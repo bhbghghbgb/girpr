@@ -67,7 +67,7 @@ async fn main() {
             let repaired = summary.files_repaired.load(Ordering::Relaxed);
             let failed = summary.files_failed.load(Ordering::Relaxed);
             if args.json_summary {
-                println!(
+                let line = format!(
                     "{{\"latest\":\"{}\",\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"freed_temp_bytes\":{},\"exit\":{}}}",
                     summary_latest(&summary),
                     summary.files_total,
@@ -79,8 +79,11 @@ async fn main() {
                     freed,
                     code
                 );
+                // stdout for parsing + log so a stderr-only capture still keeps it.
+                println!("{line}");
+                tracing::info!("{line}");
             } else {
-                println!(
+                let line = format!(
                     "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} freed_temp_bytes={} exit={}",
                     summary.files_total,
                     skipped,
@@ -91,6 +94,9 @@ async fn main() {
                     freed,
                     code
                 );
+                // stdout for parsing + log so a stderr-only capture still keeps it.
+                println!("{line}");
+                tracing::info!("{line}");
             }
             std::process::exit(code);
         }

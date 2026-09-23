@@ -63,7 +63,12 @@ cargo build --release
 
 Progress and diagnostics go to **stderr** (structured `tracing` logs); the final
 `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… freed_temp_bytes=… exit=…`
-line goes to **stdout** for easy parsing.
+line goes to **stdout** for easy parsing **and is mirrored to the log**, so a
+stderr-only capture still keeps it. During long phases a
+`PROGRESS done=<done>/<total> skipped=… repaired=… failed=… download_bytes=…`
+line is emitted to **stdout every 10s (also mirrored to the log)** — from a
+background reporter during repair, and inline during `--check-only`
+(`skipped` = intact files so far, `failed` = bad files so far).
 
 ### Logging & correlation
 
@@ -71,7 +76,8 @@ Each file task logs inside a `file{seq,total,task,path}` span (`task` = tokio as
 stable across worker-thread hops), so `grep 'path=<file>'` groups its lifecycle:
 `check start` (expected size/md5) → outcome with actuals → per-chunk trace
 (reuse-hit vs download, byte counts) → `after: tmp ready` → `repaired` with chunk stats.
-API calls log URL (passwords redacted) + retcode at debug, full JSON bodies at trace.
+API calls log the full request URL (no redaction — the HoYoPlay/Sophon API is public)
++ retcode at debug, full JSON bodies at trace.
 
 ## How it keeps disk usage low
 

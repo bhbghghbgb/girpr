@@ -218,7 +218,7 @@ impl HypClient {
     }
 
     async fn get_node<T: DeserializeOwned>(&self, url: &str, node: &str) -> Result<T> {
-        tracing::debug!(api = "hyp", url = %redact(url), "GET");
+        tracing::debug!(api = "hyp", url = %url, "GET");
         let mut last_err = anyhow::anyhow!("no attempts");
         for attempt in 1..=5 {
             let r = self.client.get(url).send().await;
@@ -226,16 +226,16 @@ impl HypClient {
                 Ok(resp) => {
                     let status = resp.status();
                     let body = resp.bytes().await.context("read body")?;
-                    tracing::trace!(api = "hyp", url = %redact(url), status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
                     let w: NodeWrapper =
                         serde_json::from_slice(&body).context("parse hyp wrapper")?;
                     if w.retcode != 0 {
-                        tracing::debug!(api = "hyp", url = %redact(url), retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
+                        tracing::debug!(api = "hyp", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
                         last_err = anyhow::anyhow!(
                             "hyp api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
-                            redact(url)
+                            url
                         );
                     } else {
                         let node_val = w
@@ -244,13 +244,13 @@ impl HypClient {
                             .and_then(|d| d.get(node))
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
-                        tracing::debug!(api = "hyp", url = %redact(url), node, attempt, "ok");
+                        tracing::debug!(api = "hyp", url = %url, node, attempt, "ok");
                         let v: T = serde_json::from_value(node_val).context("parse hyp node")?;
                         return Ok(v);
                     }
                 }
                 Err(e) => {
-                    tracing::debug!(api = "hyp", url = %redact(url), attempt, "http error: {}", e);
+                    tracing::debug!(api = "hyp", url = %url, attempt, "http error: {}", e);
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
@@ -262,7 +262,7 @@ impl HypClient {
     async fn get_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
         // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
         // Returns retcode -202 when tag unknown -> caller maps to None.
-        tracing::debug!(api = "sophon", url = %redact(url), "GET");
+        tracing::debug!(api = "sophon", url = %url, "GET");
         let mut last_err = anyhow::anyhow!("no attempts");
         for attempt in 1..=5 {
             let resp = self.client.get(url).send().await;
@@ -270,36 +270,36 @@ impl HypClient {
                 Ok(r) => {
                     let status = r.status();
                     let body = r.bytes().await.context("read body")?;
-                    tracing::trace!(api = "sophon", url = %redact(url), status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
+                    tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
                     let w: Wrapper<T> = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
-                            tracing::debug!(api = "sophon", url = %redact(url), attempt, "parse error: {}", e);
+                            tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
                             last_err = anyhow::anyhow!("parse sophon wrapper: {}", e);
                             tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
                             continue;
                         }
                     };
                     if w.retcode != 0 {
-                        tracing::debug!(api = "sophon", url = %redact(url), retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
+                        tracing::debug!(api = "sophon", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
                         last_err = anyhow::anyhow!(
                             "sophon api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
-                            redact(url)
+                            url
                         );
                         if w.retcode == -202 {
                             return Err(SophonNotFound.into());
                         }
                     } else if let Some(d) = w.data {
-                        tracing::debug!(api = "sophon", url = %redact(url), attempt, "ok");
+                        tracing::debug!(api = "sophon", url = %url, attempt, "ok");
                         return Ok(d);
                     } else {
-                        last_err = anyhow::anyhow!("sophon api empty data url={}", redact(url));
+                        last_err = anyhow::anyhow!("sophon api empty data url={}", url);
                     }
                 }
                 Err(e) => {
-                    tracing::debug!(api = "sophon", url = %redact(url), attempt, "http error: {}", e);
+                    tracing::debug!(api = "sophon", url = %url, attempt, "http error: {}", e);
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
@@ -364,22 +364,6 @@ impl std::fmt::Display for SophonNotFound {
 }
 impl std::error::Error for SophonNotFound {}
 
-/// Redact `password=...` query values (sophon getBuild URLs carry the branch password).
-fn redact(url: &str) -> String {
-    let mut out = url.to_string();
-    let mut i = 0;
-    while let Some(pos) = out[i..].find("password=") {
-        let start = i + pos + "password=".len();
-        let end = out[start..]
-            .find('&')
-            .map(|e| start + e)
-            .unwrap_or(out.len());
-        out.replace_range(start..end, "***");
-        i = start + 3;
-    }
-    out
-}
-
 fn urlencode(s: &str) -> String {
     let mut o = String::new();
     for b in s.bytes() {
@@ -403,15 +387,6 @@ mod tests {
         let v: Vec<GameBranch> =
             serde_json::from_value(w.data.unwrap().get("game_branches").cloned().unwrap()).unwrap();
         assert_eq!(v[0].main.tag, "5.0.0");
-    }
-
-    #[test]
-    fn redact_hides_password() {
-        let u = "https://x/getBuild?branch=main&package_id=p&password=secret123&tag=7.0";
-        let r = redact(u);
-        assert!(!r.contains("secret123"));
-        assert!(r.contains("password=***"));
-        assert!(r.contains("tag=7.0"));
     }
 
     #[test]

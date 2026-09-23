@@ -38,6 +38,43 @@ pub struct Summary {
     pub freed_temp_bytes: AtomicU64,
 }
 
+/// How often the background reporter emits `PROGRESS` during long phases.
+pub const PROGRESS_INTERVAL_SECS: u64 = 10;
+
+/// Format the one-line progress snapshot. Shared by stdout + log emission.
+pub fn format_progress(sum: &Summary) -> String {
+    let skipped = sum.files_skipped.load(Ordering::Relaxed);
+    let repaired = sum.files_repaired.load(Ordering::Relaxed);
+    let failed = sum.files_failed.load(Ordering::Relaxed);
+    let done = skipped + repaired + failed;
+    let dl = sum.download_bytes.load(Ordering::Relaxed);
+    format!(
+        "PROGRESS done={}/{} skipped={} repaired={} failed={} download_bytes={}",
+        done, sum.files_total, skipped, repaired, failed, dl
+    )
+}
+
+/// Emit progress to **both** stdout and the log so unattended runs keep it
+/// regardless of which stream is captured.
+pub fn emit_progress(sum: &Summary) {
+    let line = format_progress(sum);
+    println!("{line}");
+    tracing::info!("{line}");
+}
+
+fn start_progress_reporter(sum: Arc<Summary>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(PROGRESS_INTERVAL_SECS));
+        // First tick fires immediately; skip it so we only report after a full interval.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            emit_progress(&sum);
+        }
+    })
+}
+
 pub struct RepairCtx {
     pub game_dir: PathBuf,
     pub biz: Biz,
@@ -159,24 +196,36 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     // 4. check-only mode
     if ctx.check_only {
         let mut bad = 0u64;
-        for f in &plan.files {
+        summary.files_total = plan.files.len() as u64;
+        let mut last_emit = std::time::Instant::now();
+        for (i, f) in plan.files.iter().enumerate() {
             let p = game_dir.join(normalize_rel(&f.rel));
             let actual_len = util::file_len(&p);
             if actual_len != Some(f.size as u64) {
                 bad += 1;
                 tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
-                continue;
+            } else {
+                match util::md5_file(&p) {
+                    Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
+                    Ok(h) => {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
+                    }
+                    Err(e) => {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {:#}", e);
+                    }
+                }
             }
-            match util::md5_file(&p) {
-                Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
-                Ok(h) => {
-                    bad += 1;
-                    tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
-                }
-                Err(e) => {
-                    bad += 1;
-                    tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {:#}", e);
-                }
+            // Keep the check-only counter live so PROGRESS reflects work done so far.
+            summary.files_skipped.store(
+                (i as u64 + 1) - bad.min(i as u64 + 1),
+                Ordering::Relaxed,
+            );
+            summary.files_failed.store(bad, Ordering::Relaxed);
+            if last_emit.elapsed().as_secs() >= PROGRESS_INTERVAL_SECS {
+                emit_progress(&summary);
+                last_emit = std::time::Instant::now();
             }
         }
         tracing::info!("check-only: total={} bad={}", plan.files.len(), bad);
@@ -199,6 +248,7 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     // It must be shared by Arc: a per-task deep clone here once cost ~6GB across ~3k tasks.
     let local_map_a = Arc::new(local_map);
     let sum_a = Arc::new(summary);
+    let progress = start_progress_reporter(sum_a.clone());
     let dry_run = ctx.dry_run;
     let mut handles = Vec::new();
     for idx in 0..plan_a.files.len() {
@@ -242,6 +292,7 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     for h in handles {
         let _ = h.await;
     }
+    progress.abort();
     let summary = Arc::try_unwrap(sum_a).unwrap_or_else(|a| Summary {
         files_total: a.files_total,
         files_skipped: AtomicU64::new(a.files_skipped.load(Ordering::Relaxed)),
@@ -701,5 +752,21 @@ mod tests {
             vec!["a.dat", "b.dat"]
         );
         assert_eq!(plan.latest, "5.0");
+    }
+
+    #[test]
+    fn progress_format_done_counts() {
+        let s = Summary {
+            files_total: 10,
+            files_skipped: AtomicU64::new(3),
+            files_repaired: AtomicU64::new(2),
+            files_failed: AtomicU64::new(1),
+            download_bytes: AtomicU64::new(123),
+            ..Summary::default()
+        };
+        assert_eq!(
+            format_progress(&s),
+            "PROGRESS done=6/10 skipped=3 repaired=2 failed=1 download_bytes=123"
+        );
     }
 }
