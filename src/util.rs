@@ -1,0 +1,229 @@
+use anyhow::{Context, Result};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+const MD5_BUF: usize = 512 * 1024;
+
+/// Lowercase hex MD5 of a file.
+pub fn md5_file(path: &Path) -> Result<String> {
+    let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut buf = vec![0u8; MD5_BUF];
+    let mut ctx = md5::Context::new();
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        ctx.consume(&buf[..n]);
+    }
+    Ok(format!("{:x}", ctx.compute()))
+}
+
+/// MD5 of a byte slice range of a file [offset, offset+len).
+pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    f.seek(SeekFrom::Start(offset))?;
+    let mut ctx = md5::Context::new();
+    let mut remaining = len;
+    let mut buf = vec![0u8; MD5_BUF.min(1 << 20)];
+    while remaining > 0 {
+        let want = (remaining as usize).min(buf.len());
+        let n = f.read(&mut buf[..want])?;
+        if n == 0 {
+            break;
+        }
+        ctx.consume(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(format!("{:x}", ctx.compute()))
+}
+
+pub fn file_len(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
+}
+
+/// Delete `**/*_tmp`, `**/*.hdiff` and dirs `chunk/ ldiff/ staging/`. Returns (entries, bytes).
+pub fn sweep_temps(game_dir: &Path, dry_run: bool) -> (u64, u64) {
+    let mut entries = 0u64;
+    let mut bytes = 0u64;
+    let it = walkdir::WalkDir::new(game_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok());
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for e in it {
+        let p = e.path();
+        if e.file_type().is_dir() {
+            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                if name == "chunk" || name == "ldiff" || name == "staging" {
+                    dirs.push(p.to_path_buf());
+                }
+            }
+            continue;
+        }
+        let name = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if name.ends_with("_tmp") || name.ends_with(".hdiff") {
+            if let Ok(m) = std::fs::metadata(p) {
+                entries += 1;
+                bytes += m.len();
+                if !dry_run {
+                    let _ = std::fs::remove_file(p);
+                } else {
+                    tracing::info!("would delete temp {}", p.display());
+                }
+            }
+        }
+    }
+    for d in dirs {
+        let size: u64 = walkdir::WalkDir::new(&d)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+            .sum();
+        entries += 1;
+        bytes += size;
+        tracing::info!("sweep dir {} ({} bytes)", d.display(), size);
+        if !dry_run {
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+    (entries, bytes)
+}
+
+/// Parse `config.ini` last `game_version=` match.
+pub fn read_game_version(game_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
+    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;
+    re.captures_iter(&text).last().map(|c| c[1].trim().to_string())
+}
+
+/// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
+pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return set;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if v.get("is_delete").and_then(|b| b.as_bool()).unwrap_or(false) {
+                if let Some(c) = v.get("category").and_then(|c| c.as_str()) {
+                    set.insert(c.to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Read blacklist file: JSON-lines {"fileName":"..."}.
+pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return set;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(n) = v.get("fileName").and_then(|n| n.as_str()) {
+                set.insert(n.replace('\\', "/"));
+            }
+        }
+    }
+    set
+}
+
+/// Bump (or create) config.ini with latest version + channel fields.
+pub fn write_config_ini(
+    game_dir: &Path,
+    latest: &str,
+    biz: &str,
+    channel: (&str, &str, &str),
+    sdk_version: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let path = game_dir.join("config.ini");
+    let mut map: Vec<(String, String)> = Vec::new();
+    if path.exists() {
+        let text = std::fs::read_to_string(&path)?;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('[') || line.starts_with(';') || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let k = k.trim().to_string();
+                if k == "game_version"
+                    || k == "channel"
+                    || k == "sub_channel"
+                    || k == "cps"
+                    || k == "sdk_version"
+                    || k == "game_biz"
+                {
+                    continue;
+                }
+                map.push((k, v.trim().to_string()));
+            }
+        }
+    }
+    map.push(("game_version".into(), latest.into()));
+    map.push(("channel".into(), channel.0.into()));
+    map.push(("sub_channel".into(), channel.1.into()));
+    map.push(("cps".into(), channel.2.into()));
+    map.push(("sdk_version".into(), sdk_version.into()));
+    map.push(("game_biz".into(), biz.into()));
+    let mut out = String::from("[General]\n");
+    for (k, v) in &map {
+        out.push_str(&format!("{}={}\n", k, v));
+    }
+    if dry_run {
+        tracing::info!("would write config.ini game_version={}", latest);
+        return Ok(());
+    }
+    let tmp = path.with_extension("ini.girpr_tmp");
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(out.as_bytes())?;
+        f.sync_all().ok();
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_last_match_wins() {
+        let dir = std::env::temp_dir().join("girpr_test_cfg");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.ini"), "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n").unwrap();
+        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ignore_and_blacklist_parse() {
+        let dir = std::env::temp_dir().join("girpr_test_lists");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("rc"), "{\"category\":\"10302\",\"is_delete\":true}\n{}\n").unwrap();
+        assert!(read_ignore_categories(&dir.join("rc")).contains("10302"));
+        std::fs::write(dir.join("bl"), "{\"fileName\":\"a/b.dat\"}\n").unwrap();
+        assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
