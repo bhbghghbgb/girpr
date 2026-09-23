@@ -76,8 +76,7 @@ Each file task logs inside a `file{seq,total,task,path}` span (`task` = tokio as
 stable across worker-thread hops), so `grep 'path=<file>'` groups its lifecycle:
 `check start` (expected size/md5) → outcome with actuals → per-chunk trace
 (reuse-hit vs download, byte counts) → `after: tmp ready` → `repaired` with chunk stats.
-API calls log the full request URL (no redaction — the HoYoPlay/Sophon API is public)
-+ retcode at debug, full JSON bodies at trace.
+API calls log the full request URL + retcode at debug, full JSON bodies at trace.
 
 ## How it keeps disk usage low
 
@@ -107,3 +106,38 @@ docs/          findings & verdict, language-agnostic spec, Rust plan
 Chunk-repair only: no hdiff fast-update, no 7z legacy path, no predownload, no SDK/WPF/plugin
 downloads, no dispatcher persistent revisions, no speed limiter. Reruns are safe (idempotent:
 intact files skipped, partial `_tmp` resumed by length and re-verified by final MD5).
+
+## V1 simplifications vs Starward's chunk path (deliberate)
+
+The patching core ports Starward's repair-in-chunk-mode, with three deliberate
+simplifications. They trade peak RAM / re-download bytes for lower disk use and
+a smaller implementation. Do not "fix" them without reading this first.
+
+- **S1 — Whole-blob buffering.** Manifests and chunks are fetched and
+  zstd-decoded fully in memory (`decode_all`), and manifests are never cached
+  inside `game_dir`. Starward instead streams chunks through a
+  `Pipe + DecompressionStream` pipeline
+  ([GameInstallHelper.cs](https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412))
+  and caches manifests under an app cache dir
+  ([GamePackageService.cs](https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864)).
+  Pro: no retained `chunk/` blob store, no in-game manifest cache, simpler code.
+  Tradeoff: higher peak RAM per active file (one chunk + pipe buffers ×
+  `io_threads`); very large manifests/chunks could pressure memory — stream
+  them if that ever bites.
+- **S2 — Same-file-only chunk reuse.** A chunk is reused locally only when the
+  same path in the local build carries the same `(uncompressed_md5,
+  uncompressed_size)` slice. Starward maps each chunk to *any* local file via
+  `OriginalFileFullPath / OriginalFileOffset` cross-file dedup
+  ([GameInstallFile.cs](https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131),
+  [GameInstallHelper.cs](https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360)).
+  Pro: reuse map is per-path and tiny; covers ~all Genshin wins (same-file
+  chunk stability). Tradeoff: moved/renamed content re-downloads instead of
+  being sourced from another local file.
+- **S3 — Resume-by-length with final-MD5 gate.** An existing `_tmp` prefix is
+  kept based on length alone (`cur_len >= offset + size` skips the chunk);
+  only the final whole-file MD5 decides promotion. Same as Starward's
+  `fs.Length < chunk.Offset + chunk.UncompressedSize` check
+  ([GameInstallHelper.cs](https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343)).
+  Pro: cheap resume, no per-chunk manifest of completed ranges. Tradeoff: a
+  corrupt prefix is only caught at the end (wasted work, then retry from
+  network via the hash-gated reuse fallback).

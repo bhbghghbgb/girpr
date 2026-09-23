@@ -4,7 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 
-/// Sophon chunk manifest protobuf (Starward Sophon.proto parity).
+/// Sophon chunk manifest protobuf (Starward `Sophon.proto` parity).
+/// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
+/// kept verbatim so diffs against the reference stay obvious. Do not "fix" the
+/// spelling.
+/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30
 /// message SophonChunkManifest { repeated SophonChunkFile chuncks = 1; }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SophonChunkManifest {
@@ -38,6 +42,8 @@ pub struct SophonChunk {
     pub compressed_size: i64,
     #[prost(int64, tag = "5")]
     pub uncompressed_size: i64,
+    // NOTE(starward-parity): opaque upstream field, preserved for decode compat.
+    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L22-L30
     #[prost(int64, tag = "6")]
     pub unknown: i64,
     #[prost(string, tag = "7")]
@@ -51,6 +57,12 @@ pub struct WantedManifest {
 }
 
 /// Filter manifests: drop res_category ignores + non-selected audio fields (Starward parity).
+/// NOTE(starward-parity): the `len is 5 or 10 && contains('-')` audio heuristic
+/// (`zh-cn` / `mini-zh-cn`) and the audio re-add loop that bypasses the ignore
+/// set are both verbatim ports of `GetAvailableGameSophonChunkManifests` — the
+/// heuristic is fragile upstream, but diverging here would break parity.
+/// Do not "fix" without checking upstream first.
+/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769
 /// Audio fields look like `zh-cn` (len 5 with '-') or `mini-zh-cn` (len 10 with '-').
 pub fn select_manifests<'a>(
     build: &'a ChunkBuild,
@@ -77,7 +89,17 @@ pub fn select_manifests<'a>(
 }
 
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
-pub async fn fetch_manifest(client: &reqwest::Client, meta: &ChunkManifestMeta) -> Result<Vec<SophonChunkFile>> {
+/// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
+/// verified case-insensitively before parsing, like `EnsureSophonManifestFileAsync`.
+/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864
+/// V1-SIMPLIFICATION (S1, see README): the whole blob is buffered in memory
+/// (`decode_all`) and manifests are never cached inside `game_dir`, instead of
+/// Starward's file cache + streaming decompression. Simpler + lower disk use at
+/// the cost of higher peak RAM on large manifests.
+pub async fn fetch_manifest(
+    client: &reqwest::Client,
+    meta: &ChunkManifestMeta,
+) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
     let mut last_err = anyhow::anyhow!("no attempts");
     for attempt in 1..=5u64 {
@@ -121,13 +143,20 @@ async fn try_fetch_manifest(
         );
     }
     let m = SophonChunkManifest::decode(decoded.as_slice()).context("protobuf decode manifest")?;
-    let (files, chunks): (usize, usize) = (m.chuncks.len(), m.chuncks.iter().map(|f| f.chunks.len()).sum());
+    let (files, chunks): (usize, usize) = (
+        m.chuncks.len(),
+        m.chuncks.iter().map(|f| f.chunks.len()).sum(),
+    );
     tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, "manifest parsed");
     Ok(m.chuncks)
 }
 
 /// Download one chunk's compressed bytes.
-pub async fn fetch_chunk_bytes(client: &reqwest::Client, url_prefix: &str, id: &str) -> Result<Vec<u8>> {
+pub async fn fetch_chunk_bytes(
+    client: &reqwest::Client,
+    url_prefix: &str,
+    id: &str,
+) -> Result<Vec<u8>> {
     let url = join_url(url_prefix, id);
     let mut last_err = anyhow::anyhow!("no attempts");
     for attempt in 1..=5u64 {
@@ -167,7 +196,10 @@ pub fn build_local_chunk_map(
             let e = map.entry(f.file.clone()).or_default();
             for c in &f.chunks {
                 // keep first occurrence per md5 (duplicates exist)
-                if !e.iter().any(|(md5, sz, _)| md5 == &c.uncompressed_md5 && *sz == c.uncompressed_size) {
+                if !e
+                    .iter()
+                    .any(|(md5, sz, _)| md5 == &c.uncompressed_md5 && *sz == c.uncompressed_size)
+                {
                     e.push((c.uncompressed_md5.clone(), c.uncompressed_size, c.offset));
                 }
             }

@@ -6,6 +6,10 @@ use crate::Biz;
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
+/// Endpoint shapes follow `HoYoPlayClient` (hyp vs sophon bases, `launcher_id` +
+/// `language` query) — see
+/// https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L108-L113
+/// Request URLs are logged verbatim at debug.
 pub struct HypClient {
     client: reqwest::Client,
     host: &'static str,

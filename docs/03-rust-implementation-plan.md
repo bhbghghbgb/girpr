@@ -50,13 +50,13 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 ## 4. Testing
 
 `cargo test`: pure unit tests — config.ini parse/bump, audio-lang mapping, manifest filter,
-reuse-map build, expected-set/purge classification, temp-sweep matcher, URL password redaction.
+reuse-map build, expected-set/purge classification, temp-sweep matcher.
 Network paths covered by `--dry-run`/`--check-only` against a fixture manifest (no live-game CI dependency).
 
 ## 5. Logging & correlation
 
 `tracing` to stderr; `--log-level debug|trace` (uses `RUST_LOG` if set).
-- `hyp` (debug): every HoYoPlay/Sophon JSON call with redacted URL (`password=***`), retcode,
+- `hyp` (debug): every HoYoPlay/Sophon JSON call with full request URL, retcode,
   node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
 - `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual
   decompressed MD5, parsed file/chunk counts; (trace) per-chunk download byte counts.

@@ -46,6 +46,11 @@ pub fn file_len(path: &Path) -> Option<u64> {
 }
 
 /// Delete `**/*_tmp`, `**/*.hdiff` and dirs `chunk/ ldiff/ staging/`. Returns (entries, bytes).
+/// NOTE(starward-parity): same temp set Starward clears outside predownload
+/// mode (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`); the suffixes are
+/// load-bearing (foreign leftovers included), not magic strings to dedupe.
+/// Do not narrow this without checking upstream.
+/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallService.cs#L747-L771
 pub fn sweep_temps(game_dir: &Path, dry_run: bool) -> (u64, u64) {
     let mut entries = 0u64;
     let mut bytes = 0u64;
@@ -98,6 +103,10 @@ pub fn sweep_temps(game_dir: &Path, dry_run: bool) -> (u64, u64) {
 }
 
 /// Parse `config.ini` last `game_version=` match.
+/// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
+/// (`matches[^1]` over `game_version=(.+)`); missing file means fresh install.
+/// Do not "fix" to first-match.
+/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L47-L70
 pub fn read_game_version(game_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
     let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;

@@ -4,8 +4,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
     atomic::{AtomicU64, Ordering},
+    Arc,
 };
 
 use crate::hyp::HypClient;
@@ -56,6 +56,8 @@ pub fn format_progress(sum: &Summary) -> String {
 
 /// Emit progress to **both** stdout and the log so unattended runs keep it
 /// regardless of which stream is captured.
+/// NOTE(design-intent): the dual emission is deliberate (automation contract,
+/// see README).
 pub fn emit_progress(sum: &Summary) {
     let line = format_progress(sum);
     println!("{line}");
@@ -89,7 +91,10 @@ pub struct RepairCtx {
 pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     let mut summary = Summary::default();
     std::fs::create_dir_all(&ctx.game_dir)?;
-    let game_dir = ctx.game_dir.canonicalize().unwrap_or_else(|_| ctx.game_dir.clone());
+    let game_dir = ctx
+        .game_dir
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.game_dir.clone());
 
     // 0. pre-clean temps (reclaim space first)
     let (_, freed) = util::sweep_temps(&game_dir, ctx.dry_run);
@@ -111,7 +116,9 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         cfg.default_download_mode
     );
     if cfg.default_download_mode == "DOWNLOAD_MODE_FILE" {
-        anyhow::bail!("game is in legacy FILE mode; chunk repair not supported (unexpected for Genshin)");
+        anyhow::bail!(
+            "game is in legacy FILE mode; chunk repair not supported (unexpected for Genshin)"
+        );
     }
     let branch = hyp.game_branch().await.context("getGameBranches")?;
     let latest = branch.main.tag.clone();
@@ -190,7 +197,9 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     // purge-before (optional, frees space for the repair itself)
     if ctx.purge_before {
         let bytes = purge_extra_files(&game_dir, &plan, ctx.dry_run)?;
-        summary.deleted_extra_bytes.fetch_add(bytes, Ordering::Relaxed);
+        summary
+            .deleted_extra_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
     // 4. check-only mode
@@ -218,10 +227,9 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
                 }
             }
             // Keep the check-only counter live so PROGRESS reflects work done so far.
-            summary.files_skipped.store(
-                (i as u64 + 1) - bad.min(i as u64 + 1),
-                Ordering::Relaxed,
-            );
+            summary
+                .files_skipped
+                .store((i as u64 + 1) - bad.min(i as u64 + 1), Ordering::Relaxed);
             summary.files_failed.store(bad, Ordering::Relaxed);
             if last_emit.elapsed().as_secs() >= PROGRESS_INTERVAL_SECS {
                 emit_progress(&summary);
@@ -270,13 +278,23 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
             );
             async move {
                 tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
-                match repair_one_file(&http, &game_dir, &plan.files[idx], &plan.url_prefix_by_file, &local_map, dry_run).await {
+                match repair_one_file(
+                    &http,
+                    &game_dir,
+                    &plan.files[idx],
+                    &plan.url_prefix_by_file,
+                    &local_map,
+                    dry_run,
+                )
+                .await
+                {
                     Ok(Repaired::Skipped) => {
                         sum.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(Repaired::Repaired(stats)) => {
                         sum.files_repaired.fetch_add(1, Ordering::Relaxed);
-                        sum.download_bytes.fetch_add(stats.download_bytes, Ordering::Relaxed);
+                        sum.download_bytes
+                            .fetch_add(stats.download_bytes, Ordering::Relaxed);
                     }
                     Ok(Repaired::DryRun) => {}
                     Err(e) => {
@@ -333,10 +351,19 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         summary.freed_temp_bytes.fetch_add(freed, Ordering::Relaxed);
         if ctx.purge_extra {
             let bytes = purge_extra_files(&game_dir, &plan_a, false)?;
-            summary.deleted_extra_bytes.fetch_add(bytes, Ordering::Relaxed);
+            summary
+                .deleted_extra_bytes
+                .fetch_add(bytes, Ordering::Relaxed);
         }
         let (ch, sub, cps) = ctx.biz.channel_tuple();
-        util::write_config_ini(&game_dir, &latest, ctx.biz.as_str(), (ch, sub, cps), "", false)?;
+        util::write_config_ini(
+            &game_dir,
+            &latest,
+            ctx.biz.as_str(),
+            (ch, sub, cps),
+            "",
+            false,
+        )?;
     } else if ctx.purge_extra {
         let plan_ref = &*plan_a;
         let _ = purge_extra_files(&game_dir, plan_ref, true)?;
@@ -430,7 +457,12 @@ async fn repair_one_file(
         return Ok(Repaired::DryRun);
     }
     let prefix = prefix_by_path.get(&file.rel).cloned().unwrap_or_default();
-    // Starward-style temp name so foreign leftovers are also swept next run.
+    // NOTE(starward-parity): temp-then-atomic-promote. Starward writes
+    // `FullPath + "_tmp"` (OpenOrCreate), verifies MD5, then `Move(tmp, final,
+    // true)` and `Delete(tmp)` on mismatch — same contract here, including the
+    // suffix, so foreign leftovers are swept on the next run.
+    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L330-L331
+    // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
 
     for attempt in 1..=5u32 {
@@ -469,25 +501,43 @@ async fn repair_attempt(
         tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
     }
-    tracing::debug!(tmp_bytes = f.metadata().map(|m| m.len()).unwrap_or(0), expect_size = file.size, "tmp resume point");
+    tracing::debug!(
+        tmp_bytes = f.metadata().map(|m| m.len()).unwrap_or(0),
+        expect_size = file.size,
+        "tmp resume point"
+    );
     let reuse_entries = local_map.get(&file.rel);
     for c in &file.chunks {
         let end = (c.offset + c.uncompressed_size) as u64;
         let cur_len = f.metadata().map(|m| m.len()).unwrap_or(0);
+        // V1-SIMPLIFICATION (S3, see README): resume-by-length. A completed
+        // prefix is kept without per-chunk re-verification; the final
+        // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
+        // before failing shut. Mirrors Starward's
+        // `if (fs.Length < chunk.Offset + chunk.UncompressedSize)` skip.
+        // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343
         if cur_len >= end {
             stats.chunks_resumed += 1;
             tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
             continue; // completed prefix kept; final whole-file MD5 re-verifies
         }
         f.seek(SeekFrom::Start(c.offset as u64))?;
-        // (a) verified local slice reuse (same path, md5+size match)
+        // (a) verified local slice reuse (same path, md5+size match).
+        // V1-SIMPLIFICATION (S2, see README): same-file-only reuse. Starward
+        // maps each chunk to any local file via `OriginalFileFullPath/Offset`
+        // (cross-file dedup); we only reuse slices from the same path, which
+        // covers ~all Genshin wins at a fraction of the bookkeeping.
+        // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
+        // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
         let mut reused = false;
         match reuse_entries.and_then(|entries| {
             entries.iter().find(|(md5, sz, _)| {
                 md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
             })
         }) {
-            None => tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download"),
+            None => {
+                tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download")
+            }
             Some((_, _, ro)) => {
                 let src = game_dir.join(normalize_rel(&file.rel));
                 match util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
@@ -513,15 +563,24 @@ async fn repair_attempt(
                             stats.chunks_reused += 1;
                         }
                     }
-                    Ok(h) => tracing::debug!(chunk = %c.id, slice_md5 = %h, "reuse slice md5 mismatch -> download"),
-                    Err(e) => tracing::debug!(chunk = %c.id, "reuse slice unreadable ({:#}) -> download", e),
+                    Ok(h) => {
+                        tracing::debug!(chunk = %c.id, slice_md5 = %h, "reuse slice md5 mismatch -> download")
+                    }
+                    Err(e) => {
+                        tracing::debug!(chunk = %c.id, "reuse slice unreadable ({:#}) -> download", e)
+                    }
                 }
             }
         }
         if reused {
             continue;
         }
-        // (b) download chunk blob + zstd decode + write at offset
+        // (b) download chunk blob + zstd decode + write at offset.
+        // V1-SIMPLIFICATION (S1, see README): whole-chunk buffering
+        // (`fetch` + `decode_all`) instead of Starward's streaming
+        // `Pipe + DecompressionStream` pipeline. Simpler and avoids any
+        // retained blob store; costs higher peak RAM per active chunk.
+        // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
         let blob = sophon::fetch_chunk_bytes(http, prefix, &c.id)
             .await
             .with_context(|| format!("chunk {}", c.id))?;
@@ -555,9 +614,17 @@ async fn repair_attempt(
     }
     let h = util::md5_file(tmp_path)?;
     tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
+    // NOTE(starward-parity): final MD5 gates promotion; on mismatch the tmp is
+    // deleted and the file is retried/failed, never promoted partially.
+    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     if !h.eq_ignore_ascii_case(&file.md5) {
         std::fs::remove_file(tmp_path).ok();
-        anyhow::bail!("final md5 mismatch for {}: expect {} got {}", file.rel, file.md5, h);
+        anyhow::bail!(
+            "final md5 mismatch for {}: expect {} got {}",
+            file.rel,
+            file.md5,
+            h
+        );
     }
     let final_path = game_dir.join(normalize_rel(&file.rel));
     std::fs::rename(tmp_path, &final_path).with_context(|| format!("promote {}", file.rel))?;
@@ -566,12 +633,21 @@ async fn repair_attempt(
 }
 
 /// Expected-set purge (Collapse GetUnusedFileInfoList, simplified, no SDK/WPF zips).
+/// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest,
+/// minus a small allowlist — the same idea as `GetUnusedFileInfoList`, minus the
+/// plugin/SDK/WPF zip enumeration which v1 deliberately skips (game launches
+/// without them). Do not "fix" the missing zip handling without reading the
+/// v1-limits section in the README.
+/// See https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
 /// Keeps: manifest paths + config.ini + audio_lang_* + ScreenShot/** + log dirs.
 pub fn purge_extra_files(game_dir: &Path, plan: &RepairPlan, dry_run: bool) -> Result<u64> {
     let expected: HashSet<String> = plan.files.iter().map(|f| f.rel.clone()).collect();
     let mut deleted_bytes = 0u64;
     let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
-    for e in walkdir::WalkDir::new(game_dir).into_iter().filter_map(|e| e.ok()) {
+    for e in walkdir::WalkDir::new(game_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if !e.file_type().is_file() {
             continue;
         }
@@ -748,7 +824,10 @@ mod tests {
         let bl: HashSet<String> = ["drop.dat".to_string()].into_iter().collect();
         let plan = build_plan(per, &bl, "5.0");
         assert_eq!(
-            plan.files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(),
+            plan.files
+                .iter()
+                .map(|f| f.rel.as_str())
+                .collect::<Vec<_>>(),
             vec!["a.dat", "b.dat"]
         );
         assert_eq!(plan.latest, "5.0");
