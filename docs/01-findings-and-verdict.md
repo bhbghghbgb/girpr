@@ -74,7 +74,7 @@ Starward's repair path is *unconditionally* version-agnostic by construction.
 
 ## 3. Disk-space behavior (the deciding factor)
 
-Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles`):
+Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles` L722-777):
 - No sparse files / preallocation (`FileSliceStream.SetLength` throws).
 - **Temp-then-atomic-move everywhere**: chunk mode writes `FullPath_tmp` (`OpenOrCreate`, resume by
   `Length < Offset+UncompressedSize`), streaming zstd-decompress via `Pipe+DecompressionStream`;
@@ -83,10 +83,23 @@ Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles`):
   chunk cache in the common path (only transient `InstallPath/chunk/{id}` reuse probe); no preload blobs.
 - Peak transient per file ≈ `old file + new _tmp` while that file is processed; files processed in
   parallel (`Parallel.ForEachAsync`, unbounded in code → we will bound it). No whole-game duplicate.
-- Cleanup: deletes downloaded compressed packages, `DeprecatedFileConfig.deprecated_files[]`,
-  and (when not predownload) `**/*_tmp`, `**/*.hdiff`, `chunk/`, `ldiff/`, `staging/`. Update-patch also
-  deletes consumed diffs/sources/`hdiffmap.json|hdifffiles.txt|deletefiles.txt`.
-- **Does NOT purge unknown extra files** (only the deprecated list; `// todo clear useless audio`).
+- **Starward-handling cleanup (post-task ONLY, never an orphan sweep)** — `ClearDeprecatedFiles`
+  runs after Install/Update/Repair (never Predownload), and only when `PredownloadVersion is null`
+  does it also sweep `**/*_tmp`, `**/*.hdiff`, dirs `chunk/`, `ldiff/`, `staging/` (L747-773).
+  Otherwise it deletes exactly: downloaded compressed packages (L729-737) + each
+  `DeprecatedFileConfig.deprecated_files[].Name` joined under install path (L738-746, source:
+  `GET getGameDeprecatedFileConfigs`, node `deprecated_file_configs`,
+  `GamePackageService.cs:993-996` via `HoYoPlayClient.cs:222-226`). Update-patch additionally
+  deletes consumed diffs/sources/`hdiffmap.json|hdifffiles.txt|deletefiles.txt`
+  (`GameInstallHelper.cs:730-841`) and per-`DeleteTags[localVersion]` files
+  (`GameInstallService.cs:508-519`, populated `GamePackageService.cs:329-376`).
+  Pre-task does NO deletes (only `SetAttributes(Normal)`).
+- **Does NOT purge unknown extra files** (only the deprecated list; `GameInstallService.cs:681`
+  `// todo clear useless audio` — unselected audio is never cleaned). `res_category_dir`
+  (`{"category":"...","is_delete":true}`) and `blacklist_dir` (`{"fileName":"..."}`) only
+  *exclude* entries from the download work list (`GamePackageService.cs:128-143,742-769`); they are
+  never deleted. Audio `cache→res` move (`GameInstallService.cs:427-444,643-660`, `File.Move`
+  overwrite) and `config.ini` bump (`SetGameConfigIniAsync`, L788-850) are moves/rewrites, not purges.
 
 Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall.cs:GetUnusedFileInfoList`):
 - Quota gate `EnsureDiskSpaceSufficiencyAsync` (volume free space + dialog) — UI-oriented, skip for CLI.
@@ -98,13 +111,33 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
 - Streaming: `PerformWriteStreamThreadAsync` (`ResponseHeadersRead` + zstd stream, `MD5.TransformBlock`
   on the fly, `ArrayPool` 4 KiB, per-chunk `Parallel.ForEachAsync(max(8,CPU))`, `FileStream.Lock`
   disabled via `NOSTREAMLOCK`), 30 s timeout/retry, speed limiter.
-- Deletion: repair marks `Unused` → delete; patch `Remove` (`UnusedAssets` minus still-referenced);
-  `CheckRedundantFiles` deletes `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff`; legacy zip path handles
-  `hdifffiles.txt/deletefiles.txt/hdiffmap.json`.
-- **Has the desired "clear extra files"**: `GenshinInstall.GetUnusedFileInfoList` builds the expected set
-  (`Repair.ResetAndFetchAssets()` + plugin/SDK/WPF zip entries via `SimpleZipArchiveReader`) and diffs
-  against `Directory.EnumerateFiles` minus `FilesCleanupIgnoreList` + `Audio_*_pkg_version` regex.
-  This is exactly the user's Collapse usage (before + after Starward).
+- Deletion comes in **two separate Collapse-handling mechanisms** (do not conflate with Starward's
+  post-task sweep above):
+  - (a) **Manual orphan purge** — `GenshinInstall.GetUnusedFileInfoList` override
+    (`CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs:176-263`), triggered only by
+    user cleanup UI (`HomePage.xaml.cs:969-981`, `MainPage.Navigation.cs:396-405` → `CleanUpGameFiles()`
+    → `InstallManagerBase.PkgVersion.cs:151-188`), never auto before/after repair. Expected set =
+    `Repair.ResetAndFetchAssets()` union (Sophon fake-`pkg_version` via
+    `GenshinInstall.PkgVersion.cs:112-190` + dispatcher persistent via `Fetch.Persistent.cs:44-117` +
+    plugin/SDK/WPF zip entries via `SimpleZipArchiveReader`), diffed against full
+    `EnumerateFiles("*", AllDirectories)`. Protected: server `FilesCleanupIgnoreList` regexes
+    (`PresetConfig.cs:86-94`, normally `[]` for Genshin — `GenshinInstall.cs:145-172` sets none) matched
+    against `RelativePath` via `WhereMatchPattern` (`PatternMatcher.cs:93-108`, case-insensitive,
+    non-matching kept) **plus** per-line `^Audio_<entry>_pkg_version$` built from
+    `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs:228-247`). Note the base-class
+    `config.ini/pkg_version/Persistent/ScreenShot` protections (`InstallManagerBase.PkgVersion.cs:456-535`)
+    do NOT apply to this override (except insofar as those files are in the union).
+  - (b) **Repair-time redundant pass** — `Check.cs:26-67` → `CheckRedundantFiles` (before the hash loop)
+    marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs:232-319`) as `Unused`, deleted in
+    `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
+- **v1 purge scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
+  `{latest chunk-manifest paths} ∪ {config.ini, exe per game config, blacklist file, res_category file,
+  audio scan file, audio_lang_14 + Audio_*_pkg_version for selected langs}`; allowlist additionally keeps
+  user data both launchers never touch (`ScreenShot/**`, log dirs). Temp names (`*_tmp`, `*.hdiff`,
+  `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`, `*deletefiles*`) belong to Starward-handling temp
+  sweep, NOT to the purge comparison (purge skips them; sweep deletes them) so byte accounting stays split
+  (`freed_temp_bytes` vs `deleted_extra_bytes`). This is exactly the user's Collapse usage
+  (before + after Starward).
 
 ## 4. Verdict
 
@@ -122,18 +155,23 @@ Reasons:
    ×2 transient, processed with bounded file parallelism (HDD-safe). Collapse's preload-then-apply and
    patch-blob retention use strictly more transient space.
 3. Smallest implementation: HoYoPlay `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
-   dedup] → manifest download/verify/parse → per-file repair → `getGameDeprecatedFileConfigs` delete →
-   temp cleanup → `config.ini` bump. No dispatcher (`res_versions`/`data_versions`), no persistent
+   dedup] → manifest download/verify/parse → per-file repair → **Starward-handling post-phase**
+   (`getGameDeprecatedFileConfigs` delete + temp sweep + audio cache→res move + `config.ini` bump).
+   No dispatcher (`res_versions`/`data_versions`), no persistent
    revisions, no `ctable` juggling, no hdiff/7z pipeline, no SDK/WPF/plugin zips, no speed limiter, no
    quota dialog. Collapse's extras are launcher conveniences, not needed to leave a launchable Genshin.
 4. Collapse contributes the one thing Starward lacks: full extra-file purge by set-difference
-   (expected manifest set vs on-disk enumeration + small allowlist). Cheap to implement, big low-disk win
-   before/after patching, and directly replicates the user's current two-launcher workflow in one tool.
+   (**Collapse-handling**, `GetUnusedFileInfoList` parity scoped to v1 — no SDK/WPF/dispatcher union).
+   Cheap to implement, big low-disk win before/after patching, and directly replicates the user's
+   current two-launcher workflow in one tool.
 
 Extra behavior changes recommended (beyond 1:1 port):
-- Pre-clean temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`) **before** patching to reclaim space.
-- Purge-extra both before and after (flags; dry-run lists bytes); keep allowlist minimal
-  (`config.ini`, selected `audio_lang_*`, `ScreenShot/`, log dirs) — Collapse parity without SDK/WPF zips.
+- **Starward-handling, extended**: run the temp sweep (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`,
+  `staging/`) **before** patching too (Starward only sweeps post-task) to reclaim space.
+- **Collapse-handling**: purge-extra both before (`--purge-before`, repair-time `CheckRedundantFiles`
+  parity — frees space for the repair itself) and after (`--purge-extra`, manual-cleanup parity);
+  dry-run lists bytes. Expected set per §3-Collapse v1 scope; keep allowlist minimal
+  (`config.ini`, server-config metadata files, selected `audio_lang_*`, `ScreenShot/`, log dirs).
 - Bound file parallelism (`--io-threads`; chunks sequential within a file) for HDD vs SSD.
 - Skip SDK/WPF downloads and dispatcher persistent writes in v1 (game launches without them; add
   `--with-sdk --with-wpf` later if a channel proves otherwise). Always move audio cache→res if the

@@ -33,15 +33,18 @@ Exit codes: 0 ok (incl. check-only clean), 1 usage, 2 metadata/network, 3 verify
 
 ## 3. Key flows → code mapping
 
-| Spec step | Code |
-|---|---|
-| Pre-clean temps | `util::sweep_temps(game_dir)` (0) |
-| Local version + audio | `repair::read_local_version`, audio scan file read/write (1) |
-| 4 metadata calls | `hyp::get_game_config/branches/build/deprecated` (2) |
-| Manifest fetch/verify/parse | `sophon::fetch_manifest(manifest_dl, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) |
-| Work list + reuse map | `repair::build_plan(latest, local)` keyed by path, chunk md5+size (4) |
-| Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (5) |
-| Post deletes/config/purge | `repair::post_phase()` (6), summary (7) |
+| Spec step | Code | Provenance |
+|---|---|---|
+| Pre-clean temps | `util::sweep_temps(game_dir)` (0.2) → `freed_temp_bytes` | Starward-handling (`ClearDeprecatedFiles` extended pre-task) |
+| Purge-before | `repair::purge_extra_files(game_dir, plan)` when `--purge-before` (0.3) → `deleted_extra_bytes` | Collapse-handling (`CheckRedundantFiles` parity) |
+| Local version + audio | `repair::read_local_version`, audio scan file read/write (1) | Starward |
+| 4 metadata calls | `hyp::get_game_config/branches/build/deprecated` (2) | Starward |
+| Manifest fetch/verify/parse | `sophon::fetch_manifest(manifest_dl, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
+| Work list + reuse map | `repair::build_plan(latest, local)` keyed by path, chunk md5+size (4) | Starward |
+| Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (5) | Starward |
+| Post deletes/config | deprecated delete + `sweep_temps` + audio cache→res + `write_config_ini` (6S) | Starward-handling |
+| Purge-extra | `repair::purge_extra_files(game_dir, plan)` when `--purge-extra` (6C) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope) |
+| Summary | (7) | — |
 
 Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with
 ~`io_threads*4` pool; per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
