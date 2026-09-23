@@ -97,6 +97,7 @@ async fn try_fetch_manifest(
     url: &str,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
+    tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
     let bytes = client
         .get(url)
         .send()
@@ -105,10 +106,12 @@ async fn try_fetch_manifest(
         .error_for_status()?
         .bytes()
         .await?;
+    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = bytes.len(), "manifest downloaded");
     // Entire blob is zstd-compressed; checksum = MD5 of DECOMPRESSED bytes.
     let decoded = zstd::stream::decode_all(std::io::Cursor::new(&bytes))
         .context("zstd decompress manifest")?;
     let digest = format!("{:x}", md5::compute(&decoded));
+    tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = decoded.len(), expect_md5 = %meta.manifest.checksum, actual_md5 = %digest, "manifest checksum check");
     if !digest.eq_ignore_ascii_case(&meta.manifest.checksum) {
         anyhow::bail!(
             "manifest checksum mismatch id={} expect={} got={}",
@@ -118,6 +121,8 @@ async fn try_fetch_manifest(
         );
     }
     let m = SophonChunkManifest::decode(decoded.as_slice()).context("protobuf decode manifest")?;
+    let (files, chunks): (usize, usize) = (m.chuncks.len(), m.chuncks.iter().map(|f| f.chunks.len()).sum());
+    tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, "manifest parsed");
     Ok(m.chuncks)
 }
 
@@ -129,13 +134,17 @@ pub async fn fetch_chunk_bytes(client: &reqwest::Client, url_prefix: &str, id: &
         match client.get(&url).send().await {
             Ok(r) => match r.error_for_status() {
                 Ok(r) => match r.bytes().await {
-                    Ok(b) => return Ok(b.to_vec()),
+                    Ok(b) => {
+                        tracing::trace!(chunk = %id, compressed_bytes = b.len(), attempt, "chunk downloaded");
+                        return Ok(b.to_vec());
+                    }
                     Err(e) => last_err = anyhow::anyhow!("read chunk body: {}", e),
                 },
                 Err(e) => last_err = anyhow::anyhow!("chunk status: {}", e),
             },
             Err(e) => last_err = anyhow::anyhow!("GET chunk: {}", e),
         }
+        tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {}", last_err);
         tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)

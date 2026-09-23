@@ -50,8 +50,23 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 ## 4. Testing
 
 `cargo test`: pure unit tests — config.ini parse/bump, audio-lang mapping, manifest filter,
-reuse-map build, expected-set/purge classification, temp-sweep matcher. Network paths covered by
-`--dry-run`/`--check-only` against a fixture manifest (no live-game CI dependency).
+reuse-map build, expected-set/purge classification, temp-sweep matcher, URL password redaction.
+Network paths covered by `--dry-run`/`--check-only` against a fixture manifest (no live-game CI dependency).
+
+## 5. Logging & correlation
+
+`tracing` to stderr; `--log-level debug|trace` (uses `RUST_LOG` if set).
+- `hyp` (debug): every HoYoPlay/Sophon JSON call with redacted URL (`password=***`), retcode,
+  node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
+- `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual
+  decompressed MD5, parsed file/chunk counts; (trace) per-chunk download byte counts.
+- `repair`: every file task runs inside a `file{seq,total,task,path}` span (`task` = tokio
+  async-task id, stable across worker-thread hops; first event notes the picking worker thread),
+  so `grep 'path=<file>'` groups its whole lifecycle: `check start` (expect size/md5/chunks) →
+  `check: missing|size mismatch|md5 mismatch (actual)|md5 match -> skip` → per-chunk trace
+  (`already complete|no reuse candidate|reuse slice ok|slice mismatch -> download|decoded bytes`) →
+  `after: tmp ready` → `repaired` (chunks total/reused/downloaded/resumed, bytes, final md5).
+  Check-only failures log `expect_*` vs `actual_*` at warn level.
 
 ## 5. v1 limits (documented, not bugs)
 

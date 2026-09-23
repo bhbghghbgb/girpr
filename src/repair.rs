@@ -12,6 +12,7 @@ use crate::hyp::HypClient;
 use crate::sophon::{self, SophonChunkFile, WantedManifest};
 use crate::util;
 use crate::Biz;
+use tracing::Instrument;
 
 pub struct RepairPlan {
     pub latest: String,
@@ -160,11 +161,22 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         let mut bad = 0u64;
         for f in &plan.files {
             let p = game_dir.join(normalize_rel(&f.rel));
-            let ok = util::file_len(&p) == Some(f.size as u64)
-                && util::md5_file(&p).map(|h| h.eq_ignore_ascii_case(&f.md5)).unwrap_or(false);
-            if !ok {
+            let actual_len = util::file_len(&p);
+            if actual_len != Some(f.size as u64) {
                 bad += 1;
-                tracing::warn!("CHECK fail: {}", f.rel);
+                tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
+                continue;
+            }
+            match util::md5_file(&p) {
+                Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
+                Ok(h) => {
+                    bad += 1;
+                    tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
+                }
+                Err(e) => {
+                    bad += 1;
+                    tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {:#}", e);
+                }
             }
         }
         tracing::info!("check-only: total={} bad={}", plan.files.len(), bad);
@@ -173,8 +185,12 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 
-    // 5. repair files (bounded file parallelism, sequential chunks per file)
+    // 5. repair files (bounded file parallelism, sequential chunks per file).
+    // Each file task gets a `file{seq,total,task,path}` span so its progress can be
+    // grouped in logs; `task` is the tokio async-task id (stable across thread hops),
+    // and the `started on thread` event records which worker picked the file up.
     summary.files_total = plan.files.len() as u64;
+    let total_files = plan.files.len();
     let sem = Arc::new(tokio::sync::Semaphore::new(ctx.jobs.max(1)));
     let game_dir_a = Arc::new(game_dir.clone());
     let http_a = Arc::new(http);
@@ -194,20 +210,33 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         let local_map = local_map_a.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.unwrap();
-            match repair_one_file(&http, &game_dir, &plan.files[idx], &plan.url_prefix_by_file, &local_map, dry_run).await {
-                Ok(Repaired::Skipped) => {
-                    sum.files_skipped.fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(Repaired::Repaired(n)) => {
-                    sum.files_repaired.fetch_add(1, Ordering::Relaxed);
-                    sum.download_bytes.fetch_add(n, Ordering::Relaxed);
-                }
-                Ok(Repaired::DryRun) => {}
-                Err(e) => {
-                    sum.files_failed.fetch_add(1, Ordering::Relaxed);
-                    tracing::error!("repair failed {}: {:#}", plan.files[idx].rel, e);
+            let task_id = tokio::task::try_id();
+            let span = tracing::info_span!(
+                "file",
+                seq = idx + 1,
+                total = total_files,
+                task = ?task_id,
+                path = %plan.files[idx].rel,
+            );
+            async move {
+                tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
+                match repair_one_file(&http, &game_dir, &plan.files[idx], &plan.url_prefix_by_file, &local_map, dry_run).await {
+                    Ok(Repaired::Skipped) => {
+                        sum.files_skipped.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(Repaired::Repaired(stats)) => {
+                        sum.files_repaired.fetch_add(1, Ordering::Relaxed);
+                        sum.download_bytes.fetch_add(stats.download_bytes, Ordering::Relaxed);
+                    }
+                    Ok(Repaired::DryRun) => {}
+                    Err(e) => {
+                        sum.files_failed.fetch_add(1, Ordering::Relaxed);
+                        tracing::error!("repair failed: {:#}", e);
+                    }
                 }
             }
+            .instrument(span)
+            .await
         }));
     }
     for h in handles {
@@ -302,8 +331,17 @@ pub fn build_plan(
 
 enum Repaired {
     Skipped,
-    Repaired(u64),
+    Repaired(ChunkStats),
     DryRun,
+}
+
+#[derive(Default, Debug)]
+struct ChunkStats {
+    download_bytes: u64,
+    chunks_total: u64,
+    chunks_reused: u64,
+    chunks_downloaded: u64,
+    chunks_resumed: u64,
 }
 
 async fn repair_one_file(
@@ -320,17 +358,24 @@ async fn repair_one_file(
             std::fs::create_dir_all(parent)?;
         }
     }
+    tracing::debug!(expect_size = file.size, expect_md5 = %file.md5, chunks = file.chunks.len(), "check start");
     // fast skip: size + full MD5
-    if util::file_len(&final_path) == Some(file.size as u64) {
-        if let Ok(h) = util::md5_file(&final_path) {
-            if h.eq_ignore_ascii_case(&file.md5) {
-                tracing::debug!("skip {}", file.rel);
+    match util::file_len(&final_path) {
+        None => tracing::debug!("check: missing local file"),
+        Some(n) if n != file.size as u64 => {
+            tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
+        }
+        Some(_) => match util::md5_file(&final_path) {
+            Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
+                tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
                 return Ok(Repaired::Skipped);
             }
-        }
+            Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
+            Err(e) => tracing::debug!("check: unreadable ({:#}) -> needs repair", e),
+        },
     }
     if dry_run {
-        tracing::info!("would repair {}", file.rel);
+        tracing::info!("would repair");
         return Ok(Repaired::DryRun);
     }
     let prefix = prefix_by_path.get(&file.rel).cloned().unwrap_or_default();
@@ -339,9 +384,9 @@ async fn repair_one_file(
 
     for attempt in 1..=5u32 {
         match repair_attempt(http, game_dir, file, &prefix, local_map, &tmp_path).await {
-            Ok(n) => return Ok(Repaired::Repaired(n)),
+            Ok(stats) => return Ok(Repaired::Repaired(stats)),
             Err(e) => {
-                tracing::warn!("repair {} attempt {}/5 failed: {:#}", file.rel, attempt, e);
+                tracing::warn!(attempt, "attempt failed: {:#}", e);
                 if attempt == 5 {
                     return Err(e);
                 }
@@ -359,8 +404,9 @@ async fn repair_attempt(
     prefix: &str,
     local_map: &HashMap<String, Vec<(String, i64, i64)>>,
     tmp_path: &Path,
-) -> Result<u64> {
-    let mut downloaded: u64 = 0;
+) -> Result<ChunkStats> {
+    let mut stats = ChunkStats::default();
+    stats.chunks_total = file.chunks.len() as u64;
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -369,45 +415,55 @@ async fn repair_attempt(
         .with_context(|| format!("open tmp {}", tmp_path.display()))?;
     let have = f.metadata().map(|m| m.len()).unwrap_or(0);
     if have > file.size as u64 {
+        tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
     }
+    tracing::debug!(tmp_bytes = f.metadata().map(|m| m.len()).unwrap_or(0), expect_size = file.size, "tmp resume point");
     let reuse_entries = local_map.get(&file.rel);
     for c in &file.chunks {
         let end = (c.offset + c.uncompressed_size) as u64;
         let cur_len = f.metadata().map(|m| m.len()).unwrap_or(0);
         if cur_len >= end {
+            stats.chunks_resumed += 1;
+            tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
             continue; // completed prefix kept; final whole-file MD5 re-verifies
         }
         f.seek(SeekFrom::Start(c.offset as u64))?;
         // (a) verified local slice reuse (same path, md5+size match)
         let mut reused = false;
-        if let Some(entries) = reuse_entries {
-            if let Some((_, _, ro)) = entries
-                .iter()
-                .find(|(md5, sz, _)| md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size)
-            {
+        match reuse_entries.and_then(|entries| {
+            entries.iter().find(|(md5, sz, _)| {
+                md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
+            })
+        }) {
+            None => tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download"),
+            Some((_, _, ro)) => {
                 let src = game_dir.join(normalize_rel(&file.rel));
-                if util::file_len(&src).is_some() {
-                    if let Ok(h) = util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
-                        if h.eq_ignore_ascii_case(&c.uncompressed_md5) {
-                            let mut sf = File::open(&src)?;
-                            sf.seek(SeekFrom::Start(*ro as u64))?;
-                            let mut remaining = c.uncompressed_size as u64;
-                            let mut buf = vec![0u8; 512 * 1024];
-                            let mut ok = true;
-                            while remaining > 0 {
-                                let want = (remaining as usize).min(buf.len());
-                                let n = sf.read(&mut buf[..want])?;
-                                if n == 0 {
-                                    ok = false;
-                                    break;
-                                }
-                                f.write_all(&buf[..n])?;
-                                remaining -= n as u64;
+                match util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
+                    Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
+                        tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
+                        let mut sf = File::open(&src)?;
+                        sf.seek(SeekFrom::Start(*ro as u64))?;
+                        let mut remaining = c.uncompressed_size as u64;
+                        let mut buf = vec![0u8; 512 * 1024];
+                        let mut ok = true;
+                        while remaining > 0 {
+                            let want = (remaining as usize).min(buf.len());
+                            let n = sf.read(&mut buf[..want])?;
+                            if n == 0 {
+                                ok = false;
+                                break;
                             }
-                            reused = ok;
+                            f.write_all(&buf[..n])?;
+                            remaining -= n as u64;
+                        }
+                        reused = ok;
+                        if reused {
+                            stats.chunks_reused += 1;
                         }
                     }
+                    Ok(h) => tracing::debug!(chunk = %c.id, slice_md5 = %h, "reuse slice md5 mismatch -> download"),
+                    Err(e) => tracing::debug!(chunk = %c.id, "reuse slice unreadable ({:#}) -> download", e),
                 }
             }
         }
@@ -418,9 +474,10 @@ async fn repair_attempt(
         let blob = sophon::fetch_chunk_bytes(http, prefix, &c.id)
             .await
             .with_context(|| format!("chunk {}", c.id))?;
-        downloaded += blob.len() as u64;
+        stats.download_bytes += blob.len() as u64;
         let decoded = zstd::stream::decode_all(std::io::Cursor::new(&blob))
             .with_context(|| format!("zstd chunk {}", c.id))?;
+        tracing::trace!(chunk = %c.id, compressed_bytes = blob.len(), decompressed_bytes = decoded.len(), "chunk decoded");
         if decoded.len() as i64 != c.uncompressed_size {
             anyhow::bail!(
                 "chunk {} size mismatch: expect {} got {}",
@@ -431,10 +488,12 @@ async fn repair_attempt(
         }
         let dh = format!("{:x}", md5::compute(&decoded));
         if !dh.eq_ignore_ascii_case(&c.uncompressed_md5) {
+            tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %dh, "chunk md5 mismatch");
             anyhow::bail!("chunk {} md5 mismatch", c.id);
         }
         f.seek(SeekFrom::Start(c.offset as u64))?;
         f.write_all(&decoded)?;
+        stats.chunks_downloaded += 1;
     }
     f.flush()?;
     drop(f);
@@ -444,14 +503,15 @@ async fn repair_attempt(
         anyhow::bail!("tmp length {} != expected {}", len, file.size);
     }
     let h = util::md5_file(tmp_path)?;
+    tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
     if !h.eq_ignore_ascii_case(&file.md5) {
         std::fs::remove_file(tmp_path).ok();
-        anyhow::bail!("final md5 mismatch for {}", file.rel);
+        anyhow::bail!("final md5 mismatch for {}: expect {} got {}", file.rel, file.md5, h);
     }
     let final_path = game_dir.join(normalize_rel(&file.rel));
     std::fs::rename(tmp_path, &final_path).with_context(|| format!("promote {}", file.rel))?;
-    tracing::info!("repaired {} ({} dl bytes)", file.rel, downloaded);
-    Ok(downloaded)
+    tracing::info!(chunks_total = stats.chunks_total, chunks_reused = stats.chunks_reused, chunks_downloaded = stats.chunks_downloaded, chunks_resumed = stats.chunks_resumed, download_bytes = stats.download_bytes, final_md5 = %h, "repaired");
+    Ok(stats)
 }
 
 /// Expected-set purge (Collapse GetUnusedFileInfoList, simplified, no SDK/WPF zips).
