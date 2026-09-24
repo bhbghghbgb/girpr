@@ -8,11 +8,48 @@ use std::sync::{
     Arc,
 };
 
-use crate::hyp::HypClient;
+use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient};
 use crate::sophon::{self, SophonChunkFile, WantedManifest};
 use crate::util;
 use crate::Biz;
 use tracing::Instrument;
+
+/// Typed failure carrying the process exit code, so the error contract in the
+/// README / docs/02 (§1) is enforced at runtime instead of a blanket `2`.
+/// `1` usage/config, `2` metadata/network, `3` write/verify.
+#[derive(Debug)]
+pub struct RunFailure {
+    pub exit_code: i32,
+    pub source: anyhow::Error,
+}
+
+impl RunFailure {
+    pub fn usage(e: impl Into<anyhow::Error>) -> Self {
+        Self {
+            exit_code: 1,
+            source: e.into(),
+        }
+    }
+    pub fn metadata(e: impl Into<anyhow::Error>) -> Self {
+        Self {
+            exit_code: 2,
+            source: e.into(),
+        }
+    }
+    pub fn write(e: impl Into<anyhow::Error>) -> Self {
+        Self {
+            exit_code: 3,
+            source: e.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for RunFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.source)
+    }
+}
+impl std::error::Error for RunFailure {}
 
 pub struct RepairPlan {
     pub latest: String,
@@ -66,6 +103,51 @@ pub fn emit_progress(sum: &Summary) {
     tracing::info!("{line}");
 }
 
+/// The one-time begin-report written to stdout right after the metadata calls
+/// (mirrored to the log). Parsers get both versions before any repair starts:
+/// `local_version` is the on-disk `config.ini` value (`none` when absent),
+/// `latest_version` is the "will be updated to" tag; the rest come from the
+/// HoYoPlay/Sophon APIs, not from config. `audio_langs` is the effective set.
+/// Emitted as a `REPORT key=value` line, or as a JSON object with
+/// `--json-summary`.
+pub fn format_report_line(
+    local_version: &Option<String>,
+    latest_version: &str,
+    biz: &str,
+    cfg: &GameConfig,
+    pkg: &GameBranchPackage,
+    build: &ChunkBuild,
+    audio_langs: &HashSet<String>,
+    json: bool,
+) -> String {
+    let mut langs: Vec<&String> = audio_langs.iter().collect();
+    langs.sort();
+    let audio_joined: Vec<&str> = langs.iter().map(|s| s.as_str()).collect();
+    let audio = audio_joined.join(",");
+    let local = local_version.as_deref().unwrap_or("none");
+    let diff_tags = pkg.diff_tags.join(",");
+    if json {
+        serde_json::json!({
+            "local_version": local,
+            "latest_version": latest_version,
+            "biz": biz,
+            "exe": cfg.exe_file_name,
+            "download_mode": cfg.default_download_mode,
+            "branch": pkg.branch,
+            "package_id": pkg.package_id,
+            "build_id": build.build_id,
+            "audio_langs": audio,
+            "diff_tags": diff_tags,
+        })
+        .to_string()
+    } else {
+        format!(
+            "REPORT local_version={local} latest_version={latest_version} biz={biz} exe={} download_mode={} branch={} package_id={} build_id={} audio_langs={audio} diff_tags={diff_tags}",
+            cfg.exe_file_name, cfg.default_download_mode, pkg.branch, pkg.package_id, build.build_id
+        )
+    }
+}
+
 fn start_progress_reporter(sum: Arc<Summary>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval =
@@ -88,9 +170,10 @@ pub struct RepairCtx {
     pub dry_run: bool,
     pub purge_after: bool,
     pub purge_before: bool,
+    pub json_summary: bool,
 }
 
-pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
+pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32), RunFailure> {
     let mut summary = Summary::default();
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only. Every delete/write below is gated on this
@@ -98,7 +181,9 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     // deleted — both fixed by gating on `readonly`, not just `dry_run`).
     let readonly = ctx.dry_run || ctx.check_only;
     if !readonly {
-        std::fs::create_dir_all(&ctx.game_dir)?;
+        std::fs::create_dir_all(&ctx.game_dir)
+            .context("create game dir")
+            .map_err(RunFailure::usage)?;
     }
     let game_dir = ctx
         .game_dir
@@ -115,9 +200,13 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     let local_version = util::read_game_version(&game_dir);
     tracing::info!("local game_version: {:?}", local_version);
 
-    // 2. server metadata (4 calls max)
-    let hyp = HypClient::new(ctx.biz)?;
-    let cfg = hyp.game_config().await.context("getGameConfigs")?;
+    // 2. server metadata (up to 5 calls)
+    let hyp = HypClient::new(ctx.biz).map_err(RunFailure::metadata)?;
+    let cfg = hyp
+        .game_config()
+        .await
+        .context("getGameConfigs")
+        .map_err(RunFailure::metadata)?;
     tracing::info!(
         "game config: exe={} audio_scan={} audio_res={} audio_cache={} mode={}",
         cfg.exe_file_name,
@@ -127,17 +216,22 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         cfg.default_download_mode
     );
     if cfg.default_download_mode == "DOWNLOAD_MODE_FILE" {
-        anyhow::bail!(
+        return Err(RunFailure::usage(anyhow::anyhow!(
             "game is in legacy FILE mode; chunk repair not supported (unexpected for Genshin)"
-        );
+        )));
     }
-    let branch = hyp.game_branch().await.context("getGameBranches")?;
+    let branch = hyp
+        .game_branch()
+        .await
+        .context("getGameBranches")
+        .map_err(RunFailure::metadata)?;
     let latest = branch.main.tag.clone();
     tracing::info!("latest version: {}", latest);
     let latest_build = hyp
         .chunk_build(&branch.main, None)
         .await
-        .context("getBuild(latest)")?;
+        .context("getBuild(latest)")
+        .map_err(RunFailure::metadata)?;
 
     let mut local_build = None;
     if let Some(lv) = local_version.as_deref() {
@@ -170,8 +264,27 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         }
         tracing::info!("keeping current audio langs: {:?}", audio);
     } else if !ctx.dry_run && !ctx.check_only && !cfg.audio_pkg_scan_dir.is_empty() {
-        write_audio_scan(&game_dir, &cfg.audio_pkg_scan_dir, &audio)?;
+        write_audio_scan(&game_dir, &cfg.audio_pkg_scan_dir, &audio)
+            .context("write audio scan file")
+            .map_err(RunFailure::write)?;
     }
+
+    // 2.5 begin-report to stdout (mirrored to log): versions + API-sourced
+    // metadata so a stdout parser sees what is on disk and what it will become
+    // before any repair starts. JSON when `--json-summary`.
+    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallService.cs#L788-L849
+    let report_line = format_report_line(
+        &local_version,
+        &latest,
+        ctx.biz.as_str(),
+        &cfg,
+        &branch.main,
+        &latest_build,
+        &audio,
+        ctx.json_summary,
+    );
+    println!("{report_line}");
+    tracing::info!("{report_line}");
 
     // 3. fetch + verify + parse latest manifests (per-manifest lists kept for prefix mapping)
     let http = hyp.http();
@@ -180,7 +293,8 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     for m in wanted {
         let files = sophon::fetch_manifest(&http, m)
             .await
-            .with_context(|| format!("manifest {}", m.matching_field))?;
+            .with_context(|| format!("manifest {}", m.matching_field))
+            .map_err(RunFailure::metadata)?;
         tracing::info!("manifest {}: {} entries", m.matching_field, files.len());
         per_manifest.push((m.chunk_download.url_prefix.clone(), files));
     }
@@ -209,11 +323,12 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     // run here to free space for the repair itself.
     // Skipped entirely in `--check-only` (verification reports damage; it must
     // not delete). In `--dry-run` the purge runs in log-only mode.
-    // See docs/02 Step 0 and
+    // See docs/02 Step 5 and
     // https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
     if ctx.purge_before && !ctx.check_only {
         let server_keep = collapse_keep_set();
-        let bytes = collapse_purge_extra(&game_dir, &plan, &server_keep, ctx.dry_run)?;
+        let bytes = collapse_purge_extra(&game_dir, &plan, &server_keep, ctx.dry_run)
+            .map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
@@ -340,7 +455,7 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         return Ok((summary, 3));
     }
 
-    // 6. post phase (see docs/02 Step 6).
+    // 6. post phase (see docs/02 Step 7).
     // `readonly` covers both `--dry-run` and `--check-only` (check-only returns
     // before this point, but gating on `readonly` keeps the invariant obvious).
     if !readonly {
@@ -372,7 +487,8 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         // Purge-after: same files-cleanup as purge-before, run after patching.
         if ctx.purge_after {
             let server_keep = collapse_keep_set();
-            let bytes = collapse_purge_extra(&game_dir, &plan_a, &server_keep, false)?;
+            let bytes = collapse_purge_extra(&game_dir, &plan_a, &server_keep, false)
+                .map_err(RunFailure::write)?;
             summary
                 .deleted_extra_bytes
                 .fetch_add(bytes, Ordering::Relaxed);
@@ -385,13 +501,16 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
             (ch, sub, cps),
             "",
             false,
-        )?;
+        )
+        .context("write config.ini")
+        .map_err(RunFailure::write)?;
     } else if ctx.dry_run && ctx.purge_after {
         // Dry-run logging only: list what the files-cleanup would
         // delete (writes nothing; byte count stays 0 by design).
         let server_keep = collapse_keep_set();
         let plan_ref = &*plan_a;
-        let _ = collapse_purge_extra(&game_dir, plan_ref, &server_keep, true)?;
+        let _ = collapse_purge_extra(&game_dir, plan_ref, &server_keep, true)
+            .map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))
@@ -1085,5 +1204,85 @@ mod tests {
         let keep = collapse_keep_set();
         assert!(keep.contains("config.ini"));
         assert_eq!(keep.len(), 1);
+    }
+
+    #[test]
+    fn report_line_keyvalue_reports_versions_and_api_fields() {
+        use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
+        let cfg = GameConfig {
+            exe_file_name: "YuanShen.exe".into(),
+            audio_pkg_scan_dir: "scan.txt".into(),
+            audio_pkg_res_dir: "res".into(),
+            audio_pkg_cache_dir: "cache".into(),
+            default_download_mode: "DOWNLOAD_MODE_CHUNK".into(),
+            res_category_dir: "rc.txt".into(),
+            blacklist_dir: "bl.txt".into(),
+            enable_resource_blacklist: true,
+            game: None,
+        };
+        let pkg = GameBranchPackage {
+            package_id: "pkg1".into(),
+            branch: "main".into(),
+            password: String::new(),
+            tag: "5.1.0".into(),
+            diff_tags: vec!["5.0.0".into(), "5.1.0".into()],
+        };
+        let build = ChunkBuild {
+            build_id: "build42".into(),
+            tag: "5.1.0".into(),
+            manifests: Vec::new(),
+        };
+        let audio: HashSet<String> = ["ja-jp".into(), "en-us".into()].into_iter().collect();
+        let line = format_report_line(
+            &Some("4.0.0".to_string()),
+            "5.1.0",
+            "hk4e_global",
+            &cfg,
+            &pkg,
+            &build,
+            &audio,
+            false,
+        );
+        assert!(
+            line.starts_with("REPORT local_version=4.0.0 latest_version=5.1.0 biz=hk4e_global"),
+            "{line}"
+        );
+        assert!(line.contains("exe=YuanShen.exe"), "{line}");
+        assert!(line.contains("download_mode=DOWNLOAD_MODE_CHUNK"), "{line}");
+        assert!(line.contains("branch=main"), "{line}");
+        assert!(line.contains("package_id=pkg1"), "{line}");
+        assert!(line.contains("build_id=build42"), "{line}");
+        assert!(line.contains("audio_langs=en-us,ja-jp"), "{line}");
+        assert!(line.contains("diff_tags=5.0.0,5.1.0"), "{line}");
+    }
+
+    #[test]
+    fn report_line_none_local_and_sorted_json() {
+        use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
+        let cfg = GameConfig {
+            exe_file_name: "GenshinImpact.exe".into(),
+            audio_pkg_scan_dir: String::new(),
+            audio_pkg_res_dir: String::new(),
+            audio_pkg_cache_dir: String::new(),
+            default_download_mode: String::new(),
+            res_category_dir: String::new(),
+            blacklist_dir: String::new(),
+            enable_resource_blacklist: false,
+            game: None,
+        };
+        let pkg = GameBranchPackage::default();
+        let build = ChunkBuild {
+            build_id: "b1".into(),
+            tag: "3.0.0".into(),
+            manifests: Vec::new(),
+        };
+        let audio: HashSet<String> = HashSet::new();
+        let line = format_report_line(&None, "3.0.0", "hk4e_cn", &cfg, &pkg, &build, &audio, true);
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["local_version"], "none");
+        assert_eq!(v["latest_version"], "3.0.0");
+        assert_eq!(v["biz"], "hk4e_cn");
+        assert_eq!(v["exe"], "GenshinImpact.exe");
+        assert_eq!(v["audio_langs"], "");
     }
 }

@@ -262,4 +262,58 @@ mod tests {
         let back = SophonChunkManifest::decode(buf.as_slice()).unwrap();
         assert_eq!(back.chuncks[0].file, "a/b.dat");
     }
+
+    fn chunk(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: md5.into(),
+            offset,
+            compressed_size: size + 1,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: "compressed".into(),
+        }
+    }
+
+    #[test]
+    fn local_chunk_map_dedups_by_md5_size_and_skips_folders() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![
+                SophonChunkFile {
+                    file: "a/b.dat".into(),
+                    chunks: vec![
+                        chunk("c1", "d41d8cd98f00b204e9800998ecf8427e", 0, 20),
+                        // same (md5,size) at a different offset must be dropped (first wins)
+                        chunk("c1dup", "d41d8cd98f00b204e9800998ecf8427e", 999, 20),
+                        // same size, different md5 must be kept
+                        chunk("c2", "0cc175b9c0f1b6a831c399e269772661", 20, 20),
+                    ],
+                    is_folder: false,
+                    size: 40,
+                    md5: "m1".into(),
+                },
+                SophonChunkFile {
+                    file: "dir/".into(),
+                    chunks: vec![chunk("cf", "0cc175b9c0f1b6a831c399e269772661", 0, 5)],
+                    is_folder: true,
+                    size: 0,
+                    md5: String::new(),
+                },
+            ],
+        }];
+        let map = build_local_chunk_map(&wm);
+        let e = &map["a/b.dat"];
+        assert_eq!(e.len(), 2);
+        assert_eq!(
+            e[0],
+            ("d41d8cd98f00b204e9800998ecf8427e".to_string(), 20, 0)
+        );
+        assert_eq!(
+            e[1],
+            ("0cc175b9c0f1b6a831c399e269772661".to_string(), 20, 20)
+        );
+        // folders never enter the reuse map
+        assert!(!map.contains_key("dir/"));
+    }
 }

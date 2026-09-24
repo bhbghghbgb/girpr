@@ -57,6 +57,7 @@ async fn main() {
         dry_run: args.dry_run,
         purge_after: args.purge_after,
         purge_before: args.purge_before,
+        json_summary: args.json_summary,
     };
     match repair::run(ctx).await {
         Ok((summary, code)) => {
@@ -67,8 +68,7 @@ async fn main() {
             let failed = summary.files_failed.load(Ordering::Relaxed);
             if args.json_summary {
                 let line = format!(
-                    "{{\"latest\":\"{}\",\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"exit\":{}}}",
-                    summary_latest(&summary),
+                    "{{\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"exit\":{}}}",
                     summary.files_total,
                     skipped,
                     repaired,
@@ -97,16 +97,10 @@ async fn main() {
             }
             std::process::exit(code);
         }
-        Err(e) => {
-            tracing::error!("fatal: {:#}", e);
-            eprintln!("FATAL {:#}", e);
-            // metadata/network vs verify/write is not distinguished here; default to 2
-            std::process::exit(2);
+        Err(f) => {
+            tracing::error!("fatal(exit={}): {:#}", f.exit_code, f.source);
+            eprintln!("FATAL {:#}", f.source);
+            std::process::exit(f.exit_code);
         }
     }
-}
-
-fn summary_latest(_s: &repair::Summary) -> String {
-    // latest is logged; summary intentionally stays numeric-only except this placeholder.
-    String::new()
 }

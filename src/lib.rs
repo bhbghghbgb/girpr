@@ -43,7 +43,7 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 
-    /// Emit final summary as JSON on stdout
+    /// Emit the begin REPORT and final SUMMARY stdout lines as JSON
     #[arg(long, default_value_t = false)]
     pub json_summary: bool,
 
@@ -67,3 +67,28 @@ pub mod hyp;
 pub mod repair;
 pub mod sophon;
 pub mod util;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_lang_normalizes_aliases_and_rejects_unknown() {
+        assert_eq!(normalize_audio_lang("zh-cn"), Some("zh-cn".to_string()));
+        assert_eq!(normalize_audio_lang("Chinese"), Some("zh-cn".to_string()));
+        assert_eq!(normalize_audio_lang("chinese"), Some("zh-cn".to_string()));
+        assert_eq!(normalize_audio_lang("en-us"), Some("en-us".to_string()));
+        assert_eq!(normalize_audio_lang("en_us"), Some("en-us".to_string()));
+        assert_eq!(normalize_audio_lang("English"), Some("en-us".to_string()));
+        assert_eq!(
+            normalize_audio_lang("English(US)"),
+            Some("en-us".to_string())
+        );
+        assert_eq!(normalize_audio_lang("ja-jp"), Some("ja-jp".to_string()));
+        assert_eq!(normalize_audio_lang("Japanese"), Some("ja-jp".to_string()));
+        assert_eq!(normalize_audio_lang("ko-kr"), Some("ko-kr".to_string()));
+        assert_eq!(normalize_audio_lang("Korean"), Some("ko-kr".to_string()));
+        assert_eq!(normalize_audio_lang("fr-fr"), None);
+        assert_eq!(normalize_audio_lang(""), None);
+    }
+}

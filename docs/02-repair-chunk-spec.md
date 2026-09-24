@@ -26,20 +26,19 @@ Inputs: `game_dir`, `biz ∈ {hk4e_cn, hk4e_global, hk4e_bilibili}`,
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
-`1` usage/config error, `2` network/metadata error, `3` verify/write error,
-`4` check-only found damage; machine-readable final
-summary line (counts + bytes) plus structured logs (per-file start/skip/repair/fail with reason).
+`1` usage/config error, `2` metadata/network error, `3` write/verify error,
+`4` check-only found damage; a begin `REPORT` line (versions + API-sourced
+fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
+both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
+with reason). Errors carry their class at the raise site (`RunFailure`), so the
+exit code matches the class even for post-phase write failures.
 
 ## 2. Procedure
 
-### Step 0 — Pre-cleanup (reclaim space first)
+### Step 0 — Prepare `game_dir`
 1. If `game_dir` missing → create (fresh install path; local version = none).
-2. **Files-cleanup before** (optional `--purge-before`, Collapse
-   `GenshinInstall.GetUnusedFileInfoList` parity
-   `Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:176-263`): run the
-   §Step-6 cleanup now to free space for the repair itself. Same file set as
-   `--purge-after`; only the timing differs. Counts to `deleted_extra_bytes`;
-   `--dry-run` only logs.
+   The files-cleanup is NOT run here: its expected set needs the latest manifest
+   paths (Steps 3–4), so `--purge-before` executes as Step 5.
 
 ### Step 1 — Read local state
 1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
@@ -47,20 +46,30 @@ summary line (counts + bytes) plus structured logs (per-file start/skip/repair/f
    `{"category":"<matching_field>","is_delete":true}` → ignore set.
 3. Determine effective audio langs: explicit flag wins; else read audio scan file
    (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean` → map to
-   `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` + any already-present audio manifest files' langs.
+   `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default, not
+   launcher behavior — Starward falls back to its registry setting, Collapse never
+   auto-selects langs).
    Write the scan file back when an explicit selection was given.
 
-### Step 2 — Fetch server metadata (up to 5 calls: 4 required + local best-effort)
+### Step 2 — Fetch server metadata (up to 5 calls)
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
    `audio_scan_dir, audio_cache_dir, audio_res_dir, res_category_dir, blacklist_dir (+enable flag),
-   default_download_mode`. Assert chunk-capable (Genshin is); abort otherwise.
+   default_download_mode`. Assert chunk-capable (Genshin is); abort otherwise (exit 1).
 2. `GET getGameBranches?launcher_id=&language=&game_ids[]=` → pick entry for game id →
    `main{package_id,branch,password,tag,diff_tags[]}`. `latest = main.tag`.
 3. `GET getBuild?branch=&package_id=&password=` (no `tag`) → latest chunk build
    `{build_id,tag,manifests[]}`. If server returns retcode -202 → abort (Genshin must be chunk mode).
 4. If local version known: `GET getBuild?...&tag={local}` → local chunk build, best-effort
    (failure → proceed with `local=null`; costs only dedup, not correctness).
-5. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names list.
+5. Emit the begin `REPORT` line to stdout (mirrored to the log), so a parser sees
+   the on-disk version and the target version before any repair starts:
+   `REPORT local_version=<v|none> latest_version=<latest> biz=… exe=… download_mode=… branch=… package_id=… build_id=… audio_langs=… diff_tags=…`
+   (`local_version` and the effective `audio_langs` from Step 1; the rest from
+   the calls above — API-sourced, not from config). With `--json-summary` this is
+   a JSON object instead.
+6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
+   list. Fetched lazily and best-effort during the post-phase (Step 8), never in
+   `--check-only`/`--dry-run`; a failure only warns.
 
 Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
 
@@ -87,7 +96,15 @@ For each latest file `F{path,size,md5,chunks[]}`:
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
   drop listed paths from the work list.
 
-### Step 5 — Repair files (bounded parallelism, resume-safe, idempotent)
+### Step 5 — Files-cleanup before (reclaim space before repairing)
+Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
+`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:176-263`): run the
+§Step-7 cleanup *now* — after the plan exists, before any repair — to free space
+for the repair itself. Same file set as `--purge-after`; only the timing differs.
+Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
+`--check-only` (verification must not delete).
+
+### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
 Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
 (HDD-friendly; also bounds peak disk to `io_threads × largest_file`). Retries: 5× per file.
 
@@ -116,21 +133,25 @@ Why this is "repair": no step assumes the old bytes are intact — reused slices
 the final whole-file MD5 gates promotion. Any-version → latest works because the plan is derived
 from the latest manifest alone (local manifest is a pure optimization).
 
-### Step 6 — Post-phase (deletes + config)
+### Step 7 — Post-phase (deletes + config)
 
 **Starward-handling remainder** (`GameInstallService.cs:ClearDeprecatedFiles` + audio/config):
 1. Delete each `deprecated_files[]` path if present (joined under `game_dir`, files only).
    (Redundant when the purge below is enabled — deprecated files are not in the
    live manifest — but keeps them cleaned without any purge flag.)
-2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite),
-   then remove emptied cache tree (prevents stranded duplicates; Starward parity
-   `GameInstallService.cs:427-444,643-660`).
-3. Rewrite `config.ini`: preserve all existing keys except force
-   `game_version=<latest>` (+ `game_biz`, `channel/sub_channel/cps` per biz:
-   cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`). Create with `[General]`
+2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite)
+   (Starward parity `GameInstallService.cs:427-444,643-660`). Only files are moved;
+   leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
+   when `--purge-after` is set.
+3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
+   `GameInstallService.cs:788-849`): preserve existing keys outside the forced set,
+   force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
+   cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
+   `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
+   `""` for the same key, and v1 does no SDK fetch. Create with `[General]`
    header if missing.
 
-**Files-cleanup** (optional `--purge-after`, same function as Step 0 —
+**Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
 1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}`.
@@ -145,11 +166,12 @@ from the latest manifest alone (local manifest is a pure optimization).
 2. Enumerate `game_dir/**/*` (files only); delete anything not in the expected
    set, then remove emptied dirs. `--dry-run` only logs candidates + bytes.
    Counts to the single `deleted_extra_bytes` counter. `--purge-before` runs
-   this same cleanup before Step 5.
+   this same cleanup at Step 5.
 
-### Step 7 — Report
-Log + stdout summary: `{latest, files_total, files_skipped, files_repaired, files_failed,
-download_bytes, deleted_extra_bytes}`. Exit code per §1. Rerun is safe
+### Step 8 — Report
+Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
+download_bytes, deleted_extra_bytes}` (numeric-only; the versions were already
+reported at Step 2.5). Exit code per §1. Rerun is safe
 (skips intact files, resumes partial `*_tmp`).
 
 ## 3. Disk-usage argument (why minimal)
@@ -171,7 +193,7 @@ download_bytes, deleted_extra_bytes}`. Exit code per §1. Rerun is safe
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
-| Interrupted run | `_tmp` resume by length + final MD5; temp sweep on next start |
+| Interrupted run | `_tmp` resume by length + final MD5; leftover `*_tmp` purged only via `--purge-before`/`--purge-after` |
 
 ## 5. What was deliberately excluded (and when to add)
 

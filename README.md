@@ -48,7 +48,7 @@ cargo build --release
 | `--purge-before` | off | Same files-cleanup as `--purge-after`, but run *before* patching (frees space for the repair itself) |
 | `--check-only` | off | Verify size+MD5 of every file and report; writes nothing |
 | `--dry-run` | off | Log actions without writing anything |
-| `--json-summary` | off | Emit the final summary as JSON instead of `KEY=value` |
+| `--json-summary` | off | Emit the begin `REPORT` and final `SUMMARY` stdout lines as JSON |
 | `--log-level <LVL>` | `info` | `error`, `warn`, `info`, `debug`, `trace` (`RUST_LOG` also honored) |
 
 ### Exit codes (automation-friendly)
@@ -56,19 +56,32 @@ cargo build --release
 | Code | Meaning |
 |---|---|
 | `0` | Success (check-only: everything intact) |
-| `1` | Usage / config error (bad args, unknown audio lang, …) |
-| `2` | Metadata / network error (HoYoPlay/Sophon unreachable, bad manifest) |
-| `3` | Verify / write error (a file failed final MD5 after retries) |
+| `1` | Usage / config error (bad args, unknown audio lang, `--io-threads < 1`, unusable `--game-path`, game in legacy FILE mode) |
+| `2` | Metadata / network error (HoYoPlay/Sophon unreachable, non-zero retcode, bad manifest, checksum mismatch) |
+| `3` | Write / verify error (a file failed final MD5 after retries, promote/rename failed, `config.ini` / audio-scan write failed, files-cleanup failed) |
 | `4` | Check-only found damage |
 
-Progress and diagnostics go to **stderr** (structured `tracing` logs); the final
+Each error is classified at the site that raises it (`run` → `RunFailure`), so the
+right code exits even for post-phase write failures — code `3` is not limited to
+the per-file repair loop.
+
+Progress and diagnostics go to **stderr** (structured `tracing` logs). After the
+server metadata calls the tool writes a one-time
+`REPORT local_version=<v|none> latest_version=<v> biz=… exe=… download_mode=… branch=… package_id=… build_id=… audio_langs=… diff_tags=…`
+line to **stdout** (also mirrored to the log) so a parser sees both the on-disk
+version (`local_version`, from `config.ini`) and the "will be updated to"
+version (`latest_version`, from `getGameBranches`), plus metadata that does **not**
+come from config — the rest of the fields are sourced from the HoYoPlay/Sophon
+APIs; `audio_langs` is the effective set the run will keep. The final
 `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`
-line goes to **stdout** for easy parsing **and is mirrored to the log**, so a
+line also goes to **stdout** for easy parsing **and is mirrored to the log**, so a
 stderr-only capture still keeps it. During long phases a
 `PROGRESS done=<done>/<total> skipped=… repaired=… failed=… download_bytes=…`
 line is emitted to **stdout every 10s (also mirrored to the log)** — from a
 background reporter during repair, and inline during `--check-only`
-(`skipped` = intact files so far, `failed` = bad files so far).
+(`skipped` = intact files so far, `failed` = bad files so far). With
+`--json-summary`, the `REPORT` and `SUMMARY` lines are emitted as JSON objects
+instead.
 
 ### Logging & correlation
 

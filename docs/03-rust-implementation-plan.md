@@ -6,7 +6,7 @@ Spec: `docs/02-repair-chunk-spec.md`. Findings: `docs/01-findings-and-verdict.md
 
 ```text
 Cargo.toml            # clap, tokio, reqwest, serde, prost, md5, zstd, tracing, anyhow, walkdir, regex
-src/main.rs           # logging init, exit codes, SUMMARY output, orchestration
+src/main.rs           # logging init, exit codes, REPORT/SUMMARY output, orchestration
 src/lib.rs            # CLI definition (clap Args), audio-lang normalize, module root
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
@@ -28,23 +28,26 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--log-level error|warn|info|debug|trace] [--json-summary]
 ```
 
-Exit codes: 0 ok (incl. check-only clean), 1 usage, 2 metadata/network, 3 verify/write,
-4 check-only found damage. Automation: all progress on stderr (tracing), final `SUMMARY key=value`
-(or JSON) on stdout.
+Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args, unusable game
+path, legacy FILE mode), 2 metadata/network, 3 write/verify (per-file repair,
+config.ini / audio-scan write, files-cleanup), 4 check-only found damage. Errors
+carry their class via `repair::RunFailure` at the raise site. Automation: all
+progress on stderr (tracing); a begin `REPORT` line (versions + API fields) and
+the final `SUMMARY key=value` (or JSON with `--json-summary`) on stdout.
 
 ## 3. Key flows → code mapping
 
 | Spec step | Code | Provenance |
 |---|---|---|
-| Files-cleanup before | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-before` (0) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Local version + audio | `repair::read_local_version`, audio scan file read/write (1) | Starward |
-| 5 metadata calls (4 required + local best-effort) | `hyp::get_game_config/branches/build/deprecated` (2) | Starward |
+| Up to 5 metadata calls | `hyp::get_game_config/branches/build/deprecated` + `repair::format_report_line` begin-report (2) | Starward |
 | Manifest fetch/verify/parse | `sophon::fetch_manifest(manifest_dl, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::build_plan(latest, local)` keyed by path, chunk md5+size (4) | Starward |
-| Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (5) | Starward |
-| Post deletes/config | deprecated delete + audio cache→res + `write_config_ini` (6) | Starward-handling |
-| Files-cleanup after | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-after` (6) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
-| Summary | (7) | — |
+| Files-cleanup before | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
+| Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (6) | Starward |
+| Post deletes/config | deprecated delete + audio cache→res + `write_config_ini` (7) | Starward-handling |
+| Files-cleanup after | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
+| Summary | (8) | — |
 
 Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with
 ~`io_threads*4` pool; per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
@@ -52,8 +55,8 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 ## 4. Testing
 
-`cargo test`: pure unit tests — config.ini parse/bump, audio-lang mapping, manifest filter,
-reuse-map build, expected-set/purge classification.
+`cargo test`: pure unit tests — config.ini parse/bump, audio-lang mapping, local chunk-map
+build, manifest filter, expected-set/purge classification, REPORT/SUMMARY formatting.
 Network paths covered by `--dry-run`/`--check-only` against a fixture manifest (no live-game CI dependency).
 
 ## 5. Logging & correlation

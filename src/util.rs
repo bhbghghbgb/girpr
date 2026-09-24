@@ -178,4 +178,64 @@ mod tests {
         assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn config_bump_forces_target_keys_preserves_rest_and_is_idempotent() {
+        let dir = std::env::temp_dir().join("girpr_test_cfg_bump");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.ini"),
+            "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
+        )
+        .unwrap();
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            "",
+            false,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
+        assert!(text.starts_with("[General]\n"));
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.contains(&"game_version=5.1.0"));
+        assert!(!lines.contains(&"game_version=4.0.0"));
+        assert!(lines.contains(&"fps=120"));
+        assert!(lines.contains(&"sdk_version="));
+        assert!(!lines.contains(&"sdk_version=9.9.9"));
+        assert!(lines.contains(&"game_biz=hk4e_global"));
+        assert!(lines.contains(&"channel=1"));
+        assert!(lines.contains(&"sub_channel=0"));
+        assert!(lines.contains(&"cps=hyp_hoyoverse"));
+        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        // rerun: no duplicate keys (existing forced keys replaced in place)
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            "",
+            false,
+        )
+        .unwrap();
+        let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
+        for key in [
+            "game_version",
+            "fps",
+            "sdk_version",
+            "sub_channel",
+            "cps",
+            "game_biz",
+            "channel",
+        ] {
+            let count = text2
+                .lines()
+                .filter(|l| l.starts_with(&format!("{key}=")))
+                .count();
+            assert_eq!(count, 1, "{key} must appear exactly once");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

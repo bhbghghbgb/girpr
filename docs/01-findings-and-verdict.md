@@ -156,7 +156,7 @@ Reasons:
    patch-blob retention use strictly more transient space.
 3. Smallest implementation: HoYoPlay `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
    dedup] → manifest download/verify/parse → per-file repair → **Starward-handling post-phase**
-   (`getGameDeprecatedFileConfigs` delete + temp sweep + audio cache→res move + `config.ini` bump).
+   (`getGameDeprecatedFileConfigs` delete + audio cache→res move + `config.ini` bump).
    No dispatcher (`res_versions`/`data_versions`), no persistent
    revisions, no `ctable` juggling, no hdiff/7z pipeline, no SDK/WPF/plugin zips, no speed limiter, no
    quota dialog. Collapse's extras are launcher conveniences, not needed to leave a launchable Genshin.
