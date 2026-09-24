@@ -143,6 +143,13 @@ a smaller implementation. Do not "fix" them without reading this first.
   Pro: reuse map is per-path and tiny; covers ~all Genshin wins (same-file
   chunk stability). Tradeoff: moved/renamed content re-downloads instead of
   being sourced from another local file.
+  Future note (cross-file reuse, not implemented): if chunk reuse is ever
+  extended to Starward-style any-file dedup, `--purge-before` would destroy
+  those reuse sources — it deletes old-only files against the live manifest,
+  so a moved `A(old) → B(new)` would lose `A` before `B` could copy from it
+  (correctness still holds via download fallback, but the bytes are
+  re-downloaded). `--purge-before` stays destructive
+  by design — disk-critical runs accept the re-download cost.
 - **S3 — Resume-by-length with final-MD5 gate.** An existing `_tmp` prefix is
   kept based on length alone (`cur_len >= offset + size` skips the chunk);
   only the final whole-file MD5 decides promotion. Same as Starward's
