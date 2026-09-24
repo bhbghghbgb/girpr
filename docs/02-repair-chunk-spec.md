@@ -25,7 +25,8 @@ Inputs: `game_dir`, `biz ∈ {hk4e_cn, hk4e_global, hk4e_bilibili}`,
 `audio_langs ⊆ {zh-cn,en-us,ja-jp,ko-kr}` (default: keep currently selected, see §3),
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-extra`, `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
-`1` usage/config error, `2` network/metadata error, `3` verify/write error; machine-readable final
+`1` usage/config error, `2` network/metadata error, `3` verify/write error,
+`4` check-only found damage; machine-readable final
 summary line (counts + bytes) plus structured logs (per-file start/skip/repair/fail with reason).
 
 ## 2. Procedure
@@ -50,7 +51,7 @@ summary line (counts + bytes) plus structured logs (per-file start/skip/repair/f
    `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` + any already-present audio manifest files' langs.
    Write the scan file back when an explicit selection was given.
 
-### Step 2 — Fetch server metadata (only 4 calls)
+### Step 2 — Fetch server metadata (up to 5 calls: 4 required + local best-effort)
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
    `audio_scan_dir, audio_cache_dir, audio_res_dir, res_category_dir, blacklist_dir (+enable flag),
    default_download_mode`. Assert chunk-capable (Genshin is); abort otherwise.
@@ -70,7 +71,7 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 1. `manifest{id,checksum,compressed_size}` + `manifest_download{url_prefix}`, `chunk_download{url_prefix}`.
 2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 linear backoff).
 3. Zstd-decompress entire blob → compute MD5 of **decompressed** bytes → must equal `checksum`
-   (case-insensitive); mismatch → re-download once → still mismatch → abort (exit 2).
+   (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still mismatch → abort (exit 2).
 4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
    compressed_size,uncompressed_size,compressed_md5}], is_folder, size, md5}]}`.
    Drop `is_folder` entries from the work list (create dirs on demand instead).
@@ -165,7 +166,7 @@ download_bytes, deleted_extra_bytes, freed_temp_bytes}`. Exit code per §1. Reru
 
 | Failure | Handling |
 |---|---|
-| Manifest MD5 mismatch | one re-download, then abort exit 2 (never patch from bad metadata) |
+| Manifest MD5 mismatch | retry whole fetch up to 5×, then abort exit 2 (never patch from bad metadata) |
 | Chunk download corrupt (final MD5 fail) | delete `_tmp`, retry file ×5, then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |

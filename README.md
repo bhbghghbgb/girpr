@@ -92,8 +92,9 @@ API calls log the full request URL + retcode at debug, full JSON bodies at trace
 ## Project layout
 
 ```text
-src/main.rs    CLI, logging init, exit codes, SUMMARY output
-src/lib.rs     CLI definition, biz/channel/launcher/game-id mapping
+src/main.rs    logging init, exit codes, SUMMARY output, orchestration
+src/lib.rs     CLI definition (clap Args), module root
+src/biz.rs     biz/channel/launcher/game-id mapping
 src/hyp.rs     HoYoPlay client (getGameConfigs/getGameBranches/getBuild/getDeprecated)
 src/sophon.rs  Chunk-manifest protobuf, fetch+verify+parse, manifest filtering
 src/repair.rs  Work-list build, per-file repair, cleanup, extra-file purge

@@ -6,7 +6,8 @@ Spec: `docs/02-repair-chunk-spec.md`. Findings: `docs/01-findings-and-verdict.md
 
 ```text
 Cargo.toml            # clap, tokio, reqwest, serde, prost, md5, zstd, tracing, anyhow, walkdir, regex
-src/main.rs           # CLI (clap), logging init, exit codes, orchestration
+src/main.rs           # logging init, exit codes, SUMMARY output, orchestration
+src/lib.rs            # CLI definition (clap Args), audio-lang normalize, module root
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, filtering
@@ -24,7 +25,7 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--io-threads <N, default 4>]            (concurrent FILES; chunks sequential/file)
       [--purge-extra] [--purge-before]         (extra-file purge after / also before)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
-      [--log-level info|debug] [--json-summary]
+      [--log-level error|warn|info|debug|trace] [--json-summary]
 ```
 
 Exit codes: 0 ok (incl. check-only clean), 1 usage, 2 metadata/network, 3 verify/write,
@@ -38,7 +39,7 @@ Exit codes: 0 ok (incl. check-only clean), 1 usage, 2 metadata/network, 3 verify
 | Pre-clean temps | `util::sweep_temps(game_dir)` (0.2) → `freed_temp_bytes` | Starward-handling (`ClearDeprecatedFiles` extended pre-task) |
 | Purge-before | `repair::purge_extra_files(game_dir, plan)` when `--purge-before` (0.3) → `deleted_extra_bytes` | Collapse-handling (`CheckRedundantFiles` parity) |
 | Local version + audio | `repair::read_local_version`, audio scan file read/write (1) | Starward |
-| 4 metadata calls | `hyp::get_game_config/branches/build/deprecated` (2) | Starward |
+| 5 metadata calls (4 required + local best-effort) | `hyp::get_game_config/branches/build/deprecated` (2) | Starward |
 | Manifest fetch/verify/parse | `sophon::fetch_manifest(manifest_dl, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::build_plan(latest, local)` keyed by path, chunk md5+size (4) | Starward |
 | Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (5) | Starward |
@@ -71,7 +72,7 @@ Network paths covered by `--dry-run`/`--check-only` against a fixture manifest (
   `after: tmp ready` → `repaired` (chunks total/reused/downloaded/resumed, bytes, final md5).
   Check-only failures log `expect_*` vs `actual_*` at warn level.
 
-## 5. v1 limits (documented, not bugs)
+## 6. v1 limits (documented, not bugs)
 
 Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, no dispatcher
 persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` reuse dir not retained.
