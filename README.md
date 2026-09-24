@@ -27,13 +27,13 @@ cargo build --release
 
 ```powershell
 # Preview what would change (writes nothing)
-.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-extra --dry-run
+.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --dry-run
 
 # Verify only (writes nothing); exit 4 if anything is damaged
 .\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --check-only
 
 # Repair in place, purge unknown extra files afterwards
-.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-extra --io-threads 4
+.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --io-threads 4
 ```
 
 ### Options
@@ -44,8 +44,8 @@ cargo build --release
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
 | `--audio <LANG>`… | keep current | Audio languages to keep (repeatable): `zh-cn`, `en-us`, `ja-jp`, `ko-kr` |
 | `--io-threads <N>` | `4` | Concurrent **files** (chunks within a file are sequential → HDD-friendly). SSD: 4–8, HDD: 1–2 |
-| `--purge-extra` | off | After patching, delete files not in the live manifest (Collapse parity) |
-| `--purge-before` | off | Also purge extra files *before* patching (frees space for the repair itself) |
+| `--purge-after` | off | After patching, delete every file not in the live manifest (Collapse files-cleanup parity) |
+| `--purge-before` | off | Same files-cleanup as `--purge-after`, but run *before* patching (frees space for the repair itself) |
 | `--check-only` | off | Verify size+MD5 of every file and report; writes nothing |
 | `--dry-run` | off | Log actions without writing anything |
 | `--json-summary` | off | Emit the final summary as JSON instead of `KEY=value` |
@@ -62,7 +62,7 @@ cargo build --release
 | `4` | Check-only found damage |
 
 Progress and diagnostics go to **stderr** (structured `tracing` logs); the final
-`SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… freed_temp_bytes=… exit=…`
+`SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`
 line goes to **stdout** for easy parsing **and is mirrored to the log**, so a
 stderr-only capture still keeps it. During long phases a
 `PROGRESS done=<done>/<total> skipped=… repaired=… failed=… download_bytes=…`
@@ -80,14 +80,23 @@ API calls log the full request URL + retcode at debug, full JSON bodies at trace
 
 ## How it keeps disk usage low
 
-1. **Pre-clean**: deletes `**/*_tmp`, `**/*.hdiff`, `chunk/`, `ldiff/`, `staging/` before starting.
+1. **Files-cleanup (Collapse parity)**: with `--purge-before` / `--purge-after`,
+   every file not in the live manifest is deleted — temps (`*_tmp`, `*.hdiff`,
+   `chunk/`, `ldiff/`, `staging/`), orphans, unselected audio, `ScreenShot/`,
+   logs. Only `config.ini` + manifest files + `audio_lang_*` /
+   `Audio_*_pkg_version` are kept. The two flags run the same cleanup; only
+   the timing differs (before frees space for the repair itself).
 2. **Skip intact files**: size + full MD5 check first — 0 bytes downloaded for healthy files.
 3. **Chunk-level repair**: only missing/corrupt chunks are fetched; unchanged chunks are copied
    from verified local slices (hash-gated, with network fallback).
 4. **Per-file temp + atomic move**: transient cost is one `_tmp` beside the file being repaired —
    no whole-game duplicate, no retained blob stores, no zip staging.
-5. **Post-clean**: deprecated files, temps, and (with `--purge-extra`) any file not in the live
-   manifest are removed; `config.ini` is bumped to the latest version.
+5. **Post-phase**: deprecated files, audio cache→res move, and (with
+   `--purge-after`) the files-cleanup; `config.ini` is bumped to the latest version.
+
+v1 expected-set gap: the cleanup compares against `{latest Sophon manifest
+paths}` only — no dispatcher persistent union, no SDK/WPF/plugin zips (game
+launches without them).
 
 ## Project layout
 
@@ -97,8 +106,8 @@ src/lib.rs     CLI definition (clap Args), module root
 src/biz.rs     biz/channel/launcher/game-id mapping
 src/hyp.rs     HoYoPlay client (getGameConfigs/getGameBranches/getBuild/getDeprecated)
 src/sophon.rs  Chunk-manifest protobuf, fetch+verify+parse, manifest filtering
-src/repair.rs  Work-list build, per-file repair, cleanup, extra-file purge
-src/util.rs    MD5 helpers, temp sweep, config.ini read/write
+src/repair.rs  Work-list build, per-file repair, files-cleanup purge
+src/util.rs    MD5 helpers, config.ini read/write
 docs/          findings & verdict, language-agnostic spec, Rust plan
 ```
 

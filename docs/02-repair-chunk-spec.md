@@ -23,7 +23,8 @@ downloads, dispatcher persistent revisions, quota dialogs, hardlinks, UI/progres
 
 Inputs: `game_dir`, `biz ∈ {hk4e_cn, hk4e_global, hk4e_bilibili}`,
 `audio_langs ⊆ {zh-cn,en-us,ja-jp,ko-kr}` (default: keep currently selected, see §3),
-`io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-extra`, `--check-only`, `--dry-run`.
+`io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
+`--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
 `1` usage/config error, `2` network/metadata error, `3` verify/write error,
 `4` check-only found damage; machine-readable final
@@ -31,16 +32,14 @@ summary line (counts + bytes) plus structured logs (per-file start/skip/repair/f
 
 ## 2. Procedure
 
-### Step 0 — Pre-clean (reclaim space first)
+### Step 0 — Pre-cleanup (reclaim space first)
 1. If `game_dir` missing → create (fresh install path; local version = none).
-2. **Starward-handling temp sweep** (extended: Starward's `ClearDeprecatedFiles`
-   `GameInstallService.cs:722-777` only sweeps post-task when `PredownloadVersion is null`; we also
-   sweep pre-task): delete inside `game_dir`: `**/*_tmp`, `**/*.hdiff`, dirs `chunk/`, `ldiff/`,
-   `staging/`. Log bytes/entries freed to `freed_temp_bytes` (NOT `deleted_extra_bytes`).
-   Never touch `ScreenShot/`, `config.ini`, `audio_lang_*`.
-3. **Collapse-handling purge-before** (optional `--purge-before`, repair-time `CheckRedundantFiles`
-   parity `Collapse/.../RepairManagement/Genshin/Check.cs:26-67,232-319`): run the §Step-6C purge
-   now to free space for the repair itself. Counts to `deleted_extra_bytes`; `--dry-run` only logs.
+2. **Files-cleanup before** (optional `--purge-before`, Collapse
+   `GenshinInstall.GetUnusedFileInfoList` parity
+   `Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:176-263`): run the
+   §Step-6 cleanup now to free space for the repair itself. Same file set as
+   `--purge-after`; only the timing differs. Counts to `deleted_extra_bytes`;
+   `--dry-run` only logs.
 
 ### Step 1 — Read local state
 1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
@@ -118,11 +117,11 @@ the final whole-file MD5 gates promotion. Any-version → latest works because t
 from the latest manifest alone (local manifest is a pure optimization).
 
 ### Step 6 — Post-phase (deletes + config)
-Split by provenance; keep the two byte counters separate.
 
-**6S — Starward-handling** (`GameInstallService.cs:ClearDeprecatedFiles` L722-777 + audio/config):
+**Starward-handling remainder** (`GameInstallService.cs:ClearDeprecatedFiles` + audio/config):
 1. Delete each `deprecated_files[]` path if present (joined under `game_dir`, files only).
-   Re-run the Step-0 temp sweep (catches interrupted runs).
+   (Redundant when the purge below is enabled — deprecated files are not in the
+   live manifest — but keeps them cleaned without any purge flag.)
 2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite),
    then remove emptied cache tree (prevents stranded duplicates; Starward parity
    `GameInstallService.cs:427-444,643-660`).
@@ -131,30 +130,31 @@ Split by provenance; keep the two byte counters separate.
    cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`). Create with `[General]`
    header if missing.
 
-**6C — Collapse-handling purge-extra** (`GenshinInstall.GetUnusedFileInfoList`
-`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:176-263` parity, v1 scope: no
-SDK/WPF/dispatcher union — see `docs/01 §3`):
-1. Build expected set = `{latest manifest paths}`
-   ∪ server-config metadata files (see Step 2 — all live inside `game_dir` but are NEVER in the
-   chunk manifests, so without this the purge would delete them):
-   `{config.ini, exe per game config, blacklist file, res_category file, audio scan file,
-   audio_lang_14 + Audio_<entry>_pkg_version per selected lang (Collapse `GenshinInstall.cs:228-247`
-   pattern `^Audio_<entry>_pkg_version$`)}`.
-2. Enumerate `game_dir/**/*` (files only); **skip without comparing** (sweep owns them):
-   `*_tmp`, `*.hdiff`, anything under `chunk/`, `ldiff/`, `staging/`.
-   Delete anything else not in expected set **except** user-data allowlist both launchers never touch:
-   `ScreenShot/**`, `log*/**` (tight prefix — must NOT be bare `starts_with("log")`, which matches
-   e.g. `login.dat`), `audio_lang_*`, `config.ini`. `--dry-run` only logs candidates + bytes.
-   Counts to `deleted_extra_bytes`. Run before Step 5 too when `--purge-before` is set.
+**Files-cleanup** (optional `--purge-after`, same function as Step 0 —
+`GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
+`{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
+1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}`.
+   `config.ini` is the ONLY metadata keep: it lives inside `game_dir` but never
+   appears in chunk manifests. The exe needs no keep (the game flags unknown
+   exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
+   + `Audio_*_pkg_version` are kept by filename pattern (Collapse
+   `GenshinInstall.cs:228-247`); everything else not in the manifest purges —
+   including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`,
+   `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`, logs, server
+   bookkeeping files.
+2. Enumerate `game_dir/**/*` (files only); delete anything not in the expected
+   set, then remove emptied dirs. `--dry-run` only logs candidates + bytes.
+   Counts to the single `deleted_extra_bytes` counter. `--purge-before` runs
+   this same cleanup before Step 5.
 
 ### Step 7 — Report
 Log + stdout summary: `{latest, files_total, files_skipped, files_repaired, files_failed,
-download_bytes, deleted_extra_bytes, freed_temp_bytes}`. Exit code per §1. Rerun is safe
+download_bytes, deleted_extra_bytes}`. Exit code per §1. Rerun is safe
 (skips intact files, resumes partial `*_tmp`).
 
 ## 3. Disk-usage argument (why minimal)
 
-- Pre/post purge + temp sweep bounds "before/after" to exactly the live file set + tiny metadata.
+- Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
 - During: transient per active file = `≤ 1 × file size` (`_tmp` grows beside the old file) plus pipe
   buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no in-game manifest cache.
   Peak ≈ `io_threads × largest_file`. With `io_threads=1` the tool needs only

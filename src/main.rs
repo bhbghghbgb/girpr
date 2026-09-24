@@ -38,11 +38,11 @@ async fn main() {
     }
 
     tracing::info!(
-        "girpr start game_path={} biz={} jobs={} purge_extra={} purge_before={} check_only={} dry_run={}",
+        "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={}",
         args.game_path.display(),
         args.biz.as_str(),
         args.io_threads,
-        args.purge_extra,
+        args.purge_after,
         args.purge_before,
         args.check_only,
         args.dry_run
@@ -55,20 +55,19 @@ async fn main() {
         jobs: args.io_threads,
         check_only: args.check_only,
         dry_run: args.dry_run,
-        purge_extra: args.purge_extra,
+        purge_after: args.purge_after,
         purge_before: args.purge_before,
     };
     match repair::run(ctx).await {
         Ok((summary, code)) => {
             let dl = summary.download_bytes.load(Ordering::Relaxed);
             let del = summary.deleted_extra_bytes.load(Ordering::Relaxed);
-            let freed = summary.freed_temp_bytes.load(Ordering::Relaxed);
             let skipped = summary.files_skipped.load(Ordering::Relaxed);
             let repaired = summary.files_repaired.load(Ordering::Relaxed);
             let failed = summary.files_failed.load(Ordering::Relaxed);
             if args.json_summary {
                 let line = format!(
-                    "{{\"latest\":\"{}\",\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"freed_temp_bytes\":{},\"exit\":{}}}",
+                    "{{\"latest\":\"{}\",\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"exit\":{}}}",
                     summary_latest(&summary),
                     summary.files_total,
                     skipped,
@@ -76,7 +75,6 @@ async fn main() {
                     failed,
                     dl,
                     del,
-                    freed,
                     code
                 );
                 // stdout for parsing + log so a stderr-only capture still keeps it.
@@ -84,14 +82,13 @@ async fn main() {
                 tracing::info!("{line}");
             } else {
                 let line = format!(
-                    "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} freed_temp_bytes={} exit={}",
+                    "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} exit={}",
                     summary.files_total,
                     skipped,
                     repaired,
                     failed,
                     dl,
                     del,
-                    freed,
                     code
                 );
                 // stdout for parsing + log so a stderr-only capture still keeps it.

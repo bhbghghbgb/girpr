@@ -25,11 +25,13 @@ pub struct Args {
     #[arg(long, default_value_t = 4)]
     pub io_threads: usize,
 
-    /// Delete files not in the live manifest after patching (Collapse parity)
+    /// Delete files not in the live manifest after patching (Collapse files-cleanup parity).
+    /// Same cleanup as `--purge-before`, only the timing differs.
     #[arg(long, default_value_t = false)]
-    pub purge_extra: bool,
+    pub purge_after: bool,
 
-    /// Also purge extra files BEFORE patching (frees space for the repair itself)
+    /// Same files-cleanup as `--purge-after`, but run before patching
+    /// (frees space for the repair itself).
     #[arg(long, default_value_t = false)]
     pub purge_before: bool,
 

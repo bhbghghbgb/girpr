@@ -130,14 +130,14 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
   - (b) **Repair-time redundant pass** — `Check.cs:26-67` → `CheckRedundantFiles` (before the hash loop)
     marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs:232-319`) as `Unused`, deleted in
     `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
-- **v1 purge scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
-  `{latest chunk-manifest paths} ∪ {config.ini, exe per game config, blacklist file, res_category file,
-  audio scan file, audio_lang_14 + Audio_*_pkg_version for selected langs}`; allowlist additionally keeps
-  user data both launchers never touch (`ScreenShot/**`, log dirs). Temp names (`*_tmp`, `*.hdiff`,
-  `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`, `*deletefiles*`) belong to Starward-handling temp
-  sweep, NOT to the purge comparison (purge skips them; sweep deletes them) so byte accounting stays split
-  (`freed_temp_bytes` vs `deleted_extra_bytes`). This is exactly the user's Collapse usage
-  (before + after Starward).
+- **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
+  `{latest chunk-manifest paths} ∪ {config.ini}` plus filename-pattern keeps for
+  `audio_lang_*` + `Audio_*_pkg_version` (Collapse `GenshinInstall.cs:228-247` parity).
+  Everything else purges into the single `deleted_extra_bytes` counter — including
+  temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`,
+  `*deletefiles*`), unselected audio, `ScreenShot/`, logs, exe and server
+  bookkeeping files. `--purge-before` and `--purge-after` run this same cleanup;
+  only the timing differs.
 
 ## 4. Verdict
 
@@ -166,12 +166,11 @@ Reasons:
    current two-launcher workflow in one tool.
 
 Extra behavior changes recommended (beyond 1:1 port):
-- **Starward-handling, extended**: run the temp sweep (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`,
-  `staging/`) **before** patching too (Starward only sweeps post-task) to reclaim space.
-- **Collapse-handling**: purge-extra both before (`--purge-before`, repair-time `CheckRedundantFiles`
-  parity — frees space for the repair itself) and after (`--purge-extra`, manual-cleanup parity);
-  dry-run lists bytes. Expected set per §3-Collapse v1 scope; keep allowlist minimal
-  (`config.ini`, server-config metadata files, selected `audio_lang_*`, `ScreenShot/`, log dirs).
+- **Files-cleanup both before and after** (`--purge-before` / `--purge-after` run the
+  same Collapse `GetUnusedFileInfoList`-parity cleanup; only timing differs);
+  dry-run lists bytes. Expected set per §3 v1 scope; keep minimal
+  (`config.ini` + manifest membership + `audio_lang_*` / `Audio_*_pkg_version`
+  pattern).
 - Bound file parallelism (`--io-threads`; chunks sequential within a file) for HDD vs SSD.
 - Skip SDK/WPF downloads and dispatcher persistent writes in v1 (game launches without them; add
   `--with-sdk --with-wpf` later if a channel proves otherwise). Always move audio cache→res if the

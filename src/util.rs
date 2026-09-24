@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MD5_BUF: usize = 512 * 1024;
 
@@ -43,63 +43,6 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
 
 pub fn file_len(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|m| m.len())
-}
-
-/// Delete `**/*_tmp`, `**/*.hdiff` and dirs `chunk/ ldiff/ staging/`. Returns (entries, bytes).
-/// NOTE(starward-parity): same temp set Starward clears outside predownload
-/// mode (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`); the suffixes are
-/// load-bearing (foreign leftovers included), not magic strings to dedupe.
-/// Do not narrow this without checking upstream.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallService.cs#L747-L771
-pub fn sweep_temps(game_dir: &Path, dry_run: bool) -> (u64, u64) {
-    let mut entries = 0u64;
-    let mut bytes = 0u64;
-    let it = walkdir::WalkDir::new(game_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok());
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    for e in it {
-        let p = e.path();
-        if e.file_type().is_dir() {
-            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                if name == "chunk" || name == "ldiff" || name == "staging" {
-                    dirs.push(p.to_path_buf());
-                }
-            }
-            continue;
-        }
-        let name = match p.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        if name.ends_with("_tmp") || name.ends_with(".hdiff") {
-            if let Ok(m) = std::fs::metadata(p) {
-                entries += 1;
-                bytes += m.len();
-                if !dry_run {
-                    let _ = std::fs::remove_file(p);
-                } else {
-                    tracing::info!("would delete temp {}", p.display());
-                }
-            }
-        }
-    }
-    for d in dirs {
-        let size: u64 = walkdir::WalkDir::new(&d)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .filter_map(|e| e.metadata().ok().map(|m| m.len()))
-            .sum();
-        entries += 1;
-        bytes += size;
-        tracing::info!("sweep dir {} ({} bytes)", d.display(), size);
-        if !dry_run {
-            let _ = std::fs::remove_dir_all(&d);
-        }
-    }
-    (entries, bytes)
 }
 
 /// Parse `config.ini` last `game_version=` match.

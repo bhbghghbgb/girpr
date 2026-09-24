@@ -34,8 +34,10 @@ pub struct Summary {
     pub files_repaired: AtomicU64,
     pub files_failed: AtomicU64,
     pub download_bytes: AtomicU64,
+    /// Unified cleanup counter (Collapse files-cleanup parity): every byte
+    /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
+    /// deprecated files) lands here. No split accounting.
     pub deleted_extra_bytes: AtomicU64,
-    pub freed_temp_bytes: AtomicU64,
 }
 
 /// How often the background reporter emits `PROGRESS` during long phases.
@@ -84,7 +86,7 @@ pub struct RepairCtx {
     pub jobs: usize,
     pub check_only: bool,
     pub dry_run: bool,
-    pub purge_extra: bool,
+    pub purge_after: bool,
     pub purge_before: bool,
 }
 
@@ -103,12 +105,11 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         .canonicalize()
         .unwrap_or_else(|_| ctx.game_dir.clone());
 
-    // 0. Starward-handling temp sweep (extended: Starward's `ClearDeprecatedFiles`
-    // only sweeps post-task; we also sweep pre-task to reclaim space).
-    // See docs/02 Step 0 and
-    // https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallService.cs#L747-L773
-    let (_, freed) = util::sweep_temps(&game_dir, readonly);
-    summary.freed_temp_bytes.fetch_add(freed, Ordering::Relaxed);
+    // NOTE: no unconditional temp sweep. All cleanup is the single
+    // Collapse-style files-cleanup (`collapse_purge_extra`), run before
+    // and/or after patching only when the corresponding flag is set.
+    // `--purge-before` and `--purge-after` delete the same things; only the
+    // timing differs.
 
     // 1. local state
     let local_version = util::read_game_version(&game_dir);
@@ -204,14 +205,14 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
     let plan = build_plan(per_manifest, &blacklist, &latest);
     tracing::info!("work list: {} files", plan.files.len());
 
-    // 0C. Collapse-handling purge-before (optional, repair-time
-    // `CheckRedundantFiles` parity — frees space for the repair itself).
+    // Purge-before: same Collapse-style files-cleanup as purge-after,
+    // run here to free space for the repair itself.
     // Skipped entirely in `--check-only` (verification reports damage; it must
     // not delete). In `--dry-run` the purge runs in log-only mode.
     // See docs/02 Step 0 and
-    // https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/RepairManagement/Genshin/Check.cs#L232-L319
+    // https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
     if ctx.purge_before && !ctx.check_only {
-        let server_keep = collapse_keep_set(&cfg);
+        let server_keep = collapse_keep_set();
         let bytes = collapse_purge_extra(&game_dir, &plan, &server_keep, ctx.dry_run)?;
         summary
             .deleted_extra_bytes
@@ -334,18 +335,19 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         files_failed: AtomicU64::new(a.files_failed.load(Ordering::Relaxed)),
         download_bytes: AtomicU64::new(a.download_bytes.load(Ordering::Relaxed)),
         deleted_extra_bytes: AtomicU64::new(a.deleted_extra_bytes.load(Ordering::Relaxed)),
-        freed_temp_bytes: AtomicU64::new(a.freed_temp_bytes.load(Ordering::Relaxed)),
     });
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
         return Ok((summary, 3));
     }
 
-    // 6. post phase, split by provenance (see docs/02 Step 6).
+    // 6. post phase (see docs/02 Step 6).
     // `readonly` covers both `--dry-run` and `--check-only` (check-only returns
     // before this point, but gating on `readonly` keeps the invariant obvious).
     if !readonly {
-        // 6S. Starward-handling: deprecated list + temp re-sweep + audio
-        // cache→res move + config.ini bump.
+        // Starward-handling remainder: deprecated list + audio cache→res move
+        // + config.ini bump. Deprecated files are also covered by the purge
+        // below when enabled (they are not in the live manifest); the explicit
+        // loop keeps them cleaned even without any purge flag.
         match hyp.deprecated_files().await {
             Ok(list) => {
                 for n in list {
@@ -367,11 +369,9 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
         {
             move_audio_cache(&game_dir, &cfg.audio_pkg_cache_dir, &cfg.audio_pkg_res_dir);
         }
-        let (_, freed) = util::sweep_temps(&game_dir, false);
-        summary.freed_temp_bytes.fetch_add(freed, Ordering::Relaxed);
-        // 6C. Collapse-handling purge-after (manual-cleanup parity).
-        if ctx.purge_extra {
-            let server_keep = collapse_keep_set(&cfg);
+        // Purge-after: same files-cleanup as purge-before, run after patching.
+        if ctx.purge_after {
+            let server_keep = collapse_keep_set();
             let bytes = collapse_purge_extra(&game_dir, &plan_a, &server_keep, false)?;
             summary
                 .deleted_extra_bytes
@@ -386,10 +386,10 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32)> {
             "",
             false,
         )?;
-    } else if ctx.dry_run && ctx.purge_extra {
-        // Dry-run logging only: list what the Collapse-handling purge would
+    } else if ctx.dry_run && ctx.purge_after {
+        // Dry-run logging only: list what the files-cleanup would
         // delete (writes nothing; byte count stays 0 by design).
-        let server_keep = collapse_keep_set(&cfg);
+        let server_keep = collapse_keep_set();
         let plan_ref = &*plan_a;
         let _ = collapse_purge_extra(&game_dir, plan_ref, &server_keep, true)?;
     }
@@ -657,23 +657,27 @@ async fn repair_attempt(
     Ok(stats)
 }
 
-/// Collapse-handling orphan purge (v1 scope).
+/// Collapse-style files-cleanup (v1 scope).
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest,
-/// the same idea as `GetUnusedFileInfoList`, minus the plugin/SDK/WPF zip
-/// enumeration and the dispatcher persistent union which v1 deliberately skips
-/// (game launches without them). Do not "fix" the missing zip handling without
-/// reading the v1-limits section in the README.
+/// the same idea as `GetUnusedFileInfoList`.
 /// See https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
 ///
-/// This is deliberately separate from the Starward-handling temp sweep
-/// (`util::sweep_temps`): the sweep owns `*_tmp` / `*.hdiff` / `chunk/` /
-/// `ldiff/` / `staging/` and accounts them to `freed_temp_bytes`; the purge
-/// skips those names untouched and accounts the rest to `deleted_extra_bytes`.
-/// Keep the two counters split — do not merge the walks.
+/// V1 GAP (deliberate, documented): Collapse's expected set is the union of
+/// the Sophon primary manifests + dispatcher persistent manifests
+/// (`res_versions_external`, `data_versions`) + plugin/SDK/WPF zip entries,
+/// minus `EliminateUnnecessaryAssetIndex` (unselected audio) and `ctable*`.
+/// v1 only uses `{latest Sophon manifest paths}` — no dispatcher, no
+/// SDK/WPF/plugin zips (game launches without them; see README v1 limits).
+/// Do not "fix" the missing union without reading the v1-limits section.
 ///
-/// `server_keep` comes from [`collapse_keep_set`]: game-config metadata files
-/// that live inside `game_dir` but NEVER appear in chunk manifests. Without it
-/// the purge would delete the launcher's own bookkeeping (point-15 bug).
+/// There is exactly one cleanup: `--purge-before` and `--purge-after` call
+/// this same function; only the timing differs. Temps (`*_tmp`, `*.hdiff`,
+/// `chunk/`, `ldiff/`, `staging/`, legacy `*.diff` / `*deletefiles*`) are NOT
+/// skipped — they are not in the live manifest, so they purge here like any
+/// other orphan, into the single `deleted_extra_bytes` counter.
+///
+/// `server_keep` comes from [`collapse_keep_set`]: files that live inside
+/// `game_dir` but NEVER appear in chunk manifests.
 pub fn collapse_purge_extra(
     game_dir: &Path,
     plan: &RepairPlan,
@@ -715,7 +719,7 @@ pub fn collapse_purge_extra(
     }
     if dry_run {
         tracing::info!(
-            "purge-extra dry-run: {} bytes would be freed (deleted_extra_bytes stays 0 by design)",
+            "purge dry-run: {} bytes would be freed (deleted_extra_bytes stays 0 by design)",
             would_be
         );
     }
@@ -738,56 +742,28 @@ pub fn collapse_purge_extra(
     Ok(deleted_bytes)
 }
 
-/// Server-config metadata files the Collapse-handling purge must keep.
+/// Metadata files the files-cleanup must keep.
 ///
-/// These paths come from `getGameConfigs` and live inside `game_dir`, but they
-/// NEVER appear in Sophon chunk manifests — so manifest membership alone would
-/// wrongly purge them. (Previous code only kept `config.ini` + hardcoded
-/// patterns and would have deleted e.g. the blacklist file when
-/// `--purge-extra` was set.)
+/// v1: `config.ini` ONLY. It lives inside `game_dir` but NEVER appears in
+/// Sophon chunk manifests, and the tool rewrites it after patching — purging
+/// it would break the version bookkeeping. Everything else (exe, blacklist /
+/// res-category / audio-scan bookkeeping, `ScreenShot/`, logs, temps) is
+/// intentionally NOT kept: Collapse's `GenshinInstall.GetUnusedFileInfoList`
+/// protects only `FilesCleanupIgnoreList` (empty for Genshin) plus the
+/// `Audio_*_pkg_version` regexes, and this tool maximizes free space — if the
+/// user wants anything else kept, that needs an explicit `--keep` flag
+/// (not implemented in v1).
 ///
-/// NOT included on purpose, with reasons:
-/// - `audio_pkg_res_dir` / `audio_pkg_cache_dir` are *directories* whose files
-///   are governed by manifest membership (unselected audio is intentionally
-///   purged — the effective audio set in `run()` decides what counts as
-///   "selected", mirroring Collapse's `EliminateUnnecessaryAssetIndex`).
-/// - `audio_lang_14` / `Audio_*_pkg_version` are matched by filename pattern in
-///   [`classify_purge_path`] (Collapse `GenshinInstall.cs:228-247` parity:
-///   `^Audio_<entry>_pkg_version$` per `audio_lang_14` line), not by exact path,
-///   because their location varies by channel.
+/// NOTE: the game flags unknown executables inside the game folder, so the
+/// tool binary itself must never live there; the exe needs no keep rule.
+///
+/// `audio_lang_*` / `Audio_*_pkg_version` are matched by filename pattern in
+/// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
 /// [`build_plan`] and the purge walk).
-pub fn collapse_keep_set(cfg: &crate::hyp::GameConfig) -> HashSet<String> {
-    let mut keep = HashSet::new();
-    keep.insert("config.ini".to_string());
-    let mut add = |p: &str| {
-        let n = normalize_purge_rel(p);
-        if !n.is_empty() {
-            keep.insert(n);
-        }
-    };
-    // Game executable at the game root (belt-and-braces: it is normally also
-    // in the manifest, but never purge the launcher entry point).
-    add(&cfg.exe_file_name);
-    // Launcher bookkeeping files (Starward reads these; Collapse protects its
-    // equivalents via `FilesCleanupIgnoreList` + pkg_version regexes).
-    add(&cfg.blacklist_dir);
-    add(&cfg.res_category_dir);
-    add(&cfg.audio_pkg_scan_dir);
-    keep
-}
-
-/// Normalize a server-config path to the `/`-separated rel form used by the
-/// purge comparison. Returns `""` for empty input (caller skips it).
-fn normalize_purge_rel(p: &str) -> String {
-    let n = p.replace('\\', "/");
-    let n = n.trim_matches('/').to_string();
-    if n == "." {
-        String::new()
-    } else {
-        n
-    }
+pub fn collapse_keep_set() -> HashSet<String> {
+    HashSet::from(["config.ini".to_string()])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -796,21 +772,18 @@ pub enum PurgeVerdict {
     Purge,
 }
 
-/// Decide the fate of one `/`-separated rel path for the Collapse-handling
-/// purge. Pure function (no I/O) so it can be unit-tested exhaustively.
+/// Decide the fate of one `/`-separated rel path for the files-cleanup.
+/// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
 /// Rule order matters (first match wins); each rule names its provenance:
 /// 1. Manifest membership (Collapse expected set).
-/// 2. Sweep-owned temp names (Starward-handling owns them — skip here so the
-///    byte accounting stays split; `*.girpr_tmp` needs no separate rule: it
-///    ends with `_tmp`).
-/// 3. Server metadata exact/prefix match ([`collapse_keep_set`]).
-/// 4. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
-///    `Audio_*_pkg_version`, `GenshinInstall.cs:228-247`).
-/// 5. User data both launchers never touch (`ScreenShot` dirs, `log*` dirs).
-///    NOTE: the `log` rule matches *directories* (top-level component starting
-///    with `log`) — the old bare `starts_with("log")` also matched root files
-///    like `login.dat` and would wrongly keep them (point-15 bug).
+/// 2. `config.ini` ([`collapse_keep_set`] — the only metadata keep).
+/// 3. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
+///    `Audio_*_pkg_version`, `GenshinInstall.cs:228-247`). v1 matches broadly
+///    by pattern rather than per-`audio_lang_14`-line exact regexes.
+/// Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
+/// `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
+/// exe and server bookkeeping files.
 pub fn classify_purge_path(
     rel: &str,
     expected: &HashSet<String>,
@@ -820,41 +793,13 @@ pub fn classify_purge_path(
     if expected.contains(rel) {
         return PurgeVerdict::Keep;
     }
-    // 2. Sweep-owned temp names → keep here (sweep deletes them).
-    let name = file_name(rel);
-    if name.ends_with("_tmp") || name.ends_with(".hdiff") {
+    // 2. config.ini → keep.
+    if server_keep.contains(rel) {
         return PurgeVerdict::Keep;
     }
-    if let Some(top) = rel.split('/').next() {
-        if top == "chunk" || top == "ldiff" || top == "staging" {
-            return PurgeVerdict::Keep;
-        }
-    }
-    // 3. Server-config metadata (exact file, or anything under it if the
-    // config ever names a directory) → keep.
-    if server_keep.contains(rel)
-        || server_keep
-            .iter()
-            .any(|k| rel.starts_with(&format!("{k}/")))
-    {
+    // 3. Collapse audio pkg-version parity → keep.
+    if is_audio_version_file(file_name(rel)) {
         return PurgeVerdict::Keep;
-    }
-    // 4. Collapse audio pkg-version parity → keep.
-    if is_audio_version_file(name) {
-        return PurgeVerdict::Keep;
-    }
-    // 5. User data → keep.
-    if rel.split('/').any(|c| {
-        c.eq_ignore_ascii_case("screenshot") || c.eq_ignore_ascii_case("screenshots")
-    }) {
-        return PurgeVerdict::Keep;
-    }
-    if rel.contains('/') {
-        if let Some(top) = rel.split('/').next() {
-            if top.to_ascii_lowercase().starts_with("log") {
-                return PurgeVerdict::Keep;
-            }
-        }
     }
     PurgeVerdict::Purge
 }
@@ -1013,34 +958,35 @@ mod tests {
 
     fn purge_fixture() -> (HashSet<String>, HashSet<String>) {
         let expected: HashSet<String> = ["game.dat".to_string()].into_iter().collect();
-        let server_keep: HashSet<String> = [
-            "config.ini",
-            "YuanShen.exe",
-            "blacklist.txt",
-            "res_category.txt",
-            "audio_scan.txt",
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+        let server_keep = collapse_keep_set();
         (expected, server_keep)
     }
 
     #[test]
-    fn purge_keeps_manifest_and_server_metadata() {
+    fn purge_keeps_manifest_and_config_only() {
         let (expected, keep) = purge_fixture();
-        for rel in [
-            "game.dat",
-            "config.ini",
-            "YuanShen.exe",
-            "blacklist.txt",
-            "res_category.txt",
-            "audio_scan.txt",
-        ] {
+        for rel in ["game.dat", "config.ini"] {
             assert_eq!(
                 classify_purge_path(rel, &expected, &keep),
                 PurgeVerdict::Keep,
                 "{rel} must be kept"
+            );
+        }
+        // v1: exe, server bookkeeping, user data all purge (maximize free
+        // space; explicit --keep not implemented).
+        for rel in [
+            "YuanShen.exe",
+            "blacklist.txt",
+            "res_category.txt",
+            "audio_scan.txt",
+            "ScreenShot/shot.png",
+            "log/output.txt",
+            "login.dat",
+        ] {
+            assert_eq!(
+                classify_purge_path(rel, &expected, &keep),
+                PurgeVerdict::Purge,
+                "{rel} must be purged"
             );
         }
     }
@@ -1064,38 +1010,10 @@ mod tests {
     }
 
     #[test]
-    fn purge_keeps_user_data_but_purges_lookalikes() {
+    fn purge_purges_temps_like_any_other_orphan() {
         let (expected, keep) = purge_fixture();
-        // ScreenShot dirs at any depth (case-insensitive), log* dirs.
-        for rel in [
-            "ScreenShot/shot.png",
-            "Game_Data/ScreenShots/x.png",
-            "screenshot/a.png",
-            "log/output.txt",
-            "logs/run.log",
-            "log_2024/t.txt",
-        ] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep),
-                PurgeVerdict::Keep,
-                "{rel} must be kept"
-            );
-        }
-        // Point-15 regression: bare starts_with("log") wrongly kept these.
-        for rel in ["login.dat", "logout.ini", "catalog.json"] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep),
-                PurgeVerdict::Purge,
-                "{rel} must be purged"
-            );
-        }
-    }
-
-    #[test]
-    fn purge_skips_sweep_owned_temps() {
-        let (expected, keep) = purge_fixture();
-        // Starward-handling sweep owns these; purge leaves them alone so byte
-        // accounting stays split. *.girpr_tmp needs no special case (ends _tmp).
+        // Single files-cleanup: temps are not skipped, they purge into the
+        // same counter. --purge-before and --purge-after delete the same set.
         for rel in [
             "a.dat_tmp",
             "config.ini.girpr_tmp",
@@ -1103,15 +1021,9 @@ mod tests {
             "chunk/abc123",
             "ldiff/p1",
             "staging/y",
+            "old.diff",
+            "patch.deletefiles.txt",
         ] {
-            assert_eq!(
-                classify_purge_path(rel, &expected, &keep),
-                PurgeVerdict::Keep,
-                "{rel} must be left to the sweep"
-            );
-        }
-        // Legacy Collapse redundant names are NOT sweep-owned → purged.
-        for rel in ["old.diff", "patch.deletefiles.txt"] {
             assert_eq!(
                 classify_purge_path(rel, &expected, &keep),
                 PurgeVerdict::Purge,
@@ -1169,32 +1081,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_set_normalizes_separators_and_skips_empty() {
-        assert_eq!(normalize_purge_rel("a\\b\\c.txt"), "a/b/c.txt");
-        assert_eq!(normalize_purge_rel("/x/y/"), "x/y");
-        assert_eq!(normalize_purge_rel(""), "");
-    }
-
-    #[test]
-    fn keep_set_includes_server_metadata_files() {
-        let cfg = crate::hyp::GameConfig {
-            exe_file_name: "YuanShen.exe".into(),
-            audio_pkg_scan_dir: "scan.txt".into(),
-            audio_pkg_res_dir: "res".into(),
-            audio_pkg_cache_dir: "cache".into(),
-            default_download_mode: String::new(),
-            res_category_dir: "res_cat".into(),
-            blacklist_dir: "bl.txt".into(),
-            enable_resource_blacklist: true,
-            game: None,
-        };
-        let keep = collapse_keep_set(&cfg);
-        for rel in ["config.ini", "YuanShen.exe", "scan.txt", "res_cat", "bl.txt"] {
-            assert!(keep.contains(rel), "{rel} must be kept");
-        }
-        // Audio res/cache DIRS are not kept: their files are governed by
-        // manifest membership (unselected audio is intentionally purged).
-        assert!(!keep.contains("res"));
-        assert!(!keep.contains("cache"));
+    fn keep_set_is_config_only() {
+        let keep = collapse_keep_set();
+        assert!(keep.contains("config.ini"));
+        assert_eq!(keep.len(), 1);
     }
 }
