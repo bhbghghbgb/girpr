@@ -1,7 +1,19 @@
 use clap::Parser;
 use girpr::{normalize_audio_lang, repair, Args};
 use std::collections::HashSet;
+use std::fs::File;
+use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use tracing_subscriber::prelude::*;
+
+fn open_log_file(path: &Path) -> std::io::Result<File> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    std::fs::create_dir_all(dir)?;
+    std::fs::OpenOptions::new().create(true).append(true).open(path)
+}
 
 #[tokio::main]
 async fn main() {
@@ -11,14 +23,43 @@ async fn main() {
         args.log_level,
         std::env::var("RUST_LOG").unwrap_or_default()
     );
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(
             filter
                 .parse::<tracing_subscriber::EnvFilter>()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
+        );
+
+    let log_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        })
+        .join("logs")
+        .join(format!(
+            "girpr_{}.log",
+            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S%.3f")
+        ));
+    let file_writer: Mutex<Box<dyn std::io::Write + Send + Sync>> = match open_log_file(&log_path) {
+        Ok(f) => Mutex::new(Box::new(f)),
+        Err(e) => {
+            eprintln!("WARN disabling file logging ({}): {e}", log_path.display());
+            Mutex::new(Box::new(std::io::sink()))
+        }
+    };
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_ansi(false)
+        .with_filter(tracing_subscriber::filter::LevelFilter::TRACE);
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(file_layer)
         .init();
+
+    tracing::info!("log file: {}", log_path.display());
 
     if args.io_threads == 0 {
         eprintln!("ERROR io-threads must be >= 1");
