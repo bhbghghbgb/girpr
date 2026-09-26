@@ -496,12 +496,17 @@ fn open_db(db_path: &Path, case_sensitive: bool, ignore_cache: bool, backup_firs
         Some(v) => {
             let m: Meta = serde_json::from_slice(&v)
                 .context("parse cache meta (corrupt? use --ignore-cache)")?;
+            if m.version != 1 {
+                bail!("unsupported cache version {} (use --ignore-cache to rebuild)", m.version);
+            }
+            // NOTE: case_sensitive is informational only. The cache stays usable
+            // across modes: in insensitive mode a disk/cached casing difference is
+            // fixed to the on-disk name (disk always governs), so the same record
+            // remains valid for a later sensitive run. Only genuine conflicts
+            // (two live/record paths differing only by case in insensitive mode)
+            // abort, detected by the callers — never here.
             if m.case_sensitive != case_sensitive {
-                bail!(
-                    "case-sensitivity mismatch: cache was created with case_sensitive={} but now {} (delete cache or rerun with matching flag)",
-                    m.case_sensitive,
-                    case_sensitive
-                );
+                db.insert(META_KEY, serde_json::to_vec(&Meta { version: 1, case_sensitive })?)?;
             }
         }
     }
@@ -552,6 +557,21 @@ fn build_effective_folder(
         }
         live_set.insert(e.rel.clone());
     }
+    // In insensitive mode the on-disk name governs: index cached keys by
+    // lowercase so a disk/cached casing difference is fixed to the disk name
+    // first (reusing the cached hashes when stat matches) instead of
+    // erroring. Multiple stale alternates are just pruned below, not a conflict.
+    let alt_recs: HashMap<String, FileRec> = if !case_sensitive {
+        load_all_records(db)?
+    } else {
+        HashMap::new()
+    };
+    let mut alt_index: HashMap<String, Vec<String>> = HashMap::new();
+    if !case_sensitive {
+        for key in alt_recs.keys() {
+            alt_index.entry(key.to_lowercase()).or_default().push(key.clone());
+        }
+    }
     for e in live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
             continue;
@@ -588,16 +608,46 @@ fn build_effective_folder(
             continue;
         }
         // file
-        let cached: Option<FileRec> = db
+        // `adopted` = cache entry came from an alternate-cased key, so the
+        // disk-cased key must be (re)written even on a fast-hit.
+        let (cached, adopted): (Option<FileRec>, bool) = match db
             .get(e.rel.as_bytes())?
             .map(|v| serde_json::from_slice(&v))
             .transpose()
-            .context("parse cache entry")?;
+            .context("parse cache entry")?
+        {
+            Some(c) => (Some(c), false),
+            // Exact-case miss in insensitive mode: adopt the single stale
+            // alternate-cased entry as the cache candidate (disk name wins).
+            None if !case_sensitive => {
+                match alt_index.get(&e.rel.to_lowercase()) {
+                    Some(alts) => {
+                        let others: Vec<&String> =
+                            alts.iter().filter(|k| *k != &e.rel).collect();
+                        if others.len() == 1 {
+                            let old = others[0];
+                            let rec = alt_recs.get(old).cloned();
+                            if !dry_run {
+                                db.remove(old.as_bytes())?; // old casing dropped; new one upserted below
+                            }
+                            (rec, true)
+                        } else {
+                            (None, false) // zero (truly new) or several stale: prune handles leftovers
+                        }
+                    }
+                    None => (None, false),
+                }
+            }
+            None => (None, false),
+        };
         let fresh = cached.as_ref().map(|c| c.size == e.size && c.mtime_ns == e.mtime_ns && c.kind == "file").unwrap_or(false);
         if fresh && !force_hash {
             let c = cached.as_ref().unwrap();
             let have_all = algos.iter().all(|a| c.hashes.contains_key(a));
             if have_all {
+                if adopted && !dry_run {
+                    put_rec(db, &e.rel, c)?;
+                }
                 eff.insert(
                     e.rel.clone(),
                     EffRec {
@@ -1363,6 +1413,59 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
+        // Cache created sensitive with "a.txt"; disk renames to "A.txt".
+        // Insensitive run must NOT error: disk governs, cache key becomes
+        // "A.txt" (hashes reused), and a later sensitive run still works.
+        let dir = std::env::temp_dir()
+            .join(format!("girsync_test_casefix_{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        let db_path = dir.join(CACHE_PREFIX);
+        let algos = vec!["md5".to_string()];
+
+        let db = open_db(&db_path, true, false, false).unwrap();
+        let eff = build_effective_folder(
+            &dir, &db, &algos, true, &[], &[], true, 10, true, false,
+        )
+        .unwrap();
+        assert!(eff.contains_key("a.txt"));
+        drop(db);
+
+        // Case-only rename via intermediate (works on case-insensitive FS too).
+        let tmp = dir.join("girsync_rename_tmp");
+        std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
+        std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
+
+        // Previously this errored in open_db (meta mismatch). Must succeed now.
+        let db = open_db(&db_path, false, false, false).unwrap();
+        let eff = build_effective_folder(
+            &dir, &db, &algos, true, &[], &[], false, 10, false, false,
+        )
+        .unwrap();
+        assert!(eff.contains_key("A.txt"), "disk casing governs");
+        let want = format!("{:x}", md5::compute(b"hello"));
+        assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+        let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
+        assert!(keys.contains(&"A.txt".to_string()), "cache key fixed to disk");
+        assert!(!keys.contains(&"a.txt".to_string()), "stale casing pruned");
+        drop(db);
+
+        // Same record must remain usable in a later sensitive run.
+        let db = open_db(&db_path, true, false, false).unwrap();
+        let eff = build_effective_folder(
+            &dir, &db, &algos, true, &[], &[], true, 10, false, false,
+        )
+        .unwrap();
+        assert!(eff.contains_key("A.txt"));
+        assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+        drop(db);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn hash_arg_none_exclusive() {
