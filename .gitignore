@@ -1,3 +1,5 @@
 /target/
+tools/*/target/
 /reference-projects/
+girpr-cache*
 *.log

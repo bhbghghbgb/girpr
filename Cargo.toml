@@ -8,6 +8,9 @@ description = "Genshin Impact low-disk repair patcher (Starward chunk-repair cor
 name = "girpr"
 path = "src/main.rs"
 
+[workspace]
+members = [".", "tools/sync"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
