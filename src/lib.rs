@@ -1,9 +1,30 @@
+//! girpr — Genshin Impact low-disk repair patcher (library root).
+//!
+//! Module map:
+//! - [`biz`] — biz/channel/launcher/game-id mapping
+//! - [`hyp`] — HoYoPlay client (`getGameConfigs`/`getGameBranches`/`getBuild`/`getDeprecated`)
+//! - [`sophon`] — chunk-manifest protobuf, fetch+verify+parse, manifest filtering
+//! - [`plan`] — work list (`RepairPlan`/`PlannedFile`, `build_plan`)
+//! - [`repair`] — pipeline orchestration + per-file repair, files-cleanup, check-only
+//! - [`report`] — `Summary` counters and the `REPORT`/`PROGRESS`/`SUMMARY` line formats
+//! - [`error`] — `RunFailure`, the exit-code-carrying error type
+//! - [`util`] — MD5 helpers, path normalization, `config.ini` read/write
+
 use std::path::PathBuf;
 
 use clap::Parser;
 
 pub mod biz;
+pub mod error;
+pub mod hyp;
+pub mod plan;
+pub mod repair;
+pub mod report;
+pub mod sophon;
+pub mod util;
+
 pub use biz::Biz;
+pub use error::RunFailure;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -62,11 +83,6 @@ pub fn normalize_audio_lang(s: &str) -> Option<String> {
         _ => None,
     }
 }
-
-pub mod hyp;
-pub mod repair;
-pub mod sophon;
-pub mod util;
 
 #[cfg(test)]
 mod tests {

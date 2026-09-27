@@ -49,7 +49,8 @@ exit code matches the class even for post-phase write failures.
    `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default, not
    launcher behavior — Starward falls back to its registry setting, Collapse never
    auto-selects langs).
-   Write the scan file back when an explicit selection was given.
+   Write the scan file back when an explicit selection was given — in write modes only
+   (`--dry-run`/`--check-only` never write).
 
 ### Step 2 — Fetch server metadata (up to 5 calls)
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
@@ -58,7 +59,8 @@ exit code matches the class even for post-phase write failures.
 2. `GET getGameBranches?launcher_id=&language=&game_ids[]=` → pick entry for game id →
    `main{package_id,branch,password,tag,diff_tags[]}`. `latest = main.tag`.
 3. `GET getBuild?branch=&package_id=&password=` (no `tag`) → latest chunk build
-   `{build_id,tag,manifests[]}`. If server returns retcode -202 → abort (Genshin must be chunk mode).
+   `{build_id,tag,manifests[]}`. If server returns retcode -202 → abort (exit 2, metadata class;
+   Genshin must be chunk mode).
 4. If local version known: `GET getBuild?...&tag={local}` → local chunk build, best-effort
    (failure → proceed with `local=null`; costs only dedup, not correctness).
 5. Emit the begin `REPORT` line to stdout (mirrored to the log), so a parser sees
@@ -68,7 +70,7 @@ exit code matches the class even for post-phase write failures.
    the calls above — API-sourced, not from config). With `--json-summary` this is
    a JSON object instead.
 6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
-   list. Fetched lazily and best-effort during the post-phase (Step 8), never in
+   list. Fetched lazily and best-effort during the post-phase (Step 7), never in
    `--check-only`/`--dry-run`; a failure only warns.
 
 Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
@@ -80,21 +82,25 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 linear backoff).
 3. Zstd-decompress entire blob → compute MD5 of **decompressed** bytes → must equal `checksum`
    (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still mismatch → abort (exit 2).
-4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
-   compressed_size,uncompressed_size,compressed_md5}], is_folder, size, md5}]}`.
+4. Protobuf-decode `SophonChunkManifest{chuncks: [{file, chunks:[{id,uncompressed_md5,offset,
+   compressed_size,uncompressed_size,compressed_md5}], is_folder, size, md5}]}` (field number 1;
+   the upstream name is misspelled `chuncks` and is kept verbatim for reference diffs).
    Drop `is_folder` entries from the work list (create dirs on demand instead).
-5. Same for the local build if present (used only for chunk reuse, §4). Cache manifests outside
-   `game_dir` (e.g. system temp keyed by manifest id) or keep in memory; never store in `game_dir`.
+5. Same for the local build if present (used only for chunk reuse, §4). Manifests are held
+   **in memory only** for the run — never written to `game_dir` or any cache dir (README S1).
 
 ### Step 4 — Build work list
-For each latest file `F{path,size,md5,chunks[]}`:
-- `local_F` = same `path` in local build manifest (may be absent/different).
-- Build `chunk_plan[]`: for each chunk `C{offset,uncompressed_size,uncompressed_md5}`:
-  `reuse = (local_F contains chunk with same (uncompressed_md5, uncompressed_size))`
-  → record `(reuse_path=game_dir/local_F.path, reuse_offset)`, else `reuse=null`.
-  (Cross-file dedup by md5 is allowed but optional; same-file covers ~all Genshin wins.)
+For each latest file `F{path,size,md5,chunks[]}` (deduped by path across manifests, sorted by path):
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
   drop listed paths from the work list.
+- If the local build is present, build a per-path reuse index from its manifests:
+  `local[path] = [(uncompressed_md5, uncompressed_size, offset), …]`, first occurrence per
+  `(md5, size)` winning, folder entries skipped. Resolution is **deferred to Step 6**: for a
+  chunk `C{offset,uncompressed_size,uncompressed_md5}` the candidate reuse offset is the entry of
+  `local[F.path]` with a matching `(uncompressed_md5, uncompressed_size)`, and Step 6 re-hashes
+  the actual slice before copying (a corrupt candidate is a cache miss, not an error).
+  (Cross-file dedup by md5 is allowed but optional; same-file covers ~all Genshin wins —
+  see README S2.)
 
 ### Step 5 — Files-cleanup before (reclaim space before repairing)
 Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
@@ -112,21 +118,25 @@ Per file `F`:
 1. `if exists(game_dir/F.path) and len==F.size and md5(file)==F.md5` → **skip** (log `skip`, count
    as verified, no download). Else proceed.
 2. Ensure parent dir. Open `game_dir/F.path_tmp` (`{path}_tmp`) with `OpenOrCreate|ReadWrite`.
-   Let `have = len(tmp)`. If `have > F.size` → truncate to `F.size` (corrupt resume). Work only on
-   chunks with `offset+uncompressed_size > have` (already-complete prefix is kept; it is re-verified
-   by the final whole-file MD5).
+   Let `have = len(tmp)`. If `have > F.size` → truncate to `F.size` (corrupt resume). Skip any
+   chunk with `offset+uncompressed_size <= len(tmp)` (re-read the current length per chunk, since
+   earlier iterations grow it); an already-complete prefix is kept and re-verified by the final
+   whole-file MD5.
 3. For each pending chunk `C` in offset order, seek `tmp` to `C.offset`:
-   a. If `C.reuse` set and `exists(reuse_path)` with expected length: read
-      `reuse_path[reuse_offset .. +uncompressed_size]`, MD5 it; if equals `C.uncompressed_md5` →
-      copy bytes to `tmp` at `C.offset`, continue (no network). Mismatch → fall through to (b).
-   b. `GET {chunk_prefix}/{C.id}` → response bytes are **zstd-compressed** chunk payload.
-      Stream-decompress while writing at `C.offset` (do not buffer whole file; 8–512 KiB pipe buffer).
-      Optional: MD5 the decompressed bytes and compare to `C.uncompressed_md5` immediately
-      (early retry); mandatory: rely on step 4's whole-file check.
-   c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
+   a. If a reuse candidate exists for `C` (Step 4): read
+      `game_dir/F.path[candidate_offset .. +uncompressed_size]`, MD5 it; if equals
+      `C.uncompressed_md5` → copy bytes to `tmp` at `C.offset`, continue (no network).
+      Unreadable / mismatch → fall through to (b).
+   b. `GET {chunk_prefix}/{C.id}` → response bytes are the **zstd-compressed** chunk payload.
+      V1-SIMPLIFICATION (S1, README): the blob is buffered in memory and decompressed whole
+      (`decode_all`) rather than streamed through an 8–512 KiB pipe; the decompressed size and
+      MD5 are verified against `C` immediately (early retry), then written at `C.offset`.
+      Tradeoff: higher peak RAM per active chunk (× `io_threads`), no disk cost.
+   c. Any chunk failure → retry whole file (up to 5, linear backoff); resume keeps `tmp` prefix.
 4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
-   log `repaired {downloaded_bytes}`. Else delete `tmp`, log error, mark file failed (exit 3).
-   Never modify the original in place; never leave `tmp` behind on success.
+   log `repaired {downloaded_bytes}`. Else mark the file failed (exit 3): a **length** mismatch keeps
+   `_tmp` for the next run's resume, a **MD5** mismatch deletes it. Never modify the original
+   in place; never leave `tmp` behind on success.
 5. `--check-only`: perform only step 1 for all files and report; write nothing.
 
 Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated and
@@ -177,10 +187,12 @@ reported at Step 2.5). Exit code per §1. Rerun is safe
 ## 3. Disk-usage argument (why minimal)
 
 - Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
-- During: transient per active file = `≤ 1 × file size` (`_tmp` grows beside the old file) plus pipe
-  buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no in-game manifest cache.
-  Peak ≈ `io_threads × largest_file`. With `io_threads=1` the tool needs only
-  `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
+- During: transient **disk** per active file = `≤ 1 × file size` (the `_tmp` growing beside the old
+  file) and nothing else — no `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no
+  in-game manifest cache. Peak disk ≈ `io_threads × largest_file`. With `io_threads=1` the tool
+  needs only `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
+  The S1 whole-blob buffering costs **RAM**, not disk: ≈ one compressed + one decompressed chunk
+  per active file (× `io_threads`), plus the in-memory manifests.
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
   missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).
 
@@ -192,7 +204,7 @@ reported at Step 2.5). Exit code per §1. Rerun is safe
 | Chunk download corrupt (final MD5 fail) | delete `_tmp`, retry file ×5, then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
-| Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
+| Missing server diff support (-202) | abort exit 2 (Genshin is chunk-only; no legacy path in v1) |
 | Interrupted run | `_tmp` resume by length + final MD5; leftover `*_tmp` purged only via `--purge-before`/`--purge-after` |
 
 ## 5. What was deliberately excluded (and when to add)

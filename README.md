@@ -12,7 +12,7 @@ for the full comparison, `docs/02-repair-chunk-spec.md` for the language-agnosti
 
 ## Requirements
 
-- Rust 1.80+ (`cargo build`)
+- Rust 1.85+ (the crate uses edition 2024)
 - Network access to HoYoPlay + Sophon CDNs
 - The game directory (read/write); only `max_file_size` free bytes beyond the game are needed
   with `--io-threads 1` (peak transient ≈ `io_threads × largest file`)
@@ -56,7 +56,7 @@ cargo build --release
 | Code | Meaning |
 |---|---|
 | `0` | Success (check-only: everything intact) |
-| `1` | Usage / config error (bad args, unknown audio lang, `--io-threads < 1`, unusable `--game-path`, game in legacy FILE mode) |
+| `1` | Usage / config error (bad args, unknown audio lang, `--io-threads < 1`, unusable `--game-path` in write modes, game in legacy FILE mode) |
 | `2` | Metadata / network error (HoYoPlay/Sophon unreachable, non-zero retcode, bad manifest, checksum mismatch) |
 | `3` | Write / verify error (a file failed final MD5 after retries, promote/rename failed, `config.ini` / audio-scan write failed, files-cleanup failed) |
 | `4` | Check-only found damage |
@@ -84,6 +84,10 @@ background reporter during repair, and inline during `--check-only`
 instead.
 
 ### Logging & correlation
+
+Logs go to **stderr** and, in parallel, to a per-run file `logs/girpr_<YYYY-MM-DD_HH-MM-SS.mmm>.log`
+next to the binary (the file always gets `trace`, independent of `--log-level`, so a failed
+unattended run can be replayed; stderr honors `--log-level`).
 
 Each file task logs inside a `file{seq,total,task,path}` span (`task` = tokio async-task id,
 stable across worker-thread hops), so `grep 'path=<file>'` groups its lifecycle:
@@ -113,15 +117,26 @@ launches without them).
 
 ## Project layout
 
+`girpr` is the workspace root package; `tools/sync` (`girsync`) is a dev-only mirror tool and a
+separate workspace member — see [tools/sync/README.md](tools/sync/README.md).
+
 ```text
-src/main.rs    logging init, exit codes, SUMMARY output, orchestration
-src/lib.rs     CLI definition (clap Args), module root
-src/biz.rs     biz/channel/launcher/game-id mapping
-src/hyp.rs     HoYoPlay client (getGameConfigs/getGameBranches/getBuild/getDeprecated)
-src/sophon.rs  Chunk-manifest protobuf, fetch+verify+parse, manifest filtering
-src/repair.rs  Work-list build, per-file repair, files-cleanup purge
-src/util.rs    MD5 helpers, config.ini read/write
-docs/          findings & verdict, language-agnostic spec, Rust plan
+src/main.rs           logging init, arg validation, exit codes, SUMMARY output
+src/lib.rs            module root, CLI definition (clap Args), audio-lang normalize
+src/biz.rs            biz/channel/launcher/game-id mapping
+src/hyp.rs            HoYoPlay client (getGameConfigs/getGameBranches/getBuild/getDeprecated)
+src/sophon.rs         chunk-manifest protobuf, fetch+verify+parse, manifest filtering
+src/plan.rs           work list: RepairPlan/PlannedFile, build_plan (dedup + blacklist)
+src/error.rs          RunFailure — the exit-code-carrying error type
+src/report.rs         Summary counters, REPORT/PROGRESS line formats, progress reporter
+src/util.rs           MD5 helpers, path normalization, config.ini read/write
+src/repair/mod.rs     pipeline orchestration (run) + RepairCtx
+src/repair/file.rs    per-file chunk repair + bounded file-parallelism driver
+src/repair/check.rs   --check-only verification pass
+src/repair/purge.rs   Collapse-parity files-cleanup (--purge-before/--purge-after)
+src/repair/audio.rs   audio-scan read/write, audio cache->res move
+docs/                 findings & verdict, language-agnostic spec, Rust plan
+tools/sync/           dev-only girsync mirror tool (separate crate)
 ```
 
 ## Limitations (v1)

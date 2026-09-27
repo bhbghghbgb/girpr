@@ -5,6 +5,12 @@ use std::path::Path;
 
 const MD5_BUF: usize = 512 * 1024;
 
+/// Convert a `/`-separated manifest path to the platform separator, so every
+/// `game_dir.join(..)` in the pipeline normalizes identically.
+pub fn normalize_rel(rel: &str) -> String {
+    rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+}
+
 /// Lowercase hex MD5 of a file.
 pub fn md5_file(path: &Path) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
