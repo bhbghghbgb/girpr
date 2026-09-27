@@ -578,10 +578,10 @@ async fn repair_one_file(
     dry_run: bool,
 ) -> Result<Repaired> {
     let final_path = game_dir.join(normalize_rel(&file.rel));
-    if let Some(parent) = final_path.parent() {
-        if !dry_run {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = final_path.parent()
+        && !dry_run
+    {
+        std::fs::create_dir_all(parent)?;
     }
     tracing::debug!(expect_size = file.size, expect_md5 = %file.md5, chunks = file.chunks.len(), "check start");
     // fast skip: size + full MD5

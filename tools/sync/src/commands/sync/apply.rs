@@ -125,10 +125,10 @@ impl Applier<'_> {
             let p = self.dst.join(r);
             // the plan only holds files here; dirs are handled by the
             // unknown-dirs pass
-            if let Some(rec) = self.dm.get(r) {
-                if rec.kind == "dir" {
-                    continue;
-                }
+            if let Some(rec) = self.dm.get(r)
+                && rec.kind == "dir"
+            {
+                continue;
             }
             if p.is_file() || p.is_symlink() {
                 std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
@@ -232,10 +232,10 @@ impl Applier<'_> {
         for (i, r) in unknown_dirs.iter().enumerate() {
             let p = self.dst.join(r);
             if p.is_dir() {
-                if let Err(e) = std::fs::remove_dir_all(&p) {
-                    if p.exists() {
-                        bail!("rmdir {}: {:#}", p.display(), e);
-                    }
+                if let Err(e) = std::fs::remove_dir_all(&p)
+                    && p.exists()
+                {
+                    bail!("rmdir {}: {:#}", p.display(), e);
                 }
                 self.dst_db.remove(r.as_bytes())?;
                 println!("RMDIR {}", r);

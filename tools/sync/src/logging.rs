@@ -54,11 +54,11 @@ pub fn init_tracing(
         .with_filter(console_filter);
 
     if let Some(p) = log_file {
-        if let Some(parent) = p.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("create log dir {}", parent.display()))?;
-            }
+        if let Some(parent) = p.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create log dir {}", parent.display()))?;
         }
         let file = std::fs::OpenOptions::new()
             .create(true)

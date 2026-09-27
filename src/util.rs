@@ -67,12 +67,11 @@ pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> 
         if line.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            if v.get("is_delete").and_then(|b| b.as_bool()).unwrap_or(false) {
-                if let Some(c) = v.get("category").and_then(|c| c.as_str()) {
-                    set.insert(c.to_string());
-                }
-            }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+            && v.get("is_delete").and_then(|b| b.as_bool()).unwrap_or(false)
+            && let Some(c) = v.get("category").and_then(|c| c.as_str())
+        {
+            set.insert(c.to_string());
         }
     }
     set
@@ -89,10 +88,10 @@ pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
         if line.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(n) = v.get("fileName").and_then(|n| n.as_str()) {
-                set.insert(n.replace('\\', "/"));
-            }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(n) = v.get("fileName").and_then(|n| n.as_str())
+        {
+            set.insert(n.replace('\\', "/"));
         }
     }
     set
