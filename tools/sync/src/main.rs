@@ -1093,6 +1093,11 @@ fn cmd_sync(
         }
         for (from, to, drel, srel) in renames {
             println!("RENAME {} -> {}", drel, srel);
+            // Keep the in-memory map in sync in both real and dry-run so the
+            // post-rename diff sees aligned keys. FS + DB writes are real-only.
+            if let Some(v) = dm.remove(&drel) {
+                dm.insert(srel.clone(), v);
+            }
             if !dry_run {
                 if let Some(parent) = to.parent() {
                     std::fs::create_dir_all(parent)
@@ -1104,10 +1109,7 @@ fn cmd_sync(
                     .with_context(|| format!("rename {} (case fix step1)", from.display()))?;
                 std::fs::rename(&tmp, &to)
                     .with_context(|| format!("rename to {} (case fix step2)", to.display()))?;
-                // move DB entry + in-memory entry
-                if let Some(v) = dm.remove(&drel) {
-                    dm.insert(srel.clone(), v);
-                }
+                // move DB entry
                 if let Ok(Some(raw)) = dst_db.get(drel.as_bytes()) {
                     dst_db.remove(drel.as_bytes())?;
                     dst_db.insert(srel.as_bytes(), raw)?;
