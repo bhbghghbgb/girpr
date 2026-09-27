@@ -166,6 +166,10 @@ pub struct RepairCtx {
     pub game_dir: PathBuf,
     pub biz: Biz,
     pub audio: HashSet<String>,
+    /// `true` when `--audio` was passed (including `--audio none` = explicit
+    /// game-only empty set). `false` (flag omitted) means autodetect: keep the
+    /// scan file, else default `en-us` for automation.
+    pub audio_explicit: bool,
     pub jobs: usize,
     pub check_only: bool,
     pub dry_run: bool,
@@ -256,18 +260,27 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32), RunFailure> {
         HashSet::new()
     };
 
-    // effective audio langs
+    // effective audio langs: explicit `--audio` (incl. `none` = game-only) wins and
+    // overwrites the scan file; omitted flag keeps the detected scan-file set,
+    // defaulting to `en-us` when undetectable so automation gets a launchable game.
     let mut audio = ctx.audio.clone();
-    if audio.is_empty() {
+    if ctx.audio_explicit {
+        if audio.is_empty() {
+            tracing::info!("explicit game-only audio selection (--audio none)");
+        } else {
+            tracing::info!("explicit audio langs: {:?}", audio);
+        }
+        if !readonly && !cfg.audio_pkg_scan_dir.is_empty() {
+            write_audio_scan(&game_dir, &cfg.audio_pkg_scan_dir, &audio)
+                .context("write audio scan file")
+                .map_err(RunFailure::write)?;
+        }
+    } else {
         audio = read_current_audio(&game_dir, &cfg.audio_pkg_scan_dir);
         if audio.is_empty() {
             audio.insert("en-us".to_string());
         }
         tracing::info!("keeping current audio langs: {:?}", audio);
-    } else if !ctx.dry_run && !ctx.check_only && !cfg.audio_pkg_scan_dir.is_empty() {
-        write_audio_scan(&game_dir, &cfg.audio_pkg_scan_dir, &audio)
-            .context("write audio scan file")
-            .map_err(RunFailure::write)?;
     }
 
     // 2.5 begin-report to stdout (mirrored to log): versions + API-sourced

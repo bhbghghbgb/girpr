@@ -22,7 +22,8 @@ downloads, dispatcher persistent revisions, quota dialogs, hardlinks, UI/progres
 ## 1. Inputs / outputs
 
 Inputs: `game_dir`, `biz ∈ {hk4e_cn, hk4e_global, hk4e_bilibili}`,
-`audio_langs ⊆ {zh-cn,en-us,ja-jp,ko-kr}` (default: keep currently selected, see §3),
+`audio_langs ⊆ {zh-cn,en-us,ja-jp,ko-kr}` or explicit empty (`--audio none` = game-only;
+default when omitted: keep currently selected, else `en-us`, see Step 1),
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
@@ -30,8 +31,11 @@ Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok
 `4` check-only found damage; a begin `REPORT` line (versions + API-sourced
 fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
 both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
-with reason). Errors carry their class at the raise site (`RunFailure`), so the
-exit code matches the class even for post-phase write failures.
+with reason). Fatal errors carry their class at the raise site (`RunFailure`), so the
+exit code matches the class even for post-phase write failures. Per-file verify
+failures are the exception: they continue across files and return `Ok(summary, 3)`
+(counted, with `SUMMARY … failed>0`) instead of `Err(RunFailure::write)` (fatal,
+`FATAL` only, no `SUMMARY`).
 
 ## 2. Procedure
 
@@ -44,13 +48,14 @@ exit code matches the class even for post-phase write failures.
 1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
 2. Read `res_category_dir` ignore list if game config names it (see step 2): file of JSON lines
    `{"category":"<matching_field>","is_delete":true}` → ignore set.
- 3. Determine effective audio langs: explicit flag wins; else read audio scan file
-   (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean` → map to
-   `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default, not
-   launcher behavior — Starward falls back to its registry setting, Collapse never
-   auto-selects langs).
-   Write the scan file back when an explicit selection was given, except in
-   `--dry-run` / `--check-only` (no writes) or when the scan dir is unconfigured.
+  3. Determine effective audio langs: explicit flag wins, including `--audio none`
+   (explicit empty = game-only, scan file overwritten with an empty list); else read
+   audio scan file (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean`
+   → map to `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default for
+   automation so the game launches — Starward/ Collapse use game-only when the scan file
+   is missing, and `none` opts into that behavior explicitly).
+   Write the scan file back when an explicit selection was given (including `none`),
+   except in `--dry-run` / `--check-only` (no writes) or when the scan dir is unconfigured.
 
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
@@ -128,8 +133,10 @@ Per file `F`:
       `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to
       lower peak RAM; the final whole-file MD5 still gates promotion.
    c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
-4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
-   log `repaired {downloaded_bytes}`. Else delete `tmp`, log error, mark file failed (exit 3).
+ 4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
+   log `repaired {downloaded_bytes}`. Else delete `tmp`, log error, count the file as failed
+   and continue remaining files; after all files, return `Ok(summary, 3)` (skips the post-phase
+   so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
    Never modify the original in place; never leave `tmp` behind on success.
 5. `--check-only`: perform only step 1 for all files and report; write nothing.
 
@@ -150,12 +157,15 @@ from the latest manifest alone (local manifest is a pure optimization).
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
    `collapse_purge_extra` and is skipped only in `--dry-run`).
-3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
-   `GameInstallService.cs:788-849`): preserve existing keys outside the forced set,
+ 3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
+   `GameInstallService.cs:788-849`): preserve unknown keys outside the forced set
+   (Starward parity — other keys pass through; comments/other `[sections]` are not
+   preserved, same wholesale-rewrite class as Starward),
    force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
    cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
    `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
-   `""` for the same key, and v1 does no SDK fetch. Create with `[General]`
+   `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
+   channel SDK and write the real version if a channel ever requires it. Create with `[General]`
    header if missing.
 
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —

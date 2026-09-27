@@ -42,7 +42,7 @@ cargo build --release
 |---|---|---|
 | `--game-path <DIR>` | (required) | Game install directory (contains `config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
-| `--audio <LANG>`… | keep current, else `en-us` | Audio languages to keep (repeatable): `zh-cn`, `en-us`, `ja-jp`, `ko-kr`. If omitted, the audio scan file is read; if that is missing/unreadable, falls back to `en-us` |
+| `--audio <LANG>`… | keep current, else `en-us` | Audio languages to keep (repeatable): `zh-cn`, `en-us`, `ja-jp`, `ko-kr`, or `none` for game-only (no audio). If omitted, the audio scan file is read; if that is missing/unreadable, falls back to `en-us` so automation gets a launchable game. An explicit selection (including `none`) overwrites the scan file |
 | `--io-threads <N>` | `4` | Concurrent **files** (chunks within a file are sequential → HDD-friendly). SSD: 4–8, HDD: 1–2 |
 | `--purge-after` | off | After patching, delete every file not in the live manifest (Collapse files-cleanup parity) |
 | `--purge-before` | off | Same files-cleanup as `--purge-after`, but run *before* patching (frees space for the repair itself) |
@@ -56,14 +56,17 @@ cargo build --release
 | Code | Meaning |
 |---|---|
 | `0` | Success (check-only: everything intact) |
-| `1` | Usage / config error (bad args, unknown audio lang, `--io-threads < 1`, unusable `--game-path`, game in legacy FILE mode) |
+| `1` | Usage / config error (bad args, unknown audio lang, `--audio none` mixed with langs, `--io-threads < 1`, unusable `--game-path`, game in legacy FILE mode) |
 | `2` | Metadata / network error (HoYoPlay/Sophon unreachable, non-zero retcode, bad manifest, checksum mismatch) |
-| `3` | Write / verify error (a file failed final MD5 after retries, promote/rename failed, `config.ini` / audio-scan write failed, files-cleanup failed) |
+| `3` | Write / verify error — two mechanisms, same code: counted per-file failures (`Ok(summary, 3)` with `SUMMARY … failed>0`) vs fatal write failures (`Err(RunFailure::write)` with `FATAL` only, no `SUMMARY`): a file failed final MD5 after retries, promote/rename failed, `config.ini` / audio-scan write failed, files-cleanup failed |
 | `4` | Check-only found damage |
 
-Each error is classified at the site that raises it (`run` → `RunFailure`), so the
+Each fatal error is classified at the site that raises it (`run` → `RunFailure`), so the
 right code exits even for post-phase write failures — code `3` is not limited to
-the per-file repair loop.
+the per-file repair loop. Per-file failures instead continue across files, skip the
+post-phase (no deprecated/audio/purge-after/`config.ini` bump, so the version is not
+marked latest while damaged), and return `Ok(summary, 3)` so automation still gets the
+machine-readable `SUMMARY` with `failed` counts.
 
 Progress and diagnostics go to **stderr** (structured `tracing` logs, level from
 `--log-level` plus `RUST_LOG`) and to a `TRACE`-level log file

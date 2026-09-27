@@ -98,6 +98,12 @@ pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
 }
 
 /// Bump (or create) config.ini with latest version + channel fields.
+/// Starward parity (`SetGameConfigIniAsync`): preserve unknown keys, force the
+/// known set below. Single `[General]` header; comments/other sections are not
+/// preserved (matches Starward's wholesale rewrite; Collapse preserves sections).
+/// TODO(sdk_version): Starward writes the real channel SDK version
+/// (`GameChannelSDK?.Version ?? ""`); v1 always writes `""` (no SDK fetch).
+/// Fetch the channel SDK and write the real version if a channel ever requires it.
 pub fn write_config_ini(
     game_dir: &Path,
     latest: &str,

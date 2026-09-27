@@ -21,7 +21,7 @@ No build.rs (prost `derive` only, no protoc). No SQLite, no GUI, no speed limite
 
 ```text
 girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
-      [--audio <zh-cn,en-us,ja-jp,ko-kr>]...   (repeatable; default: keep current selection)
+      [--audio <zh-cn,en-us,ja-jp,ko-kr|none>]...   (repeatable; default: keep current else en-us; `none` = explicit game-only, overwrites scan file, cannot mix)
       [--io-threads <N, default 4>]            (concurrent FILES; chunks sequential/file)
       [--purge-after] [--purge-before]          (same files-cleanup after / before; timing only)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
@@ -29,9 +29,11 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
 ```
 
 Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args, unusable game
-path, legacy FILE mode), 2 metadata/network, 3 write/verify (per-file repair,
-config.ini / audio-scan write, files-cleanup), 4 check-only found damage. Errors
-carry their class via `repair::RunFailure` at the raise site. Automation: `tracing` diagnostics
+path, legacy FILE mode), 2 metadata/network, 3 write/verify (counted per-file repair
+failures via `Ok(summary, 3)` with `SUMMARY`, plus fatal config.ini / audio-scan write,
+files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage. Fatal
+errors carry their class via `repair::RunFailure` at the raise site; per-file verify
+failures continue and skip the post-phase instead. Automation: `tracing` diagnostics
 on stderr; the begin `REPORT` line (versions + API fields), `PROGRESS` lines, and
 the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and are mirrored to the log.
 

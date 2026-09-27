@@ -16,7 +16,10 @@ pub struct Args {
     #[arg(long, value_enum)]
     pub biz: Biz,
 
-    /// Audio languages to keep (repeatable). If omitted, keeps current selection.
+    /// Audio languages to keep (repeatable). If omitted, keeps current selection
+    /// (falls back to `en-us` if the scan file is missing). Use `--audio none`
+    /// for game-only (no audio); it overwrites the scan file with an empty list.
+    /// `none` cannot be mixed with language codes.
     #[arg(long = "audio")]
     pub audio: Vec<String>,
 
@@ -50,6 +53,13 @@ pub struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     pub log_level: String,
+}
+
+/// `true` for the game-only sentinel (`--audio none`, case-insensitive).
+/// Handled separately from `normalize_audio_lang` so `none` is never confused
+/// with an unknown language code.
+pub fn is_audio_none(s: &str) -> bool {
+    s.eq_ignore_ascii_case("none")
 }
 
 /// Normalize user audio input ("English(US)", "en_us", ...) to sophon matching_field.
@@ -90,5 +100,13 @@ mod tests {
         assert_eq!(normalize_audio_lang("Korean"), Some("ko-kr".to_string()));
         assert_eq!(normalize_audio_lang("fr-fr"), None);
         assert_eq!(normalize_audio_lang(""), None);
+    }
+
+    #[test]
+    fn audio_none_sentinel_is_case_insensitive_and_not_a_lang() {
+        assert!(is_audio_none("none"));
+        assert!(is_audio_none("NONE"));
+        assert!(!is_audio_none("en-us"));
+        assert_eq!(normalize_audio_lang("none"), None);
     }
 }

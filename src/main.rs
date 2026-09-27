@@ -1,5 +1,5 @@
 use clap::Parser;
-use girpr::{normalize_audio_lang, repair, Args};
+use girpr::{is_audio_none, normalize_audio_lang, repair, Args};
 use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
@@ -68,17 +68,32 @@ async fn main() {
         std::process::exit(1);
     }
     let mut audio = HashSet::new();
+    let mut saw_none = false;
     for a in &args.audio {
+        if is_audio_none(a) {
+            saw_none = true;
+            continue;
+        }
         match normalize_audio_lang(a) {
             Some(n) => {
                 audio.insert(n);
             }
             None => {
-                eprintln!("ERROR unknown audio lang '{}' (want zh-cn|en-us|ja-jp|ko-kr)", a);
+                eprintln!(
+                    "ERROR unknown audio lang '{}' (want zh-cn|en-us|ja-jp|ko-kr|none)",
+                    a
+                );
                 std::process::exit(1);
             }
         }
     }
+    if saw_none && !audio.is_empty() {
+        eprintln!("ERROR --audio none cannot be mixed with language codes");
+        std::process::exit(1);
+    }
+    // No `--audio` at all -> autodetect (keep scan file, else en-us).
+    // `--audio none` alone -> explicit game-only (empty set, overwrites scan file).
+    let audio_explicit = !args.audio.is_empty();
 
     tracing::info!(
         "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={}",
@@ -95,6 +110,7 @@ async fn main() {
         game_dir: args.game_path.clone(),
         biz: args.biz,
         audio,
+        audio_explicit,
         jobs: args.io_threads,
         check_only: args.check_only,
         dry_run: args.dry_run,
