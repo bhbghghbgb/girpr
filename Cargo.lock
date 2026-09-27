@@ -569,8 +569,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "sled",
- "tracing",
- "tracing-subscriber",
  "walkdir",
 ]
 

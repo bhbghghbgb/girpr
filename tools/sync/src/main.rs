@@ -9,14 +9,8 @@ use clap::{Parser, Subcommand};
 use glob::{MatchOptions, Pattern};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex,
-};
-use tracing_subscriber::prelude::*;
 
 const META_KEY: &str = "\0meta";
 const CACHE_PREFIX: &str = "girpr-cache";
@@ -25,10 +19,6 @@ const SUPPORTED_HASHES: &[&str] = &["md5", "sha256"];
 #[derive(Parser, Debug)]
 #[command(name = "girsync", about = "Dev-only one-way folder mirror with hash cache")]
 struct Cli {
-    /// Log level (trace|debug|info|warn|error). File log always uses trace.
-    #[arg(long, default_value = "info", global = true)]
-    log_level: String,
-
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -139,130 +129,12 @@ struct LiveEnt {
     mtime_ns: i64,
 }
 
-fn open_log_file(path: &Path) -> std::io::Result<File> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-    std::fs::create_dir_all(dir)?;
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
-}
-
-fn init_logging(log_level: &str) -> PathBuf {
-    let filter = format!(
-        "girsync={},{}",
-        log_level,
-        std::env::var("RUST_LOG").unwrap_or_default()
-    );
-    // Dev tool: logs go to stdout (no stdout/stderr split like the main binary).
-    let stdout_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stdout)
-        .with_filter(
-            filter
-                .parse::<tracing_subscriber::EnvFilter>()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        );
-
-    let log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        })
-        .join("logs")
-        .join(format!(
-            "girsync_{}.log",
-            chrono::Local::now().format("%Y-%m-%d_%H-%M-%S%.3f")
-        ));
-    let file_writer: Mutex<Box<dyn std::io::Write + Send + Sync>> = match open_log_file(&log_path) {
-        Ok(f) => Mutex::new(Box::new(f)),
-        Err(e) => {
-            // Logging itself goes to stdout, but this happens before init so
-            // a plain print is the only option.
-            println!("WARN disabling file logging ({}): {e}", log_path.display());
-            Mutex::new(Box::new(std::io::sink()))
-        }
-    };
-    // File log always captures everything, regardless of --log-level.
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
-        .with_ansi(false)
-        .with_filter(tracing_subscriber::filter::LevelFilter::TRACE);
-
-    tracing_subscriber::registry()
-        .with(stdout_layer)
-        .with(file_layer)
-        .init();
-
-    tracing::info!("log file: {}", log_path.display());
-    log_path
-}
-
-/// Emit a user-visible line to both stdout and the log, so a file-log-only
-/// capture still keeps machine-parseable output (same contract as girpr).
-fn emit_line(line: &str) {
-    println!("{line}");
-    tracing::info!("{line}");
-}
-
-/// How often the background reporter emits `PROGRESS` during long phases.
-pub const PROGRESS_INTERVAL_SECS: u64 = 10;
-
-#[derive(Default)]
-struct Progress {
-    total_files: AtomicU64,
-    hashed_files: AtomicU64,
-    hashed_bytes: AtomicU64,
-    copied_files: AtomicU64,
-    deleted_files: AtomicU64,
-}
-
-/// Format the one-line progress snapshot. Shared by stdout + log emission.
-fn format_progress(p: &Progress) -> String {
-    format!(
-        "PROGRESS hashed={}/{} copied={} deleted={} hashed_bytes={}",
-        p.hashed_files.load(Ordering::Relaxed),
-        p.total_files.load(Ordering::Relaxed),
-        p.copied_files.load(Ordering::Relaxed),
-        p.deleted_files.load(Ordering::Relaxed),
-        p.hashed_bytes.load(Ordering::Relaxed),
-    )
-}
-
-/// Emit progress to **both** stdout and the log (mirrors girpr::emit_progress).
-fn emit_progress(p: &Progress) {
-    emit_line(&format_progress(p));
-}
-
-fn start_progress_reporter(p: Arc<Progress>) -> Arc<AtomicBool> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let flag = stop.clone();
-    std::thread::spawn(move || {
-        // Sleep in short slices so `stop` takes effect promptly at the end.
-        let mut elapsed = 0u64;
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if flag.load(Ordering::Relaxed) {
-                break;
-            }
-            elapsed += 1;
-            if elapsed * 500 >= PROGRESS_INTERVAL_SECS * 1000 {
-                elapsed = 0;
-                emit_progress(&p);
-            }
-        }
-    });
-    stop
-}
-
 fn main() {
     let cli = Cli::parse();
-    init_logging(&cli.log_level);
-    tracing::info!("girsync start cmd={:?}", cli.cmd);
     let code = match run(cli) {
         Ok(code) => code,
         Err(e) => {
-            tracing::error!("fatal: {:#}", e);
-            println!("FATAL {:#}", e);
+            eprintln!("FATAL {:#}", e);
             3
         }
     };
@@ -374,8 +246,7 @@ fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-backup-{}", ts_now()));
     copy_dir_all(db_path, &dest)?;
-    let line = format!("backup {} -> {}", db_path.display(), dest.display());
-    emit_line(&line);
+    println!("backup {} -> {}", db_path.display(), dest.display());
     Ok(Some(dest))
 }
 
@@ -386,8 +257,7 @@ fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-old-{}", ts_now()));
     copy_dir_all(db_path, &dest)?;
-    let line = format!("snapshot-old {} -> {}", db_path.display(), dest.display());
-    emit_line(&line);
+    println!("snapshot-old {} -> {}", db_path.display(), dest.display());
     Ok(Some(dest))
 }
 
@@ -612,9 +482,7 @@ fn open_db(db_path: &Path, case_sensitive: bool, ignore_cache: bool, backup_firs
         }
         std::fs::remove_dir_all(db_path)
             .with_context(|| format!("remove {}", db_path.display()))?;
-        let line = format!("ignore-cache: removed {}", db_path.display());
-        emit_line(&line);
-        tracing::debug!("{line}");
+        println!("ignore-cache: removed {}", db_path.display());
     } else if backup_first && db_path.exists() {
         backup_db(db_path)?;
     }
@@ -678,11 +546,8 @@ fn build_effective_folder(
     max_depth: usize,
     force_hash: bool,
     dry_run: bool,
-    progress: &Progress,
 ) -> Result<HashMap<String, EffRec>> {
-    tracing::debug!(root = %root.display(), fast, force_hash, dry_run, "scan start");
     let live = walk_live(root, max_depth)?;
-    tracing::debug!(root = %root.display(), entries = live.len(), "walk done");
     check_mixed_case(&live, &root.display().to_string(), case_sensitive)?;
     let mut eff = HashMap::new();
     let mut live_set: HashSet<String> = HashSet::new();
@@ -692,12 +557,6 @@ fn build_effective_folder(
         }
         live_set.insert(e.rel.clone());
     }
-    progress.total_files.fetch_add(
-        live.iter()
-            .filter(|e| !e.is_dir && !is_excluded(&e.rel, includes, excludes, case_sensitive))
-            .count() as u64,
-        Ordering::Relaxed,
-    );
     // In insensitive mode the on-disk name governs: index cached keys by
     // lowercase so a disk/cached casing difference is fixed to the disk name
     // first (reusing the cached hashes when stat matches) instead of
@@ -789,8 +648,6 @@ fn build_effective_folder(
                 if adopted && !dry_run {
                     put_rec(db, &e.rel, c)?;
                 }
-                tracing::trace!(rel = %e.rel, "cache hit");
-                progress.hashed_files.fetch_add(1, Ordering::Relaxed);
                 eff.insert(
                     e.rel.clone(),
                     EffRec {
@@ -809,12 +666,8 @@ fn build_effective_folder(
         }
         let have_all = cached.as_ref().map(|c| algos.iter().all(|a| c.hashes.contains_key(a))).unwrap_or(false);
         if !fast || !fresh || force_hash || !have_all {
-            tracing::debug!(rel = %e.rel, size = e.size, "hashing");
             let hashes = hash_file(&e.abs, algos)
                 .with_context(|| format!("hash {}", e.abs.display()))?;
-            tracing::trace!(rel = %e.rel, size = e.size, "hashed");
-            progress.hashed_files.fetch_add(1, Ordering::Relaxed);
-            progress.hashed_bytes.fetch_add(e.size, Ordering::Relaxed);
             if !dry_run {
                 put_rec(
                     db,
@@ -839,7 +692,6 @@ fn build_effective_folder(
         } else {
             // fast hit path (fresh && fast && have_all handled above); fallback hash
             let c = cached.as_ref().unwrap();
-            progress.hashed_files.fetch_add(1, Ordering::Relaxed);
             eff.insert(
                 e.rel.clone(),
                 EffRec {
@@ -861,7 +713,6 @@ fn build_effective_folder(
         }
         db.flush()?;
     }
-    tracing::debug!(root = %root.display(), files = eff.values().filter(|r| r.kind == "file").count(), "scan done");
     Ok(eff)
 }
 
@@ -871,7 +722,6 @@ fn load_record_side(
     excludes: &[Pattern],
     case_sensitive: bool,
 ) -> Result<HashMap<String, EffRec>> {
-    tracing::debug!(record = %db_path.display(), "load record side");
     if !db_path.exists() {
         bail!("record {} not found", db_path.display());
     }
@@ -908,7 +758,6 @@ fn load_record_side(
             }
         }
     }
-    tracing::debug!(record = %db_path.display(), files = out.values().filter(|r| r.kind == "file").count(), "record loaded");
     Ok(out)
 }
 
@@ -1016,7 +865,6 @@ fn hashes_differ(a: &HashMap<String, String>, b: &HashMap<String, String>, algos
 
 // ---------- commands ----------
 
-#[allow(clippy::too_many_arguments)]
 fn cmd_update(
     dir: PathBuf,
     hash: Vec<String>,
@@ -1032,23 +880,16 @@ fn cmd_update(
     if !dir.is_dir() {
         bail!("--dir {} is not a directory", dir.display());
     }
-    tracing::info!(dir = %dir.display(), algos = ?algos, "update start");
-    let progress = Arc::new(Progress::default());
-    let stop = start_progress_reporter(progress.clone());
     let db_path = dir.join(CACHE_PREFIX);
     let db = open_db(&db_path, case_sensitive, ignore_cache, true)?;
     let eff = build_effective_folder(
         &dir, &db, &algos, true, &includes, &excludes, case_sensitive, max_depth,
         true, // update mode: ensure hashes populated
         false,
-        &progress,
     )?;
     let files = eff.values().filter(|r| r.kind == "file").count();
     let dirs = eff.values().filter(|r| r.kind == "dir").count();
-    stop.store(true, Ordering::Relaxed);
-    emit_progress(&progress);
-    tracing::info!(dir = %dir.display(), files, dirs, "update done");
-    emit_line(&format!("update {} files={} dirs={} algos=[{}]", dir.display(), files, dirs, algos.join(",")));
+    println!("update {} files={} dirs={} algos=[{}]", dir.display(), files, dirs, algos.join(","));
     Ok(0)
 }
 
@@ -1065,7 +906,6 @@ fn classify(p: &Path) -> Side {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_side(
     side: &Side,
     algos: &[String],
@@ -1077,7 +917,6 @@ fn load_side(
     ignore_cache: bool,
     force_hash: bool,
     dry_run: bool,
-    progress: &Progress,
 ) -> Result<HashMap<String, EffRec>> {
     match side {
         Side::Record(dbp) => load_record_side(dbp, includes, excludes, case_sensitive),
@@ -1091,14 +930,14 @@ fn load_side(
                 let db = open_db(&db_path, case_sensitive, false, false)?;
                 let eff = build_effective_folder(
                     root, &db, algos, fast, includes, excludes, case_sensitive, max_depth,
-                    force_hash, dry_run, progress,
+                    force_hash, dry_run,
                 )?;
                 return Ok(eff);
             }
             match open_db(&db_path, case_sensitive, ignore_cache, !dry_run) {
                 Ok(db) => build_effective_folder(
                     root, &db, algos, fast, includes, excludes, case_sensitive, max_depth,
-                    force_hash, dry_run, progress,
+                    force_hash, dry_run,
                 ),
                 Err(e) => Err(e.context(format!("cache for {} (use --ignore-cache to rebuild)", root.display()))),
             }
@@ -1106,7 +945,6 @@ fn load_side(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn cmd_compare(
     src: PathBuf,
     dst: PathBuf,
@@ -1123,31 +961,26 @@ fn cmd_compare(
     let excludes = compile_patterns(&exclude)?;
     let s = classify(&src);
     let d = classify(&dst);
-    tracing::info!(src = %src.display(), dst = %dst.display(), algos = ?algos, fast, "compare start");
-    let progress = Arc::new(Progress::default());
-    let stop = start_progress_reporter(progress.clone());
-    let sm = load_side(&s, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false, &progress)?;
-    let dm = load_side(&d, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false, &progress)?;
-    stop.store(true, Ordering::Relaxed);
-    emit_progress(&progress);
+    let sm = load_side(&s, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
+    let dm = load_side(&d, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
     let diff = diff_maps(&sm, &dm, &algos, case_sensitive);
     for r in &diff.missing {
-        emit_line(&format!("MISSING {}", r));
+        println!("MISSING {}", r);
     }
     for r in &diff.extra {
-        emit_line(&format!("EXTRA {}", r));
+        println!("EXTRA {}", r);
     }
     for r in &diff.changed {
-        emit_line(&format!("CHANGED {}", r));
+        println!("CHANGED {}", r);
     }
     for r in &diff.type_conflict {
-        emit_line(&format!("TYPE-CONFLICT {}", r));
+        println!("TYPE-CONFLICT {}", r);
     }
     for (a, b) in &diff.case_mismatch {
-        emit_line(&format!("CASE-MISMATCH {} <=> {}", a, b));
+        println!("CASE-MISMATCH {} <=> {}", a, b);
     }
     let total = diff.missing.len() + diff.extra.len() + diff.changed.len() + diff.type_conflict.len();
-    let summary = format!(
+    println!(
         "SUMMARY missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={}",
         diff.missing.len(),
         diff.extra.len(),
@@ -1156,7 +989,6 @@ fn cmd_compare(
         diff.case_mismatch.len(),
         total
     );
-    emit_line(&summary);
     Ok(if total == 0 && diff.case_mismatch.is_empty() { 0 } else { 4 })
 }
 
@@ -1193,9 +1025,6 @@ fn cmd_sync(
     if jobs == 0 {
         bail!("--jobs must be >= 1");
     }
-    tracing::info!(src = %src.display(), dst = %dst.display(), algos = ?algos, fast, missing_only, keep_extra, dry_run, jobs, "sync start");
-    let progress = Arc::new(Progress::default());
-    let stop = start_progress_reporter(progress.clone());
 
     let src_db_path = src.join(CACHE_PREFIX);
     let dst_db_path = dst.join(CACHE_PREFIX);
@@ -1215,9 +1044,7 @@ fn cmd_sync(
                 if p.exists() {
                     std::fs::remove_dir_all(p)
                         .with_context(|| format!("remove {}", p.display()))?;
-                    let line = format!("ignore-cache: removed {}", p.display());
-                    emit_line(&line);
-                    tracing::debug!("{line}");
+                    println!("ignore-cache: removed {}", p.display());
                 }
             }
         }
@@ -1242,14 +1069,12 @@ fn cmd_sync(
 
     let sm = build_effective_folder(
         &src, &src_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
-        false, dry_run, &progress,
+        false, dry_run,
     )?;
-    emit_progress(&progress);
     let mut dm = build_effective_folder(
         &dst, &dst_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
-        false, dry_run, &progress,
+        false, dry_run,
     )?;
-    emit_progress(&progress);
 
     // case-insensitive rename pass (sync mode): rename dst to src casing first.
     let mut renamed = 0usize;
@@ -1267,9 +1092,7 @@ fn cmd_sync(
             }
         }
         for (from, to, drel, srel) in renames {
-            let line = format!("RENAME {} -> {}", drel, srel);
-            emit_line(&line);
-            tracing::debug!("{line}");
+            println!("RENAME {} -> {}", drel, srel);
             if !dry_run {
                 if let Some(parent) = to.parent() {
                     std::fs::create_dir_all(parent)
@@ -1352,18 +1175,18 @@ fn cmd_sync(
 
     if dry_run {
         for r in &to_mkdir {
-            emit_line(&format!("MKDIR {}", r));
+            println!("MKDIR {}", r);
         }
         for r in &to_copy {
-            emit_line(&format!("COPY {}", r));
+            println!("COPY {}", r);
         }
         for r in &to_delete_files {
-            emit_line(&format!("DELETE {}", r));
+            println!("DELETE {}", r);
         }
         for r in &to_fix_dirs {
-            emit_line(&format!("RMDIR-FILE {}", r));
+            println!("RMDIR-FILE {}", r);
         }
-        let summary = format!(
+        println!(
             "SUMMARY renamed={} mkdir={} copy={} delete={} missing_only={} keep_extra={} dry_run=true",
             renamed,
             to_mkdir.len(),
@@ -1372,15 +1195,11 @@ fn cmd_sync(
             missing_only,
             keep_extra
         );
-        stop.store(true, Ordering::Relaxed);
-        emit_progress(&progress);
-        emit_line(&summary);
         return Ok(0);
     }
 
     // Apply: mkdirs
     for r in &to_mkdir {
-        tracing::debug!(rel = %r, "mkdir");
         std::fs::create_dir_all(dst.join(r))
             .with_context(|| format!("mkdir {}", dst.join(r).display()))?;
         dst_db.insert(
@@ -1403,10 +1222,7 @@ fn cmd_sync(
             std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
         }
         std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
-        let line = format!("FIX-DIR {}", r);
-        emit_line(&line);
-        tracing::debug!("{line}");
-        progress.deleted_files.fetch_add(1, Ordering::Relaxed);
+        println!("FIX-DIR {}", r);
     }
 
     // Delete entries before file changes (crash leaves truncated risk documented;
@@ -1428,47 +1244,31 @@ fn cmd_sync(
         }
         if p.is_file() || p.is_symlink() {
             std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
-            let line = format!("DELETE {}", r);
-            emit_line(&line);
-            tracing::debug!("{line}");
+            println!("DELETE {}", r);
             deleted += 1;
-            progress.deleted_files.fetch_add(1, Ordering::Relaxed);
         } else if p.is_dir() {
             std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
-            let line = format!("RMDIR {}", r);
-            emit_line(&line);
-            tracing::debug!("{line}");
+            println!("RMDIR {}", r);
             deleted += 1;
-            progress.deleted_files.fetch_add(1, Ordering::Relaxed);
         } else if p.exists() {
             bail!("unsupported type {}", p.display());
         }
     }
 
     // Copy files in parallel (truncate + write in place, preserve mtime, verify).
-    tracing::info!(files = to_copy.len(), jobs, "copy start");
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
         .build()
         .context("build thread pool")?;
-    let progress_clone = progress.clone();
     let results = pool.install(|| {
         use rayon::prelude::*;
-        to_copy.par_iter().map(|rel| {
-            let r = copy_one(&src, &dst, rel, &algos);
-            if r.is_ok() {
-                progress_clone.copied_files.fetch_add(1, Ordering::Relaxed);
-            }
-            r
-        }).collect::<Vec<_>>()
+        to_copy.par_iter().map(|rel| copy_one(&src, &dst, rel, &algos)).collect::<Vec<_>>()
     });
     let mut copied = 0usize;
     let mut new_recs: Vec<(String, FileRec)> = Vec::new();
     for (rel, r) in to_copy.iter().zip(results) {
         let rec = r.with_context(|| format!("copy {}", rel))?;
-        let line = format!("COPY {}", rel);
-        emit_line(&line);
-        tracing::debug!("{line}");
+        println!("COPY {}", rel);
         new_recs.push((rel.clone(), rec));
         copied += 1;
     }
@@ -1508,9 +1308,7 @@ fn cmd_sync(
                 }
             }
             dst_db.remove(r.as_bytes())?;
-            let line = format!("RMDIR {}", r);
-            emit_line(&line);
-            tracing::debug!("{line}");
+            println!("RMDIR {}", r);
             removed_dirs += 1;
         }
     }
@@ -1537,9 +1335,7 @@ fn cmd_sync(
     src_db.flush()?;
     dst_db.flush()?;
 
-    stop.store(true, Ordering::Relaxed);
-    emit_progress(&progress);
-    let summary = format!(
+    println!(
         "SUMMARY renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={}",
         renamed,
         to_mkdir.len(),
@@ -1549,12 +1345,10 @@ fn cmd_sync(
         missing_only,
         keep_extra
     );
-    emit_line(&summary);
     Ok(0)
 }
 
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
-    tracing::debug!(rel, "copy start");
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
     // dst dir that is in the way of a file copy: remove first
@@ -1608,7 +1402,6 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
             bail!("verify hash({}) {}", a, d.display());
         }
     }
-    tracing::trace!(rel, size = ssize, "copied");
     Ok(FileRec {
         kind: "file".into(),
         size: ssize,
@@ -1635,9 +1428,8 @@ mod tests {
         let algos = vec!["md5".to_string()];
 
         let db = open_db(&db_path, true, false, false).unwrap();
-        let prog = Progress::default();
         let eff = build_effective_folder(
-            &dir, &db, &algos, true, &[], &[], true, 10, true, false, &prog,
+            &dir, &db, &algos, true, &[], &[], true, 10, true, false,
         )
         .unwrap();
         assert!(eff.contains_key("a.txt"));
@@ -1650,9 +1442,8 @@ mod tests {
 
         // Previously this errored in open_db (meta mismatch). Must succeed now.
         let db = open_db(&db_path, false, false, false).unwrap();
-        let prog = Progress::default();
         let eff = build_effective_folder(
-            &dir, &db, &algos, true, &[], &[], false, 10, false, false, &prog,
+            &dir, &db, &algos, true, &[], &[], false, 10, false, false,
         )
         .unwrap();
         assert!(eff.contains_key("A.txt"), "disk casing governs");
@@ -1665,9 +1456,8 @@ mod tests {
 
         // Same record must remain usable in a later sensitive run.
         let db = open_db(&db_path, true, false, false).unwrap();
-        let prog = Progress::default();
         let eff = build_effective_folder(
-            &dir, &db, &algos, true, &[], &[], true, 10, false, false, &prog,
+            &dir, &db, &algos, true, &[], &[], true, 10, false, false,
         )
         .unwrap();
         assert!(eff.contains_key("A.txt"));
@@ -1692,19 +1482,5 @@ mod tests {
         assert!(is_excluded("other.txt", &inc, &exc, true));
         assert!(!is_excluded("a.dat", &inc, &exc, true));
         assert!(is_excluded("secret.dat", &inc, &exc, true));
-    }
-
-    #[test]
-    fn progress_format_counts() {
-        let p = Progress::default();
-        p.total_files.store(10, Ordering::Relaxed);
-        p.hashed_files.store(4, Ordering::Relaxed);
-        p.hashed_bytes.store(1024, Ordering::Relaxed);
-        p.copied_files.store(2, Ordering::Relaxed);
-        p.deleted_files.store(1, Ordering::Relaxed);
-        assert_eq!(
-            format_progress(&p),
-            "PROGRESS hashed=4/10 copied=2 deleted=1 hashed_bytes=1024"
-        );
     }
 }
