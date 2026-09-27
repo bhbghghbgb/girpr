@@ -29,146 +29,96 @@ struct Cli {
     cmd: Cmd,
 }
 
-// ---------- minimal standalone logger (no dependency on main girpr crate) ----------
+// ---------- tracing-based structured logging (standalone, no girpr crate dependency) ----------
 //
 // Design:
-// - Console (stderr) is filtered by --log-level.
-// - File (if --log-file) always captures everything (trace and above).
+// - Console (stderr, human-readable) is filtered by --log-level.
+// - File (if --log-file, JSON) always captures TRACE and above, no matter --log-level.
 // - Data-plane output (MISSING/COPY/SUMMARY/...) stays on stdout via println!.
-// - All operational chatter (start report, progress, backups, end summary) goes
-//   through these macros -> stderr (+ file).
+// - All operational chatter uses tracing events with structured fields.
+// - Per-command spans carry config so every event inside is correlated.
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum LogLevel {
-    Trace = 0,
-    Debug = 1,
-    Info = 2,
-    Warn = 3,
-    Error = 4,
-}
+use tracing::{debug, error, info, trace, warn};
+use tracing_subscriber::{fmt, prelude::*};
 
-impl LogLevel {
-    fn parse(s: &str) -> Result<LogLevel> {
-        match s.to_ascii_lowercase().as_str() {
-            "trace" => Ok(LogLevel::Trace),
-            "debug" => Ok(LogLevel::Debug),
-            "info" => Ok(LogLevel::Info),
-            "warn" | "warning" => Ok(LogLevel::Warn),
-            "error" => Ok(LogLevel::Error),
-            other => bail!(
-                "invalid --log-level '{}' (expected trace|debug|info|warn|error)",
-                other
-            ),
+fn parse_level_name(s: &str) -> Result<String> {
+    match s.to_ascii_lowercase().as_str() {
+        "trace" | "debug" | "info" | "warn" | "warning" | "error" => {
+            Ok(if s.eq_ignore_ascii_case("warning") {
+                "warn".to_string()
+            } else {
+                s.to_ascii_lowercase()
+            })
         }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            LogLevel::Trace => "TRACE",
-            LogLevel::Debug => "DEBUG",
-            LogLevel::Info => "INFO",
-            LogLevel::Warn => "WARN",
-            LogLevel::Error => "ERROR",
-        }
+        other => bail!(
+            "invalid --log-level '{}' (expected trace|debug|info|warn|error)",
+            other
+        ),
     }
 }
 
-struct LogState {
-    console_level: LogLevel,
-    file: Option<std::sync::Mutex<std::io::BufWriter<std::fs::File>>>,
-}
+/// Install the global tracing subscriber.
+///
+/// Console (stderr, human-readable) is filtered by --log-level for our
+/// `girsync` target; third-party targets (e.g. sled) stay at warn to avoid
+/// noise. File (if --log-file, JSON) always captures TRACE for `girsync`
+/// regardless of --log-level.
+///
+/// Returns the file guard which must be kept alive for the whole run
+/// (otherwise buffered file logs are dropped).
+fn init_tracing(
+    level_str: &str,
+    log_file: Option<&Path>,
+) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    let console_level = parse_level_name(level_str)?;
+    // Scope filters to our target so `sled` etc. don't flood stderr/file.
+    let console_filter =
+        tracing_subscriber::EnvFilter::new(format!("girsync={},sled=warn", console_level));
+    let console_layer = fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(true)
+        .with_target(true)
+        .with_filter(console_filter);
 
-static LOG_STATE: std::sync::OnceLock<LogState> = std::sync::OnceLock::new();
-
-fn console_level() -> LogLevel {
-    LOG_STATE.get().map(|s| s.console_level).unwrap_or(LogLevel::Info)
-}
-
-fn log_file_enabled() -> bool {
-    LOG_STATE.get().map(|s| s.file.is_some()).unwrap_or(false)
-}
-
-fn log_file_path_str() -> String {
-    LOG_FILE_PATH.get().cloned().unwrap_or_default()
-}
-
-static LOG_FILE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-fn init_logger(level_str: &str, log_file: Option<&Path>) -> Result<()> {
-    let level = LogLevel::parse(level_str)?;
-    let (file, path_str) = match log_file {
-        Some(p) => {
-            if let Some(parent) = p.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("create log dir {}", parent.display()))?;
-                }
-            }
-            let f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(p)
-                .with_context(|| format!("open log file {}", p.display()))?;
-            let mut w = std::io::BufWriter::new(f);
-            use std::io::Write as _;
-            let _ = writeln!(
-                w,
-                "=== girsync log start {} path={} console_level={} ===",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-                p.display(),
-                level.label(),
-            );
-            let _ = w.flush();
-            (Some(std::sync::Mutex::new(w)), p.display().to_string())
-        }
-        None => (None, String::new()),
-    };
-    let _ = LOG_FILE_PATH.set(path_str);
-    let _ = LOG_STATE.set(LogState { console_level: level, file });
-    Ok(())
-}
-
-fn log_record(level: LogLevel, msg: String) {
-    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-    let line = format!("{} [{:<5}] {}", ts, level.label(), msg);
-    match LOG_STATE.get() {
-        Some(st) => {
-            if level >= st.console_level {
-                eprintln!("{}", line);
-            }
-            if let Some(m) = st.file.as_ref() {
-                if let Ok(mut w) = m.lock() {
-                    use std::io::Write as _;
-                    let _ = writeln!(w, "{}", line);
-                    // Flush eagerly so a killed run still leaves a usable log.
-                    let _ = w.flush();
-                }
+    if let Some(p) = log_file {
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("create log dir {}", parent.display()))?;
             }
         }
-        None => {
-            // Logger not initialised (e.g. unit tests calling helpers directly):
-            // surface info+ on stderr, drop trace/debug.
-            if level >= LogLevel::Info {
-                eprintln!("{}", line);
-            }
-        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .with_context(|| format!("open log file {}", p.display()))?;
+        let (nb, guard) = tracing_appender::non_blocking(file);
+        let file_filter =
+            tracing_subscriber::EnvFilter::new("girsync=trace,sled=warn");
+        let file_layer = fmt::layer()
+            .json()
+            .with_writer(nb)
+            .with_ansi(false)
+            .with_target(true)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_filter(file_filter);
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+        info!(
+            path = %p.display(),
+            console_level = %console_level,
+            file_level = "trace",
+            pid = std::process::id(),
+            "log start"
+        );
+        Ok(Some(guard))
+    } else {
+        tracing_subscriber::registry().with(console_layer).init();
+        Ok(None)
     }
-}
-
-macro_rules! log_trace {
-    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Trace, format!($($a)*)) };
-}
-macro_rules! log_debug {
-    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Debug, format!($($a)*)) };
-}
-macro_rules! log_info {
-    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Info, format!($($a)*)) };
-}
-macro_rules! log_warn {
-    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Warn, format!($($a)*)) };
-}
-macro_rules! log_error {
-    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Error, format!($($a)*)) };
 }
 
 #[derive(Subcommand, Debug)]
@@ -279,14 +229,17 @@ struct LiveEnt {
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(e) = init_logger(&cli.log_level, cli.log_file.as_deref()) {
-        eprintln!("FATAL {:#}", e);
-        std::process::exit(3);
-    }
+    let _log_guard = match init_tracing(&cli.log_level, cli.log_file.as_deref()) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("FATAL {:#}", e);
+            std::process::exit(3);
+        }
+    };
     let code = match run(cli) {
         Ok(code) => code,
         Err(e) => {
-            log_error!("FATAL {:#}", e);
+            error!(error = format!("{:#}", e), "FATAL");
             eprintln!("FATAL {:#}", e);
             3
         }
@@ -374,26 +327,15 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
-fn log_start_report(cmd: &str, fields: &[(&str, String)]) {
-    log_info!("START girsync {} (pid={})", cmd, std::process::id());
-    for (k, v) in fields {
-        log_info!("  config {}={}", k, v);
-    }
-    log_info!(
-        "  console_level={} file_level=trace file={}",
-        console_level().label(),
-        if log_file_enabled() {
-            log_file_path_str()
-        } else {
-            "(none)".to_string()
-        }
-    );
-    log_debug!("start timestamp {}", chrono::Local::now().to_rfc3339());
+fn elapsed_s(t0: std::time::Instant) -> f64 {
+    t0.elapsed().as_secs_f64()
 }
 
-fn fmt_elapsed(t0: std::time::Instant) -> String {
-    let d = t0.elapsed();
-    format!("{:.2}s", d.as_secs_f64())
+fn log_file_display(log_file: &Option<PathBuf>) -> String {
+    log_file
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(none)".to_string())
 }
 
 // ---------- generic helpers ----------
@@ -430,29 +372,31 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Copy existing sled DB dir to <parent>/girpr-cache-backup-<ts>. Returns backup path if made.
+#[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
-        log_trace!("backup skip (missing) {}", db_path.display());
+        trace!(path = %db_path.display(), "backup skip: db missing");
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-backup-{}", ts_now()));
-    log_info!("backup {} -> {} ...", db_path.display(), dest.display());
+    info!(src = %db_path.display(), dst = %dest.display(), "backup start");
     copy_dir_all(db_path, &dest)?;
-    log_info!("backup done {} -> {}", db_path.display(), dest.display());
+    info!(src = %db_path.display(), dst = %dest.display(), "backup done");
     Ok(Some(dest))
 }
 
+#[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
-        log_trace!("snapshot-old skip (missing) {}", db_path.display());
+        trace!(path = %db_path.display(), "snapshot-old skip: db missing");
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-old-{}", ts_now()));
-    log_info!("snapshot-old {} -> {} ...", db_path.display(), dest.display());
+    info!(src = %db_path.display(), dst = %dest.display(), "snapshot-old start");
     copy_dir_all(db_path, &dest)?;
-    log_info!("snapshot-old done {} -> {}", db_path.display(), dest.display());
+    info!(src = %db_path.display(), dst = %dest.display(), "snapshot-old done");
     Ok(Some(dest))
 }
 
@@ -579,8 +523,9 @@ fn is_excluded(
     false
 }
 
+#[tracing::instrument(skip_all, fields(root = %root.display(), max_depth))]
 fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
-    log_debug!("scan start {} (max_depth={})", root.display(), max_depth);
+    debug!(root = %root.display(), max_depth, "scan start");
     let t0 = std::time::Instant::now();
     let mut out = Vec::new();
     let mut it = walkdir::WalkDir::new(root)
@@ -622,6 +567,8 @@ fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     continue;
                 }
                 let ft = ent.file_type();
+                // Progress: trace every entry (file log), debug heartbeat every 2000.
+                trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {
                         rel,
@@ -644,23 +591,21 @@ fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
-                // Progress: trace every entry (file log), debug heartbeat every 2000.
-                log_trace!("scan {}", ent.path().display());
                 if out.len() % 2000 == 0 {
-                    log_debug!("scan {} ... {} entries ({:.1}s)", root.display(), out.len(), t0.elapsed().as_secs_f64());
+                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress");
                 }
             }
         }
     }
     let files = out.iter().filter(|e| !e.is_dir).count();
     let dirs = out.len() - files;
-    log_info!(
-        "scan done {}: entries={} files={} dirs={} elapsed={:.2}s",
-        root.display(),
-        out.len(),
+    info!(
+        root = %root.display(),
+        entries = out.len(),
         files,
         dirs,
-        t0.elapsed().as_secs_f64()
+        elapsed_s = elapsed_s(t0),
+        "scan done"
     );
     Ok(out)
 }
@@ -687,6 +632,7 @@ fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> Resu
 
 // ---------- sled helpers ----------
 
+#[tracing::instrument(skip_all, fields(db = %db_path.display(), case_sensitive, ignore_cache, backup_first))]
 fn open_db(db_path: &Path, case_sensitive: bool, ignore_cache: bool, backup_first: bool) -> Result<sled::Db> {
     if ignore_cache && db_path.exists() {
         if backup_first {
@@ -694,7 +640,7 @@ fn open_db(db_path: &Path, case_sensitive: bool, ignore_cache: bool, backup_firs
         }
         std::fs::remove_dir_all(db_path)
             .with_context(|| format!("remove {}", db_path.display()))?;
-        log_info!("ignore-cache: removed {}", db_path.display());
+        info!(path = %db_path.display(), "ignore-cache removed");
     } else if backup_first && db_path.exists() {
         backup_db(db_path)?;
     }
@@ -769,14 +715,14 @@ fn build_effective_folder(
         }
         live_set.insert(e.rel.clone());
     }
-    log_info!(
-        "effective {}: live={} fast={} force_hash={} dry_run={} algos=[{}]",
-        root.display(),
-        live.len(),
+    info!(
+        root = %root.display(),
+        live = live.len(),
         fast,
         force_hash,
         dry_run,
-        algos.join(",")
+        algos = ?algos,
+        "effective start"
     );
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
@@ -886,16 +832,16 @@ fn build_effective_folder(
                 );
                 n_done += 1;
                 n_fast_hit += 1;
-                log_trace!("cache-hit {}", e.rel);
+                trace!(rel = %e.rel, "cache-hit");
                 if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
-                    log_info!(
-                        "hash progress {}: {}/{} files hashed={} fast_hit={} elapsed={:.1}s",
-                        root.display(),
-                        n_done,
-                        total_live,
-                        n_hashed,
-                        n_fast_hit,
-                        t_eff.elapsed().as_secs_f64()
+                    info!(
+                        root = %root.display(),
+                        done = n_done,
+                        total = total_live,
+                        hashed = n_hashed,
+                        fast_hit = n_fast_hit,
+                        elapsed_s = t_eff.elapsed().as_secs_f64(),
+                        "hash progress"
                     );
                     last_prog = std::time::Instant::now();
                 }
@@ -908,10 +854,10 @@ fn build_effective_folder(
         }
         let have_all = cached.as_ref().map(|c| algos.iter().all(|a| c.hashes.contains_key(a))).unwrap_or(false);
         if !fast || !fresh || force_hash || !have_all {
-            log_debug!("hashing {}", e.rel);
+            debug!(rel = %e.rel, path = %e.abs.display(), "hashing");
             let hashes = hash_file(&e.abs, algos)
                 .with_context(|| format!("hash {}", e.abs.display()))?;
-            log_trace!("hashed {} {:?}", e.rel, hashes.keys());
+            trace!(rel = %e.rel, algos = ?hashes.keys().collect::<Vec<_>>(), "hashed");
             if !dry_run {
                 put_rec(
                     db,
@@ -949,17 +895,17 @@ fn build_effective_folder(
             );
             n_done += 1;
             n_fast_hit += 1;
-            log_trace!("cache-hit {}", e.rel);
+            trace!(rel = %e.rel, "cache-hit");
         }
         if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
-            log_info!(
-                "hash progress {}: {}/{} files hashed={} fast_hit={} elapsed={:.1}s",
-                root.display(),
-                n_done,
-                total_live,
-                n_hashed,
-                n_fast_hit,
-                t_eff.elapsed().as_secs_f64()
+            info!(
+                root = %root.display(),
+                done = n_done,
+                total = total_live,
+                hashed = n_hashed,
+                fast_hit = n_fast_hit,
+                elapsed_s = t_eff.elapsed().as_secs_f64(),
+                "hash progress"
             );
             last_prog = std::time::Instant::now();
         }
@@ -972,22 +918,22 @@ fn build_effective_folder(
             if !live_set.contains(rel) {
                 db.remove(rel.as_bytes())?;
                 pruned += 1;
-                log_trace!("prune cache {}", rel);
+                trace!(rel = %rel, "prune cache");
             }
         }
         db.flush()?;
     }
     let n_files = eff.values().filter(|r| r.kind == "file").count();
     let n_dirs = eff.values().filter(|r| r.kind == "dir").count();
-    log_info!(
-        "effective done {}: files={} dirs={} hashed={} fast_hit={} pruned={} elapsed={:.2}s",
-        root.display(),
-        n_files,
-        n_dirs,
-        n_hashed,
-        n_fast_hit,
+    info!(
+        root = %root.display(),
+        files = n_files,
+        dirs = n_dirs,
+        hashed = n_hashed,
+        fast_hit = n_fast_hit,
         pruned,
-        t_eff.elapsed().as_secs_f64()
+        elapsed_s = elapsed_s(t_eff),
+        "effective done"
     );
     Ok(eff)
 }
@@ -1141,6 +1087,7 @@ fn hashes_differ(a: &HashMap<String, String>, b: &HashMap<String, String>, algos
 
 // ---------- commands ----------
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_update(
     dir: PathBuf,
     hash: Vec<String>,
@@ -1156,28 +1103,27 @@ fn cmd_update(
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
-    log_start_report(
-        "update",
-        &[
-            ("dir", dir.display().to_string()),
-            ("hash", format!("[{}]", algos.join(","))),
-            ("include", format!("{:?}", include)),
-            ("exclude", format!("{:?}", exclude)),
-            ("case_sensitive", case_sensitive.to_string()),
-            ("max_depth", max_depth.to_string()),
-            ("ignore_cache", ignore_cache.to_string()),
-            ("log_level", log_level),
-            (
-                "log_file",
-                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
-            ),
-        ],
+    let span = tracing::info_span!(
+        "girsync.update",
+        pid = std::process::id(),
+        dir = %dir.display(),
+        algos = ?algos,
+        include = ?include,
+        exclude = ?exclude,
+        case_sensitive,
+        max_depth,
+        ignore_cache,
+        console_level = %log_level.to_ascii_lowercase(),
+        file_level = "trace",
+        log_file = %log_file_display(&log_file),
     );
+    let _span_guard = span.enter();
+    info!("start");
     if !dir.is_dir() {
         bail!("--dir {} is not a directory", dir.display());
     }
     let db_path = dir.join(CACHE_PREFIX);
-    log_info!("open cache {}", db_path.display());
+    info!(cache = %db_path.display(), "open cache");
     let db = open_db(&db_path, case_sensitive, ignore_cache, true)?;
     let eff = build_effective_folder(
         &dir, &db, &algos, true, &includes, &excludes, case_sensitive, max_depth,
@@ -1187,12 +1133,13 @@ fn cmd_update(
     let files = eff.values().filter(|r| r.kind == "file").count();
     let dirs = eff.values().filter(|r| r.kind == "dir").count();
     println!("update {} files={} dirs={} algos=[{}]", dir.display(), files, dirs, algos.join(","));
-    log_info!(
-        "END girsync update: files={} dirs={} algos=[{}] elapsed={} exit=0",
+    info!(
         files,
         dirs,
-        algos.join(","),
-        fmt_elapsed(t0)
+        algos = ?algos,
+        elapsed_s = elapsed_s(t0),
+        exit = 0,
+        "end"
     );
     Ok(0)
 }
@@ -1224,9 +1171,9 @@ fn load_side(
 ) -> Result<HashMap<String, EffRec>> {
     match side {
         Side::Record(dbp) => {
-            log_info!("load record side {}", dbp.display());
+            info!(record = %dbp.display(), "load record side");
             let m = load_record_side(dbp, includes, excludes, case_sensitive)?;
-            log_info!("record {} loaded: {} entries", dbp.display(), m.len());
+            info!(record = %dbp.display(), entries = m.len(), "record loaded");
             Ok(m)
         }
         Side::Folder(root) => {
@@ -1236,7 +1183,7 @@ fn load_side(
             let db_path = root.join(CACHE_PREFIX);
             if !db_path.exists() {
                 // missing cache: just create it
-                log_info!("cache missing, creating {}", db_path.display());
+                info!(cache = %db_path.display(), "cache missing, creating");
                 let db = open_db(&db_path, case_sensitive, false, false)?;
                 let eff = build_effective_folder(
                     root, &db, algos, fast, includes, excludes, case_sensitive, max_depth,
@@ -1250,7 +1197,7 @@ fn load_side(
                     force_hash, dry_run,
                 ),
                 Err(e) => {
-                    log_warn!("cache open failed for {}: {:#}", root.display(), e);
+                    warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
                     Err(e.context(format!("cache for {} (use --ignore-cache to rebuild)", root.display())))
                 }
             }
@@ -1275,68 +1222,67 @@ fn cmd_compare(
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
-    log_start_report(
-        "compare",
-        &[
-            ("src", src.display().to_string()),
-            ("dst", dst.display().to_string()),
-            ("hash", format!("[{}]", algos.join(","))),
-            ("fast", fast.to_string()),
-            ("include", format!("{:?}", include)),
-            ("exclude", format!("{:?}", exclude)),
-            ("case_sensitive", case_sensitive.to_string()),
-            ("max_depth", max_depth.to_string()),
-            ("ignore_cache", ignore_cache.to_string()),
-            ("log_level", log_level),
-            (
-                "log_file",
-                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
-            ),
-        ],
+    let span = tracing::info_span!(
+        "girsync.compare",
+        pid = std::process::id(),
+        src = %src.display(),
+        dst = %dst.display(),
+        algos = ?algos,
+        fast,
+        include = ?include,
+        exclude = ?exclude,
+        case_sensitive,
+        max_depth,
+        ignore_cache,
+        console_level = %log_level.to_ascii_lowercase(),
+        file_level = "trace",
+        log_file = %log_file_display(&log_file),
     );
+    let _span_guard = span.enter();
+    info!("start");
     let s = classify(&src);
     let d = classify(&dst);
-    log_info!(
-        "load src side ({}: {})",
-        src.display(),
-        match &s {
+    info!(
+        src = %src.display(),
+        src_kind = match &s {
             Side::Record(_) => "record",
             Side::Folder(_) => "folder",
-        }
+        },
+        "load src side"
     );
     let sm = load_side(&s, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
-    log_info!("src loaded: {} entries", sm.len());
-    log_info!(
-        "load dst side ({}: {})",
-        dst.display(),
-        match &d {
+    info!(side = "src", entries = sm.len(), "side loaded");
+    info!(
+        dst = %dst.display(),
+        dst_kind = match &d {
             Side::Record(_) => "record",
             Side::Folder(_) => "folder",
-        }
+        },
+        "load dst side"
     );
     let dm = load_side(&d, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
-    log_info!("dst loaded: {} entries", dm.len());
-    log_info!("diffing src={} entries vs dst={} entries ...", sm.len(), dm.len());
+    info!(side = "dst", entries = dm.len(), "side loaded");
+    info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
     let diff = diff_maps(&sm, &dm, &algos, case_sensitive);
     for r in &diff.missing {
         println!("MISSING {}", r);
-        log_debug!("diff MISSING {}", r);
+        debug!(kind = "missing", rel = %r, "diff");
     }
     for r in &diff.extra {
         println!("EXTRA {}", r);
-        log_debug!("diff EXTRA {}", r);
+        debug!(kind = "extra", rel = %r, "diff");
     }
     for r in &diff.changed {
         println!("CHANGED {}", r);
-        log_debug!("diff CHANGED {}", r);
+        debug!(kind = "changed", rel = %r, "diff");
     }
     for r in &diff.type_conflict {
         println!("TYPE-CONFLICT {}", r);
-        log_debug!("diff TYPE-CONFLICT {}", r);
+        debug!(kind = "type-conflict", rel = %r, "diff");
     }
     for (a, b) in &diff.case_mismatch {
         println!("CASE-MISMATCH {} <=> {}", a, b);
-        log_debug!("diff CASE-MISMATCH {} <=> {}", a, b);
+        debug!(kind = "case-mismatch", src_rel = %a, dst_rel = %b, "diff");
     }
     let total = diff.missing.len() + diff.extra.len() + diff.changed.len() + diff.type_conflict.len();
     println!(
@@ -1349,16 +1295,16 @@ fn cmd_compare(
         total
     );
     let code = if total == 0 && diff.case_mismatch.is_empty() { 0 } else { 4 };
-    log_info!(
-        "END girsync compare: missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={} elapsed={} exit={}",
-        diff.missing.len(),
-        diff.extra.len(),
-        diff.changed.len(),
-        diff.type_conflict.len(),
-        diff.case_mismatch.len(),
-        total,
-        fmt_elapsed(t0),
-        code
+    info!(
+        missing = diff.missing.len(),
+        extra = diff.extra.len(),
+        changed = diff.changed.len(),
+        type_conflict = diff.type_conflict.len(),
+        case_mismatch = diff.case_mismatch.len(),
+        total_diff = total,
+        elapsed_s = elapsed_s(t0),
+        exit = code,
+        "end"
     );
     Ok(code)
 }
@@ -1385,29 +1331,28 @@ fn cmd_sync(
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
-    log_start_report(
-        "sync",
-        &[
-            ("src", src.display().to_string()),
-            ("dst", dst.display().to_string()),
-            ("hash", format!("[{}]", algos.join(","))),
-            ("fast", fast.to_string()),
-            ("missing_only", missing_only.to_string()),
-            ("keep_extra", keep_extra.to_string()),
-            ("dry_run", dry_run.to_string()),
-            ("jobs", jobs.to_string()),
-            ("include", format!("{:?}", include)),
-            ("exclude", format!("{:?}", exclude)),
-            ("case_sensitive", case_sensitive.to_string()),
-            ("max_depth", max_depth.to_string()),
-            ("ignore_cache", ignore_cache.to_string()),
-            ("log_level", log_level),
-            (
-                "log_file",
-                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
-            ),
-        ],
+    let span = tracing::info_span!(
+        "girsync.sync",
+        pid = std::process::id(),
+        src = %src.display(),
+        dst = %dst.display(),
+        algos = ?algos,
+        fast,
+        missing_only,
+        keep_extra,
+        dry_run,
+        jobs,
+        include = ?include,
+        exclude = ?exclude,
+        case_sensitive,
+        max_depth,
+        ignore_cache,
+        console_level = %log_level.to_ascii_lowercase(),
+        file_level = "trace",
+        log_file = %log_file_display(&log_file),
     );
+    let _span_guard = span.enter();
+    info!("start");
     if is_record_path(&src) || is_record_path(&dst) {
         bail!("sync needs folder vs folder (record inputs are compare-only)");
     }
@@ -1441,12 +1386,12 @@ fn cmd_sync(
                 if p.exists() {
                     std::fs::remove_dir_all(p)
                         .with_context(|| format!("remove {}", p.display()))?;
-                    log_info!("ignore-cache: removed {}", p.display());
+                    info!(path = %p.display(), "ignore-cache removed");
                 }
             }
         }
     } else {
-        log_info!("dry-run: skipping backups and cache writes");
+        info!("dry-run: skipping backups and cache writes");
     }
 
     let src_db = if dry_run {
@@ -1466,17 +1411,17 @@ fn cmd_sync(
         open_db(&dst_db_path, case_sensitive, false, false)?
     };
 
-    log_info!("loading src effective map ...");
+    info!("loading src effective map");
     let sm = build_effective_folder(
         &src, &src_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
         false, dry_run,
     )?;
-    log_info!("loading dst effective map ...");
+    info!("loading dst effective map");
     let mut dm = build_effective_folder(
         &dst, &dst_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
         false, dry_run,
     )?;
-    log_info!("maps ready: src={} dst={} entries", sm.len(), dm.len());
+    info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
 
     // case-insensitive rename pass (sync mode): rename dst to src casing first.
     let mut renamed = 0usize;
@@ -1493,10 +1438,10 @@ fn cmd_sync(
                 renames.push((dst.join(drel), dst.join(*srel), (*drel).clone(), (*srel).clone()));
             }
         }
-        log_info!("rename pass: {} case-only renames pending", renames.len());
+        info!(pending = renames.len(), "rename pass");
         for (from, to, drel, srel) in renames {
             println!("RENAME {} -> {}", drel, srel);
-            log_info!("RENAME {} -> {}", drel, srel);
+            info!(from = %drel, to = %srel, "rename");
             if !dry_run {
                 if let Some(parent) = to.parent() {
                     std::fs::create_dir_all(parent)
@@ -1577,17 +1522,17 @@ fn cmd_sync(
         }
     }
     to_mkdir.sort();
-    log_info!(
-        "plan: renamed={} mkdir={} copy={} delete_files={} fix_dirs={} dry_run={}",
+    info!(
         renamed,
-        to_mkdir.len(),
-        to_copy.len(),
-        to_delete_files.len(),
-        to_fix_dirs.len(),
-        dry_run
+        mkdir = to_mkdir.len(),
+        copy = to_copy.len(),
+        delete_files = to_delete_files.len(),
+        fix_dirs = to_fix_dirs.len(),
+        dry_run,
+        "plan"
     );
-    log_debug!("plan copy list: {:?}", to_copy);
-    log_debug!("plan mkdir list: {:?}", to_mkdir);
+    debug!(copy = ?to_copy, "plan copy list");
+    debug!(mkdir = ?to_mkdir, "plan mkdir list");
 
     if dry_run {
         for r in &to_mkdir {
@@ -1611,19 +1556,21 @@ fn cmd_sync(
             missing_only,
             keep_extra
         );
-        log_info!(
-            "END girsync sync (dry-run): renamed={} mkdir={} copy={} delete={} elapsed={} exit=0",
+        info!(
             renamed,
-            to_mkdir.len(),
-            to_copy.len(),
-            to_delete_files.len() + to_fix_dirs.len(),
-            fmt_elapsed(t0)
+            mkdir = to_mkdir.len(),
+            copy = to_copy.len(),
+            delete = to_delete_files.len() + to_fix_dirs.len(),
+            dry_run = true,
+            elapsed_s = elapsed_s(t0),
+            exit = 0,
+            "end"
         );
         return Ok(0);
     }
 
     // Apply: mkdirs
-    log_info!("apply mkdirs: {} dirs ...", to_mkdir.len());
+    info!(dirs = to_mkdir.len(), "apply mkdirs");
     for (i, r) in to_mkdir.iter().enumerate() {
         std::fs::create_dir_all(dst.join(r))
             .with_context(|| format!("mkdir {}", dst.join(r).display()))?;
@@ -1636,13 +1583,13 @@ fn cmd_sync(
                 hashes: HashMap::new(),
             })?,
         )?;
-        log_debug!("MKDIR {}", r);
+        debug!(rel = %r, "mkdir");
         if (i + 1) % 100 == 0 {
-            log_info!("mkdir progress {}/{}", i + 1, to_mkdir.len());
+            info!(done = i + 1, total = to_mkdir.len(), "mkdir progress");
         }
     }
     // Fix type-conflicts where src is dir: remove dst file, mkdir
-    log_info!("apply fix-dirs: {} ...", to_fix_dirs.len());
+    info!(count = to_fix_dirs.len(), "apply fix-dirs");
     for r in &to_fix_dirs {
         dst_db.remove(r.as_bytes())?; // delete entries before change
         let p = dst.join(r);
@@ -1653,7 +1600,7 @@ fn cmd_sync(
         }
         std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
         println!("FIX-DIR {}", r);
-        log_info!("FIX-DIR {}", r);
+        info!(rel = %r, "fix-dir");
     }
 
     // Delete entries before file changes (crash leaves truncated risk documented;
@@ -1665,7 +1612,7 @@ fn cmd_sync(
 
     // Delete extra files (+ prune unknown dirs afterwards)
     let mut deleted = 0usize;
-    log_info!("apply deletes: {} files ...", to_delete_files.len());
+    info!(files = to_delete_files.len(), "apply deletes");
     for (i, r) in to_delete_files.iter().enumerate() {
         let p = dst.join(r);
         // eff map only tracks files here for extra; dirs handled below
@@ -1677,24 +1624,24 @@ fn cmd_sync(
         if p.is_file() || p.is_symlink() {
             std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
             println!("DELETE {}", r);
-            log_debug!("DELETE {}", r);
+            debug!(rel = %r, "delete");
             deleted += 1;
         } else if p.is_dir() {
             std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
             println!("RMDIR {}", r);
-            log_debug!("RMDIR {}", r);
+            debug!(rel = %r, "rmdir");
             deleted += 1;
         } else if p.exists() {
             bail!("unsupported type {}", p.display());
         }
         if (i + 1) % 100 == 0 {
-            log_info!("delete progress {}/{} deleted={}", i + 1, to_delete_files.len(), deleted);
+            info!(done = i + 1, total = to_delete_files.len(), deleted, "delete progress");
         }
     }
-    log_info!("deletes done: deleted={}", deleted);
+    info!(deleted, "deletes done");
 
     // Copy files in parallel (truncate + write in place, preserve mtime, verify).
-    log_info!("copy start: {} files jobs={}", to_copy.len(), jobs);
+    info!(files = to_copy.len(), jobs, "copy start");
     let copy_total = to_copy.len();
     let copy_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let copy_done_cb = copy_done.clone();
@@ -1707,13 +1654,13 @@ fn cmd_sync(
         to_copy
             .par_iter()
             .map(|rel| {
-                log_debug!("copy start {}", rel);
+                debug!(rel = %rel, "copy start");
                 let r = copy_one(&src, &dst, rel, &algos);
                 let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 if n % 25 == 0 || n == copy_total {
-                    log_info!("copy progress {}/{}", n, copy_total);
+                    info!(done = n, total = copy_total, "copy progress");
                 } else {
-                    log_trace!("copy progress {}/{} ({})", n, copy_total, rel);
+                    trace!(done = n, total = copy_total, rel = %rel, "copy progress");
                 }
                 r
             })
@@ -1724,18 +1671,18 @@ fn cmd_sync(
     for (rel, r) in to_copy.iter().zip(results) {
         let rec = r.with_context(|| format!("copy {}", rel))?;
         println!("COPY {}", rel);
-        log_debug!("COPY done {}", rel);
+        debug!(rel = %rel, "copy done");
         new_recs.push((rel.clone(), rec));
         copied += 1;
     }
-    log_info!("copy done: copied={}/{}", copied, copy_total);
+    info!(copied, total = copy_total, "copy done");
     for (rel, rec) in new_recs {
         dst_db.insert(rel.as_bytes(), serde_json::to_vec(&rec)?)?;
     }
 
     // Remove dst dirs not in src (unknown empties + leftovers), deepest first.
     let mut removed_dirs = 0usize;
-    log_info!("scan dst for unknown dirs ...");
+    info!("scan dst for unknown dirs");
     let live_after = walk_live(&dst, max_depth)?;
     let mut src_dirs: HashSet<String> = sm
         .iter()
@@ -1756,7 +1703,7 @@ fn cmd_sync(
         }
     }
     unknown_dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    log_info!("rmdir pass: {} unknown dirs", unknown_dirs.len());
+    info!(unknown = unknown_dirs.len(), "rmdir pass");
     for (i, r) in unknown_dirs.iter().enumerate() {
         let p = dst.join(&r);
         if p.is_dir() {
@@ -1768,11 +1715,11 @@ fn cmd_sync(
             }
             dst_db.remove(r.as_bytes())?;
             println!("RMDIR {}", r);
-            log_debug!("RMDIR {}", r);
+            debug!(rel = %r, "rmdir");
             removed_dirs += 1;
         }
         if (i + 1) % 100 == 0 {
-            log_info!("rmdir progress {}/{} removed={}", i + 1, unknown_dirs.len(), removed_dirs);
+            info!(done = i + 1, total = unknown_dirs.len(), removed = removed_dirs, "rmdir progress");
         }
     }
     // final prune of anything else missing + flush
@@ -1808,22 +1755,25 @@ fn cmd_sync(
         missing_only,
         keep_extra
     );
-    log_info!(
-        "END girsync sync: renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={} dry_run=false elapsed={} exit=0",
+    info!(
         renamed,
-        to_mkdir.len(),
+        mkdir = to_mkdir.len(),
         copied,
         deleted,
-        removed_dirs,
+        rmdir = removed_dirs,
         missing_only,
         keep_extra,
-        fmt_elapsed(t0)
+        dry_run = false,
+        elapsed_s = elapsed_s(t0),
+        exit = 0,
+        "end"
     );
     Ok(0)
 }
 
+#[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
-    log_trace!("copy_one start {}", rel);
+    trace!("copy_one start");
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
     // dst dir that is in the way of a file copy: remove first
@@ -1874,11 +1824,12 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
     let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
     for a in algos {
         if sh.get(a) != dh.get(a) {
-            log_error!("verify hash({}) mismatch {}", a, d.display());
+            error!(algo = %a, path = %d.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, d.display());
         }
     }
-    log_trace!("copy_one done {} bytes={}", rel, ssize);
+    tracing::Span::current().record("bytes", ssize);
+    trace!(bytes = ssize, "copy_one done");
     Ok(FileRec {
         kind: "file".into(),
         size: ssize,
