@@ -9,6 +9,29 @@ Workspace member (`tools/sync`, binary `girsync`) for testing version upgrades/d
 snapshot a game folder's state, diff two folders/records, and restore `dst` to `src` content.
 Separate from the `girpr` binary; shares no flags, no exit-code contract, no code.
 
+## Source layout
+
+`src/lib.rs` holds the whole implementation; `src/main.rs` is just
+parse -> init tracing -> `run` -> exit. Tests are integration tests in `tests/`
+and drive the public API.
+
+| File | Responsibility |
+| --- | --- |
+| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all three subcommands) |
+| `config.rs` | validated per-run options: `CommonOpts`, `ScanMode`, `LogCtx`, `Update/Compare/SyncOpts` |
+| `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated) |
+| `commands/update.rs` | refresh one folder's cache |
+| `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
+| `commands/sync.rs` | the mirror run (plan, then apply) plus `copy_one` |
+| `cache.rs` | sled schema (`Meta`, `FileRec`), `open_db`, backup/snapshot helpers |
+| `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
+| `effective.rs` | collapses cache + filters + case rules into one `EffRec` map per side |
+| `diff.rs` | `Diff` buckets and `diff_maps` |
+| `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
+
+Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
+`CommonArgs` in `config.rs`'s `TryFrom`, then use `common.<field>` in the command.
+
 ## Commands
 
 ```
@@ -112,3 +135,7 @@ Record-vs-folder without touching the folder's cache:
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
 - Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
+  Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
+  (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `sync.rs`, with
+  shared fixtures in `tests/common/mod.rs`. They run against the public API, so
+  anything they touch must stay `pub`.

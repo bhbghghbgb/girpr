@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with sled hash cache"
 
+[lib]
+name = "girsync"
+path = "src/lib.rs"
+
 [[bin]]
 name = "girsync"
 path = "src/main.rs"
@@ -23,3 +27,9 @@ rayon = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
+
+# Integration tests in tests/ only see the lib's public API plus dev-deps,
+# so the two crates the tests poke at directly are repeated here.
+[dev-dependencies]
+md5 = "0.7"
+sled = "0.34"
