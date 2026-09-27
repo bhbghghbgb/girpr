@@ -80,8 +80,9 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 linear backoff).
 3. Zstd-decompress entire blob → compute MD5 of **decompressed** bytes → must equal `checksum`
    (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still mismatch → abort (exit 2).
-4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
-   compressed_size,uncompressed_size,compressed_md5}], is_folder, size, md5}]}`.
+ 4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
+   compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}], is_folder, size, md5}]}`
+   (keep opaque field 6; `compressed_md5` is tag 7).
    Drop `is_folder` entries from the work list (create dirs on demand instead).
 5. Same for the local build if present (used only for chunk reuse, §4). Cache manifests outside
    `game_dir` (e.g. system temp keyed by manifest id) or keep in memory; never store in `game_dir`.
@@ -120,9 +121,11 @@ Per file `F`:
       `reuse_path[reuse_offset .. +uncompressed_size]`, MD5 it; if equals `C.uncompressed_md5` →
       copy bytes to `tmp` at `C.offset`, continue (no network). Mismatch → fall through to (b).
    b. `GET {chunk_prefix}/{C.id}` → response bytes are **zstd-compressed** chunk payload.
-      Stream-decompress while writing at `C.offset` (do not buffer whole file; 8–512 KiB pipe buffer).
-      Optional: MD5 the decompressed bytes and compare to `C.uncompressed_md5` immediately
-      (early retry); mandatory: rely on step 4's whole-file check.
+      v1 (S1 simplification, see README): buffer the whole chunk, `decode_all`, then verify
+      `uncompressed_md5` immediately — mismatch fails the attempt and retries the whole file
+      (up to 5×). Only then write the bytes at `C.offset`. A streaming
+      `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to
+      lower peak RAM; the final whole-file MD5 still gates promotion.
    c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
 4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
    log `repaired {downloaded_bytes}`. Else delete `tmp`, log error, mark file failed (exit 3).

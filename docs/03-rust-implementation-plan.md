@@ -31,22 +31,22 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
 Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args, unusable game
 path, legacy FILE mode), 2 metadata/network, 3 write/verify (per-file repair,
 config.ini / audio-scan write, files-cleanup), 4 check-only found damage. Errors
-carry their class via `repair::RunFailure` at the raise site. Automation: all
-progress on stderr (tracing); a begin `REPORT` line (versions + API fields) and
-the final `SUMMARY key=value` (or JSON with `--json-summary`) on stdout.
+carry their class via `repair::RunFailure` at the raise site. Automation: `tracing` diagnostics
+on stderr; the begin `REPORT` line (versions + API fields), `PROGRESS` lines, and
+the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and are mirrored to the log.
 
 ## 3. Key flows → code mapping
 
 | Spec step | Code | Provenance |
 |---|---|---|
-| Local version + audio | `repair::read_local_version`, audio scan file read/write (1) | Starward |
-| Up to 5 metadata calls | `hyp::get_game_config/branches/build/deprecated` + `repair::format_report_line` begin-report (2) | Starward |
-| Manifest fetch/verify/parse | `sophon::fetch_manifest(manifest_dl, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
-| Work list + reuse map | `repair::build_plan(latest, local)` keyed by path, chunk md5+size (4) | Starward |
-| Files-cleanup before | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
+| Local version + audio | `util::read_game_version`, audio scan file read/write (1) | Starward |
+| Up to 5 metadata calls | `hyp::HypClient::game_config/game_branch/chunk_build/deprecated_files` + `repair::format_report_line` begin-report (2) | Starward |
+| Manifest fetch/verify/parse | `sophon::fetch_manifest(client, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
+| Work list + reuse map | `repair::build_plan(per_manifest, blacklist, latest_tag)` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
+| Files-cleanup before | `repair::collapse_purge_extra(game_dir, plan, server_keep, dry_run)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Per-file repair | `repair::repair_file()` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd stream → write at offset → final md5 → rename (6) | Starward |
 | Post deletes/config | deprecated delete + audio cache→res + `write_config_ini` (7) | Starward-handling |
-| Files-cleanup after | `repair::collapse_purge_extra(game_dir, plan)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
+| Files-cleanup after | `repair::collapse_purge_extra(game_dir, plan, server_keep, dry_run)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
 | Summary | (8) | — |
 
 Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with

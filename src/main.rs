@@ -18,11 +18,13 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let filter = format!(
-        "girpr={},{}",
-        args.log_level,
-        std::env::var("RUST_LOG").unwrap_or_default()
-    );
+    let rust_log = std::env::var("RUST_LOG").unwrap_or_default();
+    let rust_log = rust_log.trim();
+    let filter = if rust_log.is_empty() {
+        format!("girpr={}", args.log_level)
+    } else {
+        format!("girpr={},{}", args.log_level, rust_log)
+    };
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_filter(

@@ -29,7 +29,8 @@ corrupt or any older version; after the run the game must be at the current live
   `game/{manifest.id}`, zstd-decompress (`ZstdSharp`), verify decompressed **MD5 == checksum**,
   else re-download `GET {UrlPrefix}/{id}`. Parse protobuf per `src/Starward.RPC/GameInstall/Sophon.proto`:
   `SophonChunkManifest{chunks: SophonChunkFile{file,chunks,is_folder,size,md5}}`,
-  `SophonChunk{id,uncompressed_md5,offset,compressed_size,uncompressed_size,compressed_md5}`.
+  `SophonChunk{id,uncompressed_md5,offset,compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}`
+  (field 6 is opaque `unknown`; keep tag 7 for `compressed_md5` or protobuf misparses).
   Chunk bytes URL = `ChunkDownload.UrlPrefix/{chunk.id}`.
 - Manifest filtering: skip `matching_field` listed in `res_category_dir` file
   (`{"category":"...","is_delete":true}` lines), skip all `*-??` audio fields then re-add only selected
@@ -46,7 +47,8 @@ Core lib `Hi3Helper.Sophon/` + glue `CollapseLauncher/Classes/{RepairManagement/
   (`GET {ManifestBaseUrl}/{ManifestId}`, zstd + `Google.Protobuf` parse of `Protos/SophonManifestProto.proto`,
   cached in `%LocalLow%/CollapseLauncher/_sophonMetadataCache/manifest_{xxh64}`),
   `Helper/Extension.cs:GetChunkAndIfAltAsync` (`GET {ChunksBaseUrl}/{ChunkName}` + alt fallback).
-  Chunk identity may be `xxh64` (parsed from chunk name) with MD5 fallback.
+  Repair/download chunk identity is MD5-only (`ChunkDecompressedHashMd5`); `xxh64` parsed from the
+  chunk name is only a preload/diff-staging resume probe, not the repair hash.
 - Genshin glue (`RepairManagement/Genshin/Fetch.cs:BuildPrimaryManifest`) fakes the legacy `pkg_version`
   from the Sophon manifest (post-5.6 HoYo removed scattered zips): `SophonAssetDictRef` map +
   `PkgVersionProperties{remoteName,fileSize,md5}` per asset + per-VO `Audio_*_pkg_version` from
@@ -97,8 +99,9 @@ Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles` L
 - **Does NOT purge unknown extra files** (only the deprecated list; `GameInstallService.cs:681`
   `// todo clear useless audio` — unselected audio is never cleaned). `res_category_dir`
   (`{"category":"...","is_delete":true}`) and `blacklist_dir` (`{"fileName":"..."}`) only
-  *exclude* entries from the download work list (`GamePackageService.cs:128-143,742-769`); they are
-  never deleted. Audio `cache→res` move (`GameInstallService.cs:427-444,643-660`, `File.Move`
+  *exclude* entries from the download work list (`GamePackageService.cs:128-143` blacklist apply,
+  `GamePackageService.cs:703-727` res-category read consumed by the `GamePackageService.cs:742-769` filter); they are
+  never deleted. Audio `cache→res` move (`GameInstallService.cs:427-445,643-661`, `File.Move`
   overwrite) and `config.ini` bump (`SetGameConfigIniAsync`, L788-850) are moves/rewrites, not purges.
 
 Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall.cs:GetUnusedFileInfoList`):
@@ -109,8 +112,8 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
   apply (extra transient ≈ compressed delta retained alongside game), then apply writes `_tempUpdate`
   alongside the original → `Move`. Patch path holds `ldiff/{PatchName}` + `target.temp` + old file.
 - Streaming: `PerformWriteStreamThreadAsync` (`ResponseHeadersRead` + zstd stream, `MD5.TransformBlock`
-  on the fly, `ArrayPool` 4 KiB, per-chunk `Parallel.ForEachAsync(max(8,CPU))`, `FileStream.Lock`
-  disabled via `NOSTREAMLOCK`), 30 s timeout/retry, speed limiter.
+  on the fly, `ArrayPool` 4 KiB, per-chunk `Parallel.ForEachAsync(min(8,CPU))`, `FileStream.Lock`
+  disabled via `NOSTREAMLOCK`), 20 s timeout/retry, speed limiter.
 - Deletion comes in **two separate Collapse-handling mechanisms** (do not conflate with Starward's
   post-task sweep above):
   - (a) **Manual orphan purge** — `GenshinInstall.GetUnusedFileInfoList` override
@@ -133,10 +136,11 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
 - **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
   `{latest chunk-manifest paths} ∪ {config.ini}` plus filename-pattern keeps for
   `audio_lang_*` + `Audio_*_pkg_version` (Collapse `GenshinInstall.cs:228-247` parity).
-  Everything else purges into the single `deleted_extra_bytes` counter — including
-  temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`,
-  `*deletefiles*`), unselected audio, `ScreenShot/`, logs, exe and server
-  bookkeeping files. `--purge-before` and `--purge-after` run this same cleanup;
+  Everything else not in the live manifest purges into the single `deleted_extra_bytes` counter —
+  including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`,
+  `*deletefiles*`), unselected audio, `ScreenShot/`, logs, and server
+  bookkeeping files (the exe / `pkg_version` / `Persistent/` / `ctable.dat` purge only when
+  absent from the live manifest — the exe is normally kept via rule 1). `--purge-before` and `--purge-after` run this same cleanup;
   only the timing differs.
 
 ## 4. Verdict
