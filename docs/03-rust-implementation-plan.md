@@ -40,7 +40,7 @@ the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and a
 | Spec step | Code | Provenance |
 |---|---|---|
 | Local version + audio | `util::read_game_version`, audio scan file read/write (1) | Starward |
-| Up to 5 metadata calls | `hyp::HypClient::game_config/game_branch/chunk_build/deprecated_files` + `repair::format_report_line` begin-report (2) | Starward |
+| Metadata calls (`game_config`/`game_branch`/`chunk_build` latest + optional local, lazy `deprecated_files` in post-phase) | `hyp::HypClient::game_config/game_branch/chunk_build/deprecated_files` + `repair::format_report_line` begin-report (2) | Starward |
 | Manifest fetch/verify/parse | `sophon::fetch_manifest(client, meta)` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::build_plan(per_manifest, blacklist, latest_tag)` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
 | Files-cleanup before | `repair::collapse_purge_extra(game_dir, plan, server_keep, dry_run)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
@@ -49,8 +49,8 @@ the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and a
 | Files-cleanup after | `repair::collapse_purge_extra(game_dir, plan, server_keep, dry_run)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
 | Summary | (8) | — |
 
-Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with
-~`io_threads*4` pool; per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
+Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with fixed
+`pool_max_idle_per_host(16)` (see `src/hyp.rs`; not scaled by `io_threads`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
 (512 KiB bufs). Retries: 5× linear backoff on manifest/chunk/file ops.
 
 ## 4. Testing
@@ -61,7 +61,8 @@ Network paths covered by `--dry-run`/`--check-only` against a fixture manifest (
 
 ## 5. Logging & correlation
 
-`tracing` to stderr; `--log-level debug|trace` (uses `RUST_LOG` if set).
+`tracing` to stderr (`--log-level` + `RUST_LOG`) plus a `TRACE`-level file log at
+`<exe-dir>/logs/girpr_<timestamp>.log` (created in `src/main.rs`; `--log-level` only affects stderr).
 - `hyp` (debug): every HoYoPlay/Sophon JSON call with full request URL, retcode,
   node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
 - `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual

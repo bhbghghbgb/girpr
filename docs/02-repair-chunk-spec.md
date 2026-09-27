@@ -44,14 +44,15 @@ exit code matches the class even for post-phase write failures.
 1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
 2. Read `res_category_dir` ignore list if game config names it (see step 2): file of JSON lines
    `{"category":"<matching_field>","is_delete":true}` → ignore set.
-3. Determine effective audio langs: explicit flag wins; else read audio scan file
+ 3. Determine effective audio langs: explicit flag wins; else read audio scan file
    (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean` → map to
    `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default, not
    launcher behavior — Starward falls back to its registry setting, Collapse never
    auto-selects langs).
-   Write the scan file back when an explicit selection was given.
+   Write the scan file back when an explicit selection was given, except in
+   `--dry-run` / `--check-only` (no writes) or when the scan dir is unconfigured.
 
-### Step 2 — Fetch server metadata (up to 5 calls)
+### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
    `audio_scan_dir, audio_cache_dir, audio_res_dir, res_category_dir, blacklist_dir (+enable flag),
    default_download_mode`. Assert chunk-capable (Genshin is); abort otherwise (exit 1).
@@ -67,8 +68,8 @@ exit code matches the class even for post-phase write failures.
    (`local_version` and the effective `audio_langs` from Step 1; the rest from
    the calls above — API-sourced, not from config). With `--json-summary` this is
    a JSON object instead.
-6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
-   list. Fetched lazily and best-effort during the post-phase (Step 8), never in
+ 6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
+   list. This is the lazy call: fetched best-effort during the post-phase (Step 8), never in
    `--check-only`/`--dry-run`; a failure only warns.
 
 Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
@@ -140,12 +141,15 @@ from the latest manifest alone (local manifest is a pure optimization).
 
 **Starward-handling remainder** (`GameInstallService.cs:ClearDeprecatedFiles` + audio/config):
 1. Delete each `deprecated_files[]` path if present (joined under `game_dir`, files only).
+   Bytes deleted here count toward the single `deleted_extra_bytes` counter even when
+   neither purge flag is set.
    (Redundant when the purge below is enabled — deprecated files are not in the
    live manifest — but keeps them cleaned without any purge flag.)
 2. If audio cache dir ≠ res dir and both configured: move `cache/**/*` → `res/<relative>` (overwrite)
-   (Starward parity `GameInstallService.cs:427-444,643-660`). Only files are moved;
+   (Starward parity `GameInstallService.cs:427-445,643-661`). Only files are moved;
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
-   when `--purge-after` is set.
+   whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
+   `collapse_purge_extra` and is skipped only in `--dry-run`).
 3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
    `GameInstallService.cs:788-849`): preserve existing keys outside the forced set,
    force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
@@ -167,9 +171,13 @@ from the latest manifest alone (local manifest is a pure optimization).
    `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`, logs, server
    bookkeeping files.
 2. Enumerate `game_dir/**/*` (files only); delete anything not in the expected
-   set, then remove emptied dirs. `--dry-run` only logs candidates + bytes.
-   Counts to the single `deleted_extra_bytes` counter. `--purge-before` runs
-   this same cleanup at Step 5.
+   set, then remove emptied dirs (dir sweep runs whenever a purge runs with writes
+   enabled, i.e. both `--purge-before` and `--purge-after`; skipped in `--dry-run`).
+   `--dry-run` only logs candidates + bytes and leaves `deleted_extra_bytes` at 0 by design.
+   Counts to the single `deleted_extra_bytes` counter (shared with deprecated-file
+   deletes above). `--purge-before` runs
+   this same cleanup at Step 5. Manifests are never cached inside `game_dir`; the only
+   in-`game_dir` transient is the atomic `config.ini.girpr_tmp` used by the `config.ini` bump.
 
 ### Step 8 — Report
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,

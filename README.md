@@ -42,7 +42,7 @@ cargo build --release
 |---|---|---|
 | `--game-path <DIR>` | (required) | Game install directory (contains `config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
-| `--audio <LANG>`… | keep current | Audio languages to keep (repeatable): `zh-cn`, `en-us`, `ja-jp`, `ko-kr` |
+| `--audio <LANG>`… | keep current, else `en-us` | Audio languages to keep (repeatable): `zh-cn`, `en-us`, `ja-jp`, `ko-kr`. If omitted, the audio scan file is read; if that is missing/unreadable, falls back to `en-us` |
 | `--io-threads <N>` | `4` | Concurrent **files** (chunks within a file are sequential → HDD-friendly). SSD: 4–8, HDD: 1–2 |
 | `--purge-after` | off | After patching, delete every file not in the live manifest (Collapse files-cleanup parity) |
 | `--purge-before` | off | Same files-cleanup as `--purge-after`, but run *before* patching (frees space for the repair itself) |
@@ -65,7 +65,10 @@ Each error is classified at the site that raises it (`run` → `RunFailure`), so
 right code exits even for post-phase write failures — code `3` is not limited to
 the per-file repair loop.
 
-Progress and diagnostics go to **stderr** (structured `tracing` logs). After the
+Progress and diagnostics go to **stderr** (structured `tracing` logs, level from
+`--log-level` plus `RUST_LOG`) and to a `TRACE`-level log file
+`<exe-dir>/logs/girpr_<timestamp>.log` beside the binary (see `src/main.rs`; created
+on startup, appended). After the
 server metadata calls the tool writes a one-time
 `REPORT local_version=<v|none> latest_version=<v> biz=… exe=… download_mode=… branch=… package_id=… build_id=… audio_langs=… diff_tags=…`
 line to **stdout** (also mirrored to the log) so a parser sees both the on-disk
@@ -90,6 +93,8 @@ stable across worker-thread hops), so `grep 'path=<file>'` groups its lifecycle:
 `check start` (expected size/md5) → outcome with actuals → per-chunk trace
 (reuse-hit vs download, byte counts) → `after: tmp ready` → `repaired` with chunk stats.
 API calls log the full request URL + retcode at debug, full JSON bodies at trace.
+The same events also go to the `<exe-dir>/logs/` file above (always `TRACE`), so
+`--log-level` only affects the stderr view.
 
 ## How it keeps disk usage low
 
