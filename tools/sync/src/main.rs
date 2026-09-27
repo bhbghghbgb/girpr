@@ -1911,4 +1911,658 @@ mod tests {
         assert!(!is_excluded("a.dat", &inc, &exc, true));
         assert!(is_excluded("secret.dat", &inc, &exc, true));
     }
+
+    // ---------- end-to-end run tests (real FS + real sled cache) ----------
+    //
+    // These exercise full runs through cmd_update / cmd_compare / cmd_sync
+    // (and one via run(Cli)), unlike the unit tests above which only cover
+    // single helpers. Each test gets an isolated temp root so parallel
+    // `cargo test` workers never share a sled DB.
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct TempRoot {
+        path: PathBuf,
+    }
+
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let n = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "girsync_run_{}_{}_{}_{}",
+                std::process::id(),
+                nanos,
+                n,
+                tag
+            ));
+            std::fs::remove_dir_all(&path).ok();
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn mkdirs(&self, rel: &str) -> PathBuf {
+            let p = self.path.join(rel);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        }
+
+        fn root(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            // Sled DBs opened by cmd_* are dropped by then; best-effort cleanup.
+            std::fs::remove_dir_all(&self.path).ok();
+        }
+    }
+
+    fn wfile(root: &Path, rel: &str, bytes: &[u8]) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&p, bytes).unwrap();
+    }
+
+    fn rfile(root: &Path, rel: &str) -> Vec<u8> {
+        std::fs::read(root.join(rel)).unwrap()
+    }
+
+    fn md5arg() -> Vec<String> {
+        vec!["md5".to_string()]
+    }
+
+    fn err_level() -> String {
+        // Keep test output quiet; tracing is a no-op without a subscriber anyway.
+        "error".to_string()
+    }
+
+    fn has_backup_sibling(dir: &Path) -> bool {
+        let parent = dir.parent().unwrap_or_else(|| Path::new("."));
+        let Ok(rd) = std::fs::read_dir(parent) else {
+            return false;
+        };
+        let needle = format!("{}-backup-", CACHE_PREFIX);
+        rd.filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .any(|n| n.starts_with(&needle))
+    }
+
+    #[test]
+    fn run_update_then_compare_equal() {
+        let t = TempRoot::new("upd_eq");
+        let dir = t.mkdirs("a");
+        wfile(&dir, "a.txt", b"hello");
+        wfile(&dir, "sub/b.txt", b"world");
+
+        let code = cmd_update(
+            dir.clone(),
+            md5arg(),
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert!(dir.join(CACHE_PREFIX).is_dir(), "update creates cache");
+
+        // Folder vs itself is equal.
+        let code = cmd_compare(
+            dir.clone(),
+            dir.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+
+        // Record vs folder is equal without touching anything else.
+        let record = dir.join(CACHE_PREFIX);
+        let code = cmd_compare(
+            record,
+            dir.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn run_compare_detects_diff_then_sync_converges() {
+        let t = TempRoot::new("diff_sync");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        wfile(&src, "keep.txt", b"same");
+        wfile(&dst, "keep.txt", b"same");
+        wfile(&src, "changed.txt", b"src-new-content-much-longer");
+        wfile(&dst, "changed.txt", b"dst-old");
+        wfile(&src, "src_only.txt", b"only in src");
+        wfile(&dst, "dst_only.txt", b"only in dst");
+        wfile(&src, "sub/nested.txt", b"nested");
+
+        let code = cmd_compare(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 4, "differences must exit 4");
+
+        let code = cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            2,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+
+        assert_eq!(rfile(&dst, "keep.txt"), b"same");
+        assert_eq!(rfile(&dst, "changed.txt"), b"src-new-content-much-longer");
+        assert_eq!(rfile(&dst, "src_only.txt"), b"only in src");
+        assert_eq!(rfile(&dst, "sub/nested.txt"), b"nested");
+        assert!(!dst.join("dst_only.txt").exists(), "extra deleted by default");
+
+        let code = cmd_compare(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0, "dst must equal src after sync");
+    }
+
+    #[test]
+    fn run_sync_dry_run_writes_nothing() {
+        let t = TempRoot::new("dryrun");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        wfile(&src, "a.txt", b"new content here");
+        wfile(&dst, "a.txt", b"old");
+        wfile(&dst, "extra.txt", b"stay for now");
+
+        let code = cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            true, // dry_run
+            2,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        // Nothing changed on disk.
+        assert_eq!(rfile(&dst, "a.txt"), b"old");
+        assert_eq!(rfile(&dst, "extra.txt"), b"stay for now");
+        assert!(!has_backup_sibling(&dst.join(CACHE_PREFIX)), "dry-run makes no backups");
+
+        // Still different afterwards.
+        let code = cmd_compare(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 4);
+    }
+
+    #[test]
+    fn run_sync_keep_extra_and_missing_only() {
+        let t = TempRoot::new("flags");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        wfile(&src, "common.txt", b"v2-changed-and-longer");
+        wfile(&dst, "common.txt", b"v1");
+        wfile(&src, "newfile.txt", b"brand new");
+        wfile(&dst, "extra.txt", b"keep me");
+
+        let code = cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            true, // missing_only: copy newfile, skip content update
+            true, // keep_extra: leave extra.txt alone
+            false,
+            1,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(rfile(&dst, "newfile.txt"), b"brand new");
+        assert_eq!(rfile(&dst, "common.txt"), b"v1", "missing-only skips updates");
+        assert_eq!(rfile(&dst, "extra.txt"), b"keep me", "keep-extra spares dst-only");
+
+        // Default flags converge fully.
+        let code = cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            1,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(rfile(&dst, "common.txt"), b"v2-changed-and-longer");
+        assert!(!dst.join("extra.txt").exists());
+    }
+
+    #[test]
+    fn run_sync_rejects_bad_inputs() {
+        let t = TempRoot::new("reject");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        wfile(&src, "a.txt", b"x");
+        wfile(&dst, "a.txt", b"x");
+
+        // src == dst
+        assert!(cmd_sync(
+            src.clone(),
+            src.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            1,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .is_err());
+
+        // record inputs are compare-only
+        cmd_update(
+            src.clone(),
+            md5arg(),
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert!(cmd_sync(
+            src.join(CACHE_PREFIX),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            1,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .is_err());
+
+        // jobs == 0 is a runtime error
+        assert!(cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            0,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn run_update_prunes_and_excludes() {
+        let t = TempRoot::new("prune");
+        let dir = t.mkdirs("w");
+        wfile(&dir, "keep.txt", b"keep");
+        wfile(&dir, "gone.txt", b"to be deleted");
+        wfile(&dir, "skip.me", b"excluded content v1");
+
+        cmd_update(
+            dir.clone(),
+            md5arg(),
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        {
+            let db = sled::open(dir.join(CACHE_PREFIX)).unwrap();
+            let recs = load_all_records(&db).unwrap();
+            assert!(recs.contains_key("gone.txt"));
+            assert!(recs.contains_key("skip.me"));
+        }
+
+        // Deleting a file + re-update prunes it from the record.
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        cmd_update(
+            dir.clone(),
+            md5arg(),
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        {
+            let db = sled::open(dir.join(CACHE_PREFIX)).unwrap();
+            let recs = load_all_records(&db).unwrap();
+            assert!(!recs.contains_key("gone.txt"), "deleted file is pruned");
+            assert!(recs.contains_key("keep.txt"));
+        }
+
+        // Excluded paths are treated as nonexistent: re-update with an
+        // exclude prunes skip.me even though it is still on disk.
+        cmd_update(
+            dir.clone(),
+            md5arg(),
+            vec![],
+            vec!["*.me".to_string()],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        {
+            let db = sled::open(dir.join(CACHE_PREFIX)).unwrap();
+            let recs = load_all_records(&db).unwrap();
+            assert!(!recs.contains_key("skip.me"), "excluded path is pruned");
+        }
+        assert!(dir.join("skip.me").exists(), "exclude never deletes disk files");
+
+        // Filters also apply to runs: two dirs differing only in an
+        // excluded file compare equal with the filter, different without.
+        // NOTE: compare treats size/mtime/hash as equality, so normalize
+        // keep.txt's mtime across both dirs (same bytes, fresh writes would
+        // otherwise differ by mtime alone and report CHANGED).
+        let other = t.mkdirs("other");
+        wfile(&other, "keep.txt", b"keep");
+        wfile(&other, "skip.me", b"excluded content v2 (different)");
+        {
+            let mtime = std::fs::metadata(dir.join("keep.txt"))
+                .unwrap()
+                .modified()
+                .unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(other.join("keep.txt"))
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+        let code = cmd_compare(
+            dir.clone(),
+            other.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec!["*.me".to_string()],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0, "excluded difference is invisible");
+        let code = cmd_compare(
+            dir.clone(),
+            other.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 4, "same files differ without the filter");
+    }
+
+    #[test]
+    fn run_sync_resolves_type_conflicts() {
+        let t = TempRoot::new("typeconf");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        // src file vs dst dir at the same relpath...
+        wfile(&src, "node", b"i am a file");
+        wfile(&dst, "node/inner.txt", b"i am a dir");
+        // ...and src dir vs dst file.
+        wfile(&src, "node2/f.txt", b"in src dir");
+        wfile(&dst, "node2", b"i am a file");
+
+        let code = cmd_sync(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            false,
+            false,
+            false,
+            1,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(rfile(&dst, "node"), b"i am a file");
+        assert!(dst.join("node2").is_dir(), "dst resolves toward src kind");
+        assert_eq!(rfile(&dst, "node2/f.txt"), b"in src dir");
+
+        let code = cmd_compare(
+            src.clone(),
+            dst.clone(),
+            md5arg(),
+            true,
+            vec![],
+            vec![],
+            true,
+            10,
+            false,
+            err_level(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn run_cli_dispatch_update_compare_sync() {
+        // Same full runs, but through run(Cli) to cover CLI dispatch +
+        // log_level/log_file threading.
+        let t = TempRoot::new("cli");
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        wfile(&src, "a.txt", b"aaa");
+        wfile(&dst, "a.txt", b"bbb");
+
+        let mkcli = |cmd| Cli {
+            log_level: "error".to_string(),
+            log_file: None,
+            cmd,
+        };
+
+        let code = run(mkcli(Cmd::Update {
+            dir: src.clone(),
+            hash: md5arg(),
+            include: vec![],
+            exclude: vec![],
+            case_sensitive: true,
+            max_depth: 10,
+            ignore_cache: false,
+        }))
+        .unwrap();
+        assert_eq!(code, 0);
+
+        let code = run(mkcli(Cmd::Compare {
+            src: src.clone(),
+            dst: dst.clone(),
+            hash: md5arg(),
+            no_fast: false,
+            include: vec![],
+            exclude: vec![],
+            case_sensitive: true,
+            max_depth: 10,
+            ignore_cache: false,
+        }))
+        .unwrap();
+        assert_eq!(code, 4);
+
+        let code = run(mkcli(Cmd::Sync {
+            src: src.clone(),
+            dst: dst.clone(),
+            hash: md5arg(),
+            no_fast: false,
+            missing_only: false,
+            keep_extra: false,
+            dry_run: false,
+            jobs: 1,
+            include: vec![],
+            exclude: vec![],
+            case_sensitive: true,
+            max_depth: 10,
+            ignore_cache: false,
+        }))
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(rfile(&dst, "a.txt"), b"aaa");
+
+        let code = run(mkcli(Cmd::Compare {
+            src: src.clone(),
+            dst: dst.clone(),
+            hash: md5arg(),
+            no_fast: false,
+            include: vec![],
+            exclude: vec![],
+            case_sensitive: true,
+            max_depth: 10,
+            ignore_cache: false,
+        }))
+        .unwrap();
+        assert_eq!(code, 0);
+
+        let _ = t.root();
+    }
 }
