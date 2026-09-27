@@ -19,8 +19,156 @@ const SUPPORTED_HASHES: &[&str] = &["md5", "sha256"];
 #[derive(Parser, Debug)]
 #[command(name = "girsync", about = "Dev-only one-way folder mirror with hash cache")]
 struct Cli {
+    /// Console log level: trace|debug|info|warn|error (file log, if enabled, always captures trace+).
+    #[arg(long, default_value = "info", global = true)]
+    log_level: String,
+    /// Optional log file path. File always records at trace level regardless of --log-level.
+    #[arg(long, global = true)]
+    log_file: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+// ---------- minimal standalone logger (no dependency on main girpr crate) ----------
+//
+// Design:
+// - Console (stderr) is filtered by --log-level.
+// - File (if --log-file) always captures everything (trace and above).
+// - Data-plane output (MISSING/COPY/SUMMARY/...) stays on stdout via println!.
+// - All operational chatter (start report, progress, backups, end summary) goes
+//   through these macros -> stderr (+ file).
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum LogLevel {
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
+}
+
+impl LogLevel {
+    fn parse(s: &str) -> Result<LogLevel> {
+        match s.to_ascii_lowercase().as_str() {
+            "trace" => Ok(LogLevel::Trace),
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" | "warning" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            other => bail!(
+                "invalid --log-level '{}' (expected trace|debug|info|warn|error)",
+                other
+            ),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            LogLevel::Trace => "TRACE",
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+        }
+    }
+}
+
+struct LogState {
+    console_level: LogLevel,
+    file: Option<std::sync::Mutex<std::io::BufWriter<std::fs::File>>>,
+}
+
+static LOG_STATE: std::sync::OnceLock<LogState> = std::sync::OnceLock::new();
+
+fn console_level() -> LogLevel {
+    LOG_STATE.get().map(|s| s.console_level).unwrap_or(LogLevel::Info)
+}
+
+fn log_file_enabled() -> bool {
+    LOG_STATE.get().map(|s| s.file.is_some()).unwrap_or(false)
+}
+
+fn log_file_path_str() -> String {
+    LOG_FILE_PATH.get().cloned().unwrap_or_default()
+}
+
+static LOG_FILE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn init_logger(level_str: &str, log_file: Option<&Path>) -> Result<()> {
+    let level = LogLevel::parse(level_str)?;
+    let (file, path_str) = match log_file {
+        Some(p) => {
+            if let Some(parent) = p.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("create log dir {}", parent.display()))?;
+                }
+            }
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .with_context(|| format!("open log file {}", p.display()))?;
+            let mut w = std::io::BufWriter::new(f);
+            use std::io::Write as _;
+            let _ = writeln!(
+                w,
+                "=== girsync log start {} path={} console_level={} ===",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                p.display(),
+                level.label(),
+            );
+            let _ = w.flush();
+            (Some(std::sync::Mutex::new(w)), p.display().to_string())
+        }
+        None => (None, String::new()),
+    };
+    let _ = LOG_FILE_PATH.set(path_str);
+    let _ = LOG_STATE.set(LogState { console_level: level, file });
+    Ok(())
+}
+
+fn log_record(level: LogLevel, msg: String) {
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let line = format!("{} [{:<5}] {}", ts, level.label(), msg);
+    match LOG_STATE.get() {
+        Some(st) => {
+            if level >= st.console_level {
+                eprintln!("{}", line);
+            }
+            if let Some(m) = st.file.as_ref() {
+                if let Ok(mut w) = m.lock() {
+                    use std::io::Write as _;
+                    let _ = writeln!(w, "{}", line);
+                    // Flush eagerly so a killed run still leaves a usable log.
+                    let _ = w.flush();
+                }
+            }
+        }
+        None => {
+            // Logger not initialised (e.g. unit tests calling helpers directly):
+            // surface info+ on stderr, drop trace/debug.
+            if level >= LogLevel::Info {
+                eprintln!("{}", line);
+            }
+        }
+    }
+}
+
+macro_rules! log_trace {
+    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Trace, format!($($a)*)) };
+}
+macro_rules! log_debug {
+    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Debug, format!($($a)*)) };
+}
+macro_rules! log_info {
+    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Info, format!($($a)*)) };
+}
+macro_rules! log_warn {
+    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Warn, format!($($a)*)) };
+}
+macro_rules! log_error {
+    ($($a:tt)*) => { crate::log_record(crate::LogLevel::Error, format!($($a)*)) };
 }
 
 #[derive(Subcommand, Debug)]
@@ -131,9 +279,14 @@ struct LiveEnt {
 
 fn main() {
     let cli = Cli::parse();
+    if let Err(e) = init_logger(&cli.log_level, cli.log_file.as_deref()) {
+        eprintln!("FATAL {:#}", e);
+        std::process::exit(3);
+    }
     let code = match run(cli) {
         Ok(code) => code,
         Err(e) => {
+            log_error!("FATAL {:#}", e);
             eprintln!("FATAL {:#}", e);
             3
         }
@@ -142,6 +295,8 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<i32> {
+    let log_level = cli.log_level.clone();
+    let log_file = cli.log_file.clone();
     match cli.cmd {
         Cmd::Update {
             dir,
@@ -151,7 +306,17 @@ fn run(cli: Cli) -> Result<i32> {
             case_sensitive,
             max_depth,
             ignore_cache,
-        } => cmd_update(dir, hash, include, exclude, case_sensitive, max_depth, ignore_cache),
+        } => cmd_update(
+            dir,
+            hash,
+            include,
+            exclude,
+            case_sensitive,
+            max_depth,
+            ignore_cache,
+            log_level,
+            log_file,
+        ),
         Cmd::Compare {
             src,
             dst,
@@ -172,6 +337,8 @@ fn run(cli: Cli) -> Result<i32> {
             case_sensitive,
             max_depth,
             ignore_cache,
+            log_level,
+            log_file,
         ),
         Cmd::Sync {
             src,
@@ -201,8 +368,32 @@ fn run(cli: Cli) -> Result<i32> {
             case_sensitive,
             max_depth,
             ignore_cache,
+            log_level,
+            log_file,
         ),
     }
+}
+
+fn log_start_report(cmd: &str, fields: &[(&str, String)]) {
+    log_info!("START girsync {} (pid={})", cmd, std::process::id());
+    for (k, v) in fields {
+        log_info!("  config {}={}", k, v);
+    }
+    log_info!(
+        "  console_level={} file_level=trace file={}",
+        console_level().label(),
+        if log_file_enabled() {
+            log_file_path_str()
+        } else {
+            "(none)".to_string()
+        }
+    );
+    log_debug!("start timestamp {}", chrono::Local::now().to_rfc3339());
+}
+
+fn fmt_elapsed(t0: std::time::Instant) -> String {
+    let d = t0.elapsed();
+    format!("{:.2}s", d.as_secs_f64())
 }
 
 // ---------- generic helpers ----------
@@ -241,23 +432,27 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// Copy existing sled DB dir to <parent>/girpr-cache-backup-<ts>. Returns backup path if made.
 fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
+        log_trace!("backup skip (missing) {}", db_path.display());
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-backup-{}", ts_now()));
+    log_info!("backup {} -> {} ...", db_path.display(), dest.display());
     copy_dir_all(db_path, &dest)?;
-    println!("backup {} -> {}", db_path.display(), dest.display());
+    log_info!("backup done {} -> {}", db_path.display(), dest.display());
     Ok(Some(dest))
 }
 
 fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
+        log_trace!("snapshot-old skip (missing) {}", db_path.display());
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let dest = unique_sibling(parent, format!("girpr-cache-old-{}", ts_now()));
+    log_info!("snapshot-old {} -> {} ...", db_path.display(), dest.display());
     copy_dir_all(db_path, &dest)?;
-    println!("snapshot-old {} -> {}", db_path.display(), dest.display());
+    log_info!("snapshot-old done {} -> {}", db_path.display(), dest.display());
     Ok(Some(dest))
 }
 
@@ -385,6 +580,8 @@ fn is_excluded(
 }
 
 fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
+    log_debug!("scan start {} (max_depth={})", root.display(), max_depth);
+    let t0 = std::time::Instant::now();
     let mut out = Vec::new();
     let mut it = walkdir::WalkDir::new(root)
         .follow_links(true)
@@ -447,9 +644,24 @@ fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
+                // Progress: trace every entry (file log), debug heartbeat every 2000.
+                log_trace!("scan {}", ent.path().display());
+                if out.len() % 2000 == 0 {
+                    log_debug!("scan {} ... {} entries ({:.1}s)", root.display(), out.len(), t0.elapsed().as_secs_f64());
+                }
             }
         }
     }
+    let files = out.iter().filter(|e| !e.is_dir).count();
+    let dirs = out.len() - files;
+    log_info!(
+        "scan done {}: entries={} files={} dirs={} elapsed={:.2}s",
+        root.display(),
+        out.len(),
+        files,
+        dirs,
+        t0.elapsed().as_secs_f64()
+    );
     Ok(out)
 }
 
@@ -482,7 +694,7 @@ fn open_db(db_path: &Path, case_sensitive: bool, ignore_cache: bool, backup_firs
         }
         std::fs::remove_dir_all(db_path)
             .with_context(|| format!("remove {}", db_path.display()))?;
-        println!("ignore-cache: removed {}", db_path.display());
+        log_info!("ignore-cache: removed {}", db_path.display());
     } else if backup_first && db_path.exists() {
         backup_db(db_path)?;
     }
@@ -557,6 +769,20 @@ fn build_effective_folder(
         }
         live_set.insert(e.rel.clone());
     }
+    log_info!(
+        "effective {}: live={} fast={} force_hash={} dry_run={} algos=[{}]",
+        root.display(),
+        live.len(),
+        fast,
+        force_hash,
+        dry_run,
+        algos.join(",")
+    );
+    let t_eff = std::time::Instant::now();
+    let mut n_done: usize = 0;
+    let mut n_hashed: usize = 0;
+    let mut n_fast_hit: usize = 0;
+    let total_live = live.len();
     // In insensitive mode the on-disk name governs: index cached keys by
     // lowercase so a disk/cached casing difference is fixed to the disk name
     // first (reusing the cached hashes when stat matches) instead of
@@ -572,6 +798,7 @@ fn build_effective_folder(
             alt_index.entry(key.to_lowercase()).or_default().push(key.clone());
         }
     }
+    let mut last_prog = std::time::Instant::now();
     for e in live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
             continue;
@@ -657,6 +884,21 @@ fn build_effective_folder(
                         hashes: c.hashes.clone(),
                     },
                 );
+                n_done += 1;
+                n_fast_hit += 1;
+                log_trace!("cache-hit {}", e.rel);
+                if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
+                    log_info!(
+                        "hash progress {}: {}/{} files hashed={} fast_hit={} elapsed={:.1}s",
+                        root.display(),
+                        n_done,
+                        total_live,
+                        n_hashed,
+                        n_fast_hit,
+                        t_eff.elapsed().as_secs_f64()
+                    );
+                    last_prog = std::time::Instant::now();
+                }
                 continue;
             }
         }
@@ -666,8 +908,10 @@ fn build_effective_folder(
         }
         let have_all = cached.as_ref().map(|c| algos.iter().all(|a| c.hashes.contains_key(a))).unwrap_or(false);
         if !fast || !fresh || force_hash || !have_all {
+            log_debug!("hashing {}", e.rel);
             let hashes = hash_file(&e.abs, algos)
                 .with_context(|| format!("hash {}", e.abs.display()))?;
+            log_trace!("hashed {} {:?}", e.rel, hashes.keys());
             if !dry_run {
                 put_rec(
                     db,
@@ -689,6 +933,8 @@ fn build_effective_folder(
                     hashes,
                 },
             );
+            n_done += 1;
+            n_hashed += 1;
         } else {
             // fast hit path (fresh && fast && have_all handled above); fallback hash
             let c = cached.as_ref().unwrap();
@@ -701,18 +947,48 @@ fn build_effective_folder(
                     hashes: c.hashes.clone(),
                 },
             );
+            n_done += 1;
+            n_fast_hit += 1;
+            log_trace!("cache-hit {}", e.rel);
+        }
+        if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
+            log_info!(
+                "hash progress {}: {}/{} files hashed={} fast_hit={} elapsed={:.1}s",
+                root.display(),
+                n_done,
+                total_live,
+                n_hashed,
+                n_fast_hit,
+                t_eff.elapsed().as_secs_f64()
+            );
+            last_prog = std::time::Instant::now();
         }
     }
     // prune DB rows for files no longer on disk (or now excluded)
+    let mut pruned = 0usize;
     if !dry_run {
         let existing = load_all_records(db)?;
         for rel in existing.keys() {
             if !live_set.contains(rel) {
                 db.remove(rel.as_bytes())?;
+                pruned += 1;
+                log_trace!("prune cache {}", rel);
             }
         }
         db.flush()?;
     }
+    let n_files = eff.values().filter(|r| r.kind == "file").count();
+    let n_dirs = eff.values().filter(|r| r.kind == "dir").count();
+    log_info!(
+        "effective done {}: files={} dirs={} hashed={} fast_hit={} pruned={} elapsed={:.2}s",
+        root.display(),
+        n_files,
+        n_dirs,
+        n_hashed,
+        n_fast_hit,
+        pruned,
+        t_eff.elapsed().as_secs_f64()
+    );
     Ok(eff)
 }
 
@@ -873,14 +1149,35 @@ fn cmd_update(
     case_sensitive: bool,
     max_depth: usize,
     ignore_cache: bool,
+    log_level: String,
+    log_file: Option<PathBuf>,
 ) -> Result<i32> {
+    let t0 = std::time::Instant::now();
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
+    log_start_report(
+        "update",
+        &[
+            ("dir", dir.display().to_string()),
+            ("hash", format!("[{}]", algos.join(","))),
+            ("include", format!("{:?}", include)),
+            ("exclude", format!("{:?}", exclude)),
+            ("case_sensitive", case_sensitive.to_string()),
+            ("max_depth", max_depth.to_string()),
+            ("ignore_cache", ignore_cache.to_string()),
+            ("log_level", log_level),
+            (
+                "log_file",
+                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
+            ),
+        ],
+    );
     if !dir.is_dir() {
         bail!("--dir {} is not a directory", dir.display());
     }
     let db_path = dir.join(CACHE_PREFIX);
+    log_info!("open cache {}", db_path.display());
     let db = open_db(&db_path, case_sensitive, ignore_cache, true)?;
     let eff = build_effective_folder(
         &dir, &db, &algos, true, &includes, &excludes, case_sensitive, max_depth,
@@ -890,6 +1187,13 @@ fn cmd_update(
     let files = eff.values().filter(|r| r.kind == "file").count();
     let dirs = eff.values().filter(|r| r.kind == "dir").count();
     println!("update {} files={} dirs={} algos=[{}]", dir.display(), files, dirs, algos.join(","));
+    log_info!(
+        "END girsync update: files={} dirs={} algos=[{}] elapsed={} exit=0",
+        files,
+        dirs,
+        algos.join(","),
+        fmt_elapsed(t0)
+    );
     Ok(0)
 }
 
@@ -919,7 +1223,12 @@ fn load_side(
     dry_run: bool,
 ) -> Result<HashMap<String, EffRec>> {
     match side {
-        Side::Record(dbp) => load_record_side(dbp, includes, excludes, case_sensitive),
+        Side::Record(dbp) => {
+            log_info!("load record side {}", dbp.display());
+            let m = load_record_side(dbp, includes, excludes, case_sensitive)?;
+            log_info!("record {} loaded: {} entries", dbp.display(), m.len());
+            Ok(m)
+        }
         Side::Folder(root) => {
             if !root.is_dir() {
                 bail!("folder {} not found", root.display());
@@ -927,6 +1236,7 @@ fn load_side(
             let db_path = root.join(CACHE_PREFIX);
             if !db_path.exists() {
                 // missing cache: just create it
+                log_info!("cache missing, creating {}", db_path.display());
                 let db = open_db(&db_path, case_sensitive, false, false)?;
                 let eff = build_effective_folder(
                     root, &db, algos, fast, includes, excludes, case_sensitive, max_depth,
@@ -939,7 +1249,10 @@ fn load_side(
                     root, &db, algos, fast, includes, excludes, case_sensitive, max_depth,
                     force_hash, dry_run,
                 ),
-                Err(e) => Err(e.context(format!("cache for {} (use --ignore-cache to rebuild)", root.display()))),
+                Err(e) => {
+                    log_warn!("cache open failed for {}: {:#}", root.display(), e);
+                    Err(e.context(format!("cache for {} (use --ignore-cache to rebuild)", root.display())))
+                }
             }
         }
     }
@@ -955,29 +1268,75 @@ fn cmd_compare(
     case_sensitive: bool,
     max_depth: usize,
     ignore_cache: bool,
+    log_level: String,
+    log_file: Option<PathBuf>,
 ) -> Result<i32> {
+    let t0 = std::time::Instant::now();
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
+    log_start_report(
+        "compare",
+        &[
+            ("src", src.display().to_string()),
+            ("dst", dst.display().to_string()),
+            ("hash", format!("[{}]", algos.join(","))),
+            ("fast", fast.to_string()),
+            ("include", format!("{:?}", include)),
+            ("exclude", format!("{:?}", exclude)),
+            ("case_sensitive", case_sensitive.to_string()),
+            ("max_depth", max_depth.to_string()),
+            ("ignore_cache", ignore_cache.to_string()),
+            ("log_level", log_level),
+            (
+                "log_file",
+                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
+            ),
+        ],
+    );
     let s = classify(&src);
     let d = classify(&dst);
+    log_info!(
+        "load src side ({}: {})",
+        src.display(),
+        match &s {
+            Side::Record(_) => "record",
+            Side::Folder(_) => "folder",
+        }
+    );
     let sm = load_side(&s, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
+    log_info!("src loaded: {} entries", sm.len());
+    log_info!(
+        "load dst side ({}: {})",
+        dst.display(),
+        match &d {
+            Side::Record(_) => "record",
+            Side::Folder(_) => "folder",
+        }
+    );
     let dm = load_side(&d, &algos, fast, &includes, &excludes, case_sensitive, max_depth, ignore_cache, false, false)?;
+    log_info!("dst loaded: {} entries", dm.len());
+    log_info!("diffing src={} entries vs dst={} entries ...", sm.len(), dm.len());
     let diff = diff_maps(&sm, &dm, &algos, case_sensitive);
     for r in &diff.missing {
         println!("MISSING {}", r);
+        log_debug!("diff MISSING {}", r);
     }
     for r in &diff.extra {
         println!("EXTRA {}", r);
+        log_debug!("diff EXTRA {}", r);
     }
     for r in &diff.changed {
         println!("CHANGED {}", r);
+        log_debug!("diff CHANGED {}", r);
     }
     for r in &diff.type_conflict {
         println!("TYPE-CONFLICT {}", r);
+        log_debug!("diff TYPE-CONFLICT {}", r);
     }
     for (a, b) in &diff.case_mismatch {
         println!("CASE-MISMATCH {} <=> {}", a, b);
+        log_debug!("diff CASE-MISMATCH {} <=> {}", a, b);
     }
     let total = diff.missing.len() + diff.extra.len() + diff.changed.len() + diff.type_conflict.len();
     println!(
@@ -989,7 +1348,19 @@ fn cmd_compare(
         diff.case_mismatch.len(),
         total
     );
-    Ok(if total == 0 && diff.case_mismatch.is_empty() { 0 } else { 4 })
+    let code = if total == 0 && diff.case_mismatch.is_empty() { 0 } else { 4 };
+    log_info!(
+        "END girsync compare: missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={} elapsed={} exit={}",
+        diff.missing.len(),
+        diff.extra.len(),
+        diff.changed.len(),
+        diff.type_conflict.len(),
+        diff.case_mismatch.len(),
+        total,
+        fmt_elapsed(t0),
+        code
+    );
+    Ok(code)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1007,10 +1378,36 @@ fn cmd_sync(
     case_sensitive: bool,
     max_depth: usize,
     ignore_cache: bool,
+    log_level: String,
+    log_file: Option<PathBuf>,
 ) -> Result<i32> {
+    let t0 = std::time::Instant::now();
     let algos = parse_hash_list(&hash)?;
     let includes = compile_patterns(&include)?;
     let excludes = compile_patterns(&exclude)?;
+    log_start_report(
+        "sync",
+        &[
+            ("src", src.display().to_string()),
+            ("dst", dst.display().to_string()),
+            ("hash", format!("[{}]", algos.join(","))),
+            ("fast", fast.to_string()),
+            ("missing_only", missing_only.to_string()),
+            ("keep_extra", keep_extra.to_string()),
+            ("dry_run", dry_run.to_string()),
+            ("jobs", jobs.to_string()),
+            ("include", format!("{:?}", include)),
+            ("exclude", format!("{:?}", exclude)),
+            ("case_sensitive", case_sensitive.to_string()),
+            ("max_depth", max_depth.to_string()),
+            ("ignore_cache", ignore_cache.to_string()),
+            ("log_level", log_level),
+            (
+                "log_file",
+                log_file.map(|p| p.display().to_string()).unwrap_or("(none)".into()),
+            ),
+        ],
+    );
     if is_record_path(&src) || is_record_path(&dst) {
         bail!("sync needs folder vs folder (record inputs are compare-only)");
     }
@@ -1044,10 +1441,12 @@ fn cmd_sync(
                 if p.exists() {
                     std::fs::remove_dir_all(p)
                         .with_context(|| format!("remove {}", p.display()))?;
-                    println!("ignore-cache: removed {}", p.display());
+                    log_info!("ignore-cache: removed {}", p.display());
                 }
             }
         }
+    } else {
+        log_info!("dry-run: skipping backups and cache writes");
     }
 
     let src_db = if dry_run {
@@ -1067,14 +1466,17 @@ fn cmd_sync(
         open_db(&dst_db_path, case_sensitive, false, false)?
     };
 
+    log_info!("loading src effective map ...");
     let sm = build_effective_folder(
         &src, &src_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
         false, dry_run,
     )?;
+    log_info!("loading dst effective map ...");
     let mut dm = build_effective_folder(
         &dst, &dst_db, &algos, fast, &includes, &excludes, case_sensitive, max_depth,
         false, dry_run,
     )?;
+    log_info!("maps ready: src={} dst={} entries", sm.len(), dm.len());
 
     // case-insensitive rename pass (sync mode): rename dst to src casing first.
     let mut renamed = 0usize;
@@ -1091,8 +1493,10 @@ fn cmd_sync(
                 renames.push((dst.join(drel), dst.join(*srel), (*drel).clone(), (*srel).clone()));
             }
         }
+        log_info!("rename pass: {} case-only renames pending", renames.len());
         for (from, to, drel, srel) in renames {
             println!("RENAME {} -> {}", drel, srel);
+            log_info!("RENAME {} -> {}", drel, srel);
             if !dry_run {
                 if let Some(parent) = to.parent() {
                     std::fs::create_dir_all(parent)
@@ -1172,6 +1576,18 @@ fn cmd_sync(
             to_mkdir.push(rel.clone());
         }
     }
+    to_mkdir.sort();
+    log_info!(
+        "plan: renamed={} mkdir={} copy={} delete_files={} fix_dirs={} dry_run={}",
+        renamed,
+        to_mkdir.len(),
+        to_copy.len(),
+        to_delete_files.len(),
+        to_fix_dirs.len(),
+        dry_run
+    );
+    log_debug!("plan copy list: {:?}", to_copy);
+    log_debug!("plan mkdir list: {:?}", to_mkdir);
 
     if dry_run {
         for r in &to_mkdir {
@@ -1195,11 +1611,20 @@ fn cmd_sync(
             missing_only,
             keep_extra
         );
+        log_info!(
+            "END girsync sync (dry-run): renamed={} mkdir={} copy={} delete={} elapsed={} exit=0",
+            renamed,
+            to_mkdir.len(),
+            to_copy.len(),
+            to_delete_files.len() + to_fix_dirs.len(),
+            fmt_elapsed(t0)
+        );
         return Ok(0);
     }
 
     // Apply: mkdirs
-    for r in &to_mkdir {
+    log_info!("apply mkdirs: {} dirs ...", to_mkdir.len());
+    for (i, r) in to_mkdir.iter().enumerate() {
         std::fs::create_dir_all(dst.join(r))
             .with_context(|| format!("mkdir {}", dst.join(r).display()))?;
         dst_db.insert(
@@ -1211,8 +1636,13 @@ fn cmd_sync(
                 hashes: HashMap::new(),
             })?,
         )?;
+        log_debug!("MKDIR {}", r);
+        if (i + 1) % 100 == 0 {
+            log_info!("mkdir progress {}/{}", i + 1, to_mkdir.len());
+        }
     }
     // Fix type-conflicts where src is dir: remove dst file, mkdir
+    log_info!("apply fix-dirs: {} ...", to_fix_dirs.len());
     for r in &to_fix_dirs {
         dst_db.remove(r.as_bytes())?; // delete entries before change
         let p = dst.join(r);
@@ -1223,6 +1653,7 @@ fn cmd_sync(
         }
         std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
         println!("FIX-DIR {}", r);
+        log_info!("FIX-DIR {}", r);
     }
 
     // Delete entries before file changes (crash leaves truncated risk documented;
@@ -1234,7 +1665,8 @@ fn cmd_sync(
 
     // Delete extra files (+ prune unknown dirs afterwards)
     let mut deleted = 0usize;
-    for r in &to_delete_files {
+    log_info!("apply deletes: {} files ...", to_delete_files.len());
+    for (i, r) in to_delete_files.iter().enumerate() {
         let p = dst.join(r);
         // eff map only tracks files here for extra; dirs handled below
         if let Some(rec) = dm.get(r) {
@@ -1245,39 +1677,65 @@ fn cmd_sync(
         if p.is_file() || p.is_symlink() {
             std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
             println!("DELETE {}", r);
+            log_debug!("DELETE {}", r);
             deleted += 1;
         } else if p.is_dir() {
             std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
             println!("RMDIR {}", r);
+            log_debug!("RMDIR {}", r);
             deleted += 1;
         } else if p.exists() {
             bail!("unsupported type {}", p.display());
         }
+        if (i + 1) % 100 == 0 {
+            log_info!("delete progress {}/{} deleted={}", i + 1, to_delete_files.len(), deleted);
+        }
     }
+    log_info!("deletes done: deleted={}", deleted);
 
     // Copy files in parallel (truncate + write in place, preserve mtime, verify).
+    log_info!("copy start: {} files jobs={}", to_copy.len(), jobs);
+    let copy_total = to_copy.len();
+    let copy_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let copy_done_cb = copy_done.clone();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
         .build()
         .context("build thread pool")?;
     let results = pool.install(|| {
         use rayon::prelude::*;
-        to_copy.par_iter().map(|rel| copy_one(&src, &dst, rel, &algos)).collect::<Vec<_>>()
+        to_copy
+            .par_iter()
+            .map(|rel| {
+                log_debug!("copy start {}", rel);
+                let r = copy_one(&src, &dst, rel, &algos);
+                let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n % 25 == 0 || n == copy_total {
+                    log_info!("copy progress {}/{}", n, copy_total);
+                } else {
+                    log_trace!("copy progress {}/{} ({})", n, copy_total, rel);
+                }
+                r
+            })
+            .collect::<Vec<_>>()
     });
     let mut copied = 0usize;
     let mut new_recs: Vec<(String, FileRec)> = Vec::new();
     for (rel, r) in to_copy.iter().zip(results) {
         let rec = r.with_context(|| format!("copy {}", rel))?;
         println!("COPY {}", rel);
+        log_debug!("COPY done {}", rel);
         new_recs.push((rel.clone(), rec));
         copied += 1;
     }
+    log_info!("copy done: copied={}/{}", copied, copy_total);
     for (rel, rec) in new_recs {
         dst_db.insert(rel.as_bytes(), serde_json::to_vec(&rec)?)?;
     }
 
     // Remove dst dirs not in src (unknown empties + leftovers), deepest first.
     let mut removed_dirs = 0usize;
+    log_info!("scan dst for unknown dirs ...");
     let live_after = walk_live(&dst, max_depth)?;
     let mut src_dirs: HashSet<String> = sm
         .iter()
@@ -1298,7 +1756,8 @@ fn cmd_sync(
         }
     }
     unknown_dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    for r in unknown_dirs {
+    log_info!("rmdir pass: {} unknown dirs", unknown_dirs.len());
+    for (i, r) in unknown_dirs.iter().enumerate() {
         let p = dst.join(&r);
         if p.is_dir() {
             // dir may already be gone as child of removed parent
@@ -1309,7 +1768,11 @@ fn cmd_sync(
             }
             dst_db.remove(r.as_bytes())?;
             println!("RMDIR {}", r);
+            log_debug!("RMDIR {}", r);
             removed_dirs += 1;
+        }
+        if (i + 1) % 100 == 0 {
+            log_info!("rmdir progress {}/{} removed={}", i + 1, unknown_dirs.len(), removed_dirs);
         }
     }
     // final prune of anything else missing + flush
@@ -1345,10 +1808,22 @@ fn cmd_sync(
         missing_only,
         keep_extra
     );
+    log_info!(
+        "END girsync sync: renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={} dry_run=false elapsed={} exit=0",
+        renamed,
+        to_mkdir.len(),
+        copied,
+        deleted,
+        removed_dirs,
+        missing_only,
+        keep_extra,
+        fmt_elapsed(t0)
+    );
     Ok(0)
 }
 
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
+    log_trace!("copy_one start {}", rel);
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
     // dst dir that is in the way of a file copy: remove first
@@ -1399,9 +1874,11 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
     let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
     for a in algos {
         if sh.get(a) != dh.get(a) {
+            log_error!("verify hash({}) mismatch {}", a, d.display());
             bail!("verify hash({}) {}", a, d.display());
         }
     }
+    log_trace!("copy_one done {} bytes={}", rel, ssize);
     Ok(FileRec {
         kind: "file".into(),
         size: ssize,
