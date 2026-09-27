@@ -22,7 +22,10 @@ and drive the public API.
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated) |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
-| `commands/sync.rs` | the mirror run (plan, then apply) plus `copy_one` |
+| `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
+| `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
+| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
+| `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
 | `cache.rs` | sled schema (`Meta`, `FileRec`), `open_db`, backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | collapses cache + filters + case rules into one `EffRec` map per side |
@@ -31,6 +34,12 @@ and drive the public API.
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 `CommonArgs` in `config.rs`'s `TryFrom`, then use `common.<field>` in the command.
+
+`build_plan` reads only the two effective maps, which is what makes `--dry-run`
+exact. The apply phases are ordered inside `Applier::apply` because the order is
+a correctness invariant: cache entries for every path a run will touch are
+dropped *before* the filesystem change, so a crash re-copies rather than
+trusting a half-written file.
 
 ## Commands
 
@@ -77,7 +86,10 @@ Mirrors `src` → `dst`:
    file change, so a crash re-copies rather than trusting a half-written file. No resume.
 
 `--dry-run` prints `MKDIR/COPY/DELETE/RENAME` + `SUMMARY` and writes nothing
-(no backups, no cache updates, no FS changes).
+(no backups, no cache updates, no FS changes). Caveat: in insensitive mode a
+dry run does not apply the rename pass to its in-memory dst map, so a
+case-mismatched path shows up as both a `COPY` and a `DELETE`. A real run only
+renames.
 
 ## Core semantics (must-know for AI edits)
 
