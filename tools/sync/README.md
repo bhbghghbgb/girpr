@@ -86,10 +86,8 @@ Mirrors `src` → `dst`:
    file change, so a crash re-copies rather than trusting a half-written file. No resume.
 
 `--dry-run` prints `MKDIR/COPY/DELETE/RENAME` + `SUMMARY` and writes nothing
-(no backups, no cache updates, no FS changes). Caveat: in insensitive mode a
-dry run does not apply the rename pass to its in-memory dst map, so a
-case-mismatched path shows up as both a `COPY` and a `DELETE`. A real run only
-renames.
+(no backups, no cache updates, no FS changes). The plan is exact: it is the same
+work list a real run executes, including the insensitive-mode rename pass.
 
 ## Core semantics (must-know for AI edits)
 

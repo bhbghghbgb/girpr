@@ -66,6 +66,33 @@ pub fn rfile(root: &Path, rel: &str) -> Vec<u8> {
     std::fs::read(root.join(rel)).unwrap()
 }
 
+/// Actual directory entry names, excluding `girpr-cache*`.
+///
+/// Path existence cannot answer casing questions on a case-insensitive
+/// filesystem: `data.txt` and `Data.txt` resolve to the same entry there.
+pub fn entry_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with("girpr-cache"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Pin `target`'s mtime to `source`'s, so two identical-content files compare
+/// equal (compare treats size+mtime+hash as identity).
+pub fn sync_mtime(source: &Path, target: &Path) {
+    let mtime = std::fs::metadata(source).unwrap().modified().unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(target)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 /// Default options for the end-to-end tests: md5, no filters, case-sensitive.
 pub fn opts() -> CommonOpts {
     CommonOpts {

@@ -2,7 +2,9 @@
 
 mod common;
 
-use common::{compare, has_backup_sibling, log, rfile, sync, update, wfile, TempRoot};
+use common::{
+    compare, entry_names, has_backup_sibling, log, rfile, sync, sync_mtime, update, wfile, TempRoot,
+};
 use girsync::cache::CACHE_PREFIX;
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 
@@ -108,4 +110,46 @@ fn run_sync_resolves_type_conflicts() {
 
     let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0);
+}
+
+/// A case-only difference must be settled by renaming dst, not by copying.
+/// Regression: the dry run used to leave its in-memory dst map on the old
+/// casing, so it planned both a COPY and a DELETE for the same file.
+#[test]
+fn run_sync_case_only_difference_renames_instead_of_copying() {
+    let t = TempRoot::new("caseren");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    // Align mtime so casing is the *only* difference; otherwise the diff
+    // legitimately reports CHANGED and a copy is the right answer.
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    // Dry run: prints the rename, changes nothing.
+    let mut dry = sync(src.clone(), dst.clone());
+    dry.common.case_sensitive = false;
+    dry.dry_run = true;
+    assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "a dry run renames nothing on disk"
+    );
+
+    // Real run: dst adopts src's casing.
+    let mut real = sync(src.clone(), dst.clone());
+    real.common.case_sensitive = false;
+    assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
+    assert_eq!(
+        entry_names(&dst),
+        vec!["Data.txt".to_string()],
+        "dst adopts src casing"
+    );
+
+    // Converged: no further differences in either mode.
+    let mut same = compare(src.clone(), dst.clone());
+    same.common.case_sensitive = false;
+    assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
+    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
 }
