@@ -128,15 +128,14 @@ pub fn hashes_differ(
     algos: &[String],
 ) -> bool {
     for algo in algos {
-        match (a.get(algo), b.get(algo)) {
-            (Some(x), Some(y)) => {
-                if x != y {
-                    return true;
-                }
-            }
-            // If either side lacks the hash (e.g. --hash none history), fall back to
-            // size+mtime which the caller already compared; do not force differ here.
-            _ => {}
+        // If either side lacks the hash (e.g. --hash none history), fall back to
+        // size+mtime which the caller already compared; do not force differ here.
+        // let-else keeps this edition-2021 compatible (no let-chains / Rust 2024 needed).
+        let (Some(x), Some(y)) = (a.get(algo), b.get(algo)) else {
+            continue;
+        };
+        if x != y {
+            return true;
         }
     }
     false

@@ -174,7 +174,7 @@ impl Applier<'_> {
                     debug!(rel = %rel, "copy start");
                     let r = copy_one(self.src, self.dst, rel, &self.common.algos);
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    if n % 25 == 0 || n == copy_total {
+                    if n.is_multiple_of(25) || n == copy_total {
                         info!(done = n, total = copy_total, "copy progress");
                     } else {
                         trace!(done = n, total = copy_total, rel = %rel, "copy progress");

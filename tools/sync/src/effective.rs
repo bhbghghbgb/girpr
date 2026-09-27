@@ -186,7 +186,7 @@ pub fn build_effective_folder(
                 n_done += 1;
                 n_fast_hit += 1;
                 trace!(rel = %e.rel, "cache-hit");
-                if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
+                if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
                     info!(
                         root = %root.display(),
                         done = n_done,
@@ -253,7 +253,7 @@ pub fn build_effective_folder(
             n_fast_hit += 1;
             trace!(rel = %e.rel, "cache-hit");
         }
-        if n_done % 100 == 0 || last_prog.elapsed().as_secs() >= 5 {
+        if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
             info!(
                 root = %root.display(),
                 done = n_done,

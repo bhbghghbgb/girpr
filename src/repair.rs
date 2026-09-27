@@ -110,6 +110,7 @@ pub fn emit_progress(sum: &Summary) {
 /// HoYoPlay/Sophon APIs, not from config. `audio_langs` is the effective set.
 /// Emitted as a `REPORT key=value` line, or as a JSON object with
 /// `--json-summary`.
+#[allow(clippy::too_many_arguments)] // stable report formatter; params-struct would churn CLI parsing
 pub fn format_report_line(
     local_version: &Option<String>,
     latest_version: &str,
@@ -551,6 +552,8 @@ pub fn build_plan(
     }
 }
 
+// TODO: rename `Repaired::Repaired` (e.g. `Done`) — touches match sites at repair_one_file/repair_attempt; kept to avoid logic churn.
+#[allow(clippy::enum_variant_names)] // variant mirrors Starward parity naming; rename would touch 7 match sites
 enum Repaired {
     Skipped,
     Repaired(ChunkStats),
@@ -632,12 +635,15 @@ async fn repair_attempt(
     local_map: &HashMap<String, Vec<(String, i64, i64)>>,
     tmp_path: &Path,
 ) -> Result<ChunkStats> {
-    let mut stats = ChunkStats::default();
-    stats.chunks_total = file.chunks.len() as u64;
+    let mut stats = ChunkStats {
+        chunks_total: file.chunks.len() as u64,
+        ..Default::default()
+    };
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false) // keep tmp resume data; explicit to satisfy clippy::suspicious_open_options
         .open(tmp_path)
         .with_context(|| format!("open tmp {}", tmp_path.display()))?;
     let have = f.metadata().map(|m| m.len()).unwrap_or(0);
@@ -850,7 +856,7 @@ pub fn collapse_purge_extra(
             .filter(|e| e.file_type().is_dir())
             .map(|e| e.path().to_path_buf())
             .collect();
-        dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+        dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
         for d in dirs {
             if d == game_dir {
                 continue;
@@ -900,9 +906,10 @@ pub enum PurgeVerdict {
 /// 3. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
 ///    `Audio_*_pkg_version`, `GenshinInstall.cs:228-247`). v1 matches broadly
 ///    by pattern rather than per-`audio_lang_14`-line exact regexes.
-/// Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
-/// `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
-/// exe and server bookkeeping files.
+///
+///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
+///    `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
+///    exe and server bookkeeping files.
 pub fn classify_purge_path(
     rel: &str,
     expected: &HashSet<String>,
@@ -937,8 +944,7 @@ fn file_name(rel: &str) -> &str {
 }
 
 pub fn normalize_rel(rel: &str) -> String {
-    rel.replace('/', std::path::MAIN_SEPARATOR_STR)
-        .replace('\\', std::path::MAIN_SEPARATOR_STR)
+    rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
 }
 
 fn read_current_audio(game_dir: &Path, scan_dir: &str) -> HashSet<String> {
@@ -1006,11 +1012,11 @@ fn move_audio_cache(game_dir: &Path, cache_dir: &str, res_dir: &str) {
     for src in files {
         if let Ok(rel) = src.strip_prefix(&cache) {
             let target = res.join(rel);
-            if std::fs::create_dir_all(target.parent().unwrap_or(&res)).is_ok() {
-                if std::fs::rename(&src, &target).is_err() {
-                    let _ = std::fs::copy(&src, &target);
-                    let _ = std::fs::remove_file(&src);
-                }
+            if std::fs::create_dir_all(target.parent().unwrap_or(&res)).is_ok()
+                && std::fs::rename(&src, &target).is_err()
+            {
+                let _ = std::fs::copy(&src, &target);
+                let _ = std::fs::remove_file(&src);
             }
         }
     }

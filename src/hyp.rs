@@ -134,7 +134,7 @@ where
     deserializer.deserialize_any(V)
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ManifestFile {
     #[serde(default)]
     pub id: String,
@@ -144,17 +144,6 @@ pub struct ManifestFile {
     pub compressed_size: i64,
     #[serde(default, deserialize_with = "num_from_string")]
     pub uncompressed_size: i64,
-}
-
-impl Default for ManifestFile {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            checksum: String::new(),
-            compressed_size: 0,
-            uncompressed_size: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
