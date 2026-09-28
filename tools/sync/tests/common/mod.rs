@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, UpdateOpts};
+use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -113,11 +113,10 @@ pub fn log() -> LogCtx {
     }
 }
 
-/// Scan mode for tests that just want a fast, complete pass.
-pub fn scan(fast: bool, force_hash: bool, dry_run: bool) -> ScanMode {
+/// Scan mode for tests: `no_trust_cached_hashes` and `dry_run`.
+pub fn scan(no_trust_cached_hashes: bool, dry_run: bool) -> ScanMode {
     ScanMode {
-        fast,
-        force_hash,
+        no_trust_cached_hashes,
         dry_run,
     }
 }
@@ -133,7 +132,7 @@ pub fn compare(src: PathBuf, dst: PathBuf) -> CompareOpts {
     CompareOpts {
         src,
         dst,
-        fast: true,
+        trust: TrustOpts::default(),
         common: opts(),
     }
 }
@@ -142,7 +141,7 @@ pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
     SyncOpts {
         src,
         dst,
-        fast: true,
+        trust: TrustOpts::default(),
         missing_only: false,
         keep_extra: false,
         dry_run: false,

@@ -122,7 +122,8 @@ fn convert_sled_dir_to_redb_file() {
             .unwrap();
     }
     let mut o = common::compare(dst.clone(), live.clone());
-    o.fast = false;
+    o.trust.no_trust_src = true;
+    o.trust.no_trust_dst = true;
     o.common.algos = vec!["md5".to_string(), "sha256".to_string()];
     let _ = &log();
     // record-vs-folder with extra blake3 rows: blake3 is not requested, so

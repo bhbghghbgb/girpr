@@ -63,8 +63,7 @@ pub fn build_effective_folder(
     let case_sensitive = common.case_sensitive;
     let max_depth = common.max_depth;
     let ScanMode {
-        fast,
-        force_hash,
+        no_trust_cached_hashes,
         dry_run,
     } = mode;
 
@@ -81,8 +80,7 @@ pub fn build_effective_folder(
     info!(
         root = %root.display(),
         live = live.len(),
-        fast,
-        force_hash,
+        no_trust_cached_hashes,
         dry_run,
         algos = ?algos,
         "effective start"
@@ -90,7 +88,7 @@ pub fn build_effective_folder(
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
     let mut n_hashed: usize = 0;
-    let mut n_fast_hit: usize = 0;
+    let mut n_cache_hit: usize = 0;
     let total_live = live.len();
     let alt_recs: HashMap<String, FileRec> = if !case_sensitive {
         // Read once up front; the scan's batch handle starts from the same
@@ -132,7 +130,7 @@ pub fn build_effective_folder(
         }
         // file
         // `adopted` = cache entry came from an alternate-cased key, so the
-        // disk-cased key must be (re)written even on a fast-hit.
+        // disk-cased key must be (re)written even on a cache hit.
         let (cached, adopted): (Option<FileRec>, bool) = match match batch.as_mut() {
             Some(w) => w.get(&e.rel)?,
             None => cache.get(&e.rel)?,
@@ -164,53 +162,36 @@ pub fn build_effective_folder(
             .as_ref()
             .map(|c| c.size == e.size && c.mtime_ns == e.mtime_ns && c.kind == "file")
             .unwrap_or(false);
-        if fresh && !force_hash {
-            let c = cached.as_ref().unwrap();
-            let have_all = algos.iter().all(|a| c.hashes.contains_key(a));
-            if have_all {
-                if adopted {
-                    if let Some(w) = batch.as_mut() {
-                        w.put(&e.rel, c)?;
-                    }
-                }
-                eff.insert(
-                    e.rel.clone(),
-                    EffRec {
-                        kind: "file".into(),
-                        size: c.size,
-                        mtime_ns: c.mtime_ns,
-                        hashes: c.hashes.clone(),
-                    },
-                );
-                n_done += 1;
-                n_fast_hit += 1;
-                trace!(rel = %e.rel, "cache-hit");
-                if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
-                    info!(
-                        root = %root.display(),
-                        done = n_done,
-                        total = total_live,
-                        hashed = n_hashed,
-                        fast_hit = n_fast_hit,
-                        elapsed_s = t_eff.elapsed().as_secs_f64(),
-                        "hash progress"
-                    );
-                    last_prog = std::time::Instant::now();
-                }
-                continue;
+        // Reuse the cached row only when the stat still matches, this side
+        // trusts the cache, and every requested algo is present. Every other
+        // case falls through to the rehash below.
+        let trusted = cached.as_ref().filter(|c| {
+            fresh && !no_trust_cached_hashes && algos.iter().all(|a| c.hashes.contains_key(a))
+        });
+        if let Some(c) = trusted {
+            if adopted && let Some(w) = batch.as_mut() {
+                w.put(&e.rel, c)?;
             }
-        }
-        // stale or missing or --no-fast or missing algos: drop stale entry, rehash
-        if cached.is_some() && !fresh {
-            if let Some(w) = batch.as_mut() {
-                w.remove(&e.rel)?; // preemptively drop whole path record
+            eff.insert(
+                e.rel.clone(),
+                EffRec {
+                    kind: "file".into(),
+                    size: c.size,
+                    mtime_ns: c.mtime_ns,
+                    hashes: c.hashes.clone(),
+                },
+            );
+            n_cache_hit += 1;
+            trace!(rel = %e.rel, "cache-hit");
+        } else {
+            // Stale rows are dropped wholesale, so a partially rewritten
+            // record can never be mistaken for a valid one.
+            if cached.is_some()
+                && !fresh
+                && let Some(w) = batch.as_mut()
+            {
+                w.remove(&e.rel)?;
             }
-        }
-        let have_all = cached
-            .as_ref()
-            .map(|c| algos.iter().all(|a| c.hashes.contains_key(a)))
-            .unwrap_or(false);
-        if !fast || !fresh || force_hash || !have_all {
             debug!(rel = %e.rel, path = %e.abs.display(), "hashing");
             let hashes =
                 hash_file(&e.abs, algos).with_context(|| format!("hash {}", e.abs.display()))?;
@@ -235,33 +216,18 @@ pub fn build_effective_folder(
                     hashes,
                 },
             );
-            n_done += 1;
             n_hashed += 1;
-        } else {
-            // fast hit path (fresh && fast && have_all handled above); fallback hash
-            let c = cached.as_ref().unwrap();
-            eff.insert(
-                e.rel.clone(),
-                EffRec {
-                    kind: "file".into(),
-                    size: c.size,
-                    mtime_ns: c.mtime_ns,
-                    hashes: c.hashes.clone(),
-                },
-            );
-            n_done += 1;
-            n_fast_hit += 1;
-            trace!(rel = %e.rel, "cache-hit");
         }
+        n_done += 1;
         if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
             info!(
                 root = %root.display(),
                 done = n_done,
                 total = total_live,
                 hashed = n_hashed,
-                fast_hit = n_fast_hit,
+                cache_hit = n_cache_hit,
                 elapsed_s = t_eff.elapsed().as_secs_f64(),
-                "hash progress"
+                "scan progress"
             );
             last_prog = std::time::Instant::now();
         }
@@ -288,7 +254,7 @@ pub fn build_effective_folder(
         files = n_files,
         dirs = n_dirs,
         hashed = n_hashed,
-        fast_hit = n_fast_hit,
+        cache_hit = n_cache_hit,
         pruned,
         elapsed_s = elapsed_s(t_eff),
         "effective done"

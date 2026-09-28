@@ -5,7 +5,7 @@
 //! flattened into each variant. `run` converts them into [`crate::config`]
 //! structs once, which is where the strings get validated.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -48,6 +48,27 @@ pub struct CommonArgs {
     pub ignore_cache: bool,
 }
 
+/// One side of a two-sided run, as named on the command line.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustSide {
+    /// The `--src` side.
+    Src,
+    /// The `--dst` side.
+    Dst,
+}
+
+/// Cache-trust overrides, shared by the two-sided subcommands.
+///
+/// `update` is absent on purpose: it is defined as a full repopulate, so it
+/// never trusts cached digests and has nothing to override.
+#[derive(Args, Debug, Clone, Default)]
+pub struct TrustArgs {
+    /// Rehash this side even when size+mtime match a cached digest. Repeatable;
+    /// pass `src`, `dst`, or both. Off by default.
+    #[arg(long = "no-trust-cached-hashes", value_name = "SIDE")]
+    pub no_trust_cached_hashes: Vec<TrustSide>,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// Build/refresh the record for a folder (always hashes per --hash, prunes missing).
@@ -63,9 +84,8 @@ pub enum Cmd {
         src: PathBuf,
         #[arg(long)]
         dst: PathBuf,
-        /// Rehash every file instead of trusting cached hashes on size+mtime hits.
-        #[arg(long, default_value_t = false)]
-        no_fast: bool,
+        #[command(flatten)]
+        trust: TrustArgs,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -75,9 +95,6 @@ pub enum Cmd {
         src: PathBuf,
         #[arg(long)]
         dst: PathBuf,
-        /// Rehash every file instead of trusting cached hashes on size+mtime hits.
-        #[arg(long, default_value_t = false)]
-        no_fast: bool,
         /// Only copy src-only (missing) files; skip content updates.
         #[arg(long, default_value_t = false)]
         missing_only: bool,
@@ -90,6 +107,8 @@ pub enum Cmd {
         /// Parallel copy workers.
         #[arg(long, default_value_t = 4)]
         jobs: usize,
+        #[command(flatten)]
+        trust: TrustArgs,
         #[command(flatten)]
         common: CommonArgs,
     },

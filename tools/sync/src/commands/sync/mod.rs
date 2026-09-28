@@ -38,7 +38,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let SyncOpts {
         src,
         dst,
-        fast,
+        trust,
         missing_only,
         keep_extra,
         dry_run,
@@ -52,7 +52,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         src = %src.display(),
         dst = %dst.display(),
         algos = ?common.algos,
-        fast,
+        no_trust_src = trust.no_trust_src,
+        no_trust_dst = trust.no_trust_dst,
         missing_only,
         keep_extra,
         dry_run,
@@ -97,15 +98,26 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
 
     // 2. Open both caches and resolve each side's effective map.
     let (src_db, dst_db) = open_caches(&src_db_path, &dst_db_path, &common, dry_run)?;
-    let mode = ScanMode {
-        fast,
-        force_hash: false,
-        dry_run,
-    };
     info!("loading src effective map");
-    let sm = build_effective_folder(&src, &src_db, &common, mode)?;
+    let sm = build_effective_folder(
+        &src,
+        &src_db,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run,
+        },
+    )?;
     info!("loading dst effective map");
-    let mut dm = build_effective_folder(&dst, &dst_db, &common, mode)?;
+    let mut dm = build_effective_folder(
+        &dst,
+        &dst_db,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run,
+        },
+    )?;
     info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
 
     // 3. Align casing before diffing, so the diff can be case-sensitive.

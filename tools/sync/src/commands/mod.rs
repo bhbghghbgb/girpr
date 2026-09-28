@@ -33,13 +33,13 @@ pub fn run(cli: Cli) -> Result<i32> {
         Cmd::Compare {
             src,
             dst,
-            no_fast,
+            trust,
             common,
         } => cmd_compare(
             CompareOpts {
                 src,
                 dst,
-                fast: !no_fast,
+                trust: trust.into(),
                 common: CommonOpts::try_from(common)?,
             },
             &log,
@@ -47,17 +47,17 @@ pub fn run(cli: Cli) -> Result<i32> {
         Cmd::Sync {
             src,
             dst,
-            no_fast,
             missing_only,
             keep_extra,
             dry_run,
             jobs,
+            trust,
             common,
         } => cmd_sync(
             SyncOpts {
                 src,
                 dst,
-                fast: !no_fast,
+                trust: trust.into(),
                 missing_only,
                 keep_extra,
                 dry_run,

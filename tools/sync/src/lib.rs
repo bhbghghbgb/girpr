@@ -28,7 +28,7 @@ pub mod logging;
 pub mod scan;
 pub mod util;
 
-pub use cli::{Cli, Cmd, CommonArgs};
+pub use cli::{Cli, Cmd, CommonArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_sync, cmd_update, run};
-pub use config::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, UpdateOpts};
+pub use config::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
 pub use logging::init_tracing;

@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TempRoot, rfile, wfile};
-use girsync::cli::{Cli, Cmd, CommonArgs};
+use girsync::cli::{Cli, Cmd, CommonArgs, TrustArgs};
 use girsync::run;
 
 #[test]
@@ -38,7 +38,7 @@ fn run_cli_dispatch_update_compare_sync() {
     let code = run(mkcli(Cmd::Compare {
         src: src.clone(),
         dst: dst.clone(),
-        no_fast: false,
+        trust: TrustArgs::default(),
         common: common(),
     }))
     .unwrap();
@@ -47,11 +47,11 @@ fn run_cli_dispatch_update_compare_sync() {
     let code = run(mkcli(Cmd::Sync {
         src: src.clone(),
         dst: dst.clone(),
-        no_fast: false,
         missing_only: false,
         keep_extra: false,
         dry_run: false,
         jobs: 1,
+        trust: TrustArgs::default(),
         common: common(),
     }))
     .unwrap();
@@ -61,7 +61,7 @@ fn run_cli_dispatch_update_compare_sync() {
     let code = run(mkcli(Cmd::Compare {
         src: src.clone(),
         dst: dst.clone(),
-        no_fast: false,
+        trust: TrustArgs::default(),
         common: common(),
     }))
     .unwrap();

@@ -8,7 +8,7 @@ use anyhow::Result;
 use glob::Pattern;
 use std::path::PathBuf;
 
-use crate::cli::CommonArgs;
+use crate::cli::{CommonArgs, TrustArgs, TrustSide};
 use crate::filter::compile_patterns;
 use crate::hash::parse_hash_list;
 
@@ -68,18 +68,39 @@ impl TryFrom<CommonArgs> for CommonOpts {
 
 /// How a single folder scan treats the cache and the filesystem.
 ///
-/// These used to be three bare `bool`s on
-/// [`crate::effective::build_effective_folder`], where the call sites had to be
-/// read to know what a given combination meant.
+/// `fast` and `force_hash` used to be separate fields here, but they described
+/// the same decision — whether a size+mtime-matching cache entry may stand in
+/// for a digest — so they are one flag now.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanMode {
-    /// Trust cached hashes on a size+mtime hit; `false` rehashes everything.
-    pub fast: bool,
-    /// Rehash even when the cache is fresh and complete (`update` always sets
-    /// this).
-    pub force_hash: bool,
+    /// Rehash even when the cache holds a size+mtime match for this path.
+    /// Set by `--no-trust-cached-hashes <side>`, and unconditionally by
+    /// `update`, which is defined as a full repopulate.
+    pub no_trust_cached_hashes: bool,
     /// Plan only: no cache writes and no filesystem changes.
     pub dry_run: bool,
+}
+
+/// Which sides of a two-sided run distrust cached digests.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TrustOpts {
+    /// `--no-trust-cached-hashes src`
+    pub no_trust_src: bool,
+    /// `--no-trust-cached-hashes dst`
+    pub no_trust_dst: bool,
+}
+
+impl From<TrustArgs> for TrustOpts {
+    fn from(a: TrustArgs) -> Self {
+        let mut o = Self::default();
+        for side in a.no_trust_cached_hashes {
+            match side {
+                TrustSide::Src => o.no_trust_src = true,
+                TrustSide::Dst => o.no_trust_dst = true,
+            }
+        }
+        o
+    }
 }
 
 /// `girsync update` inputs.
@@ -94,8 +115,8 @@ pub struct UpdateOpts {
 pub struct CompareOpts {
     pub src: PathBuf,
     pub dst: PathBuf,
-    /// Derived from `--no-fast`.
-    pub fast: bool,
+    /// Derived from `--no-trust-cached-hashes`.
+    pub trust: TrustOpts,
     pub common: CommonOpts,
 }
 
@@ -104,8 +125,8 @@ pub struct CompareOpts {
 pub struct SyncOpts {
     pub src: PathBuf,
     pub dst: PathBuf,
-    /// Derived from `--no-fast`.
-    pub fast: bool,
+    /// Derived from `--no-trust-cached-hashes`.
+    pub trust: TrustOpts,
     /// Copy src-only files, skip content updates.
     pub missing_only: bool,
     /// Leave dst-only files alone instead of deleting them.

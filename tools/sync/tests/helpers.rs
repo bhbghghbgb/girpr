@@ -50,8 +50,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
         &db,
         &sensitive,
         ScanMode {
-            fast: true,
-            force_hash: true,
+            no_trust_cached_hashes: true,
             dry_run: false,
         },
     )
@@ -66,7 +65,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 
     // Previously this errored in open_db (meta mismatch). Must succeed now.
     let db = open_db(&db_path, false, false, false).unwrap();
-    let eff = build_effective_folder(&dir, &db, &insensitive, scan(true, false, false)).unwrap();
+    let eff = build_effective_folder(&dir, &db, &insensitive, scan(false, false)).unwrap();
     assert!(eff.contains_key("A.txt"), "disk casing governs");
     let want = md5::compute(b"hello").0.to_vec();
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
@@ -80,7 +79,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 
     // Same record must remain usable in a later sensitive run.
     let db = open_db(&db_path, true, false, false).unwrap();
-    let eff = build_effective_folder(&dir, &db, &sensitive, scan(true, false, false)).unwrap();
+    let eff = build_effective_folder(&dir, &db, &sensitive, scan(false, false)).unwrap();
     assert!(eff.contains_key("A.txt"));
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
     drop(db);

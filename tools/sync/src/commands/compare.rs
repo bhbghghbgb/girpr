@@ -17,7 +17,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     let CompareOpts {
         src,
         dst,
-        fast,
+        trust,
         common,
     } = opts;
     let span = tracing::info_span!(
@@ -26,7 +26,8 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         src = %src.display(),
         dst = %dst.display(),
         algos = ?common.algos,
-        fast,
+        no_trust_src = trust.no_trust_src,
+        no_trust_dst = trust.no_trust_dst,
         include = ?common.includes,
         exclude = ?common.excludes,
         case_sensitive = common.case_sensitive,
@@ -42,15 +43,24 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     let d = classify(&dst);
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
     // compare only reads, so it never writes cache rows and never dry-runs.
-    let mode = ScanMode {
-        fast,
-        force_hash: false,
-        dry_run: false,
-    };
-    let sm = load_side(&s, &common, mode)?;
+    let sm = load_side(
+        &s,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+    )?;
     info!(side = "src", entries = sm.len(), "side loaded");
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
-    let dm = load_side(&d, &common, mode)?;
+    let dm = load_side(
+        &d,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+    )?;
     info!(side = "dst", entries = dm.len(), "side loaded");
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
     let diff = diff_maps(&sm, &dm, &common.algos, common.case_sensitive);

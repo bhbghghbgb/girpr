@@ -45,12 +45,20 @@ trusting a half-written file.
 
 ```
 girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache]
-girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-fast] [...]
-girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--dry-run] [--jobs 4] [--hash md5] [--no-fast] [...]
+girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [...]
+girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--dry-run] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [...]
 ```
 
 `--hash` is repeatable (`md5`, `sha256`; default `md5`). `--hash none` is exclusive:
 no hashing at all, decisions by size+mtime only (verify-after-copy also size+mtime).
+
+`--no-trust-cached-hashes` is repeatable and takes a side: pass `src`, `dst`, or
+both. On a named side, a cached digest is never reused — every file is rehashed
+even when size+mtime match the cache. Off by default, and it only concerns
+*digest* reuse, not the stat data (which is always re-read from disk). Combining
+it with `--hash none` is harmless but pointless: there are no digests to distrust.
+`update` has no such flag — it is defined as a full repopulate, so it never
+trusts cached digests in the first place.
 
 ### update
 
@@ -101,9 +109,11 @@ work list a real run executes, including the insensitive-mode rename pass.
 - **Cache is a cache, not truth.** Disk governs. Stale entries (size/mtime
   mismatch) are dropped wholesale per path and rehashed; missing algos are hashed
   on demand. `update` always populates; `compare`/`sync` populate lazily and may
-  leave untouched entries stale — by design. Fast mode (default) trusts cached
-  hashes on size+mtime hit; `--no-fast` rehashes everything. Missing cache is
-  created; corrupt cache errors (exit 3, `--ignore-cache` backs up + rebuilds).
+  leave untouched entries stale — by design. A side reuses a cached digest only
+  when size+mtime match *and* every requested algo is already stored; otherwise
+  it rehashes. `--no-trust-cached-hashes <side>` rehashes that side regardless.
+  Missing cache is created; corrupt cache errors (exit 3, `--ignore-cache` backs
+  up + rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
   **false**): within one side, two live/record paths differing only by case is a
   fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first

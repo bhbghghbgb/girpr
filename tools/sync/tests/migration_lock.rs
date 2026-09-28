@@ -14,7 +14,7 @@
 mod common;
 
 use common::{TempRoot, compare, log, sync, update, wfile};
-use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
 use girsync::hash::hash_file;
 use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
 use std::collections::HashMap;
@@ -73,7 +73,7 @@ fn lock_update_records_files_dirs_and_hashes() {
 }
 
 /// A second update with identical content keeps identical cache values
-/// (fast-hit path reuses entries instead of rewriting them).
+/// (the cache-hit path reuses entries instead of rewriting them).
 #[test]
 fn lock_update_is_idempotent() {
     let t = TempRoot::new("lock_idem");
@@ -179,19 +179,68 @@ fn lock_sha256_sync_converges() {
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
 }
 
-/// `--no-fast` (force rehash) still converges.
+/// `--no-trust-cached-hashes` makes a side rehash despite a size+mtime match,
+/// and it is selectable per side.
+///
+/// A wrong digest is planted in one side's cache while the file's size and
+/// mtime still match the other side. That isolates the trust decision: the
+/// planted digest can only surface as a diff if the side actually trusted the
+/// cache, so exit 0 under the flag proves the rehash happened.
 #[test]
-fn lock_no_fast_sync_converges() {
-    let t = TempRoot::new("lock_nofast");
+fn lock_no_trust_cached_hashes_is_per_side() {
+    let t = TempRoot::new("lock_notrust");
     let src = t.mkdirs("src");
     let dst = t.mkdirs("dst");
-    wfile(&src, "a.txt", b"newer content here!!");
-    wfile(&dst, "a.txt", b"old");
+    wfile(&src, "a.txt", b"identical bytes");
+    wfile(&dst, "a.txt", b"identical bytes");
+    common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
 
-    let mut s = sync(src.clone(), dst.clone());
-    s.fast = false;
-    assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
-    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    // Plant a wrong md5 for dst, leaving size/mtime intact.
+    poison(&dst, "a.txt");
+
+    // Default trusts the cache, so the planted digest surfaces as a diff.
+    assert_eq!(
+        cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap(),
+        4
+    );
+
+    // Distrusting dst forces a rehash, which repairs the entry in place.
+    let mut c = compare(src.clone(), dst.clone());
+    c.trust.no_trust_dst = true;
+    assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
+
+    // dst is repaired now, so re-poison and check the flag is really
+    // per-side: distrusting src alone must not repair dst.
+    poison(&dst, "a.txt");
+    let mut c = compare(src.clone(), dst.clone());
+    c.trust.no_trust_src = true;
+    assert_eq!(
+        cmd_compare(c, &log()).unwrap(),
+        4,
+        "distrusting src must not repair dst's cached digest"
+    );
+
+    // Distrusting both sides repairs both.
+    poison(&src, "a.txt");
+    poison(&dst, "a.txt");
+    let mut c = compare(src.clone(), dst.clone());
+    c.trust.no_trust_src = true;
+    c.trust.no_trust_dst = true;
+    assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
+}
+
+/// Overwrite a cached digest with a wrong one, keeping size and mtime as-is.
+fn poison(dir: &std::path::Path, rel: &str) {
+    let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+    let mut rec = get_rec(&db, rel).unwrap().expect("row exists after update");
+    let real = hash_file(&dir.join(rel), &md5s()).unwrap();
+    assert_eq!(real["md5"].len(), 16, "md5 digest is 16 raw bytes");
+    rec.hashes.insert("md5".into(), vec![0u8; 16]);
+    assert_ne!(rec.hashes["md5"], real["md5"], "planted digest differs");
+    put_rec(&db, rel, &rec).unwrap();
 }
 
 /// Second update leaves a `girpr-cache-backup-*` sibling; sync leaves a

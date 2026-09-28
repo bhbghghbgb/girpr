@@ -36,14 +36,14 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     let db_path = dir.join(CACHE_PREFIX);
     info!(cache = %db_path.display(), "open cache");
     let db = open_db(&db_path, common.case_sensitive, common.ignore_cache, true)?;
-    // update always populates: force rehash even when the cache looks fresh.
+    // update always populates: it never trusts a cached digest, so there is
+    // no flag to override here.
     let eff = build_effective_folder(
         &dir,
         &db,
         &common,
         ScanMode {
-            fast: true,
-            force_hash: true,
+            no_trust_cached_hashes: true,
             dry_run: false,
         },
     )?;
