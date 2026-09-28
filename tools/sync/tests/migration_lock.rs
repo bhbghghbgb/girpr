@@ -13,10 +13,10 @@
 
 mod common;
 
-use common::{compare, log, sync, update, wfile, TempRoot};
-use girsync::cache::{load_all_records, open_db, CACHE_PREFIX};
+use common::{TempRoot, compare, log, sync, update, wfile};
+use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::hash::hash_file;
-use girsync::{cmd_compare, cmd_sync, cmd_update, CommonOpts};
+use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
 use std::collections::HashMap;
 
 fn md5s() -> Vec<String> {
@@ -57,10 +57,7 @@ fn lock_update_records_files_dirs_and_hashes() {
     std::fs::create_dir_all(dir.join("empty")).unwrap();
 
     assert_eq!(cmd_update(update(dir.clone()), &log()).unwrap(), 0);
-    assert!(
-        dir.join(CACHE_PREFIX).exists(),
-        "update creates the cache"
-    );
+    assert!(dir.join(CACHE_PREFIX).exists(), "update creates the cache");
 
     let r = recs(&dir);
     assert!(r.contains_key("a.txt"));
@@ -143,7 +140,10 @@ fn lock_hash_none_tracks_without_digests() {
     };
     cmd_update(none_opts(src.clone()), &log()).unwrap();
     let r = recs(&src);
-    assert!(r["a.txt"].hashes.is_empty(), "--hash none stores no digests");
+    assert!(
+        r["a.txt"].hashes.is_empty(),
+        "--hash none stores no digests"
+    );
     assert_eq!(r["a.txt"].size, 10);
 
     // Compare + sync under --hash none converge.
@@ -172,10 +172,7 @@ fn lock_sha256_sync_converges() {
     assert_eq!(common::rfile(&dst, "a.txt"), b"sha payload v2 longer");
 
     let got = recs(&dst)["a.txt"].hashes.clone();
-    assert_eq!(
-        got,
-        hash_file(&dst.join("a.txt"), &sha256s()).unwrap()
-    );
+    assert_eq!(got, hash_file(&dst.join("a.txt"), &sha256s()).unwrap());
 
     let mut c = compare(src.clone(), dst.clone());
     c.common.algos = sha256s();

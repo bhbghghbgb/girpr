@@ -14,7 +14,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config::{RunCtx, RunFailure};
-use crate::hyp::{production_bases, ChunkBuild, GameBranchPackage, GameConfig, HypClient};
+use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient, production_bases};
 use crate::util;
 
 use super::audio;

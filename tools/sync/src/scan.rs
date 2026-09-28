@@ -1,6 +1,6 @@
 //! Live filesystem scan: one entry per file and dir, with cache dirs pruned.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace};

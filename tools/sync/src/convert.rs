@@ -71,21 +71,19 @@ pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Co
         crate::cache::remove_cache_path(redb_path)?;
     }
 
-    let old = sled::open(sled_dir)
-        .with_context(|| format!("open sled db {}", sled_dir.display()))?;
+    let old =
+        sled::open(sled_dir).with_context(|| format!("open sled db {}", sled_dir.display()))?;
     let mut case_sensitive = true;
     let mut recs: Vec<(String, crate::cache::FileRec)> = Vec::new();
     for kv in old.iter() {
         let (k, v) = kv.context("read sled entry")?;
         if k.as_ref() == OLD_META_KEY.as_bytes() {
-            let m: OldMeta =
-                serde_json::from_slice(&v).context("parse sled meta (corrupt?)")?;
+            let m: OldMeta = serde_json::from_slice(&v).context("parse sled meta (corrupt?)")?;
             case_sensitive = m.case_sensitive;
             info!(version = m.version, "sled meta");
             continue;
         }
-        let rel =
-            String::from_utf8(k.to_vec()).context("non-UTF8 key in sled cache")?;
+        let rel = String::from_utf8(k.to_vec()).context("non-UTF8 key in sled cache")?;
         let o: OldFileRec =
             serde_json::from_slice(&v).with_context(|| format!("parse sled entry {rel}"))?;
         if o.kind != "file" && o.kind != "dir" {

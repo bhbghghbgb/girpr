@@ -20,8 +20,8 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::{build_fixture, read_game_file, temp_dir, write_game_file, MockOpts, MockServer};
-use girpr::{repair, Biz, RunCtx};
+use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
+use girpr::{Biz, RunCtx, repair};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
@@ -29,12 +29,7 @@ fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunC
     ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
 }
 
-fn ctx_for_biz(
-    game_dir: std::path::PathBuf,
-    mock: &MockServer,
-    jobs: usize,
-    biz: Biz,
-) -> RunCtx {
+fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz: Biz) -> RunCtx {
     RunCtx {
         game_dir,
         biz,
@@ -407,7 +402,10 @@ async fn non_chunk_download_mode_is_a_usage_error() {
             "mode {mode:?}: {err}"
         );
         // No manifests were fetched and nothing was written.
-        assert!(mock.first_target_with("getBuild").is_none(), "mode {mode:?}");
+        assert!(
+            mock.first_target_with("getBuild").is_none(),
+            "mode {mode:?}"
+        );
         assert!(!dir.join("config.ini").exists(), "mode {mode:?}");
         mock.stop();
         std::fs::remove_dir_all(&dir).ok();

@@ -8,7 +8,7 @@
 //! - All operational chatter uses tracing events with structured fields.
 //! - Per-command spans carry config so every event inside is correlated.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*};

@@ -42,8 +42,8 @@ pub use metadata::Meta;
 pub use plan::{PlannedFile, RepairPlan};
 pub use purge::PurgeVerdict;
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 
@@ -99,17 +99,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     let http = meta.hyp.http();
     let per_manifest =
         manifest::fetch_latest(&http, &meta.latest_build, &meta.audio, &meta.ignore).await?;
-    let local_map = manifest::local_reuse_map(
-        &http,
-        meta.local_build.as_ref(),
-        &meta.audio,
-        &meta.ignore,
-    )
-    .await;
+    let local_map =
+        manifest::local_reuse_map(&http, meta.local_build.as_ref(), &meta.audio, &meta.ignore)
+            .await;
 
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
-    let plan = Arc::new(plan::build_plan(per_manifest, &meta.blacklist, &meta.latest));
+    let plan = Arc::new(plan::build_plan(
+        per_manifest,
+        &meta.blacklist,
+        &meta.latest,
+    ));
     tracing::info!("work list: {} files", plan.files.len());
 
     // 5. files-cleanup before: same Collapse-style cleanup as purge-after, run

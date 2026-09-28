@@ -9,11 +9,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Parser;
 
-use crate::config::RunCtx;
 use crate::Biz;
+use crate::config::RunCtx;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]

@@ -1,9 +1,9 @@
 //! `girsync update` — fully refresh a folder's cache from current disk state.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{open_db, CACHE_PREFIX};
+use crate::cache::{CACHE_PREFIX, open_db};
 use crate::config::{LogCtx, ScanMode, UpdateOpts};
 use crate::effective::build_effective_folder;
 use crate::util::elapsed_s;

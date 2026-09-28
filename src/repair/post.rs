@@ -41,12 +41,20 @@ pub async fn run(
     if ctx.purge_after {
         let bytes = purge::purge_extra(game_dir, plan, &purge::keep_set(), false)
             .map_err(RunFailure::write)?;
-        summary.deleted_extra_bytes.fetch_add(bytes, Ordering::Relaxed);
+        summary
+            .deleted_extra_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
     }
     let (ch, sub, cps) = ctx.biz.channel_tuple();
-    util::write_config_ini(game_dir, &meta.latest, ctx.biz.as_str(), (ch, sub, cps), false)
-        .context("write config.ini")
-        .map_err(RunFailure::write)?;
+    util::write_config_ini(
+        game_dir,
+        &meta.latest,
+        ctx.biz.as_str(),
+        (ch, sub, cps),
+        false,
+    )
+    .context("write config.ini")
+    .map_err(RunFailure::write)?;
     Ok(())
 }
 

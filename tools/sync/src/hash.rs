@@ -1,6 +1,6 @@
 //! Hash algorithm selection and streaming file digests.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;

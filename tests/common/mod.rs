@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 
 use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
@@ -165,12 +165,7 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Fresh unique temp dir for one test. Caller removes it at test end.
 pub fn temp_dir(name: &str) -> PathBuf {
     let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!(
-        "girpr_it_{}_{}_{}",
-        std::process::id(),
-        n,
-        name
-    ));
+    let p = std::env::temp_dir().join(format!("girpr_it_{}_{}_{}", std::process::id(), n, name));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("create temp game dir");
     p
@@ -228,10 +223,8 @@ impl MockServer {
             .expect("bind mock server");
         let port = listener.local_addr().expect("local addr").port();
         let hyp_base = format!("http://127.0.0.1:{port}/hyp/hyp-connect/api");
-        let sophon_base =
-            format!("http://127.0.0.1:{port}/downloader/sophon_chunk/api");
-        let manifest_prefix =
-            format!("http://127.0.0.1:{port}/manifests/test_build");
+        let sophon_base = format!("http://127.0.0.1:{port}/downloader/sophon_chunk/api");
+        let manifest_prefix = format!("http://127.0.0.1:{port}/manifests/test_build");
         let chunk_prefix = format!("http://127.0.0.1:{port}/chunks/test_build");
 
         let manifest_len = fixture.manifest_zstd.len();
@@ -306,11 +299,9 @@ fn build_responses(
     manifest_prefix: &str,
     chunk_prefix: &str,
 ) -> Responses {
-    let raw_manifest_len = zstd::stream::decode_all(std::io::Cursor::new(
-        fx.manifest_zstd.clone(),
-    ))
-    .expect("decode fixture manifest")
-    .len();
+    let raw_manifest_len = zstd::stream::decode_all(std::io::Cursor::new(fx.manifest_zstd.clone()))
+        .expect("decode fixture manifest")
+        .len();
     let configs = serde_json::json!({
         "retcode": 0,
         "message": "OK",
@@ -437,57 +428,54 @@ async fn serve_one(
         .to_string();
     seen.lock().unwrap().push(target.clone());
 
-    let (status, ctype, body): (&str, &str, Vec<u8>) =
-        if target.contains("getGameConfigs") {
-            ("200 OK", "application/json", r.configs.clone())
-        } else if target.contains("getGameBranches") {
-            ("200 OK", "application/json", r.branches.clone())
-        } else if target.contains("getGameDeprecatedFileConfigs") {
-            ("200 OK", "application/json", r.deprecated.clone())
-        } else if target.contains("getBuild") {
-            match query_tag(&target) {
-                Some(t) if t != r.latest_tag => (
-                    "200 OK",
-                    "application/json",
-                    r.build_not_found.clone(),
-                ),
-                _ => ("200 OK", "application/json", r.build_latest.clone()),
+    let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
+        ("200 OK", "application/json", r.configs.clone())
+    } else if target.contains("getGameBranches") {
+        ("200 OK", "application/json", r.branches.clone())
+    } else if target.contains("getGameDeprecatedFileConfigs") {
+        ("200 OK", "application/json", r.deprecated.clone())
+    } else if target.contains("getBuild") {
+        match query_tag(&target) {
+            Some(t) if t != r.latest_tag => {
+                ("200 OK", "application/json", r.build_not_found.clone())
             }
-        } else if target.contains("/manifests/") {
-            let id = target
-                .split('?')
-                .next()
-                .unwrap_or("")
-                .rsplit('/')
-                .next()
-                .unwrap_or("");
-            if id == fx.manifest_id {
-                (
-                    "200 OK",
-                    "application/octet-stream",
-                    fx.manifest_zstd.clone(),
-                )
-            } else {
-                ("404 Not Found", "text/plain", b"no such manifest".to_vec())
-            }
-        } else if target.contains("/chunks/") {
-            let id = target
-                .split('?')
-                .next()
-                .unwrap_or("")
-                .rsplit('/')
-                .next()
-                .unwrap_or("");
-            match fx.chunk_store.get(id) {
-                Some(bytes) => {
-                    log.lock().unwrap().push(id.to_string());
-                    ("200 OK", "application/octet-stream", bytes.clone())
-                }
-                None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
-            }
+            _ => ("200 OK", "application/json", r.build_latest.clone()),
+        }
+    } else if target.contains("/manifests/") {
+        let id = target
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        if id == fx.manifest_id {
+            (
+                "200 OK",
+                "application/octet-stream",
+                fx.manifest_zstd.clone(),
+            )
         } else {
-            ("404 Not Found", "text/plain", b"unknown route".to_vec())
-        };
+            ("404 Not Found", "text/plain", b"no such manifest".to_vec())
+        }
+    } else if target.contains("/chunks/") {
+        let id = target
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        match fx.chunk_store.get(id) {
+            Some(bytes) => {
+                log.lock().unwrap().push(id.to_string());
+                ("200 OK", "application/octet-stream", bytes.clone())
+            }
+            None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
+        }
+    } else {
+        ("404 Not Found", "text/plain", b"unknown route".to_vec())
+    };
 
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

@@ -62,7 +62,9 @@ pub fn normalize_rel(rel: &str) -> String {
 pub fn read_game_version(game_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
     let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;
-    re.captures_iter(&text).last().map(|c| c[1].trim().to_string())
+    re.captures_iter(&text)
+        .last()
+        .map(|c| c[1].trim().to_string())
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
@@ -77,7 +79,9 @@ pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> 
             continue;
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && v.get("is_delete").and_then(|b| b.as_bool()).unwrap_or(false)
+            && v.get("is_delete")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
             && let Some(c) = v.get("category").and_then(|c| c.as_str())
         {
             set.insert(c.to_string());
@@ -298,7 +302,11 @@ mod tests {
     fn version_last_match_wins() {
         let dir = std::env::temp_dir().join("girpr_test_cfg");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.ini"), "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n").unwrap();
+        std::fs::write(
+            dir.join("config.ini"),
+            "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n",
+        )
+        .unwrap();
         assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -307,7 +315,11 @@ mod tests {
     fn ignore_and_blacklist_parse() {
         let dir = std::env::temp_dir().join("girpr_test_lists");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("rc"), "{\"category\":\"10302\",\"is_delete\":true}\n{}\n").unwrap();
+        std::fs::write(
+            dir.join("rc"),
+            "{\"category\":\"10302\",\"is_delete\":true}\n{}\n",
+        )
+        .unwrap();
         assert!(read_ignore_categories(&dir.join("rc")).contains("10302"));
         std::fs::write(dir.join("bl"), "{\"fileName\":\"a/b.dat\"}\n").unwrap();
         assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
@@ -323,8 +335,14 @@ mod tests {
             "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
         )
         .unwrap();
-        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse"), false)
-            .unwrap();
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            false,
+        )
+        .unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
         let lines: Vec<&str> = text.lines().collect();
@@ -346,14 +364,18 @@ mod tests {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         let mut expected = sorted.clone();
-        expected.sort_by(|a, b| {
-            a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase())
-        });
+        expected.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
         assert_eq!(sorted, expected, "{text}");
         // Rerun is byte-identical (no duplicate keys, stable order).
         let snapshot = text.clone();
-        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse"), false)
-            .unwrap();
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            false,
+        )
+        .unwrap();
         let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert_eq!(text2, snapshot, "rerun must be byte-identical");
         for key in [
@@ -404,12 +426,24 @@ mod tests {
              cps=old\n",
         )
         .unwrap();
-        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse"), false)
-            .unwrap();
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            false,
+        )
+        .unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         // Sections survive: [General] + [Launcher], nothing flattened.
-        assert!(!text.contains("Launcher:"), "must not flatten sections:\n{text}");
-        assert!(!text.contains("comment"), "comments must be dropped:\n{text}");
+        assert!(
+            !text.contains("Launcher:"),
+            "must not flatten sections:\n{text}"
+        );
+        assert!(
+            !text.contains("comment"),
+            "comments must be dropped:\n{text}"
+        );
         assert_eq!(text.matches("[General]").count(), 1, "{text}");
         assert_eq!(text.matches("[Launcher]").count(), 1, "{text}");
         // Duplicate [launcher] merged into first-seen [Launcher].
@@ -436,8 +470,14 @@ mod tests {
         assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
         // Rerun byte-identical.
         let snapshot = text.clone();
-        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse"), false)
-            .unwrap();
+        write_config_ini(
+            &dir,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("config.ini")).unwrap(),
             snapshot

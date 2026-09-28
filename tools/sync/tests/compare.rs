@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{compare, log, rfile, sync, update, wfile, TempRoot};
+use common::{TempRoot, compare, log, rfile, sync, update, wfile};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 
 #[test]

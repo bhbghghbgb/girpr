@@ -58,10 +58,7 @@ pub fn init_tracing(level: &str) -> PathBuf {
     let file_writer: Mutex<Box<dyn Write + Send + Sync>> = match open_log_file(&log_path) {
         Ok(f) => Mutex::new(Box::new(f)),
         Err(e) => {
-            eprintln!(
-                "WARN disabling file logging ({}): {e}",
-                log_path.display()
-            );
+            eprintln!("WARN disabling file logging ({}): {e}", log_path.display());
             Mutex::new(Box::new(std::io::sink()))
         }
     };
@@ -84,5 +81,8 @@ fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
         .parent()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
     std::fs::create_dir_all(dir)?;
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
 }

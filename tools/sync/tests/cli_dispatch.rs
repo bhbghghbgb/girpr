@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{rfile, wfile, TempRoot};
+use common::{TempRoot, rfile, wfile};
 use girsync::cli::{Cli, Cmd, CommonArgs};
 use girsync::run;
 

@@ -1,5 +1,5 @@
 use clap::Parser;
-use girsync::{init_tracing, run, Cli};
+use girsync::{Cli, init_tracing, run};
 use tracing::error;
 
 fn main() {

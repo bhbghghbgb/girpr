@@ -19,10 +19,10 @@ mod apply;
 mod plan;
 mod rename;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use crate::cache::{backup_db, open_db, remove_cache_path, snapshot_old, CacheDb, CACHE_PREFIX};
+use crate::cache::{CACHE_PREFIX, CacheDb, backup_db, open_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::build_effective_folder;

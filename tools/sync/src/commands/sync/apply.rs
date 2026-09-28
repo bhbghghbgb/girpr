@@ -15,7 +15,7 @@
 //! commit is the durability point — there is no separate flush, and there is
 //! no resume beyond re-running.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tracing::{debug, error, info, trace};

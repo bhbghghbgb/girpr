@@ -5,7 +5,7 @@ use tracing::{debug, info};
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{classify, load_side, Side};
+use crate::effective::{Side, classify, load_side};
 use crate::util::elapsed_s;
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.

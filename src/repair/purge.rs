@@ -324,7 +324,10 @@ mod tests {
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
         let plan = plan_of("game.dat");
         purge_extra(&dir, &plan, &keep_set(), true).unwrap();
-        assert!(dir.join("empty_dir").exists(), "dry-run must not sweep dirs");
+        assert!(
+            dir.join("empty_dir").exists(),
+            "dry-run must not sweep dirs"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

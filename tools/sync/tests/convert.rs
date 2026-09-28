@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{log, TempRoot};
+use common::{TempRoot, log};
 use girsync::cache::{load_all_records, open_db};
 use std::collections::HashMap;
 
@@ -50,8 +50,7 @@ fn build_sled_db(dir: &std::path::Path) {
             [
                 (
                     "sha256".to_string(),
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                        .to_string(),
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
                 ),
                 ("blake3".to_string(), "ab".repeat(32)),
             ]
@@ -113,8 +112,7 @@ fn convert_sled_dir_to_redb_file() {
     std::fs::create_dir_all(live.join("sub")).unwrap();
     // Pin mtimes to the converted rows' stamps so size+mtime+hash all agree
     // (hashes alone would also agree, but mtime is part of equality).
-    let ts =
-        std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_700_000_000_000_000_000);
+    let ts = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_700_000_000_000_000_000);
     for rel in ["a.txt", "sub/b.bin"] {
         std::fs::OpenOptions::new()
             .write(true)
@@ -152,11 +150,7 @@ fn convert_rejects_missing_source() {
     let t = TempRoot::new("convert_missing");
     let work = t.mkdirs("w");
     assert!(
-        girsync::convert::sled_to_redb(
-            &work.join("nope"),
-            &work.join("girpr-cache"),
-            false
-        )
-        .is_err()
+        girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
+            .is_err()
     );
 }

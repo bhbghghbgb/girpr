@@ -5,13 +5,13 @@
 //! stale cache entries are dropped wholesale and rehashed, and rows for paths
 //! that vanished are pruned.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use glob::Pattern;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace, warn};
 
-use crate::cache::{open_db, CacheDb, FileRec, CACHE_PREFIX};
+use crate::cache::{CACHE_PREFIX, CacheDb, FileRec, open_db};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;

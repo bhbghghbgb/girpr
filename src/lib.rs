@@ -38,7 +38,7 @@ pub mod sophon;
 pub mod util;
 
 pub use biz::Biz;
-pub use cli::{is_audio_none, normalize_audio_lang, Args};
+pub use cli::{Args, is_audio_none, normalize_audio_lang};
 pub use config::{RunCtx, RunFailure};
 pub use repair::run;
 pub use report::Summary;

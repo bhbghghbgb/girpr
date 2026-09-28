@@ -447,8 +447,12 @@ mod tests {
     }
 
     fn client_for(biz: Biz) -> HypClient {
-        HypClient::new_with_bases(biz, "http://hyp.test/api".into(), "http://sophon.test/api".into())
-            .unwrap()
+        HypClient::new_with_bases(
+            biz,
+            "http://hyp.test/api".into(),
+            "http://sophon.test/api".into(),
+        )
+        .unwrap()
     }
 
     /// The channel query is per-launcher (`LauncherConfig.Channel/SubChannel`),

@@ -3,12 +3,12 @@
 mod common;
 
 use common::{opts, scan};
-use girsync::cache::{load_all_records, open_db, CACHE_PREFIX};
+use girsync::CommonOpts;
+use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::build_effective_folder;
 use girsync::filter::{compile_patterns, is_excluded};
 use girsync::hash::parse_hash_list;
-use girsync::CommonOpts;
 
 #[test]
 fn hash_arg_none_exclusive() {

@@ -1,11 +1,11 @@
 //! Thin entry point: parse, install tracing, run the pipeline, print `SUMMARY`,
 //! exit. All behavior lives in the library.
 
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 
 use girpr::cli::Args;
-use girpr::{logging, report, repair};
+use girpr::{logging, repair, report};
 
 #[tokio::main]
 async fn main() {

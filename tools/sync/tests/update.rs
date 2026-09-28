@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::{compare, log, update, wfile, TempRoot};
-use girsync::cache::{load_all_records, open_db, CACHE_PREFIX};
+use common::{TempRoot, compare, log, update, wfile};
+use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::filter::compile_patterns;
-use girsync::{cmd_compare, cmd_update, CommonOpts};
+use girsync::{CommonOpts, cmd_compare, cmd_update};
 
 #[test]
 fn run_update_prunes_and_excludes() {

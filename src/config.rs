@@ -94,7 +94,9 @@ impl RunCtx {
     pub fn api_bases(&self) -> (Option<String>, Option<String>) {
         let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
         (
-            self.hyp_base_override.clone().or_else(|| env("GIRPR_HYP_BASE")),
+            self.hyp_base_override
+                .clone()
+                .or_else(|| env("GIRPR_HYP_BASE")),
             self.sophon_base_override
                 .clone()
                 .or_else(|| env("GIRPR_SOPHON_BASE")),

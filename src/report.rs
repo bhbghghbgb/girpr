@@ -37,9 +37,7 @@ impl Summary {
             files_repaired: AtomicU64::new(self.files_repaired.load(Ordering::Relaxed)),
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
-            deleted_extra_bytes: AtomicU64::new(
-                self.deleted_extra_bytes.load(Ordering::Relaxed),
-            ),
+            deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
         }
     }
 }
@@ -129,7 +127,11 @@ pub fn format_report_line(
     } else {
         format!(
             "REPORT local_version={local} latest_version={latest_version} biz={biz} exe={} download_mode={} branch={} package_id={} build_id={} audio_langs={audio} diff_tags={diff_tags}",
-            cfg.exe_file_name, cfg.default_download_mode, pkg.branch, pkg.package_id, build.build_id
+            cfg.exe_file_name,
+            cfg.default_download_mode,
+            pkg.branch,
+            pkg.package_id,
+            build.build_id
         )
     }
 }

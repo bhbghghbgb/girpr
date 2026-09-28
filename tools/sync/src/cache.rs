@@ -19,8 +19,8 @@
 //! corresponding filesystem change (notably the apply pre-drop), so a killed
 //! run re-copies rather than trusting a half-written file.
 
-use anyhow::{bail, Context, Result};
-use redb::{backends::InMemoryBackend, Database, ReadableDatabase, ReadableTable, TableDefinition};
+use anyhow::{Context, Result, bail};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, backends::InMemoryBackend};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -261,10 +261,15 @@ impl CacheDb {
                 .map(|g| g.value().to_vec());
             match cur {
                 None => {
-                    meta.insert(META_KEY, encode_meta(&Meta {
-                        version: CACHE_VERSION,
-                        case_sensitive,
-                    }).as_slice()).context("write meta")?;
+                    meta.insert(
+                        META_KEY,
+                        encode_meta(&Meta {
+                            version: CACHE_VERSION,
+                            case_sensitive,
+                        })
+                        .as_slice(),
+                    )
+                    .context("write meta")?;
                 }
                 Some(raw) => {
                     let m = decode_meta(&raw)
@@ -277,10 +282,15 @@ impl CacheDb {
                     }
                     // NOTE: case_sensitive is informational only (see open_db).
                     if m.case_sensitive != case_sensitive {
-                        meta.insert(META_KEY, encode_meta(&Meta {
-                            version: CACHE_VERSION,
-                            case_sensitive,
-                        }).as_slice()).context("write meta")?;
+                        meta.insert(
+                            META_KEY,
+                            encode_meta(&Meta {
+                                version: CACHE_VERSION,
+                                case_sensitive,
+                            })
+                            .as_slice(),
+                        )
+                        .context("write meta")?;
                     }
                 }
             }
@@ -339,9 +349,11 @@ impl CacheDb {
         let g = meta
             .get(META_KEY)
             .context("read record meta")?
-            .context(format!("record {} has no meta (corrupt?)", db_path.display()))?;
-        let m =
-            decode_meta(g.value()).context("parse record meta (corrupt?)")?;
+            .context(format!(
+                "record {} has no meta (corrupt?)",
+                db_path.display()
+            ))?;
+        let m = decode_meta(g.value()).context("parse record meta (corrupt?)")?;
         if m.version != CACHE_VERSION {
             bail!(
                 "unsupported record version {} in {} (want {CACHE_VERSION})",
@@ -461,9 +473,7 @@ impl<'a> CacheWrite<'a> {
         self.dirty += 1;
         // Dirs carry no content; only file payload counts toward the byte
         // trigger (remove() has no size to account, so it counts ops only).
-        self.bytes_since_commit = self
-            .bytes_since_commit
-            .saturating_add(rec.size);
+        self.bytes_since_commit = self.bytes_since_commit.saturating_add(rec.size);
         self.maybe_commit()
     }
 
@@ -511,7 +521,12 @@ impl<'a> CacheWrite<'a> {
         self.dirty = 0;
         self.bytes_since_commit = 0;
         self.last_commit = Instant::now();
-        trace!(ops, bytes, elapsed_s = elapsed.as_secs_f64(), "cache batch committed");
+        trace!(
+            ops,
+            bytes,
+            elapsed_s = elapsed.as_secs_f64(),
+            "cache batch committed"
+        );
         Ok(())
     }
 
@@ -531,8 +546,7 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
         std::fs::remove_dir_all(db_path)
             .with_context(|| format!("remove {}", db_path.display()))?;
     } else if db_path.is_file() {
-        std::fs::remove_file(db_path)
-            .with_context(|| format!("remove {}", db_path.display()))?;
+        std::fs::remove_file(db_path).with_context(|| format!("remove {}", db_path.display()))?;
     }
     Ok(())
 }
@@ -642,8 +656,10 @@ mod tests {
             kind: "file".into(),
             size: 42,
             mtime_ns: 123456789,
-            hashes: [("md5".to_string(), vec![1u8; 16]),
-                ("sha256".to_string(), vec![2u8; 32])]
+            hashes: [
+                ("md5".to_string(), vec![1u8; 16]),
+                ("sha256".to_string(), vec![2u8; 32]),
+            ]
             .into_iter()
             .collect(),
         }
@@ -671,7 +687,9 @@ mod tests {
             kind: "file".into(),
             size: 7,
             mtime_ns: 9,
-            hashes: [("blake3".to_string(), vec![7u8; 32])].into_iter().collect(),
+            hashes: [("blake3".to_string(), vec![7u8; 32])]
+                .into_iter()
+                .collect(),
         };
         rec.hashes.insert("md5".to_string(), vec![3u8; 16]);
         let back = decode_rec(&encode_rec(&rec).unwrap()).unwrap();

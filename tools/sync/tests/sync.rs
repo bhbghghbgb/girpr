@@ -3,7 +3,7 @@
 mod common;
 
 use common::{
-    compare, entry_names, has_backup_sibling, log, rfile, sync, sync_mtime, update, wfile, TempRoot,
+    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, sync, sync_mtime, update, wfile,
 };
 use girsync::cache::CACHE_PREFIX;
 use girsync::{cmd_compare, cmd_sync, cmd_update};
