@@ -176,6 +176,45 @@ pub struct RepairCtx {
     pub purge_after: bool,
     pub purge_before: bool,
     pub json_summary: bool,
+    /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
+    /// APIs are fetched from these bases instead of the production CDNs
+    /// (e.g. a local mock server in `tests/`). `None` = production, unless
+    /// the `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE` env vars are set (used by
+    /// binary-level e2e runs; explicit `Some` wins over env).
+    pub hyp_base_override: Option<String>,
+    pub sophon_base_override: Option<String>,
+}
+
+impl RepairCtx {
+    /// Resolve the effective API bases: explicit override > env var > production.
+    fn api_bases(&self) -> (Option<String>, Option<String>) {
+        let hyp = self
+            .hyp_base_override
+            .clone()
+            .or_else(|| std::env::var("GIRPR_HYP_BASE").ok().filter(|s| !s.is_empty()));
+        let sophon = self
+            .sophon_base_override
+            .clone()
+            .or_else(|| std::env::var("GIRPR_SOPHON_BASE").ok().filter(|s| !s.is_empty()));
+        (hyp, sophon)
+    }
+}
+
+fn hyp_client_for(ctx: &RepairCtx) -> Result<HypClient, anyhow::Error> {
+    let (hyp, sophon) = ctx.api_bases();
+    match (hyp, sophon) {
+        (Some(h), Some(s)) => HypClient::new_with_bases(ctx.biz, h, s),
+        (Some(h), None) => {
+            let (_, default_sophon) =
+                crate::hyp::production_bases(ctx.biz.endpoints().0);
+            HypClient::new_with_bases(ctx.biz, h, default_sophon)
+        }
+        (None, Some(s)) => {
+            let (default_hyp, _) = crate::hyp::production_bases(ctx.biz.endpoints().0);
+            HypClient::new_with_bases(ctx.biz, default_hyp, s)
+        }
+        (None, None) => HypClient::new(ctx.biz),
+    }
 }
 
 pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32), RunFailure> {
@@ -206,7 +245,7 @@ pub async fn run(ctx: RepairCtx) -> Result<(Summary, i32), RunFailure> {
     tracing::info!("local game_version: {:?}", local_version);
 
     // 2. server metadata (up to 5 calls)
-    let hyp = HypClient::new(ctx.biz).map_err(RunFailure::metadata)?;
+    let hyp = hyp_client_for(&ctx).map_err(RunFailure::metadata)?;
     let cfg = hyp
         .game_config()
         .await

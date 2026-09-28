@@ -12,7 +12,8 @@ use crate::Biz;
 /// Request URLs are logged verbatim at debug.
 pub struct HypClient {
     client: reqwest::Client,
-    host: &'static str,
+    hyp_base: String,
+    sophon_base: String,
     launcher_id: &'static str,
     game_id: &'static str,
 }
@@ -168,7 +169,16 @@ pub struct DeprecatedFile {
 
 impl HypClient {
     pub fn new(biz: Biz) -> Result<Self> {
-        let (host, launcher_id, game_id) = biz.endpoints();
+        let (host, _, _) = biz.endpoints();
+        let (hyp_base, sophon_base) = production_bases(host);
+        Self::new_with_bases(biz, hyp_base, sophon_base)
+    }
+
+    /// Test/offline constructor: point the HoYoPlay + Sophon APIs at a mock
+    /// server (e.g. `http://127.0.0.1:<port>/hyp/hyp-connect/api`). Production
+    /// code must use [`HypClient::new`].
+    pub fn new_with_bases(biz: Biz, hyp_base: String, sophon_base: String) -> Result<Self> {
+        let (_, launcher_id, game_id) = biz.endpoints();
         let client = reqwest::Client::builder()
             .user_agent("UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)")
             .pool_max_idle_per_host(16)
@@ -176,24 +186,19 @@ impl HypClient {
             .context("build http client")?;
         Ok(Self {
             client,
-            host,
+            hyp_base,
+            sophon_base,
             launcher_id,
             game_id,
         })
     }
 
     fn hyp_base(&self) -> String {
-        match self.host {
-            "mihoyo" => "https://hyp-api.mihoyo.com/hyp/hyp-connect/api".to_string(),
-            _ => "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api".to_string(),
-        }
+        self.hyp_base.clone()
     }
 
     fn sophon_base(&self) -> String {
-        match self.host {
-            "mihoyo" => "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api".to_string(),
-            _ => "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api".to_string(),
-        }
+        self.sophon_base.clone()
     }
 
     fn hyp_url(&self, api: &str, with_channel: bool) -> String {
@@ -356,6 +361,21 @@ impl std::fmt::Display for SophonNotFound {
     }
 }
 impl std::error::Error for SophonNotFound {}
+
+/// Production API bases for a host key (`mihoyo` vs overseas).
+/// Split out so [`HypClient::new`] and tests share one mapping.
+pub fn production_bases(host: &str) -> (String, String) {
+    match host {
+        "mihoyo" => (
+            "https://hyp-api.mihoyo.com/hyp/hyp-connect/api".to_string(),
+            "https://downloader-api.mihoyo.com/downloader/sophon_chunk/api".to_string(),
+        ),
+        _ => (
+            "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api".to_string(),
+            "https://sg-downloader-api.hoyoverse.com/downloader/sophon_chunk/api".to_string(),
+        ),
+    }
+}
 
 fn urlencode(s: &str) -> String {
     let mut o = String::new();

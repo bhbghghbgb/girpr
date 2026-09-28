@@ -117,6 +117,10 @@ async fn main() {
         purge_after: args.purge_after,
         purge_before: args.purge_before,
         json_summary: args.json_summary,
+        // Production run: no overrides (env GIRPR_HYP_BASE/GIRPR_SOPHON_BASE
+        // still honored inside repair::run for binary-level e2e).
+        hyp_base_override: None,
+        sophon_base_override: None,
     };
     match repair::run(ctx).await {
         Ok((summary, code)) => {
