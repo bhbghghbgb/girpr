@@ -45,6 +45,15 @@ pub fn file_len(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|m| m.len())
 }
 
+/// Turn a `/`-separated manifest rel path into a native one.
+///
+/// Manifests always use `/`; every comparison in this crate (plan, reuse map,
+/// purge classification) is done on the `/` form, and the conversion happens
+/// only at the filesystem boundary.
+pub fn normalize_rel(rel: &str) -> String {
+    rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+}
+
 /// Parse `config.ini` last `game_version=` match.
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
 /// (`matches[^1]` over `game_version=(.+)`); missing file means fresh install.

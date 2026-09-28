@@ -2,7 +2,7 @@
 //!
 //! Everything runs against a local mock HoYoPlay + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
-//! every `RepairCtx` sets `hyp_base_override` / `sophon_base_override` to the
+//! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
 //! mock, so a sandbox without internet still passes.
 //!
 //! Coverage (full `repair::run` pipeline per test):
@@ -19,19 +19,12 @@
 mod common;
 
 use common::{build_fixture, read_game_file, temp_dir, write_game_file, MockOpts, MockServer};
-use girpr::{
-    repair::{self, RepairCtx},
-    Biz,
-};
+use girpr::{repair, Biz, RunCtx};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
-fn ctx_for(
-    game_dir: std::path::PathBuf,
-    mock: &MockServer,
-    jobs: usize,
-) -> RepairCtx {
-    RepairCtx {
+fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
+    RunCtx {
         game_dir,
         biz: Biz::Hk4eGlobal,
         audio: HashSet::new(),
@@ -47,7 +40,7 @@ fn ctx_for(
     }
 }
 
-fn load_counters(s: &repair::Summary) -> (u64, u64, u64, u64, u64) {
+fn load_counters(s: &girpr::Summary) -> (u64, u64, u64, u64, u64) {
     (
         s.files_skipped.load(Ordering::Relaxed),
         s.files_repaired.load(Ordering::Relaxed),

@@ -31,7 +31,7 @@ Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok
 `4` check-only found damage; a begin `REPORT` line (versions + API-sourced
 fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
 both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
-with reason). Fatal errors carry their class at the raise site (`RunFailure`), so the
+with reason). Fatal errors carry their class at the raise site (`config::RunFailure`), so the
 exit code matches the class even for post-phase write failures. Per-file verify
 failures are the exception: they continue across files and return `Ok(summary, 3)`
 (counted, with `SUMMARY … failed>0`) instead of `Err(RunFailure::write)` (fatal,
@@ -156,7 +156,7 @@ from the latest manifest alone (local manifest is a pure optimization).
    (Starward parity `GameInstallService.cs:427-445,643-661`). Only files are moved;
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
-   `collapse_purge_extra` and is skipped only in `--dry-run`).
+    `repair::purge::purge_extra` and is skipped only in `--dry-run`).
  3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
    `GameInstallService.cs:788-849`): preserve unknown keys outside the forced set
    (Starward parity — other keys pass through; comments/other `[sections]` are not
