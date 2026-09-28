@@ -10,16 +10,20 @@
 //!
 //! redb persists on transaction commit, so `commit()` is the analogue of the
 //! old `flush()`. Bulk phases (scan, mkdir, copy-insert, prune) batch writes
-//! in a [`CacheWrite`] handle that commits every [`COMMIT_BATCH`] mutations,
-//! so an interrupted run keeps most of its progress. Crash-safety points
-//! commit unconditionally *before* the corresponding filesystem change
-//! (notably the apply pre-drop), so a killed run re-copies rather than
-//! trusting a half-written file.
+//! in a [`CacheWrite`] handle that commits periodically — every
+//! [`COMMIT_BATCH`] operations, every [`COMMIT_BYTES`] of file content, or
+//! every [`COMMIT_INTERVAL`], whichever comes first — so an interrupted run
+//! keeps most of its progress. The byte and time triggers matter for large
+//! game files, where a single hash can take longer than hundreds of small
+//! puts. Crash-safety points commit unconditionally *before* the
+//! corresponding filesystem change (notably the apply pre-drop), so a killed
+//! run re-copies rather than trusting a half-written file.
 
 use anyhow::{bail, Context, Result};
 use redb::{backends::InMemoryBackend, Database, ReadableDatabase, ReadableTable, TableDefinition};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tracing::{info, trace};
 
 use crate::util::{copy_dir_all, ts_now, unique_sibling};
@@ -35,6 +39,38 @@ pub const CACHE_VERSION: u32 = 2;
 /// How many mutations a [`CacheWrite`] batches before committing, so
 /// interrupted runs keep their progress without an fsync per file.
 pub const COMMIT_BATCH: usize = 500;
+
+/// How much file content (sum of `FileRec.size` on `put`) a [`CacheWrite`]
+/// batches before committing. Bounds re-hash work lost to interruption when
+/// a few huge files dominate a scan.
+pub const COMMIT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// How long a [`CacheWrite`] goes between commits at most. Bounds progress
+/// lost to interruption when hashing is slow (large files) and mutations
+/// are infrequent.
+pub const COMMIT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Periodic-commit thresholds for [`CacheWrite`]; see the `COMMIT_*`
+/// constants for the defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct CommitLimits {
+    /// Commit after this many `put`/`remove` calls.
+    pub max_ops: usize,
+    /// Commit after this many bytes of `put` file content.
+    pub max_bytes: u64,
+    /// Commit if this much wall time passed since the last commit.
+    pub max_interval: Duration,
+}
+
+impl Default for CommitLimits {
+    fn default() -> Self {
+        Self {
+            max_ops: COMMIT_BATCH,
+            max_bytes: COMMIT_BYTES,
+            max_interval: COMMIT_INTERVAL,
+        }
+    }
+}
 
 const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
@@ -366,25 +402,43 @@ impl CacheDb {
     pub fn begin_write(&self) -> Result<CacheWrite<'_>> {
         CacheWrite::new(&self.db)
     }
+
+    /// Start a batched write handle with custom commit thresholds (see
+    /// [`CommitLimits`]).
+    pub fn begin_write_with(&self, limits: CommitLimits) -> Result<CacheWrite<'_>> {
+        CacheWrite::with_limits(&self.db, limits)
+    }
 }
 
 /// Batched writes over one cache: mutations accumulate in a single write
-/// transaction and are committed every [`COMMIT_BATCH`] operations plus once
-/// more at [`commit`](CacheWrite::commit). Reads see the handle's own
-/// pending writes, mirroring the old immediate-visibility semantics.
+/// transaction and are committed periodically — every `max_ops` operations,
+/// every `max_bytes` of `put` file content, or every `max_interval` of wall
+/// time, whichever comes first — plus once more at
+/// [`commit`](CacheWrite::commit). Reads see the handle's own pending
+/// writes, mirroring the old immediate-visibility semantics.
 pub struct CacheWrite<'a> {
     db: &'a Database,
     txn: Option<redb::WriteTransaction>,
+    limits: CommitLimits,
     dirty: usize,
+    bytes_since_commit: u64,
+    last_commit: Instant,
 }
 
 impl<'a> CacheWrite<'a> {
     fn new(db: &'a Database) -> Result<Self> {
+        Self::with_limits(db, CommitLimits::default())
+    }
+
+    fn with_limits(db: &'a Database, limits: CommitLimits) -> Result<Self> {
         let txn = db.begin_write().context("begin write")?;
         Ok(Self {
             db,
             txn: Some(txn),
+            limits,
             dirty: 0,
+            bytes_since_commit: 0,
+            last_commit: Instant::now(),
         })
     }
 
@@ -405,6 +459,11 @@ impl<'a> CacheWrite<'a> {
             tbl.insert(rel, bytes.as_slice()).context("cache put")?;
         }
         self.dirty += 1;
+        // Dirs carry no content; only file payload counts toward the byte
+        // trigger (remove() has no size to account, so it counts ops only).
+        self.bytes_since_commit = self
+            .bytes_since_commit
+            .saturating_add(rec.size);
         self.maybe_commit()
     }
 
@@ -430,17 +489,29 @@ impl<'a> CacheWrite<'a> {
     }
 
     fn maybe_commit(&mut self) -> Result<()> {
-        if self.dirty >= COMMIT_BATCH {
+        // The time check runs on mutation, i.e. right after the (possibly
+        // minutes-long) hash that produced this put — exactly when the
+        // backlog of uncommitted work is largest.
+        if self.dirty >= self.limits.max_ops
+            || self.bytes_since_commit >= self.limits.max_bytes
+            || self.last_commit.elapsed() >= self.limits.max_interval
+        {
             self.flush_txn()?;
         }
         Ok(())
     }
 
     fn flush_txn(&mut self) -> Result<()> {
+        let ops = self.dirty;
+        let bytes = self.bytes_since_commit;
+        let elapsed = self.last_commit.elapsed();
         let txn = self.txn.take().context("write txn gone")?;
         txn.commit().context("commit cache batch")?;
         self.txn = Some(self.db.begin_write().context("begin write")?);
         self.dirty = 0;
+        self.bytes_since_commit = 0;
+        self.last_commit = Instant::now();
+        trace!(ops, bytes, elapsed_s = elapsed.as_secs_f64(), "cache batch committed");
         Ok(())
     }
 
@@ -661,5 +732,80 @@ mod tests {
         }
         assert!(c.get("a").unwrap().is_none());
         assert_eq!(c.get("b").unwrap().unwrap(), file_rec());
+    }
+
+    fn sized_rec(size: u64) -> FileRec {
+        FileRec {
+            kind: "file".into(),
+            size,
+            mtime_ns: 0,
+            hashes: HashMap::new(),
+        }
+    }
+
+    fn quiet_limits() -> CommitLimits {
+        CommitLimits {
+            max_ops: usize::MAX,
+            max_bytes: u64::MAX,
+            max_interval: Duration::from_secs(3600),
+        }
+    }
+
+    #[test]
+    fn batch_commits_on_op_count() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let limits = CommitLimits {
+            max_ops: 2,
+            ..quiet_limits()
+        };
+        let mut w = c.begin_write_with(limits).unwrap();
+        w.put("a", &sized_rec(1)).unwrap();
+        assert_eq!(w.dirty, 1);
+        w.put("b", &sized_rec(1)).unwrap();
+        assert_eq!(w.dirty, 0, "op-count trigger committed");
+        // Rows stay visible across the internal reopen.
+        assert!(w.get("a").unwrap().is_some());
+        w.commit().unwrap();
+        assert_eq!(c.get("b").unwrap().unwrap().size, 1);
+    }
+
+    #[test]
+    fn batch_commits_on_byte_count() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let limits = CommitLimits {
+            max_bytes: 10,
+            ..quiet_limits()
+        };
+        let mut w = c.begin_write_with(limits).unwrap();
+        w.put("a", &sized_rec(6)).unwrap();
+        assert_eq!((w.dirty, w.bytes_since_commit), (1, 6));
+        w.put("b", &sized_rec(5)).unwrap();
+        assert_eq!(
+            (w.dirty, w.bytes_since_commit),
+            (0, 0),
+            "byte-count trigger committed"
+        );
+        assert!(w.get("a").unwrap().is_some());
+        w.commit().unwrap();
+        assert_eq!(c.load_all().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn batch_commits_on_interval() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let limits = CommitLimits {
+            max_interval: Duration::from_millis(50),
+            ..quiet_limits()
+        };
+        let mut w = c.begin_write_with(limits).unwrap();
+        w.put("a", &sized_rec(1)).unwrap();
+        assert_eq!(w.dirty, 1);
+        // Simulate a long hash of a huge file between mutations.
+        std::thread::sleep(Duration::from_millis(150));
+        w.put("b", &sized_rec(1)).unwrap();
+        assert_eq!(w.dirty, 0, "interval trigger committed");
+        assert!(w.get("a").unwrap().is_some());
+        w.commit().unwrap();
+        assert_eq!(c.load_all().unwrap().len(), 2);
     }
 }
