@@ -1,4 +1,4 @@
-//! End-to-end runs of `cmd_sync` (real FS + real sled cache).
+//! End-to-end runs of `cmd_sync` (real FS + real cache).
 
 mod common;
 

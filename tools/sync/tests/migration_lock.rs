@@ -1,0 +1,295 @@
+//! Backend-agnostic behavior lock for the sled -> redb migration.
+//!
+//! These tests use only the public `cmd_*` API plus the public cache helpers
+//! (`open_db` / `load_all_records`), never the backend directly, so they must
+//! pass unchanged (modulo backend-specific assertions, which are deliberately
+//! avoided here) before AND after the migration.
+//!
+//! Deliberately avoided here:
+//! - asserting the cache path is a dir vs a file (sled dir -> redb file),
+//! - asserting exact hash encodings (hex today, raw bytes after).
+//!   Hash expectations are always derived from `hash_file`, which moves with
+//!   the codebase.
+
+mod common;
+
+use common::{compare, log, sync, update, wfile, TempRoot};
+use girsync::cache::{load_all_records, open_db, CACHE_PREFIX};
+use girsync::hash::hash_file;
+use girsync::{cmd_compare, cmd_sync, cmd_update, CommonOpts};
+use std::collections::HashMap;
+
+fn md5s() -> Vec<String> {
+    vec!["md5".to_string()]
+}
+
+fn sha256s() -> Vec<String> {
+    vec!["sha256".to_string()]
+}
+
+fn both() -> Vec<String> {
+    vec!["md5".to_string(), "sha256".to_string()]
+}
+
+fn with_algos(dir: std::path::PathBuf, algos: Vec<String>) -> girsync::UpdateOpts {
+    girsync::UpdateOpts {
+        dir,
+        common: CommonOpts {
+            algos,
+            ..common::opts()
+        },
+    }
+}
+
+fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
+    let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+    load_all_records(&db).unwrap()
+}
+
+/// Cache path exists after update (dir today, file after migration: only
+/// assert existence), and files + dirs are recorded with hashes.
+#[test]
+fn lock_update_records_files_dirs_and_hashes() {
+    let t = TempRoot::new("lock_basic");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    std::fs::create_dir_all(dir.join("empty")).unwrap();
+
+    assert_eq!(cmd_update(update(dir.clone()), &log()).unwrap(), 0);
+    assert!(
+        dir.join(CACHE_PREFIX).exists(),
+        "update creates the cache"
+    );
+
+    let r = recs(&dir);
+    assert!(r.contains_key("a.txt"));
+    assert!(r.contains_key("sub/b.txt"));
+    assert!(r.contains_key("empty"), "empty dirs are presence-only rows");
+    assert_eq!(r["empty"].kind, "dir");
+    assert_eq!(r["a.txt"].kind, "file");
+
+    let want = hash_file(&dir.join("a.txt"), &md5s()).unwrap();
+    assert_eq!(r["a.txt"].hashes, want, "cached hash matches hash_file");
+    assert!(!r["a.txt"].hashes.is_empty());
+    assert!(r["empty"].hashes.is_empty());
+}
+
+/// A second update with identical content keeps identical cache values
+/// (fast-hit path reuses entries instead of rewriting them).
+#[test]
+fn lock_update_is_idempotent() {
+    let t = TempRoot::new("lock_idem");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"stable content");
+
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    let first = recs(&dir);
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    let second = recs(&dir);
+
+    assert_eq!(first.len(), second.len());
+    for (k, v) in &first {
+        let w = &second[k];
+        assert_eq!(v.kind, w.kind, "{k}");
+        assert_eq!(v.size, w.size, "{k}");
+        assert_eq!(v.mtime_ns, w.mtime_ns, "{k}");
+        assert_eq!(v.hashes, w.hashes, "{k}");
+    }
+}
+
+/// Updating with an additional algorithm backfills it; both digests then
+/// match a fresh `hash_file` call.
+#[test]
+fn lock_multi_algo_backfill() {
+    let t = TempRoot::new("lock_algos");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"digest me");
+
+    cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
+    assert!(recs(&dir)["a.txt"].hashes.contains_key("md5"));
+
+    cmd_update(with_algos(dir.clone(), both()), &log()).unwrap();
+    let r = recs(&dir);
+    let got = &r["a.txt"].hashes;
+    assert!(got.contains_key("md5"));
+    assert!(got.contains_key("sha256"));
+    assert_eq!(
+        *got,
+        hash_file(&dir.join("a.txt"), &both()).unwrap(),
+        "backfilled hashes match fresh digests"
+    );
+}
+
+/// `--hash none` records stat rows with no hashes, and they still compare
+/// equal and sync cleanly.
+#[test]
+fn lock_hash_none_tracks_without_digests() {
+    let t = TempRoot::new("lock_none");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"same bytes");
+    wfile(&dst, "a.txt", b"same bytes");
+    // Same size but fresh writes differ by mtime; pin it so size+mtime
+    // equality (the only signal under --hash none) holds.
+    common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+
+    let none_opts = |d: std::path::PathBuf| girsync::UpdateOpts {
+        dir: d,
+        common: CommonOpts {
+            algos: vec![],
+            ..common::opts()
+        },
+    };
+    cmd_update(none_opts(src.clone()), &log()).unwrap();
+    let r = recs(&src);
+    assert!(r["a.txt"].hashes.is_empty(), "--hash none stores no digests");
+    assert_eq!(r["a.txt"].size, 10);
+
+    // Compare + sync under --hash none converge.
+    let mut c = compare(src.clone(), dst.clone());
+    c.common.algos = vec![];
+    // dst has no cache yet; folder side builds one lazily under --hash none.
+    assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
+
+    let mut s = sync(src.clone(), dst.clone());
+    s.common.algos = vec![];
+    assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
+}
+
+/// sha256-only sync converges and the cache holds sha256 digests.
+#[test]
+fn lock_sha256_sync_converges() {
+    let t = TempRoot::new("lock_sha");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"sha payload v2 longer");
+    wfile(&dst, "a.txt", b"old");
+
+    let mut s = sync(src.clone(), dst.clone());
+    s.common.algos = sha256s();
+    assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
+    assert_eq!(common::rfile(&dst, "a.txt"), b"sha payload v2 longer");
+
+    let got = recs(&dst)["a.txt"].hashes.clone();
+    assert_eq!(
+        got,
+        hash_file(&dst.join("a.txt"), &sha256s()).unwrap()
+    );
+
+    let mut c = compare(src.clone(), dst.clone());
+    c.common.algos = sha256s();
+    assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
+}
+
+/// `--no-fast` (force rehash) still converges.
+#[test]
+fn lock_no_fast_sync_converges() {
+    let t = TempRoot::new("lock_nofast");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"newer content here!!");
+    wfile(&dst, "a.txt", b"old");
+
+    let mut s = sync(src.clone(), dst.clone());
+    s.fast = false;
+    assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
+    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+}
+
+/// Second update leaves a `girpr-cache-backup-*` sibling; sync leaves a
+/// `girpr-cache-old-*` snapshot of dst. Both are keep-all, so one is enough.
+#[test]
+fn lock_backups_and_snapshots_created() {
+    let t = TempRoot::new("lock_bak");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"x");
+    wfile(&dst, "a.txt", b"x");
+
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(src.clone()), &log()).unwrap();
+    assert!(
+        common::has_backup_sibling(&src.join(CACHE_PREFIX)),
+        "second update backs up the old cache"
+    );
+
+    // Snapshots only fire when dst already has a cache: create one first.
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap();
+    // Snapshots live next to the cache itself, i.e. inside dst.
+    let has_old_next_to_dst = std::fs::read_dir(&dst)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .any(|n| n.starts_with("girpr-cache-old-"));
+    assert!(
+        has_old_next_to_dst,
+        "sync snapshots dst pre-state next to the cache"
+    );
+}
+
+/// A record side is read as-is: comparing record vs folder adds no rows to
+/// the record.
+#[test]
+fn lock_record_side_is_read_only() {
+    let t = TempRoot::new("lock_rec");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+
+    let record = dir.join(CACHE_PREFIX);
+    let before = recs(&dir);
+    let code = cmd_compare(compare(record.clone(), dir.clone()), &log()).unwrap();
+    assert_eq!(code, 0);
+    let after = recs(&dir);
+    assert_eq!(before.len(), after.len(), "record compare writes no rows");
+    for (k, v) in &before {
+        assert_eq!(v.hashes, after[k].hashes);
+    }
+}
+
+/// Dry-run sync changes no disk bytes, creates no backups, and leaves the
+/// caches' logical content identical.
+#[test]
+fn lock_dry_run_changes_nothing() {
+    let t = TempRoot::new("lock_dry");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"new content here");
+    wfile(&dst, "a.txt", b"old");
+    // Pre-create both caches so dry-run has no reason to create anything.
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    let src_before = recs(&src);
+    let dst_before = recs(&dst);
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.dry_run = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(common::rfile(&dst, "a.txt"), b"old");
+    assert!(
+        !common::has_backup_sibling(&dst.join(CACHE_PREFIX)),
+        "dry-run makes no backups"
+    );
+    assert_eq!(recs(&src).len(), src_before.len());
+    assert_eq!(recs(&dst).len(), dst_before.len());
+}
+
+/// Empty dirs and nesting survive a full sync and compare equal after.
+#[test]
+fn lock_empty_dirs_and_nesting_sync() {
+    let t = TempRoot::new("lock_dirs");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a/b/c/deep.txt", b"deep");
+    std::fs::create_dir_all(src.join("a/empty1")).unwrap();
+    std::fs::create_dir_all(src.join("lonely")).unwrap();
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert!(dst.join("a/empty1").is_dir());
+    assert!(dst.join("lonely").is_dir());
+    assert_eq!(common::rfile(&dst, "a/b/c/deep.txt"), b"deep");
+    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+}

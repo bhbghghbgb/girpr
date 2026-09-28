@@ -123,8 +123,8 @@ pub fn diff_maps(
 /// If either side lacks a hash (e.g. a `--hash none` history) this stays
 /// silent: the caller has already compared size+mtime.
 pub fn hashes_differ(
-    a: &HashMap<String, String>,
-    b: &HashMap<String, String>,
+    a: &HashMap<String, Vec<u8>>,
+    b: &HashMap<String, Vec<u8>>,
     algos: &[String],
 ) -> bool {
     for algo in algos {

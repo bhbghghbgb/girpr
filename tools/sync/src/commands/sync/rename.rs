@@ -20,7 +20,7 @@ use tracing::info;
 pub(super) fn rename_to_src_casing(
     src: &HashMap<String, crate::effective::EffRec>,
     dst_root: &Path,
-    dst_db: &sled::Db,
+    dst_db: &crate::cache::CacheDb,
     dm: &mut HashMap<String, crate::effective::EffRec>,
     dry_run: bool,
 ) -> Result<usize> {
@@ -71,9 +71,11 @@ pub(super) fn rename_to_src_casing(
         std::fs::rename(&tmp, &to)
             .with_context(|| format!("rename to {} (case fix step2)", to.display()))?;
         // move the DB entry to match
-        if let Ok(Some(raw)) = dst_db.get(drel.as_bytes()) {
-            dst_db.remove(drel.as_bytes())?;
-            dst_db.insert(srel.as_bytes(), raw)?;
+        if let Some(rec) = dst_db.get(&drel)? {
+            let mut w = dst_db.begin_write()?;
+            w.remove(&drel)?;
+            w.put(&srel, &rec)?;
+            w.commit()?;
         }
     }
     Ok(renamed)
@@ -108,7 +110,7 @@ mod tests {
         sm.insert("Data.txt".to_string(), file_rec());
         let mut dm = HashMap::new();
         dm.insert("data.txt".to_string(), file_rec());
-        let db = sled::Config::new().temporary(true).open().unwrap();
+        let db = crate::cache::CacheDb::open_temp(false).unwrap();
 
         let renamed = rename_to_src_casing(&sm, &dst, &db, &mut dm, true).unwrap();
         assert_eq!(renamed, 1);

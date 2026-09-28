@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Isolated temp directory per test, so parallel `cargo test` workers never
-/// share a sled DB.
+/// share a cache file.
 pub struct TempRoot {
     path: PathBuf,
 }
@@ -49,7 +49,7 @@ impl TempRoot {
 
 impl Drop for TempRoot {
     fn drop(&mut self) {
-        // Sled DBs opened by cmd_* are dropped by then; best-effort cleanup.
+        // Cache handles opened by cmd_* are dropped by then; best-effort cleanup.
         std::fs::remove_dir_all(&self.path).ok();
     }
 }

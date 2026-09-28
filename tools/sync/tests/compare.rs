@@ -1,4 +1,4 @@
-//! End-to-end runs of `cmd_update` and `cmd_compare` (real FS + real sled cache).
+//! End-to-end runs of `cmd_update` and `cmd_compare` (real FS + real cache).
 
 mod common;
 
@@ -15,8 +15,8 @@ fn run_update_then_compare_equal() {
     let code = cmd_update(update(dir.clone()), &log()).unwrap();
     assert_eq!(code, 0);
     assert!(
-        dir.join(girsync::cache::CACHE_PREFIX).is_dir(),
-        "update creates cache"
+        dir.join(girsync::cache::CACHE_PREFIX).is_file(),
+        "update creates the cache file"
     );
 
     // Folder vs itself is equal.

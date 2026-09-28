@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace, warn};
 
-use crate::cache::{load_all_records, open_db, put_rec, FileRec, CACHE_PREFIX};
+use crate::cache::{open_db, CacheDb, FileRec, CACHE_PREFIX};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
@@ -19,13 +19,14 @@ use crate::scan::{check_mixed_case, walk_live};
 use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 
 /// A resolved path: kind, stat data, and whatever hashes were needed.
+/// Hash values are raw digest bytes (see [`crate::hash::hash_file`]).
 #[derive(Clone, Debug)]
 pub struct EffRec {
     /// "file" or "dir"
     pub kind: String,
     pub size: u64,
     pub mtime_ns: i64,
-    pub hashes: HashMap<String, String>,
+    pub hashes: HashMap<String, Vec<u8>>,
 }
 
 impl EffRec {
@@ -42,7 +43,9 @@ impl EffRec {
 /// Build the effective map for a folder, using the embedded cache to short-circuit.
 ///
 /// Writes back to the cache unless `mode.dry_run`, and prunes rows for paths
-/// that are no longer on disk (or are now filtered out).
+/// that are no longer on disk (or are now filtered out). Writes are batched
+/// and committed periodically, so an interrupted scan keeps most of its
+/// progress (the commit is the durability point).
 ///
 /// In insensitive mode the on-disk name governs: cached keys are indexed by
 /// lowercase so a disk/cached casing difference is fixed to the disk name first,
@@ -50,7 +53,7 @@ impl EffRec {
 /// stale alternates are pruned below, not treated as a conflict.
 pub fn build_effective_folder(
     root: &Path,
-    db: &sled::Db,
+    cache: &CacheDb,
     common: &CommonOpts,
     mode: ScanMode,
 ) -> Result<HashMap<String, EffRec>> {
@@ -90,7 +93,9 @@ pub fn build_effective_folder(
     let mut n_fast_hit: usize = 0;
     let total_live = live.len();
     let alt_recs: HashMap<String, FileRec> = if !case_sensitive {
-        load_all_records(db)?
+        // Read once up front; the scan's batch handle starts from the same
+        // committed state.
+        cache.load_all()?
     } else {
         HashMap::new()
     };
@@ -103,6 +108,13 @@ pub fn build_effective_folder(
                 .push(key.clone());
         }
     }
+    // Non-dry runs funnel every cache mutation through one batched handle,
+    // which auto-commits periodically so progress survives interruption.
+    let mut batch = if dry_run {
+        None
+    } else {
+        Some(cache.begin_write()?)
+    };
     let mut last_prog = std::time::Instant::now();
     for e in live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
@@ -110,23 +122,10 @@ pub fn build_effective_folder(
         }
         if e.is_dir {
             eff.insert(e.rel.clone(), EffRec::dir());
-            if !dry_run {
-                let cur: Option<FileRec> = db
-                    .get(e.rel.as_bytes())?
-                    .map(|v| serde_json::from_slice(&v))
-                    .transpose()
-                    .context("parse cache entry")?;
+            if let Some(w) = batch.as_mut() {
+                let cur: Option<FileRec> = w.get(&e.rel)?;
                 if cur.map(|c| c.kind != "dir").unwrap_or(true) {
-                    put_rec(
-                        db,
-                        &e.rel,
-                        &FileRec {
-                            kind: "dir".into(),
-                            size: 0,
-                            mtime_ns: 0,
-                            hashes: HashMap::new(),
-                        },
-                    )?;
+                    w.put(&e.rel, &FileRec::dir())?;
                 }
             }
             continue;
@@ -134,12 +133,10 @@ pub fn build_effective_folder(
         // file
         // `adopted` = cache entry came from an alternate-cased key, so the
         // disk-cased key must be (re)written even on a fast-hit.
-        let (cached, adopted): (Option<FileRec>, bool) = match db
-            .get(e.rel.as_bytes())?
-            .map(|v| serde_json::from_slice(&v))
-            .transpose()
-            .context("parse cache entry")?
-        {
+        let (cached, adopted): (Option<FileRec>, bool) = match match batch.as_mut() {
+            Some(w) => w.get(&e.rel)?,
+            None => cache.get(&e.rel)?,
+        } {
             Some(c) => (Some(c), false),
             // Exact-case miss in insensitive mode: adopt the single stale
             // alternate-cased entry as the cache candidate (disk name wins).
@@ -150,8 +147,8 @@ pub fn build_effective_folder(
                         if others.len() == 1 {
                             let old = others[0];
                             let rec = alt_recs.get(old).cloned();
-                            if !dry_run {
-                                db.remove(old.as_bytes())?; // old casing dropped; new one upserted below
+                            if let Some(w) = batch.as_mut() {
+                                w.remove(old)?; // old casing dropped; new one upserted below
                             }
                             (rec, true)
                         } else {
@@ -171,8 +168,10 @@ pub fn build_effective_folder(
             let c = cached.as_ref().unwrap();
             let have_all = algos.iter().all(|a| c.hashes.contains_key(a));
             if have_all {
-                if adopted && !dry_run {
-                    put_rec(db, &e.rel, c)?;
+                if adopted {
+                    if let Some(w) = batch.as_mut() {
+                        w.put(&e.rel, c)?;
+                    }
                 }
                 eff.insert(
                     e.rel.clone(),
@@ -202,8 +201,10 @@ pub fn build_effective_folder(
             }
         }
         // stale or missing or --no-fast or missing algos: drop stale entry, rehash
-        if !dry_run && cached.is_some() && !fresh {
-            db.remove(e.rel.as_bytes())?; // preemptively drop whole path record
+        if cached.is_some() && !fresh {
+            if let Some(w) = batch.as_mut() {
+                w.remove(&e.rel)?; // preemptively drop whole path record
+            }
         }
         let have_all = cached
             .as_ref()
@@ -214,9 +215,8 @@ pub fn build_effective_folder(
             let hashes =
                 hash_file(&e.abs, algos).with_context(|| format!("hash {}", e.abs.display()))?;
             trace!(rel = %e.rel, algos = ?hashes.keys().collect::<Vec<_>>(), "hashed");
-            if !dry_run {
-                put_rec(
-                    db,
+            if let Some(w) = batch.as_mut() {
+                w.put(
                     &e.rel,
                     &FileRec {
                         kind: "file".into(),
@@ -268,16 +268,18 @@ pub fn build_effective_folder(
     }
     // prune DB rows for files no longer on disk (or now excluded)
     let mut pruned = 0usize;
-    if !dry_run {
-        let existing = load_all_records(db)?;
+    if let Some(w) = batch.as_mut() {
+        let existing = w.load_all()?;
         for rel in existing.keys() {
             if !live_set.contains(rel) {
-                db.remove(rel.as_bytes())?;
+                w.remove(rel)?;
                 pruned += 1;
                 trace!(rel = %rel, "prune cache");
             }
         }
-        db.flush()?;
+        // Final commit: the durability point for the whole scan.
+        let w = batch.take().unwrap();
+        w.commit()?;
     }
     let n_files = eff.values().filter(|r| r.kind == "file").count();
     let n_dirs = eff.values().filter(|r| r.kind == "dir").count();
@@ -297,12 +299,8 @@ pub fn build_effective_folder(
 /// Effective map for a record input: the DB read as-is, with no FS access and
 /// no writes. Cache rows and filtered paths are dropped.
 pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<String, EffRec>> {
-    if !db_path.exists() {
-        bail!("record {} not found", db_path.display());
-    }
-    let db = sled::open(db_path)
-        .with_context(|| format!("open record {} (corrupt?)", db_path.display()))?;
-    let all = load_all_records(&db)?;
+    let cache = CacheDb::open_record(db_path)?;
+    let all = cache.load_all()?;
     let mut out = HashMap::new();
     for (rel, r) in all {
         if is_cache_rel(&rel) {
@@ -345,7 +343,7 @@ pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<S
     Ok(out)
 }
 
-/// One side of a `compare`: either a folder root or a record directory.
+/// One side of a `compare`: either a folder root or a record file.
 #[derive(Debug)]
 pub enum Side {
     Folder(PathBuf),

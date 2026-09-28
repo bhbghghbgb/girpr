@@ -33,7 +33,7 @@ pub fn parse_level_name(s: &str) -> Result<String> {
 /// Install the global tracing subscriber.
 ///
 /// Console (stderr, human-readable) is filtered by --log-level for our
-/// `girsync` target; third-party targets (e.g. sled) stay at warn to avoid
+/// `girsync` target; third-party targets (e.g. redb) stay at warn to avoid
 /// noise. File (if --log-file, JSON) always captures TRACE for `girsync`
 /// regardless of --log-level.
 ///
@@ -44,9 +44,9 @@ pub fn init_tracing(
     log_file: Option<&Path>,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let console_level = parse_level_name(level_str)?;
-    // Scope filters to our target so `sled` etc. don't flood stderr/file.
+    // Scope filters to our target so `redb` etc. don't flood stderr/file.
     let console_filter =
-        tracing_subscriber::EnvFilter::new(format!("girsync={},sled=warn", console_level));
+        tracing_subscriber::EnvFilter::new(format!("girsync={},redb=warn", console_level));
     let console_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(true)
@@ -66,7 +66,7 @@ pub fn init_tracing(
             .open(p)
             .with_context(|| format!("open log file {}", p.display()))?;
         let (nb, guard) = tracing_appender::non_blocking(file);
-        let file_filter = tracing_subscriber::EnvFilter::new("girsync=trace,sled=warn");
+        let file_filter = tracing_subscriber::EnvFilter::new("girsync=trace,redb=warn");
         let file_layer = fmt::layer()
             .json()
             .with_writer(nb)

@@ -26,7 +26,7 @@ and drive the public API.
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
-| `cache.rs` | sled schema (`Meta`, `FileRec`), `open_db`, backup/snapshot helpers |
+| `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db`, backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | collapses cache + filters + case rules into one `EffRec` map per side |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
@@ -91,10 +91,13 @@ work list a real run executes, including the insensitive-mode rename pass.
 
 ## Core semantics (must-know for AI edits)
 
-- **Cache = sled DB directory** at `<root>/girpr-cache`. Key = `/`-separated
-  relative path (UTF-8; case preserved as stored). Value = `{kind, size,
-  mtime_ns (ns since epoch), hashes{algo→hex}}` + `meta{version, case_sensitive}`.
-  `girpr-cache*` (DB, backups, olds) is always excluded from scans.
+- **Cache = redb file** at `<root>/girpr-cache`. Key = `/`-separated
+  relative path (UTF-8; case preserved as stored). Value = binary
+  `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
+  `entries` table + `meta{version, case_sensitive}` in the `meta` table.
+  `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
+  Legacy sled directories are rejected (rebuild with `--ignore-cache` or
+  convert once with `sled2redb <old-dir> <new-file>`).
 - **Cache is a cache, not truth.** Disk governs. Stale entries (size/mtime
   mismatch) are dropped wholesale per path and rehashed; missing algos are hashed
   on demand. `update` always populates; `compare`/`sync` populate lazily and may

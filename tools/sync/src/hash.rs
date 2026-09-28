@@ -39,7 +39,9 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
 /// Digest `path` with every requested algorithm in a single pass.
 ///
 /// An empty `algos` returns an empty map without touching the file.
-pub fn hash_file(path: &Path, algos: &[String]) -> Result<HashMap<String, String>> {
+/// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
+/// stores them as-is instead of hex, halving hash disk cost.
+pub fn hash_file(path: &Path, algos: &[String]) -> Result<HashMap<String, Vec<u8>>> {
     use sha2::Digest;
     let mut md5ctx = if algos.contains(&"md5".to_string()) {
         Some(md5::Context::new())
@@ -72,17 +74,11 @@ pub fn hash_file(path: &Path, algos: &[String]) -> Result<HashMap<String, String
     }
     let mut out = HashMap::new();
     if let Some(c) = md5ctx {
-        out.insert("md5".into(), format!("{:x}", c.compute()));
+        out.insert("md5".into(), c.compute().0.to_vec());
     }
     if let Some(c) = sha2ctx {
         use sha2::Digest;
-        out.insert("sha256".into(), hex::encode(c.finalize()));
+        out.insert("sha256".into(), c.finalize().to_vec());
     }
-    return Ok(out);
-
-    mod hex {
-        pub fn encode(b: impl AsRef<[u8]>) -> String {
-            b.as_ref().iter().map(|x| format!("{:02x}", x)).collect()
-        }
-    }
+    Ok(out)
 }

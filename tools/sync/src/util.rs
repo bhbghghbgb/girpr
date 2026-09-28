@@ -27,7 +27,9 @@ pub fn unique_sibling(parent: &Path, prefix: String) -> PathBuf {
     p
 }
 
-/// Recursive plain-file copy, used only for cache backup/snapshot directories.
+/// Recursive plain-file copy, used only for legacy sled-directory cache
+/// backups/snapshots. Live redb caches are single files copied with
+/// `std::fs::copy` (see [`crate::cache::backup_db`]).
 pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst).with_context(|| format!("create dir {}", dst.display()))?;
     for ent in std::fs::read_dir(src).with_context(|| format!("read dir {}", src.display()))? {

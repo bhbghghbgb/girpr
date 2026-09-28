@@ -68,7 +68,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db = open_db(&db_path, false, false, false).unwrap();
     let eff = build_effective_folder(&dir, &db, &insensitive, scan(true, false, false)).unwrap();
     assert!(eff.contains_key("A.txt"), "disk casing governs");
-    let want = format!("{:x}", md5::compute(b"hello"));
+    let want = md5::compute(b"hello").0.to_vec();
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
     let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
     assert!(

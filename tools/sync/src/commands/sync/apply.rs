@@ -7,11 +7,13 @@
 //! 1. mkdir + fix-dirs (create the shapes src expects),
 //! 2. pre-drop the cache entries for every path about to change,
 //! 3. delete extras, copy src files, remove unknown dirs,
-//! 4. prune leftover cache rows, then flush.
+//! 4. prune leftover cache rows.
 //!
 //! Steps 1 and 2 must precede any content change: cache entries are always
-//! dropped *before* the corresponding filesystem change, so a crash mid-run
-//! re-copies rather than trusting a half-written file. There is no resume.
+//! dropped *and committed* before the corresponding filesystem change, so a
+//! crash mid-run re-copies rather than trusting a half-written file. The
+//! commit is the durability point — there is no separate flush, and there is
+//! no resume beyond re-running.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -19,7 +21,7 @@ use std::path::Path;
 use tracing::{debug, error, info, trace};
 
 use super::plan::Plan;
-use crate::cache::{FileRec, META_KEY};
+use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
 use crate::filter::is_excluded;
@@ -32,7 +34,7 @@ use crate::util::mtime_ns_of;
 pub(super) struct Applier<'a> {
     pub src: &'a Path,
     pub dst: &'a Path,
-    pub dst_db: &'a sled::Db,
+    pub dst_db: &'a CacheDb,
     /// src effective map — decides which dst dirs are "unknown".
     pub sm: &'a HashMap<String, EffRec>,
     /// dst effective map, after the rename pass.
@@ -70,31 +72,37 @@ impl Applier<'_> {
     /// Create every src directory that dst lacks.
     fn mkdirs(&self, plan: &Plan) -> Result<()> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
+        let mut w = self.dst_db.begin_write()?;
         for (i, r) in plan.mkdir.iter().enumerate() {
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
-            self.dst_db.insert(
-                r.as_bytes(),
-                serde_json::to_vec(&FileRec {
-                    kind: "dir".into(),
-                    size: 0,
-                    mtime_ns: 0,
-                    hashes: HashMap::new(),
-                })?,
-            )?;
+            w.put(r, &FileRec::dir())?;
             debug!(rel = %r, "mkdir");
             if (i + 1) % 100 == 0 {
                 info!(done = i + 1, total = plan.mkdir.len(), "mkdir progress");
             }
         }
+        w.commit()?;
         Ok(())
     }
 
     /// Resolve type-conflicts toward src: dst has a file where src has a dir.
+    ///
+    /// Cache rows are dropped and committed *before* any filesystem change,
+    /// so a crash here re-resolves rather than trusting the half-done state.
     fn fix_dirs(&self, plan: &Plan) -> Result<()> {
         info!(count = plan.fix_dirs.len(), "apply fix-dirs");
+        if plan.fix_dirs.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut w = self.dst_db.begin_write()?;
+            for r in &plan.fix_dirs {
+                w.remove(r)?; // delete entries before change
+            }
+            w.commit()?;
+        }
         for r in &plan.fix_dirs {
-            self.dst_db.remove(r.as_bytes())?; // delete entries before change
             let p = self.dst.join(r);
             if p.is_file() || p.is_symlink() {
                 std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
@@ -108,12 +116,15 @@ impl Applier<'_> {
         Ok(())
     }
 
-    /// Drop the dst cache rows for every path this run will change.
+    /// Drop the dst cache rows for every path this run will change, and
+    /// commit before touching the filesystem. A crash after this point
+    /// re-copies instead of trusting a half-written file.
     fn predrop_cache_entries(&self, plan: &Plan) -> Result<()> {
+        let mut w = self.dst_db.begin_write()?;
         for r in plan.copy.iter().chain(plan.delete_files.iter()) {
-            self.dst_db.remove(r.as_bytes())?;
+            w.remove(r)?;
         }
-        self.dst_db.flush()?;
+        w.commit()?;
         Ok(())
     }
 
@@ -195,10 +206,11 @@ impl Applier<'_> {
         info!(copied, total = copy_total, "copy done");
         // Only record files that actually verified, so a partial failure never
         // leaves a cache claiming content the dst does not have.
-        for (rel, rec) in new_recs {
-            self.dst_db
-                .insert(rel.as_bytes(), serde_json::to_vec(&rec)?)?;
+        let mut w = self.dst_db.begin_write()?;
+        for (rel, rec) in &new_recs {
+            w.put(rel, rec)?;
         }
+        w.commit()?;
         Ok(copied)
     }
 
@@ -229,6 +241,7 @@ impl Applier<'_> {
         // deepest first: a child may already be gone as part of its parent
         unknown_dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
         info!(unknown = unknown_dirs.len(), "rmdir pass");
+        let mut w = self.dst_db.begin_write()?;
         for (i, r) in unknown_dirs.iter().enumerate() {
             let p = self.dst.join(r);
             if p.is_dir() {
@@ -237,7 +250,7 @@ impl Applier<'_> {
                 {
                     bail!("rmdir {}: {:#}", p.display(), e);
                 }
-                self.dst_db.remove(r.as_bytes())?;
+                w.remove(r)?;
                 println!("RMDIR {}", r);
                 debug!(rel = %r, "rmdir");
                 removed_dirs += 1;
@@ -251,6 +264,7 @@ impl Applier<'_> {
                 );
             }
         }
+        w.commit()?;
         Ok(removed_dirs)
     }
 
@@ -268,16 +282,13 @@ impl Applier<'_> {
                 present.insert(e.rel);
             }
         }
-        for kv in self.dst_db.iter() {
-            let (k, _) = kv?;
-            if k.as_ref() == META_KEY.as_bytes() {
-                continue;
-            }
-            let rel = String::from_utf8(k.to_vec()).context("non-UTF8 key")?;
-            if !present.contains(&rel) {
-                self.dst_db.remove(rel.as_bytes())?;
+        let mut w = self.dst_db.begin_write()?;
+        for rel in w.load_all()?.keys() {
+            if !present.contains(rel) {
+                w.remove(rel)?;
             }
         }
+        w.commit()?;
         Ok(())
     }
 }

@@ -1,13 +1,14 @@
-//! girsync — dev-only one-way mirror src(old) -> dst(working dir) with a sled hash cache.
+//! girsync — dev-only one-way mirror src(old) -> dst(working dir) with a redb hash cache.
 //!
-//! Layout: `<folder>/girpr-cache` is a sled DB directory.
+//! Layout: `<folder>/girpr-cache` is a redb file.
 //! Backups: `<folder>/girpr-cache-backup-<ts>` and `<folder>/girpr-cache-old-<ts>`
-//! (dir copies, keep-all). Record-only inputs: any path whose final component
+//! (file copies, keep-all). Record-only inputs: any path whose final component
 //! starts with `girpr-cache`.
 //!
 //! Module map:
 //! - [`cli`] / [`config`] — argument surface and validated per-run options
-//! - [`cache`] — sled schema, open/rebuild, backup snapshots
+//! - [`cache`] — redb schema, open/rebuild, backup snapshots
+//! - [`convert`] — one-shot sled -> redb converter
 //! - [`scan`] — live filesystem walk
 //! - [`effective`] — cache + filters + case rules collapsed into one map per side
 //! - [`diff`] — path-set diffing
@@ -18,6 +19,7 @@ pub mod cache;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod convert;
 pub mod diff;
 pub mod effective;
 pub mod filter;

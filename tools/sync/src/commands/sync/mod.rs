@@ -22,7 +22,7 @@ mod rename;
 use anyhow::{bail, Context, Result};
 use tracing::info;
 
-use crate::cache::{backup_db, open_db, snapshot_old, CACHE_PREFIX};
+use crate::cache::{backup_db, open_db, remove_cache_path, snapshot_old, CacheDb, CACHE_PREFIX};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::build_effective_folder;
@@ -88,8 +88,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         if common.ignore_cache {
             for p in [&src_db_path, &dst_db_path] {
                 if p.exists() {
-                    std::fs::remove_dir_all(p)
-                        .with_context(|| format!("remove {}", p.display()))?;
+                    remove_cache_path(p)?;
                     info!(path = %p.display(), "ignore-cache removed");
                 }
             }
@@ -161,8 +160,9 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         jobs,
     }
     .apply(&plan)?;
-    src_db.flush()?;
-    dst_db.flush()?;
+    // No final flush: every apply phase commits its own mutations, and the
+    // pre-drop commit before the filesystem changes is the crash-safety
+    // point (a rerun re-copies rather than trusting half-written files).
 
     println!(
         "SUMMARY renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={}",
@@ -215,24 +215,20 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
     Ok(())
 }
 
-/// Open both caches. Under `--dry-run`, a missing cache falls back to a
-/// temporary in-memory DB so the run never creates a real one.
+/// Open both caches. Under `--dry-run`, a corrupt or missing cache falls back
+/// to a temporary in-memory DB so the run never creates a real one.
 fn open_caches(
     src_db_path: &std::path::Path,
     dst_db_path: &std::path::Path,
     common: &crate::config::CommonOpts,
     dry_run: bool,
-) -> Result<(sled::Db, sled::Db)> {
-    let open = |p: &std::path::Path| -> Result<sled::Db> {
+) -> Result<(CacheDb, CacheDb)> {
+    let open = |p: &std::path::Path| -> Result<CacheDb> {
         if !dry_run {
             return open_db(p, common.case_sensitive, false, false);
         }
-        open_db(p, common.case_sensitive, false, false).or_else(|_| {
-            sled::Config::new()
-                .temporary(true)
-                .open()
-                .context("open temp db")
-        })
+        open_db(p, common.case_sensitive, false, false)
+            .or_else(|_| CacheDb::open_temp(common.case_sensitive))
     };
     Ok((open(src_db_path)?, open(dst_db_path)?))
 }
