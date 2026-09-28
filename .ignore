@@ -1,0 +1,2 @@
+# Expose gitignored folders to tools 
+!reference-projects/
