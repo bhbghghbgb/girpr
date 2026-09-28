@@ -38,7 +38,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
-| `src/util.rs` | MD5, `config.ini` read/Starward-shaped rewrite, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
+| `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + deterministic fixture | `MockServer`, `build_fixture`, `MockOpts` |
@@ -136,7 +136,7 @@ cargo build --release
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 37 unit + 15 integration, all offline
+cargo test            # 34 unit + 15 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
 ```
@@ -172,9 +172,6 @@ cargo clippy --all-targets
 4. Per-file temp + atomic move: transient cost is one `_tmp` beside the file — no
    game duplicate, no blob store, no zip staging.
 5. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
-   The bump is Starward-shaped: one `[General]` block, keys from other `[sections]`
-   flattened as `Section:Key`, comments dropped, owned keys (`game_version`,
-   `game_biz`, `channel`/`sub_channel`/`cps`, `sdk_version`) forced.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
 SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,

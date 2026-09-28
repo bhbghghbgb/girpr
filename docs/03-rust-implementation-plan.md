@@ -28,7 +28,7 @@ src/repair/check.rs   # --check-only size+MD5 verification loop (step 6.5)
 src/repair/file.rs    # per-file repair: skip check, _tmp resume, slice reuse, download, promote (step 6)
 src/repair/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 src/repair/audio.rs   # audio scan-file read/write + effective selection
-src/util.rs           # md5 helpers, file length, config.ini read + Starward-shaped rewrite, ignore/blacklist files, rel-path normalization
+src/util.rs           # md5 helpers, file length, config.ini read/write, ignore/blacklist files, rel-path normalization
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
 tests/common/mod.rs       # mock HoYoPlay+Sophon server and the deterministic fixture
@@ -84,11 +84,10 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 `cargo test` runs two layers, both offline by construction:
 
-- **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump
-  (including `[section]` flattening and duplicate collapse), audio-lang mapping and
-  flag validation, API URL/query building (per-launcher `channel`/`sub_channel`,
-  `getBuild` tag encoding), local chunk-map build, manifest filter, work-list
-  build/dedup, expected-set/purge classification, audio scan file,
+- **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump,
+  audio-lang mapping and flag validation, API URL/query building (per-launcher
+  `channel`/`sub_channel`, `getBuild` tag encoding), local chunk-map build, manifest
+  filter, work-list build/dedup, expected-set/purge classification, audio scan file,
   REPORT/PROGRESS/SUMMARY formatting, HoYoPlay wrapper and int-or-string parsing.
 - **Integration tests** (`tests/repair_offline.rs`): one `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`

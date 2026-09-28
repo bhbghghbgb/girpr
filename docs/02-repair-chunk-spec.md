@@ -169,21 +169,15 @@ from the latest manifest alone (local manifest is a pure optimization).
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
     `repair::purge::purge_extra` and is skipped only in `--dry-run`).
  3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
-   `GameInstallService.cs:788-849`): Starward copies every line except the
-   `[General]` header into an INI stream, forces the keys it owns, and
-   re-serializes one `[General]` block. Reproduced here:
-   - unknown keys pass through; keys from other `[sections]` survive flattened
-     into `[General]` as `Section:Key` (how .NET's INI provider surfaces them),
-   - comment (`;` / `#`) and blank lines are dropped, because the provider never
-     emits them back,
-   - key order is deterministic (file order, then the forced block) instead of
-     .NET's dictionary order; the result is still valid and idempotent,
-   - force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
-     cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
-     `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
-     `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
-     channel SDK and write the real version if a channel ever requires it. Create with `[General]`
-     header if missing.
+   `GameInstallService.cs:788-849`): preserve unknown keys outside the forced set
+   (Starward parity — other keys pass through; comments/other `[sections]` are not
+   preserved, same wholesale-rewrite class as Starward),
+   force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
+   cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
+   `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
+   `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
+   channel SDK and write the real version if a channel ever requires it. Create with `[General]`
+   header if missing.
 
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
