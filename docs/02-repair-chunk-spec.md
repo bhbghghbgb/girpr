@@ -23,7 +23,11 @@ downloads, dispatcher persistent revisions, quota dialogs, hardlinks, UI/progres
 
 Inputs: `game_dir`, `biz ∈ {hk4e_cn, hk4e_global, hk4e_bilibili}`,
 `audio_langs ⊆ {zh-cn,en-us,ja-jp,ko-kr}` or explicit empty (`--audio none` = game-only;
-default when omitted: keep currently selected, else `en-us`, see Step 1),
+default when omitted: keep currently selected, else `en-us`, see Step 1). `--audio` values are
+matched case-insensitively, `_` is accepted for `-`, and the display names `chinese` /
+`english` / `english(us)` / `japanese` / `korean` are aliases; anything else is a usage error
+(exit 1), as is mixing `none` with a language. Unknown flags, missing/duplicate-incompatible
+values and `io_threads = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
@@ -60,7 +64,10 @@ failures are the exception: they continue across files and return `Ok(summary, 3
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
    `audio_scan_dir, audio_cache_dir, audio_res_dir, res_category_dir, blacklist_dir (+enable flag),
-   default_download_mode`. Assert chunk-capable (Genshin is); abort otherwise (exit 1).
+   default_download_mode`. Assert chunk-capable: `default_download_mode` must be exactly
+   `DOWNLOAD_MODE_CHUNK` (the only value this tool can patch — `DOWNLOAD_MODE_FILE` and
+   `DOWNLOAD_MODE_LDIFF` need the 7z/hdiff paths v1 does not implement). Anything else, including
+   an empty/missing value, aborts with exit 1 rather than failing later at `getBuild`.
 2. `GET getGameBranches?launcher_id=&language=&game_ids[]=` → pick entry for game id →
    `main{package_id,branch,password,tag,diff_tags[]}`. `latest = main.tag`.
 3. `GET getBuild?branch=&package_id=&password=` (no `tag`) → latest chunk build
@@ -75,7 +82,10 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
    list. This is the lazy call: fetched best-effort during the post-phase (Step 8), never in
-   `--check-only`/`--dry-run`; a failure only warns.
+   `--check-only`/`--dry-run`; a failure only warns. `channel`/`sub_channel` are the
+   **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
+   `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
+   returns the wrong set. It is the only one of the three APIs that carries them.
 
 Each HoYoPlay response is `{"retcode":0,"message":"...","data":{"<node>":...}}`; `retcode != 0` → error.
 
@@ -105,7 +115,7 @@ For each latest file `F{path,size,md5,chunks[]}`:
 
 ### Step 5 — Files-cleanup before (reclaim space before repairing)
 Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
-`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:176-263`): run the
+`Collapse/.../InstallManagement/Genshin/GenshinInstall.cs:177-263`): run the
 §Step-7 cleanup *now* — after the plan exists, before any repair — to free space
 for the repair itself. Same file set as `--purge-after`; only the timing differs.
 Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
@@ -116,8 +126,8 @@ Concurrency: semaphore of `io_threads` over **files**; chunks within a file stri
 (HDD-friendly; also bounds peak disk to `io_threads × largest_file`). Retries: 5× per file.
 
 Per file `F`:
-1. `if exists(game_dir/F.path) and len==F.size and md5(file)==F.md5` → **skip** (log `skip`, count
-   as verified, no download). Else proceed.
+1. `if exists(game_dir/F.path) and len==F.size and md5(file)==F.md5` → **skip** (log
+   `check: md5 match -> skip`, count as verified, no download). Else proceed.
 2. Ensure parent dir. Open `game_dir/F.path_tmp` (`{path}_tmp`) with `OpenOrCreate|ReadWrite`.
    Let `have = len(tmp)`. If `have > F.size` → truncate to `F.size` (corrupt resume). Work only on
    chunks with `offset+uncompressed_size > have` (already-complete prefix is kept; it is re-verified
@@ -134,8 +144,9 @@ Per file `F`:
       lower peak RAM; the final whole-file MD5 still gates promotion.
    c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
  4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
-   log `repaired {downloaded_bytes}`. Else delete `tmp`, log error, count the file as failed
-   and continue remaining files; after all files, return `Ok(summary, 3)` (skips the post-phase
+   log the structured `repaired` event (`chunks_total`/`chunks_reused`/`chunks_downloaded`/
+   `chunks_resumed`, `download_bytes`, `final_md5`). Else delete `tmp`, log error, count the file as
+   failed and continue remaining files; after all files, return `Ok(summary, 3)` (skips the post-phase
    so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
    Never modify the original in place; never leave `tmp` behind on success.
 5. `--check-only`: perform only step 1 for all files and report; write nothing.
@@ -158,15 +169,21 @@ from the latest manifest alone (local manifest is a pure optimization).
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
     `repair::purge::purge_extra` and is skipped only in `--dry-run`).
  3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
-   `GameInstallService.cs:788-849`): preserve unknown keys outside the forced set
-   (Starward parity — other keys pass through; comments/other `[sections]` are not
-   preserved, same wholesale-rewrite class as Starward),
-   force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
-   cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
-   `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
-   `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
-   channel SDK and write the real version if a channel ever requires it. Create with `[General]`
-   header if missing.
+   `GameInstallService.cs:788-849`): Starward copies every line except the
+   `[General]` header into an INI stream, forces the keys it owns, and
+   re-serializes one `[General]` block. Reproduced here:
+   - unknown keys pass through; keys from other `[sections]` survive flattened
+     into `[General]` as `Section:Key` (how .NET's INI provider surfaces them),
+   - comment (`;` / `#`) and blank lines are dropped, because the provider never
+     emits them back,
+   - key order is deterministic (file order, then the forced block) instead of
+     .NET's dictionary order; the result is still valid and idempotent,
+   - force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
+     cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
+     `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
+     `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
+     channel SDK and write the real version if a channel ever requires it. Create with `[General]`
+     header if missing.
 
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
@@ -176,7 +193,7 @@ from the latest manifest alone (local manifest is a pure optimization).
    appears in chunk manifests. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
-   `GenshinInstall.cs:228-247`); everything else not in the manifest purges —
+   `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
    including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`,
    `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`, logs, server
    bookkeeping files.

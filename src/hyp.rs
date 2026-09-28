@@ -16,6 +16,10 @@ pub struct HypClient {
     sophon_base: String,
     launcher_id: &'static str,
     game_id: &'static str,
+    /// Per-launcher `channel`/`sub_channel` query values, from
+    /// [`Biz::channel_tuple`]. Only `getGameDeprecatedFileConfigs` uses them.
+    channel: &'static str,
+    sub_channel: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +183,7 @@ impl HypClient {
     /// code must use [`HypClient::new`].
     pub fn new_with_bases(biz: Biz, hyp_base: String, sophon_base: String) -> Result<Self> {
         let (_, launcher_id, game_id) = biz.endpoints();
+        let (channel, sub_channel, _) = biz.channel_tuple();
         let client = reqwest::Client::builder()
             .user_agent("UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)")
             .pool_max_idle_per_host(16)
@@ -190,6 +195,8 @@ impl HypClient {
             sophon_base,
             launcher_id,
             game_id,
+            channel,
+            sub_channel,
         })
     }
 
@@ -201,6 +208,15 @@ impl HypClient {
         self.sophon_base.clone()
     }
 
+    /// Build a HoYoPlay API URL.
+    ///
+    /// NOTE(starward-parity): `with_channel` appends the **per-launcher**
+    /// `channel`/`sub_channel` (`LauncherConfig.Channel` / `.SubChannel`:
+    /// CN `1/1`, global `1/0`, bilibili `14/0`), not a fixed pair. Only
+    /// `getGameDeprecatedFileConfigs` passes it; `getGameConfigs` and
+    /// `getGameBranches` do not.
+    /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L106-L126
+    /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L224
     fn hyp_url(&self, api: &str, with_channel: bool) -> String {
         let mut u = format!(
             "{}/{}?launcher_id={}&language=en-us&game_ids[]={}",
@@ -210,7 +226,10 @@ impl HypClient {
             self.game_id
         );
         if with_channel {
-            u.push_str("&channel=1&sub_channel=0");
+            u.push_str(&format!(
+                "&channel={}&sub_channel={}",
+                self.channel, self.sub_channel
+            ));
         }
         u
     }
@@ -325,17 +344,8 @@ impl HypClient {
         pkg: &GameBranchPackage,
         tag: Option<&str>,
     ) -> Result<ChunkBuild> {
-        let mut url = format!(
-            "{}/getBuild?branch={}&package_id={}&password={}",
-            self.sophon_base(),
-            urlencode(&pkg.branch),
-            urlencode(&pkg.package_id),
-            urlencode(&pkg.password)
-        );
-        if let Some(t) = tag {
-            url.push_str(&format!("&tag={}", urlencode(t)));
-        }
-        self.get_direct(&url).await
+        self.get_direct(&sophon_build_url(&self.sophon_base(), pkg, tag))
+            .await
     }
 
     pub async fn deprecated_files(&self) -> Result<Vec<String>> {
@@ -361,6 +371,28 @@ impl std::fmt::Display for SophonNotFound {
     }
 }
 impl std::error::Error for SophonNotFound {}
+
+/// Build the Sophon `getBuild` URL. `tag = None` asks for the latest build;
+/// `Some(tag)` asks for that exact version (the server answers `retcode -202`
+/// for a tag it no longer serves, which the caller treats as "no local build").
+fn sophon_build_url(base: &str, pkg: &GameBranchPackage, tag: Option<&str>) -> String {
+    let mut url = format!(
+        "{base}/getBuild?branch={}&package_id={}&password={}",
+        urlencode(&pkg.branch),
+        urlencode(&pkg.package_id),
+        urlencode(&pkg.password)
+    );
+    if let Some(t) = tag {
+        url.push_str(&format!("&tag={}", urlencode(t)));
+    }
+    url
+}
+
+/// The only `default_download_mode` this tool can patch. Genshin reports
+/// `DOWNLOAD_MODE_CHUNK`; the other two (`DOWNLOAD_MODE_FILE`,
+/// `DOWNLOAD_MODE_LDIFF`) need the 7z/hdiff paths that v1 does not implement.
+/// See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode`.
+pub const DOWNLOAD_MODE_CHUNK: &str = "DOWNLOAD_MODE_CHUNK";
 
 /// Production API bases for a host key (`mihoyo` vs overseas).
 /// Split out so [`HypClient::new`] and tests share one mapping.
@@ -412,5 +444,55 @@ mod tests {
         let a: S = serde_json::from_str(r#"{"n":12}"#).unwrap();
         let b: S = serde_json::from_str(r#"{"n":"34"}"#).unwrap();
         assert_eq!((a.n, b.n), (12, 34));
+    }
+
+    fn client_for(biz: Biz) -> HypClient {
+        HypClient::new_with_bases(biz, "http://hyp.test/api".into(), "http://sophon.test/api".into())
+            .unwrap()
+    }
+
+    /// The channel query is per-launcher (`LauncherConfig.Channel/SubChannel`),
+    /// not a fixed pair: bilibili must not be sent the global `1/0`.
+    #[test]
+    fn hyp_url_carries_the_per_launcher_channel() {
+        for (biz, launcher, game, ch, sub) in [
+            (Biz::Hk4eCn, "jGHBHlcOq1", "1Z8W5NHUQb", "1", "1"),
+            (Biz::Hk4eGlobal, "VYTpXlbWo8", "gopR6Cufr3", "1", "0"),
+            (Biz::Hk4eBilibili, "umfgRO5gh5", "T2S0Gz4Dr2", "14", "0"),
+        ] {
+            let c = client_for(biz);
+            let url = c.hyp_url("getGameDeprecatedFileConfigs", true);
+            assert_eq!(
+                url,
+                format!(
+                    "http://hyp.test/api/getGameDeprecatedFileConfigs?launcher_id={launcher}&language=en-us&game_ids[]={game}&channel={ch}&sub_channel={sub}"
+                ),
+                "{biz:?}"
+            );
+            // Channel-less APIs must not carry the params at all.
+            let plain = c.hyp_url("getGameConfigs", false);
+            assert!(!plain.contains("channel="), "{plain}");
+            assert!(!plain.contains("sub_channel="), "{plain}");
+        }
+    }
+
+    #[test]
+    fn sophon_build_url_joins_branch_and_omits_tag_for_latest() {
+        let pkg = GameBranchPackage {
+            package_id: "pkg id".into(),
+            branch: "main".into(),
+            password: "p@ss/word".into(),
+            tag: "5.1.0".into(),
+            diff_tags: vec![],
+        };
+        let base = "http://sophon.test/api";
+        assert_eq!(
+            sophon_build_url(base, &pkg, None),
+            "http://sophon.test/api/getBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword"
+        );
+        assert_eq!(
+            sophon_build_url(base, &pkg, Some("5.0.0")),
+            "http://sophon.test/api/getBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword&tag=5.0.0"
+        );
     }
 }

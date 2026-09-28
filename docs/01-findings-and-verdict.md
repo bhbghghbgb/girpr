@@ -117,7 +117,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
 - Deletion comes in **two separate Collapse-handling mechanisms** (do not conflate with Starward's
   post-task sweep above):
   - (a) **Manual orphan purge** — `GenshinInstall.GetUnusedFileInfoList` override
-    (`CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs:176-263`), triggered only by
+    (`CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs:177-263`), triggered only by
     user cleanup UI (`HomePage.xaml.cs:969-981`, `MainPage.Navigation.cs:396-405` → `CleanUpGameFiles()`
     → `InstallManagerBase.PkgVersion.cs:151-188`), never auto before/after repair. Expected set =
     `Repair.ResetAndFetchAssets()` union (Sophon fake-`pkg_version` via
@@ -127,7 +127,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
     (`PresetConfig.cs:86-94`, normally `[]` for Genshin — `GenshinInstall.cs:145-172` sets none) matched
     against `RelativePath` via `WhereMatchPattern` (`PatternMatcher.cs:93-108`, case-insensitive,
     non-matching kept) **plus** per-line `^Audio_<entry>_pkg_version$` built from
-    `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs:228-247`). Note the base-class
+    `..._Data/Persistent/audio_lang_14` (`GenshinInstall.cs:232-241`). Note the base-class
     `config.ini/pkg_version/Persistent/ScreenShot` protections (`InstallManagerBase.PkgVersion.cs:456-535`)
     do NOT apply to this override (except insofar as those files are in the union).
   - (b) **Repair-time redundant pass** — `Check.cs:26-67` → `CheckRedundantFiles` (before the hash loop)
@@ -135,7 +135,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
     `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
 - **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
   `{latest chunk-manifest paths} ∪ {config.ini}` plus filename-pattern keeps for
-  `audio_lang_*` + `Audio_*_pkg_version` (Collapse `GenshinInstall.cs:228-247` parity).
+  `audio_lang_*` + `Audio_*_pkg_version` (Collapse `GenshinInstall.cs:232-241` parity).
   Everything else not in the live manifest purges into the single `deleted_extra_bytes` counter —
   including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`,
   `*deletefiles*`), unselected audio, `ScreenShot/`, logs, and server

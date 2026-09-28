@@ -200,6 +200,10 @@ pub struct MockOpts {
     pub scan_dir: String,
     pub res_dir: String,
     pub cache_dir: String,
+    /// `getGameConfigs.default_download_mode`. `None` serves the live
+    /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
+    /// `Some("")` to model the API omitting the field.
+    pub download_mode: Option<String>,
 }
 
 pub struct MockServer {
@@ -207,6 +211,9 @@ pub struct MockServer {
     pub sophon_base: String,
     /// chunk ids fetched since start (proves reuse / no-download cases)
     pub chunk_requests: Arc<Mutex<Vec<String>>>,
+    /// every request target seen, in order (proves query params, e.g. the
+    /// per-launcher `channel`/`sub_channel` on `getGameDeprecatedFileConfigs`)
+    pub targets: Arc<Mutex<Vec<String>>>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -236,8 +243,10 @@ impl MockServer {
         ));
         let fixture = Arc::new(fixture);
         let chunk_requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let targets: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         let log = chunk_requests.clone();
+        let seen = targets.clone();
         let handle = tokio::spawn(async move {
             loop {
                 let (socket, _) = match listener.accept().await {
@@ -247,8 +256,9 @@ impl MockServer {
                 let responses = responses.clone();
                 let fixture = fixture.clone();
                 let log = log.clone();
+                let seen = seen.clone();
                 tokio::spawn(async move {
-                    serve_one(socket, &responses, &fixture, &log).await;
+                    serve_one(socket, &responses, &fixture, &log, &seen).await;
                 });
             }
         });
@@ -259,12 +269,25 @@ impl MockServer {
             hyp_base,
             sophon_base,
             chunk_requests,
+            targets,
             handle,
         }
     }
 
     pub fn chunk_hits(&self) -> Vec<String> {
         self.chunk_requests.lock().unwrap().clone()
+    }
+
+    /// Every request target the server has seen, in order.
+    pub fn request_targets(&self) -> Vec<String> {
+        self.targets.lock().unwrap().clone()
+    }
+
+    /// The query string of the first request whose target contains `needle`.
+    pub fn first_target_with(&self, needle: &str) -> Option<String> {
+        self.request_targets()
+            .into_iter()
+            .find(|t| t.contains(needle))
     }
 }
 
@@ -298,7 +321,10 @@ fn build_responses(
                 "audio_pkg_scan_dir": opts.scan_dir,
                 "audio_pkg_res_dir": opts.res_dir,
                 "audio_pkg_cache_dir": opts.cache_dir,
-                "default_download_mode": "DOWNLOAD_MODE_CHUNK",
+                "default_download_mode": opts
+                    .download_mode
+                    .clone()
+                    .unwrap_or_else(|| "DOWNLOAD_MODE_CHUNK".to_string()),
                 "res_category_dir": "",
                 "blacklist_dir": "",
                 "enable_resource_blacklist": false
@@ -383,6 +409,7 @@ async fn serve_one(
     r: &Responses,
     fx: &GameFixture,
     log: &Arc<Mutex<Vec<String>>>,
+    seen: &Arc<Mutex<Vec<String>>>,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut sock = socket;
@@ -408,6 +435,7 @@ async fn serve_one(
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/")
         .to_string();
+    seen.lock().unwrap().push(target.clone());
 
     let (status, ctype, body): (&str, &str, Vec<u8>) =
         if target.contains("getGameConfigs") {

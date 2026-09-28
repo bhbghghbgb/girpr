@@ -15,7 +15,7 @@ pub const PROGRESS_INTERVAL_SECS: u64 = 10;
 
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Summary {
     pub files_total: u64,
     pub files_skipped: AtomicU64,

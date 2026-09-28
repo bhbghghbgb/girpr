@@ -76,11 +76,15 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         config.audio_pkg_cache_dir,
         config.default_download_mode
     );
-    // Chunk repair is the only mode this tool implements; FILE mode has no
-    // chunk manifests to patch from, so refuse rather than guess.
-    if config.default_download_mode == "DOWNLOAD_MODE_FILE" {
+    // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
+    // have no per-file chunk manifests to patch from, so refuse rather than
+    // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
+    // i.e. exit 2 instead of the documented usage error).
+    // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
+    if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
         return Err(RunFailure::usage(anyhow::anyhow!(
-            "game is in legacy FILE mode; chunk repair not supported (unexpected for Genshin)"
+            "game download mode {:?} is not chunk mode; chunk repair not supported (unexpected for Genshin)",
+            config.default_download_mode
         )));
     }
 

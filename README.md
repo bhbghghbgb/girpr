@@ -38,8 +38,9 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
-| `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
+| `src/util.rs` | MD5, `config.ini` read/Starward-shaped rewrite, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
+| `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + deterministic fixture | `MockServer`, `build_fixture`, `MockOpts` |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
@@ -80,7 +81,15 @@ flowchart TD
   `TRACE` to `<exe-dir>/logs/girpr_<timestamp>.log`.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
-  `4` check-only found damage.
+  `4` check-only found damage. Every argument-level failure (unknown flag, bad
+  enum value, `--io-threads 0`, bad `--audio`) is `1` — clap's default `2` is
+  remapped so it cannot collide with "metadata/network". `--help` is `0`.
+- `getGameConfigs.default_download_mode` must be `DOWNLOAD_MODE_CHUNK`; anything
+  else (including `DOWNLOAD_MODE_FILE` / `DOWNLOAD_MODE_LDIFF`, which need the
+  7z/hdiff paths v1 lacks) exits `1` instead of failing later at `getBuild`.
+- `getGameDeprecatedFileConfigs` is the one API that needs `channel`/`sub_channel`,
+  and it uses the per-launcher pair (cn `1/1`, global `1/0`, bili `14/0`) — the
+  deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0; purge lists are only logged).
 - purge: `--purge-before` and `--purge-after` run the **same** `purge::purge_extra`
@@ -98,7 +107,8 @@ last-match-wins (`util::read_game_version`, Starward parity).
 
 ## Requirements / build / usage
 
-- Rust 1.80+; network to HoYoPlay + Sophon CDNs (production runs only).
+- Rust 1.85+ (the crate is `edition = "2024"`); network to HoYoPlay + Sophon
+  CDNs (production runs only).
 - Game dir (read/write); free bytes ≈ `io_threads × largest file` beyond the game.
 
 ```powershell
@@ -115,7 +125,7 @@ cargo build --release
 |---|---|---|
 | `--game-path <DIR>` | (required) | Install dir (`config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
-| `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr`; `none` = game-only (overwrites scan file) |
+| `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr` (case-insensitive, `_` accepted for `-`; display names `chinese`/`english`/`english(us)`/`japanese`/`korean` also work); `none` = game-only (overwrites scan file) |
 | `--io-threads <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2 |
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
 | `--check-only` | off | Verify size+MD5; writes nothing |
@@ -126,7 +136,7 @@ cargo build --release
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 32 unit + 10 integration, all offline
+cargo test            # 37 unit + 15 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
 ```
@@ -144,8 +154,11 @@ cargo clippy --all-targets
 - Fixture: 2 files / 3 chunks with fixed bytes (`build_fixture`); chunk fetches are
   logged (`mock.chunk_hits()`) so reuse/resume tests assert exact download sets.
 - Unit tests sit next to the code they cover, one `mod tests` per module: pure
-  phases only (plan, purge classification, audio scan file, `config.ini`, REPORT/
-  SUMMARY formatting, flag validation, manifest filter, local chunk map).
+  phases only (plan, purge classification, audio scan file, `config.ini`, URL and
+  query building, REPORT/SUMMARY formatting, flag validation, manifest filter,
+  local chunk map).
+- `tests/cli_contract.rs` runs the built binary to pin the process-level contract
+  (every arg error → `1`, `--help` → `0`); it never touches a game directory.
 - To add a case: extend `MockOpts` (deprecated list, audio dirs) or the fixture,
   then write one `#[tokio::test]` calling `repair::run` and asserting
   `(summary, exit code)` + on-disk state. Use `jobs=1` when asserting chunk order.
@@ -159,6 +172,9 @@ cargo clippy --all-targets
 4. Per-file temp + atomic move: transient cost is one `_tmp` beside the file — no
    game duplicate, no blob store, no zip staging.
 5. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
+   The bump is Starward-shaped: one `[General]` block, keys from other `[sections]`
+   flattened as `Section:Key`, comments dropped, owned keys (`game_version`,
+   `game_biz`, `channel`/`sub_channel`/`cps`, `sdk_version`) forced.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
 SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,

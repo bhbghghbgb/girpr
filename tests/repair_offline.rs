@@ -14,6 +14,8 @@
 //! 6. verified local-slice reuse downloads only the bad chunk (S2)
 //! 7. partial `_tmp` prefix resumed by length, gated by final MD5 (S3)
 //! 8. explicit audio selection overwrites the scan file
+//! 9. a non-chunk `default_download_mode` is refused with exit 1
+//! 10. the deprecated-files call carries the per-launcher channel
 
 #[path = "common/mod.rs"]
 mod common;
@@ -24,9 +26,18 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
+    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
+}
+
+fn ctx_for_biz(
+    game_dir: std::path::PathBuf,
+    mock: &MockServer,
+    jobs: usize,
+    biz: Biz,
+) -> RunCtx {
     RunCtx {
         game_dir,
-        biz: Biz::Hk4eGlobal,
+        biz,
         audio: HashSet::new(),
         audio_explicit: false,
         jobs,
@@ -365,4 +376,80 @@ async fn explicit_audio_selection_overwrites_scan_file() {
     std::fs::remove_dir_all(&dir2).ok();
 
     mock.stop();
+}
+
+#[tokio::test]
+async fn non_chunk_download_mode_is_a_usage_error() {
+    // Only DOWNLOAD_MODE_CHUNK is patchable; FILE and LDIFF need the 7z/hdiff
+    // paths v1 does not have, so the run must stop with exit 1 (not let getBuild
+    // -202 turn it into a metadata error).
+    for mode in ["DOWNLOAD_MODE_FILE", "DOWNLOAD_MODE_LDIFF", ""] {
+        let fx = build_fixture();
+        let mock = MockServer::start(
+            fx,
+            MockOpts {
+                download_mode: Some(mode.to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir("dlmode");
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, &f.data);
+        }
+        let err = repair::run(ctx_for(dir.clone(), &mock, 1))
+            .await
+            .expect_err("non-chunk mode must fail");
+        assert_eq!(err.exit_code, 1, "mode {mode:?} must be a usage error");
+        assert!(
+            err.source.to_string().contains("not chunk mode"),
+            "mode {mode:?}: {err}"
+        );
+        // No manifests were fetched and nothing was written.
+        assert!(mock.first_target_with("getBuild").is_none(), "mode {mode:?}");
+        assert!(!dir.join("config.ini").exists(), "mode {mode:?}");
+        mock.stop();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[tokio::test]
+async fn deprecated_files_call_carries_the_per_launcher_channel() {
+    // `getGameDeprecatedFileConfigs` is the one call that needs
+    // channel/sub_channel, and the values are per launcher: bilibili is 14/0,
+    // not the global 1/0.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("channel");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    repair::run(ctx_for_biz(dir.clone(), &mock, 1, Biz::Hk4eBilibili))
+        .await
+        .expect("bilibili run");
+
+    let dep = mock
+        .first_target_with("getGameDeprecatedFileConfigs")
+        .expect("deprecated call made");
+    assert!(dep.contains("channel=14"), "{dep}");
+    assert!(dep.contains("sub_channel=0"), "{dep}");
+    assert!(dep.contains("game_ids[]=T2S0Gz4Dr2"), "{dep}");
+    // The two channel-less APIs must not carry the params.
+    for api in ["getGameConfigs", "getGameBranches"] {
+        let t = mock.first_target_with(api).expect("call made");
+        assert!(!t.contains("channel="), "{api} must omit channel: {t}");
+    }
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
 }

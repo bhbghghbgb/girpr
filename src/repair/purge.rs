@@ -145,7 +145,7 @@ pub enum PurgeVerdict {
 /// 1. Manifest membership (Collapse expected set).
 /// 2. `config.ini` ([`keep_set`] — the only metadata keep).
 /// 3. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
-///    `Audio_*_pkg_version`, `GenshinInstall.cs:228-247`). v1 matches broadly
+///    `Audio_*_pkg_version`, `GenshinInstall.cs:232-241`). v1 matches broadly
 ///    by pattern rather than per-`audio_lang_14`-line exact regexes.
 ///
 ///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
@@ -171,7 +171,7 @@ pub fn classify_purge_path(
     PurgeVerdict::Purge
 }
 
-/// Collapse `GenshinInstall.cs:228-247` parity: `audio_lang_14` (any
+/// Collapse `GenshinInstall.cs:232-241` parity: `audio_lang_14` (any
 /// `audio_lang_*`) plus `Audio_<lang>_pkg_version` (matched case-insensitively
 /// — on disk it is `Audio_English_pkg_version`, i.e. capital A).
 fn is_audio_version_file(file_name: &str) -> bool {
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn purge_keeps_audio_version_files_case_insensitive() {
         let (expected, keep) = purge_fixture();
-        // Collapse GenshinInstall.cs:228-247 parity (audio_lang_14 + per-lang pkg_version).
+        // Collapse GenshinInstall.cs:232-241 parity (audio_lang_14 + per-lang pkg_version).
         for rel in [
             "audio_lang_14",
             "Audio_English_pkg_version",

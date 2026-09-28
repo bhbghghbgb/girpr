@@ -10,7 +10,7 @@ the exit-code contract, the submodules own the work.
 
 ```text
 Cargo.toml            # clap, tokio, reqwest, serde, prost, md5, zstd, tracing, anyhow, walkdir, regex
-src/main.rs           # shim: Args::parse -> logging::init_tracing -> repair::run -> SUMMARY -> exit
+src/main.rs           # shim: Args::try_parse (arg errors -> exit 1) -> logging::init_tracing -> repair::run -> SUMMARY -> exit
 src/lib.rs            # module map + re-exports
 src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx -> RunCtx
 src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit code)
@@ -28,8 +28,9 @@ src/repair/check.rs   # --check-only size+MD5 verification loop (step 6.5)
 src/repair/file.rs    # per-file repair: skip check, _tmp resume, slice reuse, download, promote (step 6)
 src/repair/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 src/repair/audio.rs   # audio scan-file read/write + effective selection
-src/util.rs           # md5 helpers, file length, config.ini read/write, ignore/blacklist files, rel-path normalization
+src/util.rs           # md5 helpers, file length, config.ini read + Starward-shaped rewrite, ignore/blacklist files, rel-path normalization
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
+tests/cli_contract.rs     # binary-level argument handling and exit codes
 tests/common/mod.rs       # mock HoYoPlay+Sophon server and the deterministic fixture
 ```
 
@@ -46,10 +47,12 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--log-level error|warn|info|debug|trace] [--json-summary]
 ```
 
-Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args, unusable game
-path, legacy FILE mode), 2 metadata/network, 3 write/verify (counted per-file repair
+Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args — clap-level
+included, so the code remaps clap's default 2 — unusable game path, non-chunk
+`default_download_mode`), 2 metadata/network, 3 write/verify (counted per-file repair
 failures via `Ok(summary, 3)` with `SUMMARY`, plus fatal config.ini / audio-scan write,
-files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage. Fatal
+files-cleanup via `Err(RunFailure::write)` with `FATAL` only), 4 check-only found damage. `--help`
+is the only other 0. Fatal
 errors carry their class via `config::RunFailure` at the raise site; per-file verify
 failures continue and skip the post-phase instead. Automation: `tracing` diagnostics
 on stderr; the begin `REPORT` line (versions + API fields), `PROGRESS` lines, and
@@ -65,6 +68,7 @@ the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and a
 | Begin `REPORT` | `report::format_report_line` (2.5) | Starward |
 | Manifest fetch/verify/parse | `repair::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
+| Deprecated-file list (lazy, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::purge_extra(game_dir, plan, keep_set(), dry_run)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Per-file repair | `repair::file::repair_all` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd decode → write at offset → final md5 → rename (6) | Starward |
 | Check-only | `repair::check::verify_plan` (6.5) | Starward |
@@ -80,17 +84,24 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 `cargo test` runs two layers, both offline by construction:
 
-- **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump,
-  audio-lang mapping and flag validation, local chunk-map build, manifest filter,
-  work-list build/dedup, expected-set/purge classification, audio scan file,
+- **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump
+  (including `[section]` flattening and duplicate collapse), audio-lang mapping and
+  flag validation, API URL/query building (per-launcher `channel`/`sub_channel`,
+  `getBuild` tag encoding), local chunk-map build, manifest filter, work-list
+  build/dedup, expected-set/purge classification, audio scan file,
   REPORT/PROGRESS/SUMMARY formatting, HoYoPlay wrapper and int-or-string parsing.
 - **Integration tests** (`tests/repair_offline.rs`): one `#[tokio::test]` per
   behavior, each running the full `repair::run` pipeline against a `MockServer`
   on `127.0.0.1:<ephemeral>` (`tests/common/mod.rs`) injected through
   `RunCtx::hyp_base_override` / `sophon_base_override`. Covers repair, check-only
-  clean/dirty, dry-run, both purge timings, deprecated deletes, S2 slice reuse and
-  S3 `_tmp` resume (asserting the exact chunk download set), and the audio scan file.
+  clean/dirty, dry-run, both purge timings, deprecated deletes, the non-chunk
+  `default_download_mode` refusal, the per-launcher channel on the deprecated
+  call, S2 slice reuse and S3 `_tmp` resume (asserting the exact chunk download
+  set), and the audio scan file.
   `--dry-run`/`--check-only` are covered here, so no live-game CI dependency exists.
+- **Binary-level tests** (`tests/cli_contract.rs`): run the built binary
+  (`CARGO_BIN_EXE_girpr`) to pin the process exit codes — every argument error is
+  `1`, never clap's `2`, and `--help` is `0`. No game directory is touched.
 
 ## 5. Logging & correlation
 
