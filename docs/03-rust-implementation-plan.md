@@ -72,7 +72,7 @@ the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and a
 | Files-cleanup before | `repair::purge::purge_extra(game_dir, plan, keep_set(), dry_run)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Per-file repair | `repair::file::repair_all` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd decode → write at offset → final md5 → rename (6) | Starward |
 | Check-only | `repair::check::verify_plan` (6.5) | Starward |
-| Post deletes/config | `repair::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Starward-handling |
+| Post deletes/config | `repair::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
 | Files-cleanup after | `repair::purge::purge_extra(game_dir, plan, keep_set(), false)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
 | Summary | `report::format_summary_line`, emitted by `main` (8) | — |
 

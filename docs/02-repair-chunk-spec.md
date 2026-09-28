@@ -168,16 +168,20 @@ from the latest manifest alone (local manifest is a pure optimization).
    leftover empty cache dirs are removed by the files-cleanup's emptied-dir sweep
    whenever either `--purge-before` or `--purge-after` runs (the sweep lives inside
     `repair::purge::purge_extra` and is skipped only in `--dry-run`).
- 3. Rewrite `config.ini` (Starward `SetGameConfigIniAsync` parity,
-   `GameInstallService.cs:788-849`): preserve unknown keys outside the forced set
-   (Starward parity — other keys pass through; comments/other `[sections]` are not
-   preserved, same wholesale-rewrite class as Starward),
-   force `game_version=<latest>`, `game_biz`, `channel/sub_channel/cps` per biz:
-   cn `1/1/hyp_mihoyo`, global `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`), and
-   `sdk_version=` — always empty in v1: Starward writes the channel SDK version or
-   `""` for the same key, and v1 does no SDK fetch. TODO(sdk_version): fetch the
-   channel SDK and write the real version if a channel ever requires it. Create with `[General]`
-   header if missing.
+ 3. Rewrite `config.ini` (Collapse `GameVersionBase` parity:
+    section-preserving surgical update, never a wholesale rewrite):
+    every `[section]` survives in first-seen order (duplicates merged, names
+    case-insensitive); only keys inside `[General]` (case-insensitive) are
+    touched. Force `game_version=<latest>`, `game_biz`,
+    `channel/sub_channel/cps` per biz (cn `1/1/hyp_mihoyo`, global
+    `1/0/hyp_hoyoverse`, bili `14/0/hyp_mihoyo`; `game_biz` is a deliberate
+    Starward carryover — Collapse never writes it, but game/launcher interop
+    expects it). `sdk_version` is preserved when present, created empty when
+    missing (Collapse only holds the empty default; the real SDK lives in
+    `plugin_sdk_version`, never touched). `uapc`/`wpf_version`/`predownload`/
+    `plugin_*` are pure passthrough, never created. Comments and blank lines
+    are dropped, keys within a section are sorted alphabetically, blank line
+    after each section. Create `[General]` if missing.
 
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
