@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace, warn};
 
-use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, FileRec, open_db};
+use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, CacheWrite, FileRec, open_db};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
@@ -92,6 +92,80 @@ impl EffRec {
             hashes: HashMap::new(),
         }
     }
+}
+
+/// True when `prior` still describes a file at exactly this stat.
+///
+/// This is the *only* definition of row freshness in the crate, and it is
+/// deliberately also the only thing [`merge_row`] consults. A run that decides
+/// "is this row reusable?" by one rule and decides "what do I store?" by another
+/// can write back a digest it just decided was stale.
+fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) -> bool {
+    prior
+        .map(|c| c.kind == "file" && c.size == size && c.mtime_ns == mtime_ns)
+        .unwrap_or(false)
+}
+
+/// The row a scan stores for one file: W1's merge-write, as a pure function.
+///
+/// `computed` is what this run hashed (empty for `--hash none` and for a
+/// stat-only pass); `prior` is whatever the cache held, or `None`.
+///
+/// **The write shape.** What the row keeps afterwards depends only on whether
+/// the stat still matches — never on what this run computed, and never on
+/// whether the run trusted the cache:
+///
+/// | stat            | digests stored                                    |
+/// | --------------- | ------------------------------------------------- |
+/// | changed         | only the algos computed this run (all old ones are suspect) |
+/// | unchanged       | those, merged over the algos already on the row  |
+///
+/// Trust is absent from that table on purpose. Distrusting the cache means
+/// "re-read the file", not "forget what we already know about it"; keying the
+/// write on the trust flag would make every `update` run (which always distrusts)
+/// discard digests it never recomputed.
+///
+/// The unchanged branch is what keeps a digest-free scan from destroying good
+/// digests: `--hash none` and stat-only recording both land here with an empty
+/// `computed`, so they record the new stat and leave the rest of the row alone.
+///
+/// It is kept as a named function rather than inlined in the scan loop because
+/// it is a cache-durability rule, not a scan detail, and two scan
+/// implementations would be two chances to spell it differently.
+fn merge_row(
+    size: u64,
+    mtime_ns: i64,
+    computed: HashMap<String, Vec<u8>>,
+    prior: Option<&FileRec>,
+) -> FileRec {
+    let hashes = match prior.filter(|c| stat_matches(Some(c), size, mtime_ns)) {
+        Some(c) => {
+            let mut merged = c.hashes.clone();
+            merged.extend(computed);
+            merged
+        }
+        None => computed,
+    };
+    FileRec {
+        kind: "file".into(),
+        size,
+        mtime_ns,
+        hashes,
+    }
+}
+
+/// Record a directory as presence-only, leaving an existing dir row alone.
+///
+/// A dir row is fully determined by its key, so rewriting an identical one per
+/// scan would be pure write amplification on a tree with many directories. The
+/// write is still made when the row is absent or is a *file* row: a file that
+/// became a directory must lose its digests, or a later scan would read a
+/// directory's stat against a digest taken from the file that used to be there.
+fn put_dir_row(w: &mut CacheWrite<'_>, rel: &str) -> Result<()> {
+    if w.get(rel)?.map(|c| c.kind != "dir").unwrap_or(true) {
+        w.put(rel, &FileRec::dir())?;
+    }
+    Ok(())
 }
 
 /// Build the effective map for a folder, using the embedded cache to short-circuit.
@@ -184,16 +258,16 @@ pub fn build_effective_folder(
     };
     let mut last_prog = std::time::Instant::now();
     for e in live {
-        if is_excluded(&e.rel, includes, excludes, case_sensitive) {
+        // `live_set` was built from this same predicate over this same vec, so
+        // membership here is the exclusion test — and a hash lookup rather than
+        // re-running every glob against the path.
+        if !live_set.contains(&e.rel) {
             continue;
         }
         if e.is_dir {
             eff.insert(e.rel.clone(), EffRec::dir());
             if let Some(w) = batch.as_mut() {
-                let cur: Option<FileRec> = w.get(&e.rel)?;
-                if cur.map(|c| c.kind != "dir").unwrap_or(true) {
-                    w.put(&e.rel, &FileRec::dir())?;
-                }
+                put_dir_row(w, &e.rel)?;
             }
             continue;
         }
@@ -227,10 +301,7 @@ pub fn build_effective_folder(
             }
             None => (None, false),
         };
-        let fresh = cached
-            .as_ref()
-            .map(|c| c.size == e.size && c.mtime_ns == e.mtime_ns && c.kind == "file")
-            .unwrap_or(false);
+        let fresh = stat_matches(cached.as_ref(), e.size, e.mtime_ns);
         // Reuse the cached row only when the stat still matches, this side
         // trusts the cache, and every requested algo is present. Every other
         // case falls through to the rehash below.
@@ -257,48 +328,17 @@ pub fn build_effective_folder(
             let computed =
                 hash_file(&e.abs, algos).with_context(|| format!("hash {}", e.abs.display()))?;
             trace!(rel = %e.rel, algos = ?computed.keys().collect::<Vec<_>>(), "hashed");
-            // What the row ends up holding is decided by `fresh` alone, never
-            // by `no_trust_cached_hashes`: distrusting the cache means "re-read
-            // the file", not "forget what we already know about it". Keying the
-            // write on the trust flag instead would make every `update` run
-            // (which always distrusts) discard digests it never recomputed.
-            //
-            //   stat changed   -> the content is assumed changed, so every
-            //                     stored digest is suspect and only the algos
-            //                     computed this run are kept;
-            //   stat unchanged -> the file is assumed identical, so digests
-            //                     this run did not ask for are still valid and
-            //                     ride along.
-            //
-            // The second case is what keeps a digest-free scan from destroying
-            // good digests: `--hash none` and stat-only recording both land
-            // here with an empty `computed`.
-            let hashes = match cached.as_ref() {
-                Some(c) if fresh => {
-                    let mut merged = c.hashes.clone();
-                    merged.extend(computed);
-                    merged
-                }
-                _ => computed,
-            };
+            let row = merge_row(e.size, e.mtime_ns, computed, cached.as_ref());
             if let Some(w) = batch.as_mut() {
-                w.put(
-                    &e.rel,
-                    &FileRec {
-                        kind: "file".into(),
-                        size: e.size,
-                        mtime_ns: e.mtime_ns,
-                        hashes: hashes.clone(),
-                    },
-                )?;
+                w.put(&e.rel, &row)?;
             }
             eff.insert(
                 e.rel.clone(),
                 EffRec {
                     kind: "file".into(),
-                    size: e.size,
-                    mtime_ns: e.mtime_ns,
-                    hashes,
+                    size: row.size,
+                    mtime_ns: row.mtime_ns,
+                    hashes: row.hashes,
                 },
             );
             n_hashed += 1;
@@ -537,5 +577,138 @@ pub fn load_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Sid
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file row carrying `md5` and `sha256` digests, distinguishable by a
+    /// single byte so an assertion cannot pass on length alone.
+    fn row(size: u64, mtime_ns: i64, md5: u8, sha256: u8) -> FileRec {
+        FileRec {
+            kind: "file".into(),
+            size,
+            mtime_ns,
+            hashes: [
+                ("md5".to_string(), vec![md5; 16]),
+                ("sha256".to_string(), vec![sha256; 32]),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    fn digests(algos: &[(&str, u8)]) -> HashMap<String, Vec<u8>> {
+        algos
+            .iter()
+            .map(|(a, b)| (a.to_string(), vec![*b; 16]))
+            .collect()
+    }
+
+    fn algos_of(rec: &FileRec) -> Vec<String> {
+        let mut v: Vec<String> = rec.hashes.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    // The whole write rule is one question: does the stat still match?
+
+    #[test]
+    fn stat_matches_only_an_identical_file_row() {
+        let r = row(10, 99, 1, 2);
+        assert!(stat_matches(Some(&r), 10, 99), "same size and mtime");
+        assert!(!stat_matches(Some(&r), 11, 99), "size moved");
+        assert!(!stat_matches(Some(&r), 10, 100), "mtime moved");
+        assert!(!stat_matches(None, 10, 99), "no prior row");
+    }
+
+    /// A dir row is presence-only, so its stat fields are all zero. Without the
+    /// kind check, a file that replaced a directory of the same name could
+    /// inherit the directory's (empty) digest set as a "fresh" match, and a
+    /// 0-byte file at mtime 0 would be judged fresh against it forever.
+    #[test]
+    fn stat_matches_rejects_a_dir_row() {
+        assert!(!stat_matches(Some(&FileRec::dir()), 0, 0));
+    }
+
+    #[test]
+    fn merge_row_without_a_prior_keeps_only_what_was_computed() {
+        let out = merge_row(10, 99, digests(&[("md5", 7)]), None);
+        assert_eq!((out.size, out.mtime_ns), (10, 99));
+        assert_eq!(algos_of(&out), vec!["md5"]);
+        assert_eq!(out.hashes["md5"], vec![7u8; 16]);
+    }
+
+    /// Stat changed: the content is assumed to have changed with it, so every
+    /// stored digest is suspect — including `sha256`, which this run never asked
+    /// for and therefore never had reason to distrust. This is the drop that
+    /// keeps a changed file from being judged against its pre-change digest.
+    #[test]
+    fn merge_row_drops_unrequested_digests_when_the_stat_changed() {
+        let prior = row(10, 99, 1, 2);
+        let out = merge_row(10, 100, digests(&[("md5", 7)]), Some(&prior));
+        assert_eq!(algos_of(&out), vec!["md5"], "sha256 was never recomputed");
+        assert_eq!(
+            out.hashes["md5"],
+            vec![7u8; 16],
+            "and md5 took the new value"
+        );
+    }
+
+    /// Stat unchanged: digests this run did not ask for are still valid and ride
+    /// along, while the ones it did ask for are replaced.
+    #[test]
+    fn merge_row_merges_over_the_prior_row_when_the_stat_holds() {
+        let prior = row(10, 99, 1, 2);
+        let out = merge_row(10, 99, digests(&[("md5", 7)]), Some(&prior));
+        assert_eq!(algos_of(&out), vec!["md5", "sha256"], "sha256 rides along");
+        assert_eq!(out.hashes["md5"], vec![7u8; 16], "md5 was recomputed");
+        assert_eq!(out.hashes["sha256"], vec![2u8; 32], "sha256 was not");
+    }
+
+    /// `--hash none` with an unchanged stat: stat is recorded, digests survive.
+    /// This is the case that a digest-free scan must get right, since it is the
+    /// only thing standing between `girsync update --hash none` and destroying
+    /// every digest in the cache.
+    #[test]
+    fn merge_row_with_nothing_computed_preserves_digests_when_the_stat_holds() {
+        let prior = row(10, 99, 1, 2);
+        let out = merge_row(10, 99, HashMap::new(), Some(&prior));
+        assert_eq!(algos_of(&out), vec!["md5", "sha256"]);
+        assert_eq!(out.hashes["md5"], vec![1u8; 16]);
+    }
+
+    /// `--hash none` with a *changed* stat: the row becomes stat-only. A row
+    /// with a stat and no digest is a normal, valid state, and under W2 it is
+    /// the expected one for every file a lazy scan decided by stat.
+    #[test]
+    fn merge_row_with_nothing_computed_drops_digests_when_the_stat_changed() {
+        let prior = row(10, 99, 1, 2);
+        let out = merge_row(10, 100, HashMap::new(), Some(&prior));
+        assert!(out.hashes.is_empty(), "stat-only row");
+        assert_eq!((out.size, out.mtime_ns), (10, 100));
+    }
+
+    #[test]
+    fn put_dir_row_writes_when_absent_or_wrong_kind() {
+        let db = CacheDb::open_temp(true).unwrap();
+        let mut w = db.begin_write().unwrap();
+        // Absent -> written.
+        put_dir_row(&mut w, "a").unwrap();
+        assert!(w.get("a").unwrap().unwrap().is_dir());
+        // Already a dir -> left alone, so a dir-heavy tree is not rewritten per
+        // scan for no change.
+        w.put("b", &FileRec::dir()).unwrap();
+        put_dir_row(&mut w, "b").unwrap();
+        assert!(w.get("b").unwrap().unwrap().is_dir());
+        // A *file* row must lose its digests: a directory replaced it, and a
+        // later scan must not read the directory's stat against them.
+        w.put("c", &row(10, 99, 1, 2)).unwrap();
+        put_dir_row(&mut w, "c").unwrap();
+        let c = w.get("c").unwrap().unwrap();
+        assert!(c.is_dir());
+        assert!(c.hashes.is_empty());
     }
 }
