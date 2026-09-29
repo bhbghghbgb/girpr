@@ -344,6 +344,17 @@ pub enum Side {
     Record(PathBuf),
 }
 
+impl Side {
+    /// The cache file this side reads from or writes to: a record side *is* its
+    /// cache, a folder side is backed by the `<root>/girpr-cache` inside it.
+    pub fn cache_path(&self) -> PathBuf {
+        match self {
+            Side::Record(p) => p.clone(),
+            Side::Folder(root) => root.join(CACHE_PREFIX),
+        }
+    }
+}
+
 /// Classify an input path by basename: `girpr-cache*` means record, else folder.
 pub fn classify(p: &Path) -> Side {
     if is_record_path(p) {
@@ -351,6 +362,49 @@ pub fn classify(p: &Path) -> Side {
     } else {
         Side::Folder(p.to_path_buf())
     }
+}
+
+/// Reject two sides that would resolve to the same cache file.
+///
+/// redb permits one live handle per file, so a run must never name the same
+/// cache twice. This covers every shape of the collision in one predicate: the
+/// same folder on both sides, the same record on both sides, and a folder
+/// paired with the record that lives inside it. The identity compared is the
+/// *canonical* cache path, so two spellings of one target (`F/sub/..` vs `F`)
+/// collide too. Canonicalization falls back to the raw path when it fails, so a
+/// missing folder still reaches `load_side` and reports "not found" rather than
+/// a canonicalize error.
+///
+/// Beyond the handle clash, a self-collision makes the run meaningless. A
+/// folder side populates its cache as a side effect of scanning, so a record
+/// compared against its own folder is diffed against a view the very same run
+/// is still mutating: a path reported as drifted on one line is written into the
+/// record before the next, and a follow-up run over the same pair comes back
+/// clean. The audit silently repairs the drift it was asked to report, which is
+/// exactly the property a comparison is supposed to lack.
+pub fn ensure_distinct_sides(src: &Side, dst: &Side) -> Result<()> {
+    let a = cache_identity(src);
+    let b = cache_identity(dst);
+    if a == b {
+        bail!("src and dst resolve to the same cache {}", display_path(&a));
+    }
+    Ok(())
+}
+
+/// Canonical cache path of a side. A path that does not exist yet cannot
+/// collide with anything but an identically-spelled one, so the raw path is a
+/// good enough identity.
+fn cache_identity(side: &Side) -> PathBuf {
+    let raw = side.cache_path();
+    raw.canonicalize().unwrap_or(raw)
+}
+
+/// Render a path for humans, dropping the `\\?\` verbatim prefix that
+/// `canonicalize` adds on Windows — a user never types it, so echoing it back
+/// only makes the message harder to match against a flag.
+fn display_path(p: &Path) -> String {
+    let s = p.display().to_string();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 /// Effective map for a record or folder side. All four combinations work.

@@ -19,13 +19,13 @@ mod apply;
 mod plan;
 mod rename;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use tracing::info;
 
 use crate::cache::{CACHE_PREFIX, CacheDb, backup_db, open_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
-use crate::effective::build_effective_folder;
+use crate::effective::{build_effective_folder, classify, ensure_distinct_sides};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -210,17 +210,9 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
     if !src.is_dir() || !dst.is_dir() {
         bail!("src and dst must both be directories");
     }
-    // Compare canonical paths: two spellings of one folder would otherwise make
-    // the run delete src out from under itself.
-    let canon_src = src
-        .canonicalize()
-        .with_context(|| format!("canon {}", src.display()))?;
-    let canon_dst = dst
-        .canonicalize()
-        .with_context(|| format!("canon {}", dst.display()))?;
-    if canon_src == canon_dst {
-        bail!("src == dst");
-    }
+    // One cache per run: two spellings of one folder would otherwise make the
+    // mirror delete src out from under itself, on top of the handle clash.
+    ensure_distinct_sides(&classify(src), &classify(dst))?;
     if jobs == 0 {
         bail!("--jobs must be >= 1");
     }

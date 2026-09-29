@@ -341,6 +341,11 @@ fn lock_backups_and_snapshots_created() {
 
 /// A record side is read as-is: comparing record vs folder adds no rows to
 /// the record.
+///
+/// The folder must be a *different* root. `compare` refuses a record paired
+/// with the folder that holds it — a folder side rewrites its cache as it
+/// scans, so the "before" snapshot would be repaired by the run under test and
+/// the assertion would hold vacuously.
 #[test]
 fn lock_record_side_is_read_only() {
     let t = TempRoot::new("lock_rec");
@@ -348,9 +353,14 @@ fn lock_record_side_is_read_only() {
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
 
+    // Same content, different root.
+    let live = t.mkdirs("live");
+    wfile(&live, "a.txt", b"hello");
+    common::sync_mtime(&dir.join("a.txt"), &live.join("a.txt"));
+
     let record = dir.join(CACHE_PREFIX);
     let before = recs(&dir);
-    let code = cmd_compare(compare(record.clone(), dir.clone()), &log()).unwrap();
+    let code = cmd_compare(compare(record, live), &log()).unwrap();
     assert_eq!(code, 0);
     let after = recs(&dir);
     assert_eq!(before.len(), after.len(), "record compare writes no rows");

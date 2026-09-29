@@ -5,7 +5,7 @@ use tracing::{debug, info};
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{Side, classify, load_side};
+use crate::effective::{Side, classify, ensure_distinct_sides, load_side};
 use crate::util::elapsed_s;
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.
@@ -41,6 +41,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
     let s = classify(&src);
     let d = classify(&dst);
+    // A folder side writes its cache while scanning, so naming one cache twice
+    // would diff a record against the view the run itself is mutating.
+    ensure_distinct_sides(&s, &d)?;
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
     // compare only reads, so it never writes cache rows and never dry-runs.
     let sm = load_side(

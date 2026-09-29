@@ -86,17 +86,18 @@ from a bad prune; it is a recovery aid, not a correctness mechanism.
 Each side is classified by basename: path whose final component starts with
 `girpr-cache` is a **record** (DB used as-is, no FS access, no writes);
 otherwise it is a **folder** (embedded `<root>/girpr-cache` loaded/created, live
-stat + lazy hash, cache updated as a side effect). All 4 combos work.
-Output classes, one per line: `MISSING` (src-only), `EXTRA` (dst-only),
-`CHANGED` (size/mtime/hash differ), `TYPE-CONFLICT` (file vs dir),
-`CASE-MISMATCH a <=> A` (insensitive mode only), then a `SUMMARY` line.
+stat + lazy hash, cache updated as a side effect). All 4 combos work, subject to
+the one-cache-per-run rule below. Output classes, one per line: `MISSING`
+(src-only), `EXTRA` (dst-only), `CHANGED` (size/mtime/hash differ), `TYPE-CONFLICT`
+(file vs dir), `CASE-MISMATCH a <=> A` (insensitive mode only), then a `SUMMARY` line.
 Exit `4` if any diff, `0` if equal. `sync` accepts folders only.
 
 ### sync
 
 Mirrors `src` → `dst`:
 
-1. Abort if canonical `src == dst`, if either side is a record path, or on any IO error
+1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
+   path, or on any IO error
    (dangling symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
@@ -129,6 +130,11 @@ work list a real run executes, including the insensitive-mode rename pass.
   `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
+- **One cache per run.** redb locks a cache file, so a single run must never name
+  the same cache twice. `compare` and `sync` both reject a `--src`/`--dst` pair
+  that resolves to one cache file — the same folder twice, the same record twice,
+  or a folder paired with the record inside it. Resolution is by *canonical* path,
+  so two spellings of one target (`F/sub/..` vs `F`) collide too. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
   requested algos; `compare`/`sync` populate lazily and may leave untouched
   entries stale — by design. A side reuses a cached digest only when size+mtime
@@ -153,7 +159,8 @@ work list a real run executes, including the insensitive-mode rename pass.
   raise for deep trees). Dangling links abort. Link targets outside the root are
   followed and materialized as plain files/dirs. Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
-  (bad flag values, `src == dst`, IO/verify/corrupt — message on stderr;
+  (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
+  stderr;
   note runtime usage mistakes also exit `3`, unlike `girpr`'s `1`)
   · `4` compare found diff. `--jobs 0` is a runtime error → exit `3`.
 
