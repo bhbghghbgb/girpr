@@ -3,10 +3,17 @@
 mod common;
 
 use common::{
-    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, sync, sync_mtime, update, wfile,
+    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, rw, sync, sync_mtime, update,
+    wfile,
 };
-use girsync::cache::CACHE_PREFIX;
+use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
+use std::collections::HashMap;
+use std::path::Path;
+
+fn recs(dir: &Path) -> HashMap<String, FileRec> {
+    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+}
 
 #[test]
 fn run_sync_dry_run_writes_nothing() {
@@ -33,6 +40,64 @@ fn run_sync_dry_run_writes_nothing() {
     // Still different afterwards.
     let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 4);
+}
+
+/// A dry run writes nothing, which includes not *creating* the caches: a
+/// read/write open would have created one per side and written its `meta`.
+#[test]
+fn run_sync_dry_run_creates_no_cache() {
+    let t = TempRoot::new("drynocache");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"new content here");
+    wfile(&dst, "a.txt", b"old");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.dry_run = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    for d in [&src, &dst] {
+        assert!(
+            !d.join(CACHE_PREFIX).exists(),
+            "dry-run leaves {} without a cache",
+            d.display()
+        );
+        assert!(
+            !has_backup_sibling(&d.join(CACHE_PREFIX)),
+            "dry-run makes no backups"
+        );
+    }
+    // The plan was still the real one, and nothing was applied.
+    assert_eq!(rfile(&dst, "a.txt"), b"old");
+    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 4);
+}
+
+/// `--ignore-cache` asks for a rebuild, which a dry run may not perform. The
+/// real cache is treated as absent rather than deleted: left exactly as it was.
+#[test]
+fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
+    let t = TempRoot::new("dryignore");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"new content here");
+    wfile(&dst, "a.txt", b"old");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    let (src_before, dst_before) = (recs(&src), recs(&dst));
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.dry_run = true;
+    o.common.ignore_cache = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    for (dir, before) in [(&src, &src_before), (&dst, &dst_before)] {
+        assert!(
+            !has_backup_sibling(&dir.join(CACHE_PREFIX)),
+            "ignore-cache under dry-run backs nothing up"
+        );
+        assert_eq!(&recs(dir), before, "cache left exactly as it was");
+    }
+    assert_eq!(rfile(&dst, "a.txt"), b"old");
 }
 
 #[test]

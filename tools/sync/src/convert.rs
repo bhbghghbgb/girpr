@@ -107,7 +107,14 @@ pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Co
     old.flush().ok();
     drop(old);
 
-    let cache = crate::cache::open_db(redb_path, case_sensitive, false, false)?;
+    let cache = crate::cache::open_db(
+        redb_path,
+        case_sensitive,
+        crate::cache::CacheOpen::ReadWrite {
+            ignore_cache: false,
+            backup_first: false,
+        },
+    )?;
     let mut out = Converted::default();
     {
         let mut w = cache.begin_write()?;

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TempRoot, compare, log, update, wfile};
+use common::{TempRoot, compare, log, rw, update, wfile};
 use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::filter::compile_patterns;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
@@ -17,7 +17,7 @@ fn run_update_prunes_and_excludes() {
 
     cmd_update(update(dir.clone()), &log()).unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
         let recs = load_all_records(&db).unwrap();
         assert!(recs.contains_key("gone.txt"));
         assert!(recs.contains_key("skip.me"));
@@ -27,7 +27,7 @@ fn run_update_prunes_and_excludes() {
     std::fs::remove_file(dir.join("gone.txt")).unwrap();
     cmd_update(update(dir.clone()), &log()).unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
         let recs = load_all_records(&db).unwrap();
         assert!(!recs.contains_key("gone.txt"), "deleted file is pruned");
         assert!(recs.contains_key("keep.txt"));
@@ -48,7 +48,7 @@ fn run_update_prunes_and_excludes() {
     )
     .unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
         let recs = load_all_records(&db).unwrap();
         assert!(!recs.contains_key("skip.me"), "excluded path is pruned");
     }

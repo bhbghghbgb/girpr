@@ -20,11 +20,14 @@
 //! run re-copies rather than trusting a half-written file.
 
 use anyhow::{Context, Result, bail};
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, backends::InMemoryBackend};
+use redb::{
+    Database, ReadOnlyDatabase, ReadableDatabase, ReadableTable, TableDefinition,
+    backends::InMemoryBackend,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::util::{copy_dir_all, ts_now, unique_sibling};
 
@@ -236,14 +239,78 @@ fn is_table_missing(e: &redb::TableError) -> bool {
 // Cache handle
 // ---------------------------------------------------------------------------
 
-/// An open redb cache file.
+/// How a cache file should be opened.
 ///
-/// Note: redb takes a file lock per open database, so two `CacheDb` handles
-/// on the **same** file cannot be alive at once (the second open fails with
-/// "Database already open"). All callers open, use, and drop sequentially —
-/// never hold two handles on one path.
+/// A read/write open is a *participant* in the run: it may create the file,
+/// back it up, and rewrite `meta`. A read-only open is an *observer*: it
+/// requires the file to already be a valid current-version cache and never
+/// opens it for writing, so the file comes out byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheOpen {
+    /// Create if missing, and optionally back up and/or rebuild first.
+    ///
+    /// `ignore_cache` backs up (when `backup_first`) and deletes the file so it
+    /// is rebuilt from scratch. `backup_first` copies it aside to
+    /// `girpr-cache-backup-<ts>` before opening.
+    ReadWrite {
+        ignore_cache: bool,
+        backup_first: bool,
+    },
+    /// Open the existing file for reading only: no create-if-missing, no
+    /// backup, no `meta` rewrite.
+    ///
+    /// A read/write open silently rewrites `meta` when the recorded
+    /// `case_sensitive` flag disagrees with the mode the run is in. That flag is
+    /// documented as informational, so a read-only open cannot act on the
+    /// disagreement — it warns and moves on rather than refusing a cache that
+    /// is perfectly usable.
+    ReadOnly,
+}
+
+/// The redb handle a [`CacheDb`] wraps.
+///
+/// `ReadOnlyDatabase` is a distinct type rather than a flag on `Database`, so
+/// the two have to be matched on. Read-only handles *share* the file with each
+/// other; only a read/write handle excludes everyone, which is what makes the
+/// one-handle-per-file rule below about writers.
+enum Handle {
+    Writable(Database),
+    ReadOnly(ReadOnlyDatabase),
+}
+
+impl Handle {
+    fn writable(&self) -> Option<&Database> {
+        match self {
+            Handle::Writable(d) => Some(d),
+            Handle::ReadOnly(_) => None,
+        }
+    }
+}
+impl ReadableDatabase for Handle {
+    fn begin_read(&self) -> std::result::Result<redb::ReadTransaction, redb::TransactionError> {
+        match self {
+            Handle::Writable(d) => d.begin_read(),
+            Handle::ReadOnly(d) => d.begin_read(),
+        }
+    }
+
+    fn cache_stats(&self) -> redb::CacheStats {
+        match self {
+            Handle::Writable(d) => d.cache_stats(),
+            Handle::ReadOnly(d) => d.cache_stats(),
+        }
+    }
+}
+
+/// An open redb cache file, read/write or read-only.
+///
+/// Note: redb takes a file lock per *writable* database, so two read/write
+/// `CacheDb` handles on the **same** file cannot be alive at once (the second
+/// open fails with "Database already open"). All callers open, use, and drop
+/// sequentially — never hold two writable handles on one path. Read-only
+/// handles do not conflict with each other.
 pub struct CacheDb {
-    db: Database,
+    db: Handle,
 }
 
 impl CacheDb {
@@ -321,11 +388,17 @@ impl CacheDb {
             .create_with_backend(InMemoryBackend::new())
             .context("open temp cache")?;
         Self::init_meta(&db, case_sensitive)?;
-        Ok(Self { db })
+        Ok(Self {
+            db: Handle::Writable(db),
+        })
     }
 
-    /// Open an existing record file read-only-ish: no writes, no meta
-    /// creation — but the version is still validated.
+    /// Open an existing record file read-only: no writes, no meta creation,
+    /// no case-mode rewrite — but the version is still validated.
+    ///
+    /// A record is an input, not a participant, so it has no case mode of its
+    /// own and no `meta` reconciliation to do: the only thing worth checking is
+    /// that the file is a cache this build can read.
     pub fn open_record(db_path: &Path) -> Result<Self> {
         if !db_path.exists() {
             bail!("record {} not found", db_path.display());
@@ -336,32 +409,34 @@ impl CacheDb {
                 db_path.display()
             );
         }
-        let db = Database::open(db_path)
-            .with_context(|| format!("open record {} (corrupt?)", db_path.display()))?;
-        let txn = db.begin_read().context("begin read (record meta)")?;
-        let meta = txn.open_table(META_TBL).map_err(|e| {
-            if is_table_missing(&e) {
-                anyhow::anyhow!("record {} has no meta table (corrupt?)", db_path.display())
-            } else {
-                anyhow::anyhow!("open record meta {}: {e:#}", db_path.display())
-            }
+        let db = open_read_only(db_path).with_context(|| {
+            format!(
+                "open record {} (corrupt? use --ignore-cache to rebuild or sled2redb to convert)",
+                db_path.display()
+            )
         })?;
-        let g = meta
-            .get(META_KEY)
-            .context("read record meta")?
-            .context(format!(
-                "record {} has no meta (corrupt?)",
-                db_path.display()
-            ))?;
-        let m = decode_meta(g.value()).context("parse record meta (corrupt?)")?;
-        if m.version != CACHE_VERSION {
-            bail!(
-                "unsupported record version {} in {} (want {CACHE_VERSION})",
-                m.version,
-                db_path.display()
-            );
-        }
-        Ok(Self { db })
+        let meta = read_meta(&db)
+            .with_context(|| format!("read record meta {}", db_path.display()))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("record {} has no meta (corrupt?)", db_path.display())
+            })?;
+        require_current_version(meta.version, db_path, "record")?;
+        Ok(Self {
+            db: Handle::ReadOnly(db),
+        })
+    }
+
+    /// True when this handle cannot write, i.e. it was opened
+    /// [`CacheOpen::ReadOnly`].
+    pub fn is_read_only(&self) -> bool {
+        matches!(self.db, Handle::ReadOnly(_))
+    }
+
+    /// The read/write handle, or an error naming the path this cache is being
+    /// observed through. Every mutating method funnels through here, so a
+    /// read-only cache cannot be written by accident.
+    fn writable(&self) -> Result<&Database> {
+        self.db.writable().context("cache is open read-only")
     }
 
     /// Read one entry. Missing tables (fresh temp DBs) read as empty.
@@ -410,15 +485,16 @@ impl CacheDb {
     }
 
     /// Start a batched write handle. Must be committed (explicitly or via
-    /// periodic auto-commit) for mutations to become durable.
+    /// periodic auto-commit) for mutations to become durable. Fails on a
+    /// read-only cache.
     pub fn begin_write(&self) -> Result<CacheWrite<'_>> {
-        CacheWrite::new(&self.db)
+        CacheWrite::new(self.writable()?)
     }
 
     /// Start a batched write handle with custom commit thresholds (see
-    /// [`CommitLimits`]).
+    /// [`CommitLimits`]). Fails on a read-only cache.
     pub fn begin_write_with(&self, limits: CommitLimits) -> Result<CacheWrite<'_>> {
-        CacheWrite::with_limits(&self.db, limits)
+        CacheWrite::with_limits(self.writable()?, limits)
     }
 }
 
@@ -594,36 +670,123 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(dest))
 }
 
+/// Open an existing cache file for reading, without ever opening it for
+/// writing.
+///
+/// `ReadOnlyDatabase` is the reason a read-only run can promise the file is
+/// untouched: the backend has no write path at all, so there is nothing to
+/// accidentally commit through, and open-time recovery cannot rewrite pages.
+fn open_read_only(db_path: &Path) -> Result<ReadOnlyDatabase> {
+    ReadOnlyDatabase::open(db_path).with_context(|| {
+        format!(
+            "open redb cache {} (corrupt? use --ignore-cache)",
+            db_path.display()
+        )
+    })
+}
+
+/// The `meta` row, or `None` when the table or the key is absent.
+///
+/// Absence is reported rather than invented: a read-only open cannot create
+/// the row a read/write open would, so the caller has to decide what a
+/// meta-less cache means.
+fn read_meta(db: &impl ReadableDatabase) -> Result<Option<Meta>> {
+    let txn = db.begin_read().context("begin read (meta)")?;
+    let tbl = match txn.open_table(META_TBL) {
+        Ok(t) => t,
+        Err(e) if is_table_missing(&e) => return Ok(None),
+        Err(e) => bail!("open meta table: {e:#}"),
+    };
+    let g = tbl.get(META_KEY).context("read meta")?;
+    match g {
+        None => Ok(None),
+        Some(g) => Ok(Some(
+            decode_meta(g.value()).context("parse cache meta (corrupt?)")?,
+        )),
+    }
+}
+
+/// Refuse a cache this build cannot interpret, whatever the open mode: a wrong
+/// version means every row would be decoded under the wrong assumptions.
+fn require_current_version(version: u32, db_path: &Path, label: &str) -> Result<()> {
+    if version != CACHE_VERSION {
+        bail!(
+            "unsupported {label} version {} in {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+            version,
+            db_path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Open (creating if needed) the cache at `db_path`.
 ///
 /// `ignore_cache` backs up (when `backup_first`) and deletes the cache to
 /// force a rebuild. A corrupt cache is a hard error; the message points at
 /// `--ignore-cache`.
-#[tracing::instrument(skip_all, fields(db = %db_path.display(), case_sensitive, ignore_cache, backup_first))]
-pub fn open_db(
-    db_path: &Path,
-    case_sensitive: bool,
-    ignore_cache: bool,
-    backup_first: bool,
-) -> Result<CacheDb> {
-    if ignore_cache && db_path.exists() {
-        if backup_first {
-            backup_db(db_path)?;
+///
+/// [`CacheOpen::ReadOnly`] inverts every side effect: the file must exist, is
+/// never opened for writing, and is left byte-identical. It still validates the
+/// schema version, because a cache this build cannot decode is useless
+/// whatever the mode. A `case_sensitive` flag disagreeing with the run's mode
+/// only warns — a read/write open would silently rewrite `meta` to match, and
+/// that flag is informational (see [`Meta::case_sensitive`]).
+#[tracing::instrument(skip_all, fields(db = %db_path.display(), mode = ?mode))]
+pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<CacheDb> {
+    match mode {
+        CacheOpen::ReadWrite {
+            ignore_cache,
+            backup_first,
+        } => {
+            if ignore_cache && db_path.exists() {
+                if backup_first {
+                    backup_db(db_path)?;
+                }
+                remove_cache_path(db_path)?;
+                info!(path = %db_path.display(), "ignore-cache removed");
+            } else if backup_first && db_path.exists() {
+                backup_db(db_path)?;
+            }
+            let db = CacheDb::open_file(db_path)?;
+            CacheDb::init_meta(&db, case_sensitive)?;
+            // NOTE: case_sensitive is informational only. The cache stays usable
+            // across modes: in insensitive mode a disk/cached casing difference is
+            // fixed to the on-disk name (disk always governs), so the same record
+            // remains valid for a later sensitive run. Only genuine conflicts
+            // (two live/record paths differing only by case in insensitive mode)
+            // abort, detected by the callers — never here.
+            Ok(CacheDb {
+                db: Handle::Writable(db),
+            })
         }
-        remove_cache_path(db_path)?;
-        info!(path = %db_path.display(), "ignore-cache removed");
-    } else if backup_first && db_path.exists() {
-        backup_db(db_path)?;
+        CacheOpen::ReadOnly => {
+            if !db_path.exists() {
+                bail!("cache {} not found", db_path.display());
+            }
+            let db = open_read_only(db_path)?;
+            let Some(meta) = read_meta(&db)? else {
+                bail!(
+                    "cache {} has no meta (corrupt? use --ignore-cache)",
+                    db_path.display()
+                );
+            };
+            require_current_version(meta.version, db_path, "cache")?;
+            if meta.case_sensitive != case_sensitive {
+                // A read/write open would quietly rewrite meta to match. It is
+                // documented as informational, so the disagreement is not a
+                // reason to refuse a cache that reads fine.
+                warn!(
+                    path = %db_path.display(),
+                    recorded = meta.case_sensitive,
+                    requested = case_sensitive,
+                    "cache case mode differs; read-only open leaves meta as recorded"
+                );
+            }
+            Ok(CacheDb {
+                db: Handle::ReadOnly(db),
+            })
+        }
     }
-    let db = CacheDb::open_file(db_path)?;
-    CacheDb::init_meta(&db, case_sensitive)?;
-    // NOTE: case_sensitive is informational only. The cache stays usable
-    // across modes: in insensitive mode a disk/cached casing difference is
-    // fixed to the on-disk name (disk always governs), so the same record
-    // remains valid for a later sensitive run. Only genuine conflicts
-    // (two live/record paths differing only by case in insensitive mode)
-    // abort, detected by the callers — never here.
-    Ok(CacheDb { db })
 }
 
 /// Every cached path.
@@ -670,6 +833,160 @@ mod tests {
         let rec = file_rec();
         let back = decode_rec(&encode_rec(&rec).unwrap()).unwrap();
         assert_eq!(rec, back);
+    }
+
+    // -- read-only opens ---------------------------------------------------
+    //
+    // Scoped to what this crate decides. That redb hands out a handle with no
+    // write path, and that two read-only handles share the file, are the
+    // library's guarantees, not ours: nothing here asserts them.
+
+    /// A scratch directory holding one real cache file, plus its path.
+    fn seeded(tag: &str, case_sensitive: bool) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("girsync_ro_{}_{}", std::process::id(), tag));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(CACHE_PREFIX);
+        let c = open_db(
+            &p,
+            case_sensitive,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        c.put("a.txt", &file_rec()).unwrap();
+        drop(c);
+        (dir, p)
+    }
+
+    /// Every mutating entry point must refuse a read-only cache, so an observer
+    /// run cannot corrupt the file it is observing by accident.
+    #[test]
+    fn read_only_cache_refuses_every_write() {
+        let (dir, p) = seeded("nowrite", true);
+        let c = open_db(&p, true, CacheOpen::ReadOnly).unwrap();
+        assert!(c.is_read_only(), "reports its mode");
+
+        // Reads still work, and see the same rows a read/write open would.
+        assert_eq!(c.get("a.txt").unwrap(), Some(file_rec()));
+        assert_eq!(c.load_all().unwrap().len(), 1);
+
+        let refusals: Vec<Result<()>> = vec![
+            c.put("b.txt", &file_rec()),
+            c.remove("a.txt"),
+            c.begin_write().map(|_| ()),
+            c.begin_write_with(CommitLimits::default()).map(|_| ()),
+        ];
+        for r in refusals {
+            let err = r.expect_err("a read-only cache must refuse writes");
+            assert!(
+                format!("{:#}", err).contains("read-only"),
+                "error must name the cause: {:#}",
+                err
+            );
+        }
+        drop(c);
+
+        // The rows are exactly as they were.
+        let after = open_db(
+            &p,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        let all = after.load_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all.contains_key("a.txt"));
+        assert!(!all.contains_key("b.txt"), "the refused put did not land");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A read/write open rewrites `meta` when the recorded case mode disagrees
+    /// with the run's. A read-only open cannot, and the flag is informational,
+    /// so it warns and hands back a usable cache.
+    #[test]
+    fn read_only_open_tolerates_a_case_mode_mismatch() {
+        let (dir, p) = seeded("casemix", true);
+        // Written above as case-sensitive; read it back in insensitive mode.
+        let c = open_db(&p, false, CacheOpen::ReadOnly).unwrap();
+        assert_eq!(c.get("a.txt").unwrap(), Some(file_rec()));
+        drop(c);
+
+        // meta is left as recorded, not rewritten to match the caller.
+        let after = open_db(
+            &p,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        let meta = read_meta(&after.db).unwrap().unwrap();
+        assert!(
+            meta.case_sensitive,
+            "a read-only open must not rewrite the recorded case mode"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A read-only open refuses anything it cannot faithfully interpret: no
+    /// file to read, no `meta` to check the version against, or a version this
+    /// build would decode under the wrong assumptions.
+    #[test]
+    fn read_only_open_requires_a_readable_current_version_cache() {
+        let dir = std::env::temp_dir().join(format!("girsync_ro_{}_gates", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let ro = |p: &Path| open_db(p, true, CacheOpen::ReadOnly);
+
+        // No file: there is nothing to observe, and creating one would be a write.
+        assert!(ro(&dir.join("absent")).is_err(), "missing file is refused");
+
+        // A file that is not a cache at all.
+        let junk = dir.join("junk");
+        std::fs::write(&junk, b"not a redb database").unwrap();
+        assert!(ro(&junk).is_err(), "garbage is refused");
+
+        // A redb file with no `meta` row: nothing to validate the schema against.
+        let bare = dir.join("bare");
+        {
+            let db = Database::create(&bare).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let _ = txn.open_table(ENTRIES).unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert!(ro(&bare).is_err(), "a meta-less cache is refused");
+
+        // A well-formed cache stamped with a version this build cannot read.
+        let future = dir.join("future");
+        {
+            let db = Database::create(&future).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut m = txn.open_table(META_TBL).unwrap();
+                m.insert(
+                    META_KEY,
+                    encode_meta(&Meta {
+                        version: CACHE_VERSION + 1,
+                        case_sensitive: true,
+                    })
+                    .as_slice(),
+                )
+                .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert!(ro(&future).is_err(), "a future version is refused");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

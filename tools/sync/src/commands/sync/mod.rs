@@ -22,7 +22,9 @@ mod rename;
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{CACHE_PREFIX, CacheDb, backup_db, open_db, remove_cache_path, snapshot_old};
+use crate::cache::{
+    CACHE_PREFIX, CacheDb, CacheOpen, backup_db, open_db, remove_cache_path, snapshot_old,
+};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{build_effective_folder, classify, ensure_distinct_sides};
@@ -219,8 +221,15 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
     Ok(())
 }
 
-/// Open both caches. Under `--dry-run`, a corrupt or missing cache falls back
-/// to a temporary in-memory DB so the run never creates a real one.
+/// Open both caches. Under `--dry-run` neither one is ever opened for writing.
+///
+/// A dry run has nothing to persist: `build_effective_folder` skips its batch
+/// handle and `rename_to_src_casing` returns before touching disk, so the only
+/// writes a read/write open could perform are the ones a dry run promises not to
+/// do — creating a missing cache, and rewriting `meta` when the case mode
+/// disagrees. So an existing cache is opened read-only, and a missing one falls
+/// back to an in-memory DB that leaves the folder exactly as it was. A corrupt
+/// cache falls back the same way: a dry run should still produce a plan.
 fn open_caches(
     src_db_path: &std::path::Path,
     dst_db_path: &std::path::Path,
@@ -229,9 +238,23 @@ fn open_caches(
 ) -> Result<(CacheDb, CacheDb)> {
     let open = |p: &std::path::Path| -> Result<CacheDb> {
         if !dry_run {
-            return open_db(p, common.case_sensitive, false, false);
+            return open_db(
+                p,
+                common.case_sensitive,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                },
+            );
         }
-        open_db(p, common.case_sensitive, false, false)
+        // `--dry-run --ignore-cache` asks for the cache to be rebuilt, and a dry
+        // run may not rebuild it. Act as though it were absent: the folder is
+        // then scanned from disk alone and the real cache is left untouched.
+        if common.ignore_cache || !p.exists() {
+            info!(path = %p.display(), "dry-run: using an in-memory cache");
+            return CacheDb::open_temp(common.case_sensitive);
+        }
+        open_db(p, common.case_sensitive, CacheOpen::ReadOnly)
             .or_else(|_| CacheDb::open_temp(common.case_sensitive))
     };
     Ok((open(src_db_path)?, open(dst_db_path)?))

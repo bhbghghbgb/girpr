@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace, warn};
 
-use crate::cache::{CACHE_PREFIX, CacheDb, FileRec, open_db};
+use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, FileRec, open_db};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
@@ -431,15 +431,24 @@ pub fn load_side(
             if !db_path.exists() {
                 // missing cache: just create it
                 info!(cache = %db_path.display(), "cache missing, creating");
-                let db = open_db(&db_path, common.case_sensitive, false, false)?;
+                let db = open_db(
+                    &db_path,
+                    common.case_sensitive,
+                    CacheOpen::ReadWrite {
+                        ignore_cache: false,
+                        backup_first: false,
+                    },
+                )?;
                 let eff = build_effective_folder(root, &db, common, mode)?;
                 return Ok(eff);
             }
             match open_db(
                 &db_path,
                 common.case_sensitive,
-                common.ignore_cache,
-                !mode.dry_run,
+                CacheOpen::ReadWrite {
+                    ignore_cache: common.ignore_cache,
+                    backup_first: !mode.dry_run,
+                },
             ) {
                 Ok(db) => build_effective_folder(root, &db, common, mode),
                 Err(e) => {

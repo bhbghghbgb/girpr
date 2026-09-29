@@ -5,11 +5,20 @@
 
 #![allow(dead_code)]
 
+use girsync::cache::CacheOpen;
 use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The plain read/write open most tests want: no rebuild, no backup.
+pub fn rw() -> CacheOpen {
+    CacheOpen::ReadWrite {
+        ignore_cache: false,
+        backup_first: false,
+    }
+}
 
 /// Isolated temp directory per test, so parallel `cargo test` workers never
 /// share a cache file.

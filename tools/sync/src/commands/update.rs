@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{CACHE_PREFIX, open_db};
+use crate::cache::{CACHE_PREFIX, CacheOpen, open_db};
 use crate::config::{LogCtx, ScanMode, UpdateOpts};
 use crate::effective::build_effective_folder;
 use crate::util::elapsed_s;
@@ -44,7 +44,14 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     }
     let db_path = dir.join(CACHE_PREFIX);
     info!(cache = %db_path.display(), "open cache");
-    let db = open_db(&db_path, common.case_sensitive, common.ignore_cache, true)?;
+    let db = open_db(
+        &db_path,
+        common.case_sensitive,
+        CacheOpen::ReadWrite {
+            ignore_cache: common.ignore_cache,
+            backup_first: true,
+        },
+    )?;
     // update always populates: it never trusts a cached digest, so there is
     // no flag to override here.
     let eff = build_effective_folder(

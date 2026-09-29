@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{opts, scan};
+use common::{opts, rw, scan};
 use girsync::CommonOpts;
 use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::config::ScanMode;
@@ -44,7 +44,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
         ..opts()
     };
 
-    let db = open_db(&db_path, true, false, false).unwrap();
+    let db = open_db(&db_path, true, rw()).unwrap();
     let eff = build_effective_folder(
         &dir,
         &db,
@@ -64,7 +64,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
 
     // Previously this errored in open_db (meta mismatch). Must succeed now.
-    let db = open_db(&db_path, false, false, false).unwrap();
+    let db = open_db(&db_path, false, rw()).unwrap();
     let eff = build_effective_folder(&dir, &db, &insensitive, scan(false, false)).unwrap();
     assert!(eff.contains_key("A.txt"), "disk casing governs");
     let want = md5::compute(b"hello").0.to_vec();
@@ -78,7 +78,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     drop(db);
 
     // Same record must remain usable in a later sensitive run.
-    let db = open_db(&db_path, true, false, false).unwrap();
+    let db = open_db(&db_path, true, rw()).unwrap();
     let eff = build_effective_folder(&dir, &db, &sensitive, scan(false, false)).unwrap();
     assert!(eff.contains_key("A.txt"));
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);

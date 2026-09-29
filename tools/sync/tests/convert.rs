@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{TempRoot, log};
+use common::{TempRoot, log, rw};
 use girsync::cache::{load_all_records, open_db};
 use std::collections::HashMap;
 
@@ -83,7 +83,7 @@ fn convert_sled_dir_to_redb_file() {
     assert!(src.is_dir(), "source sled dir is left untouched");
 
     let recs = {
-        let cache = open_db(&dst, true, false, false).unwrap();
+        let cache = open_db(&dst, true, rw()).unwrap();
         load_all_records(&cache).unwrap()
         // cache handle drops here, releasing the file lock before compare
     };

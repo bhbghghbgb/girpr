@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{TempRoot, compare, log, sync, update, wfile};
+use common::{TempRoot, compare, log, rw, sync, update, wfile};
 use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
 use girsync::hash::hash_file;
 use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
@@ -42,7 +42,7 @@ fn with_algos(dir: std::path::PathBuf, algos: Vec<String>) -> girsync::UpdateOpt
 }
 
 fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
-    let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+    let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
     load_all_records(&db).unwrap()
 }
 
@@ -298,7 +298,7 @@ fn lock_no_trust_cached_hashes_is_per_side() {
 
 /// Overwrite a cached digest with a wrong one, keeping size and mtime as-is.
 fn poison(dir: &std::path::Path, rel: &str) {
-    let db = open_db(&dir.join(CACHE_PREFIX), true, false, false).unwrap();
+    let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
     let mut rec = get_rec(&db, rel).unwrap().expect("row exists after update");
     let real = hash_file(&dir.join(rel), &md5s()).unwrap();
     assert_eq!(real["md5"].len(), 16, "md5 digest is 16 raw bytes");

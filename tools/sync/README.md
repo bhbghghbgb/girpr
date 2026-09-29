@@ -26,7 +26,7 @@ and drive the public API.
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
-| `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db`, backup/snapshot helpers |
+| `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | collapses cache + filters + case rules into one `EffRec` map per side |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
@@ -121,6 +121,13 @@ nothing.
 (no backups, no cache updates, no FS changes). The plan is exact: it is the same
 work list a real run executes, including the insensitive-mode rename pass.
 
+"writes nothing" is enforced by never opening a cache for writing: an existing
+cache is opened read-only and a missing one is served from an in-memory DB, so a
+dry run against cache-less folders does not leave `girpr-cache` behind.
+`--dry-run --ignore-cache` is the one combination that asks for something a dry
+run may not do, so the cache is treated as *absent* rather than rebuilt — the
+folder is scanned from disk alone and the real cache is left as it was.
+
 ## Core semantics (must-know for AI edits)
 
 - **Cache = redb file** at `<root>/girpr-cache`. Key = `/`-separated
@@ -130,11 +137,21 @@ work list a real run executes, including the insensitive-mode rename pass.
   `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
-- **One cache per run.** redb locks a cache file, so a single run must never name
-  the same cache twice. `compare` and `sync` both reject a `--src`/`--dst` pair
-  that resolves to one cache file — the same folder twice, the same record twice,
-  or a folder paired with the record inside it. Resolution is by *canonical* path,
-  so two spellings of one target (`F/sub/..` vs `F`) collide too. Exit `3`.
+- **Read-only vs read/write opens.** `open_db` takes a `CacheOpen`:
+  `ReadWrite` may create the file, back it up, and reconcile `meta`;
+  `ReadOnly` requires an existing, current-version cache and never opens it for
+  writing, so the file comes out byte-identical and every write method on the
+  handle fails. A read-only open cannot rewrite `meta` when the recorded
+  `case_sensitive` flag disagrees with the run's mode; since that flag is
+  informational, it warns and continues rather than refusing the cache. A wrong
+  schema version is still fatal in both modes. Record sides and `sync --dry-run`
+  both use read-only opens.
+- **One cache per run.** A read/write open locks its file exclusively, so a run
+  must never name the same cache twice. `compare` and `sync` both reject a
+  `--src`/`--dst` pair that resolves to one cache file — the same folder twice,
+  the same record twice, or a folder paired with the record inside it.
+  Resolution is by *canonical* path, so two spellings of one target (`F/sub/..`
+  vs `F`) collide too. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
   requested algos; `compare`/`sync` populate lazily and may leave untouched
   entries stale — by design. A side reuses a cached digest only when size+mtime
