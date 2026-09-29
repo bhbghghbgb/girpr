@@ -12,7 +12,7 @@
 //! - [`scan`] — live filesystem walk
 //! - [`effective`] — cache + filters + case rules collapsed into one map per side
 //! - [`diff`] — path-set diffing
-//! - [`commands`] — `update`, `compare`, `sync`
+//! - [`commands`] — `update`, `compare`, `compare-self`, `sync`
 //! - [`filter`], [`hash`], [`util`], [`logging`] — supporting primitives
 
 pub mod cache;
@@ -29,6 +29,8 @@ pub mod scan;
 pub mod util;
 
 pub use cli::{Cli, Cmd, CommonArgs, TrustArgs, TrustSide};
-pub use commands::{cmd_compare, cmd_sync, cmd_update, run};
-pub use config::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
+pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
+pub use config::{
+    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+};
 pub use logging::init_tracing;

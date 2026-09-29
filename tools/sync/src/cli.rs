@@ -89,6 +89,26 @@ pub enum Cmd {
         #[command(flatten)]
         common: CommonArgs,
     },
+    /// Compare a folder against its own cache, writing nothing.
+    ///
+    /// The record side is `--dir`'s own `girpr-cache`, so this is `compare`
+    /// with one argument: report what the cache has drifted from, without
+    /// repairing the cache in the process.
+    ///
+    /// By default a file whose size+mtime still match the cache is taken at its
+    /// recorded digest, so this reports *stat* drift. Add
+    /// `--no-trust-cached-hashes` to rehash everything and report content
+    /// drift too.
+    CompareSelf {
+        /// The folder to audit. Its `girpr-cache` is the record side.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Rehash every file even when size+mtime match a cached digest.
+        #[arg(long, default_value_t = false)]
+        no_trust_cached_hashes: bool,
+        #[command(flatten)]
+        common: CommonArgs,
+    },
     /// Mirror src folder -> dst folder.
     Sync {
         #[arg(long)]

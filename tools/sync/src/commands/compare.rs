@@ -1,12 +1,14 @@
 //! `girsync compare` — report how dst differs from src, changing nothing itself.
 
 use anyhow::Result;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{Side, classify, ensure_distinct_sides, load_side};
 use crate::util::elapsed_s;
+
+use super::report_diff;
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.
 ///
@@ -67,44 +69,14 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     info!(side = "dst", entries = dm.len(), "side loaded");
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
     let diff = diff_maps(&sm, &dm, &common.algos, common.case_sensitive);
-    for r in &diff.missing {
-        println!("MISSING {}", r);
-        debug!(kind = "missing", rel = %r, "diff");
-    }
-    for r in &diff.extra {
-        println!("EXTRA {}", r);
-        debug!(kind = "extra", rel = %r, "diff");
-    }
-    for r in &diff.changed {
-        println!("CHANGED {}", r);
-        debug!(kind = "changed", rel = %r, "diff");
-    }
-    for r in &diff.type_conflict {
-        println!("TYPE-CONFLICT {}", r);
-        debug!(kind = "type-conflict", rel = %r, "diff");
-    }
-    for (a, b) in &diff.case_mismatch {
-        println!("CASE-MISMATCH {} <=> {}", a, b);
-        debug!(kind = "case-mismatch", src_rel = %a, dst_rel = %b, "diff");
-    }
-    let total = diff.total();
-    println!(
-        "SUMMARY missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={}",
-        diff.missing.len(),
-        diff.extra.len(),
-        diff.changed.len(),
-        diff.type_conflict.len(),
-        diff.case_mismatch.len(),
-        total
-    );
-    let code = if diff.is_empty() { 0 } else { 4 };
+    let code = report_diff(&diff);
     info!(
         missing = diff.missing.len(),
         extra = diff.extra.len(),
         changed = diff.changed.len(),
         type_conflict = diff.type_conflict.len(),
         case_mismatch = diff.case_mismatch.len(),
-        total_diff = total,
+        total_diff = diff.total(),
         elapsed_s = elapsed_s(t0),
         exit = code,
         "end"

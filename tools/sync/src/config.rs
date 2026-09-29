@@ -77,7 +77,12 @@ pub struct ScanMode {
     /// Set by `--no-trust-cached-hashes <side>`, and unconditionally by
     /// `update`, which is defined as a full repopulate.
     pub no_trust_cached_hashes: bool,
-    /// Plan only: no cache writes and no filesystem changes.
+    /// No cache writes: the scan reads rows but never opens a write handle.
+    ///
+    /// This is the *cache* half of a dry run. Whether a run may touch the
+    /// filesystem is decided by its own command (`sync` threads a separate
+    /// `dry_run` into the rename and apply phases), not here — so a command
+    /// that never writes files, like `compare-self`, sets this and nothing else.
     pub dry_run: bool,
 }
 
@@ -117,6 +122,17 @@ pub struct CompareOpts {
     pub dst: PathBuf,
     /// Derived from `--no-trust-cached-hashes`.
     pub trust: TrustOpts,
+    pub common: CommonOpts,
+}
+
+/// `girsync compare-self` inputs.
+#[derive(Debug)]
+pub struct CompareSelfOpts {
+    /// The folder to audit. Its `girpr-cache` is the record side.
+    pub dir: PathBuf,
+    /// A plain boolean, unlike the two-sided commands: there is only one scanned
+    /// side here, so naming it `src` or `dst` would be a choice with no meaning.
+    pub no_trust_cached_hashes: bool,
     pub common: CommonOpts,
 }
 

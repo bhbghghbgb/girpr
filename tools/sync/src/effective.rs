@@ -294,6 +294,24 @@ pub fn build_effective_folder(
 /// no writes. Cache rows and filtered paths are dropped.
 pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<String, EffRec>> {
     let cache = CacheDb::open_record(db_path)?;
+    load_record_side_from(&cache, common, &db_path.display().to_string())
+}
+
+/// [`load_record_side`] against an already-open cache.
+///
+/// Split out so a caller that needs the record view *and* a disk scan of the
+/// same folder can do both from one handle. That is not a lock requirement —
+/// two read-only handles share the file — it is a cost one: each `CacheDb`
+/// builds its own copy of the file's tables, so opening twice doubles the
+/// memory a large cache occupies. The same reasoning applies harder to a
+/// writable handle, where the second open would be refused outright.
+///
+/// `label` names the record in error messages; the caller knows the path.
+pub fn load_record_side_from(
+    cache: &CacheDb,
+    common: &CommonOpts,
+    label: &str,
+) -> Result<HashMap<String, EffRec>> {
     let all = cache.load_all()?;
     let mut out = HashMap::new();
     for (rel, r) in all {
@@ -328,7 +346,7 @@ pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<S
             if uniq.len() > 1 {
                 bail!(
                     "mixed-case collision in record {}: {}",
-                    db_path.display(),
+                    label,
                     v.join(" vs ")
                 );
             }

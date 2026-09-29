@@ -19,9 +19,10 @@ and drive the public API.
 | --- | --- |
 | `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all three subcommands) |
 | `config.rs` | validated per-run options: `CommonOpts`, `ScanMode`, `LogCtx`, `Update/Compare/SyncOpts` |
-| `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated) |
+| `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff printer/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
+| `commands/compare_self.rs` | diff a folder against its own cache, read-only |
 | `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
@@ -46,6 +47,7 @@ trusting a half-written file.
 ```
 girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache]
 girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [...]
+girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [...]
 girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--dry-run] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [...]
 ```
 
@@ -91,6 +93,34 @@ the one-cache-per-run rule below. Output classes, one per line: `MISSING`
 (src-only), `EXTRA` (dst-only), `CHANGED` (size/mtime/hash differ), `TYPE-CONFLICT`
 (file vs dir), `CASE-MISMATCH a <=> A` (insensitive mode only), then a `SUMMARY` line.
 Exit `4` if any diff, `0` if equal. `sync` accepts folders only.
+
+### compare-self
+
+`compare` with one argument: the record side is `--dir`'s own `girpr-cache`, so
+this reports what the cache has drifted from without repairing it in the
+process. That repair is the reason it is not simply
+`compare --src <DIR>/girpr-cache --dst <DIR>` — that spelling is rejected by the
+one-cache-per-run rule, because a folder side rewrites its cache while scanning,
+so the audit would fix the drift it was reporting and a rerun would come back
+clean. Here the cache is opened read-only, which is the real guarantee: the
+handle has no write path at all, so a cache write could not commit even if some
+future code asked for one.
+
+Output and exit codes are `compare`'s, with the **record as `src`**:
+`MISSING` = a row the cache still holds for a path that is gone, `EXTRA` = a
+path on disk the cache never recorded, `CHANGED` = stat or digest disagreement.
+Exits `4` on drift, `0` when in step, `3` if there is no cache to compare
+against (it never creates one — that would make the first run vacuously clean)
+or if `--ignore-cache` was passed (it would delete the record under audit).
+
+**The default checks stat, not content.** The disk side is still built with the
+cache available, so a file whose size+mtime match keeps its recorded digest.
+That is what makes this cheap, and it is why content that changed while
+preserving both size and mtime is invisible until `--no-trust-cached-hashes`
+forces a rehash. Treat that flag as the difference between "the cache matches
+the folder's shape" and "the cache matches the folder's bytes". The same caveat
+applies to `--max-depth` and to `--include`/`--exclude`: a run whose filters
+differ from the ones the cache was built with reports drift that is not there.
 
 ### sync
 
@@ -198,6 +228,13 @@ Record-vs-folder without touching the folder's cache:
 .\target\debug\girsync compare --src D:\game-old\girpr-cache --dst D:\game-live
 ```
 
+Is a folder's own cache still in step with it? (`compare-self` never writes, so
+this can be run at any time; add `--no-trust-cached-hashes` to rehash):
+
+```powershell
+.\target\debug\girsync compare-self --dir D:\game-live              # exit 0 = in step
+```
+
 ## Gotchas
 
 - Deletes extras **by default**; in-place truncate means a killed run leaves
@@ -208,6 +245,6 @@ Record-vs-folder without touching the folder's cache:
 - Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
-  (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `sync.rs`, with
+  (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`, `sync.rs`, with
   shared fixtures in `tests/common/mod.rs`. They run against the public API, so
   anything they touch must stay `pub`.
