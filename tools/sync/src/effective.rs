@@ -13,10 +13,9 @@ use tracing::{debug, info, trace, warn};
 
 use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, CacheWrite, FileRec, open_db};
 use crate::config::{CommonOpts, ScanMode};
-use crate::diff::{Diff, diff_maps};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
-use crate::planner::{HashPlan, SideSpec, plan_pairs};
+use crate::planner::HashPlan;
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 
@@ -806,7 +805,7 @@ pub fn load_record_side_from(
 }
 
 /// One side of a `compare`: either a folder root or a record file.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Side {
     Folder(PathBuf),
     Record(PathBuf),
@@ -875,78 +874,29 @@ fn display_path(p: &Path) -> String {
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
-/// One side of a comparison, opened and statted, with its handle still live.
+/// Effective map for a record or folder side. All four combinations work.
 ///
-/// The handle staying open across the whole run is the point. Phase A writes the
-/// cache, and a command that plans across two sides needs both sides' phase-A
-/// output *before* either resolves — so it needs both handles simultaneously.
-/// The previous shape, which opened a side, scanned it and dropped the handle
-/// before opening the next, could not express that at all.
-///
-/// Sound only because [`ensure_distinct_sides`] rejects any pair that resolves to
-/// one cache file before a single handle is opened. Opening a side's cache twice
-/// in one run is the failure mode, and redb refuses the second writable open
-/// anyway — but the folder-inside-its-own-record case has to be caught by
-/// [`ensure_distinct_sides`], since it is the one that is *meaningful* rather than
-/// merely refused.
-pub struct OpenSide {
-    side: Side,
-    cache: CacheDb,
-    mode: ScanMode,
-    /// Phase A's output. The only thing the planner reads.
-    pub phase_a: SideScan<SideEntry>,
-    pub cap: SideCapability,
-}
-
-impl OpenSide {
-    /// What this side is, for log messages.
-    pub fn kind(&self) -> &'static str {
-        match self.side {
-            Side::Record(_) => "record",
-            Side::Folder(_) => "folder",
-        }
-    }
-
-    /// Phase C: produce this side's resolved map for the given plan.
-    pub fn resolve(&self, plan: &HashPlan) -> Result<SideScan> {
-        match &self.side {
-            Side::Folder(root) => resolve_folder(root, &self.cache, self.mode, &self.phase_a, plan),
-            // A record has no filesystem to hash, so its plan is empty by
-            // construction and this is a copy of what phase A carried.
-            Side::Record(_) => Ok(resolve_record(&self.phase_a)),
-        }
-    }
-}
-
-/// Open one side, run its phase A, and keep the handle open.
-///
-/// The read/write or read-only decision is made here rather than per phase, so
-/// a side's cache is opened exactly once per run no matter how many phases touch
-/// it.
-pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<OpenSide> {
+/// A folder side populates and may leave untouched entries stale — by design,
+/// since the cache is a cache and disk is the truth.
+pub fn load_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<SideScan> {
     match side {
         Side::Record(dbp) => {
             info!(record = %dbp.display(), "load record side");
-            let cache = CacheDb::open_record(dbp)?;
-            let phase_a = load_record_side_from(&cache, common, &dbp.display().to_string())?;
-            info!(record = %dbp.display(), entries = phase_a.map.len(), "record loaded");
-            Ok(OpenSide {
-                side: side.clone(),
-                cache,
-                mode,
-                phase_a,
-                cap: SideCapability::record(),
-            })
+            let pa = load_record_side(dbp, common)?;
+            info!(record = %dbp.display(), entries = pa.map.len(), "record loaded");
+            // A record resolves with nothing to compute: it has no filesystem to
+            // hash, so phase C is a copy of what phase A carried.
+            Ok(resolve_record(&pa))
         }
         Side::Folder(root) => {
             if !root.is_dir() {
                 bail!("folder {} not found", root.display());
             }
             let db_path = root.join(CACHE_PREFIX);
-            let (cache, phase_a) = if !db_path.exists() {
+            if !db_path.exists() {
                 // missing cache: just create it
                 info!(cache = %db_path.display(), "cache missing, creating");
-                let cache = open_db(
+                let db = open_db(
                     &db_path,
                     common.case_sensitive,
                     CacheOpen::ReadWrite {
@@ -954,99 +904,28 @@ pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Ope
                         backup_first: false,
                     },
                 )?;
-                let phase_a = scan_stat_only(root, &cache, common, mode)?;
-                (cache, phase_a)
-            } else {
-                match open_db(
-                    &db_path,
-                    common.case_sensitive,
-                    CacheOpen::ReadWrite {
-                        ignore_cache: common.ignore_cache,
-                        backup_first: !mode.dry_run,
-                    },
-                ) {
-                    Ok(cache) => {
-                        let phase_a = scan_stat_only(root, &cache, common, mode)?;
-                        (cache, phase_a)
-                    }
-                    Err(e) => {
-                        warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
-                        return Err(e.context(format!(
-                            "cache for {} (use --ignore-cache to rebuild)",
-                            root.display()
-                        )));
-                    }
+                let eff = build_effective_folder(root, &db, common, mode)?;
+                return Ok(eff);
+            }
+            match open_db(
+                &db_path,
+                common.case_sensitive,
+                CacheOpen::ReadWrite {
+                    ignore_cache: common.ignore_cache,
+                    backup_first: !mode.dry_run,
+                },
+            ) {
+                Ok(db) => build_effective_folder(root, &db, common, mode),
+                Err(e) => {
+                    warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
+                    Err(e.context(format!(
+                        "cache for {} (use --ignore-cache to rebuild)",
+                        root.display()
+                    )))
                 }
-            };
-            let cap = SideCapability::for_folder(&cache, mode);
-            Ok(OpenSide {
-                side: side.clone(),
-                cache,
-                mode,
-                phase_a,
-                cap,
-            })
+            }
         }
     }
-}
-
-/// The result of a two-sided comparison: the diff, plus what each side had to do
-/// to produce it.
-///
-/// The counters travel with the diff because the diff is the *verdict* and the
-/// counters are the *cost*, and W2's whole claim is that laziness changes only
-/// the second. A caller that wants only the verdict should read `.diff`.
-pub struct PairResult {
-    pub diff: Diff,
-    pub src: ScanStats,
-    pub dst: ScanStats,
-}
-
-/// Plan across both sides, resolve both, and diff — the whole two-sided path.
-///
-/// Ordered deliberately: both phase A maps, then one plan over the pair, then
-/// both resolves. A per-side plan would be the bug W2 exists to fix, because a
-/// side alone cannot know whether its counterpart is present, nor whether the
-/// metadata already differs — so it would read every file, which is what happens
-/// today.
-pub fn compare_pair(src: &OpenSide, dst: &OpenSide, common: &CommonOpts) -> Result<PairResult> {
-    let plan = plan_pairs(
-        SideSpec {
-            entries: &src.phase_a.map,
-            cap: src.cap,
-            no_trust_cached_hashes: src.mode.no_trust_cached_hashes,
-        },
-        SideSpec {
-            entries: &dst.phase_a.map,
-            cap: dst.cap,
-            no_trust_cached_hashes: dst.mode.no_trust_cached_hashes,
-        },
-        common.case_sensitive,
-        &common.algos,
-    );
-    info!(
-        src_pending = plan.src.by_rel.len(),
-        dst_pending = plan.dst.by_rel.len(),
-        digests = plan.digest_count(),
-        "plan"
-    );
-    let sm = src.resolve(&plan.src)?;
-    let dm = dst.resolve(&plan.dst)?;
-    Ok(PairResult {
-        diff: diff_maps(&sm.map, &dm.map, &common.algos, common.case_sensitive),
-        src: ScanStats {
-            hashed: sm.stats.hashed,
-            cache_hit: sm.stats.cache_hit,
-            stat_only: sm.stats.stat_only,
-            ..src.phase_a.stats
-        },
-        dst: ScanStats {
-            hashed: dm.stats.hashed,
-            cache_hit: dm.stats.cache_hit,
-            stat_only: dm.stats.stat_only,
-            ..dst.phase_a.stats
-        },
-    })
 }
 
 #[cfg(test)]

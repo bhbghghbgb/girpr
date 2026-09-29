@@ -95,11 +95,6 @@ the one-cache-per-run rule below. Output classes, one per line: `MISSING`
 (file vs dir), `CASE-MISMATCH a <=> A` (insensitive mode only), then a `SUMMARY` line.
 Exit `4` if any diff, `0` if equal. `sync` accepts folders only.
 
-Both sides are statted, then planned as a *pair*, then resolved — so a file is
-read only if its counterpart exists with the same size and mtime and the verdict
-is still open. `src_hashed` / `dst_hashed` on the `end` log line report what that
-cost; `stat_only` counts files that needed no digest at all.
-
 ### compare-self
 
 `compare` with one argument: the record side is `--dir`'s own `girpr-cache`, so
@@ -189,20 +184,15 @@ folder is scanned from disk alone and the real cache is left as it was.
   Resolution is by *canonical* path, so two spellings of one target (`F/sub/..`
   vs `F`) collide too. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
-  requested algos for every file. `compare` reads a file only when the *pair* it
-  belongs to could still go either way: a path whose size or mtime already differs
-  on the other side is `CHANGED` without any digest, so it is not read at all. A
-  side reuses a cached digest only when size+mtime match *and* every requested
-  algo is already stored; otherwise it backfills by hashing. So `compare` leaves
-  a file whose stat moved with a **stat-only row** — stat recorded, no digest —
-  which is a normal state, not a half-done one: the next run sees a fresh row with
-  nothing cached and asks for a digest again.
+  requested algos; `compare`/`sync` populate lazily and may leave untouched
+  entries stale — by design. A side reuses a cached digest only when size+mtime
+  match *and* every requested algo is already stored; otherwise it rehashes.
   `--no-trust-cached-hashes <side>` rehashes that side regardless — it changes
-  only *whether the file is read*, never *what the row keeps*, so it is a no-op
-  for a pair already decided by stat. What a rehash writes back keys on the stat
-  alone: unchanged stat merges the new digests over whatever the row already had,
-  changed stat drops every stored digest. Missing cache is created; corrupt cache
-  errors (exit 3, `--ignore-cache` backs up + rebuilds).
+  only *whether the file is read*, never *what the row keeps*. What a rehash
+  writes back keys on the stat alone: unchanged stat merges the new digests over
+  whatever the row already had, changed stat drops every stored digest. Missing
+  cache is created; corrupt cache errors (exit 3, `--ignore-cache` backs up +
+  rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
   **false**): within one side, two live/record paths differing only by case is a
   fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first
@@ -256,7 +246,6 @@ this can be run at any time; add `--no-trust-cached-hashes` to rehash):
 - Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
-  (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `lazy.rs` (read counts + the lazy-vs-eager oracle), with
-  shared fixtures in `tests/common/mod.rs` (including a seeded tree generator).
-  They run against the public API, so anything they touch must stay `pub`.
+  (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`, `sync.rs`, with
+  shared fixtures in `tests/common/mod.rs`. They run against the public API, so
+  anything they touch must stay `pub`.

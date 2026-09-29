@@ -4,7 +4,8 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
-use crate::effective::{Side, classify, compare_pair, ensure_distinct_sides, open_side};
+use crate::diff::diff_maps;
+use crate::effective::{Side, classify, ensure_distinct_sides, load_side};
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -43,18 +44,11 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     let s = classify(&src);
     let d = classify(&dst);
     // A folder side writes its cache while scanning, so naming one cache twice
-    // would diff a record against the view the run itself is mutating. This must
-    // run before either side is opened: it is what makes holding both handles
-    // open across the plan sound.
+    // would diff a record against the view the run itself is mutating.
     ensure_distinct_sides(&s, &d)?;
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
-    // Both sides are opened and statted first, then planned as a pair, then
-    // resolved. A side planned alone would have to assume its counterpart is
-    // there and that the metadata matches, and would read every file to find out
-    // what the pair already decided.
-    // compare only reads the filesystem, so it never dry-runs the FS; the cache
-    // half of a dry run is what keeps a compare from persisting digests.
-    let s_open = open_side(
+    // compare only reads, so it never writes cache rows and never dry-runs.
+    let sm = load_side(
         &s,
         &common,
         ScanMode {
@@ -62,13 +56,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(
-        side = "src",
-        entries = s_open.phase_a.map.len(),
-        "side loaded"
-    );
+    info!(side = "src", entries = sm.map.len(), "side loaded");
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
-    let d_open = open_side(
+    let dm = load_side(
         &d,
         &common,
         ScanMode {
@@ -76,18 +66,10 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(
-        side = "dst",
-        entries = d_open.phase_a.map.len(),
-        "side loaded"
-    );
-    info!(
-        src_entries = s_open.phase_a.map.len(),
-        dst_entries = d_open.phase_a.map.len(),
-        "diffing"
-    );
-    let pair = compare_pair(&s_open, &d_open, &common)?;
-    let diff = pair.diff;
+    info!(side = "dst", entries = dm.map.len(), "side loaded");
+    let (sm, dm) = (sm.map, dm.map);
+    info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
+    let diff = diff_maps(&sm, &dm, &common.algos, common.case_sensitive);
     let code = report_diff(&diff);
     info!(
         missing = diff.missing.len(),
@@ -96,12 +78,6 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         type_conflict = diff.type_conflict.len(),
         case_mismatch = diff.case_mismatch.len(),
         total_diff = diff.total(),
-        src_hashed = pair.src.hashed,
-        src_cache_hit = pair.src.cache_hit,
-        src_stat_only = pair.src.stat_only,
-        dst_hashed = pair.dst.hashed,
-        dst_cache_hit = pair.dst.cache_hit,
-        dst_stat_only = pair.dst.stat_only,
         elapsed_s = elapsed_s(t0),
         exit = code,
         "end"
