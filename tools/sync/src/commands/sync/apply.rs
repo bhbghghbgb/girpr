@@ -117,8 +117,29 @@ impl Applier<'_> {
     }
 
     /// Drop the dst cache rows for every path this run will change, and
-    /// commit before touching the filesystem. A crash after this point
-    /// re-copies instead of trusting a half-written file.
+    /// commit before touching the filesystem.
+    ///
+    /// This is belt-and-braces, and deliberately so: the pre-drop is *not* the
+    /// mechanism that makes an interrupted run safe. Every way `copy_one` can
+    /// die is already caught without it, because
+    ///
+    /// - `File::create` truncates, so a partial write is strictly smaller than
+    ///   src and fails the size comparison;
+    /// - mtime is restored only after a complete write, so "copied but not yet
+    ///   stamped" fails the mtime comparison;
+    /// - a verify failure leaves the file complete with matching stat, but its
+    ///   content then differs from the digest already on the row, so the
+    ///   comparison still fires;
+    /// - a run that got all the way through has nothing left to do.
+    ///
+    /// It stays because it costs one batched write and it does not depend on
+    /// any of those properties holding. It becomes load-bearing the moment
+    /// `copy_one` stops truncating, stops deferring mtime, or reuses a digest
+    /// across a content change — so do not "optimize it away" without checking
+    /// those three. Note also that it is not a *signal*: a later scan that
+    /// records stat without a digest for a size/mtime-differing file looks
+    /// exactly like this, so nothing downstream may depend on the row's absence
+    /// to detect a crash.
     fn predrop_cache_entries(&self, plan: &Plan) -> Result<()> {
         let mut w = self.dst_db.begin_write()?;
         for r in plan.copy.iter().chain(plan.delete_files.iter()) {

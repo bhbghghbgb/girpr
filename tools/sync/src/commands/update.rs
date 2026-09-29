@@ -11,6 +11,15 @@ use crate::util::elapsed_s;
 /// Rebuild `<dir>/girpr-cache` from scratch: stat + hash every file, record
 /// empty dirs as presence-only, prune rows for deleted or filtered-out paths.
 /// The old DB is backed up first.
+///
+/// "From scratch" describes the row set, not the digests. `update` never trusts
+/// a cached digest, so every requested algo is recomputed on every run — but a
+/// file whose size+mtime are unchanged keeps any *other* algorithm already on
+/// its row, and `--hash none` therefore records stat data without touching
+/// stored digests at all. A file whose stat *did* change has all of its digests
+/// dropped, including algorithms this run did not request, because the content
+/// is assumed to have changed with it. Ask for every algorithm you want
+/// refreshed; the pre-run `girpr-cache-backup-*` is the manual way back.
 pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     let t0 = std::time::Instant::now();
     let UpdateOpts { dir, common } = opts;

@@ -118,6 +118,70 @@ fn lock_multi_algo_backfill() {
     );
 }
 
+/// A cache write never drops a digest it did not recompute, unless the file's
+/// stat changed.
+///
+/// The write shape keys on the stat comparison alone. Every `update` call also
+/// exercises `no_trust_cached_hashes` (update always sets it), so these cover
+/// both inputs to the decision: which algos were requested, and whether the
+/// stat still matches.
+#[test]
+fn lock_cache_writes_merge_unless_stat_changed() {
+    let t = TempRoot::new("lock_merge");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"digest me");
+    wfile(&dir, "sub/b.txt", b"nested payload");
+    let full = hash_file(&dir.join("a.txt"), &both()).unwrap();
+
+    // Baseline: every algorithm on the row.
+    cmd_update(with_algos(dir.clone(), both()), &log()).unwrap();
+    assert_eq!(recs(&dir)["a.txt"].hashes, full);
+
+    // stat unchanged + `--hash none` -> nothing recomputed, nothing lost.
+    cmd_update(with_algos(dir.clone(), vec![]), &log()).unwrap();
+    assert_eq!(
+        recs(&dir)["a.txt"].hashes,
+        full,
+        "--hash none must not destroy existing digests"
+    );
+
+    // stat unchanged + narrower --hash -> unrequested algo rides along.
+    cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
+    let kept = recs(&dir)["a.txt"].hashes.clone();
+    assert!(
+        kept.contains_key("sha256"),
+        "unrequested sha256 survives an md5-only update"
+    );
+    assert_eq!(kept["md5"], full["md5"]);
+
+    // stat changed -> every stored digest is suspect, so all are dropped and
+    // only the algos requested this run are kept.
+    wfile(&dir, "a.txt", b"different bytes entirely");
+    cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
+    let after = &recs(&dir)["a.txt"].hashes;
+    assert_eq!(
+        after.len(),
+        1,
+        "a stat change drops digests the run did not recompute, got {:?}",
+        after.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        after.contains_key("md5"),
+        "the requested algo is present after the drop"
+    );
+    assert_eq!(
+        *after,
+        hash_file(&dir.join("a.txt"), &md5s()).unwrap(),
+        "recomputed digest still matches the file"
+    );
+    // The untouched sibling proves this is per-path, not a whole-cache wipe.
+    assert_eq!(
+        recs(&dir)["sub/b.txt"].hashes,
+        hash_file(&dir.join("sub/b.txt"), &both()).unwrap(),
+        "unchanged path keeps its digests"
+    );
+}
+
 /// `--hash none` records stat rows with no hashes, and they still compare
 /// equal and sync cleanly.
 #[test]

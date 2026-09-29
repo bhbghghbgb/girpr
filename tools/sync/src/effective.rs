@@ -47,6 +47,18 @@ impl EffRec {
 /// and committed periodically, so an interrupted scan keeps most of its
 /// progress (the commit is the durability point).
 ///
+/// **Write shape.** A row is rewritten whenever a path is rehashed, and what it
+/// keeps afterwards depends only on whether the stat still matches:
+///
+/// | stat            | digests stored                                    |
+/// | --------------- | ------------------------------------------------- |
+/// | changed         | only the algos computed this run (all old ones are suspect) |
+/// | unchanged       | those, merged over the algos already on the row  |
+///
+/// So a run never destroys a digest it did not recompute, unless the file's
+/// stat says it changed. `--hash none` and `no_trust_cached_hashes` both write
+/// stat data while leaving unrequested digests intact.
+///
 /// In insensitive mode the on-disk name governs: cached keys are indexed by
 /// lowercase so a disk/cached casing difference is fixed to the disk name first,
 /// reusing the cached hashes when stat matches, instead of erroring. Multiple
@@ -184,18 +196,34 @@ pub fn build_effective_folder(
             n_cache_hit += 1;
             trace!(rel = %e.rel, "cache-hit");
         } else {
-            // Stale rows are dropped wholesale, so a partially rewritten
-            // record can never be mistaken for a valid one.
-            if cached.is_some()
-                && !fresh
-                && let Some(w) = batch.as_mut()
-            {
-                w.remove(&e.rel)?;
-            }
             debug!(rel = %e.rel, path = %e.abs.display(), "hashing");
-            let hashes =
+            let computed =
                 hash_file(&e.abs, algos).with_context(|| format!("hash {}", e.abs.display()))?;
-            trace!(rel = %e.rel, algos = ?hashes.keys().collect::<Vec<_>>(), "hashed");
+            trace!(rel = %e.rel, algos = ?computed.keys().collect::<Vec<_>>(), "hashed");
+            // What the row ends up holding is decided by `fresh` alone, never
+            // by `no_trust_cached_hashes`: distrusting the cache means "re-read
+            // the file", not "forget what we already know about it". Keying the
+            // write on the trust flag instead would make every `update` run
+            // (which always distrusts) discard digests it never recomputed.
+            //
+            //   stat changed   -> the content is assumed changed, so every
+            //                     stored digest is suspect and only the algos
+            //                     computed this run are kept;
+            //   stat unchanged -> the file is assumed identical, so digests
+            //                     this run did not ask for are still valid and
+            //                     ride along.
+            //
+            // The second case is what keeps a digest-free scan from destroying
+            // good digests: `--hash none` and stat-only recording both land
+            // here with an empty `computed`.
+            let hashes = match cached.as_ref() {
+                Some(c) if fresh => {
+                    let mut merged = c.hashes.clone();
+                    merged.extend(computed);
+                    merged
+                }
+                _ => computed,
+            };
             if let Some(w) = batch.as_mut() {
                 w.put(
                     &e.rel,

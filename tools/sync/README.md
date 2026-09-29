@@ -62,9 +62,24 @@ trusts cached digests in the first place.
 
 ### update
 
-Fully refreshes `<DIR>/girpr-cache` to current disk state: stats + hashes every file
-per `--hash`, records empty dirs (presence-only), prunes rows for deleted/excluded paths.
-Backs up the old DB first (see below).
+Refreshes `<DIR>/girpr-cache` to current disk state: stats every file, records
+empty dirs (presence-only), prunes rows for deleted/excluded paths. Backs up
+the old DB first (see below).
+
+It recomputes every algorithm named by `--hash` on every run, but that does
+**not** mean every stored digest is replaced:
+
+- **stat unchanged** — algorithms this run did not ask for are kept, so
+  `--hash none` records stat data without touching stored digests at all, and
+  `--hash md5` leaves an existing `sha256` alone. To refresh an algorithm, ask
+  for it by name.
+- **stat changed** — *all* stored digests are dropped, including algorithms
+  this run did not request, since the content is assumed to have changed with
+  them. Only the `--hash` set is written back.
+
+So the cache is a superset of what you last asked for, pruned to the current
+stat. `girpr-cache-backup-*` (written before the run) is the manual way back
+from a bad prune; it is a recovery aid, not a correctness mechanism.
 
 ### compare
 
@@ -91,7 +106,15 @@ Mirrors `src` → `dst`:
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime when `--hash none`); the dst record entry is deleted *before* each
-   file change, so a crash re-copies rather than trusting a half-written file. No resume.
+   file change. No resume.
+
+The pre-drop in (5) is belt-and-braces, not the safety mechanism — every way a
+copy can die is already caught by size (truncation makes a partial file
+strictly smaller), by mtime (stamped only after a complete write), or by the
+pre-copy digest no longer matching. It stays because it costs one batched write
+and depends on none of those. Do not treat a *missing* row as a crash signal,
+though: a scan may legitimately record stat without a digest, so absence proves
+nothing.
 
 `--dry-run` prints `MKDIR/COPY/DELETE/RENAME` + `SUMMARY` and writes nothing
 (no backups, no cache updates, no FS changes). The plan is exact: it is the same
@@ -106,14 +129,16 @@ work list a real run executes, including the insensitive-mode rename pass.
   `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
-- **Cache is a cache, not truth.** Disk governs. Stale entries (size/mtime
-  mismatch) are dropped wholesale per path and rehashed; missing algos are hashed
-  on demand. `update` always populates; `compare`/`sync` populate lazily and may
-  leave untouched entries stale — by design. A side reuses a cached digest only
-  when size+mtime match *and* every requested algo is already stored; otherwise
-  it rehashes. `--no-trust-cached-hashes <side>` rehashes that side regardless.
-  Missing cache is created; corrupt cache errors (exit 3, `--ignore-cache` backs
-  up + rebuilds).
+- **Cache is a cache, not truth.** Disk governs. `update` always populates the
+  requested algos; `compare`/`sync` populate lazily and may leave untouched
+  entries stale — by design. A side reuses a cached digest only when size+mtime
+  match *and* every requested algo is already stored; otherwise it rehashes.
+  `--no-trust-cached-hashes <side>` rehashes that side regardless — it changes
+  only *whether the file is read*, never *what the row keeps*. What a rehash
+  writes back keys on the stat alone: unchanged stat merges the new digests over
+  whatever the row already had, changed stat drops every stored digest. Missing
+  cache is created; corrupt cache errors (exit 3, `--ignore-cache` backs up +
+  rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
   **false**): within one side, two live/record paths differing only by case is a
   fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first
