@@ -364,7 +364,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         let mut expected = sorted.clone();
-        expected.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+        expected.sort_by_key(|a| a.to_ascii_lowercase());
         assert_eq!(sorted, expected, "{text}");
         // Rerun is byte-identical (no duplicate keys, stable order).
         let snapshot = text.clone();

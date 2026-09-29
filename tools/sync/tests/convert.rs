@@ -118,7 +118,7 @@ fn convert_sled_dir_to_redb_file() {
             .write(true)
             .open(live.join(rel))
             .unwrap()
-            .set_modified(ts.into())
+            .set_modified(ts)
             .unwrap();
     }
     let mut o = common::compare(dst.clone(), live.clone());
