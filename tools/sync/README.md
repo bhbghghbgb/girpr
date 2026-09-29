@@ -29,7 +29,8 @@ and drive the public API.
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
-| `effective.rs` | collapses cache + filters + case rules into one `EffRec` map per side |
+| `effective.rs` | the two phases for one side: `scan_stat_only` (stat + cache, never hashes) and `resolve_folder`/`resolve_record` (hash what was planned); `merge_row`, the cache write rule |
+| `planner.rs` | `HashPlan`: the only place that decides which digests a run must compute |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 

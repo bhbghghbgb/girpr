@@ -25,7 +25,8 @@ use tracing::info;
 use crate::cache::{CACHE_PREFIX, CacheOpen, open_db};
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{build_effective_folder, load_record_side_from};
+use crate::effective::{load_record_side_from, resolve_folder, resolve_record, scan_stat_only};
+use crate::planner::HashPlan;
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -94,17 +95,19 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         entries = rec.map.len(),
         "record side loaded"
     );
-    let disk = build_effective_folder(
-        &dir,
-        &cache,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes,
-            // No cache writes. The FS half of a dry run is moot: this command
-            // never touches the filesystem.
-            dry_run: true,
-        },
-    )?;
+    // Phase A for both roles off the one handle, then a plan, then phase C — the
+    // shape `compare` uses, and what lets a stat-drifted file cost no read once
+    // the planner learns to skip it.
+    let disk_mode = ScanMode {
+        no_trust_cached_hashes,
+        // No cache writes. The FS half of a dry run is moot: this command
+        // never touches the filesystem.
+        dry_run: true,
+    };
+    let disk = scan_stat_only(&dir, &cache, &common, disk_mode)?;
+    let plan = HashPlan::plan_one_side(&disk.map, &common.algos, no_trust_cached_hashes);
+    let disk = resolve_folder(&dir, &cache, disk_mode, &disk, &plan)?;
+    let rec = resolve_record(&rec);
     info!(
         side = "disk",
         entries = disk.map.len(),

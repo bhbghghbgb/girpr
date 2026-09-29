@@ -10,7 +10,8 @@
 //! - [`cache`] — redb schema, open/rebuild, backup snapshots
 //! - [`convert`] — one-shot sled -> redb converter
 //! - [`scan`] — live filesystem walk
-//! - [`effective`] — cache + filters + case rules collapsed into one map per side
+//! - [`effective`] — phase A (stat + cache) and phase C (hash) for one side
+//! - [`planner`] — [`HashPlan`]: the only place that decides what must be hashed
 //! - [`diff`] — path-set diffing
 //! - [`commands`] — `update`, `compare`, `compare-self`, `sync`
 //! - [`filter`], [`hash`], [`util`], [`logging`] — supporting primitives
@@ -25,6 +26,7 @@ pub mod effective;
 pub mod filter;
 pub mod hash;
 pub mod logging;
+pub mod planner;
 pub mod scan;
 pub mod util;
 
@@ -33,5 +35,6 @@ pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
-pub use effective::{EffRec, ScanStats, SideScan};
+pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 pub use logging::init_tracing;
+pub use planner::HashPlan;

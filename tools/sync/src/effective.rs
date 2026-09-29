@@ -15,6 +15,7 @@ use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, CacheWrite, FileRec, open_d
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
+use crate::planner::HashPlan;
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 
@@ -39,25 +40,40 @@ pub struct ScanStats {
     pub hashed: usize,
     /// Files answered wholly from the cache: stat matched and every requested
     /// algo was already stored, so the file was never opened.
+    ///
+    /// "Wholly from the cache" is literal — a path the plan left alone *and* the
+    /// cache had nothing for is [`stat_only`](Self::stat_only), not a hit. An
+    /// empty algo set over a cold tree produces no hits at all, which is the
+    /// honest answer: nothing was served from a cache, because nothing was
+    /// needed and nothing was read.
     pub cache_hit: usize,
+    /// Files that needed no digest at all and so were never candidates for one:
+    /// the request set was empty (`--hash none`).
+    ///
+    /// The bucket a lazily-resolved stat-differing pair will move into, once the
+    /// planner learns to skip it. Kept distinct from `cache_hit` from the start
+    /// so that transition does not make a run look like it read nothing *and*
+    /// served everything from cache.
+    pub stat_only: usize,
     /// Cache rows dropped for paths no longer live (or now filtered out).
     pub pruned: usize,
 }
 
-/// One side's resolved map, plus the counters describing how it was built.
+/// A side's map at one phase, plus the counters describing how it was built.
 ///
 /// The two travel together because the counters are only meaningful next to the
 /// map they were produced for, and a caller that drops the map has no use for
-/// them either.
+/// them either. Generic over the entry type because both phases produce a map:
+/// phase A an [`SideEntry`] per path, phase C an [`EffRec`] per path.
 #[derive(Debug, Default)]
-pub struct SideScan {
-    /// The effective map: kind, stat, and the digests that were actually needed.
-    pub map: HashMap<String, EffRec>,
+pub struct SideScan<T = EffRec> {
+    /// The map, keyed by relative path.
+    pub map: HashMap<String, T>,
     pub stats: ScanStats,
 }
 
-impl SideScan {
-    /// Count a map's files and dirs, leaving the work counters at zero.
+impl SideScan<EffRec> {
+    /// Count a resolved map's files and dirs, leaving the work counters at zero.
     ///
     /// For a record side, which is read with no filesystem access: there is no
     /// hashing to report and nothing to prune, so zero is the truth rather than
@@ -66,6 +82,18 @@ impl SideScan {
         let stats = ScanStats {
             files: map.values().filter(|r| r.kind == "file").count(),
             dirs: map.values().filter(|r| r.kind == "dir").count(),
+            ..ScanStats::default()
+        };
+        Self { map, stats }
+    }
+}
+
+impl SideScan<SideEntry> {
+    /// Count an entry set's files and dirs, leaving the work counters at zero.
+    fn of_entries(map: HashMap<String, SideEntry>) -> Self {
+        let stats = ScanStats {
+            files: map.values().filter(|e| e.is_file()).count(),
+            dirs: map.values().filter(|e| !e.is_file()).count(),
             ..ScanStats::default()
         };
         Self { map, stats }
@@ -154,6 +182,114 @@ fn merge_row(
     }
 }
 
+/// One side's contribution to a pair decision: what phase A learned about a
+/// path without reading its bytes.
+///
+/// This is phase A's whole output, and it is deliberately *not* an [`EffRec`].
+/// An `EffRec` claims to answer a diff question, and answering it is phase C's
+/// job; an entry here only says what the path is and what the cache already
+/// holds for it. Keeping them apart is what lets the planner see a side's full
+/// digest availability before committing to a read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SideEntry {
+    /// "file" or "dir"
+    pub kind: String,
+    pub size: u64,
+    pub mtime_ns: i64,
+    /// Digests carried **only** when the stat still matches the row, and
+    /// **every** algorithm on that row — requested or not, because the planner
+    /// needs the whole availability picture to choose one per path.
+    ///
+    /// Empty for a dir, for a new path, and for a path whose stat moved. That
+    /// last case is the load-bearing one: a stale row's digests must never reach
+    /// the planner, or a changed file gets judged against its pre-change digest.
+    pub cached: HashMap<String, Vec<u8>>,
+    /// Whether the cache row's stat still matches disk.
+    ///
+    /// Not derivable from `cached` being empty, because a fresh row can carry no
+    /// digests at all — that is what a `--hash none` history looks like, and it
+    /// is a real state. Phase C needs the distinction to reconstruct the prior
+    /// row and hand it to [`merge_row`], so it is carried explicitly rather than
+    /// inferred.
+    pub fresh: bool,
+}
+
+impl SideEntry {
+    fn dir() -> Self {
+        Self {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            cached: HashMap::new(),
+            fresh: true,
+        }
+    }
+
+    /// True when this entry is a file rather than a directory. Dirs are compared
+    /// by presence alone and never need a digest.
+    pub fn is_file(&self) -> bool {
+        self.kind == "file"
+    }
+
+    /// The cache row as phase C needs it back: reconstructible exactly when the
+    /// stat still matches, so [`merge_row`] sees the same prior row a single-pass
+    /// scan would have.
+    fn prior(&self) -> Option<FileRec> {
+        self.fresh.then(|| FileRec {
+            kind: "file".into(),
+            size: self.size,
+            mtime_ns: self.mtime_ns,
+            hashes: self.cached.clone(),
+        })
+    }
+}
+
+/// What a side is *able* to do — two independent bits, not one property of the
+/// cache handle.
+///
+/// `CacheDb::is_read_only` answers "can this handle write?". It does not answer
+/// "can this side produce a digest?", and the two come apart in both directions
+/// within a single command:
+///
+/// | side                          | handle     | can_hash_from_disk | can_write_cache |
+/// | ----------------------------- | ---------- | ------------------ | --------------- |
+/// | folder, normal run            | ReadWrite  | yes                | yes             |
+/// | folder, `sync --dry-run`, `compare-self` | ReadOnly | yes      | no              |
+/// | record                        | ReadOnly  | no                 | no              |
+///
+/// Reading a read-only handle as "cannot hash" would make W2 refuse to hash a
+/// dry run's folder — the one case where hashing is the only thing left to do.
+/// Reading it as "can hash and write" would try to hash a record, which has no
+/// filesystem to hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SideCapability {
+    /// Can produce a digest that is not already cached, by reading the file.
+    pub can_hash_from_disk: bool,
+    /// Can persist what it produces.
+    pub can_write_cache: bool,
+}
+
+impl SideCapability {
+    /// A folder side. Full filesystem access regardless of how the cache was
+    /// opened, so it can always hash; persisting needs both a writable handle
+    /// and a run that is permitted to write.
+    pub fn for_folder(cache: &CacheDb, mode: ScanMode) -> Self {
+        Self {
+            can_hash_from_disk: true,
+            can_write_cache: !mode.dry_run && !cache.is_read_only(),
+        }
+    }
+
+    /// A record side: no filesystem access, so it can neither produce a digest
+    /// it does not already hold nor store one.
+    pub fn record() -> Self {
+        Self {
+            can_hash_from_disk: false,
+            can_write_cache: false,
+        }
+    }
+}
+
 /// Record a directory as presence-only, leaving an existing dir row alone.
 ///
 /// A dir row is fully determined by its key, so rewriting an identical one per
@@ -194,12 +330,40 @@ fn put_dir_row(w: &mut CacheWrite<'_>, rel: &str) -> Result<()> {
 /// lowercase so a disk/cached casing difference is fixed to the disk name first,
 /// reusing the cached hashes when stat matches, instead of erroring. Multiple
 /// stale alternates are pruned below, not treated as a conflict.
-pub fn build_effective_folder(
+/// **Phase A.** Walk `root`, consult the cache, and report what it knows about
+/// every path — without reading a single file's bytes.
+///
+/// The output is a [`SideEntry`] per path: its kind, its stat, and the digests
+/// the cache holds *for that exact stat*. Nothing here decides what still needs
+/// computing; that is [`HashPlan`]'s job, and keeping the two apart is what lets
+/// a later `--hash-any-of` choose an algorithm per path instead of inheriting
+/// whatever this pass decided to open.
+///
+/// Writes back to the cache unless `mode.dry_run`, and prunes rows for paths that
+/// are no longer on disk (or are now filtered out). The writes are the ones that
+/// do not depend on any plan:
+///
+/// - dir rows (presence-only);
+/// - an alternate-cased key being retired in favour of the disk name;
+/// - a file whose stat moved, which gets a stat-only row. A stat with no digest
+///   is a valid state, not a half-done one: the next run sees a fresh row with
+///   nothing cached, and the plan asks for a digest again. Writing it here rather
+///   than waiting for a digest is what stops a changed file keeping a row that
+///   still carries its pre-change hashes.
+///
+/// Phase A opens, uses and commits its own batched write handle, so the row set
+/// is durable before the expensive phase begins.
+///
+/// In insensitive mode the on-disk name governs: cached keys are indexed by
+/// lowercase so a disk/cached casing difference is fixed to the disk name first,
+/// carrying the cached hashes when stat matches, instead of erroring. Multiple
+/// stale alternates are pruned, not treated as a conflict.
+pub fn scan_stat_only(
     root: &Path,
     cache: &CacheDb,
     common: &CommonOpts,
     mode: ScanMode,
-) -> Result<SideScan> {
+) -> Result<SideScan<SideEntry>> {
     let algos: &[String] = &common.algos;
     let includes: &[Pattern] = &common.includes;
     let excludes: &[Pattern] = &common.excludes;
@@ -212,7 +376,7 @@ pub fn build_effective_folder(
 
     let live = walk_live(root, max_depth)?;
     check_mixed_case(&live, &root.display().to_string(), case_sensitive)?;
-    let mut eff = HashMap::new();
+    let mut map: HashMap<String, SideEntry> = HashMap::new();
     let mut live_set: HashSet<String> = HashSet::new();
     for e in &live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
@@ -230,8 +394,6 @@ pub fn build_effective_folder(
     );
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
-    let mut n_hashed: usize = 0;
-    let mut n_cache_hit: usize = 0;
     let total_live = live.len();
     let alt_recs: HashMap<String, FileRec> = if !case_sensitive {
         // Read once up front; the scan's batch handle starts from the same
@@ -265,7 +427,7 @@ pub fn build_effective_folder(
             continue;
         }
         if e.is_dir {
-            eff.insert(e.rel.clone(), EffRec::dir());
+            map.insert(e.rel.clone(), SideEntry::dir());
             if let Some(w) = batch.as_mut() {
                 put_dir_row(w, &e.rel)?;
             }
@@ -273,7 +435,7 @@ pub fn build_effective_folder(
         }
         // file
         // `adopted` = cache entry came from an alternate-cased key, so the
-        // disk-cased key must be (re)written even on a cache hit.
+        // disk-cased key must be (re)written even when no digest is computed.
         let (cached, adopted): (Option<FileRec>, bool) = match match batch.as_mut() {
             Some(w) => w.get(&e.rel)?,
             None => cache.get(&e.rel)?,
@@ -302,46 +464,32 @@ pub fn build_effective_folder(
             None => (None, false),
         };
         let fresh = stat_matches(cached.as_ref(), e.size, e.mtime_ns);
-        // Reuse the cached row only when the stat still matches, this side
-        // trusts the cache, and every requested algo is present. Every other
-        // case falls through to the rehash below.
-        let trusted = cached.as_ref().filter(|c| {
-            fresh && !no_trust_cached_hashes && algos.iter().all(|a| c.hashes.contains_key(a))
-        });
-        if let Some(c) = trusted {
-            if adopted && let Some(w) = batch.as_mut() {
-                w.put(&e.rel, c)?;
-            }
-            eff.insert(
-                e.rel.clone(),
-                EffRec {
-                    kind: "file".into(),
-                    size: c.size,
-                    mtime_ns: c.mtime_ns,
-                    hashes: c.hashes.clone(),
+        // A stale row's digests are dropped on the floor here. This is the carry
+        // rule, and it is the same rule `merge_row` writes by: a row is valid iff
+        // its stat matches. Carrying them would let a changed file be judged
+        // against its pre-change digest.
+        map.insert(
+            e.rel.clone(),
+            SideEntry {
+                kind: "file".into(),
+                size: e.size,
+                mtime_ns: e.mtime_ns,
+                cached: match (fresh, cached.as_ref()) {
+                    (true, Some(c)) => c.hashes.clone(),
+                    _ => HashMap::new(),
                 },
-            );
-            n_cache_hit += 1;
-            trace!(rel = %e.rel, "cache-hit");
-        } else {
-            debug!(rel = %e.rel, path = %e.abs.display(), "hashing");
-            let computed =
-                hash_file(&e.abs, algos).with_context(|| format!("hash {}", e.abs.display()))?;
-            trace!(rel = %e.rel, algos = ?computed.keys().collect::<Vec<_>>(), "hashed");
-            let row = merge_row(e.size, e.mtime_ns, computed, cached.as_ref());
-            if let Some(w) = batch.as_mut() {
-                w.put(&e.rel, &row)?;
-            }
-            eff.insert(
-                e.rel.clone(),
-                EffRec {
-                    kind: "file".into(),
-                    size: row.size,
-                    mtime_ns: row.mtime_ns,
-                    hashes: row.hashes,
-                },
-            );
-            n_hashed += 1;
+                fresh,
+            },
+        );
+        // The two cases where phase A owes a write regardless of any plan: the
+        // stat moved, so the old row is now wrong; or the key was adopted from a
+        // stale casing, so the disk-cased key does not exist yet.
+        if (!fresh || adopted)
+            && let Some(w) = batch.as_mut()
+        {
+            let row = merge_row(e.size, e.mtime_ns, HashMap::new(), cached.as_ref());
+            w.put(&e.rel, &row)?;
+            trace!(rel = %e.rel, fresh, adopted, "stat-only row");
         }
         n_done += 1;
         if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
@@ -349,8 +497,8 @@ pub fn build_effective_folder(
                 root = %root.display(),
                 done = n_done,
                 total = total_live,
-                hashed = n_hashed,
-                cache_hit = n_cache_hit,
+                hashed = 0,
+                cache_hit = 0,
                 elapsed_s = t_eff.elapsed().as_secs_f64(),
                 "scan progress"
             );
@@ -368,34 +516,229 @@ pub fn build_effective_folder(
                 trace!(rel = %rel, "prune cache");
             }
         }
-        // Final commit: the durability point for the whole scan.
+        // Durability point for the row set. Phase C opens its own handle, so
+        // this is not the end of the scan — it is the point at which the cache
+        // describes the tree even if every hash after it is lost.
         let w = batch.take().unwrap();
         w.commit()?;
     }
     let stats = ScanStats {
         live: total_live,
-        files: eff.values().filter(|r| r.kind == "file").count(),
-        dirs: eff.values().filter(|r| r.kind == "dir").count(),
-        hashed: n_hashed,
-        cache_hit: n_cache_hit,
+        files: map.values().filter(|e| e.is_file()).count(),
+        dirs: map.values().filter(|e| !e.is_file()).count(),
+        hashed: 0,
+        cache_hit: 0,
+        stat_only: 0,
         pruned,
     };
     info!(
         root = %root.display(),
         files = stats.files,
         dirs = stats.dirs,
-        hashed = stats.hashed,
-        cache_hit = stats.cache_hit,
+        hashed = 0,
+        cache_hit = 0,
         pruned = stats.pruned,
         elapsed_s = elapsed_s(t_eff),
         "effective done"
     );
-    Ok(SideScan { map: eff, stats })
+    Ok(SideScan { map, stats })
 }
 
-/// Effective map for a record input: the DB read as-is, with no FS access and
-/// no writes. Cache rows and filtered paths are dropped.
-pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<SideScan> {
+/// **Phase C.** Hash what the plan asked for, and finalize each path's map entry.
+///
+/// This is the only phase that opens a file, and it opens exactly the ones
+/// [`HashPlan`] names — no more, so a stat-mismatch short circuit in the planner
+/// is worth real I/O; no fewer, so a digest the diff will compare is always
+/// present on both sides.
+///
+/// A path the plan leaves alone is finalized from what phase A carried, and
+/// costs no write: its row is already correct. A path that is hashed is written
+/// through [`merge_row`], which is the same write rule phase A used, so the two
+/// phases cannot spell it differently.
+pub fn resolve_folder(
+    root: &Path,
+    cache: &CacheDb,
+    mode: ScanMode,
+    phase_a: &SideScan<SideEntry>,
+    plan: &HashPlan,
+) -> Result<SideScan> {
+    let ScanMode { dry_run, .. } = mode;
+    let t_eff = std::time::Instant::now();
+    info!(
+        root = %root.display(),
+        pending = plan.pending().len(),
+        digests = plan.digest_count(),
+        "resolve start"
+    );
+    let mut batch = if dry_run {
+        None
+    } else {
+        Some(cache.begin_write()?)
+    };
+
+    // Sorted, so a run reads the same paths in the same order every time and the
+    // progress heartbeat is reproducible.
+    let mut pending: Vec<&String> = phase_a
+        .map
+        .iter()
+        .filter(|(rel, e)| e.is_file() && !plan.is_settled(rel))
+        .map(|(rel, _)| rel)
+        .collect();
+    pending.sort();
+
+    let mut map: HashMap<String, EffRec> = HashMap::new();
+    let mut n_hashed = 0usize;
+    let mut last_prog = std::time::Instant::now();
+    // Hashing and writing stay interleaved on purpose: `COMMIT_INTERVAL` bounds
+    // how much hashing work an interruption can lose, and that only holds if a
+    // digest becomes durable shortly after it is computed. Batching all the
+    // writes until after the last hash would keep the whole hash phase in
+    // memory and none of it on disk.
+    for (i, rel) in pending.iter().enumerate() {
+        let path = root.join(rel);
+        let algos = plan.get(rel);
+        let e = &phase_a.map[*rel];
+        debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
+        let computed =
+            hash_file(&path, algos).with_context(|| format!("hash {}", path.display()))?;
+        trace!(rel = %rel, algos = ?computed.keys().collect::<Vec<_>>(), "hashed");
+        let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
+        if let Some(w) = batch.as_mut() {
+            w.put(rel, &row)?;
+        }
+        map.insert(
+            (*rel).clone(),
+            EffRec {
+                kind: "file".into(),
+                size: row.size,
+                mtime_ns: row.mtime_ns,
+                hashes: row.hashes,
+            },
+        );
+        n_hashed += 1;
+        if (i + 1).is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
+            info!(
+                root = %root.display(),
+                done = i + 1,
+                total = pending.len(),
+                hashed = n_hashed,
+                cache_hit = 0,
+                elapsed_s = t_eff.elapsed().as_secs_f64(),
+                "scan progress"
+            );
+            last_prog = std::time::Instant::now();
+        }
+    }
+
+    // Everything the plan settled: a file, a dir, and no read.
+    let mut n_cache_hit = 0usize;
+    let mut n_stat_only = 0usize;
+    for (rel, e) in &phase_a.map {
+        if map.contains_key(rel) {
+            continue;
+        }
+        if !e.is_file() {
+            map.insert(rel.clone(), EffRec::dir());
+            continue;
+        }
+        if e.cached.is_empty() {
+            n_stat_only += 1;
+            trace!(rel = %rel, "stat-only");
+        } else {
+            n_cache_hit += 1;
+            trace!(rel = %rel, "cache-hit");
+        }
+        map.insert(
+            rel.clone(),
+            EffRec {
+                kind: "file".into(),
+                size: e.size,
+                mtime_ns: e.mtime_ns,
+                hashes: e.cached.clone(),
+            },
+        );
+    }
+
+    if let Some(w) = batch.take() {
+        w.commit()?;
+    }
+    let stats = ScanStats {
+        hashed: n_hashed,
+        cache_hit: n_cache_hit,
+        stat_only: n_stat_only,
+        ..ScanStats::default()
+    };
+    info!(
+        root = %root.display(),
+        files = phase_a.stats.files,
+        dirs = phase_a.stats.dirs,
+        hashed = stats.hashed,
+        cache_hit = stats.cache_hit,
+        stat_only = stats.stat_only,
+        pruned = phase_a.stats.pruned,
+        elapsed_s = elapsed_s(t_eff),
+        "effective done"
+    );
+    Ok(SideScan { map, stats })
+}
+
+/// **Phase C** for a record side: no filesystem access, so it can only hand back
+/// what it already had.
+///
+/// It does not check that the plan was answerable. That check belongs to the
+/// planner, which sees both sides at once and can report every uncovered path at
+/// once; and until the all-of rule lands, a record that lacks a digest still
+/// degrades to size+mtime silently, exactly as it does today. Failing here
+/// instead would make a record side fatal on the first undecided path it
+/// happened to be short of, which is the reverted attempt's mistake.
+pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
+    let map = phase_a
+        .map
+        .iter()
+        .map(|(rel, e)| {
+            (
+                rel.clone(),
+                EffRec {
+                    kind: e.kind.clone(),
+                    size: e.size,
+                    mtime_ns: e.mtime_ns,
+                    hashes: e.cached.clone(),
+                },
+            )
+        })
+        .collect();
+    SideScan::of_map(map)
+}
+
+/// Build the effective map for a folder: phase A, a plan, then phase C.
+///
+/// Kept as one function so every existing caller behaves exactly as it did, with
+/// the one-sided plan that reproduces the pre-W2 request: every requested
+/// algorithm for every file. The commands that can plan across two sides open
+/// the phases themselves instead; this is the shape they converge on.
+pub fn build_effective_folder(
+    root: &Path,
+    cache: &CacheDb,
+    common: &CommonOpts,
+    mode: ScanMode,
+) -> Result<SideScan> {
+    let phase_a = scan_stat_only(root, cache, common, mode)?;
+    let plan = HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
+    let resolved = resolve_folder(root, cache, mode, &phase_a, &plan)?;
+    Ok(SideScan {
+        stats: ScanStats {
+            hashed: resolved.stats.hashed,
+            cache_hit: resolved.stats.cache_hit,
+            stat_only: resolved.stats.stat_only,
+            ..phase_a.stats
+        },
+        map: resolved.map,
+    })
+}
+
+/// **Phase A** for a record input: the DB read as-is, with no FS access and no
+/// writes. Cache rows and filtered paths are dropped.
+pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<SideScan<SideEntry>> {
     let cache = CacheDb::open_record(db_path)?;
     load_record_side_from(&cache, common, &db_path.display().to_string())
 }
@@ -414,9 +757,9 @@ pub fn load_record_side_from(
     cache: &CacheDb,
     common: &CommonOpts,
     label: &str,
-) -> Result<SideScan> {
+) -> Result<SideScan<SideEntry>> {
     let all = cache.load_all()?;
-    let mut out = HashMap::new();
+    let mut out: HashMap<String, SideEntry> = HashMap::new();
     for (rel, r) in all {
         if is_cache_rel(&rel) {
             continue;
@@ -431,11 +774,12 @@ pub fn load_record_side_from(
         }
         out.insert(
             rel,
-            EffRec {
+            SideEntry {
                 kind: r.kind,
                 size: r.size,
                 mtime_ns: r.mtime_ns,
-                hashes: r.hashes,
+                cached: r.hashes,
+                fresh: true,
             },
         );
     }
@@ -455,7 +799,9 @@ pub fn load_record_side_from(
             }
         }
     }
-    Ok(SideScan::of_map(out))
+    // A record's row *is* its stat — there is no disk to disagree with — so
+    // every row is fresh and its digests are carried whole.
+    Ok(SideScan::of_entries(out))
 }
 
 /// One side of a `compare`: either a folder root or a record file.
@@ -536,9 +882,11 @@ pub fn load_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Sid
     match side {
         Side::Record(dbp) => {
             info!(record = %dbp.display(), "load record side");
-            let m = load_record_side(dbp, common)?;
-            info!(record = %dbp.display(), entries = m.map.len(), "record loaded");
-            Ok(m)
+            let pa = load_record_side(dbp, common)?;
+            info!(record = %dbp.display(), entries = pa.map.len(), "record loaded");
+            // A record resolves with nothing to compute: it has no filesystem to
+            // hash, so phase C is a copy of what phase A carried.
+            Ok(resolve_record(&pa))
         }
         Side::Folder(root) => {
             if !root.is_dir() {
