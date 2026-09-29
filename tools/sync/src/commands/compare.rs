@@ -56,7 +56,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(side = "src", entries = sm.len(), "side loaded");
+    info!(side = "src", entries = sm.map.len(), "side loaded");
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
     let dm = load_side(
         &d,
@@ -66,7 +66,8 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(side = "dst", entries = dm.len(), "side loaded");
+    info!(side = "dst", entries = dm.map.len(), "side loaded");
+    let (sm, dm) = (sm.map, dm.map);
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
     let diff = diff_maps(&sm, &dm, &common.algos, common.case_sensitive);
     let code = report_diff(&diff);

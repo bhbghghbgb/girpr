@@ -54,7 +54,7 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     )?;
     // update always populates: it never trusts a cached digest, so there is
     // no flag to override here.
-    let eff = build_effective_folder(
+    let scan = build_effective_folder(
         &dir,
         &db,
         &common,
@@ -63,18 +63,17 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    let files = eff.values().filter(|r| r.kind == "file").count();
-    let dirs = eff.values().filter(|r| r.kind == "dir").count();
+    let stats = scan.stats;
     println!(
         "update {} files={} dirs={} algos=[{}]",
         dir.display(),
-        files,
-        dirs,
+        stats.files,
+        stats.dirs,
         common.algos.join(",")
     );
     info!(
-        files,
-        dirs,
+        files = stats.files,
+        dirs = stats.dirs,
         algos = ?common.algos,
         elapsed_s = elapsed_s(t0),
         exit = 0,

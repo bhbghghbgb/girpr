@@ -18,6 +18,60 @@ use crate::hash::hash_file;
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 
+/// What one side's scan actually did.
+///
+/// Counters, not a verdict: they describe how much work the run performed. They
+/// are the only honest measure of laziness — the diff output is identical either
+/// way, so a run that hashes nothing and a run that hashes everything print the
+/// same thing. They used to be local to the scan and emitted as log fields only,
+/// which made that distinction untestable; W2's whole performance claim rests on
+/// asserting them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScanStats {
+    /// Entries the walk found, before glob filters.
+    pub live: usize,
+    /// Files in the resulting map.
+    pub files: usize,
+    /// Dirs in the resulting map.
+    pub dirs: usize,
+    /// Files whose *bytes* were read to compute a digest. A dir never counts, and
+    /// neither does a file served entirely from a stat-matching cached row.
+    pub hashed: usize,
+    /// Files answered wholly from the cache: stat matched and every requested
+    /// algo was already stored, so the file was never opened.
+    pub cache_hit: usize,
+    /// Cache rows dropped for paths no longer live (or now filtered out).
+    pub pruned: usize,
+}
+
+/// One side's resolved map, plus the counters describing how it was built.
+///
+/// The two travel together because the counters are only meaningful next to the
+/// map they were produced for, and a caller that drops the map has no use for
+/// them either.
+#[derive(Debug, Default)]
+pub struct SideScan {
+    /// The effective map: kind, stat, and the digests that were actually needed.
+    pub map: HashMap<String, EffRec>,
+    pub stats: ScanStats,
+}
+
+impl SideScan {
+    /// Count a map's files and dirs, leaving the work counters at zero.
+    ///
+    /// For a record side, which is read with no filesystem access: there is no
+    /// hashing to report and nothing to prune, so zero is the truth rather than
+    /// a stand-in for "unknown".
+    fn of_map(map: HashMap<String, EffRec>) -> Self {
+        let stats = ScanStats {
+            files: map.values().filter(|r| r.kind == "file").count(),
+            dirs: map.values().filter(|r| r.kind == "dir").count(),
+            ..ScanStats::default()
+        };
+        Self { map, stats }
+    }
+}
+
 /// A resolved path: kind, stat data, and whatever hashes were needed.
 /// Hash values are raw digest bytes (see [`crate::hash::hash_file`]).
 #[derive(Clone, Debug)]
@@ -59,6 +113,9 @@ impl EffRec {
 /// stat says it changed. `--hash none` and `no_trust_cached_hashes` both write
 /// stat data while leaving unrequested digests intact.
 ///
+/// Returns the map with the counters describing how it was built; see
+/// [`ScanStats`] for why those are part of the result rather than a log line.
+///
 /// In insensitive mode the on-disk name governs: cached keys are indexed by
 /// lowercase so a disk/cached casing difference is fixed to the disk name first,
 /// reusing the cached hashes when stat matches, instead of erroring. Multiple
@@ -68,7 +125,7 @@ pub fn build_effective_folder(
     cache: &CacheDb,
     common: &CommonOpts,
     mode: ScanMode,
-) -> Result<HashMap<String, EffRec>> {
+) -> Result<SideScan> {
     let algos: &[String] = &common.algos;
     let includes: &[Pattern] = &common.includes;
     let excludes: &[Pattern] = &common.excludes;
@@ -275,24 +332,30 @@ pub fn build_effective_folder(
         let w = batch.take().unwrap();
         w.commit()?;
     }
-    let n_files = eff.values().filter(|r| r.kind == "file").count();
-    let n_dirs = eff.values().filter(|r| r.kind == "dir").count();
+    let stats = ScanStats {
+        live: total_live,
+        files: eff.values().filter(|r| r.kind == "file").count(),
+        dirs: eff.values().filter(|r| r.kind == "dir").count(),
+        hashed: n_hashed,
+        cache_hit: n_cache_hit,
+        pruned,
+    };
     info!(
         root = %root.display(),
-        files = n_files,
-        dirs = n_dirs,
-        hashed = n_hashed,
-        cache_hit = n_cache_hit,
-        pruned,
+        files = stats.files,
+        dirs = stats.dirs,
+        hashed = stats.hashed,
+        cache_hit = stats.cache_hit,
+        pruned = stats.pruned,
         elapsed_s = elapsed_s(t_eff),
         "effective done"
     );
-    Ok(eff)
+    Ok(SideScan { map: eff, stats })
 }
 
 /// Effective map for a record input: the DB read as-is, with no FS access and
 /// no writes. Cache rows and filtered paths are dropped.
-pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<String, EffRec>> {
+pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<SideScan> {
     let cache = CacheDb::open_record(db_path)?;
     load_record_side_from(&cache, common, &db_path.display().to_string())
 }
@@ -311,7 +374,7 @@ pub fn load_record_side_from(
     cache: &CacheDb,
     common: &CommonOpts,
     label: &str,
-) -> Result<HashMap<String, EffRec>> {
+) -> Result<SideScan> {
     let all = cache.load_all()?;
     let mut out = HashMap::new();
     for (rel, r) in all {
@@ -352,7 +415,7 @@ pub fn load_record_side_from(
             }
         }
     }
-    Ok(out)
+    Ok(SideScan::of_map(out))
 }
 
 /// One side of a `compare`: either a folder root or a record file.
@@ -427,18 +490,14 @@ fn display_path(p: &Path) -> String {
 
 /// Effective map for a record or folder side. All four combinations work.
 ///
-/// A folder side lazily populates and may leave untouched entries stale — by
-/// design, since the cache is a cache and disk is the truth.
-pub fn load_side(
-    side: &Side,
-    common: &CommonOpts,
-    mode: ScanMode,
-) -> Result<HashMap<String, EffRec>> {
+/// A folder side populates and may leave untouched entries stale — by design,
+/// since the cache is a cache and disk is the truth.
+pub fn load_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<SideScan> {
     match side {
         Side::Record(dbp) => {
             info!(record = %dbp.display(), "load record side");
             let m = load_record_side(dbp, common)?;
-            info!(record = %dbp.display(), entries = m.len(), "record loaded");
+            info!(record = %dbp.display(), entries = m.map.len(), "record loaded");
             Ok(m)
         }
         Side::Folder(root) => {

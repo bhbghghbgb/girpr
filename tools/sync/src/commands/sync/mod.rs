@@ -110,8 +110,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             dry_run,
         },
     )?;
+    info!(side = "src", hashed = sm.stats.hashed, "src map built");
+    let sm = sm.map;
     info!("loading dst effective map");
-    let mut dm = build_effective_folder(
+    let dm = build_effective_folder(
         &dst,
         &dst_db,
         &common,
@@ -120,6 +122,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             dry_run,
         },
     )?;
+    info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
+    let mut dm = dm.map;
     info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
 
     // 3. Align casing before diffing, so the diff can be case-sensitive.

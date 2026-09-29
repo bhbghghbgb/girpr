@@ -33,4 +33,5 @@ pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
+pub use effective::{EffRec, ScanStats, SideScan};
 pub use logging::init_tracing;

@@ -89,7 +89,11 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     let cache = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
     info!(cache = %db_path.display(), entries = cache.load_all()?.len(), "cache opened read-only");
     let rec = load_record_side_from(&cache, &common, &db_path.display().to_string())?;
-    info!(side = "record", entries = rec.len(), "record side loaded");
+    info!(
+        side = "record",
+        entries = rec.map.len(),
+        "record side loaded"
+    );
     let disk = build_effective_folder(
         &dir,
         &cache,
@@ -101,8 +105,15 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             dry_run: true,
         },
     )?;
-    info!(side = "disk", entries = disk.len(), "disk side loaded");
+    info!(
+        side = "disk",
+        entries = disk.map.len(),
+        hashed = disk.stats.hashed,
+        cache_hit = disk.stats.cache_hit,
+        "disk side loaded"
+    );
 
+    let (rec, disk) = (rec.map, disk.map);
     info!(
         record_entries = rec.len(),
         disk_entries = disk.len(),
