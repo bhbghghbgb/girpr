@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use glob::Pattern;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, trace, warn};
 
@@ -306,7 +306,88 @@ pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<HashMap<S
             }
         }
     }
+    require_record_digests(db_path, &out, &common.algos)?;
     Ok(out)
+}
+
+/// A record side is read with no FS access, so it can never backfill a missing
+/// digest. A file holding none of the requested algorithms would therefore be
+/// judged on size+mtime alone — and `hashes_differ` stays quiet when a digest
+/// is absent, so the run would report equality it never actually established.
+/// Refuse that instead of degrading silently, and name what would work.
+///
+/// Coverage is per algorithm, not per file: the diff ORs across the requested
+/// algorithms, so a file that has *any* one of them is still content-exact.
+/// That keeps records carrying mixed histories (one file md5-only, another
+/// sha256-only) usable. With a single `--hash`, this reduces to "every file must
+/// have it".
+fn require_record_digests(
+    db_path: &Path,
+    out: &HashMap<String, EffRec>,
+    algos: &[String],
+) -> Result<()> {
+    if algos.is_empty() {
+        return Ok(()); // `--hash none` never consults a digest
+    }
+    // Dirs are presence-only, so they need no digests.
+    let files: Vec<(&String, &EffRec)> = out.iter().filter(|(_, r)| r.kind == "file").collect();
+    let mut uncovered: Vec<&String> = files
+        .iter()
+        .filter(|(_, r)| !algos.iter().any(|a| r.hashes.contains_key(a)))
+        .map(|(rel, _)| *rel)
+        .collect();
+    if uncovered.is_empty() {
+        return Ok(());
+    }
+    uncovered.sort();
+
+    // Per-algorithm coverage, for both "what is here" and "what may I ask for".
+    let mut have: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, r) in &files {
+        for algo in r.hashes.keys() {
+            *have.entry(algo.as_str()).or_default() += 1;
+        }
+    }
+    let total = files.len();
+    let provided = if have.is_empty() {
+        "none at all (it looks like a --hash none record)".to_string()
+    } else {
+        have.iter()
+            .map(|(a, n)| format!("{a} ({n}/{total})"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let usable: Vec<&str> = have
+        .iter()
+        .filter(|(_, n)| **n == total)
+        .map(|(a, _)| *a)
+        .collect();
+
+    let examples = uncovered
+        .iter()
+        .take(3)
+        .map(|r| r.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remedy = if usable.is_empty() {
+        "no single algorithm covers every entry, so re-run with --hash none \
+         to compare by size+mtime only"
+            .to_string()
+    } else {
+        format!(
+            "re-run with --hash {}, or --hash none to compare by size+mtime only",
+            usable.join(" --hash ")
+        )
+    };
+    bail!(
+        "record {} cannot answer a content-exact compare: {} of {total} file \
+         entries hold none of the requested digests ({}), e.g. {examples}.\n\
+         the record provides: {provided}\n\
+         {remedy}",
+        db_path.display(),
+        uncovered.len(),
+        algos.join(", "),
+    )
 }
 
 /// One side of a `compare`: either a folder root or a record file.

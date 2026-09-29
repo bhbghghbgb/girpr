@@ -77,6 +77,16 @@ Output classes, one per line: `MISSING` (src-only), `EXTRA` (dst-only),
 `CASE-MISMATCH a <=> A` (insensitive mode only), then a `SUMMARY` line.
 Exit `4` if any diff, `0` if equal. `sync` accepts folders only.
 
+A record is read with no FS access, so it can never backfill a digest. If any
+record file entry holds **none** of the requested algorithms, the run aborts
+(exit `3`) instead of letting `hashes_differ` fall through to size+mtime and
+report an equality it never established. The error names the uncovered entries
+and the per-algorithm coverage, and offers the remedies: an algorithm every
+entry does hold, or `--hash none`. Coverage is per file, not per record — one
+file md5-only and another sha256-only is fine, since the diff ORs across the
+requested algorithms. `--hash none` always qualifies. Folder sides are
+unaffected; they always backfill on demand.
+
 ### sync
 
 Mirrors `src` → `dst`:
