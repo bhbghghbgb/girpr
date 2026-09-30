@@ -23,13 +23,13 @@ and drive the public API.
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
 | `commands/compare_self.rs` | diff a folder against its own cache, read-only |
-| `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
+| `commands/sync/mod.rs` | the coordinator: validate, back up, open both caches, plan across both sides, rename, then plan -> apply |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
-| `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
+| `effective.rs` | the two phases for one side: `open_side`/`open_folder_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
 | `planner.rs` | `HashPlan` and `plan_pairs`: the only place that decides which digests a run must compute |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
@@ -135,13 +135,26 @@ Mirrors `src` → `dst`:
    (dangling symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
-3. Insensitive mode: rename dst paths to src casing first (`RENAME`, two-step for Windows).
-4. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
+3. Open both caches and plan **across** the two sides: a path is read only when it
+   is a file on both sides with equal size and mtime (see "Cache is a cache, not
+   truth"). A `MISSING`, `EXTRA` or already-stat-different path costs no read.
+4. Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
+   Windows). This runs *after* the plan and keys on the two maps' path sets, not
+   on any digest.
+5. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
    `DELETE` extra files + remove unknown dirs deepest-first (skipped when `--keep-extra`).
    Type-conflicts resolve toward src kind.
-5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
+6. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime when `--hash none`); the dst record entry is deleted *before* each
    file change. No resume.
+
+Note the two case arguments in (3) and (5), which look like a typo and are not.
+The plan pairs the sides **as they are on disk**, so in insensitive mode it pairs
+case-insensitively; the rename in (4) then collapses exactly those pairs onto exact
+keys, so the diff in (5) can be taken case-sensitively. Passing `true` to the
+planner would make a case-only pair look one-sided and skip a digest it may need;
+passing `false` to the diff would resurrect the `CASE-MISMATCH` bucket the rename
+exists to eliminate.
 
 The pre-drop in (5) is belt-and-braces, not the safety mechanism — every way a
 copy can die is already caught by size (truncation makes a partial file
@@ -153,14 +166,19 @@ nothing.
 
 `--dry-run` prints `MKDIR/COPY/DELETE/RENAME` + `SUMMARY` and writes nothing
 (no backups, no cache updates, no FS changes). The plan is exact: it is the same
-work list a real run executes, including the insensitive-mode rename pass.
+work list a real run executes, including the insensitive-mode rename pass. It is
+asserted byte-for-byte, in both case modes, against the real binary's stdout in
+`tests/sync_golden.rs` — laziness may remove reads, never a plan line.
 
 "writes nothing" is enforced by never opening a cache for writing: an existing
 cache is opened read-only and a missing one is served from an in-memory DB, so a
-dry run against cache-less folders does not leave `girpr-cache` behind.
-`--dry-run --ignore-cache` is the one combination that asks for something a dry
-run may not do, so the cache is treated as *absent* rather than rebuilt — the
-folder is scanned from disk alone and the real cache is left as it was.
+dry run against cache-less folders does not leave `girpr-cache` behind. This is
+why `sync` opens its own handles and hands them to `effective::open_folder_side`
+rather than calling `effective::open_side`, which opens a folder cache
+read/write. `--dry-run --ignore-cache` is the one combination that asks for
+something a dry run may not do, so the cache is treated as *absent* rather than
+rebuilt — the folder is scanned from disk alone and the real cache is left as it
+was.
 
 ## Core semantics (must-know for AI edits)
 

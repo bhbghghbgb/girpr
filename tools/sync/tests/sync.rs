@@ -218,3 +218,176 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
 }
+
+/// A case-only pair whose *content also differs* must still be copied.
+///
+/// This is the test that pins the asymmetry between `plan_pairs` and `diff_maps`
+/// in `sync`. `plan_pairs` gets `common.case_sensitive` — false here — so it
+/// pairs `Data.txt` with `data.txt` and hashes them, because equal size and mtime
+/// make the pair genuinely undecided. Then the rename pass collapses them onto
+/// exact keys and `diff_maps` runs with a hardcoded `true`.
+///
+/// If either half were flipped the plan would go wrong in opposite directions:
+/// `plan_pairs(.., true)` would call this pair one-sided and skip both digests,
+/// and `diff_maps(.., false)` would report a `CASE-MISMATCH` instead of a
+/// `CHANGED` — which the applier does not act on.
+#[test]
+fn run_sync_case_only_difference_with_other_content_is_copied() {
+    let t = TempRoot::new("casecopy");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "Data.txt", b"src-content-longer");
+    wfile(&dst, "data.txt", b"dst");
+    // Equal size, equal mtime: the pair is stat-equal, so only a digest can tell
+    // them apart. That makes the rename alone insufficient.
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.case_sensitive = false;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        entry_names(&dst),
+        vec!["Data.txt".to_string()],
+        "dst took src's casing"
+    );
+    assert_eq!(
+        rfile(&dst, "Data.txt"),
+        b"src-content-longer".to_vec(),
+        "and src's content, so the pair was compared by digest and copied"
+    );
+    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+}
+
+/// Phase A's alternate-case adoption and the rename pass both move the same cache
+/// row, in sequence, in one run.
+///
+/// The row is keyed `DATA.txt` in the cache, the file on disk is `data.txt`, and
+/// src says `Data.txt`. Phase A finds the exact-key miss and adopts the single
+/// stale alternate onto the disk name; the rename pass then moves the disk name
+/// onto src's name. Two moves, one row.
+///
+/// A row that survives both with its digest intact is the proof that neither move
+/// lost the digests — which is the failure mode that would be invisible, because
+/// a lost digest degrades to size+mtime rather than erroring. `os::rename`
+/// preserves mtime, so the stat still matches at the end.
+#[test]
+fn alt_adoption_and_rename_both_move_the_same_row() {
+    let t = TempRoot::new("altmove");
+    let dst = t.mkdirs("dst");
+    let src = t.mkdirs("src");
+
+    // Warm dst's cache under an all-caps key.
+    wfile(&dst, "DATA.txt", b"payload");
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    assert_eq!(
+        digests(&dst, "DATA.txt"),
+        ["md5"],
+        "the row starts keyed DATA.txt, with a digest"
+    );
+
+    // Rename on disk only. mtime is preserved by the rename, so the stat still
+    // matches the cached row and the digests are reusable.
+    std::fs::rename(dst.join("DATA.txt"), dst.join("data.txt")).unwrap();
+
+    // src supplies the third spelling.
+    wfile(&src, "Data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let mut o = sync(src, dst.clone());
+    o.common.case_sensitive = false;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    let rows = recs(&dst);
+    let mut keys: Vec<&String> = rows.keys().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["Data.txt"],
+        "exactly one row survives, keyed to src's casing"
+    );
+    assert_eq!(
+        digests(&dst, "Data.txt"),
+        ["md5"],
+        "and it kept its digest across both moves"
+    );
+    assert_eq!(
+        rfile(&dst, "Data.txt"),
+        b"payload".to_vec(),
+        "equal content, so no copy was needed"
+    );
+}
+
+/// A stat-differing pair is never read, so `sync` leaves its dst row exactly as
+/// it found it. Under `--missing-only` the pair is also not copied, so nothing
+/// replaces the row either — the cache is simply not touched.
+///
+/// This is better than it first looks. A row keeps its digests because
+/// `merge_row` only ever drops them when the *stat* changed, and here the stat
+/// did not: the file was neither read nor written. So the digest left in the row
+/// is still correct, and the next run can use it.
+///
+/// The state that actually needs care is a *changed* stat, where the digest must
+/// go — a pre-change digest would be judged against a post-change file. That is
+/// `merge_row`'s carry rule, asserted in `helpers.rs` and in
+/// `a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped`.
+#[test]
+fn missing_only_leaves_a_stat_differing_pair_untouched() {
+    let t = TempRoot::new("misonly");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // Same size, different bytes: only mtime differs, so nothing here needs a
+    // digest to reach a verdict.
+    wfile(&src, "f.txt", b"aaaa");
+    wfile(&dst, "f.txt", b"bbbb");
+    sync_mtime(&src.join("f.txt"), &dst.join("f.txt"));
+    src_mtime_older(&src.join("f.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    let dst_before = recs(&dst);
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.case_sensitive = false;
+    o.missing_only = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        rfile(&dst, "f.txt"),
+        b"bbbb".to_vec(),
+        "missing-only left the existing file alone"
+    );
+    assert_eq!(
+        recs(&dst)["f.txt"].hashes,
+        dst_before["f.txt"].hashes,
+        "the dst row was neither read nor rewritten, so its digest is untouched \
+         and still valid"
+    );
+    assert_eq!(
+        digests(&dst, "f.txt"),
+        ["md5"],
+        "and the digest it kept is the one update wrote"
+    );
+    assert_eq!(
+        cmd_compare(compare(src, dst), &log()).unwrap(),
+        4,
+        "the pair is still reported as different"
+    );
+}
+
+/// The algorithms a side's cache holds for one path.
+fn digests(dir: &Path, rel: &str) -> Vec<String> {
+    let mut v: Vec<String> = recs(dir)[rel].hashes.keys().cloned().collect();
+    v.sort();
+    v
+}
+
+fn src_mtime_older(p: &Path) {
+    let m = std::fs::metadata(p).unwrap().modified().unwrap();
+    let older = m - std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(p)
+        .unwrap()
+        .set_modified(older)
+        .unwrap();
+}
