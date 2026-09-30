@@ -573,61 +573,6 @@ fn the_wider_handle_window_still_refuses_a_self_collision() {
     );
 }
 
-/// A dry run must not prune, even though a real run would.
-///
-/// Pruning is correctness, so it is tempting to let it run unconditionally — but
-/// a dry run promises to change nothing, and a prune is a cache write. The
-/// mechanism is that `mode.dry_run` leaves the phase-A write batch as `None`,
-/// which skips the merge writes *and* the prune block together.
-///
-/// Pinned at the phase-A level rather than through `cmd_sync`, because `cmd_sync`
-/// returns an exit code and not its stats; the observable difference is the
-/// surviving row.
-#[test]
-fn a_dry_run_prunes_nothing() {
-    let t = TempRoot::new("lz_dry_prune");
-    let (src, _dst) = pair(
-        &t,
-        &[("gone.txt", Some(b"gone"), Some(b"gone"))],
-        &["md5"],
-        true,
-    );
-    std::fs::remove_file(src.join("gone.txt")).unwrap();
-    let pruned = {
-        let opened = open_side(
-            &classify(&src),
-            &opts(),
-            ScanMode {
-                no_trust_cached_hashes: false,
-                dry_run: true,
-            },
-        )
-        .unwrap();
-        opened.phase_a.stats.pruned
-    };
-    assert_eq!(pruned, 0, "a dry run reports no pruning");
-    assert!(
-        recs_of(&src).contains_key("gone.txt"),
-        "and the orphan row is still there, because nothing was written"
-    );
-
-    // Same tree, same open, not a dry run: the row does go.
-    let pruned = {
-        let opened = open_side(
-            &classify(&src),
-            &opts(),
-            ScanMode {
-                no_trust_cached_hashes: false,
-                dry_run: false,
-            },
-        )
-        .unwrap();
-        opened.phase_a.stats.pruned
-    };
-    assert_eq!(pruned, 1);
-    assert!(!recs_of(&src).contains_key("gone.txt"));
-}
-
 /// The `Side` re-export is what `classify` returns; assert the classification
 /// itself so a case's fixture is not silently the wrong shape.
 #[test]

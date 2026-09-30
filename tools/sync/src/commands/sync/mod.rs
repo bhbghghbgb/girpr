@@ -27,8 +27,7 @@ use crate::cache::{
 };
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
-use crate::effective::{classify, ensure_distinct_sides, open_folder_side, resolve_side};
-use crate::planner::{SideRequest, plan_pairs};
+use crate::effective::{build_effective_folder, classify, ensure_distinct_sides};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -99,77 +98,42 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         }
     }
 
-    // 2. Open both caches and run phase A on each side.
-    //
-    // The handles come from `open_caches`, not `open_side`, because a dry run must
-    // not create a cache or rewrite `meta` — see that function's doc. `sync` owns
-    // the open policy; `effective::open_folder_side` owns the scan.
+    // 2. Open both caches and resolve each side's effective map.
     let (src_db, dst_db) = open_caches(&src_db_path, &dst_db_path, &common, dry_run)?;
     info!("loading src effective map");
-    let src_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_src,
-        dry_run,
-    };
-    let mut s = open_folder_side(&src, src_db, &common, src_mode)?;
-    let dst_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_dst,
-        dry_run,
-    };
-    let mut d = open_folder_side(&dst, dst_db, &common, dst_mode)?;
-    info!(
-        src_entries = s.phase_a.map.len(),
-        dst_entries = d.phase_a.map.len(),
-        "maps ready"
-    );
-
-    // 3. One decision, both sides in — the same shape `compare` uses. A path is
-    // read only if it is a file on *both* sides with equal size and mtime; every
-    // other pair state is already decided, and `diff_maps` short-circuits the
-    // digest comparison anyway.
-    //
-    // `common.case_sensitive` here, and a hardcoded `true` in the `diff_maps` call
-    // below. That asymmetry is deliberate: this call pairs the sides as they are
-    // *on disk*, which in insensitive mode means case-insensitively — and the
-    // rename pass then collapses exactly those pairs onto exact keys, so by the
-    // time the diff runs the pairing is the same one. Passing `true` here would
-    // make a case-only pair look one-sided and skip a digest it may need; passing
-    // `false` in the diff would resurrect the `CASE-MISMATCH` bucket the rename
-    // pass exists to eliminate.
-    let plans = plan_pairs(
-        SideRequest {
-            entries: &s.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_src,
+    let sm = build_effective_folder(
+        &src,
+        &src_db,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run,
         },
-        SideRequest {
-            entries: &d.phase_a.map,
-            algos: &common.algos,
-            no_trust: trust.no_trust_dst,
-        },
-        common.case_sensitive,
-    );
-    info!(
-        src_pending = plans.src.by_rel.len(),
-        dst_pending = plans.dst.by_rel.len(),
-        "planned"
-    );
-    let sm = resolve_side(&mut s, src_mode, &plans.src)?;
+    )?;
     info!(side = "src", hashed = sm.stats.hashed, "src map built");
     let sm = sm.map;
-    let dm = resolve_side(&mut d, dst_mode, &plans.dst)?;
+    info!("loading dst effective map");
+    let dm = build_effective_folder(
+        &dst,
+        &dst_db,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run,
+        },
+    )?;
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
+    info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
 
-    // 4. Align casing before diffing, so the diff can be case-sensitive. Runs
-    // after the plan and the resolve, and is unaffected by them: it keys on the
-    // two maps' path sets, not on any digest.
+    // 3. Align casing before diffing, so the diff can be case-sensitive.
     let renamed = if common.case_sensitive {
         0
     } else {
-        rename_to_src_casing(&sm, &dst, d.cache(), &mut dm, dry_run)?
+        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run)?
     };
 
-    // 5. Plan, then print or apply.
+    // 4. Plan, then print or apply.
     let diff = diff_maps(
         &sm,
         &dm,
@@ -207,7 +171,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let applied = Applier {
         src: &src,
         dst: &dst,
-        dst_db: d.cache(),
+        dst_db: &dst_db,
         sm: &sm,
         dm: &dm,
         common: &common,
