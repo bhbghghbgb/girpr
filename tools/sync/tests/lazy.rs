@@ -582,3 +582,103 @@ fn fixtures_classify_as_folders() {
     assert!(matches!(classify(&dir), Side::Folder(_)));
     assert!(matches!(classify(&dir.join(CACHE_PREFIX)), Side::Record(_)));
 }
+
+/// A folder side still corrects its own cache before the planner ever sees it:
+/// a row whose stat no longer matches disk loses its digests, and a row whose
+/// file is gone is dropped outright. Neither needs the other side.
+///
+/// This is the ordering that makes stage 3 safe. The planner reads `SideEntry`,
+/// and if a stale digest could survive into that map the pair would be judged
+/// against a pre-change hash — so the correction has to happen inside the scan,
+/// not as a step someone remembers to run later.
+///
+/// Covers both triggers at once: `stale.txt` grows (row survives, digests
+/// dropped), `gone.txt` is deleted (row dropped entirely). `keep.txt` is the
+/// control — untouched, so its digests must still be there afterwards.
+#[test]
+fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
+    let t = TempRoot::new("lz_prune");
+    let (src, dst) = pair(
+        &t,
+        &[
+            ("keep.txt", Some(b"keep"), Some(b"keep")),
+            ("stale.txt", Some(b"stale"), Some(b"stale")),
+            ("gone.txt", Some(b"gone"), Some(b"gone")),
+        ],
+        &["md5"],
+        true,
+    );
+    assert_eq!(digests_of(&src, "stale.txt"), ["md5"]);
+    assert!(recs_of(&src).contains_key("gone.txt"));
+
+    std::fs::write(src.join("stale.txt"), b"stale-and-longer").unwrap();
+    std::fs::remove_file(src.join("gone.txt")).unwrap();
+
+    let (sm, dm) = resolve_both(&src, &dst, TrustOpts::default());
+
+    // The orphan is pruned, counted, and gone from the cache.
+    assert_eq!(sm.stats.pruned, 1, "the deleted file's row is pruned");
+    assert_eq!(dm.stats.pruned, 0, "dst was not touched");
+    assert!(
+        !recs_of(&src).contains_key("gone.txt"),
+        "the orphan row is dropped, not merely ignored"
+    );
+
+    // The stale row survives — the file is still there — but with no digests.
+    assert!(
+        recs_of(&src).contains_key("stale.txt"),
+        "a stat-changed row is corrected, not removed"
+    );
+    assert!(
+        digests_of(&src, "stale.txt").is_empty(),
+        "a stale row's digests are dropped before the planner can read them"
+    );
+    assert_eq!(
+        digests_of(&src, "keep.txt"),
+        ["md5"],
+        "an untouched row keeps its digests"
+    );
+
+    // And the verdicts are unaffected: pruning corrected the cache, it did not
+    // change what the tree says. `gone.txt` was deleted from *src*, so dst still
+    // has it — `EXTRA`, and still reported even though the orphan row on the src
+    // side is gone.
+    assert_eq!(
+        verdict(&diff_maps(&sm.map, &dm.map, &["md5".to_string()], true)),
+        [
+            ("extra", "EXTRA gone.txt".to_string()),
+            ("changed", "CHANGED stale.txt".to_string()),
+            (
+                "summary",
+                "SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2"
+                    .to_string()
+            )
+        ]
+    );
+}
+
+/// Pruning is a correctness step, so `--no-trust-cached-hashes` must not be able
+/// to switch it off. Distrusting a cache means "do not *reuse* it", never "keep
+/// the rows that are wrong".
+#[test]
+fn distrusting_the_cache_does_not_suppress_pruning() {
+    let t = TempRoot::new("lz_prune_nt");
+    let (src, dst) = pair(
+        &t,
+        &[("gone.txt", Some(b"gone"), Some(b"gone"))],
+        &["md5"],
+        true,
+    );
+    std::fs::remove_file(src.join("gone.txt")).unwrap();
+
+    let (sm, _dm) = resolve_both(
+        &src,
+        &dst,
+        TrustOpts {
+            no_trust_src: true,
+            no_trust_dst: false,
+        },
+    );
+    assert_eq!(sm.stats.pruned, 1);
+    assert!(!recs_of(&src).contains_key("gone.txt"));
+}

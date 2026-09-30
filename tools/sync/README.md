@@ -195,10 +195,19 @@ folder is scanned from disk alone and the real cache is left as it was.
   pair under `--no-trust-cached-hashes` — distrusting the cache does not make an
   unequal size uncertain. A folder side therefore leaves **stat-only rows** for
   paths it did not hash, which is a valid state: the next run sees a fresh row
-  with nothing cached and asks for a digest. What a rehash *writes* is unchanged
-  and keys on the stat alone (`merge_row`): unchanged stat merges over whatever
-  the row had, changed stat drops every stored digest. Missing cache is created;
-  corrupt cache errors (exit 3, `--ignore-cache` backs up + rebuilds).
+  with nothing cached and asks for a digest.
+
+  Separately, and needing no knowledge of the other side, a folder side
+  **corrects its own cache** as it walks: a stale row (stat no longer matches
+  disk) loses its digests, and an orphan (file gone) is dropped. That is phase A
+  work, so it finishes before the planner runs and the entries the planner reads
+  are already self-consistent — a stat-differing pair can never be judged against
+  a pre-change digest. `--no-trust-cached-hashes` cannot suppress it: distrusting
+  a cache means do not *reuse* it, never keep the rows that are wrong. Both
+  corrections go out through `merge_row`, which keys on the stat alone —
+  unchanged stat merges over whatever the row had, changed stat drops every
+  stored digest. Missing cache is created; corrupt cache errors (exit 3,
+  `--ignore-cache` backs up + rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
   **false**): within one side, two live/record paths differing only by case is a
   fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first

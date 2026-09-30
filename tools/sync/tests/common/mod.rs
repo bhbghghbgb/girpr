@@ -6,6 +6,8 @@
 #![allow(dead_code)]
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
+use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::planner::{SideRequest, plan_pairs};
 use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -186,7 +188,9 @@ pub fn has_backup_sibling(dir: &Path) -> bool {
 // request — so the cases build it directly, through the public cache API.
 
 /// A cache row edited in place, or a path to one.
-fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
+/// Every row a side's cache currently holds, for asserting what a run left
+/// behind or dropped.
+pub fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
     load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
 }
 
@@ -299,4 +303,67 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
         algos: algos.iter().map(|a| a.to_string()).collect(),
         ..opts()
     }
+}
+
+/// The exact phase sequence `cmd_compare` runs — open both sides, one
+/// `plan_pairs`, resolve both — with the per-side trust flags applied.
+///
+/// Driven by the tests rather than delegated to, so that a case can assert what
+/// the planner decided *and* what the sides ended up reading. Every phase
+/// happens here, in this order; that is the property under test.
+pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, SideScan) {
+    let common = with_algos(&["md5"]);
+    let src = classify(src);
+    let dst = classify(dst);
+    ensure_distinct_sides(&src, &dst).unwrap();
+    let mut s = open_side(
+        &src,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    let mut d = open_side(
+        &dst,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &s.phase_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_src,
+        },
+        SideRequest {
+            entries: &d.phase_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_dst,
+        },
+        common.case_sensitive,
+    );
+    let sm = resolve_side(
+        &mut s,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+        &plans.src,
+    )
+    .unwrap();
+    let dm = resolve_side(
+        &mut d,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+        &plans.dst,
+    )
+    .unwrap();
+    (sm, dm)
 }
