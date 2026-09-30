@@ -5,8 +5,9 @@
 
 #![allow(dead_code)]
 
-use girsync::cache::CacheOpen;
+use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -173,4 +174,129 @@ pub fn has_backup_sibling(dir: &Path) -> bool {
     rd.filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().into_string().ok())
         .any(|n| n.starts_with(&needle))
+}
+
+// ---------------------------------------------------------------------------
+// Fixture helpers for the lazy-resolution cases
+// ---------------------------------------------------------------------------
+//
+// These arrange a cache state rather than hoping the binary produces it. A row
+// whose stat matches and which is missing an algorithm is a state a real
+// `--hash none` history leaves behind, but the binary will not create it on
+// request — so the cases build it directly, through the public cache API.
+
+/// A cache row edited in place, or a path to one.
+fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
+    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+}
+
+fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+    let p = dir.join(CACHE_PREFIX);
+    let db = open_db(&p, true, rw()).unwrap();
+    let mut rec = db
+        .get(rel)
+        .unwrap()
+        .unwrap_or_else(|| panic!("no row for {rel}"));
+    f(&mut rec);
+    db.put(rel, &rec).unwrap();
+}
+
+/// Drop one algorithm from a row, leaving its stat intact.
+pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
+    edit_rec(dir, rel, |r| {
+        r.hashes.remove(algo);
+    });
+}
+
+/// Overwrite a digest with a wrong one of the same length, keeping size and
+/// mtime. The stat still matches, so only the content disagrees — the case where
+/// a digest is the only thing that can decide the pair.
+pub fn poison_digest(dir: &Path, rel: &str, algo: &str) {
+    edit_rec(dir, rel, |r| {
+        let n = r.hashes.get(algo).map(|d| d.len()).unwrap_or(32);
+        r.hashes.insert(algo.to_string(), vec![0xABu8; n]);
+    });
+}
+
+/// Push a file's mtime forward, so a stat-equal pair stops being equal.
+pub fn age(dir: &Path, rel: &str, secs: u64) {
+    let p = dir.join(rel);
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(secs);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+}
+
+/// The digest rows currently hold, for asserting what a case left behind.
+pub fn digests_of(dir: &Path, rel: &str) -> Vec<String> {
+    let mut v: Vec<String> = recs_of(dir)[rel].hashes.keys().cloned().collect();
+    v.sort();
+    v
+}
+
+/// One side of a fixture path: `None` absent, `Some(&[])` a directory, anything
+/// else a file's bytes.
+pub type Side = Option<&'static [u8]>;
+
+/// One fixture path: `(rel, src, dst)`. See [`Side`] for the shapes.
+pub type Spec = (&'static str, Side, Side);
+
+/// A pair of folders laid out from `spec`, each warmed with `algos`.
+///
+/// `None` on a side means the path is **absent** there; `Some(&[])` means an
+/// **empty directory** — different shapes, and cases need both, since
+/// absent-there is a `MISSING`/`EXTRA` while a directory there is a
+/// `TYPE-CONFLICT`. When both sides carry content, dst's mtime is pinned to
+/// src's, so the pair starts out stat-equal and a case can break exactly the
+/// dimension it is about.
+///
+/// With `warmed: false` both caches are left cold.
+pub fn pair(t: &TempRoot, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    let s = t.mkdirs("src");
+    let d = t.mkdirs("dst");
+    for (rel, sb, db) in spec {
+        for (dir, bytes) in [(&s, *sb), (&d, *db)] {
+            match bytes {
+                None => continue,
+                // An empty byte slice is a directory, not an empty file: a
+                // fixture asking for one means it.
+                Some([]) => {
+                    std::fs::create_dir_all(dir.join(rel)).unwrap();
+                }
+                Some(b) => wfile(dir, rel, b),
+            }
+        }
+        if let (Some(sb), Some(db)) = (sb, db)
+            && !sb.is_empty()
+            && !db.is_empty()
+        {
+            sync_mtime(&s.join(rel), &d.join(rel));
+        }
+    }
+    if warmed {
+        for dir in [&s, &d] {
+            let o = with_algos(algos);
+            girsync::cmd_update(
+                girsync::UpdateOpts {
+                    dir: dir.clone(),
+                    common: o,
+                },
+                &log(),
+            )
+            .unwrap();
+        }
+    }
+    (s, d)
+}
+
+/// Pin a case's algorithm set on an existing pair, so the caches were warmed
+/// with one set and the run is asked for another.
+pub fn with_algos(algos: &[&str]) -> CommonOpts {
+    CommonOpts {
+        algos: algos.iter().map(|a| a.to_string()).collect(),
+        ..opts()
+    }
 }

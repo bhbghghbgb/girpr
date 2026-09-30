@@ -31,7 +31,7 @@ pub mod scan;
 pub mod util;
 
 pub use cli::{Cli, Cmd, CommonArgs, TrustArgs, TrustSide};
-pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
+pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run, verdict};
 pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };

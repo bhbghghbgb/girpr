@@ -5,7 +5,11 @@ use std::collections::{HashMap, HashSet};
 use crate::effective::EffRec;
 
 /// Per-class diff buckets, each sorted by relative path.
-#[derive(Default)]
+///
+/// Derives `PartialEq` so a test can state a whole expected verdict at once
+/// rather than five fields one at a time; it has no interior state, so this
+/// costs nothing.
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Diff {
     /// src-only.
     pub missing: Vec<String>,

@@ -5,7 +5,8 @@ use tracing::info;
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{Side, classify, ensure_distinct_sides, load_side};
+use crate::effective::{Side, classify, ensure_distinct_sides, open_side, resolve_side};
+use crate::planner::{SideRequest, plan_pairs};
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -47,8 +48,10 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // would diff a record against the view the run itself is mutating.
     ensure_distinct_sides(&s, &d)?;
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
-    // compare only reads, so it never writes cache rows and never dry-runs.
-    let sm = load_side(
+    // compare only reads, so it never dry-runs. Both handles stay live across
+    // the plan and the resolve, which is sound only because `ensure_distinct_sides`
+    // already ran: redb allows one writable handle per cache file.
+    let mut s = open_side(
         &s,
         &common,
         ScanMode {
@@ -56,9 +59,13 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(side = "src", entries = sm.map.len(), "side loaded");
+    info!(
+        side = "src",
+        entries = s.phase_a.map.len(),
+        "src side opened"
+    );
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
-    let dm = load_side(
+    let mut d = open_side(
         &d,
         &common,
         ScanMode {
@@ -66,7 +73,54 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             dry_run: false,
         },
     )?;
-    info!(side = "dst", entries = dm.map.len(), "side loaded");
+    info!(
+        side = "dst",
+        entries = d.phase_a.map.len(),
+        "dst side opened"
+    );
+
+    // One decision, both sides in. A path is read only if it is a file on *both*
+    // sides with equal size and mtime; every other pair state is already
+    // decided, and `diff_maps` short-circuits the digest comparison anyway.
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &s.phase_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_src,
+        },
+        SideRequest {
+            entries: &d.phase_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_dst,
+        },
+        common.case_sensitive,
+    );
+    info!(
+        src_pending = plans.src.by_rel.len(),
+        dst_pending = plans.dst.by_rel.len(),
+        "planned"
+    );
+    let sm = resolve_side(
+        &mut s,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+        &plans.src,
+    )?;
+    let dm = resolve_side(
+        &mut d,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+        &plans.dst,
+    )?;
+    info!(
+        src_hashed = sm.stats.hashed,
+        dst_hashed = dm.stats.hashed,
+        "resolved"
+    );
     let (sm, dm) = (sm.map, dm.map);
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
     let diff = diff_maps(&sm, &dm, &common.algos, common.case_sensitive);

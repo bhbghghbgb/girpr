@@ -805,7 +805,7 @@ pub fn load_record_side_from(
 }
 
 /// One side of a `compare`: either a folder root or a record file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Side {
     Folder(PathBuf),
     Record(PathBuf),
@@ -819,6 +819,121 @@ impl Side {
             Side::Record(p) => p.clone(),
             Side::Folder(root) => root.join(CACHE_PREFIX),
         }
+    }
+}
+
+/// A side opened and statted, ready for a plan and then a resolve.
+///
+/// The handle stays live across both, which is the point: phase C writes rows
+/// for this same side, and a caller planning across two sides has to hold both
+/// sets of phase-A output at once. redb allows one writable handle per file, so
+/// this is only sound because [`ensure_distinct_sides`] runs before any open.
+pub struct OpenSide {
+    /// What it is, which decides how phase C runs.
+    side: Side,
+    cache: CacheDb,
+    /// Phase A's output.
+    pub phase_a: SideScan<SideEntry>,
+    /// What this side is able to do, independent of how the handle was opened.
+    pub cap: SideCapability,
+}
+
+impl OpenSide {
+    /// The open cache, for a caller that has to write it itself (`sync`'s
+    /// applier, which pre-drops rows and records verified copies).
+    pub fn cache(&self) -> &CacheDb {
+        &self.cache
+    }
+}
+
+/// **Phase A** for a record or folder side: open the cache and stat the tree.
+///
+/// This replaces the old `load_side`, which scanned *and* resolved before
+/// returning and therefore dropped the handle. A caller that wants to plan across
+/// two sides needs this side's phase-A output while the other side's handle is
+/// still open, and both handles still open when phase C writes.
+///
+/// A folder side's cache is created if missing, and backed up unless this is a
+/// dry run. A record side is opened read-only and never written.
+pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<OpenSide> {
+    let (cache, phase_a, cap) = match side {
+        Side::Record(dbp) => {
+            info!(record = %dbp.display(), "load record side");
+            let cache = CacheDb::open_record(dbp)?;
+            let phase_a = load_record_side_from(&cache, common, &dbp.display().to_string())?;
+            info!(
+                record = %dbp.display(),
+                entries = phase_a.map.len(),
+                "record side loaded"
+            );
+            (cache, phase_a, SideCapability::record())
+        }
+        Side::Folder(root) => {
+            if !root.is_dir() {
+                bail!("folder {} not found", root.display());
+            }
+            let db_path = root.join(CACHE_PREFIX);
+            if !db_path.exists() {
+                // missing cache: just create it
+                info!(cache = %db_path.display(), "cache missing, creating");
+                let cache = open_db(
+                    &db_path,
+                    common.case_sensitive,
+                    CacheOpen::ReadWrite {
+                        ignore_cache: false,
+                        backup_first: false,
+                    },
+                )?;
+                let phase_a = scan_stat_only(root, &cache, common, mode)?;
+                let cap = SideCapability::for_folder(&cache, mode);
+                return Ok(OpenSide {
+                    side: side.clone(),
+                    cache,
+                    phase_a,
+                    cap,
+                });
+            }
+            let cache = match open_db(
+                &db_path,
+                common.case_sensitive,
+                CacheOpen::ReadWrite {
+                    ignore_cache: common.ignore_cache,
+                    backup_first: !mode.dry_run,
+                },
+            ) {
+                Ok(db) => db,
+                Err(e) => {
+                    warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
+                    return Err(e.context(format!(
+                        "cache for {} (use --ignore-cache to rebuild)",
+                        root.display()
+                    )));
+                }
+            };
+            let phase_a = scan_stat_only(root, &cache, common, mode)?;
+            let cap = SideCapability::for_folder(&cache, mode);
+            (cache, phase_a, cap)
+        }
+    };
+    Ok(OpenSide {
+        side: side.clone(),
+        cache,
+        phase_a,
+        cap,
+    })
+}
+
+/// **Phase C**: produce what `plan` asked for, and finalize the map.
+///
+/// Dispatches on what the side *is*, not on whether its handle can write: a
+/// read-only folder still hashes freely, and a record cannot hash at all.
+pub fn resolve_side(opened: &mut OpenSide, mode: ScanMode, plan: &HashPlan) -> Result<SideScan> {
+    match &opened.side {
+        Side::Folder(root) => {
+            let root = root.clone();
+            resolve_folder(&root, &opened.cache, mode, &opened.phase_a, plan)
+        }
+        Side::Record(_) => Ok(resolve_record(&opened.phase_a)),
     }
 }
 
@@ -872,60 +987,6 @@ fn cache_identity(side: &Side) -> PathBuf {
 fn display_path(p: &Path) -> String {
     let s = p.display().to_string();
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
-}
-
-/// Effective map for a record or folder side. All four combinations work.
-///
-/// A folder side populates and may leave untouched entries stale — by design,
-/// since the cache is a cache and disk is the truth.
-pub fn load_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<SideScan> {
-    match side {
-        Side::Record(dbp) => {
-            info!(record = %dbp.display(), "load record side");
-            let pa = load_record_side(dbp, common)?;
-            info!(record = %dbp.display(), entries = pa.map.len(), "record loaded");
-            // A record resolves with nothing to compute: it has no filesystem to
-            // hash, so phase C is a copy of what phase A carried.
-            Ok(resolve_record(&pa))
-        }
-        Side::Folder(root) => {
-            if !root.is_dir() {
-                bail!("folder {} not found", root.display());
-            }
-            let db_path = root.join(CACHE_PREFIX);
-            if !db_path.exists() {
-                // missing cache: just create it
-                info!(cache = %db_path.display(), "cache missing, creating");
-                let db = open_db(
-                    &db_path,
-                    common.case_sensitive,
-                    CacheOpen::ReadWrite {
-                        ignore_cache: false,
-                        backup_first: false,
-                    },
-                )?;
-                let eff = build_effective_folder(root, &db, common, mode)?;
-                return Ok(eff);
-            }
-            match open_db(
-                &db_path,
-                common.case_sensitive,
-                CacheOpen::ReadWrite {
-                    ignore_cache: common.ignore_cache,
-                    backup_first: !mode.dry_run,
-                },
-            ) {
-                Ok(db) => build_effective_folder(root, &db, common, mode),
-                Err(e) => {
-                    warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
-                    Err(e.context(format!(
-                        "cache for {} (use --ignore-cache to rebuild)",
-                        root.display()
-                    )))
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

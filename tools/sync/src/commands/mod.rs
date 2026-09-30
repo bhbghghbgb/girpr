@@ -22,36 +22,54 @@ use crate::diff::Diff;
 ///
 /// Shared by `compare` and `compare-self` so the two cannot drift apart in
 /// vocabulary or exit code. The caller has already logged the span outcome.
-pub(super) fn report_diff(diff: &Diff) -> i32 {
+/// The lines a diff prints, in report order, each with the log kind it is
+/// reported under.
+///
+/// Printing and asserting read the same list, so what a test states and what a
+/// user sees cannot drift apart: there is one definition of a `CHANGED` line,
+/// not one in the printer and another in each test.
+pub fn verdict(diff: &Diff) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
     for r in &diff.missing {
-        println!("MISSING {}", r);
-        debug!(kind = "missing", rel = %r, "diff");
+        out.push(("missing", format!("MISSING {r}")));
     }
     for r in &diff.extra {
-        println!("EXTRA {}", r);
-        debug!(kind = "extra", rel = %r, "diff");
+        out.push(("extra", format!("EXTRA {r}")));
     }
     for r in &diff.changed {
-        println!("CHANGED {}", r);
-        debug!(kind = "changed", rel = %r, "diff");
+        out.push(("changed", format!("CHANGED {r}")));
     }
     for r in &diff.type_conflict {
-        println!("TYPE-CONFLICT {}", r);
-        debug!(kind = "type-conflict", rel = %r, "diff");
+        out.push(("type-conflict", format!("TYPE-CONFLICT {r}")));
     }
     for (a, b) in &diff.case_mismatch {
-        println!("CASE-MISMATCH {} <=> {}", a, b);
-        debug!(kind = "case-mismatch", src_rel = %a, dst_rel = %b, "diff");
+        out.push(("case-mismatch", format!("CASE-MISMATCH {a} <=> {b}")));
     }
-    println!(
-        "SUMMARY missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={}",
-        diff.missing.len(),
-        diff.extra.len(),
-        diff.changed.len(),
-        diff.type_conflict.len(),
-        diff.case_mismatch.len(),
-        diff.total()
-    );
+    out.push((
+        "summary",
+        format!(
+            "SUMMARY missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={}",
+            diff.missing.len(),
+            diff.extra.len(),
+            diff.changed.len(),
+            diff.type_conflict.len(),
+            diff.case_mismatch.len(),
+            diff.total()
+        ),
+    ));
+    out
+}
+
+/// Print one line per difference plus the `SUMMARY` line, and return the exit
+/// code: `0` when nothing differs, `4` when something does.
+///
+/// Shared by `compare` and `compare-self` so the two cannot drift apart in
+/// vocabulary or exit code. The caller has already logged the span outcome.
+pub(super) fn report_diff(diff: &Diff) -> i32 {
+    for (kind, line) in verdict(diff) {
+        println!("{line}");
+        debug!(kind, "diff");
+    }
     if diff.is_empty() { 0 } else { 4 }
 }
 
