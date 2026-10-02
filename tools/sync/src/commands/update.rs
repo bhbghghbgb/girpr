@@ -3,9 +3,8 @@
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{CACHE_PREFIX, CacheOpen, open_db};
 use crate::config::{LogCtx, ScanMode, UpdateOpts};
-use crate::effective::build_effective_folder;
+use crate::effective::{build_effective_folder, open_folder_cache};
 use crate::util::elapsed_s;
 
 /// Rebuild `<dir>/girpr-cache` from scratch: stat + hash every file, record
@@ -33,6 +32,7 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
+        dry_run = common.dry_run,
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -42,27 +42,19 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     if !dir.is_dir() {
         bail!("--dir {} is not a directory", dir.display());
     }
-    let db_path = dir.join(CACHE_PREFIX);
-    info!(cache = %db_path.display(), "open cache");
-    let db = open_db(
-        &db_path,
-        common.case_sensitive,
-        CacheOpen::ReadWrite {
-            ignore_cache: common.ignore_cache,
-            backup_first: true,
-        },
-    )?;
+    // `update`'s whole output *is* the cache, so `--dry-run` here is not a
+    // convenience — it is the only way to ask "what would a repopulate do, and
+    // how much would it read?" without committing to it. It still hashes every
+    // file, because `update` trusts nothing and a dry run that skipped the
+    // hashing would not be answering the same question.
+    let mode = ScanMode {
+        no_trust_cached_hashes: true,
+        dry_run: common.dry_run,
+    };
+    let db = open_folder_cache(&dir, &common, mode, true)?;
     // update always populates: it never trusts a cached digest, so there is
     // no flag to override here.
-    let scan = build_effective_folder(
-        &dir,
-        &db,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: true,
-            dry_run: false,
-        },
-    )?;
+    let scan = build_effective_folder(&dir, &db, &common, mode)?;
     let stats = scan.stats;
     println!(
         "update {} files={} dirs={} algos=[{}]",

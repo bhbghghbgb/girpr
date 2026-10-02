@@ -25,7 +25,7 @@ and drive the public API.
 | `commands/compare_self.rs` | diff a folder against its own cache, read-only |
 | `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
-| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer |
+| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective.rs`) is what makes `--dry-run` mean the same thing in every command |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
@@ -46,10 +46,10 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache]
-girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [...]
-girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [...]
-girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--dry-run] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [...]
+girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
+girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [--dry-run] [...]
+girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 `--hash` is repeatable (`md5`, `sha256`; default `md5`). `--hash none` is exclusive:
@@ -89,14 +89,21 @@ from a bad prune; it is a recovery aid, not a correctness mechanism.
 Each side is classified by basename: path whose final component starts with
 `girpr-cache` is a **record** (DB used as-is, no FS access, no writes);
 otherwise it is a **folder** (embedded `<root>/girpr-cache` loaded/created, live
-stat + lazy hash, cache updated as a side effect). All 4 combos work, subject to
-the one-cache-per-run rule below. What gets read is decided per pair, not per
-side: a file on both sides with equal size and mtime is the only thing that needs
-a digest (see "Cache is a cache, not truth"). Output classes, one per line:
-`MISSING` (src-only), `EXTRA` (dst-only), `CHANGED` (size/mtime/hash differ),
-`TYPE-CONFLICT` (file vs dir), `CASE-MISMATCH a <=> A` (insensitive mode only),
-then a `SUMMARY` line. Exit `4` if any diff, `0` if equal. `sync` accepts folders
-only.
+stat + lazy hash, **cache created and updated as a side effect**). All 4 combos
+work, subject to the one-cache-per-run rule below. What gets read is decided per
+pair, not per side: a file on both sides with equal size and mtime is the only
+thing that needs a digest (see "Cache is a cache, not truth"). Output classes, one
+per line: `MISSING` (src-only), `EXTRA` (dst-only), `CHANGED`
+(size/mtime/hash differ), `TYPE-CONFLICT` (file vs dir), `CASE-MISMATCH a <=> A`
+(insensitive mode only), then a `SUMMARY` line. Exit `4` if any diff, `0` if
+equal. `sync` accepts folders only.
+
+`compare` never touches the two trees, but it *does* write the caches — so it
+takes `--dry-run` like every other subcommand, and without it there is no way to
+audit two folders and leave both caches exactly as they were. Under `--dry-run`
+the caches come out byte-identical (an existing one is opened read-only, a
+missing one is served from memory so none is left behind), and the report is
+identical.
 
 ### compare-self
 
@@ -155,12 +162,44 @@ nothing.
 (no backups, no cache updates, no FS changes). The plan is exact: it is the same
 work list a real run executes, including the insensitive-mode rename pass.
 
-"writes nothing" is enforced by never opening a cache for writing: an existing
-cache is opened read-only and a missing one is served from an in-memory DB, so a
-dry run against cache-less folders does not leave `girpr-cache` behind.
-`--dry-run --ignore-cache` is the one combination that asks for something a dry
-run may not do, so the cache is treated as *absent* rather than rebuilt — the
-folder is scanned from disk alone and the real cache is left as it was.
+### `--dry-run`
+
+Every subcommand takes it, and it means one thing everywhere: **write nothing at
+all** — no file tree change, no cache created, no cache updated, no backup.
+
+The flag is on `CommonArgs`, not on one command, because that is the only way it
+stays one flag. `sync` additionally threads it into the rename and apply phases,
+which are the only filesystem writes in the crate; the cache half reaches every
+command through `ScanMode::dry_run`. `compare-self` accepts it and warns, since it
+opens its cache read-only and already writes nothing — a script passing
+`--dry-run` everywhere should not break on the one command that was already safe.
+
+**A dry run must answer the same question, not a smaller one.** This is the part
+that is easy to get wrong and had never been enforced here: a dry run still
+stats the tree, still reads cached digests, and still hashes whatever stat alone
+cannot settle. It does the same work and takes the same decisions; only the writes
+are gone. Skipping the hashing would make it cheaper and *wrong* — it would report
+the answer to a different question. That is also why `SideCapability`'s
+`can_hash_from_disk` stays true under a dry run.
+
+Enforcement is structural rather than per-command: `effective::open_folder_cache`
+is the single place a folder's cache is opened, so no command can honour the flag
+incorrectly by opening the wrong kind of handle. Under `--dry-run` it opens an
+existing cache read-only, serves a missing one from an in-memory DB, and falls
+back to memory for a corrupt one — each of which still yields the same effective
+map a real run would. `--dry-run --ignore-cache` is the one combination that asks
+for something a dry run may not do, so the cache is treated as *absent* rather
+than rebuilt; the folder is scanned from disk alone, which is what a real
+`--ignore-cache` run does too.
+
+Tests pin the whole thing. `compare_dry_run_writes_nothing_and_answers_the_same`
+asserts both caches are byte-identical and the verdict matches;
+`compare_dry_run_computes_the_same_digests` asserts the two runs produce *equal
+effective maps*, which is stronger than agreeing on printed verdicts — two runs
+can print the same `CHANGED` lines while having hashed different files and reached
+the same conclusion by luck, whereas the maps hold the digests themselves.
+`the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs` guards the
+fixture underneath, so that equality cannot pass vacuously by hashing nothing.
 
 ## Core semantics (must-know for AI edits)
 

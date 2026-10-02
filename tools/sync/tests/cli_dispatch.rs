@@ -21,6 +21,7 @@ fn run_cli_dispatch_update_compare_sync() {
         case_sensitive: true,
         max_depth: 10,
         ignore_cache: false,
+        dry_run: false,
     };
     let mkcli = |cmd| Cli {
         log_level: "error".to_string(),
@@ -65,7 +66,6 @@ fn run_cli_dispatch_update_compare_sync() {
         dst: dst.clone(),
         missing_only: false,
         keep_extra: false,
-        dry_run: false,
         jobs: 1,
         trust: TrustArgs::default(),
         common: common(),

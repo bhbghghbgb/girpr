@@ -20,7 +20,7 @@
 //! promises no more than the former.
 
 use anyhow::{Result, bail};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::cache::{CACHE_PREFIX, CacheOpen, open_db};
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
@@ -62,6 +62,18 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     let _span_guard = span.enter();
     info!("start");
 
+    if common.dry_run {
+        // Warned, not rejected. This command already writes nothing — its cache
+        // is opened read-only and every write method on that handle fails — so the
+        // flag is a no-op rather than a conflict. Erroring would break a script
+        // that passes `--dry-run` to every subcommand to be safe, which is exactly
+        // the usage this invites.
+        warn!(
+            "--dry-run is redundant for compare-self: this command writes nothing \
+             (its cache is opened read-only), so it was already a dry run"
+        );
+    }
+
     if common.ignore_cache {
         // It would back up and delete the very record under audit, leaving
         // nothing to compare against.
@@ -100,8 +112,9 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // the planner learns to skip it.
     let disk_mode = ScanMode {
         no_trust_cached_hashes,
-        // No cache writes. The FS half of a dry run is moot: this command
-        // never touches the filesystem.
+        // Unconditionally true, and deliberately not read from the flag: this
+        // command has no write path at all, so it is a dry run whatever the user
+        // passed. The redundancy of `--dry-run` is reported above.
         dry_run: true,
     };
     let disk = scan_stat_only(&dir, &cache, &common, disk_mode)?;

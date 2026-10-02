@@ -49,6 +49,13 @@ pub struct CommonOpts {
     pub max_depth: usize,
     /// Back up + delete the cache before opening, forcing a rebuild.
     pub ignore_cache: bool,
+    /// `--dry-run`: write nothing at all.
+    ///
+    /// Lives here rather than on a command because it applies to all four and
+    /// there must be exactly one definition. `sync` additionally threads it into
+    /// its rename and apply phases, which are the only filesystem writes anywhere
+    /// in the crate.
+    pub dry_run: bool,
 }
 
 impl TryFrom<CommonArgs> for CommonOpts {
@@ -62,6 +69,7 @@ impl TryFrom<CommonArgs> for CommonOpts {
             case_sensitive: a.case_sensitive,
             max_depth: a.max_depth,
             ignore_cache: a.ignore_cache,
+            dry_run: a.dry_run,
         })
     }
 }
@@ -77,12 +85,32 @@ pub struct ScanMode {
     /// Set by `--no-trust-cached-hashes <side>`, and unconditionally by
     /// `update`, which is defined as a full repopulate.
     pub no_trust_cached_hashes: bool,
-    /// No cache writes: the scan reads rows but never opens a write handle.
+    /// No writes. Nothing this run computes is persisted.
     ///
-    /// This is the *cache* half of a dry run. Whether a run may touch the
-    /// filesystem is decided by its own command (`sync` threads a separate
-    /// `dry_run` into the rename and apply phases), not here — so a command
-    /// that never writes files, like `compare-self`, sets this and nothing else.
+    /// A dry run must produce **the same answer as the real run**, with the
+    /// writes removed and nothing else. That is the whole contract, and it has
+    /// two halves that are easy to confuse:
+    ///
+    /// - *decisions* are identical — a dry run still stats the tree, still reads
+    ///   cached digests, and still hashes whatever the planner cannot settle from
+    ///   stat alone. `can_hash_from_disk` stays true for exactly this reason:
+    ///   suppressing those reads would change the verdict, not merely the side
+    ///   effects.
+    /// - *writes* are absent — no cache mutation, no cache creation, no backup,
+    ///   and for a command that moves files, no filesystem change.
+    ///
+    /// The wording matters because the first half is the point. A dry run that
+    /// skipped the hashing would be cheaper and *wrong*: it would report the
+    /// answer to a different question.
+    ///
+    /// This field is the cache half. A command that also moves files threads its
+    /// own `dry_run` into those phases (`sync` does); a command that never writes
+    /// files has no second half, and this field is the whole of it — which is why
+    /// `compare-self` sets it unconditionally rather than reading a flag.
+    ///
+    /// How the cache is *opened* under this flag is
+    /// [`crate::effective::open_folder_cache`]'s decision, so no command can
+    /// honour it incorrectly by opening the wrong kind of handle.
     pub dry_run: bool,
 }
 
@@ -147,8 +175,10 @@ pub struct SyncOpts {
     pub missing_only: bool,
     /// Leave dst-only files alone instead of deleting them.
     pub keep_extra: bool,
-    pub dry_run: bool,
     /// Copy worker threads; must be >= 1.
     pub jobs: usize,
+    /// `--dry-run` is `common.dry_run`. Read it from there rather than keeping a
+    /// copy here: the cache half and the filesystem half are the same flag, and
+    /// two fields for one flag is how they drift apart.
     pub common: CommonOpts,
 }

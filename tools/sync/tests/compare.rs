@@ -2,8 +2,152 @@
 
 mod common;
 
-use common::{TempRoot, compare, log, rfile, sync, sync_mtime, update, wfile};
-use girsync::{cmd_compare, cmd_sync, cmd_update};
+use common::{
+    TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, rfile, sync,
+    sync_mtime, update, update_dry, wfile,
+};
+use girsync::cache::CACHE_PREFIX;
+use girsync::config::{CommonOpts, ScanMode};
+use girsync::effective::{
+    EffRec, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
+};
+use girsync::planner::{SideRequest, plan_pairs};
+use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+
+/// A cache file's bytes, for "byte-identical" claims. Length alone would pass on
+/// a rewrite that happened to produce the same row count.
+fn bytes(p: &std::path::Path) -> Vec<u8> {
+    std::fs::read(p).unwrap()
+}
+
+/// Every file in a tree, with its bytes, for asserting no file changed.
+fn tree_state(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = vec![];
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let e = e.unwrap();
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push((
+                    p.strip_prefix(root).unwrap().display().to_string(),
+                    std::fs::read(&p).unwrap(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A two-tree fixture that makes the planner do real work: one equal pair that
+/// must be hashed to confirm, one that is already decided by size, one src-only,
+/// one dst-only, and one nested path.
+fn two_trees(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"same");
+    wfile(&dst, "a.txt", b"same");
+    // The load-bearing file: same length, so size cannot settle it, and the
+    // mtime pinned below so stat cannot either. Only reading both sides finds
+    // the difference — a dry run that skipped hashing could not match it.
+    wfile(&src, "changed.txt", b"src-version");
+    wfile(&dst, "changed.txt", b"dst-version");
+    // A pair stat already settles, so it must cost no read.
+    wfile(&src, "sized.txt", b"longer-src-content");
+    wfile(&dst, "sized.txt", b"short");
+    wfile(&src, "src_only.txt", b"only in src");
+    wfile(&dst, "dst_only.txt", b"only in dst");
+    wfile(&src, "sub/nested.txt", b"nested");
+    for rel in ["a.txt", "changed.txt"] {
+        sync_mtime(&src.join(rel), &dst.join(rel));
+    }
+    (src, dst)
+}
+
+/// Resolve both sides the way `cmd_compare` does and hand back the maps and the
+/// total hashed count, so two runs can be compared on more than their verdicts.
+fn effective_maps(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    dry_run: bool,
+) -> (
+    std::collections::HashMap<String, EffRec>,
+    std::collections::HashMap<String, EffRec>,
+    usize,
+) {
+    let common = CommonOpts {
+        dry_run,
+        ..common::opts()
+    };
+    let (s, d) = (classify(src), classify(dst));
+    ensure_distinct_sides(&s, &d).unwrap();
+    let mode = ScanMode {
+        no_trust_cached_hashes: false,
+        dry_run,
+    };
+    let mut so = open_side(&s, &common, mode).unwrap();
+    let mut do_ = open_side(&d, &common, mode).unwrap();
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &so.phase_a.map,
+            algos: &common.algos,
+            no_trust: false,
+        },
+        SideRequest {
+            entries: &do_.phase_a.map,
+            algos: &common.algos,
+            no_trust: false,
+        },
+        common.case_sensitive,
+    );
+    let sm: SideScan = resolve_side(&mut so, mode, &plans.src).unwrap();
+    let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst).unwrap();
+    (sm.map, dm.map, sm.stats.hashed + dm.stats.hashed)
+}
+
+/// The fixture must actually force hashing, or `compare_dry_run_computes_the_same_
+/// digests` proves nothing: equal maps would fall out of both runs doing no work.
+///
+/// `changed.txt` is the load-bearing file — equal size and mtime, different
+/// content — so `plan_pairs` cannot settle it from stat and both sides must read
+/// it. `a.txt` and `sub/nested.txt` are equal pairs for the same reason, so they
+/// hash too; the size-differing and one-sided paths must *not* appear in the
+/// total, which is also checked so a regression to eager hashing is visible here.
+#[test]
+fn the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs() {
+    let t = TempRoot::new("cmp_dry_fixture");
+    let (src, dst) = two_trees(&t);
+    let (sm, dm, hashed) = effective_maps(&src, &dst, false);
+
+    // a.txt and changed.txt are equal-stat pairs, so the planner cannot settle
+    // them and both sides are read: 2 pairs x 2 sides. changed.txt is the one
+    // that differs in content, which is what forces the read to be *useful*
+    // rather than merely required.
+    assert_eq!(hashed, 4, "two undecided pairs, read on both sides");
+    assert!(!sm["changed.txt"].hashes.is_empty(), "src read it");
+    assert!(!dm["changed.txt"].hashes.is_empty(), "dst read it");
+    assert_ne!(
+        sm["changed.txt"].hashes, dm["changed.txt"].hashes,
+        "the equal-stat pair really did differ, so hashing was required"
+    );
+
+    // Everything stat already settled costs nothing.
+    assert!(
+        sm["sized.txt"].hashes.is_empty() && dm["sized.txt"].hashes.is_empty(),
+        "a size-differing pair needs no digest"
+    );
+    assert!(
+        sm["src_only.txt"].hashes.is_empty(),
+        "a src-only path needs no digest"
+    );
+    assert!(
+        dm["dst_only.txt"].hashes.is_empty(),
+        "a dst-only path needs no digest"
+    );
+}
 
 #[test]
 fn run_update_then_compare_equal() {
@@ -114,4 +258,146 @@ fn run_compare_detects_diff_then_sync_converges() {
 
     let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0, "dst must equal src after sync");
+}
+
+/// `--dry-run` on `compare` must write nothing *and* answer the same question.
+///
+/// The flag exists because `compare` does write: a folder side updates its own
+/// cache as it resolves, so without it there is no way to audit two folders and
+/// leave both caches byte-identical.
+///
+/// The contract being pinned is the one that has never been enforced — a dry run
+/// must do the same *work* and take the same *decisions*, differing only in the
+/// writes. Asserting the exit code alone would not catch a dry run that skipped
+/// the hashing: it would still print the same verdicts. So this compares the
+/// resolved effective maps, which hold the digests themselves and cannot agree by
+/// coincidence.
+#[test]
+fn compare_dry_run_writes_nothing_and_answers_the_same() {
+    let t = TempRoot::new("cmp_dry");
+    let (src, dst) = two_trees(&t);
+    let src_cache = src.join(CACHE_PREFIX);
+    let dst_cache = dst.join(CACHE_PREFIX);
+
+    // Cold caches, so the dry run has the most to not-do: creating two cache
+    // files, then populating them.
+    assert_eq!(
+        cmd_compare(compare_dry(src.clone(), dst.clone()), &log()).unwrap(),
+        4
+    );
+    assert!(!src_cache.exists(), "a dry run does not create a cache");
+    assert!(!dst_cache.exists(), "a dry run does not create a cache");
+
+    // The real run creates both, so the dry-run-on-warm-cache case below has
+    // something to leave alone.
+    assert_eq!(
+        cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap(),
+        4
+    );
+    let (src_before, dst_before) = (bytes(&src_cache), bytes(&dst_cache));
+
+    let src_stat = tree_state(&src);
+    let dst_stat = tree_state(&dst);
+
+    assert_eq!(
+        cmd_compare(compare_dry(src.clone(), dst.clone()), &log()).unwrap(),
+        4,
+        "the dry run reaches the same verdict as the real one"
+    );
+
+    assert_eq!(
+        bytes(&src_cache),
+        src_before,
+        "src's cache is byte-identical"
+    );
+    assert_eq!(
+        bytes(&dst_cache),
+        dst_before,
+        "dst's cache is byte-identical"
+    );
+    assert_eq!(tree_state(&src), src_stat, "no file tree change either");
+    assert_eq!(tree_state(&dst), dst_stat, "no file tree change either");
+}
+
+/// The strongest form of the same contract: two runs that differ only in
+/// `--dry-run` must produce *equal effective maps*, digests included.
+///
+/// Separate from the test above because that one compares side effects, which a
+/// run can get right while still having hashed a different set of files. Map
+/// equality catches that — `a.txt` matching on stat and `changed.txt` decided by
+/// size are different digests in the map, whatever the verdict says.
+#[test]
+fn compare_dry_run_computes_the_same_digests() {
+    let t = TempRoot::new("cmp_dry_map");
+    let (src, dst) = two_trees(&t);
+
+    // Cold, so the dry run really does have to hash to answer. It gets an
+    // in-memory cache, hashes everything the planner asks for, and keeps the
+    // result only in the map.
+    let dry = effective_maps(&src, &dst, true);
+    let real = effective_maps(&src, &dst, false);
+
+    assert_eq!(
+        dry.0, real.0,
+        "a dry run resolves src to the same effective map"
+    );
+    assert_eq!(
+        dry.1, real.1,
+        "a dry run resolves dst to the same effective map"
+    );
+    assert!(
+        dry.2 > 0 && real.2 > 0,
+        "both runs actually hashed something, so the comparison above is meaningful \
+         (dry hashed {0}, real hashed {1})",
+        dry.2,
+        real.2
+    );
+}
+
+/// `update`'s entire output is the cache, so `--dry-run` there answers "what
+/// would a repopulate do, and how much would it read?" without committing.
+///
+/// It must still hash everything — `update` trusts no cached digest, and a dry
+/// run that skipped the hashing would not be answering the same question.
+#[test]
+fn update_dry_run_reads_everything_and_writes_nothing() {
+    let t = TempRoot::new("upd_dry");
+    let dir = t.mkdirs("a");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    let cache = dir.join(CACHE_PREFIX);
+
+    assert_eq!(cmd_update(update_dry(dir.clone()), &log()).unwrap(), 0);
+    assert!(!cache.exists(), "a dry run creates no cache");
+
+    // A warm cache must come out byte-identical, with no backup sibling either.
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    let before = bytes(&cache);
+    assert_eq!(cmd_update(update_dry(dir.clone()), &log()).unwrap(), 0);
+    assert_eq!(bytes(&cache), before, "the cache is byte-identical");
+    assert!(!has_backup_sibling(&cache), "a dry run takes no backup");
+}
+
+/// `compare-self` never writes, so `--dry-run` is redundant rather than
+/// contradictory. It must warn and carry on, not error: a script that passes
+/// `--dry-run` to every subcommand to be safe should not break on the one
+/// command that was already safe.
+#[test]
+fn compare_self_accepts_dry_run_with_a_warning() {
+    let t = TempRoot::new("cs_dry");
+    let dir = t.mkdirs("a");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    let cache = dir.join(CACHE_PREFIX);
+    let before = bytes(&cache);
+
+    let mut o = compare_self_opts(dir.clone());
+    o.common.dry_run = true;
+    let code = cmd_compare_self(o, &log()).unwrap();
+    assert_eq!(code, 0, "the run still completes");
+    assert_eq!(
+        bytes(&cache),
+        before,
+        "and still writes nothing, because it never did"
+    );
 }

@@ -102,7 +102,14 @@ impl SideScan<SideEntry> {
 
 /// A resolved path: kind, stat data, and whatever hashes were needed.
 /// Hash values are raw digest bytes (see [`crate::hash::hash_file`]).
-#[derive(Clone, Debug)]
+///
+/// `PartialEq` exists so a test can assert that two runs produced *the same
+/// effective map*, which is the strongest available statement of the dry-run
+/// contract. Comparing printed verdicts is weaker: two runs can agree on every
+/// `CHANGED` line while one of them hashed a different set of files and reached
+/// the same conclusion by luck. Equality of the map cannot be faked that way,
+/// because the map holds the digests themselves.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffRec {
     /// "file" or "dir"
     pub kind: String,
@@ -861,8 +868,9 @@ impl OpenSide {
 /// two sides needs this side's phase-A output while the other side's handle is
 /// still open, and both handles still open when phase C writes.
 ///
-/// A folder side's cache is created if missing, and backed up unless this is a
-/// dry run. A record side is opened read-only and never written.
+/// How a folder's cache is opened — and therefore whether anything touches disk
+/// — is [`open_folder_cache`]'s decision, not this function's. A record side is
+/// opened read-only and never written, with or without a dry run.
 pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<OpenSide> {
     let (cache, phase_a, cap) = match side {
         Side::Record(dbp) => {
@@ -880,44 +888,13 @@ pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Ope
             if !root.is_dir() {
                 bail!("folder {} not found", root.display());
             }
-            let db_path = root.join(CACHE_PREFIX);
-            if !db_path.exists() {
-                // missing cache: just create it
-                info!(cache = %db_path.display(), "cache missing, creating");
-                let cache = open_db(
-                    &db_path,
-                    common.case_sensitive,
-                    CacheOpen::ReadWrite {
-                        ignore_cache: false,
-                        backup_first: false,
-                    },
-                )?;
-                let phase_a = scan_stat_only(root, &cache, common, mode)?;
-                let cap = SideCapability::for_folder(&cache, mode);
-                return Ok(OpenSide {
-                    side: side.clone(),
-                    cache,
-                    phase_a,
-                    cap,
-                });
-            }
-            let cache = match open_db(
-                &db_path,
-                common.case_sensitive,
-                CacheOpen::ReadWrite {
-                    ignore_cache: common.ignore_cache,
-                    backup_first: !mode.dry_run,
-                },
-            ) {
-                Ok(db) => db,
-                Err(e) => {
-                    warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
-                    return Err(e.context(format!(
-                        "cache for {} (use --ignore-cache to rebuild)",
-                        root.display()
-                    )));
-                }
-            };
+            let cache = open_folder_cache(root, common, mode, true).map_err(|e| {
+                warn!(root = %root.display(), error = format!("{:#}", e), "cache open failed");
+                e.context(format!(
+                    "cache for {} (use --ignore-cache to rebuild)",
+                    root.display()
+                ))
+            })?;
             let phase_a = scan_stat_only(root, &cache, common, mode)?;
             let cap = SideCapability::for_folder(&cache, mode);
             (cache, phase_a, cap)
@@ -928,6 +905,64 @@ pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Ope
         cache,
         phase_a,
         cap,
+    })
+}
+
+/// Open a folder side's cache, honouring [`ScanMode::dry_run`].
+///
+/// The one place that decides *how* a folder's cache is opened, so every command
+/// gets the same answer and none can forget. `backup_first` is a separate
+/// argument because `sync` backs up both sides before it opens either — it has
+/// to, to snapshot dst's old state before anything moves — while `compare` has no
+/// such ordering requirement and lets the open do it.
+///
+/// A dry run must not write to disk, and the cache is on disk, so under
+/// `dry_run`:
+///
+/// - an existing cache is opened **read-only**: no `meta` rewrite, no backup, no
+///   write handle at all, so the file comes out byte-identical;
+/// - a **missing** cache is served from an in-memory DB, because creating one
+///   would leave `girpr-cache` behind in a folder that had none;
+/// - a **corrupt** cache falls back to in-memory the same way, so a dry run still
+///   answers rather than dying on a cache it is not allowed to rebuild;
+/// - `--ignore-cache` is treated as *absent* rather than honoured, since
+///   rebuilding is a write. The folder is then scanned from disk alone — which is
+///   what a real `--ignore-cache` run does too, so the two agree.
+///
+/// Each fallback still yields the **same** effective map a real run would, which
+/// is the point: a dry run answers the question, it does not answer a different
+/// one. The read paths are identical; only the write handle is absent. That is
+/// why this function exists rather than a `dry_run` check at each call site — a
+/// per-command check is a per-command chance to get it wrong.
+pub fn open_folder_cache(
+    root: &Path,
+    common: &CommonOpts,
+    mode: ScanMode,
+    backup_first: bool,
+) -> Result<CacheDb> {
+    let db_path = root.join(CACHE_PREFIX);
+    if !mode.dry_run {
+        return open_db(
+            &db_path,
+            common.case_sensitive,
+            CacheOpen::ReadWrite {
+                ignore_cache: common.ignore_cache,
+                backup_first,
+            },
+        );
+    }
+    if common.ignore_cache || !db_path.exists() {
+        info!(path = %db_path.display(), "dry-run: using an in-memory cache");
+        return CacheDb::open_temp(common.case_sensitive);
+    }
+    info!(path = %db_path.display(), "dry-run: opening read-only");
+    open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly).or_else(|e| {
+        warn!(
+            path = %db_path.display(),
+            error = format!("{:#}", e),
+            "dry-run: unreadable cache, scanning from disk alone"
+        );
+        CacheDb::open_temp(common.case_sensitive)
     })
 }
 

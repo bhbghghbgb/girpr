@@ -42,21 +42,32 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let _span_guard = span.enter();
     info!("start");
+    if common.dry_run {
+        info!(
+            "dry-run: no cache will be created, updated, or backed up; \
+             both caches come out byte-identical"
+        );
+    }
     let s = classify(&src);
     let d = classify(&dst);
     // A folder side writes its cache while scanning, so naming one cache twice
     // would diff a record against the view the run itself is mutating.
     ensure_distinct_sides(&s, &d)?;
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
-    // compare only reads, so it never dry-runs. Both handles stay live across
-    // the plan and the resolve, which is sound only because `ensure_distinct_sides`
-    // already ran: redb allows one writable handle per cache file.
+    // Both handles stay live across the plan and the resolve, which is sound only
+    // because `ensure_distinct_sides` already ran: redb allows one writable
+    // handle per cache file.
+    //
+    // `compare` has no filesystem half to suppress — it never touches the trees —
+    // but a folder side does write its cache as it resolves, so `--dry-run` is
+    // carried into `ScanMode` and `open_folder_cache` turns that into a read-only
+    // or in-memory handle. Every decision below is unchanged either way.
     let mut s = open_side(
         &s,
         &common,
         ScanMode {
             no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: false,
+            dry_run: common.dry_run,
         },
     )?;
     info!(
@@ -70,7 +81,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         &common,
         ScanMode {
             no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: false,
+            dry_run: common.dry_run,
         },
     )?;
     info!(
@@ -104,7 +115,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         &mut s,
         ScanMode {
             no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: false,
+            dry_run: common.dry_run,
         },
         &plans.src,
     )?;
@@ -112,7 +123,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         &mut d,
         ScanMode {
             no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: false,
+            dry_run: common.dry_run,
         },
         &plans.dst,
     )?;

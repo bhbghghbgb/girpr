@@ -3,8 +3,8 @@
 mod common;
 
 use common::{
-    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, rw, sync, sync_mtime, update,
-    wfile,
+    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, rw, sync, sync_dry, sync_mtime,
+    update, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
@@ -24,8 +24,7 @@ fn run_sync_dry_run_writes_nothing() {
     wfile(&dst, "a.txt", b"old");
     wfile(&dst, "extra.txt", b"stay for now");
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let mut o = sync_dry(src.clone(), dst.clone());
     o.jobs = 2;
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
@@ -52,8 +51,7 @@ fn run_sync_dry_run_creates_no_cache() {
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let o = sync_dry(src.clone(), dst.clone());
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     for d in [&src, &dst] {
@@ -85,8 +83,7 @@ fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
     cmd_update(update(dst.clone()), &log()).unwrap();
     let (src_before, dst_before) = (recs(&src), recs(&dst));
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let mut o = sync_dry(src.clone(), dst.clone());
     o.common.ignore_cache = true;
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
@@ -194,7 +191,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.case_sensitive = false;
-    dry.dry_run = true;
+    dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
         entry_names(&dst),

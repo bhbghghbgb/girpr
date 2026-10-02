@@ -8,7 +8,9 @@
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::planner::{SideRequest, plan_pairs};
-use girsync::{CommonOpts, CompareOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts};
+use girsync::{
+    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -114,6 +116,15 @@ pub fn opts() -> CommonOpts {
         case_sensitive: true,
         max_depth: 10,
         ignore_cache: false,
+        dry_run: false,
+    }
+}
+
+/// `opts()` with `--dry-run`, for the cases that assert a run writes nothing.
+pub fn opts_dry() -> CommonOpts {
+    CommonOpts {
+        dry_run: true,
+        ..opts()
     }
 }
 
@@ -149,6 +160,30 @@ pub fn compare(src: PathBuf, dst: PathBuf) -> CompareOpts {
     }
 }
 
+/// [`compare`] with `--dry-run`.
+pub fn compare_dry(src: PathBuf, dst: PathBuf) -> CompareOpts {
+    CompareOpts {
+        common: opts_dry(),
+        ..compare(src, dst)
+    }
+}
+
+/// [`update`] with `--dry-run`.
+pub fn update_dry(dir: PathBuf) -> UpdateOpts {
+    UpdateOpts {
+        common: opts_dry(),
+        ..update(dir)
+    }
+}
+
+pub fn compare_self_opts(dir: PathBuf) -> CompareSelfOpts {
+    CompareSelfOpts {
+        dir,
+        no_trust_cached_hashes: false,
+        common: opts(),
+    }
+}
+
 pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
     SyncOpts {
         src,
@@ -156,9 +191,17 @@ pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
         trust: TrustOpts::default(),
         missing_only: false,
         keep_extra: false,
-        dry_run: false,
         jobs: 1,
         common: opts(),
+    }
+}
+
+/// [`sync`] with `--dry-run`. The flag lives on `common`, since one flag drives
+/// both the cache half and the filesystem half.
+pub fn sync_dry(src: PathBuf, dst: PathBuf) -> SyncOpts {
+    SyncOpts {
+        common: opts_dry(),
+        ..sync(src, dst)
     }
 }
 

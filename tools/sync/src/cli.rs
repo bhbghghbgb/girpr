@@ -25,7 +25,7 @@ pub struct Cli {
 }
 
 /// Flags shared by every subcommand: hashing, glob filters, case mode, walk
-/// depth, and cache reset.
+/// depth, cache reset, and the dry run.
 #[derive(Args, Debug, Clone)]
 pub struct CommonArgs {
     /// Hash algorithm; repeatable (md5, sha256). "none" disables hashing entirely.
@@ -46,6 +46,20 @@ pub struct CommonArgs {
     /// Back up and rebuild the cache instead of trusting it.
     #[arg(long, default_value_t = false)]
     pub ignore_cache: bool,
+    /// Write nothing at all: no cache created, no cache updated, no backup, and
+    /// for a command that moves files, no filesystem change.
+    ///
+    /// Every command accepts this, including the ones that never touch a file
+    /// tree. `compare` does write — a folder side updates its own cache as it
+    /// resolves — so without this flag there is no way to audit two folders and
+    /// leave both caches byte-identical. `compare-self` never writes and ignores
+    /// it with a warning.
+    ///
+    /// The guarantee is that the run *answers the same question*, not that it
+    /// does less work: it still stats the tree, still reads cached digests, and
+    /// still hashes whatever stat alone cannot settle. Only the writes are gone.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
 }
 
 /// One side of a two-sided run, as named on the command line.
@@ -79,6 +93,9 @@ pub enum Cmd {
         common: CommonArgs,
     },
     /// Compare two sides (each: folder root or girpr-cache* record dir).
+    ///
+    /// Never modifies the two trees, but a folder side does write its cache as it
+    /// resolves. Pass `--dry-run` to leave both caches exactly as they were.
     Compare {
         #[arg(long)]
         src: PathBuf,
@@ -106,6 +123,10 @@ pub enum Cmd {
         /// Rehash every file even when size+mtime match a cached digest.
         #[arg(long, default_value_t = false)]
         no_trust_cached_hashes: bool,
+        // `--dry-run` arrives here via `CommonArgs` and is accepted but has no
+        // effect: this command opens its cache read-only and has no write path,
+        // so it already writes nothing. `cmd_compare_self` warns rather than
+        // erroring, so a script passing it everywhere does not break here.
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -121,9 +142,9 @@ pub enum Cmd {
         /// Keep dst-only files (default deletes them).
         #[arg(long, default_value_t = false)]
         keep_extra: bool,
-        /// Print the plan without touching the filesystem or cache.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
+        // `--dry-run` arrives via `CommonArgs`. This command threads it into the
+        // rename and apply phases too, so it means no cache writes *and* no
+        // filesystem change.
         /// Parallel copy workers.
         #[arg(long, default_value_t = 4)]
         jobs: usize,
