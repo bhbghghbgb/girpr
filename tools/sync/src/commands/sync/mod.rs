@@ -22,12 +22,12 @@ mod rename;
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{
-    CACHE_PREFIX, CacheDb, CacheOpen, backup_db, open_db, remove_cache_path, snapshot_old,
-};
+use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
-use crate::effective::{build_effective_folder, classify, ensure_distinct_sides};
+use crate::effective::{
+    build_effective_folder, classify, ensure_distinct_sides, open_folder_cache,
+};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -99,29 +99,26 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     }
 
     // 2. Open both caches and resolve each side's effective map.
-    let (src_db, dst_db) = open_caches(&src_db_path, &dst_db_path, &common, dry_run)?;
+    //
+    // `open_folder_cache` is the single answer to "how does this run open a
+    // folder's cache", shared with `compare`. It used to be a private copy here,
+    // which is how the two could drift.
+    let src_mode = ScanMode {
+        no_trust_cached_hashes: trust.no_trust_src,
+        dry_run,
+    };
+    let dst_mode = ScanMode {
+        no_trust_cached_hashes: trust.no_trust_dst,
+        dry_run,
+    };
+    let src_db = open_folder_cache(&src, &common, src_mode, false)?;
     info!("loading src effective map");
-    let sm = build_effective_folder(
-        &src,
-        &src_db,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run,
-        },
-    )?;
+    let sm = build_effective_folder(&src, &src_db, &common, src_mode)?;
     info!(side = "src", hashed = sm.stats.hashed, "src map built");
     let sm = sm.map;
+    let dst_db = open_folder_cache(&dst, &common, dst_mode, false)?;
     info!("loading dst effective map");
-    let dm = build_effective_folder(
-        &dst,
-        &dst_db,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run,
-        },
-    )?;
+    let dm = build_effective_folder(&dst, &dst_db, &common, dst_mode)?;
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
     info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
@@ -223,43 +220,4 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
         bail!("--jobs must be >= 1");
     }
     Ok(())
-}
-
-/// Open both caches. Under `--dry-run` neither one is ever opened for writing.
-///
-/// A dry run has nothing to persist: `build_effective_folder` skips its batch
-/// handle and `rename_to_src_casing` returns before touching disk, so the only
-/// writes a read/write open could perform are the ones a dry run promises not to
-/// do — creating a missing cache, and rewriting `meta` when the case mode
-/// disagrees. So an existing cache is opened read-only, and a missing one falls
-/// back to an in-memory DB that leaves the folder exactly as it was. A corrupt
-/// cache falls back the same way: a dry run should still produce a plan.
-fn open_caches(
-    src_db_path: &std::path::Path,
-    dst_db_path: &std::path::Path,
-    common: &crate::config::CommonOpts,
-    dry_run: bool,
-) -> Result<(CacheDb, CacheDb)> {
-    let open = |p: &std::path::Path| -> Result<CacheDb> {
-        if !dry_run {
-            return open_db(
-                p,
-                common.case_sensitive,
-                CacheOpen::ReadWrite {
-                    ignore_cache: false,
-                    backup_first: false,
-                },
-            );
-        }
-        // `--dry-run --ignore-cache` asks for the cache to be rebuilt, and a dry
-        // run may not rebuild it. Act as though it were absent: the folder is
-        // then scanned from disk alone and the real cache is left untouched.
-        if common.ignore_cache || !p.exists() {
-            info!(path = %p.display(), "dry-run: using an in-memory cache");
-            return CacheDb::open_temp(common.case_sensitive);
-        }
-        open_db(p, common.case_sensitive, CacheOpen::ReadOnly)
-            .or_else(|_| CacheDb::open_temp(common.case_sensitive))
-    };
-    Ok((open(src_db_path)?, open(dst_db_path)?))
 }

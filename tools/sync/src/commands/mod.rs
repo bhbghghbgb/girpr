@@ -93,6 +93,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Cmd::Compare {
             src,
             dst,
+            dry_run,
             trust,
             common,
         } => cmd_compare(
@@ -100,6 +101,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 src,
                 dst,
                 trust: trust.into(),
+                dry_run,
                 common: CommonOpts::try_from(common)?,
             },
             &log,

@@ -29,7 +29,7 @@ and drive the public API.
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
-| `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
+| `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `open_folder_cache`, the single answer to "how does this run open a cache" and therefore how `--dry-run` is honoured; `merge_row`, the cache write rule |
 | `planner.rs` | `HashPlan` and `plan_pairs`: the only place that decides which digests a run must compute |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
@@ -47,7 +47,7 @@ trusting a half-written file.
 
 ```
 girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache]
-girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [...]
+girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [...]
 girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--dry-run] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [...]
 ```
@@ -97,6 +97,12 @@ a digest (see "Cache is a cache, not truth"). Output classes, one per line:
 `TYPE-CONFLICT` (file vs dir), `CASE-MISMATCH a <=> A` (insensitive mode only),
 then a `SUMMARY` line. Exit `4` if any diff, `0` if equal. `sync` accepts folders
 only.
+
+`--dry-run` reports without touching disk — **including the caches**. That
+matters here in a way it does not for `sync`: `compare` never modifies the two
+trees, but a folder side updates its own cache as it resolves, so without this
+flag there is no way to audit two folders and leave both caches exactly as they
+were. The report is identical either way; see "Dry run means the same run" below.
 
 ### compare-self
 
@@ -155,12 +161,44 @@ nothing.
 (no backups, no cache updates, no FS changes). The plan is exact: it is the same
 work list a real run executes, including the insensitive-mode rename pass.
 
-"writes nothing" is enforced by never opening a cache for writing: an existing
-cache is opened read-only and a missing one is served from an in-memory DB, so a
-dry run against cache-less folders does not leave `girpr-cache` behind.
-`--dry-run --ignore-cache` is the one combination that asks for something a dry
-run may not do, so the cache is treated as *absent* rather than rebuilt — the
-folder is scanned from disk alone and the real cache is left as it was.
+### Dry run means the same run
+
+`--dry-run` is not "behave differently but write less". It is **the same run with
+the writes removed and nothing else changed** — same decisions, same reads, same
+output, repeated as many times as you like. Two halves, and only one of them is
+obvious:
+
+- **The decisions must be identical.** A dry run still stats both trees, still
+  reuses cached digests, and still hashes whatever stat alone cannot settle. It
+  does *not* skip hashing to save work — the digest it would have written back is
+  also the digest that decides the verdict, so skipping the read would change the
+  answer, not just the side effects. A stat-equal pair with different content is
+  `CHANGED` only because of a digest, and a dry run still has to look.
+- **The writes must be absent.** No cache mutation, no cache creation, no backup,
+  and for `sync`, no filesystem change.
+
+This is why a dry run is *repeatable*: it leaves nothing behind for the next run
+to see, so run 2 starts from the state run 1 started from and must reach the same
+conclusion. A dry run that wrote one cache row or one `meta` would quietly become
+a real run, one field at a time.
+
+How the cache is opened is decided in exactly one place —
+`effective::open_folder_cache` — so no command can honour the flag incorrectly by
+opening the wrong kind of handle. Under `--dry-run`: an existing cache is opened
+`ReadOnly` (so the file comes out byte-identical and every write method on the
+handle fails), a **missing** cache is served from an in-memory DB (creating one
+would leave `girpr-cache` behind in a folder that had none), and a **corrupt**
+cache falls back in-memory the same way, so a dry run still produces its report
+instead of dying on a cache it may not rebuild. `--dry-run --ignore-cache` is
+therefore treated as *absent* rather than honoured — the folder is scanned from
+disk alone and the real cache is left as it was.
+
+`compare-self` needs no flag: it already opens read-only, which is a stronger
+guarantee than a dry run (the handle has no write path at all).
+
+Tests: `compare_dry_run_reaches_the_same_verdict_and_hashes_the_same`,
+`compare_dry_run_creates_no_cache`, `compare_dry_run_leaves_an_existing_cache_byte_identical`,
+`run_sync_dry_run_is_repeatable_and_leaves_the_world_unchanged`.
 
 ## Core semantics (must-know for AI edits)
 
@@ -178,8 +216,8 @@ folder is scanned from disk alone and the real cache is left as it was.
   handle fails. A read-only open cannot rewrite `meta` when the recorded
   `case_sensitive` flag disagrees with the run's mode; since that flag is
   informational, it warns and continues rather than refusing the cache. A wrong
-  schema version is still fatal in both modes. Record sides and `sync --dry-run`
-  both use read-only opens.
+  schema version is still fatal in both modes. Record sides, `compare-self`, and
+  every `--dry-run` use read-only opens.
 - **One cache per run.** A read/write open locks its file exclusively, so a run
   must never name the same cache twice. `compare` and `sync` both reject a
   `--src`/`--dst` pair that resolves to one cache file — the same folder twice,

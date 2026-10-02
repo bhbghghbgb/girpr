@@ -84,6 +84,14 @@ pub enum Cmd {
         src: PathBuf,
         #[arg(long)]
         dst: PathBuf,
+        /// Write nothing at all — including the caches.
+        ///
+        /// `compare` never modifies the two trees, but a folder side does update
+        /// its cache as it resolves, so without this flag there is no way to
+        /// audit two folders and leave both caches untouched. The report is
+        /// identical either way.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
         #[command(flatten)]
         trust: TrustArgs,
         #[command(flatten)]

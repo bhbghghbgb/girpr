@@ -77,12 +77,27 @@ pub struct ScanMode {
     /// Set by `--no-trust-cached-hashes <side>`, and unconditionally by
     /// `update`, which is defined as a full repopulate.
     pub no_trust_cached_hashes: bool,
-    /// No cache writes: the scan reads rows but never opens a write handle.
+    /// No writes. Nothing this run computes is persisted.
     ///
-    /// This is the *cache* half of a dry run. Whether a run may touch the
-    /// filesystem is decided by its own command (`sync` threads a separate
-    /// `dry_run` into the rename and apply phases), not here — so a command
-    /// that never writes files, like `compare-self`, sets this and nothing else.
+    /// A dry run must produce **the same answer as the real run**, with the
+    /// writes removed and nothing else. That is the whole contract, and it has
+    /// two halves that are easy to confuse:
+    ///
+    /// - *decisions* must be identical — a dry run still stats the tree, still
+    ///   reads cached digests, and still hashes whatever the planner cannot
+    ///   settle from stat alone. `can_hash_from_disk` stays true precisely
+    ///   because suppressing those reads would change the verdict, not just the
+    ///   side effects.
+    /// - *writes* must be absent — no cache mutation, no cache creation, no
+    ///   backup, and for a command that moves files, no filesystem change.
+    ///
+    /// This field is the cache half. A command that also moves files threads its
+    /// own `dry_run` into those phases (`sync` does); a command that never
+    /// writes files has no second half and this field is the whole of it.
+    ///
+    /// How the cache is *opened* under this flag is
+    /// [`crate::effective::open_folder_cache`]'s decision, so no command can
+    /// honour the flag incorrectly by opening the wrong kind of handle.
     pub dry_run: bool,
 }
 
@@ -122,6 +137,14 @@ pub struct CompareOpts {
     pub dst: PathBuf,
     /// Derived from `--no-trust-cached-hashes`.
     pub trust: TrustOpts,
+    /// Write nothing at all: no cache updates, no cache creation, no backups.
+    ///
+    /// `compare` has no filesystem half to suppress — it never touches the trees
+    /// — but a folder side does write its cache as it resolves, so without this
+    /// there is no way to audit two folders and leave both caches exactly as
+    /// they were. The report is identical either way; see
+    /// [`ScanMode::dry_run`].
+    pub dry_run: bool,
     pub common: CommonOpts,
 }
 
