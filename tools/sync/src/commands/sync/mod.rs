@@ -167,7 +167,6 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         src: &src,
         dst: &dst,
         dst_db: &dst_db,
-        sm: &sm,
         dm: &dm,
         common: &common,
         jobs,

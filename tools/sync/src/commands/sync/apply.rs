@@ -35,9 +35,9 @@ pub(super) struct Applier<'a> {
     pub src: &'a Path,
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
-    /// src effective map — decides which dst dirs are "unknown".
-    pub sm: &'a HashMap<String, EffRec>,
-    /// dst effective map, after the rename pass.
+    /// dst effective map, after the rename pass. Consulted for what dst actually
+    /// holds at a path; src's map is not needed here any more, because the
+    /// planner already decided which directories to remove (`Plan::rmdir`).
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
     pub jobs: usize,
@@ -63,13 +63,19 @@ impl Applier<'_> {
         let applied = Applied {
             deleted: self.delete_extras(plan)?,
             copied: self.copy_files(plan)?,
-            removed_dirs: self.remove_unknown_dirs()?,
+            removed_dirs: self.remove_unknown_dirs(plan)?,
         };
         self.prune_dst_cache()?;
         Ok(applied)
     }
 
     /// Create every src directory that dst lacks.
+    ///
+    /// Each one is announced, like every other action in the plan. The apply
+    /// phases print what they do and `--dry-run` prints what it would do, and
+    /// the two outputs are supposed to be the same document — a phase that works
+    /// silently is the one place a dry run cannot mirror, and a directory the
+    /// user did not know was being created is worth a line.
     fn mkdirs(&self, plan: &Plan) -> Result<()> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
         let mut w = self.dst_db.begin_write()?;
@@ -77,6 +83,7 @@ impl Applier<'_> {
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
             w.put(r, &FileRec::dir())?;
+            println!("MKDIR {}", r);
             debug!(rel = %r, "mkdir");
             if (i + 1) % 100 == 0 {
                 info!(done = i + 1, total = plan.mkdir.len(), "mkdir progress");
@@ -237,33 +244,21 @@ impl Applier<'_> {
 
     /// Remove dst directories that src does not have, deepest first.
     ///
-    /// Runs after the copies so directories emptied by them are collected too.
-    fn remove_unknown_dirs(&self) -> Result<usize> {
+    /// Runs after the copies so directories emptied by them are collected too,
+    /// and reads the list [`Plan::rmdir`] rather than deriving one here. That is
+    /// deliberate: the dry run must be able to state the same number before
+    /// anything is written, so the decision belongs to the planner and this pass
+    /// is left with nothing to decide. It also drops a full walk of dst, and
+    /// makes the set the one the `--dry-run` summary already promised.
+    ///
+    /// The list excludes any directory a planned copy was going to clear out of
+    /// the way, so nothing here can name a path that is already gone; the
+    /// `is_dir` check stays as a cheap guard rather than as the logic.
+    fn remove_unknown_dirs(&self, plan: &Plan) -> Result<usize> {
         let mut removed_dirs = 0usize;
-        info!("scan dst for unknown dirs");
-        let live_after = walk_live(self.dst, self.common.max_depth)?;
-        let mut unknown_dirs: Vec<String> = Vec::new();
-        for e in &live_after {
-            if !e.is_dir {
-                continue;
-            }
-            if is_excluded(
-                &e.rel,
-                &self.common.includes,
-                &self.common.excludes,
-                self.common.case_sensitive,
-            ) {
-                continue;
-            }
-            if !self.sm.contains_key(&e.rel) {
-                unknown_dirs.push(e.rel.clone());
-            }
-        }
-        // deepest first: a child may already be gone as part of its parent
-        unknown_dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        info!(unknown = unknown_dirs.len(), "rmdir pass");
+        info!(unknown = plan.rmdir.len(), "rmdir pass");
         let mut w = self.dst_db.begin_write()?;
-        for (i, r) in unknown_dirs.iter().enumerate() {
+        for (i, r) in plan.rmdir.iter().enumerate() {
             let p = self.dst.join(r);
             if p.is_dir() {
                 if let Err(e) = std::fs::remove_dir_all(&p)
@@ -279,7 +274,7 @@ impl Applier<'_> {
             if (i + 1) % 100 == 0 {
                 info!(
                     done = i + 1,
-                    total = unknown_dirs.len(),
+                    total = plan.rmdir.len(),
                     removed = removed_dirs,
                     "rmdir progress"
                 );

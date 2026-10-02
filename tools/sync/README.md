@@ -144,7 +144,8 @@ Mirrors `src` → `dst`:
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
 3. Insensitive mode: rename dst paths to src casing first (`RENAME`, two-step for Windows).
 4. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
-   `DELETE` extra files + remove unknown dirs deepest-first (skipped when `--keep-extra`).
+   `DELETE` extra files + remove dst-only dirs deepest-first (both skipped when
+   `--keep-extra`, which spares directories as well as files).
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime when `--hash none`); the dst record entry is deleted *before* each
@@ -158,9 +159,10 @@ and depends on none of those. Do not treat a *missing* row as a crash signal,
 though: a scan may legitimately record stat without a digest, so absence proves
 nothing.
 
-`--dry-run` prints `MKDIR/COPY/DELETE/RENAME` + `SUMMARY` and writes nothing
-(no backups, no cache updates, no FS changes). The plan is exact: it is the same
-work list a real run executes, including the insensitive-mode rename pass.
+`--dry-run` prints `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in apply
+order and writes nothing (no backups, no cache updates, no FS changes). Its
+output is the same document a real run prints, with a trailing `dry_run=true` on
+the `SUMMARY`; see the `--dry-run` section below.
 
 ### `--dry-run`
 
@@ -210,12 +212,25 @@ what a real `--ignore-cache` run does too. A **corrupt** cache is deliberately n
 in that list: it is the one state where the cache is neither absent nor discarded,
 and it is a hard error in both modes.
 
-One summary field cannot match, and that is inherent rather than a bug:
-`sync --dry-run` prints no `rmdir` count, because whether a directory is unknown
-depends on the planned copies and deletes having emptied it. Simulating the
-post-copy tree would produce a *guess*, and a guess that disagrees with the real
-run is worse than an honest omission. Every other summary field corresponds
-one-to-one.
+`sync`'s two outputs are the same document. The `SUMMARY` uses identical field
+names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
+`keep_extra` — and the action lines share one vocabulary and one order (`MKDIR`,
+`FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry run's only
+addition is a trailing `dry_run=true`, so a caller reading either does not have
+to know which it got. `run_sync_dry_run_summary_matches_a_real_run` compares the
+whole stdout with only that marker normalised away, so any future divergence in
+labels, ordering or counts fails there rather than reaching a user.
+
+`rmdir` is exact rather than omitted, which is why it is *planned*:
+`build_plan` decides the set (see `Plan::rmdir`), so the same count is available
+before anything is written as after.
+
+That plan step is also where the one genuinely tricky case lives. `copy_one`
+clears a dst *directory* out of the way when a planned copy lands on one, and it
+does so recursively — so that directory's whole subtree is gone before the rmdir
+pass could look at it. Those directories are excluded from the plan; counting
+them would promise removals that cannot happen. `--keep-extra` spares the set
+entirely, directories as well as files.
 
 Tests pin the whole thing. `compare_dry_run_writes_nothing_and_answers_the_same`
 asserts both caches are byte-identical and the verdict matches;

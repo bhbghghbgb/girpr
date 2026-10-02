@@ -131,6 +131,199 @@ fn run_sync_keep_extra_and_missing_only() {
     assert!(!dst.join("extra.txt").exists());
 }
 
+/// `--keep-extra` spares directories as well as files.
+///
+/// The flag name is not a promise about files only, and README's step 4 says the
+/// unknown-dir removal is skipped too. It was not: `remove_unknown_dirs` ran
+/// unconditionally, so a `--keep-extra` run deleted exactly the empty trees the
+/// user had asked it to leave. Worse, the deletion was invisible in the plan —
+/// the dry run announced `RMDIR` for the very directories a real run then
+/// removed, so the two agreed with each other and both contradicted the flag.
+#[test]
+fn run_sync_keep_extra_spares_extra_dirs_too() {
+    let t = TempRoot::new("keep_dirs");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "shared.txt", b"same");
+    wfile(&dst, "shared.txt", b"same");
+    wfile(&dst, "extra.txt", b"extra file");
+    wfile(&dst, "extradir/top.bin", b"x");
+    wfile(&dst, "extradir/nested/deep.bin", b"y");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.keep_extra = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(dst.join("extra.txt").is_file(), "extra file kept");
+    assert!(dst.join("extradir").is_dir(), "extra dir kept");
+    assert!(
+        dst.join("extradir/nested/deep.bin").is_file(),
+        "and its contents, since nothing was emptied"
+    );
+
+    // Without the flag the same tree is fully collected, dirs included.
+    let t2 = TempRoot::new("no_keep_dirs");
+    let src2 = t2.mkdirs("src");
+    let dst2 = t2.mkdirs("dst");
+    wfile(&src2, "shared.txt", b"same");
+    wfile(&dst2, "shared.txt", b"same");
+    wfile(&dst2, "extradir/nested/deep.bin", b"y");
+    assert_eq!(cmd_sync(sync(src2, dst2.clone()), &log()).unwrap(), 0);
+    assert!(!dst2.join("extradir").exists(), "collected by default");
+}
+
+/// The dry run and a real run must print the same `SUMMARY`, field for field.
+///
+/// This is the observable half of the `--dry-run` contract, and it is only
+/// checkable from the outside: `cmd_sync` returns an exit code, so the printed
+/// lines are the result. Both runs go through the real binary so the comparison
+/// covers the `RENAME` and `FIX-DIR` lines, which the plan printer does not emit.
+///
+/// `rmdir` is the field that had to change to make this possible. It used to be
+/// absent from the dry run because it was computed by walking dst *during* the
+/// apply phase — too late to print. It is now decided by `build_plan`, so the
+/// same count is available before anything is written.
+#[test]
+fn run_sync_dry_run_summary_matches_a_real_run() {
+    // The `TempRoot` is returned alongside the paths and bound to `_keep`: dropping
+    // it deletes the tree, so a fixture built inside a closure would be gone
+    // before the subprocess ever ran.
+    //
+    // `sync_mtime` is load-bearing here, not tidiness. The two trees are built at
+    // different moments, and two files written microseconds apart can land on the
+    // same filesystem timestamp in one tree and different ones in the other — which
+    // makes a case-only pair read as `CHANGED` in one run and equal in the other,
+    // for reasons that have nothing to do with the code under test. Pinning the
+    // stamps makes the two trees stat-identical, which is the precondition for
+    // comparing anything they print.
+    let build = |tag: &str| -> (TempRoot, std::path::PathBuf, std::path::PathBuf) {
+        let t = TempRoot::new(tag);
+        let src = t.mkdirs("src");
+        let dst = t.mkdirs("dst");
+        // One of every plan line there is.
+        wfile(&src, "same.txt", b"identical");
+        wfile(&dst, "same.txt", b"identical");
+        sync_mtime(&src.join("same.txt"), &dst.join("same.txt"));
+        wfile(&src, "differs.txt", b"src-content-that-is-longer");
+        wfile(&dst, "differs.txt", b"dst");
+        wfile(&src, "Data.txt", b"payload");
+        wfile(&dst, "data.txt", b"payload");
+        sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+        wfile(&src, "onlysrc.txt", b"s");
+        wfile(&dst, "onlydst.txt", b"d");
+        wfile(&dst, "extradir/nested/deep.bin", b"x");
+        // A src-only directory: the apply phase has to announce its MKDIR, and the
+        // dry run already did. Without this the label parity is untested, because
+        // a fixture that plans no mkdir cannot tell the two modes apart here.
+        wfile(&src, "newdir/inner.txt", b"n");
+        // A file on dst standing where src has a directory: the `FIX-DIR` case,
+        // likewise the only thing that exercises that label.
+        wfile(&src, "fixdir/inner.txt", b"f");
+        wfile(&dst, "fixdir", b"a blocking file");
+        (t, src, dst)
+    };
+    let run = |src: &std::path::Path, dst: &std::path::Path, extra: &[&str]| -> String {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+            .arg("sync")
+            .arg("--src")
+            .arg(src)
+            .arg("--dst")
+            .arg(dst)
+            .args(extra)
+            .output()
+            .expect("spawn girsync");
+        assert!(
+            out.status.success(),
+            "sync failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).expect("stdout is utf-8")
+    };
+
+    let (_keep_a, dry_src, dry_dst) = build("sum_dry");
+    let dry = run(&dry_src, &dry_dst, &["--dry-run"]);
+    let (_keep_b, real_src, real_dst) = build("sum_real");
+    let real = run(&real_src, &real_dst, &[]);
+
+    // The whole document, with only the dry-run marker normalised away. There is
+    // no per-line fudging left: the two modes print the same labels, the same
+    // counts and the same order, so any future divergence in vocabulary,
+    // sequencing or numbers fails right here instead of reaching a user.
+    assert_eq!(
+        dry.replace(" dry_run=true", ""),
+        real,
+        "a dry run prints what a real run prints\n--- dry ---\n{dry}\n--- real ---\n{real}"
+    );
+    assert!(dry.contains("dry_run=true"), "the dry run marks itself");
+    // The two labels this stage had to unify. Asserted explicitly so that
+    // dropping either change fails with a pointed message instead of passing
+    // because the fixture stopped exercising it.
+    for (label, line) in [
+        ("MKDIR", "MKDIR newdir"),
+        ("FIX-DIR", "FIX-DIR fixdir"),
+        ("RMDIR", "RMDIR extradir"),
+    ] {
+        assert!(
+            dry.contains(line) && real.contains(line),
+            "`{label}` must appear in both modes\n--- dry ---\n{dry}\n--- real ---\n{real}"
+        );
+    }
+    assert!(
+        !dry.contains("RMDIR-FILE"),
+        "the old spelling is gone: {dry}"
+    );
+}
+
+/// A planned copy that lands on a dst *directory* clears it out of the way
+/// recursively, so that directory's whole subtree is gone before the rmdir pass
+/// could look at it. The plan must not promise removals that cannot happen: a
+/// dry run that counted `extradir` here would report an `rmdir` the real run can
+/// never reach.
+///
+/// The fixture is deliberately the pathological one — src has `clash` as a
+/// *file*, dst has `clash/sub/deep/` as directories, so `clash/sub` and
+/// `clash/sub/deep` are unknown dirs that the copy wipes.
+#[test]
+fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
+    let t = TempRoot::new("wiped");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "clash", b"iamafile");
+    std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
+
+    let dry = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(&src)
+        .arg("--dst")
+        .arg(&dst)
+        .arg("--dry-run")
+        .output()
+        .expect("spawn girsync");
+    let dry = String::from_utf8(dry.stdout).unwrap();
+    assert!(
+        !dry.contains("RMDIR clash"),
+        "the subtree is wiped by the copy, not removed by the rmdir pass:\n{dry}"
+    );
+    assert!(
+        dry.contains("rmdir=0"),
+        "so the dry run must report zero, which is what the real run reaches:\n{dry}"
+    );
+
+    // And the real run agrees.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(&src)
+        .arg("--dst")
+        .arg(&dst)
+        .output()
+        .expect("spawn girsync");
+    let real = String::from_utf8(out.stdout).unwrap();
+    assert!(real.contains("rmdir=0"), "real run:\n{real}");
+    assert!(dst.join("clash").is_file(), "and the copy happened");
+}
+
 #[test]
 fn run_sync_rejects_bad_inputs() {
     let t = TempRoot::new("reject");
