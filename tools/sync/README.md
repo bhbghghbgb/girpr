@@ -17,7 +17,7 @@ and drive the public API.
 
 | File | Responsibility |
 | --- | --- |
-| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all three subcommands) |
+| `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all four subcommands) |
 | `config.rs` | validated per-run options: `CommonOpts`, `ScanMode`, `LogCtx`, `Update/Compare/SyncOpts` |
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff printer/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
@@ -182,15 +182,40 @@ are gone. Skipping the hashing would make it cheaper and *wrong* — it would re
 the answer to a different question. That is also why `SideCapability`'s
 `can_hash_from_disk` stays true under a dry run.
 
+The testable form of that is **`ScanStats` is identical in both modes**, and it
+is asserted as a whole struct rather than field by field, so a counter added
+later cannot quietly start reporting a write's outcome instead of a decision.
+Two bugs that assertion caught, both instances of one mistake — gating a
+*decision* or a *count* behind the write handle instead of gating only the write:
+
+- The prune set was computed inside `if let Some(w) = batch`, so a dry run never
+  worked out which rows were stale and reported `pruned = 0` over a tree a real
+  run prunes. How many rows *would* be dropped is an answer; only the `remove`
+  calls are writes.
+- A corrupt cache fell back to an in-memory one under `--dry-run`, "so a dry run
+  still answers rather than dying on a cache it is not allowed to rebuild". A real
+  run exits `3` with no answer at all, so this made a dry run report a confident
+  verdict over a cache neither mode could read — worse than crashing, because it
+  looks like an answer. It now refuses exactly as a real run does.
+
 Enforcement is structural rather than per-command: `effective::open_folder_cache`
 is the single place a folder's cache is opened, so no command can honour the flag
 incorrectly by opening the wrong kind of handle. Under `--dry-run` it opens an
-existing cache read-only, serves a missing one from an in-memory DB, and falls
-back to memory for a corrupt one — each of which still yields the same effective
-map a real run would. `--dry-run --ignore-cache` is the one combination that asks
-for something a dry run may not do, so the cache is treated as *absent* rather
-than rebuilt; the folder is scanned from disk alone, which is what a real
-`--ignore-cache` run does too.
+existing cache read-only, and serves a missing one — or one `--ignore-cache` would
+have discarded anyway — from an in-memory DB; each of those still yields the same
+effective map a real run would. `--dry-run --ignore-cache` is thus the one
+combination that asks for something a dry run may not do, so the cache is treated
+as *absent* rather than rebuilt; the folder is scanned from disk alone, which is
+what a real `--ignore-cache` run does too. A **corrupt** cache is deliberately not
+in that list: it is the one state where the cache is neither absent nor discarded,
+and it is a hard error in both modes.
+
+One summary field cannot match, and that is inherent rather than a bug:
+`sync --dry-run` prints no `rmdir` count, because whether a directory is unknown
+depends on the planned copies and deletes having emptied it. Simulating the
+post-copy tree would produce a *guess*, and a guess that disagrees with the real
+run is worse than an honest omission. Every other summary field corresponds
+one-to-one.
 
 Tests pin the whole thing. `compare_dry_run_writes_nothing_and_answers_the_same`
 asserts both caches are byte-identical and the verdict matches;
@@ -198,8 +223,9 @@ asserts both caches are byte-identical and the verdict matches;
 effective maps*, which is stronger than agreeing on printed verdicts — two runs
 can print the same `CHANGED` lines while having hashed different files and reached
 the same conclusion by luck, whereas the maps hold the digests themselves.
-`the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs` guards the
-fixture underneath, so that equality cannot pass vacuously by hashing nothing.
+`dry_run_reports_the_same_counters_as_a_real_run` extends that to `ScanStats`,
+and `the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs` guards the
+fixture underneath, so neither equality can pass vacuously by hashing nothing.
 
 ## Core semantics (must-know for AI edits)
 
@@ -245,7 +271,10 @@ fixture underneath, so that equality cannot pass vacuously by hashing nothing.
   a cache means do not *reuse* it, never keep the rows that are wrong. Both
   corrections go out through `merge_row`, which keys on the stat alone —
   unchanged stat merges over whatever the row had, changed stat drops every
-  stored digest. Missing cache is created; corrupt cache errors (exit 3,
+  stored digest. Both corrections are decided unconditionally — a dry run reaches
+  the same prune set and the same row contents — and only the *writes* are
+  suppressed, so `ScanStats` is identical in both modes. Missing cache is created;
+  corrupt cache errors (exit 3,
   `--ignore-cache` backs up + rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
   **false**): within one side, two live/record paths differing only by case is a

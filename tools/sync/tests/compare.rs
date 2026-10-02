@@ -3,13 +3,13 @@
 mod common;
 
 use common::{
-    TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, rfile, sync,
-    sync_mtime, update, update_dry, wfile,
+    TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
+    sync, sync_mtime, update, update_dry, wfile,
 };
-use girsync::cache::CACHE_PREFIX;
+use girsync::cache::{CACHE_PREFIX, FileRec, open_db};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
-    EffRec, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
+    EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
 };
 use girsync::planner::{SideRequest, plan_pairs};
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
@@ -67,8 +67,9 @@ fn two_trees(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
     (src, dst)
 }
 
-/// Resolve both sides the way `cmd_compare` does and hand back the maps and the
-/// total hashed count, so two runs can be compared on more than their verdicts.
+/// Resolve both sides the way `cmd_compare` does and hand back the maps, the
+/// per-side counters, and the total hashed count, so two runs can be compared on
+/// more than their verdicts.
 fn effective_maps(
     src: &std::path::Path,
     dst: &std::path::Path,
@@ -76,6 +77,7 @@ fn effective_maps(
 ) -> (
     std::collections::HashMap<String, EffRec>,
     std::collections::HashMap<String, EffRec>,
+    ScanStats,
     usize,
 ) {
     let common = CommonOpts {
@@ -105,7 +107,118 @@ fn effective_maps(
     );
     let sm: SideScan = resolve_side(&mut so, mode, &plans.src).unwrap();
     let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst).unwrap();
-    (sm.map, dm.map, sm.stats.hashed + dm.stats.hashed)
+    // `ScanStats` derives `PartialEq`, so this can be asserted whole rather than
+    // field by field — which is the point: a new counter added later cannot
+    // quietly diverge between the two modes without this test noticing.
+    (
+        sm.map.clone(),
+        dm.map.clone(),
+        sm.stats,
+        sm.stats.hashed + dm.stats.hashed,
+    )
+}
+
+/// **The general form of the dry-run contract: same counters, not merely same
+/// verdict.** `--dry-run` promises the run answers the same question, so every
+/// number it reports must match a real run's — including `pruned`, which is a
+/// *decision* (how many rows would be dropped) and not a side effect.
+///
+/// This is the test that catches the whole class of bug rather than one instance
+/// of it. `pruned` was the instance found: the prune loop sat behind the write
+/// handle, so a dry run over a tree with an orphan row reported `0` where a real
+/// run reports `1`. Nothing else compared the counters, so it passed. `ScanStats`
+/// derives `PartialEq` so a future counter is covered by this assertion without
+/// anyone remembering to extend it.
+#[test]
+fn dry_run_reports_the_same_counters_as_a_real_run() {
+    let t = TempRoot::new("dry_stats");
+    let (src, dst) = two_trees(&t);
+
+    // An orphan row on each side, so `pruned` is non-zero and the two modes have
+    // something to disagree about.
+    for dir in [&src, &dst] {
+        let p = dir.join(CACHE_PREFIX);
+        let db = open_db(&p, true, rw()).unwrap();
+        db.put(
+            "vanished.txt",
+            &FileRec {
+                kind: "file".into(),
+                size: 7,
+                mtime_ns: 1234,
+                hashes: [("md5".to_string(), vec![3u8; 16])].into_iter().collect(),
+            },
+        )
+        .unwrap();
+    }
+    // And a stat-moved row, whose digests a real run drops and a dry run must
+    // equally decide to drop.
+    wfile(&src, "moved.txt", b"newer-and-longer");
+    for dir in [&src, &dst] {
+        let p = dir.join(CACHE_PREFIX);
+        let db = open_db(&p, true, rw()).unwrap();
+        db.put(
+            "moved.txt",
+            &FileRec {
+                kind: "file".into(),
+                size: 4,
+                mtime_ns: 1,
+                hashes: [("md5".to_string(), vec![9u8; 16])].into_iter().collect(),
+            },
+        )
+        .unwrap();
+    }
+
+    let dry = effective_maps(&src, &dst, true);
+    let real = effective_maps(&src, &dst, false);
+
+    assert_eq!(
+        dry.2.pruned, real.2.pruned,
+        "a dry run must reach the same prune decision as a real run"
+    );
+    assert!(
+        real.2.pruned >= 1,
+        "the fixture must leave an orphan row, or this asserts nothing"
+    );
+    assert_eq!(dry.2, real.2, "every counter must match, not just `pruned`");
+    assert_eq!(dry.3, real.3, "and so must the total hashed count");
+    assert_eq!(dry.0, real.0, "src map");
+    assert_eq!(dry.1, real.1, "dst map");
+}
+
+/// The direct check on the fix: a dry run *decides* to prune and reports it, and
+/// still leaves the row on disk. The row surviving is the point — a dry run that
+/// dropped it would be writing.
+#[test]
+fn a_dry_run_decides_to_prune_without_dropping_the_row() {
+    let t = TempRoot::new("dry_prune");
+    let (src, dst) = two_trees(&t);
+    let p = src.join(CACHE_PREFIX);
+    {
+        let db = open_db(&p, true, rw()).unwrap();
+        db.put("vanished.txt", &FileRec::dir()).unwrap();
+    }
+    assert!(
+        recs_of(&src).contains_key("vanished.txt"),
+        "the orphan row is there"
+    );
+
+    let dry = effective_maps(&src, &dst, true);
+    assert!(
+        dry.2.pruned >= 1,
+        "a dry run reached the prune decision: pruned={}",
+        dry.2.pruned
+    );
+    assert!(
+        recs_of(&src).contains_key("vanished.txt"),
+        "and did not act on it"
+    );
+
+    let real = effective_maps(&src, &dst, false);
+    assert_eq!(dry.2.pruned, real.2.pruned, "same decision, both modes");
+    assert!(
+        !recs_of(&src).contains_key("vanished.txt"),
+        "a real run drops it"
+    );
 }
 
 /// The fixture must actually force hashing, or `compare_dry_run_computes_the_same_
@@ -120,7 +233,7 @@ fn effective_maps(
 fn the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs() {
     let t = TempRoot::new("cmp_dry_fixture");
     let (src, dst) = two_trees(&t);
-    let (sm, dm, hashed) = effective_maps(&src, &dst, false);
+    let (sm, dm, _, hashed) = effective_maps(&src, &dst, false);
 
     // a.txt and changed.txt are equal-stat pairs, so the planner cannot settle
     // them and both sides are read: 2 pairs x 2 sides. changed.txt is the one
@@ -346,11 +459,15 @@ fn compare_dry_run_computes_the_same_digests() {
         "a dry run resolves dst to the same effective map"
     );
     assert!(
-        dry.2 > 0 && real.2 > 0,
+        dry.3 > 0 && real.3 > 0,
         "both runs actually hashed something, so the comparison above is meaningful \
          (dry hashed {0}, real hashed {1})",
-        dry.2,
-        real.2
+        dry.3,
+        real.3
+    );
+    assert_eq!(
+        dry.2, real.2,
+        "and every counter agrees too — see `dry_run_reports_the_same_counters_as_a_real_run`"
     );
 }
 

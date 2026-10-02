@@ -5,9 +5,9 @@ mod common;
 use common::{TempRoot, md5arg, opts, rw, scan, wfile};
 use girsync::CommonOpts;
 use girsync::ScanStats;
-use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
-use girsync::effective::{build_effective_folder, scan_stat_only};
+use girsync::effective::{build_effective_folder, open_folder_cache, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
 use girsync::hash::parse_hash_list;
 
@@ -247,6 +247,86 @@ fn phase_a_never_hashes() {
         "the cached digest is carried for the planner"
     );
     drop(db);
+}
+
+/// **Phase A never hashes, and never withholds an answer because it may not
+/// write.** Asserted at the phase where the bug lived, so `update` and `sync`
+/// are covered as well as `compare`: they reach phase A through the same
+/// function.
+///
+/// The fixture leaves one orphan row and one stale row, so `pruned` is non-zero
+/// and the stat-only rewrite has something to do. A dry run must reach the same
+/// decisions and report the same counts while writing nothing — the counters are
+/// answers, not side effects.
+#[test]
+fn phase_a_reports_the_same_decisions_when_it_cannot_write() {
+    let t = TempRoot::new("phase_a_dry");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "gone.txt", b"was-here");
+    let db_path = dir.join(CACHE_PREFIX);
+    {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        let _ = build_effective_folder(&dir, &db, &opts(), scan(false, false)).unwrap();
+        // An orphan row and a row whose stat no longer matches its file.
+        db.put("vanished.txt", &FileRec::dir()).unwrap();
+        let mut stale = load_all_records(&db).unwrap()["gone.txt"].clone();
+        stale.size = 999;
+        db.put("gone.txt", &stale).unwrap();
+    }
+
+    let dry = {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        scan_stat_only(&dir, &db, &opts(), scan(false, true)).unwrap()
+    };
+    let dry_stats = dry.stats;
+    assert!(dry_stats.pruned >= 1, "the orphan row is a prune candidate");
+    assert!(
+        !dry.map["gone.txt"].fresh && dry.map["gone.txt"].cached.is_empty(),
+        "the stale row's digests are dropped from the planner's view either way"
+    );
+    // The one thing that does differ: nothing was written. Checked *before* the
+    // real run below, which will legitimately drop these rows.
+    let rows = load_all_records(&open_db(&db_path, true, rw()).unwrap()).unwrap();
+    assert!(rows.contains_key("vanished.txt"), "the orphan row survived");
+    assert!(
+        rows["gone.txt"].size == 999,
+        "and the stale row was left as it was, not corrected"
+    );
+    drop(dry.map);
+
+    let real = {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        scan_stat_only(&dir, &db, &opts(), scan(false, false)).unwrap()
+    };
+    assert_eq!(
+        dry_stats, real.stats,
+        "a dry run answers the same question; only the writes are gone"
+    );
+}
+
+/// A corrupt cache is refused by both modes. The tempting shortcut — fall back
+/// to an in-memory cache so the dry run "still answers" — is exactly the
+/// divergence this rules out: a real run exits `3` with no answer at all, so a
+/// dry run that reports a verdict is answering a question nobody asked. It looks
+/// like an answer, which is what makes it worse than a crash.
+#[test]
+fn a_corrupt_cache_is_refused_by_a_dry_run_too() {
+    let t = TempRoot::new("corrupt_dry");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    let db_path = dir.join(CACHE_PREFIX);
+    std::fs::write(&db_path, b"not a redb database").unwrap();
+
+    let err = open_folder_cache(&dir, &opts(), scan(false, true), false)
+        .and_then(|db| scan_stat_only(&dir, &db, &opts(), scan(false, true)))
+        .expect_err("a dry run must refuse a corrupt cache like a real run");
+    assert!(
+        format!("{:#}", err).contains("not a redb database")
+            || format!("{:#}", err).contains("corrupt"),
+        "a dry run refuses a corrupt cache like a real run: {:#}",
+        err
+    );
 }
 
 /// A stat-changed row's digests must not reach the planner. Phase A is where that

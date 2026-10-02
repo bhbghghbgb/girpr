@@ -490,13 +490,15 @@ pub fn scan_stat_only(
         );
         // The two cases where phase A owes a write regardless of any plan: the
         // stat moved, so the old row is now wrong; or the key was adopted from a
-        // stale casing, so the disk-cased key does not exist yet.
-        if (!fresh || adopted)
-            && let Some(w) = batch.as_mut()
-        {
+        // stale casing, so the disk-cased key does not exist yet. The row is built
+        // unconditionally — only the put is gated, so "what would be stored" is
+        // never something that depends on whether the run may write.
+        if !fresh || adopted {
             let row = merge_row(e.size, e.mtime_ns, HashMap::new(), cached.as_ref());
-            w.put(&e.rel, &row)?;
             trace!(rel = %e.rel, fresh, adopted, "stat-only row");
+            if let Some(w) = batch.as_mut() {
+                w.put(&e.rel, &row)?;
+            }
         }
         n_done += 1;
         if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
@@ -512,21 +514,38 @@ pub fn scan_stat_only(
             last_prog = std::time::Instant::now();
         }
     }
-    // prune DB rows for files no longer on disk (or now excluded)
-    let mut pruned = 0usize;
-    if let Some(w) = batch.as_mut() {
-        let existing = w.load_all()?;
-        for rel in existing.keys() {
-            if !live_set.contains(rel) {
-                w.remove(rel)?;
-                pruned += 1;
-                trace!(rel = %rel, "prune cache");
-            }
+    // Prune DB rows for files no longer on disk (or now excluded).
+    //
+    // The prune *decision* is an answer, not a side effect: how many rows this run
+    // would drop is part of what the run reports, so it is computed in both modes
+    // and only the `remove` calls are suppressed. Gating the whole loop on the
+    // write handle — which is what this did — makes a dry run report `pruned = 0`
+    // over a tree a real run prunes, i.e. it answers a different question.
+    //
+    // Reading through the batch handle when there is one is not required for
+    // correctness: every key this run has written is a live key, and a live key is
+    // never pruned, so the batch's pending writes cannot change the set. It does
+    // change nothing about the *count* either way.
+    let existing = match batch.as_mut() {
+        Some(w) => w.load_all()?,
+        None => cache.load_all()?,
+    };
+    let stale: Vec<String> = existing
+        .keys()
+        .filter(|rel| !live_set.contains(*rel))
+        .cloned()
+        .collect();
+    let pruned = stale.len();
+    for rel in &stale {
+        trace!(rel = %rel, "prune cache");
+        if let Some(w) = batch.as_mut() {
+            w.remove(rel)?;
         }
-        // Durability point for the row set. Phase C opens its own handle, so
-        // this is not the end of the scan — it is the point at which the cache
-        // describes the tree even if every hash after it is lost.
-        let w = batch.take().unwrap();
+    }
+    if let Some(w) = batch.take() {
+        // Durability point for the row set. Phase C opens its own handle, so this
+        // is not the end of the scan — it is the point at which the cache describes
+        // the tree even if every hash after it is lost.
         w.commit()?;
     }
     let stats = ScanStats {
@@ -923,17 +942,24 @@ pub fn open_side(side: &Side, common: &CommonOpts, mode: ScanMode) -> Result<Ope
 ///   write handle at all, so the file comes out byte-identical;
 /// - a **missing** cache is served from an in-memory DB, because creating one
 ///   would leave `girpr-cache` behind in a folder that had none;
-/// - a **corrupt** cache falls back to in-memory the same way, so a dry run still
-///   answers rather than dying on a cache it is not allowed to rebuild;
 /// - `--ignore-cache` is treated as *absent* rather than honoured, since
 ///   rebuilding is a write. The folder is then scanned from disk alone — which is
 ///   what a real `--ignore-cache` run does too, so the two agree.
 ///
 /// Each fallback still yields the **same** effective map a real run would, which
 /// is the point: a dry run answers the question, it does not answer a different
-/// one. The read paths are identical; only the write handle is absent. That is
-/// why this function exists rather than a `dry_run` check at each call site — a
-/// per-command check is a per-command chance to get it wrong.
+/// one. The read paths are identical; only the write handle is absent.
+///
+/// A **corrupt** cache is deliberately *not* on that list. A real run refuses it,
+/// and a dry run must refuse it too: falling back to memory would have the dry
+/// run report a confident verdict over a cache neither mode could read, which is
+/// the worst outcome available — it looks like an answer and is not one. The two
+/// branches that *are* safe are the ones where the cache contributes nothing a
+/// real run would have used (it does not exist, or it was going to be discarded
+/// anyway); a corrupt cache is neither.
+///
+/// This is also why this function exists rather than a `dry_run` check at each
+/// call site — a per-command check is a per-command chance to get it wrong.
 pub fn open_folder_cache(
     root: &Path,
     common: &CommonOpts,
@@ -956,14 +982,7 @@ pub fn open_folder_cache(
         return CacheDb::open_temp(common.case_sensitive);
     }
     info!(path = %db_path.display(), "dry-run: opening read-only");
-    open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly).or_else(|e| {
-        warn!(
-            path = %db_path.display(),
-            error = format!("{:#}", e),
-            "dry-run: unreadable cache, scanning from disk alone"
-        );
-        CacheDb::open_temp(common.case_sensitive)
-    })
+    open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)
 }
 
 /// **Phase C**: produce what `plan` asked for, and finalize the map.
