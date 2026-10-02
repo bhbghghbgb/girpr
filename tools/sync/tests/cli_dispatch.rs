@@ -54,7 +54,6 @@ fn run_cli_dispatch_update_compare_sync() {
     let code = run(mkcli(Cmd::Compare {
         src: src.clone(),
         dst: dst.clone(),
-        dry_run: false,
         trust: TrustArgs::default(),
         common: common(),
     }))
@@ -78,7 +77,6 @@ fn run_cli_dispatch_update_compare_sync() {
     let code = run(mkcli(Cmd::Compare {
         src: src.clone(),
         dst: dst.clone(),
-        dry_run: false,
         trust: TrustArgs::default(),
         common: common(),
     }))

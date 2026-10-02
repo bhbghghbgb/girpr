@@ -510,7 +510,6 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
         src: src.clone(),
         dst: dst.clone(),
         trust: TrustOpts::default(),
-        dry_run: false,
         common: opts(),
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
@@ -521,7 +520,6 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
         src: src.clone(),
         dst: dst.clone(),
         trust: TrustOpts::default(),
-        dry_run: false,
         common: opts(),
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
@@ -565,7 +563,6 @@ fn the_wider_handle_window_still_refuses_a_self_collision() {
         src: dir.clone(),
         dst: dir.join(CACHE_PREFIX),
         trust: TrustOpts::default(),
-        dry_run: false,
         common: opts(),
     };
     let err = girsync::cmd_compare(o, &log()).unwrap_err();

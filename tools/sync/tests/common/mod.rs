@@ -145,7 +145,6 @@ pub fn compare(src: PathBuf, dst: PathBuf) -> CompareOpts {
         src,
         dst,
         trust: TrustOpts::default(),
-        dry_run: false,
         common: opts(),
     }
 }
@@ -306,12 +305,6 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
     }
 }
 
-/// [`resolve_both`] with `dry_run: true` — the phase sequence `cmd_compare`
-/// runs under `--dry-run`.
-pub fn resolve_both_dry(src: &Path, dst: &Path) -> (SideScan, SideScan) {
-    resolve_both_mode(src, dst, TrustOpts::default(), true)
-}
-
 /// The exact phase sequence `cmd_compare` runs — open both sides, one
 /// `plan_pairs`, resolve both — with the per-side trust flags applied.
 ///
@@ -319,29 +312,28 @@ pub fn resolve_both_dry(src: &Path, dst: &Path) -> (SideScan, SideScan) {
 /// the planner decided *and* what the sides ended up reading. Every phase
 /// happens here, in this order; that is the property under test.
 pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, SideScan) {
-    resolve_both_mode(src, dst, trust, false)
-}
-
-fn resolve_both_mode(
-    src: &Path,
-    dst: &Path,
-    trust: TrustOpts,
-    dry_run: bool,
-) -> (SideScan, SideScan) {
     let common = with_algos(&["md5"]);
     let src = classify(src);
     let dst = classify(dst);
     ensure_distinct_sides(&src, &dst).unwrap();
-    let src_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_src,
-        dry_run,
-    };
-    let dst_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_dst,
-        dry_run,
-    };
-    let mut s = open_side(&src, &common, src_mode).unwrap();
-    let mut d = open_side(&dst, &common, dst_mode).unwrap();
+    let mut s = open_side(
+        &src,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    let mut d = open_side(
+        &dst,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+    )
+    .unwrap();
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
@@ -355,7 +347,23 @@ fn resolve_both_mode(
         },
         common.case_sensitive,
     );
-    let sm = resolve_side(&mut s, src_mode, &plans.src).unwrap();
-    let dm = resolve_side(&mut d, dst_mode, &plans.dst).unwrap();
+    let sm = resolve_side(
+        &mut s,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+        &plans.src,
+    )
+    .unwrap();
+    let dm = resolve_side(
+        &mut d,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+        &plans.dst,
+    )
+    .unwrap();
     (sm, dm)
 }

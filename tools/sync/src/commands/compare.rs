@@ -1,4 +1,4 @@
-//! `girsync compare` — report how dst differs from src.
+//! `girsync compare` — report how dst differs from src, changing nothing itself.
 
 use anyhow::Result;
 use tracing::info;
@@ -15,21 +15,12 @@ use super::report_diff;
 ///
 /// Each side may independently be a folder root or a `girpr-cache*` record
 /// directory, so all four combinations work. Exits `4` if anything differs.
-///
-/// **This command does not modify either tree, but it is not read-only**: a
-/// folder side updates its own cache as it resolves, which is a disk write. So
-/// `--dry-run` here means "write nothing at all", and it is honoured per side —
-/// an existing cache is opened read-only, a missing one is served from memory.
-/// The report is identical either way; only the writes differ. That is the whole
-/// contract: `--dry-run` answers the same question, it does not answer a
-/// cheaper one. See [`ScanMode::dry_run`].
 pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     let t0 = std::time::Instant::now();
     let CompareOpts {
         src,
         dst,
         trust,
-        dry_run,
         common,
     } = opts;
     let span = tracing::info_span!(
@@ -45,7 +36,6 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
-        dry_run,
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -58,26 +48,31 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // would diff a record against the view the run itself is mutating.
     ensure_distinct_sides(&s, &d)?;
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
-    // Both handles stay live across the plan and the resolve, which is sound only
-    // because `ensure_distinct_sides` already ran: redb allows one writable
-    // handle per cache file. Under `--dry-run` neither is writable, but the
-    // lifetime requirement is the same.
-    let src_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_src,
-        dry_run,
-    };
-    let mut s = open_side(&s, &common, src_mode)?;
+    // compare only reads, so it never dry-runs. Both handles stay live across
+    // the plan and the resolve, which is sound only because `ensure_distinct_sides`
+    // already ran: redb allows one writable handle per cache file.
+    let mut s = open_side(
+        &s,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+    )?;
     info!(
         side = "src",
         entries = s.phase_a.map.len(),
         "src side opened"
     );
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
-    let dst_mode = ScanMode {
-        no_trust_cached_hashes: trust.no_trust_dst,
-        dry_run,
-    };
-    let mut d = open_side(&d, &common, dst_mode)?;
+    let mut d = open_side(
+        &d,
+        &common,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+    )?;
     info!(
         side = "dst",
         entries = d.phase_a.map.len(),
@@ -105,8 +100,22 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         dst_pending = plans.dst.by_rel.len(),
         "planned"
     );
-    let sm = resolve_side(&mut s, src_mode, &plans.src)?;
-    let dm = resolve_side(&mut d, dst_mode, &plans.dst)?;
+    let sm = resolve_side(
+        &mut s,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_src,
+            dry_run: false,
+        },
+        &plans.src,
+    )?;
+    let dm = resolve_side(
+        &mut d,
+        ScanMode {
+            no_trust_cached_hashes: trust.no_trust_dst,
+            dry_run: false,
+        },
+        &plans.dst,
+    )?;
     info!(
         src_hashed = sm.stats.hashed,
         dst_hashed = dm.stats.hashed,
