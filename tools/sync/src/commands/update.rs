@@ -5,6 +5,7 @@ use tracing::info;
 
 use crate::config::{LogCtx, ScanMode, UpdateOpts};
 use crate::effective::{build_effective_folder, open_folder_cache};
+use crate::report::update_summary;
 use crate::util::elapsed_s;
 
 /// Rebuild `<dir>/girpr-cache` from scratch: stat + hash every file, record
@@ -36,6 +37,7 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
+        output = %log.output,
     );
     let _span_guard = span.enter();
     info!("start");
@@ -56,13 +58,10 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // no flag to override here.
     let scan = build_effective_folder(&dir, &db, &common, mode)?;
     let stats = scan.stats;
-    println!(
-        "update {} files={} dirs={} algos=[{}]",
-        dir.display(),
-        stats.files,
-        stats.dirs,
-        common.algos.join(",")
-    );
+    // The one record `update` reports. `dir` is a field rather than part of a
+    // sentence, so `--output json` can attribute the counts without parsing them
+    // out of prose — and the text form keeps the historical wording.
+    update_summary(&dir, stats.files, stats.dirs, &common.algos).emit(log.output);
     info!(
         files = stats.files,
         dirs = stats.dirs,

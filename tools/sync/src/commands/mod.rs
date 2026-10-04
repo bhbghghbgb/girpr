@@ -10,65 +10,29 @@ pub use compare_self::cmd_compare_self;
 pub use sync::cmd_sync;
 pub use update::cmd_update;
 
+pub use crate::report::verdict;
+
 use anyhow::Result;
-use tracing::debug;
 
 use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
+use crate::report::Report;
 
-/// Print one line per difference plus the `SUMMARY` line, and return the exit
-/// code: `0` when nothing differs, `4` when something does.
+/// Emit every record a diff reports — one per difference plus the `SUMMARY` — and
+/// return the exit code: `0` when nothing differs, `4` when something does.
 ///
 /// Shared by `compare` and `compare-self` so the two cannot drift apart in
 /// vocabulary or exit code. The caller has already logged the span outcome.
-/// The lines a diff prints, in report order, each with the log kind it is
-/// reported under.
 ///
-/// Printing and asserting read the same list, so what a test states and what a
-/// user sees cannot drift apart: there is one definition of a `CHANGED` line,
-/// not one in the printer and another in each test.
-pub fn verdict(diff: &Diff) -> Vec<(&'static str, String)> {
-    let mut out: Vec<(&'static str, String)> = Vec::new();
-    for r in &diff.missing {
-        out.push(("missing", format!("MISSING {r}")));
-    }
-    for r in &diff.extra {
-        out.push(("extra", format!("EXTRA {r}")));
-    }
-    for r in &diff.changed {
-        out.push(("changed", format!("CHANGED {r}")));
-    }
-    for r in &diff.type_conflict {
-        out.push(("type-conflict", format!("TYPE-CONFLICT {r}")));
-    }
-    for (a, b) in &diff.case_mismatch {
-        out.push(("case-mismatch", format!("CASE-MISMATCH {a} <=> {b}")));
-    }
-    out.push((
-        "summary",
-        format!(
-            "SUMMARY missing={} extra={} changed={} type_conflict={} case_mismatch={} total_diff={}",
-            diff.missing.len(),
-            diff.extra.len(),
-            diff.changed.len(),
-            diff.type_conflict.len(),
-            diff.case_mismatch.len(),
-            diff.total()
-        ),
-    ));
-    out
-}
-
-/// Print one line per difference plus the `SUMMARY` line, and return the exit
-/// code: `0` when nothing differs, `4` when something does.
-///
-/// Shared by `compare` and `compare-self` so the two cannot drift apart in
-/// vocabulary or exit code. The caller has already logged the span outcome.
-pub(super) fn report_diff(diff: &Diff) -> i32 {
-    for (kind, line) in verdict(diff) {
-        println!("{line}");
-        debug!(kind, "diff");
+/// The records come from [`verdict`], which is *data* rather than text, so
+/// [`Report`] alone decides whether a human reads lines or a parser reads JSON.
+/// That is also why printing and asserting read the same list: there is one
+/// definition of a `CHANGED` record, not one in the printer and another in each
+/// test.
+pub(super) fn report_diff(diff: &Diff, report: &Report) -> i32 {
+    for rec in verdict(diff) {
+        report.emit(rec);
     }
     if diff.is_empty() { 0 } else { 4 }
 }
@@ -81,6 +45,7 @@ pub fn run(cli: Cli) -> Result<i32> {
     let log = LogCtx {
         level: cli.log_level,
         file: cli.log_file,
+        output: cli.output,
     };
     match cli.cmd {
         Cmd::Update { dir, common } => cmd_update(

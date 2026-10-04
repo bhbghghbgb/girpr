@@ -3,16 +3,52 @@
 mod common;
 
 use common::{
-    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, rw, sync, sync_dry, sync_mtime,
-    update, wfile,
+    TempRoot, compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync,
+    sync_dry, sync_mtime, update, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
 fn recs(dir: &Path) -> HashMap<String, FileRec> {
     load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+}
+
+/// Run the real binary and return the records it reported on stdout.
+///
+/// `--output json` throughout, so what a test reads is what a machine reads. The
+/// alternative — matching rendered text lines — makes every case a second,
+/// quieter statement of the vocabulary, and a reworded message fails a test whose
+/// point was the plan.
+fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(src)
+        .arg("--dst")
+        .arg(dst)
+        .arg("--output")
+        .arg("json")
+        .args(extra)
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "sync failed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    parse_ndjson(&out.stdout)
+}
+
+/// The `path` of every record with `event` `name`, in order.
+fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
+    recs.iter()
+        .filter(|r| r["event"] == name)
+        .map(|r| r["path"].as_str().expect("a path record has a path"))
+        .collect()
 }
 
 #[test]
@@ -172,16 +208,17 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     assert!(!dst2.join("extradir").exists(), "collected by default");
 }
 
-/// The dry run and a real run must print the same `SUMMARY`, field for field.
+/// The dry run and a real run must report the same thing, field for field.
 ///
 /// This is the observable half of the `--dry-run` contract, and it is only
-/// checkable from the outside: `cmd_sync` returns an exit code, so the printed
-/// lines are the result. Both runs go through the real binary so the comparison
-/// covers the `RENAME` and `FIX-DIR` lines, which the plan printer does not emit.
+/// checkable from the outside: `cmd_sync` returns an exit code, so the records it
+/// reported *are* the result. Both runs go through the real binary so the
+/// comparison covers the `rename` and `fix-dir` records, which the plan builder
+/// does not produce.
 ///
 /// `rmdir` is the field that had to change to make this possible. It used to be
 /// absent from the dry run because it was computed by walking dst *during* the
-/// apply phase — too late to print. It is now decided by `build_plan`, so the
+/// apply phase — too late to report. It is now decided by `build_plan`, so the
 /// same count is available before anything is written.
 #[test]
 fn run_sync_dry_run_summary_matches_a_real_run() {
@@ -195,12 +232,12 @@ fn run_sync_dry_run_summary_matches_a_real_run() {
     // makes a case-only pair read as `CHANGED` in one run and equal in the other,
     // for reasons that have nothing to do with the code under test. Pinning the
     // stamps makes the two trees stat-identical, which is the precondition for
-    // comparing anything they print.
+    // comparing anything they report.
     let build = |tag: &str| -> (TempRoot, std::path::PathBuf, std::path::PathBuf) {
         let t = TempRoot::new(tag);
         let src = t.mkdirs("src");
         let dst = t.mkdirs("dst");
-        // One of every plan line there is.
+        // One of every record there is.
         wfile(&src, "same.txt", b"identical");
         wfile(&dst, "same.txt", b"identical");
         sync_mtime(&src.join("same.txt"), &dst.join("same.txt"));
@@ -212,73 +249,84 @@ fn run_sync_dry_run_summary_matches_a_real_run() {
         wfile(&src, "onlysrc.txt", b"s");
         wfile(&dst, "onlydst.txt", b"d");
         wfile(&dst, "extradir/nested/deep.bin", b"x");
-        // A src-only directory: the apply phase has to announce its MKDIR, and the
-        // dry run already did. Without this the label parity is untested, because
-        // a fixture that plans no mkdir cannot tell the two modes apart here.
+        // A src-only directory: the apply phase has to report its mkdir, and the
+        // dry run already did. Without this the parity is untested, because a
+        // fixture that plans no mkdir cannot tell the two modes apart here.
         wfile(&src, "newdir/inner.txt", b"n");
-        // A file on dst standing where src has a directory: the `FIX-DIR` case,
-        // likewise the only thing that exercises that label.
+        // A file on dst standing where src has a directory: the `fix-dir` case,
+        // likewise the only thing that exercises that record.
         wfile(&src, "fixdir/inner.txt", b"f");
         wfile(&dst, "fixdir", b"a blocking file");
         (t, src, dst)
     };
-    let run = |src: &std::path::Path, dst: &std::path::Path, extra: &[&str]| -> String {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-            .arg("sync")
-            .arg("--src")
-            .arg(src)
-            .arg("--dst")
-            .arg(dst)
-            .args(extra)
-            .output()
-            .expect("spawn girsync");
-        assert!(
-            out.status.success(),
-            "sync failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).expect("stdout is utf-8")
-    };
 
     let (_keep_a, dry_src, dry_dst) = build("sum_dry");
-    let dry = run(&dry_src, &dry_dst, &["--dry-run"]);
+    let dry = run_binary(&dry_src, &dry_dst, &["--dry-run"]);
     let (_keep_b, real_src, real_dst) = build("sum_real");
-    let real = run(&real_src, &real_dst, &[]);
+    let real = run_binary(&real_src, &real_dst, &[]);
 
-    // The whole document, with only the dry-run marker normalised away. There is
-    // no per-line fudging left: the two modes print the same labels, the same
-    // counts and the same order, so any future divergence in vocabulary,
-    // sequencing or numbers fails right here instead of reaching a user.
+    // The whole document, with only the `dry_run` marker normalised away. There
+    // is no per-record fudging left: the two modes report the same events, the
+    // same counts and the same order, so any future divergence in vocabulary,
+    // sequencing or numbers fails right here instead of reaching a caller.
+    let normalised = |recs: &[Value]| -> Vec<Value> {
+        recs.iter()
+            .map(|r| {
+                let mut r = r.clone();
+                if let Some(o) = r.as_object_mut() {
+                    o.remove("dry_run");
+                }
+                r
+            })
+            .collect()
+    };
+    let show = |recs: &[Value]| {
+        recs.iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     assert_eq!(
-        dry.replace(" dry_run=true", ""),
-        real,
-        "a dry run prints what a real run prints\n--- dry ---\n{dry}\n--- real ---\n{real}"
+        normalised(&dry),
+        normalised(&real),
+        "a dry run reports what a real run reports\n--- dry ---\n{}\n--- real ---\n{}",
+        show(&dry),
+        show(&real)
     );
-    assert!(dry.contains("dry_run=true"), "the dry run marks itself");
-    // The two labels this stage had to unify. Asserted explicitly so that
+    let dry_summary = common::summary_of(&dry);
+    assert_eq!(dry_summary["dry_run"], true, "the dry run marks itself");
+    // The three labels this stage had to unify. Asserted explicitly so that
     // dropping either change fails with a pointed message instead of passing
     // because the fixture stopped exercising it.
-    for (label, line) in [
-        ("MKDIR", "MKDIR newdir"),
-        ("FIX-DIR", "FIX-DIR fixdir"),
-        ("RMDIR", "RMDIR extradir"),
+    for (event, path) in [
+        ("mkdir", "newdir"),
+        ("fix-dir", "fixdir"),
+        ("rmdir", "extradir"),
     ] {
-        assert!(
-            dry.contains(line) && real.contains(line),
-            "`{label}` must appear in both modes\n--- dry ---\n{dry}\n--- real ---\n{real}"
-        );
+        for recs in [&dry, &real] {
+            assert!(
+                recs.iter()
+                    .any(|r| r["event"] == event && r["path"] == path),
+                "`{event}` on {path} must appear in both modes, got {}",
+                show(recs)
+            );
+        }
     }
+    // The old spelling was `RMDIR-FILE`, which reads as "remove a directory that
+    // is a file" — backwards. The record for that case is `fix-dir`, asserted
+    // above; this guards the old name from creeping back in as a *new* event.
     assert!(
-        !dry.contains("RMDIR-FILE"),
-        "the old spelling is gone: {dry}"
+        !dry.iter().any(|r| r["event"].as_str() == Some("rmdir-file")),
+        "the old spelling is gone: {}",
+        show(&dry)
     );
 }
 
 /// A planned copy that lands on a dst *directory* clears it out of the way
 /// recursively, so that directory's whole subtree is gone before the rmdir pass
 /// could look at it. The plan must not promise removals that cannot happen: a
-/// dry run that counted `extradir` here would report an `rmdir` the real run can
-/// never reach.
+/// dry run that counted `extradir` here would report an `rmdir` record the real
+/// run can never reach.
 ///
 /// The fixture is deliberately the pathological one — src has `clash` as a
 /// *file*, dst has `clash/sub/deep/` as directories, so `clash/sub` and
@@ -291,36 +339,24 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
-    let dry = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .arg("--dry-run")
-        .output()
-        .expect("spawn girsync");
-    let dry = String::from_utf8(dry.stdout).unwrap();
+    let dry = run_binary(&src, &dst, &["--dry-run"]);
     assert!(
-        !dry.contains("RMDIR clash"),
-        "the subtree is wiped by the copy, not removed by the rmdir pass:\n{dry}"
+        !paths(&dry, "rmdir").iter().any(|p| p.starts_with("clash")),
+        "the subtree is wiped by the copy, not removed by the rmdir pass: {dry:?}"
     );
-    assert!(
-        dry.contains("rmdir=0"),
-        "so the dry run must report zero, which is what the real run reaches:\n{dry}"
+    assert_eq!(
+        common::summary_of(&dry)["rmdir"],
+        0,
+        "so the dry run must report zero, which is what the real run reaches: {dry:?}"
     );
 
     // And the real run agrees.
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .arg("sync")
-        .arg("--src")
-        .arg(&src)
-        .arg("--dst")
-        .arg(&dst)
-        .output()
-        .expect("spawn girsync");
-    let real = String::from_utf8(out.stdout).unwrap();
-    assert!(real.contains("rmdir=0"), "real run:\n{real}");
+    let real = run_binary(&src, &dst, &[]);
+    assert_eq!(
+        common::summary_of(&real)["rmdir"],
+        0,
+        "real run: {real:?}"
+    );
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
 

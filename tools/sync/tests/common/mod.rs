@@ -8,6 +8,7 @@
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::planner::{SideRequest, plan_pairs};
+use girsync::report::OutputFormat;
 use girsync::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
@@ -129,10 +130,16 @@ pub fn opts_dry() -> CommonOpts {
 }
 
 /// Quiet log context; tracing is a no-op without a subscriber anyway.
+///
+/// `output` is left at the default text format. Tests that assert on what a run
+/// *reports* assert on records from `girsync::report` (or, where they need the
+/// binary, on `--output json`); the format here only decides how those records
+/// would have been rendered, which no in-process test observes.
 pub fn log() -> LogCtx {
     LogCtx {
         level: "error".to_string(),
         file: None,
+        output: OutputFormat::Text,
     }
 }
 
@@ -219,6 +226,41 @@ pub fn has_backup_sibling(dir: &Path) -> bool {
     rd.filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().into_string().ok())
         .any(|n| n.starts_with(&needle))
+}
+
+// ---------------------------------------------------------------------------
+// Reading what a run reported
+// ---------------------------------------------------------------------------
+
+/// Parse a run's `--output json` stdout into one value per line.
+///
+/// This is the reader every stdout assertion in the suite goes through. It is
+/// here rather than duplicated per binary because "stdout is newline-delimited
+/// JSON, one record per line" is a property of the tool, and a test that parses
+/// it any other way is asserting a different contract.
+pub fn parse_ndjson(bytes: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8(bytes.to_vec())
+        .expect("stdout is utf-8")
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {e}\n  line: {l}")))
+        .collect()
+}
+
+/// The single `summary` record a run reported.
+///
+/// Every command ends with exactly one, in every format, so it is the one record
+/// a caller can rely on being last. Panicking on anything else is deliberate: a
+/// run that reported no summary, or two, has changed its contract.
+pub fn summary_of(recs: &[serde_json::Value]) -> serde_json::Value {
+    let summaries: Vec<_> = recs.iter().filter(|r| r["event"] == "summary").collect();
+    assert_eq!(
+        summaries.len(),
+        1,
+        "exactly one summary record, got {summaries:?} of {}",
+        recs.len()
+    );
+    summaries[0].clone()
 }
 
 // ---------------------------------------------------------------------------

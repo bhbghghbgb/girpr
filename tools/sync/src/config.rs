@@ -11,14 +11,22 @@ use std::path::PathBuf;
 use crate::cli::{CommonArgs, TrustArgs, TrustSide};
 use crate::filter::compile_patterns;
 use crate::hash::parse_hash_list;
+use crate::report::{OutputFormat, Report};
 
-/// Logging knobs, carried only to stamp the per-command span.
+/// How the run reports itself: the log knobs and the stdout format.
+///
+/// Carried to every command for two reasons and no others. The `--log-*` values
+/// exist so the per-command span can stamp them, and `output` is the one thing a
+/// command needs in order to build its [`Report`] — a report format chosen here
+/// and rebuilt per command would be four independent reads of the same flag.
 #[derive(Debug, Clone)]
 pub struct LogCtx {
     /// Raw `--log-level` string, echoed into spans as the console level.
     pub level: String,
     /// Raw `--log-file` path, echoed into spans.
     pub file: Option<PathBuf>,
+    /// `--output`: how stdout records are rendered.
+    pub output: OutputFormat,
 }
 
 impl LogCtx {
@@ -28,6 +36,11 @@ impl LogCtx {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none)".to_string())
+    }
+
+    /// The stdout writer for this run, in the requested format.
+    pub fn report(&self) -> Report {
+        Report::new(self.output)
     }
 }
 

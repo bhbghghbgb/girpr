@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 
+use super::apply::Applied;
 use crate::diff::Diff;
 use crate::effective::EffRec;
+use crate::report::Record;
 
 /// The complete work list for one sync, computed before anything is written.
 ///
@@ -36,7 +38,7 @@ pub(super) struct Plan {
 }
 
 impl Plan {
-    /// Total planned removals, for the `SUMMARY` line.
+    /// Total planned removals, for the `SUMMARY` record.
     pub fn deletes(&self) -> usize {
         self.delete_files.len() + self.fix_dirs.len()
     }
@@ -153,58 +155,123 @@ pub(super) fn build_plan(
     }
 }
 
-/// Print the plan as `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` lines plus a
-/// `SUMMARY`, for `--dry-run`. Writes nothing.
+/// The `SUMMARY` record's fields, in both modes.
 ///
-/// The `SUMMARY` uses the **same field names as a real run**, so the two differ
-/// only by the trailing `dry_run=true`. That is the whole point of the flag: it
-/// promises the same observable result, and a caller reading either should not
-/// have to know which one it got. The names had been `copy`/`delete` against a
-/// real run's `copied`/`deleted`, which described the *plan* rather than the
-/// result — the numbers agree whenever a real run completes, since a failed copy
-/// aborts before the summary is printed, so the distinction bought nothing and
-/// cost a parser.
+/// One struct, one field list, one [`Record`] constructor — so a dry run and a
+/// real run cannot disagree about the *vocabulary*, only about the numbers and
+/// `dry_run`. That is the whole of the `--dry-run` reporting contract: same field
+/// names, same order, same meaning. It was previously written out twice, and the
+/// two lists had in fact drifted (`copy`/`delete` against `copied`/`deleted`,
+/// with `rmdir` missing from one side), which is exactly the class of bug a
+/// duplicated field list invites.
 ///
-/// `rmdir` is likewise present in both, and is exact rather than omitted: the
-/// apply phase reads [`Plan::rmdir`] instead of walking dst, so the count is the
-/// same before anything is written as it is after.
+/// `dry_run` is the only field that differs by design. The names describe the
+/// *result*, not the plan, so a dry run reports what it would reach; the numbers
+/// agree whenever a real run completes, since a failed copy aborts before the
+/// summary is reached at all.
+struct Summary {
+    renamed: usize,
+    mkdir: usize,
+    copied: usize,
+    deleted: usize,
+    rmdir: usize,
+    missing_only: bool,
+    keep_extra: bool,
+    dry_run: bool,
+}
+
+impl Summary {
+    fn record(&self) -> Record {
+        Record::keyed("SUMMARY")
+            .put("renamed", self.renamed)
+            .put("mkdir", self.mkdir)
+            .put("copied", self.copied)
+            .put("deleted", self.deleted)
+            .put("rmdir", self.rmdir)
+            .put("missing_only", self.missing_only)
+            .put("keep_extra", self.keep_extra)
+            .put("dry_run", self.dry_run)
+    }
+}
+
+/// The plan as records: one per action plus the `SUMMARY`. Writes nothing.
 ///
-/// The lines are printed in **apply order** — mkdirs, fix-dirs, deletes, copies,
+/// **This is the single definition of what a dry run reports**, so the real run
+/// cannot drift from it. [`run_sync_dry_run_summary_matches_a_real_run`] builds
+/// both and asserts the two record lists are equal field for field with only the
+/// `dry_run` marker differing, so any future divergence in labels, ordering or
+/// counts fails there rather than being discovered by a user.
+///
+/// [`run_sync_dry_run_summary_matches_a_real_run`]: ../../sync.rs
+///
+/// `rmdir` is exact rather than omitted: the apply phase reads [`Plan::rmdir`]
+/// instead of walking dst, so the count is the same before anything is written as
+/// it is after.
+///
+/// The records are in **apply order** — mkdirs, fix-dirs, deletes, copies,
 /// rmdir — rather than grouped by plan category, so the sequence a dry run
-/// reports is the sequence a real run will perform, and the two print the same
+/// reports is the sequence a real run will perform, and the two report the same
 /// document. The action labels are shared verbatim too, including `FIX-DIR` for
-/// the file-blocking-a-directory case, which this printer used to spell
-/// `RMDIR-FILE`: that name reads as "remove a directory that is a file", which is
-/// backwards — the *file* goes and a directory takes its place.
-///
-/// `run_sync_dry_run_summary_matches_a_real_run` compares the whole stdout of the
-/// two modes with only the `dry_run=true` marker normalised away, so any future
-/// divergence in labels, ordering or counts fails there rather than being
-/// discovered by a user.
-pub(super) fn print_dry_run(plan: &Plan, renamed: usize, missing_only: bool, keep_extra: bool) {
+/// the file-blocking-a-directory case, which this used to spell `RMDIR-FILE`:
+/// that name reads as "remove a directory that is a file", which is backwards —
+/// the *file* goes and a directory takes its place.
+pub(super) fn dry_run_records(
+    plan: &Plan,
+    renamed: usize,
+    missing_only: bool,
+    keep_extra: bool,
+) -> Vec<Record> {
+    let mut out = Vec::new();
     for r in &plan.mkdir {
-        println!("MKDIR {}", r);
+        out.push(Record::path("MKDIR", r));
     }
     for r in &plan.fix_dirs {
-        println!("FIX-DIR {}", r);
+        out.push(Record::path("FIX-DIR", r));
     }
     for r in &plan.delete_files {
-        println!("DELETE {}", r);
+        out.push(Record::path("DELETE", r));
     }
     for r in &plan.copy {
-        println!("COPY {}", r);
+        out.push(Record::path("COPY", r));
     }
     for r in &plan.rmdir {
-        println!("RMDIR {}", r);
+        out.push(Record::path("RMDIR", r));
     }
-    println!(
-        "SUMMARY renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={} dry_run=true",
-        renamed,
-        plan.mkdir.len(),
-        plan.copy.len(),
-        plan.delete_files.len(),
-        plan.rmdir.len(),
-        missing_only,
-        keep_extra
+    out.push(
+        Summary {
+            renamed,
+            mkdir: plan.mkdir.len(),
+            copied: plan.copy.len(),
+            deleted: plan.delete_files.len(),
+            rmdir: plan.rmdir.len(),
+            missing_only,
+            keep_extra,
+            dry_run: true,
+        }
+        .record(),
     );
+    out
+}
+
+/// The `SUMMARY` record for an applied run: the same fields and the same order as
+/// [`dry_run_records`]'s, with the counts a real run reached rather than the ones
+/// it planned.
+pub(super) fn summary_record(
+    renamed: usize,
+    plan: &Plan,
+    applied: &Applied,
+    missing_only: bool,
+    keep_extra: bool,
+) -> Record {
+    Summary {
+        renamed,
+        mkdir: plan.mkdir.len(),
+        copied: applied.copied,
+        deleted: applied.deleted,
+        rmdir: applied.removed_dirs,
+        missing_only,
+        keep_extra,
+        dry_run: false,
+    }
+    .record()
 }

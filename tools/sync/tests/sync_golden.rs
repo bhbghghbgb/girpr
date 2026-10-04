@@ -1,31 +1,40 @@
-//! The dry-run plan, as a byte-exact golden string.
+//! The dry-run plan, as a golden of the records `--output json` writes.
 //!
 //! Stage 4 makes `sync` lazy: the same planner `compare` uses stops it reading
 //! files no verdict needs. This file exists so that "lazy" can never quietly
 //! become "a different plan". The planner decides only *what to read*, and this
-//! asserts that from the outside, on stdout, exactly as a user sees it.
+//! asserts that from the outside, on stdout, exactly as a caller sees it.
 //!
-//! It runs the real binary rather than the library. That matters for two
-//! reasons. A reconstructed string from `cmd_sync`'s internals would not cover
-//! the `RENAME` line, which is printed by the rename pass rather than the plan
-//! printer — and the rename pass is the part of `sync` most exposed to this
-//! change, because `plan_pairs` runs *before* it. And it pins the real output
-//! order and the real SUMMARY, so reformatting the printer cannot quietly pass.
+//! It runs the real binary rather than the library, with `--output json`. That
+//! matters for two reasons. A reconstructed list from `cmd_sync`'s internals would
+//! not cover the `rename` record, which comes from the rename pass rather than
+//! the plan builder — and the rename pass is the part of `sync` most exposed to
+//! this change, because `plan_pairs` runs *before* it. And it pins the real
+//! output order and the real SUMMARY, so reformatting the reporter cannot quietly
+//! pass.
+//!
+//! The golden is the whole record list, compared as parsed values. That is what
+//! pins the *shape* a machine reads — event names and field names, order
+//! included — rather than the prose a human reads, which is a second rendering of
+//! the same records and is pinned in `report.rs` instead. Both are contract, so
+//! both have a case.
 //!
 //! Everything here is insensitive-mode unless a test says otherwise, which is the
 //! mode with the rename pass.
 
 mod common;
 
-use common::{TempRoot, opts, sync_mtime, wfile};
+use common::{TempRoot, opts, parse_ndjson, sync_mtime, wfile};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 
-/// Run `girsync sync --dry-run` and return its stdout.
+/// Run `girsync sync --dry-run --output json` and return the records it reported.
 ///
 /// Only stdout: tracing goes to stderr and a log file, so stdout is exactly the
-/// plan a user reads.
-fn dry_run(src: &Path, dst: &Path, extra: &[&str]) -> String {
+/// plan a caller reads. NDJSON is one object per line, which is what
+/// [`parse_ndjson`] expects.
+fn dry_run(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
     let out = Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
         .arg("--src")
@@ -33,6 +42,8 @@ fn dry_run(src: &Path, dst: &Path, extra: &[&str]) -> String {
         .arg("--dst")
         .arg(dst)
         .arg("--dry-run")
+        .arg("--output")
+        .arg("json")
         .args(extra)
         .output()
         .expect("spawn girsync");
@@ -42,7 +53,7 @@ fn dry_run(src: &Path, dst: &Path, extra: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr),
         String::from_utf8_lossy(&out.stdout)
     );
-    String::from_utf8(out.stdout).expect("stdout is utf-8")
+    parse_ndjson(&out.stdout)
 }
 
 /// The fixture, in one place, because `sync_dry_run_matches` asserts the plan this
@@ -122,7 +133,18 @@ fn sync_dry_run_matches() {
     let t = TempRoot::new("golden");
     let (src, dst) = fixture(&t);
     let got = dry_run(&src, &dst, &[]);
-    assert_eq!(got, GOLDEN, "\n--- actual ---\n{got}\n---");
+    assert_eq!(got, golden(), "\n--- actual ---\n{}\n---", render(&got));
+}
+
+/// One record per line, for a failure message.
+///
+/// Only ever printed on failure, so it borrows the binary's own JSON rendering
+/// rather than inventing a second one.
+fn render(recs: &[Value]) -> String {
+    recs.iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The same plan under `--case-sensitive`, where there is no rename pass at all.
@@ -137,10 +159,15 @@ fn sync_dry_run_case_sensitive_matches() {
     let t = TempRoot::new("golden_cs");
     let (src, dst) = fixture(&t);
     let got = dry_run(&src, &dst, &["--case-sensitive"]);
-    assert_eq!(got, GOLDEN_CASE_SENSITIVE, "\n--- actual ---\n{got}\n---");
+    assert_eq!(
+        got,
+        golden_case_sensitive(),
+        "\n--- actual ---\n{}\n---",
+        render(&got)
+    );
 }
 
-/// A dry run must print a plan and change nothing — not the filesystem, not
+/// A dry run must report a plan and change nothing — not the filesystem, not
 /// either cache. This is the promise stage 4 is most able to break, because
 /// laziness stops both sides from writing the backfill a real run would.
 #[test]
@@ -212,46 +239,58 @@ fn walk(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
 
 /// Captured from the eager `sync`, before stage 4. Anything stage 4 changes here is
 /// a plan regression, not a plan improvement — laziness may remove reads, never a
-/// line.
-const GOLDEN: &str = "\
-RENAME case.txt -> Case.txt
-RENAME data.txt -> Data.txt
-MKDIR newdir
-FIX-DIR fixdir
-DELETE extradir/nested/deep.bin
-DELETE onlydst.txt
-COPY Case.txt
-COPY conflict.txt
-COPY differs.txt
-COPY fixdir/inner.txt
-COPY newdir/nested.txt
-COPY onlysrc.txt
-RMDIR extradir/nested
-RMDIR extradir
-SUMMARY renamed=2 mkdir=1 copied=6 deleted=2 rmdir=2 missing_only=false keep_extra=false dry_run=true
-";
+/// record.
+///
+/// This is the `--output json` form: the same records the human lines render,
+/// stated as the objects a caller parses. A function rather than a `const`
+/// because `json!` builds at runtime; the comparison is on parsed `Value`s, so the
+/// assertion is about the event and field names a caller depends on rather than
+/// about whitespace or key order.
+fn golden() -> Vec<Value> {
+    vec![
+        json!({"event": "rename", "from": "case.txt", "to": "Case.txt"}),
+        json!({"event": "rename", "from": "data.txt", "to": "Data.txt"}),
+        json!({"event": "mkdir", "path": "newdir"}),
+        json!({"event": "fix-dir", "path": "fixdir"}),
+        json!({"event": "delete", "path": "extradir/nested/deep.bin"}),
+        json!({"event": "delete", "path": "onlydst.txt"}),
+        json!({"event": "copy", "path": "Case.txt"}),
+        json!({"event": "copy", "path": "conflict.txt"}),
+        json!({"event": "copy", "path": "differs.txt"}),
+        json!({"event": "copy", "path": "fixdir/inner.txt"}),
+        json!({"event": "copy", "path": "newdir/nested.txt"}),
+        json!({"event": "copy", "path": "onlysrc.txt"}),
+        json!({"event": "rmdir", "path": "extradir/nested"}),
+        json!({"event": "rmdir", "path": "extradir"}),
+        json!({"event": "summary", "renamed": 2, "mkdir": 1, "copied": 6, "deleted": 2,
+               "rmdir": 2, "missing_only": false, "keep_extra": false, "dry_run": true}),
+    ]
+}
 
 /// Same fixture, `--case-sensitive`. Note there is no rename pass in this mode, so
 /// each case-only path becomes a copy plus a delete — and `Case.txt` differs in
-/// bytes while `Data.txt` does not, which is visible here only as two more lines
+/// bytes while `Data.txt` does not, which is visible here only as two more records
 /// of the same shape. In this mode neither pair is ever compared, so neither needs
 /// a digest, which is precisely why passing `true` to `plan_pairs` would go
 /// unnoticed if the insensitive golden above did not exist.
-const GOLDEN_CASE_SENSITIVE: &str = "\
-MKDIR newdir
-FIX-DIR fixdir
-DELETE case.txt
-DELETE data.txt
-DELETE extradir/nested/deep.bin
-DELETE onlydst.txt
-COPY Case.txt
-COPY Data.txt
-COPY conflict.txt
-COPY differs.txt
-COPY fixdir/inner.txt
-COPY newdir/nested.txt
-COPY onlysrc.txt
-RMDIR extradir/nested
-RMDIR extradir
-SUMMARY renamed=0 mkdir=1 copied=7 deleted=4 rmdir=2 missing_only=false keep_extra=false dry_run=true
-";
+fn golden_case_sensitive() -> Vec<Value> {
+    vec![
+        json!({"event": "mkdir", "path": "newdir"}),
+        json!({"event": "fix-dir", "path": "fixdir"}),
+        json!({"event": "delete", "path": "case.txt"}),
+        json!({"event": "delete", "path": "data.txt"}),
+        json!({"event": "delete", "path": "extradir/nested/deep.bin"}),
+        json!({"event": "delete", "path": "onlydst.txt"}),
+        json!({"event": "copy", "path": "Case.txt"}),
+        json!({"event": "copy", "path": "Data.txt"}),
+        json!({"event": "copy", "path": "conflict.txt"}),
+        json!({"event": "copy", "path": "differs.txt"}),
+        json!({"event": "copy", "path": "fixdir/inner.txt"}),
+        json!({"event": "copy", "path": "newdir/nested.txt"}),
+        json!({"event": "copy", "path": "onlysrc.txt"}),
+        json!({"event": "rmdir", "path": "extradir/nested"}),
+        json!({"event": "rmdir", "path": "extradir"}),
+        json!({"event": "summary", "renamed": 0, "mkdir": 1, "copied": 7, "deleted": 4,
+               "rmdir": 2, "missing_only": false, "keep_extra": false, "dry_run": true}),
+    ]
+}

@@ -44,6 +44,10 @@ use rename::rename_to_src_casing;
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let t0 = std::time::Instant::now();
+    // One writer for every record this run emits, in the requested format. Held
+    // across all three phases so `--dry-run` and a real run go through exactly
+    // the same code path to say the same thing.
+    let report = log.report();
     let SyncOpts {
         src,
         dst,
@@ -78,6 +82,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
+        output = %log.output,
     );
     let _span_guard = span.enter();
     info!("start");
@@ -183,7 +188,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let renamed = if common.case_sensitive {
         0
     } else {
-        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run)?
+        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
 
     // 6. Plan, then print or apply.
@@ -207,7 +212,9 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     tracing::debug!(mkdir = ?plan.mkdir, "plan mkdir list");
 
     if dry_run {
-        plan::print_dry_run(&plan, renamed, missing_only, keep_extra);
+        for rec in plan::dry_run_records(&plan, renamed, missing_only, keep_extra) {
+            report.emit(rec);
+        }
         info!(
             renamed,
             mkdir = plan.mkdir.len(),
@@ -228,22 +235,20 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         dm: &dm,
         common: &common,
         jobs,
+        report: &report,
     }
     .apply(&plan)?;
     // No final flush: every apply phase commits its own mutations, and the
     // pre-drop commit before the filesystem changes is the crash-safety
     // point (a rerun re-copies rather than trusting half-written files).
 
-    println!(
-        "SUMMARY renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={}",
+    report.emit(plan::summary_record(
         renamed,
-        plan.mkdir.len(),
-        applied.copied,
-        applied.deleted,
-        applied.removed_dirs,
+        &plan,
+        &applied,
         missing_only,
-        keep_extra
-    );
+        keep_extra,
+    ));
     info!(
         renamed,
         mkdir = plan.mkdir.len(),

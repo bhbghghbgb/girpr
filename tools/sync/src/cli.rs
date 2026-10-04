@@ -8,6 +8,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+use crate::report::OutputFormat;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "girsync",
@@ -20,6 +22,15 @@ pub struct Cli {
     /// Optional log file path. File always records at trace level regardless of --log-level.
     #[arg(long, global = true)]
     pub log_file: Option<PathBuf>,
+    /// How stdout reports are written: text (one human line per record) or json
+    /// (one JSON object per line, same records and same order).
+    ///
+    /// Only stdout is affected. Diagnostics go to stderr as `tracing` events
+    /// either way, so `--output json` yields a stream of JSON records on stdout
+    /// with no human chatter mixed in — unless `--log-file` is given, which adds
+    /// a third, always-trace JSON log beside it.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
+    pub output: OutputFormat,
     #[command(subcommand)]
     pub cmd: Cmd,
 }

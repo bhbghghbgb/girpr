@@ -19,7 +19,8 @@ and drive the public API.
 | --- | --- |
 | `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all four subcommands) |
 | `config.rs` | validated per-run options: `CommonOpts`, `ScanMode`, `LogCtx`, `Update/Compare/SyncOpts` |
-| `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff printer/exit code shared by `compare` and `compare-self` |
+| `report.rs` | the stdout data plane: `Record` + `Report`, `--output text\|json`; `verdict` (every record a diff reports) |
+| `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff reporter/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
 | `commands/compare_self.rs` | diff a folder against its own cache, read-only |
@@ -37,6 +38,16 @@ and drive the public API.
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 `CommonArgs` in `config.rs`'s `TryFrom`, then use `common.<field>` in the command.
 
+**Two channels, and nothing is printed raw.** **stdout** is the answer —
+differences, plan actions, summaries — and it is made of `report::Record`s
+rendered by `--output` (see "Output" below). **stderr** is the narration:
+`tracing` events with named fields, filtered by `--log-level` and optionally
+mirrored to a JSON `--log-file`. `logging.rs` owns stderr and `report.rs` owns
+stdout; neither writes to the other's, which is what lets `--output json` hand a
+caller a clean stream of JSON records with no log chatter mixed in. The only
+`println!` in the crate is `Report::emit`, and the only raw stderr writes are the
+two `FATAL` lines that happen *before* a subscriber exists.
+
 `build_plan` reads only the two effective maps, which is what makes `--dry-run`
 exact. The apply phases are ordered inside `Applier::apply` because the order is
 a correctness invariant: cache entries for every path a run will touch are
@@ -51,6 +62,9 @@ girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-c
 girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [--dry-run] [...]
 girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
+
+Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
+`--output text|json`. `sled2redb` takes `--force` and the same `--output`.
 
 `--hash` is repeatable (`md5`, `sha256`; default `md5`). `--hash none` is exclusive:
 no hashing at all, decisions by size+mtime only (verify-after-copy also size+mtime).
@@ -67,7 +81,8 @@ trusts cached digests in the first place.
 
 Refreshes `<DIR>/girpr-cache` to current disk state: stats every file, records
 empty dirs (presence-only), prunes rows for deleted/excluded paths. Backs up
-the old DB first (see below).
+the old DB first (see below). Reports one record: the directory, the file and
+dir counts, and the algorithms it computed.
 
 It recomputes every algorithm named by `--hash` on every run, but that does
 **not** mean every stored digest is replaced:
@@ -93,9 +108,10 @@ stat + lazy hash, **cache created and updated as a side effect**). All 4 combos
 work, subject to the one-cache-per-run rule below. What gets read is decided per
 pair, not per side: a file on both sides with equal size and mtime is the only
 thing that needs a digest (see "Cache is a cache, not truth"). Output classes, one
-per line: `MISSING` (src-only), `EXTRA` (dst-only), `CHANGED`
+record each: `MISSING` (src-only), `EXTRA` (dst-only), `CHANGED`
 (size/mtime/hash differ), `TYPE-CONFLICT` (file vs dir), `CASE-MISMATCH a <=> A`
-(insensitive mode only), then a `SUMMARY` line. Exit `4` if any diff, `0` if
+(insensitive mode only), then a `SUMMARY` — text lines by default, JSON objects
+under `--output json` (see "Output"). Exit `4` if any diff, `0` if
 equal. `sync` accepts folders only.
 
 `compare` never touches the two trees, but it *does* write the caches — so it
@@ -132,6 +148,55 @@ forces a rehash. Treat that flag as the difference between "the cache matches
 the folder's shape" and "the cache matches the folder's bytes". The same caveat
 applies to `--max-depth` and to `--include`/`--exclude`: a run whose filters
 differ from the ones the cache was built with reports drift that is not there.
+
+### `--output text|json`
+
+Every subcommand reports through one writer (`report::Report`). `--output text`
+(the default) prints a human line per record; `--output json` prints the *same
+records* as JSON. The two are renderings of one value, not two implementations,
+so they cannot drift.
+
+JSON is **newline-delimited**: one object per line, no enclosing array, so it
+streams and the record order is the report order. Every object has an `event`
+key; the rest of the keys are the record's fields. Within an object, keys are
+names — read them by name, never by position.
+
+| event | emitted by | fields |
+| --- | --- | --- |
+| `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` |
+| `case-mismatch` | compare, compare-self | `src`, `dst` |
+| `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` |
+| `update` | update | `dir`, `files`, `dirs`, `algos` |
+| `rename` | sync | `from`, `to` |
+| `mkdir` / `fix-dir` / `delete` / `copy` / `rmdir` | sync | `path` |
+| `summary` (sync) | sync | `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`, `keep_extra`, `dry_run` |
+
+Exactly one `summary` is emitted per run, and it is last. The event name is the
+text label lowercased — `FIX-DIR` prints as `FIX-DIR` and is `"fix-dir"` — so
+there is no parallel vocabulary to keep in step.
+
+```powershell
+# text
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live
+CHANGED a.txt
+SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2
+
+# json, same run
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --output json
+{"event":"changed","path":"a.txt"}
+{"changed":1,"event":"summary","extra":1,"missing":0,"total_diff":2,"type_conflict":0,"case_mismatch":0}
+```
+
+`--output` affects **stdout only**. Diagnostics stay on stderr at every
+`--log-level`, so `--output json` is pipeable into a parser with no filtering:
+```powershell
+.\target\debug\girsync sync --src D:\game-old --dst D:\game-live --dry-run --output json |
+    ConvertFrom-Json | Where-Object event -eq copy | % path
+```
+
+Each record is *also* logged, as a `debug` `tracing` event carrying the same
+`event` name and fields, so a `--log-file` contains the same data plane without
+being asked for it twice in two shapes.
 
 ### sync
 
@@ -191,10 +256,10 @@ and depends on none of those. Do not treat a *missing* row as a crash signal,
 though: a scan may legitimately record stat without a digest, so absence proves
 nothing.
 
-`--dry-run` prints `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in apply
-order and writes nothing (no backups, no cache updates, no FS changes). Its
-output is the same document a real run prints, with a trailing `dry_run=true` on
-the `SUMMARY`; see the `--dry-run` section below.
+`--dry-run` reports `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in
+apply order and writes nothing (no backups, no cache updates, no FS changes). Its
+records are the same ones a real run reports, with `dry_run=true` on the
+`SUMMARY`; see the `--dry-run` section below.
 
 ### `--dry-run`
 
@@ -246,12 +311,13 @@ and it is a hard error in both modes.
 
 `sync`'s two outputs are the same document. The `SUMMARY` uses identical field
 names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
-`keep_extra` — and the action lines share one vocabulary and one order (`MKDIR`,
-`FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry run's only
-addition is a trailing `dry_run=true`, so a caller reading either does not have
-to know which it got. `run_sync_dry_run_summary_matches_a_real_run` compares the
-whole stdout with only that marker normalised away, so any future divergence in
-labels, ordering or counts fails there rather than reaching a user.
+`keep_extra` — and the action records share one vocabulary and one order
+(`MKDIR`, `FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
+run's only addition is `dry_run=true`, so a caller reading either does not have to
+know which it got. `run_sync_dry_run_summary_matches_a_real_run` compares the
+whole `--output json` stream of the two modes with only that marker normalised
+away, so any future divergence in labels, ordering or counts fails there rather
+than reaching a caller.
 
 `rmdir` is exact rather than omitted, which is why it is *planned*:
 `build_plan` decides the set (see `Plan::rmdir`), so the same count is available
@@ -276,6 +342,13 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
 
 ## Core semantics (must-know for AI edits)
 
+- **One writer per channel.** stdout records go through `report::Report` and
+  nowhere else — there is no second `println!` a report can escape from.
+  Diagnostics go through `tracing` with named fields and are never formatted into
+  a message string: a value belongs in a field, not in prose. Per-command spans
+  carry the whole run's config (including `output`), so every event inside is
+  correlatable. `Report::emit` is where a record becomes both a stdout line and a
+  `debug` log event, so those cannot disagree.
 - **Cache = redb file** at `<root>/girpr-cache`. Key = `/`-separated
   relative path (UTF-8; case preserved as stored). Value = binary
   `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
@@ -354,6 +427,13 @@ cargo build -p girsync
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
+Same, machine-readable — `--output json` on stdout, logs still on stderr:
+
+```powershell
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --output json |
+    ConvertFrom-Json | Where-Object event -eq changed | % path
+```
+
 Record-vs-folder without touching the folder's cache:
 
 ```powershell
@@ -378,8 +458,15 @@ this can be run at any time; add `--no-trust-cached-hashes` to rehash):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_golden.rs` (the dry-run plan as a byte-exact golden, in both
-  case modes), `lazy.rs` (per-fixture expected verdicts *and* expected read
-  counts, each stated before the code it pins), with
+  `sync.rs`, `sync_golden.rs` (the dry-run plan as a golden of `--output json`
+  records, in both case modes), `lazy.rs` (per-fixture expected verdicts *and*
+  expected read counts, each stated before the code it pins), `output.rs` (the
+  stdout contract: `--output json` is the library's `verdict`, and stdout stays a
+  clean NDJSON stream while the run narrates on stderr), with
   shared fixtures in `tests/common/mod.rs`. They run against the public API, so
   anything they touch must stay `pub`.
+- **Tests read records, not lines.** Anything that used to match rendered stdout
+  text now asserts `report::Record`s — as JSON objects via `json!`, or parsed from
+  `--output json` when the binary has to run (the `RENAME`/`FIX-DIR` records only
+  exist there). The text rendering has its own cases in `report.rs`. A test whose
+  point is *what was reported* should not also restate *how it is spelled*.

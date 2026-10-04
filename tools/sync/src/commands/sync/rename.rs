@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+use crate::report::{Record, Report};
+
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
 ///
 /// Returns the number of renames performed (or that a dry run would perform).
@@ -23,13 +25,14 @@ pub(super) fn rename_to_src_casing(
     dst_db: &crate::cache::CacheDb,
     dm: &mut HashMap<String, crate::effective::EffRec>,
     dry_run: bool,
+    report: &Report,
 ) -> Result<usize> {
     // lower -> src rel
     let mut slow: HashMap<String, &String> = HashMap::new();
     for k in src.keys() {
         slow.insert(k.to_lowercase(), k);
     }
-    // Iterate sorted, not in `HashMap` order. These become `RENAME` lines on
+    // Iterate sorted, not in `HashMap` order. These become `RENAME` records on
     // stdout, in both modes, and a plan a user reads must not reshuffle between
     // two runs over the same tree — `HashMap` iteration is seeded per process, so
     // the order was in fact different every run. It is also what makes the
@@ -51,8 +54,10 @@ pub(super) fn rename_to_src_casing(
     info!(pending = renames.len(), "rename pass");
     let mut renamed = 0usize;
     for (from, to, drel, srel) in renames {
-        println!("RENAME {} -> {}", drel, srel);
-        info!(from = %drel, to = %srel, "rename");
+        // One record, one log event. `Report::emit` does both, so there is no
+        // second hand-written `info!` stating the same rename — the count above and
+        // the `SUMMARY` cover the narration, and the record covers the detail.
+        report.emit(Record::pair("RENAME", "->", "from", &drel, "to", &srel));
         renamed += 1;
 
         // Re-key the in-memory map *before* the dry-run bail-out: the plan
@@ -92,6 +97,7 @@ pub(super) fn rename_to_src_casing(
 mod tests {
     use super::*;
     use crate::effective::EffRec;
+    use crate::report::OutputFormat;
 
     fn file_rec() -> EffRec {
         EffRec {
@@ -119,7 +125,8 @@ mod tests {
         dm.insert("data.txt".to_string(), file_rec());
         let db = crate::cache::CacheDb::open_temp(false).unwrap();
 
-        let renamed = rename_to_src_casing(&sm, &dst, &db, &mut dm, true).unwrap();
+        let report = Report::new(OutputFormat::Text);
+        let renamed = rename_to_src_casing(&sm, &dst, &db, &mut dm, true, &report).unwrap();
         assert_eq!(renamed, 1);
         assert!(
             dm.contains_key("Data.txt"),

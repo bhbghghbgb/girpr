@@ -14,6 +14,12 @@
 //! crash mid-run re-copies rather than trusting a half-written file. The
 //! commit is the durability point — there is no separate flush, and there is
 //! no resume beyond re-running.
+//!
+//! Every action a phase takes is announced through [`Applier::report`], and only
+//! there: `Report::emit` prints the record and logs the matching event in one
+//! place, so a phase cannot report an action the log never sees, nor narrate an
+//! action twice by hand. `--dry-run` reports the same records for the same plan,
+//! which is why the plan printer and these phases agree field for field.
 
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
@@ -26,6 +32,7 @@ use crate::config::CommonOpts;
 use crate::effective::EffRec;
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
+use crate::report::{Record, Report};
 use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
@@ -41,9 +48,15 @@ pub(super) struct Applier<'a> {
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
     pub jobs: usize,
+    /// Where the plan's records go, and in what format.
+    ///
+    /// The apply phases announce every action they take, and `--dry-run` reports
+    /// what it *would* take; both go through this one writer, so the two are the
+    /// same document rather than two printers that must agree.
+    pub report: &'a Report,
 }
 
-/// What a run actually did, for the `SUMMARY` line.
+/// What a run actually did, for the `SUMMARY` record.
 ///
 /// Field order matches the phase order in [`Applier::apply`].
 #[derive(Debug, Default)]
@@ -71,11 +84,11 @@ impl Applier<'_> {
 
     /// Create every src directory that dst lacks.
     ///
-    /// Each one is announced, like every other action in the plan. The apply
-    /// phases print what they do and `--dry-run` prints what it would do, and
-    /// the two outputs are supposed to be the same document — a phase that works
+    /// Each one is reported, like every other action in the plan. The apply
+    /// phases record what they do and `--dry-run` records what it would do, and
+    /// the two documents are supposed to be the same — a phase that works
     /// silently is the one place a dry run cannot mirror, and a directory the
-    /// user did not know was being created is worth a line.
+    /// user did not know was being created is worth a record.
     fn mkdirs(&self, plan: &Plan) -> Result<()> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
         let mut w = self.dst_db.begin_write()?;
@@ -83,8 +96,7 @@ impl Applier<'_> {
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
             w.put(r, &FileRec::dir())?;
-            println!("MKDIR {}", r);
-            debug!(rel = %r, "mkdir");
+            self.report.emit(Record::path("MKDIR", r));
             if (i + 1) % 100 == 0 {
                 info!(done = i + 1, total = plan.mkdir.len(), "mkdir progress");
             }
@@ -117,8 +129,7 @@ impl Applier<'_> {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
             }
             std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
-            println!("FIX-DIR {}", r);
-            info!(rel = %r, "fix-dir");
+            self.report.emit(Record::path("FIX-DIR", r));
         }
         Ok(())
     }
@@ -171,13 +182,11 @@ impl Applier<'_> {
             }
             if p.is_file() || p.is_symlink() {
                 std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
-                println!("DELETE {}", r);
-                debug!(rel = %r, "delete");
+                self.report.emit(Record::path("DELETE", r));
                 deleted += 1;
             } else if p.is_dir() {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
-                println!("RMDIR {}", r);
-                debug!(rel = %r, "rmdir");
+                self.report.emit(Record::path("RMDIR", r));
                 deleted += 1;
             } else if p.exists() {
                 bail!("unsupported type {}", p.display());
@@ -226,8 +235,7 @@ impl Applier<'_> {
         let mut new_recs: Vec<(String, FileRec)> = Vec::new();
         for (rel, r) in plan.copy.iter().zip(results) {
             let rec = r.with_context(|| format!("copy {}", rel))?;
-            println!("COPY {}", rel);
-            debug!(rel = %rel, "copy done");
+            self.report.emit(Record::path("COPY", rel));
             new_recs.push((rel.clone(), rec));
             copied += 1;
         }
@@ -267,8 +275,7 @@ impl Applier<'_> {
                     bail!("rmdir {}: {:#}", p.display(), e);
                 }
                 w.remove(r)?;
-                println!("RMDIR {}", r);
-                debug!(rel = %r, "rmdir");
+                self.report.emit(Record::path("RMDIR", r));
                 removed_dirs += 1;
             }
             if (i + 1) % 100 == 0 {

@@ -5,6 +5,12 @@
 //! by hand the answer is known before the run, and writing it down pins *more*
 //! than comparing two runs would — the counters as well as the verdict.
 //!
+//! Verdicts are asserted as **JSON records**, the same objects `--output json`
+//! writes to stdout, rather than as rendered text lines. A record has names and
+//! values, so `{"event":"changed","path":"diff1.txt"}` states what was reported
+//! without restating how it is spelled, and a change to the prose rendering
+//! cannot fail a case whose point is the verdict.
+//!
 //! The `hashed` expectations in the doc comment on each test are the **lazy**
 //! numbers. The suite was written against the eager code first, with the eager
 //! numbers, and flipped once the short circuit landed; the diff of that flip is
@@ -16,7 +22,6 @@ use std::path::Path;
 
 use common::*;
 use girsync::cache::CACHE_PREFIX;
-use girsync::commands::verdict;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
@@ -24,7 +29,9 @@ use girsync::effective::{
     resolve_side, scan_stat_only,
 };
 use girsync::planner::{SideRequest, plan_pairs};
+use girsync::report::verdict;
 use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
+use serde_json::{Value, json};
 
 /// What one two-sided run produced: the verdict, and how much it read.
 struct Run {
@@ -37,9 +44,11 @@ struct Run {
 }
 
 impl Run {
-    /// The lines a user would see, in report order.
-    fn lines(&self) -> Vec<String> {
-        verdict(&self.diff).into_iter().map(|(_, l)| l).collect()
+    /// The records a run would report, in report order, as the JSON objects
+    /// `--output json` writes. Asserting on these rather than on text keeps a
+    /// case about the verdict independent of how the verdict is spelled.
+    fn records(&self) -> Vec<Value> {
+        verdict(&self.diff).iter().map(|r| r.json()).collect()
     }
 
     fn exit(&self) -> i32 {
@@ -134,13 +143,14 @@ fn cold_all_stat_differing_pairs_read_nothing() {
     let (src, dst) = four_differing(&t);
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CHANGED a.txt",
-            "CHANGED b.txt",
-            "CHANGED sub/c.txt",
-            "CHANGED sub/deep/d.txt",
-            "SUMMARY missing=0 extra=0 changed=4 type_conflict=0 case_mismatch=0 total_diff=4",
+            json!({"event": "changed", "path": "a.txt"}),
+            json!({"event": "changed", "path": "b.txt"}),
+            json!({"event": "changed", "path": "sub/c.txt"}),
+            json!({"event": "changed", "path": "sub/deep/d.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 4,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 4}),
         ]
     );
     assert_eq!(r.hashed, 0, "the verdict needed no bytes");
@@ -165,8 +175,9 @@ fn cold_all_stat_equal_pairs_are_all_hashed() {
     );
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
-        vec!["SUMMARY missing=0 extra=0 changed=0 type_conflict=0 case_mismatch=0 total_diff=0"]
+        r.records(),
+        vec![json!({"event": "summary", "missing": 0, "extra": 0, "changed": 0,
+                    "type_conflict": 0, "case_mismatch": 0, "total_diff": 0})]
     );
     assert_eq!(r.exit(), 0);
     assert_eq!(
@@ -196,11 +207,12 @@ fn mixed_tree_reads_only_the_stat_equal_half() {
     );
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CHANGED diff1.txt",
-            "CHANGED diff2.txt",
-            "SUMMARY missing=0 extra=0 changed=2 type_conflict=0 case_mismatch=0 total_diff=2",
+            json!({"event": "changed", "path": "diff1.txt"}),
+            json!({"event": "changed", "path": "diff2.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 2,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 2}),
         ]
     );
     assert_eq!(
@@ -278,10 +290,11 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
 
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CHANGED a.txt",
-            "SUMMARY missing=0 extra=0 changed=1 type_conflict=0 case_mismatch=0 total_diff=1",
+            json!({"event": "changed", "path": "a.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 1,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 1}),
         ]
     );
     assert_eq!(r.hashed, 0, "the cached digests already disagree");
@@ -372,13 +385,14 @@ fn one_sided_paths_and_dirs_need_no_digest() {
     );
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "MISSING only_src.txt",
-            "MISSING only_src_dir",
-            "MISSING only_src_dir/inner.txt",
-            "EXTRA only_dst.txt",
-            "SUMMARY missing=3 extra=1 changed=0 type_conflict=0 case_mismatch=0 total_diff=4",
+            json!({"event": "missing", "path": "only_src.txt"}),
+            json!({"event": "missing", "path": "only_src_dir"}),
+            json!({"event": "missing", "path": "only_src_dir/inner.txt"}),
+            json!({"event": "extra", "path": "only_dst.txt"}),
+            json!({"event": "summary", "missing": 3, "extra": 1, "changed": 0,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 4}),
         ]
     );
     // Only `shared.txt` is undecided. Eager baseline: every file on both sides,
@@ -403,10 +417,11 @@ fn a_kind_conflict_needs_no_digest() {
     );
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "TYPE-CONFLICT clash",
-            "SUMMARY missing=0 extra=0 changed=0 type_conflict=1 case_mismatch=0 total_diff=1"
+            json!({"event": "type-conflict", "path": "clash"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 0,
+                   "type_conflict": 1, "case_mismatch": 0, "total_diff": 1}),
         ]
     );
     assert_eq!(r.hashed, 0, "a kind conflict is decided by presence");
@@ -432,10 +447,11 @@ fn a_case_only_difference_with_equal_content_is_still_compared() {
     };
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CASE-MISMATCH a.txt <=> A.txt",
-            "SUMMARY missing=0 extra=0 changed=0 type_conflict=0 case_mismatch=1 total_diff=0"
+            json!({"event": "case-mismatch", "src": "a.txt", "dst": "A.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 0,
+                   "type_conflict": 0, "case_mismatch": 1, "total_diff": 0}),
         ]
     );
     assert_eq!(
@@ -468,11 +484,12 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
     };
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CHANGED a.txt",
-            "CASE-MISMATCH a.txt <=> A.txt",
-            "SUMMARY missing=0 extra=0 changed=1 type_conflict=0 case_mismatch=1 total_diff=1",
+            json!({"event": "changed", "path": "a.txt"}),
+            json!({"event": "case-mismatch", "src": "a.txt", "dst": "A.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 1,
+                   "type_conflict": 0, "case_mismatch": 1, "total_diff": 1}),
         ]
     );
     assert_eq!(
@@ -502,10 +519,11 @@ fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() 
 
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
-        r.lines(),
+        r.records(),
         vec![
-            "CHANGED a.txt",
-            "SUMMARY missing=0 extra=0 changed=1 type_conflict=0 case_mismatch=0 total_diff=1"
+            json!({"event": "changed", "path": "a.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 1,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 1}),
         ]
     );
     assert_eq!(r.hashed, 0, "size already differs");
@@ -786,16 +804,15 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
     // change what the tree says. `gone.txt` was deleted from *src*, so dst still
     // has it — `EXTRA`, and still reported even though the orphan row on the src
     // side is gone.
+    let d = diff_maps(&sm.map, &dm.map, &["md5".to_string()], true);
+    let reported: Vec<Value> = verdict(&d).iter().map(|r| r.json()).collect();
     assert_eq!(
-        verdict(&diff_maps(&sm.map, &dm.map, &["md5".to_string()], true)),
+        reported,
         [
-            ("extra", "EXTRA gone.txt".to_string()),
-            ("changed", "CHANGED stale.txt".to_string()),
-            (
-                "summary",
-                "SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2"
-                    .to_string()
-            )
+            json!({"event": "extra", "path": "gone.txt"}),
+            json!({"event": "changed", "path": "stale.txt"}),
+            json!({"event": "summary", "missing": 0, "extra": 1, "changed": 1,
+                   "type_conflict": 0, "case_mismatch": 0, "total_diff": 2}),
         ]
     );
 }

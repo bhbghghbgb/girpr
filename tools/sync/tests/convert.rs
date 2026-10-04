@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{TempRoot, log, rw};
+use common::{TempRoot, log, parse_ndjson, rw};
 use girsync::cache::{load_all_records, open_db};
 use std::collections::HashMap;
 
@@ -153,5 +153,57 @@ fn convert_rejects_missing_source() {
     assert!(
         girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
             .is_err()
+    );
+}
+
+/// The converter reports through the same writer as `girsync`, so `--output json`
+/// means the same thing in both binaries and a caller parsing one can parse the
+/// other. Asserted through the binary, because that is where the flag's parsing
+/// and its reporting live.
+#[test]
+fn the_converter_reports_json_records_on_stdout() {
+    let t = TempRoot::new("convert_json");
+    let work = t.mkdirs("w");
+    build_sled_db(&work);
+    let src = work.join("legacy-cache");
+    let dst = work.join("girpr-cache");
+
+    let run = |extra: &[&str]| -> (i32, String, String) {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sled2redb"))
+            .arg(&src)
+            .arg(&dst)
+            .args(extra)
+            .output()
+            .expect("spawn sled2redb");
+        (
+            out.status.code().expect("sled2redb exits with a code"),
+            String::from_utf8(out.stdout).expect("utf-8"),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let want = serde_json::json!({"event": "converted", "src": src.display().to_string(),
+                                 "dst": dst.display().to_string(), "files": 2, "dirs": 1,
+                                 "hashes": 3});
+
+    let (code, stdout, stderr) = run(&["--output", "json"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(parse_ndjson(stdout.as_bytes()), vec![want.clone()]);
+
+    // The same record, text-rendered, and text is the default.
+    let (code, stdout, stderr) = run(&["--force", "--output", "text"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "converted src={} dst={} files=2 dirs=1 hashes=3\n",
+            src.display(),
+            dst.display()
+        )
+    );
+    let (code, stdout, stderr) = run(&["--force"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.starts_with("converted src="),
+        "text is the default: {stdout}"
     );
 }
