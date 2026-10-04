@@ -176,8 +176,10 @@ fn cold_all_stat_equal_pairs_are_all_hashed() {
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
         r.records(),
-        vec![json!({"event": "summary", "missing": 0, "extra": 0, "changed": 0,
-                    "type_conflict": 0, "case_mismatch": 0, "total_diff": 0})]
+        vec![
+            json!({"event": "summary", "missing": 0, "extra": 0, "changed": 0,
+                    "type_conflict": 0, "case_mismatch": 0, "total_diff": 0})
+        ]
     );
     assert_eq!(r.exit(), 0);
     assert_eq!(

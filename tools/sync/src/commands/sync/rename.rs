@@ -36,7 +36,7 @@ pub(super) fn rename_to_src_casing(
     // stdout, in both modes, and a plan a user reads must not reshuffle between
     // two runs over the same tree — `HashMap` iteration is seeded per process, so
     // the order was in fact different every run. It is also what makes the
-    // dry-run golden in `tests/sync_golden.rs` possible at all.
+    // dry-run plan assertions in `tests/sync_plan.rs` possible at all.
     let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
     by_lower.sort();
     let mut renames: Vec<(PathBuf, PathBuf, String, String)> = Vec::new();

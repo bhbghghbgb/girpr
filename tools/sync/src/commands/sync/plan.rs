@@ -197,12 +197,16 @@ impl Summary {
 /// The plan as records: one per action plus the `SUMMARY`. Writes nothing.
 ///
 /// **This is the single definition of what a dry run reports**, so the real run
-/// cannot drift from it. [`run_sync_dry_run_summary_matches_a_real_run`] builds
+/// cannot drift from it. [`a_dry_run_reports_what_a_real_run_reports`] builds
 /// both and asserts the two record lists are equal field for field with only the
 /// `dry_run` marker differing, so any future divergence in labels, ordering or
 /// counts fails there rather than being discovered by a user.
 ///
-/// [`run_sync_dry_run_summary_matches_a_real_run`]: ../../sync.rs
+/// [`a_dry_run_reports_what_a_real_run_reports`]: ../../sync_plan.rs
+///
+/// Which path gets which action is not pinned here as a transcript. It is asserted
+/// per path by the fixture table in `tests/sync_plan.rs`, which also derives the
+/// summary counts from the plan rather than stating them.
 ///
 /// `rmdir` is exact rather than omitted: the apply phase reads [`Plan::rmdir`]
 /// instead of walking dst, so the count is the same before anything is written as

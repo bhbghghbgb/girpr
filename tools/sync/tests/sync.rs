@@ -208,120 +208,6 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     assert!(!dst2.join("extradir").exists(), "collected by default");
 }
 
-/// The dry run and a real run must report the same thing, field for field.
-///
-/// This is the observable half of the `--dry-run` contract, and it is only
-/// checkable from the outside: `cmd_sync` returns an exit code, so the records it
-/// reported *are* the result. Both runs go through the real binary so the
-/// comparison covers the `rename` and `fix-dir` records, which the plan builder
-/// does not produce.
-///
-/// `rmdir` is the field that had to change to make this possible. It used to be
-/// absent from the dry run because it was computed by walking dst *during* the
-/// apply phase — too late to report. It is now decided by `build_plan`, so the
-/// same count is available before anything is written.
-#[test]
-fn run_sync_dry_run_summary_matches_a_real_run() {
-    // The `TempRoot` is returned alongside the paths and bound to `_keep`: dropping
-    // it deletes the tree, so a fixture built inside a closure would be gone
-    // before the subprocess ever ran.
-    //
-    // `sync_mtime` is load-bearing here, not tidiness. The two trees are built at
-    // different moments, and two files written microseconds apart can land on the
-    // same filesystem timestamp in one tree and different ones in the other — which
-    // makes a case-only pair read as `CHANGED` in one run and equal in the other,
-    // for reasons that have nothing to do with the code under test. Pinning the
-    // stamps makes the two trees stat-identical, which is the precondition for
-    // comparing anything they report.
-    let build = |tag: &str| -> (TempRoot, std::path::PathBuf, std::path::PathBuf) {
-        let t = TempRoot::new(tag);
-        let src = t.mkdirs("src");
-        let dst = t.mkdirs("dst");
-        // One of every record there is.
-        wfile(&src, "same.txt", b"identical");
-        wfile(&dst, "same.txt", b"identical");
-        sync_mtime(&src.join("same.txt"), &dst.join("same.txt"));
-        wfile(&src, "differs.txt", b"src-content-that-is-longer");
-        wfile(&dst, "differs.txt", b"dst");
-        wfile(&src, "Data.txt", b"payload");
-        wfile(&dst, "data.txt", b"payload");
-        sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
-        wfile(&src, "onlysrc.txt", b"s");
-        wfile(&dst, "onlydst.txt", b"d");
-        wfile(&dst, "extradir/nested/deep.bin", b"x");
-        // A src-only directory: the apply phase has to report its mkdir, and the
-        // dry run already did. Without this the parity is untested, because a
-        // fixture that plans no mkdir cannot tell the two modes apart here.
-        wfile(&src, "newdir/inner.txt", b"n");
-        // A file on dst standing where src has a directory: the `fix-dir` case,
-        // likewise the only thing that exercises that record.
-        wfile(&src, "fixdir/inner.txt", b"f");
-        wfile(&dst, "fixdir", b"a blocking file");
-        (t, src, dst)
-    };
-
-    let (_keep_a, dry_src, dry_dst) = build("sum_dry");
-    let dry = run_binary(&dry_src, &dry_dst, &["--dry-run"]);
-    let (_keep_b, real_src, real_dst) = build("sum_real");
-    let real = run_binary(&real_src, &real_dst, &[]);
-
-    // The whole document, with only the `dry_run` marker normalised away. There
-    // is no per-record fudging left: the two modes report the same events, the
-    // same counts and the same order, so any future divergence in vocabulary,
-    // sequencing or numbers fails right here instead of reaching a caller.
-    let normalised = |recs: &[Value]| -> Vec<Value> {
-        recs.iter()
-            .map(|r| {
-                let mut r = r.clone();
-                if let Some(o) = r.as_object_mut() {
-                    o.remove("dry_run");
-                }
-                r
-            })
-            .collect()
-    };
-    let show = |recs: &[Value]| {
-        recs.iter()
-            .map(|r| r.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    assert_eq!(
-        normalised(&dry),
-        normalised(&real),
-        "a dry run reports what a real run reports\n--- dry ---\n{}\n--- real ---\n{}",
-        show(&dry),
-        show(&real)
-    );
-    let dry_summary = common::summary_of(&dry);
-    assert_eq!(dry_summary["dry_run"], true, "the dry run marks itself");
-    // The three labels this stage had to unify. Asserted explicitly so that
-    // dropping either change fails with a pointed message instead of passing
-    // because the fixture stopped exercising it.
-    for (event, path) in [
-        ("mkdir", "newdir"),
-        ("fix-dir", "fixdir"),
-        ("rmdir", "extradir"),
-    ] {
-        for recs in [&dry, &real] {
-            assert!(
-                recs.iter()
-                    .any(|r| r["event"] == event && r["path"] == path),
-                "`{event}` on {path} must appear in both modes, got {}",
-                show(recs)
-            );
-        }
-    }
-    // The old spelling was `RMDIR-FILE`, which reads as "remove a directory that
-    // is a file" — backwards. The record for that case is `fix-dir`, asserted
-    // above; this guards the old name from creeping back in as a *new* event.
-    assert!(
-        !dry.iter().any(|r| r["event"].as_str() == Some("rmdir-file")),
-        "the old spelling is gone: {}",
-        show(&dry)
-    );
-}
-
 /// A planned copy that lands on a dst *directory* clears it out of the way
 /// recursively, so that directory's whole subtree is gone before the rmdir pass
 /// could look at it. The plan must not promise removals that cannot happen: a
@@ -352,11 +238,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
 
     // And the real run agrees.
     let real = run_binary(&src, &dst, &[]);
-    assert_eq!(
-        common::summary_of(&real)["rmdir"],
-        0,
-        "real run: {real:?}"
-    );
+    assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
 
@@ -451,7 +333,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 /// it exists because the fixture above cannot. That fixture's two sides hold the
 /// same bytes, so a run that never learns a digest for the pair still concludes
 /// "equal" and reaches the right answer by luck. Same for the case-only pair in
-/// `run_sync_dry_run_summary_matches_a_real_run` and in the golden.
+/// `sync_plan.rs`'s fixture table, whose row for this shape is `Case.txt`.
 ///
 /// Here the bytes differ at the same length with the mtime pinned, so size+mtime
 /// agree and only a digest can tell them apart. If `plan_pairs` is handed

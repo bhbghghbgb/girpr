@@ -458,13 +458,30 @@ this can be run at any time; add `--no-trust-cached-hashes` to rehash):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_golden.rs` (the dry-run plan as a golden of `--output json`
-  records, in both case modes), `lazy.rs` (per-fixture expected verdicts *and*
-  expected read counts, each stated before the code it pins), `output.rs` (the
-  stdout contract: `--output json` is the library's `verdict`, and stdout stays a
-  clean NDJSON stream while the run narrates on stderr), with
-  shared fixtures in `tests/common/mod.rs`. They run against the public API, so
-  anything they touch must stay `pub`.
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`
+  (per-fixture expected verdicts *and* expected read counts, each stated before
+  the code it pins), `output.rs` (the stdout contract: `--output json` is the
+  library's `verdict`, and stdout stays a clean NDJSON stream while the run
+  narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
+  against the public API, so anything they touch must stay `pub`.
+- **No goldens.** A whole-run transcript is a change detector wearing the costume
+  of a specification: once no eager implementation exists to compare against, the
+  only way to update one is to paste the actual output, which requires no
+  understanding of whether that output is right. `sync_plan.rs` states a **table
+  keyed by path** instead — each row says what a path is on each side and what the
+  plan must therefore do about it — which survives a change of implementation, fails
+  naming the path, and makes new behaviour a new row rather than an edited vector.
+  Three things follow: the summary counts are **derived** from the plan rather than
+  transcribed, so they cannot disagree with it; the `--case-sensitive` expectation
+  is **derived** from the same rows by a rule, since that mode is the same fixture
+  without the rename pass; and record **order** is asserted as a property (event
+  kinds in apply order, each kind contiguous) rather than as a transcript — which is
+  the check that can ask a new record kind where it applies. The one
+  whole-document comparison left is dry-run against real-run, and it earns that:
+  both are the same code path with only the write gate differing, so a divergence
+  means the dry run took a different branch. It cannot catch a *systematic* error
+  though — a summary wrong in both modes passes it — which is what the derived
+  summary is for.
 - **Tests read records, not lines.** Anything that used to match rendered stdout
   text now asserts `report::Record`s — as JSON objects via `json!`, or parsed from
   `--output json` when the binary has to run (the `RENAME`/`FIX-DIR` records only
