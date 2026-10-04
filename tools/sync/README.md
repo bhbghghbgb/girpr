@@ -142,7 +142,10 @@ Mirrors `src` → `dst`:
    (dangling symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
-3. Insensitive mode: rename dst paths to src casing first (`RENAME`, two-step for Windows).
+3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
+   truth"): a file is read only if it is on both sides with equal size+mtime.
+   Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
+   Windows) — after the plan, before the diff, so both sides are on exact keys.
 4. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
    `DELETE` extra files + remove dst-only dirs deepest-first (both skipped when
    `--keep-extra`, which spares directories as well as files).
@@ -150,6 +153,35 @@ Mirrors `src` → `dst`:
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime when `--hash none`); the dst record entry is deleted *before* each
    file change. No resume.
+
+**The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
+The planner pairs the two sides as they are *on disk* — by lowercase in
+insensitive mode — and the rename then collapses exactly those pairs onto exact
+keys, which is what the diff compares. Pairing by exact key instead would make a
+case-only pair look one-sided, skip the digest it needs, and leave the diff
+comparing two entries where one has no digest; `hashes_differ` is silent on a
+missing digest, size+mtime agree, and the run reports success having copied
+nothing. `tests/sync.rs::a_case_only_difference_in_content_is_copied_not_merely_
+renamed` exists for exactly that, because every other case-only fixture uses
+identical bytes and would pass either way.
+
+**Laziness moves work between runs rather than only removing it, so the honest
+summary is a trade.** Measured on five src files / three dst files / two src-only,
+cold caches:
+
+| run | before | after |
+| --- | --- | --- |
+| `sync` #1, dst has drifted | 8 files read | **0** |
+| `sync` #2, nothing changed | 0 read | 5 read |
+
+Run #1 is the common case and the large win: the pairs size settled are never
+opened. Run #2 is the cost — a lazy scan records stat without a digest, and the
+only thing that writes a digest during a sync is `copy_one`, which records into
+**dst's** cache, so a second run finds stat-equal pairs whose src side has no
+digest and must rehash src. In the documented workflow (`update` src → `compare`
+→ `sync`) the caches are already populated before `sync` runs and both versions
+cost nothing, so the cost only appears when `sync` is run repeatedly with nothing
+in between — which is when there is nothing to copy.
 
 The pre-drop in (5) is belt-and-braces, not the safety mechanism — every way a
 copy can die is already caught by size (truncation makes a partial file
@@ -267,15 +299,16 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   Resolution is by *canonical* path, so two spellings of one target (`F/sub/..`
   vs `F`) collide too. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
-  requested algos. A folder side reuses a cached digest only when size+mtime
-  match; what still has to be *read* is decided per **pair**, by
+  requested algos. `compare` and `sync` decide **per pair**, by
   `planner::plan_pairs`: a path needs a digest only when it is a file on both
   sides with equal size and equal mtime. A `MISSING`, `EXTRA`, `TYPE-CONFLICT` or
   already-`CHANGED` path costs no read at all, and neither does a stat-differing
   pair under `--no-trust-cached-hashes` — distrusting the cache does not make an
-  unequal size uncertain. A folder side therefore leaves **stat-only rows** for
-  paths it did not hash, which is a valid state: the next run sees a fresh row
-  with nothing cached and asks for a digest.
+  unequal size uncertain. A `MISSING` file is still copied, because `copy_one`
+  rehashes both sides to verify and returns the record it caches; that rehash is
+  the only hash such a file needs. Both commands therefore leave **stat-only
+  rows** for paths they did not hash, which is a valid state: the next run sees a
+  fresh row with nothing cached and asks for a digest.
 
   Separately, and needing no knowledge of the other side, a folder side
   **corrects its own cache** as it walks: a stale row (stat no longer matches
@@ -345,7 +378,8 @@ this can be run at any time; add `--no-trust-cached-hashes` to rehash):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `lazy.rs` (per-fixture expected verdicts *and* expected read
+  `sync.rs`, `sync_golden.rs` (the dry-run plan as a byte-exact golden, in both
+  case modes), `lazy.rs` (per-fixture expected verdicts *and* expected read
   counts, each stated before the code it pins), with
   shared fixtures in `tests/common/mod.rs`. They run against the public API, so
   anything they touch must stay `pub`.

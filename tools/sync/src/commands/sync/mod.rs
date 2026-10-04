@@ -8,9 +8,15 @@
 //!
 //! Phase order overall:
 //! 1. validate inputs, back up both caches, snapshot dst's pre-sync state,
-//! 2. open both caches and build the two effective maps,
-//! 3. rename dst paths to src's casing, so the diff lines up on exact keys,
-//! 4. plan, then either print it (`--dry-run`) or apply it.
+//! 2. open both caches and run phase A on each side,
+//! 3. plan across both sides at once, so a file is read only if the pair needs it,
+//! 4. phase C, then rename dst paths to src's casing,
+//! 5. diff, plan, then either print it (`--dry-run`) or apply it.
+//!
+//! Steps 4's rename still precedes the diff and always will: the diff is taken
+//! case-sensitively on exact keys. The plan in step 3 therefore runs *before* the
+//! rename, paired by lowercase in insensitive mode — see the comment at the call
+//! site, which is the one place the two case flags deliberately disagree.
 //!
 //! A record path (`girpr-cache*`) is not a valid sync input — that is
 //! `compare`-only. Errors propagate as `Err`; the exit code is always 0.
@@ -26,8 +32,9 @@ use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
-    build_effective_folder, classify, ensure_distinct_sides, open_folder_cache,
+    classify, ensure_distinct_sides, open_folder_cache, resolve_folder, scan_stat_only,
 };
+use crate::planner::{SideRequest, plan_pairs};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -101,34 +108,85 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         }
     }
 
-    // 2. Open both caches and resolve each side's effective map.
-    // `backup_first: false` for both: this command has already taken its own backups
-    // and dst's old-state snapshot above, and doing it again here would produce a
-    // second timestamped pair mid-run.
+    // 2. Open both caches, then phase A on each side.
+    //
+    // `backup_first: false` for both: this command has already taken its own
+    // backups and dst's old-state snapshot above, and doing it again here would
+    // produce a second timestamped pair mid-run. `open_folder_cache` is also the
+    // only thing that decides how a dry run opens a cache, so this stays a plain
+    // call rather than a second policy.
     let scan_mode = |no_trust_cached_hashes| ScanMode {
         no_trust_cached_hashes,
         dry_run,
     };
-    let src_db = open_folder_cache(&src, &common, scan_mode(trust.no_trust_src), false)?;
-    let dst_db = open_folder_cache(&dst, &common, scan_mode(trust.no_trust_dst), false)?;
-    info!("loading src effective map");
-    let sm = build_effective_folder(&src, &src_db, &common, scan_mode(trust.no_trust_src))?;
+    let src_mode = scan_mode(trust.no_trust_src);
+    let dst_mode = scan_mode(trust.no_trust_dst);
+    let src_db = open_folder_cache(&src, &common, src_mode, false)?;
+    let dst_db = open_folder_cache(&dst, &common, dst_mode, false)?;
+    info!("loading src side");
+    let src_a = scan_stat_only(&src, &src_db, &common, src_mode)?;
+    info!("loading dst side");
+    let dst_a = scan_stat_only(&dst, &dst_db, &common, dst_mode)?;
+    info!(
+        src_entries = src_a.map.len(),
+        dst_entries = dst_a.map.len(),
+        "phase A done"
+    );
+
+    // 3. One decision, both sides in — the same shape `compare` uses. A file is
+    // read only if it is on *both* sides with equal size and mtime; every other
+    // pair state is already decided, and `diff_maps` short-circuits the digest
+    // comparison anyway.
+    //
+    // `common.case_sensitive` here, and a hardcoded `true` in the `diff_maps` call
+    // below. That asymmetry is deliberate. This pairs the sides as they are *on
+    // disk*, which in insensitive mode means by lowercase — and the rename pass in
+    // step 4 then collapses exactly those pairs onto exact keys, so the diff goes
+    // on to form the same pairs. Passing `true` here would make a case-only pair
+    // look one-sided and skip a digest it needs; passing `false` in the diff would
+    // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &src_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_src,
+        },
+        SideRequest {
+            entries: &dst_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_dst,
+        },
+        common.case_sensitive,
+    );
+    info!(
+        src_pending = plans.src.by_rel.len(),
+        dst_pending = plans.dst.by_rel.len(),
+        "planned"
+    );
+
+    // 4. Resolve, then rename, then diff.
+    //
+    // Resolve before rename, always. `resolve_folder` hashes `root.join(rel)`, so
+    // re-keying dst first would have phase C read `dst/A.txt` while the file was
+    // still at `dst/a.txt` — silent success on a case-insensitive filesystem, a
+    // failure or a wrong file on a case-sensitive one. Planning pre-rename and
+    // re-keying only here makes that unrepresentable, and it is why
+    // `rename_to_src_casing` still takes resolved `EffRec` maps.
+    let sm = resolve_folder(&src, &src_db, src_mode, &src_a, &plans.src)?;
     info!(side = "src", hashed = sm.stats.hashed, "src map built");
     let sm = sm.map;
-    info!("loading dst effective map");
-    let dm = build_effective_folder(&dst, &dst_db, &common, scan_mode(trust.no_trust_dst))?;
+    let dm = resolve_folder(&dst, &dst_db, dst_mode, &dst_a, &plans.dst)?;
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
-    info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
 
-    // 3. Align casing before diffing, so the diff can be case-sensitive.
+    // 5. Align casing before diffing, so the diff can be case-sensitive.
     let renamed = if common.case_sensitive {
         0
     } else {
         rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run)?
     };
 
-    // 4. Plan, then print or apply.
+    // 6. Plan, then print or apply.
     let diff = diff_maps(
         &sm,
         &dm,

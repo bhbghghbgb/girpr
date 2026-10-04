@@ -19,9 +19,12 @@ use girsync::cache::CACHE_PREFIX;
 use girsync::commands::verdict;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
-use girsync::effective::{Side, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::effective::{
+    Side, classify, ensure_distinct_sides, open_folder_cache, open_side, resolve_folder,
+    resolve_side, scan_stat_only,
+};
 use girsync::planner::{SideRequest, plan_pairs};
-use girsync::{CommonOpts, TrustOpts, UpdateOpts};
+use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
 
 /// What one two-sided run produced: the verdict, and how much it read.
 struct Run {
@@ -99,6 +102,22 @@ fn four_differing(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
         &["md5"],
         false,
     )
+}
+
+/// A `SyncOpts` for the `sync` cases. Case-sensitive by default, so the counts are
+/// not perturbed by a rename pass; a case that wants insensitive sets it.
+fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncOpts {
+    let mut common = opts();
+    common.case_sensitive = true;
+    girsync::SyncOpts {
+        src,
+        dst,
+        trust: TrustOpts::default(),
+        missing_only: false,
+        keep_extra: false,
+        jobs: 1,
+        common,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +542,130 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
         common: opts(),
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// `sync`
+// ---------------------------------------------------------------------------
+//
+// `cmd_sync` returns an exit code and nothing else, so the counters are not
+// reachable from outside it. Asserting them would mean either scraping the log —
+// which pins a log format as a contract — or adding a return value for a test.
+//
+// So `sync` gets two layers instead. The harness below pins what the *phases*
+// decide, which is where the number is defined; and `a_lazy_sync_records_no_digest
+// _it_never_needed` pins that the *command* reaches those phases, by looking at
+// the cache a run leaves behind. The second is the one that would actually fail if
+// `cmd_sync` kept calling the monolithic scan.
+
+/// Per-side `hashed` for a `sync`, computed the way `cmd_sync` computes it.
+fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> (usize, usize) {
+    let mode = |no_trust| ScanMode {
+        no_trust_cached_hashes: no_trust,
+        dry_run: false,
+    };
+    let src_db = open_folder_cache(src, common, mode(trust.no_trust_src), false).unwrap();
+    let dst_db = open_folder_cache(dst, common, mode(trust.no_trust_dst), false).unwrap();
+    let src_a = scan_stat_only(src, &src_db, common, mode(trust.no_trust_src)).unwrap();
+    let dst_a = scan_stat_only(dst, &dst_db, common, mode(trust.no_trust_dst)).unwrap();
+    // `common.case_sensitive`, not `true`: the planner runs *before* the rename
+    // pass, so it has to pair the sides as they are on disk. See
+    // `a_case_only_difference_in_content_is_copied_not_merely_renamed`.
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &src_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_src,
+        },
+        SideRequest {
+            entries: &dst_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_dst,
+        },
+        common.case_sensitive,
+    );
+    let sm = resolve_folder(src, &src_db, mode(trust.no_trust_src), &src_a, &plans.src).unwrap();
+    let dm = resolve_folder(dst, &dst_db, mode(trust.no_trust_dst), &dst_a, &plans.dst).unwrap();
+    (sm.stats.hashed, dm.stats.hashed)
+}
+
+/// A cold tree where every pair differs in size costs the scan nothing. This is
+/// the same shape as `cold_all_stat_differing_pairs_read_nothing`, and it is the
+/// larger win: `sync` is where the I/O volume lives.
+#[test]
+fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
+    let t = TempRoot::new("lz_sync_differ");
+    let (src, dst) = four_differing(&t);
+    assert_eq!(
+        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        (0, 0),
+        "size decides every pair, so no digest is needed on either side"
+    );
+}
+
+/// A src-only file is copied without ever needing a digest at scan time: the pair
+/// is `MISSING`, which presence settles, and `copy_one` rehashes both sides to
+/// verify the copy and returns the record it caches. So a src-only file costs the
+/// *scan* nothing even though the copy itself reads it twice.
+#[test]
+fn a_src_only_file_costs_the_sync_scan_no_digest() {
+    let t = TempRoot::new("lz_sync_srconly");
+    let (src, dst) = pair(
+        &t,
+        &[
+            ("shared.txt", Some(b"shared"), Some(b"shared")),
+            ("only_src.txt", Some(b"only-here"), None),
+            ("only_dst.txt", None, Some(b"only-there")),
+        ],
+        &["md5"],
+        false,
+    );
+    // Cold caches, so nothing is cached and only the shared stat-equal pair counts.
+    assert_eq!(
+        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        (1, 1),
+        "only the shared stat-equal pair is undecided"
+    );
+}
+
+/// The end-to-end proof that `cmd_sync` reached the planner, and the gate that
+/// would fail if it did not.
+///
+/// Laziness is not observable in a return value here, but it *is* observable in
+/// what a run leaves in the cache. On a tree whose every pair differs in size, an
+/// eager scan writes an md5 for every file it read; a lazy one decides those pairs
+/// from stat, never reads them, and writes a **stat-only row** instead. The
+/// fingerprints are incompatible, so this fails loudly either way.
+///
+/// It also pins where digests still come from, which is the part that is easy to
+/// break by over-applying laziness: `copy_one` hashes both sides to verify each
+/// copy and returns dst's record, so **dst** ends the run with digests even though
+/// its scan read nothing.
+#[test]
+fn a_lazy_sync_records_no_digest_it_never_needed() {
+    let t = TempRoot::new("lz_sync_lazy");
+    let (src, dst) = four_differing(&t);
+    let mut o = sync_opts(src.clone(), dst.clone());
+    o.common.case_sensitive = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    // Every pair differed in size, so every pair was decided by stat.
+    for rel in ["a.txt", "b.txt", "sub/c.txt", "sub/deep/d.txt"] {
+        assert_eq!(rfile(&dst, rel), rfile(&src, rel), "{rel} was mirrored");
+        assert!(
+            digests_of(&src, rel).is_empty(),
+            "{rel}: src's scan decided this pair from stat, so it read nothing \
+             and recorded stat only. An md5 here means the scan is still eager."
+        );
+    }
+
+    // dst's digests come from `copy_one`'s verify, not from its scan — which is
+    // the correct outcome, and the reason laziness does not leave dst unrecorded.
+    assert_eq!(
+        digests_of(&dst, "a.txt"),
+        vec!["md5"],
+        "the copy verified the bytes and cached the record"
+    );
 }
 
 /// `update` must remain fully eager. It is the command that *defines* a complete

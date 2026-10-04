@@ -408,3 +408,65 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
 }
+
+/// A case-only pair whose **content** also differs must be renamed *and* copied.
+///
+/// This is the one gate in this stage that catches a wrong planner case-flag, and
+/// it exists because the fixture above cannot. That fixture's two sides hold the
+/// same bytes, so a run that never learns a digest for the pair still concludes
+/// "equal" and reaches the right answer by luck. Same for the case-only pair in
+/// `run_sync_dry_run_summary_matches_a_real_run` and in the golden.
+///
+/// Here the bytes differ at the same length with the mtime pinned, so size+mtime
+/// agree and only a digest can tell them apart. If `plan_pairs` is handed
+/// `case_sensitive: true` it pairs by exact key *before* the rename pass
+/// collapses the pair, so neither side gets a digest; the rename then makes the
+/// keys match, `hashes_differ` stays silent on dst's absent digest and falls back
+/// to size+mtime, and the run reports success having copied nothing — leaving dst
+/// with the wrong bytes and the mirror quietly lying.
+///
+/// So this asserts the *outcome*, not the plan: a plan assertion would be
+/// satisfied by a `RENAME` line that is printed either way.
+#[test]
+fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
+    let t = TempRoot::new("caseren_content");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // Same length, different bytes. Different lengths would let size settle the
+    // pair, and the test would pass without a digest ever being needed.
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"PAYLOAD");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    // The dry run must plan the copy, so the failure is visible before it is
+    // committed to disk.
+    let mut dry = sync(src.clone(), dst.clone());
+    dry.common.case_sensitive = false;
+    dry.common.dry_run = true;
+    assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
+    assert_eq!(
+        rfile(&dst, "data.txt"),
+        b"PAYLOAD",
+        "a dry run copies nothing"
+    );
+
+    let mut real = sync(src.clone(), dst.clone());
+    real.common.case_sensitive = false;
+    assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
+
+    assert_eq!(
+        entry_names(&dst),
+        vec!["Data.txt".to_string()],
+        "dst adopts src casing"
+    );
+    assert_eq!(
+        rfile(&dst, "Data.txt"),
+        b"payload",
+        "and the bytes are src's, not the ones dst already had"
+    );
+    assert_eq!(
+        cmd_compare(compare(src, dst), &log()).unwrap(),
+        0,
+        "converged"
+    );
+}
