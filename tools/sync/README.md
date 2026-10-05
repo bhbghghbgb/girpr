@@ -23,7 +23,7 @@ and drive the public API.
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff reporter/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
-| `commands/compare_self.rs` | diff a folder against its own cache, read-only |
+| `commands/compare_self.rs` | diff a folder against its own cache, folder side scanned with no cache |
 | `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective.rs`) is what makes `--dry-run` mean the same thing in every command |
@@ -59,7 +59,7 @@ trusting a half-written file.
 ```
 girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
 girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [--dry-run] [...]
+girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [--dry-run] [...]   # the last two are accepted and do nothing
 girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
@@ -129,9 +129,7 @@ process. That repair is the reason it is not simply
 `compare --src <DIR>/girpr-cache --dst <DIR>` — that spelling is rejected by the
 one-cache-per-run rule, because a folder side rewrites its cache while scanning,
 so the audit would fix the drift it was reporting and a rerun would come back
-clean. Here the cache is opened read-only, which is the real guarantee: the
-handle has no write path at all, so a cache write could not commit even if some
-future code asked for one.
+clean.
 
 Output and exit codes are `compare`'s, with the **record as `src`**:
 `MISSING` = a row the cache still holds for a path that is gone, `EXTRA` = a
@@ -140,14 +138,29 @@ Exits `4` on drift, `0` when in step, `3` if there is no cache to compare
 against (it never creates one — that would make the first run vacuously clean)
 or if `--ignore-cache` was passed (it would delete the record under audit).
 
-**The default checks stat, not content.** The disk side is still built with the
-cache available, so a file whose size+mtime match keeps its recorded digest.
-That is what makes this cheap, and it is why content that changed while
-preserving both size and mtime is invisible until `--no-trust-cached-hashes`
-forces a rehash. Treat that flag as the difference between "the cache matches
-the folder's shape" and "the cache matches the folder's bytes". The same caveat
-applies to `--max-depth` and to `--include`/`--exclude`: a run whose filters
-differ from the ones the cache was built with reports drift that is not there.
+**The folder side is scanned with no cache to consult**, which is what makes this
+an audit. It used to share the record's cache, and a folder side's only
+cache-derived input is digests — so for every file whose size+mtime still
+matched, the "content comparison" was the record's digest compared with itself.
+Content that changed while preserving both was invisible, and
+`--no-trust-cached-hashes` was the only thing that could surface it. Now the
+folder is hashed against nothing, so it must be read to be compared, and a
+`CHANGED` means the bytes disagree. Two independent reasons nothing is written:
+the record is opened read-only (the handle has no write path at all), and the
+folder side is resolved against an in-memory handle that is not the same file.
+
+**It reads the undecided pairs, so the cost runs opposite to what you'd guess.**
+A file whose size or mtime disagrees with the record is settled without a read,
+which makes an audit of a drifted tree cheap. A folder that is *in step* has
+every pair stat-equal, so every file is read — there is nothing else that could
+settle them. `--hash none` is the stat-only audit and costs nothing, if that is
+what you want. `--no-trust-cached-hashes` and `--dry-run` are both accepted and
+do nothing here; the command warns rather than erroring, so a script passing them
+to every subcommand keeps working.
+
+The same caveat as everywhere else applies to `--max-depth` and
+`--include`/`--exclude`: a run whose filters differ from the ones the cache was
+built with reports drift that is not there.
 
 ### `--output text|json`
 
@@ -270,8 +283,9 @@ The flag is on `CommonArgs`, not on one command, because that is the only way it
 stays one flag. `sync` additionally threads it into the rename and apply phases,
 which are the only filesystem writes in the crate; the cache half reaches every
 command through `ScanMode::dry_run`. `compare-self` accepts it and warns, since it
-opens its cache read-only and already writes nothing — a script passing
-`--dry-run` everywhere should not break on the one command that was already safe.
+opens the record read-only and resolves the folder side against an in-memory
+handle — a script passing `--dry-run` everywhere should not break on the one
+command that was already safe.
 
 **A dry run must answer the same question, not a smaller one.** This is the part
 that is easy to get wrong and had never been enforced here: a dry run still
@@ -441,7 +455,7 @@ Record-vs-folder without touching the folder's cache:
 ```
 
 Is a folder's own cache still in step with it? (`compare-self` never writes, so
-this can be run at any time; add `--no-trust-cached-hashes` to rehash):
+this can be run at any time; it rehashes whatever size+mtime cannot settle):
 
 ```powershell
 .\target\debug\girsync compare-self --dir D:\game-live              # exit 0 = in step

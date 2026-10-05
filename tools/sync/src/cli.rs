@@ -123,21 +123,24 @@ pub enum Cmd {
     /// with one argument: report what the cache has drifted from, without
     /// repairing the cache in the process.
     ///
-    /// By default a file whose size+mtime still match the cache is taken at its
-    /// recorded digest, so this reports *stat* drift. Add
-    /// `--no-trust-cached-hashes` to rehash everything and report content
-    /// drift too.
+    /// The folder side is scanned with **no cache to consult**, which is what
+    /// makes this an audit. A file whose size+mtime still match is rehashed, so
+    /// content that changed while preserving both is reported rather than taken
+    /// at its recorded digest.
     CompareSelf {
         /// The folder to audit. Its `girpr-cache` is the record side.
         #[arg(long)]
         dir: PathBuf,
-        /// Rehash every file even when size+mtime match a cached digest.
+        /// Accepted and ignored. The disk side has no cache to distrust, so an
+        /// undecided pair is always rehashed; this used to be the only way to
+        /// see content drift that preserved size and mtime.
         #[arg(long, default_value_t = false)]
         no_trust_cached_hashes: bool,
         // `--dry-run` arrives here via `CommonArgs` and is accepted but has no
-        // effect: this command opens its cache read-only and has no write path,
-        // so it already writes nothing. `cmd_compare_self` warns rather than
-        // erroring, so a script passing it everywhere does not break here.
+        // effect: this command opens its record read-only and scans the folder
+        // against an in-memory cache, so it already writes nothing.
+        // `cmd_compare_self` warns rather than erroring, so a script passing it
+        // everywhere does not break here.
         #[command(flatten)]
         common: CommonArgs,
     },

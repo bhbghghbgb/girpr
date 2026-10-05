@@ -1,32 +1,66 @@
-//! `girsync compare-self` — report how a folder's own cache has drifted from
+//! `girsync compare-self` - report how a folder's own cache has drifted from
 //! the folder, changing nothing.
 //!
 //! This is `compare --src <DIR>/girpr-cache --dst <DIR>` collapsed to one
-//! argument, with the one thing that made that spelling impossible: the cache
-//! is opened read-only. A plain `compare` of a record against a folder is
-//! barred (see [`crate::effective::ensure_distinct_sides`]) precisely because a
-//! folder side rewrites its cache while scanning — the audit would repair the
-//! drift it was meant to report, and a second run would come back clean. Here
-//! the disk side is read without ever opening the cache for writing, so the
-//! report is the first thing that happens to the drift rather than the last.
+//! argument, and it differs from that spelling in exactly one respect that
+//! matters: **the disk side is given no cache to consult.** The record is read
+//! through a read-only handle, the folder is scanned against an *empty* one, and
+//! the two are then compared as independent sides. That is what makes this an
+//! audit rather than a self-consistency check.
 //!
-//! **What the default does and does not check.** The disk side is still built
-//! with the cache available, so a file whose size+mtime match keeps its
-//! recorded digest. That is what makes this cheap, and it is why the default
-//! reports *stat* drift only: content that changed while preserving both size
-//! and mtime is invisible until `--no-trust-cached-hashes` forces a rehash.
-//! The flag is the difference between "is the cache in step with the folder's
-//! shape" and "is it in step with the folder's bytes"; the name deliberately
-//! promises no more than the former.
+//! ## Why the disk side must have no cache
+//!
+//! A folder side's phase A takes `kind`, `size` and `mtime_ns` from the
+//! filesystem and takes **digests** from its cache. Handing it the record's
+//! cache therefore hands it the record's digests, so for every stat-equal pair
+//! the content comparison became [`crate::diff::diff_maps`] comparing the
+//! record's digest map against itself: always equal, and structurally unable to
+//! report anything. Content that changed while preserving both size and mtime
+//! was invisible, and `--no-trust-cached-hashes` was the only thing that could
+//! surface it — which made the difference between "the cache matches the
+//! folder's shape" and "the cache matches the folder's bytes" a matter of
+//! remembering a flag, on the one command whose entire job is the second.
+//!
+//! A shared handle has a second, quieter problem, and it is in the logs of the
+//! code this replaced: a folder side prunes rows it does not recognise, and
+//! under a shared handle the record's own rows are in scope. Auditing a folder
+//! whose disk spells `Case.txt` where the record holds `case.txt` had the disk
+//! side decide to drop the record's `case.txt` row, while the record side was
+//! holding that very row in memory. `ScanMode::dry_run` suppressed the write, so
+//! nothing was lost — but the audit was one flag away from rewriting its own
+//! subject, which is the same reason `ensure_distinct_sides` refuses the
+//! two-sided spelling.
+//!
+//! [`CacheDb::open_temp`] is in-memory, so the guarantee is structural rather
+//! than a flag that has to be threaded correctly: the disk side cannot reach the
+//! record because it is not the same file. The write promise then no longer rests
+//! on `ScanMode::dry_run` alone — which stays `true` here as a second,
+//! independent reason rather than the only one.
+//!
+//! ## What this costs
+//!
+//! A stat-differing pair is still settled by size and mtime with no read at all,
+//! so the audit is cheap on a drifted tree. An in-step tree is the other way
+//! round: every pair is undecided, and a digest of the folder's bytes is the only
+//! thing that can settle it, so the audit reads every file. That is the audit
+//! doing its job rather than a regression, and `tests/lazy.rs` pins the counts
+//! either way.
+//!
+//! ## The flags
+//!
+//! `--no-trust-cached-hashes` is now redundant — there is nothing left for it to
+//! distrust — and `--dry-run` was already. Both are still accepted, so a script
+//! passing them to every subcommand keeps working, and [`cmd_compare_self`] warns
+//! rather than erroring.
 
 use anyhow::{Result, bail};
 use tracing::{info, warn};
 
-use crate::cache::{CACHE_PREFIX, CacheOpen, open_db};
+use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{load_record_side_from, resolve_folder, resolve_record, scan_stat_only};
-use crate::planner::HashPlan;
+use crate::planner::{SideRequest, plan_pairs};
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -64,14 +98,23 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
 
     if common.dry_run {
-        // Warned, not rejected. This command already writes nothing — its cache
-        // is opened read-only and every write method on that handle fails — so the
-        // flag is a no-op rather than a conflict. Erroring would break a script
-        // that passes `--dry-run` to every subcommand to be safe, which is exactly
-        // the usage this invites.
+        // Warned, not rejected, and now for a shared reason with
+        // `--no-trust-cached-hashes`: neither flag changes what this command
+        // checks any more. Erroring would break a script that passes `--dry-run`
+        // to every subcommand to be safe, which is exactly the usage this
+        // invites.
         warn!(
             "--dry-run is redundant for compare-self: this command writes nothing \
-             (its cache is opened read-only), so it was already a dry run"
+             (the disk side is scanned against an in-memory cache and the record \
+             is opened read-only), so it was already a dry run"
+        );
+    }
+    if no_trust_cached_hashes {
+        warn!(
+            "--no-trust-cached-hashes is redundant for compare-self: the disk side \
+             is scanned with no cache to consult, so an undecided pair is always \
+             rehashed. This flag used to be the only way to see content drift that \
+             preserved size and mtime"
         );
     }
 
@@ -96,31 +139,71 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         );
     }
 
-    // One read-only handle serves both sides. It is the read-only *open* that
-    // carries the no-write promise, not the dry-run scan mode below: the handle
-    // has no write path at all, so a cache write could not commit even if some
-    // future code path asked for one.
-    let cache = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
-    info!(cache = %db_path.display(), entries = cache.load_all()?.len(), "cache opened read-only");
-    let rec = load_record_side_from(&cache, &common, &db_path.display().to_string())?;
+    // Two handles, and they are different files.
+    //
+    // The record: the subject under audit, read-only. The read-only *open* is
+    // what carries the no-write promise for this handle — it has no write path
+    // at all, so a cache write could not commit even if some future code asked
+    // for one.
+    let record = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
+    info!(
+        cache = %db_path.display(),
+        entries = record.load_all()?.len(),
+        "cache opened read-only"
+    );
+    let rec = load_record_side_from(&record, &common, &db_path.display().to_string())?;
     info!(
         side = "record",
         entries = rec.map.len(),
         "record side loaded"
     );
-    // Phase A for both roles off the one handle, then a plan, then phase C — the
-    // shape `compare` uses, and what lets a stat-drifted file cost no read once
-    // the planner learns to skip it.
-    let disk_mode = ScanMode {
-        no_trust_cached_hashes,
-        // Unconditionally true, and deliberately not read from the flag: this
-        // command has no write path at all, so it is a dry run whatever the user
-        // passed. The redundancy of `--dry-run` is reported above.
+
+    // The disk side: **an empty handle**, which is the entire point. This is not
+    // `open_folder_cache` with different arguments and not a second open policy —
+    // there is no folder cache to open. A temp DB is in-memory, so the disk side
+    // cannot consult, prune or rewrite the record it is being compared against,
+    // and a folder side's only cache-derived input is digests.
+    //
+    // Its `case_sensitive` matches the run's, so the pairing rule
+    // `plan_pairs` applies is the one `diff_maps` will apply.
+    let cold = CacheDb::open_temp(common.case_sensitive)?;
+
+    // Phase A for both roles, then one pair plan, then phase C — the shape
+    // `compare` uses. The planner needs both sides' maps at once, which is why
+    // both handles stay live across the plan.
+    let mode = ScanMode {
+        no_trust_cached_hashes: false,
+        // Unconditionally true, and deliberately not read from the flag. It is
+        // belt-and-braces rather than load-bearing — `cold` is in-memory and
+        // `record` is read-only, so neither could be written regardless — but
+        // keeping it means the no-write guarantee does not rest on one
+        // remembered `true` if the handles are ever reworked.
         dry_run: true,
     };
-    let disk = scan_stat_only(&dir, &cache, &common, disk_mode)?;
-    let plan = HashPlan::plan_one_side(&disk.map, &common.algos, no_trust_cached_hashes);
-    let disk = resolve_folder(&dir, &cache, disk_mode, &disk, &plan)?;
+    let disk_a = scan_stat_only(&dir, &cold, &common, mode)?;
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &rec.map,
+            algos: &common.algos,
+            // A record has no filesystem, so it never distrusts anything: what
+            // its rows hold is the answer, and `resolve_record` will hand back
+            // exactly what the planner saw.
+            no_trust: false,
+        },
+        SideRequest {
+            entries: &disk_a.map,
+            algos: &common.algos,
+            // Likewise not read from the flag — see above and the module docs.
+            no_trust: false,
+        },
+        common.case_sensitive,
+    );
+    info!(
+        record_pending = plans.src.by_rel.len(),
+        disk_pending = plans.dst.by_rel.len(),
+        "planned"
+    );
+    let disk = resolve_folder(&dir, &cold, mode, &disk_a, &plans.dst)?;
     let rec = resolve_record(&rec);
     info!(
         side = "disk",
