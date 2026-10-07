@@ -32,7 +32,8 @@ use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
-    classify, ensure_distinct_sides, open_folder_cache, resolve_folder, scan_stat_only,
+    SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
+    scan_stat_only,
 };
 use crate::planner::{SideRequest, plan_pairs};
 use crate::util::{elapsed_s, is_record_path};
@@ -155,14 +156,22 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             entries: &src_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_src,
+            // Both sides are folders, so both can hash: `sync` can never fail
+            // coverage. That is the property, not an omission — §2.4 requires the
+            // same check here as in `compare`, and here it is vacuous by
+            // construction rather than by a special case.
+            cap: SideCapability::for_folder(&src_db, src_mode),
+            label: &format!("folder {}", src.display()),
         },
         SideRequest {
             entries: &dst_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
+            cap: SideCapability::for_folder(&dst_db, dst_mode),
+            label: &format!("folder {}", dst.display()),
         },
         common.case_sensitive,
-    );
+    )?;
     info!(
         src_pending = plans.src.by_rel.len(),
         dst_pending = plans.dst.by_rel.len(),

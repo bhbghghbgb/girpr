@@ -1,5 +1,7 @@
 //! `girsync compare` — report how dst differs from src, changing nothing itself.
 
+use std::path::Path;
+
 use anyhow::Result;
 use tracing::info;
 
@@ -94,19 +96,30 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // One decision, both sides in. A path is read only if it is a file on *both*
     // sides with equal size and mtime; every other pair state is already
     // decided, and `diff_maps` short-circuits the digest comparison anyway.
+    //
+    // The `?` is load-bearing: a side that cannot supply a requested digest —
+    // which only a record can be — has to stop the run here, before either side
+    // reads anything. Carrying on would report a confident verdict over content
+    // the diff silently skipped.
+    let s_label = describe(&src);
+    let d_label = describe(&dst);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_src,
+            cap: s.cap,
+            label: &s_label,
         },
         SideRequest {
             entries: &d.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
+            cap: d.cap,
+            label: &d_label,
         },
         common.case_sensitive,
-    );
+    )?;
     info!(
         src_pending = plans.src.by_rel.len(),
         dst_pending = plans.dst.by_rel.len(),
@@ -156,4 +169,14 @@ fn side_kind(s: &Side) -> &'static str {
         Side::Record(_) => "record",
         Side::Folder(_) => "folder",
     }
+}
+
+/// How a coverage error should name this side.
+///
+/// The planner knows what a side *can do* but not what it *is*, and "the dst side
+/// cannot supply…" is not something a user can act on where "the record
+/// D:\game\old\girpr-cache cannot supply…" is.
+fn describe(p: &Path) -> String {
+    let kind = side_kind(&classify(p));
+    format!("{kind} {}", p.display())
 }

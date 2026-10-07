@@ -5,9 +5,9 @@ mod common;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use common::{TempRoot, log, rw, update, wfile};
+use common::{TempRoot, age, log, rw, strip_algo, sync, sync_mtime, update, wfile};
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
-use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_update};
+use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_sync, cmd_update};
 
 fn recs(dir: &Path) -> HashMap<String, FileRec> {
     load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
@@ -268,6 +268,169 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
         "a size difference needs no digest either way"
     );
     assert_eq!(recs(&dir), before, "still writes nothing");
+}
+
+/// A record that cannot supply a digest the run asked for must **fail**, not
+/// degrade.
+///
+/// The degradation is the dangerous part and it is silent: `hashes_differ` skips
+/// any algorithm either side lacks, so an uncovered pair falls back to the size
+/// and mtime that already agreed, and the audit reports a confident "in step"
+/// about content it never read. With the disk side cache-free (stage 5a) that
+/// silence is no longer masked by a tautology, so it is visible — and visible as
+/// a *wrong answer*, which is worse than an error.
+#[test]
+fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
+    let t = TempRoot::new("cs_cover");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    strip_algo(&dir, "a.txt", "md5");
+
+    let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
+    let msg = format!("{:#}", err);
+    // Four signals, or the user cannot act (§5.4): which record, how many paths,
+    // one example path with the algorithm it lacks, per-algorithm coverage, and
+    // a remedy.
+    for (what, needle) in [
+        ("the record under audit", "girpr-cache"),
+        ("an example path", "a.txt"),
+        ("the algorithm it lacks", "md5"),
+        ("a remedy", "girsync update"),
+    ] {
+        assert!(msg.contains(needle), "message should name {what}:\n{msg}");
+    }
+    assert!(
+        msg.contains("0/1"),
+        "per-algorithm coverage, and it says zero covered:\n{msg}"
+    );
+}
+
+/// **Scoped to the undecided set**, which is the rule that keeps this check from
+/// failing runs that are perfectly answerable.
+///
+/// The row is stripped of its digest *and* the file is aged, so the pair differs
+/// in stat — which means size and mtime have already decided it and no digest was
+/// ever required. A whole-record preflight would fail here, and one already was
+/// written and reverted once (§3); the coverage requirement is a property of a
+/// (path, side) pair inside the undecided set, never of the record as a whole.
+#[test]
+fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
+    let t = TempRoot::new("cs_cover_differ");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "b.txt", b"world");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    // `b.txt` loses its digest *and* its stat, so it is already decided.
+    strip_algo(&dir, "b.txt", "md5");
+    age(&dir, "b.txt", 60);
+
+    assert_eq!(
+        cmd_compare_self(self_compare(dir.clone()), &log()).unwrap(),
+        4,
+        "b.txt is CHANGED by stat, so the missing digest is not in question"
+    );
+    assert_eq!(
+        recs(&dir)["b.txt"].hashes.len(),
+        0,
+        "and the row is untouched"
+    );
+}
+
+/// **The failure mode is reachable by an ordinary workflow, and this is the route.**
+///
+/// `update` the folder, let a file appear, then `sync` the folder *as src*. The
+/// sync's phase A has no cached row for the newcomer, so it records the current
+/// stat and **no digest** — correctly, because the pair was decided by presence
+/// and needed no digest. The row is now stat-only and *fresh*, so nothing will
+/// ever fill it in on its own. The next `compare-self` finds a stat-equal,
+/// undecided pair on a record that cannot answer it.
+///
+/// Before the coverage rule this exited **0**: `hashes_differ` skips an algorithm
+/// either side lacks, so the pair fell back to the size+mtime that already agreed
+/// and the audit reported the newcomer as in step. That is the whole false-clean
+/// this check exists to stop, so the test uses a real `sync` rather than
+/// `strip_algo` — a hand-stripped digest is a hypothetical, a stat-only row
+/// written by a lazy scan is Tuesday.
+#[test]
+fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() {
+    let t = TempRoot::new("cs_lazy_route");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    for i in 0..2 {
+        wfile(&src, &format!("f{i}.txt"), format!("body {i}").as_bytes());
+        wfile(&dst, &format!("f{i}.txt"), format!("body {i}").as_bytes());
+    }
+    sync_mtime(&src.join("f0.txt"), &dst.join("f0.txt"));
+    sync_mtime(&src.join("f1.txt"), &dst.join("f1.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    // Arrives after the update, so src's cache has no row for it at all.
+    wfile(&src, "late.txt", b"late arrival");
+    cmd_sync(sync(src.clone(), dst), &log()).unwrap();
+
+    // The row exists, carries the file's current stat, and has no digest. Fresh,
+    // because it was taken from disk: this is not a stale entry.
+    let late = &recs(&src)["late.txt"];
+    assert!(
+        late.hashes.is_empty(),
+        "phase A recorded stat only: {late:?}"
+    );
+    assert_eq!(late.size, 12, "and the stat it recorded is the file's own");
+
+    let err = cmd_compare_self(self_compare(src.clone()), &log())
+        .expect_err("the audit cannot answer for the newcomer, and says so");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("late.txt"),
+        "names the one uncovered path:\n{msg}"
+    );
+    assert!(
+        msg.contains("girsync update --dir"),
+        "and the remedy is one command:\n{msg}"
+    );
+    assert!(
+        msg.contains(&src.display().to_string()),
+        "and the label resolves to the folder to run it on:\n{msg}"
+    );
+    // And the covered paths are counted, so the user can see this is 1 of N
+    // rather than a whole broken record.
+    assert!(msg.contains("2/3"), "per-algorithm coverage:\n{msg}");
+
+    // The remedy works, and this is the point of the test: one command, and the
+    // audit answers again.
+    cmd_update(update(src.clone()), &log()).unwrap();
+    assert_eq!(
+        cmd_compare_self(self_compare(src), &log()).unwrap(),
+        0,
+        "after update the record covers every undecided pair"
+    );
+}
+
+/// `--hash none` is a request for a stat-only audit, not a coverage failure — so
+/// the same stripped record that fails above passes here.
+///
+/// This needs no special case in the planner: an empty request means there is
+/// nothing to cover, and the early return for `--hash none` is reached before the
+/// coverage check could fire. The test is here because "no special case" is the
+/// kind of claim that stops being true without one.
+#[test]
+fn hash_none_is_not_a_coverage_failure() {
+    let t = TempRoot::new("cs_cover_none");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    strip_algo(&dir, "a.txt", "md5");
+
+    let mut o = self_compare(dir.clone());
+    o.common = CommonOpts {
+        algos: vec![],
+        ..common::opts()
+    };
+    assert_eq!(
+        cmd_compare_self(o, &log()).unwrap(),
+        0,
+        "nothing was asked for, so nothing is uncovered"
+    );
 }
 
 #[test]

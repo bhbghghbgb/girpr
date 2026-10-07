@@ -719,12 +719,17 @@ pub fn resolve_folder(
 /// **Phase C** for a record side: no filesystem access, so it can only hand back
 /// what it already had.
 ///
-/// It does not check that the plan was answerable. That check belongs to the
-/// planner, which sees both sides at once and can report every uncovered path at
-/// once; and until the all-of rule lands, a record that lacks a digest still
-/// degrades to size+mtime silently, exactly as it does today. Failing here
-/// instead would make a record side fatal on the first undecided path it
-/// happened to be short of, which is the reverted attempt's mistake.
+/// It does not check that the plan was answerable — the planner never asks it to
+/// be, because [`crate::planner::plan_pairs`] only plans work for a side that can
+/// hash from disk. So this function copies phase A's rows verbatim and there is
+/// nothing here for it to fail on.
+///
+/// The *coverage* check does exist, and it is in the planner rather than here for
+/// two reasons: the planner is the only place that holds both sides, so it can
+/// report every uncovered path in one message rather than stopping at the first;
+/// and a shortfall is a property of a (path, side) pair inside the undecided set,
+/// never of the record as a whole. A preflight over the record itself was written
+/// and reverted once for exactly that reason — see `plan_pairs`' module docs.
 pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
     let map = phase_a
         .map

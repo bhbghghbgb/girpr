@@ -4,7 +4,7 @@ mod common;
 
 use common::{
     TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
-    sync, sync_mtime, update, update_dry, wfile,
+    strip_algo, sync, sync_mtime, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, open_db};
 use girsync::config::{CommonOpts, ScanMode};
@@ -92,19 +92,28 @@ fn effective_maps(
     };
     let mut so = open_side(&s, &common, mode).unwrap();
     let mut do_ = open_side(&d, &common, mode).unwrap();
+    // Labels only so a coverage error can name a side; these fixtures are both
+    // folders and fully covered, so it never fires.
+    let s_label = format!("{}", s.cache_path().display());
+    let d_label = format!("{}", d.cache_path().display());
     let plans = plan_pairs(
         SideRequest {
             entries: &so.phase_a.map,
             algos: &common.algos,
             no_trust: false,
+            cap: so.cap,
+            label: &s_label,
         },
         SideRequest {
             entries: &do_.phase_a.map,
             algos: &common.algos,
             no_trust: false,
+            cap: do_.cap,
+            label: &d_label,
         },
         common.case_sensitive,
-    );
+    )
+    .unwrap();
     let sm: SideScan = resolve_side(&mut so, mode, &plans.src).unwrap();
     let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst).unwrap();
     // `ScanStats` derives `PartialEq`, so this can be asserted whole rather than
@@ -516,5 +525,86 @@ fn compare_self_accepts_dry_run_with_a_warning() {
         bytes(&cache),
         before,
         "and still writes nothing, because it never did"
+    );
+}
+
+/// The coverage rule, end-to-end, through the same planner `compare-self` uses.
+///
+/// The fixture is a record against a folder that started as a copy of it: same
+/// content, mtimes pinned, both caches warmed, then `md5` stripped from **both**
+/// rows.
+///
+/// Stripping it from the folder's row too is what makes this double as the ordering
+/// gate. With no digest on either side, a run that reached phase C would hash
+/// `a.txt` on the folder side and write the digest back - so the row *gaining* an
+/// `md5` is the observable, and its absence is the proof that phase C never ran.
+///
+/// **Rows, not bytes.** Byte-identity is the stronger claim and it is available
+/// under `--dry-run` - `compare_dry_run_writes_nothing_and_answers_the_same` relies
+/// on it - but this is a *real* run, whose folder cache is opened read-write, and
+/// redb may touch a file merely by being opened. Comparing bytes here would be a
+/// test of redb's open-time behaviour wearing the costume of a test of the
+/// coverage rule.
+#[test]
+fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
+    let t = TempRoot::new("cmp_cover");
+    let rec_home = t.mkdirs("rec");
+    let folder = t.mkdirs("live");
+    for dir in [&rec_home, &folder] {
+        wfile(dir, "a.txt", b"hello");
+    }
+    sync_mtime(&rec_home.join("a.txt"), &folder.join("a.txt"));
+    cmd_update(update(rec_home.clone()), &log()).unwrap();
+    cmd_update(update(folder.clone()), &log()).unwrap();
+    strip_algo(&rec_home, "a.txt", "md5");
+    strip_algo(&folder, "a.txt", "md5");
+    assert_eq!(
+        recs_of(&folder)["a.txt"].hashes.len(),
+        0,
+        "the fixture starts with nothing for the folder side to reuse"
+    );
+
+    let err = cmd_compare(compare(rec_home.join(CACHE_PREFIX), folder.clone()), &log())
+        .expect_err("an uncovered record cannot answer the question");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("girpr-cache"), "names the record:\n{msg}");
+    assert!(msg.contains("a.txt"), "and an example path:\n{msg}");
+    assert!(msg.contains("girsync update"), "and a remedy:\n{msg}");
+
+    assert_eq!(
+        recs_of(&folder)["a.txt"].hashes.len(),
+        0,
+        "the folder side was never resolved: nothing hashed, nothing written"
+    );
+}
+
+/// `--no-trust-cached-hashes` on a **record** side must not make it uncovered.
+///
+/// Trust asks "re-read rather than reuse", and a record has nothing to re-read:
+/// it has no filesystem. Folding trust into availability would make
+/// `--no-trust-cached-hashes src` fatal for every record, including one holding
+/// exactly the right digests - which is what `convert.rs`'s unrequested-algorithm
+/// case does, so this is a live regression and not a hypothetical.
+///
+/// Availability is `cached` plus `hashable`, and trust is absent from it on purpose.
+#[test]
+fn distrusting_a_record_does_not_make_it_uncovered() {
+    let t = TempRoot::new("cmp_notrust_rec");
+    let rec_home = t.mkdirs("rec");
+    let folder = t.mkdirs("live");
+    for dir in [&rec_home, &folder] {
+        wfile(dir, "a.txt", b"hello");
+    }
+    sync_mtime(&rec_home.join("a.txt"), &folder.join("a.txt"));
+    cmd_update(update(rec_home.clone()), &log()).unwrap();
+    cmd_update(update(folder.clone()), &log()).unwrap();
+
+    let mut o = compare(rec_home.join(CACHE_PREFIX), folder.clone());
+    o.trust.no_trust_src = true;
+    o.trust.no_trust_dst = true;
+    assert_eq!(
+        cmd_compare(o, &log()).unwrap(),
+        0,
+        "the record holds md5, so distrusting its cache changes nothing it owes"
     );
 }

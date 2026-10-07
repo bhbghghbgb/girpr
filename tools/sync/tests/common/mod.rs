@@ -419,19 +419,28 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
         },
     )
     .unwrap();
+    // The labels exist only so a coverage error can name a side; a fixture that
+    // reaches one is a test failure, not something to read.
+    let s_label = format!("src {}", src.cache_path().display());
+    let d_label = format!("dst {}", dst.cache_path().display());
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_src,
+            cap: s.cap,
+            label: &s_label,
         },
         SideRequest {
             entries: &d.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
+            cap: d.cap,
+            label: &d_label,
         },
         common.case_sensitive,
-    );
+    )
+    .unwrap();
     let sm = resolve_side(
         &mut s,
         ScanMode {

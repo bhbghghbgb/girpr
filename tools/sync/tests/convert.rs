@@ -7,6 +7,7 @@ mod common;
 
 use common::{TempRoot, log, parse_ndjson, rw};
 use girsync::cache::{load_all_records, open_db};
+use sha2::Digest;
 use std::collections::HashMap;
 
 fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json::Value {
@@ -18,6 +19,19 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
+/// A legacy sled DB, holding exactly what the case below needs.
+///
+/// **Both file rows carry every algorithm the case requests**, and that is
+/// load-bearing rather than incidental. The coverage rule says a record side must
+/// be able to supply every requested algorithm for every undecided pair, so a row
+/// holding only `md5` makes the run fail — which is the *correct* answer, not a
+/// converter bug. An earlier version of this fixture had `md5` on `a.txt` and
+/// `sha256` on `sub/b.bin` and nothing else, which made it an uncoverable record by
+/// accident; the lenient behaviour it leaned on is the hole stage 5b closed.
+///
+/// The `blake3` row is the other point of the case: an algorithm this crate has
+/// never heard of must survive conversion untouched and must not affect a diff that
+/// never asks for it.
 fn build_sled_db(dir: &std::path::Path) {
     let db_path = dir.join("legacy-cache");
     let db = sled::open(&db_path).unwrap();
@@ -30,13 +44,20 @@ fn build_sled_db(dir: &std::path::Path) {
         .unwrap(),
     )
     .unwrap();
-    let md5hex = format!("{:x}", md5::compute(b"hello"));
     db.insert(
         "a.txt",
         serde_json::to_vec(&old_rec(
             "file",
             5,
-            [("md5".to_string(), md5hex.clone())].into_iter().collect(),
+            [
+                ("md5".to_string(), format!("{:x}", md5::compute(b"hello"))),
+                (
+                    "sha256".to_string(),
+                    format!("{:x}", sha2::Sha256::digest(b"hello")),
+                ),
+            ]
+            .into_iter()
+            .collect(),
         ))
         .unwrap(),
     )
@@ -48,6 +69,7 @@ fn build_sled_db(dir: &std::path::Path) {
             "file",
             0,
             [
+                ("md5".to_string(), format!("{:x}", md5::compute(b""))),
                 (
                     "sha256".to_string(),
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
@@ -181,9 +203,13 @@ fn the_converter_reports_json_records_on_stdout() {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     };
+    // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them. The
+    // count tracks the fixture: `build_sled_db` gives every row both requested
+    // algorithms so the converted record can answer a `--hash md5 --hash sha256`
+    // audit, and `blake3` is the extra one that must survive untouched.
     let want = serde_json::json!({"event": "converted", "src": src.display().to_string(),
                                  "dst": dst.display().to_string(), "files": 2, "dirs": 1,
-                                 "hashes": 3});
+                                 "hashes": 5});
 
     let (code, stdout, stderr) = run(&["--output", "json"]);
     assert_eq!(code, 0, "stderr: {stderr}");
@@ -195,7 +221,7 @@ fn the_converter_reports_json_records_on_stdout() {
     assert_eq!(
         stdout,
         format!(
-            "converted src={} dst={} files=2 dirs=1 hashes=3\n",
+            "converted src={} dst={} files=2 dirs=1 hashes=5\n",
             src.display(),
             dst.display()
         )

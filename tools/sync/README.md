@@ -121,6 +121,16 @@ the caches come out byte-identical (an existing one is opened read-only, a
 missing one is served from memory so none is left behind), and the report is
 identical.
 
+**A record side must be able to answer every pair it is asked about, and exits `3`
+if it cannot.** Coverage is checked *before* either side reads a byte, over the
+undecided set only. A folder can always go and compute a missing digest; a record
+cannot, so a digest it does not hold is a question this run cannot answer — and
+the alternative, which is what used to happen, was to fall back to size+mtime and
+report a confident answer about content nobody compared. `--no-trust-cached-hashes`
+on a record side is *not* a shortfall: it asks the record to re-read, and a record
+has nothing to re-read. `sync` runs the same check and cannot trip it, because
+both its sides are folders. Details, and the message shape, in `src/planner.rs`.
+
 ### compare-self
 
 `compare` with one argument: the record side is `--dir`'s own `girpr-cache`, so
@@ -157,6 +167,27 @@ settle them. `--hash none` is the stat-only audit and costs nothing, if that is
 what you want. `--no-trust-cached-hashes` and `--dry-run` are both accepted and
 do nothing here; the command warns rather than erroring, so a script passing them
 to every subcommand keeps working.
+
+**A record that cannot answer a pair it is asked about is now an error, not a
+pass.** Exits `3`, naming the record, how many undecided paths are uncovered, a
+few of them, the per-algorithm coverage, and the remedy. This is a behaviour
+change and the commonest way to hit it is worth knowing:
+
+```
+girsync update src      # cache warm
+# a file appears in src
+girsync sync src dst    # ...and leaves a stat-only row for it in src's cache
+girsync compare-self src   # exit 3: 1 of 3 undecided paths uncovered
+```
+
+The `sync` is not at fault. It decided that pair by presence, so it needed no
+digest, so phase A recorded the file's stat and nothing else — and that row is
+*fresh*, so nothing will ever fill it in on its own. The audit then finds a
+stat-equal pair the record cannot digest, and before this rule it exited **0**:
+`hashes_differ` skips an algorithm either side lacks, so the pair quietly fell back
+to the size+mtime that had already agreed and the audit reported the newcomer as
+in step. One command fixes it (`girsync update --dir src`), or `--hash none` if a
+stat-only audit is what you wanted.
 
 The same caveat as everywhere else applies to `--max-depth` and
 `--include`/`--exclude`: a run whose filters differ from the ones the cache was
@@ -394,8 +425,23 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   unequal size uncertain. A `MISSING` file is still copied, because `copy_one`
   rehashes both sides to verify and returns the record it caches; that rehash is
   the only hash such a file needs. Both commands therefore leave **stat-only
-  rows** for paths they did not hash, which is a valid state: the next run sees a
-  fresh row with nothing cached and asks for a digest.
+  rows** for paths they did not hash, which is a valid state for a *folder* side:
+  the next run sees a fresh row with nothing cached and asks for a digest, which
+  it is able to do. It is **not** a valid state for a *record* side, which is why
+  the planner's coverage check exists — see below.
+
+  The same `plan_pairs` call that decides what to read also decides whether the run
+  *can* be answered, and it does so over the undecided set only, before any read.
+  A side's availability is `cached ∪ hashable`, with deliberately **no trust term**:
+  `--no-trust-cached-hashes` asks a side to re-read rather than reuse, and a record
+  has no filesystem to re-read, so the flag changes nothing a record owes. A
+  non-hashable side short of a requested algorithm on an undecided pair is fatal
+  (exit `3`). `resolve_record` therefore never has to check anything — the planner
+  does not plan work for a side that cannot hash, so there is nothing it could have
+  failed to deliver. That is what closes the last false clean: `hashes_differ` skips
+  an algorithm either side lacks, so an uncovered pair used to fall back to the
+  size+mtime that had already agreed and the run reported `CHANGED = 0` about
+  content nobody read.
 
   Separately, and needing no knowledge of the other side, a folder side
   **corrects its own cache** as it walks: a stale row (stat no longer matches
@@ -468,6 +514,12 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 - Backups/olds accumulate (`keep-all`, suffixed `_2…` on timestamp collision);
   clean them manually. They are `girpr-cache*` so never sync.
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
+- **A record that cannot digest an undecided pair exits `3`.** The easiest way to
+  hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
+  stat-only row in a folder's cache, and the next `compare`/`compare-self` against
+  it cannot compare content for that path. It used to exit `0` and call the pair
+  equal on size+mtime alone. `girsync update --dir <the folder>` is the fix; the
+  error names the folder, the count and the paths.
 - Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`

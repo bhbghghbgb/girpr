@@ -25,8 +25,8 @@ use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
-    Side, classify, ensure_distinct_sides, load_record_side_from, open_folder_cache, open_side,
-    resolve_folder, resolve_record, resolve_side, scan_stat_only,
+    Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
+    open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
 use girsync::planner::{SideRequest, plan_pairs};
 use girsync::report::verdict;
@@ -74,19 +74,28 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
     let mut s = open_side(&s_side, common, mode(trust.no_trust_src)).unwrap();
     let mut d = open_side(&d_side, common, mode(trust.no_trust_dst)).unwrap();
 
+    // Labels only so a coverage error can name a side. Every case here is two
+    // folders, so coverage cannot fail and the labels are never read.
+    let s_label = format!("src {}", s_side.cache_path().display());
+    let d_label = format!("dst {}", d_side.cache_path().display());
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_src,
+            cap: s.cap,
+            label: &s_label,
         },
         SideRequest {
             entries: &d.phase_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
+            cap: d.cap,
+            label: &d_label,
         },
         common.case_sensitive,
-    );
+    )
+    .unwrap();
     let sm = resolve_side(&mut s, mode(trust.no_trust_src), &plans.src).unwrap();
     let dm = resolve_side(&mut d, mode(trust.no_trust_dst), &plans.dst).unwrap();
     Run {
@@ -192,19 +201,28 @@ fn self_audit(dir: &Path) -> Run {
     // stat-equal content comparison vacuous.
     let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
     let disk_a = scan_stat_only(dir, &cold, &common, mode).unwrap();
+    // Labels only so a coverage error can name a side. Every audited folder here
+    // is `update`d with the algorithms the audit asks for, so coverage holds.
+    let rec_label = format!("record {}", dir.join(CACHE_PREFIX).display());
+    let disk_label = format!("folder {}", dir.display());
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,
             algos: &common.algos,
             no_trust: false,
+            cap: SideCapability::record(),
+            label: &rec_label,
         },
         SideRequest {
             entries: &disk_a.map,
             algos: &common.algos,
             no_trust: false,
+            cap: SideCapability::for_folder(&cold, mode),
+            label: &disk_label,
         },
         common.case_sensitive,
-    );
+    )
+    .unwrap();
     let disk = resolve_folder(dir, &cold, mode, &disk_a, &plans.dst).unwrap();
     let rec = resolve_record(&rec);
     Run {
@@ -753,19 +771,29 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
     // `common.case_sensitive`, not `true`: the planner runs *before* the rename
     // pass, so it has to pair the sides as they are on disk. See
     // `a_case_only_difference_in_content_is_copied_not_merely_renamed`.
+    //
+    // Both sides are folders, so coverage cannot fail here — which is the point
+    // of `sync` sharing the check rather than skipping it.
+    let s_label = format!("folder {}", src.display());
+    let d_label = format!("folder {}", dst.display());
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_src,
+            cap: SideCapability::for_folder(&src_db, mode(trust.no_trust_src)),
+            label: &s_label,
         },
         SideRequest {
             entries: &dst_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
+            cap: SideCapability::for_folder(&dst_db, mode(trust.no_trust_dst)),
+            label: &d_label,
         },
         common.case_sensitive,
-    );
+    )
+    .unwrap();
     let sm = resolve_folder(src, &src_db, mode(trust.no_trust_src), &src_a, &plans.src).unwrap();
     let dm = resolve_folder(dst, &dst_db, mode(trust.no_trust_dst), &dst_a, &plans.dst).unwrap();
     (sm.stats.hashed, dm.stats.hashed)

@@ -59,7 +59,9 @@ use tracing::{info, warn};
 use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{load_record_side_from, resolve_folder, resolve_record, scan_stat_only};
+use crate::effective::{
+    SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
+};
 use crate::planner::{SideRequest, plan_pairs};
 use crate::util::elapsed_s;
 
@@ -181,23 +183,37 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         dry_run: true,
     };
     let disk_a = scan_stat_only(&dir, &cold, &common, mode)?;
+    // Labels for a coverage error. The record is `src` here, so the record is what
+    // a failure names — which is the side that cannot fill a gap, and the one the
+    // remedy is about. The record's label carries the folder too, because on this
+    // command the remedy is `girsync update --dir <that folder>` and the user
+    // should not have to work out which directory a cache path belongs to.
+    let rec_label = format!("record {} (for {})", db_path.display(), dir.display());
+    let disk_label = format!("folder {}", dir.display());
+    // The `?` stops the run before either side reads anything: a record that
+    // cannot supply a requested digest must fail rather than let the pair fall
+    // back to size+mtime, which for an audit means reporting "in step" about
+    // content nobody compared.
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,
             algos: &common.algos,
-            // A record has no filesystem, so it never distrusts anything: what
-            // its rows hold is the answer, and `resolve_record` will hand back
-            // exactly what the planner saw.
+            // A record has nothing to distrust: its rows are the answer, not a
+            // cache with a possibly-stale entry. Trust is absent from coverage
+            // for the same reason.
             no_trust: false,
+            cap: SideCapability::record(),
+            label: &rec_label,
         },
         SideRequest {
             entries: &disk_a.map,
             algos: &common.algos,
-            // Likewise not read from the flag — see above and the module docs.
             no_trust: false,
+            cap: SideCapability::for_folder(&cold, mode),
+            label: &disk_label,
         },
         common.case_sensitive,
-    );
+    )?;
     info!(
         record_pending = plans.src.by_rel.len(),
         disk_pending = plans.dst.by_rel.len(),
