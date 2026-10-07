@@ -2,14 +2,68 @@
 
 mod common;
 
+use std::path::Path;
+
 use common::{TempRoot, md5arg, opts, rw, scan, wfile};
 use girsync::CommonOpts;
 use girsync::ScanStats;
-use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
-use girsync::effective::{build_effective_folder, open_folder_cache, scan_stat_only};
+use girsync::effective::{SideScan, open_folder_cache};
+use girsync::effective::{resolve_folder, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
 use girsync::hash::parse_hash_list;
+use girsync::planner::HashPlan;
+
+/// A folder-side run's counters, kept **per phase** rather than merged.
+///
+/// `build_effective_folder` handed back one merged `ScanStats` and these tests
+/// asserted it. Nothing merges any more: `cmd_update` reports phase A's
+/// `files`/`dirs` and phase C's `hashed`, because those are the only two it needs
+/// and they come from different phases — so a merged number here would assert a
+/// view nothing ships.
+///
+/// The split is also the better assertion. "Phase A hashed 0" is the property the
+/// whole planner rests on, and a merged total cannot show it: `update`'s eager
+/// `files = 3, hashed = 3` looks identical whether phase A read the bytes or phase
+/// C did, which is precisely the thing stage 2 moved and stage 3 depends on.
+#[derive(Debug)]
+struct Run {
+    /// Phase C's resolved map, keyed by relative path.
+    map: std::collections::HashMap<String, girsync::EffRec>,
+    /// Phase A's counters: the walk, and `hashed = 0` always.
+    a: ScanStats,
+    /// Phase C's counters: who got read, who was served, who needed no digest.
+    c: ScanStats,
+}
+
+/// Phase A, then [`HashPlan::plan_one_side`], then phase C — the pipeline a folder
+/// side runs, spelled out.
+///
+/// `cmd_update` does the same three steps inline, and `build_effective_folder` used
+/// to hide them. Duplicating them here rather than calling the command is what lets
+/// a unit test assert on any one phase, which is the only reason these tests exist
+/// as units at all.
+fn phased(root: &Path, cache: &CacheDb, common: &CommonOpts, mode: ScanMode) -> Run {
+    let phase_a: SideScan<girsync::SideEntry> = scan_stat_only(root, cache, common, mode).unwrap();
+    let plan = HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
+    let resolved = resolve_folder(root, cache, mode, &phase_a, &plan).unwrap();
+    Run {
+        map: resolved.map,
+        a: phase_a.stats,
+        c: resolved.stats,
+    }
+}
+
+/// [`phased`] for the tests that want the resolved map and nothing else.
+fn resolved_map(
+    root: &Path,
+    cache: &CacheDb,
+    common: &CommonOpts,
+    mode: ScanMode,
+) -> std::collections::HashMap<String, girsync::EffRec> {
+    phased(root, cache, common, mode).map
+}
 
 #[test]
 fn hash_arg_none_exclusive() {
@@ -46,7 +100,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     };
 
     let db = open_db(&db_path, true, rw()).unwrap();
-    let eff = build_effective_folder(
+    let eff = resolved_map(
         &dir,
         &db,
         &sensitive,
@@ -54,9 +108,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
             no_trust_cached_hashes: true,
             dry_run: false,
         },
-    )
-    .unwrap()
-    .map;
+    );
     assert!(eff.contains_key("a.txt"));
     drop(db);
 
@@ -67,9 +119,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 
     // Previously this errored in open_db (meta mismatch). Must succeed now.
     let db = open_db(&db_path, false, rw()).unwrap();
-    let eff = build_effective_folder(&dir, &db, &insensitive, scan(false, false))
-        .unwrap()
-        .map;
+    let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
     let want = md5::compute(b"hello").0.to_vec();
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
@@ -83,9 +133,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 
     // Same record must remain usable in a later sensitive run.
     let db = open_db(&db_path, true, rw()).unwrap();
-    let eff = build_effective_folder(&dir, &db, &sensitive, scan(false, false))
-        .unwrap()
-        .map;
+    let eff = resolved_map(&dir, &db, &sensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"));
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
     drop(db);
@@ -94,8 +142,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 }
 
 /// A three-file folder scanned on a cold cache, and the same folder scanned again
-/// once warm. Returns `(cold, warm)`.
-fn cold_then_warm(tag: &str, algos: Vec<String>) -> (ScanStats, ScanStats) {
+/// once warm. Returns `(cold, warm)`, each carrying both phases' counters.
+fn cold_then_warm(tag: &str, algos: Vec<String>) -> (Run, Run) {
     let t = TempRoot::new(tag);
     let dir = t.mkdirs("w");
     wfile(&dir, "a.txt", b"hello");
@@ -104,54 +152,54 @@ fn cold_then_warm(tag: &str, algos: Vec<String>) -> (ScanStats, ScanStats) {
     let common = CommonOpts { algos, ..opts() };
     let db_path = dir.join(CACHE_PREFIX);
 
-    let cold = {
+    let one = || {
         let db = open_db(&db_path, true, rw()).unwrap();
-        build_effective_folder(&dir, &db, &common, scan(false, false))
-            .unwrap()
-            .stats
+        phased(&dir, &db, &common, scan(false, false))
     };
-    let warm = {
-        let db = open_db(&db_path, true, rw()).unwrap();
-        build_effective_folder(&dir, &db, &common, scan(false, false))
-            .unwrap()
-            .stats
-    };
-    (cold, warm)
+    (one(), one())
 }
 
-/// A resolved folder's counters, unchanged by the phase split: a cold cache reads
-/// every file, a warm one reads nothing.
+/// A cold cache reads every file, a warm one reads nothing — and **phase A reads
+/// nothing either way**, which is the property the planner depends on and the one a
+/// merged counter cannot show.
 ///
-/// This is the number stage 3 moves. Nothing about the *map* changes when it
-/// does, which is why the counters had to become part of the result in the first
-/// place — the diff output alone cannot tell a lazy run from an eager one.
+/// This is the number stage 3 moves. Nothing about the *map* changes when it does,
+/// which is why the counters had to become part of the result in the first place —
+/// the diff output alone cannot tell a lazy run from an eager one.
 #[test]
 fn scan_counters_characterize_the_eager_baseline() {
     let (cold, warm) = cold_then_warm("stats_md5", md5arg());
 
     assert_eq!(
-        (
-            cold.files,
-            cold.dirs,
-            cold.hashed,
-            cold.cache_hit,
-            cold.stat_only,
-            cold.pruned
-        ),
-        (3, 2, 3, 0, 0, 0),
-        "a cold cache reads every file"
+        (cold.a.files, cold.a.dirs, cold.a.live),
+        (3, 2, 5),
+        "phase A sees the tree and nothing else"
     );
     assert_eq!(
-        (
-            warm.files,
-            warm.dirs,
-            warm.hashed,
-            warm.cache_hit,
-            warm.stat_only,
-            warm.pruned
-        ),
-        (3, 2, 0, 3, 0, 0),
+        (cold.a.hashed, cold.a.cache_hit, cold.a.stat_only),
+        (0, 0, 0),
+        "phase A never hashes, whatever the cache holds"
+    );
+    assert_eq!(
+        (cold.c.hashed, cold.c.cache_hit, cold.c.stat_only),
+        (3, 0, 0),
+        "a cold cache leaves every read to phase C"
+    );
+    assert_eq!(
+        (cold.a.pruned, cold.c.hashed - 3),
+        (0, 0),
+        "and prunes nothing"
+    );
+
+    assert_eq!(
+        (warm.c.hashed, warm.c.cache_hit, warm.c.stat_only),
+        (0, 3, 0),
         "a warm cache with matching stat reads nothing"
+    );
+    assert_eq!(
+        (warm.a.files, warm.a.hashed, warm.a.pruned),
+        (3, 0, 0),
+        "phase A is the same walk either way"
     );
 }
 
@@ -159,6 +207,9 @@ fn scan_counters_characterize_the_eager_baseline() {
 /// from the cache, or never needed a digest. Without this the three counters can
 /// overlap or leave files unaccounted for, and a "0 hashed" result stops meaning
 /// anything.
+///
+/// The buckets are phase C's and the total is phase A's, which is the honest pairing:
+/// phase C buckets the files phase A found.
 #[test]
 fn every_file_lands_in_exactly_one_bucket() {
     for algos in [
@@ -169,13 +220,13 @@ fn every_file_lands_in_exactly_one_bucket() {
         let (cold, warm) = cold_then_warm("stats_buckets", algos.clone());
         for s in [cold, warm] {
             assert_eq!(
-                s.hashed + s.cache_hit + s.stat_only,
-                s.files,
+                s.c.hashed + s.c.cache_hit + s.c.stat_only,
+                s.a.files,
                 "files={} hashed={} hit={} stat_only={} algos={algos:?}",
-                s.files,
-                s.hashed,
-                s.cache_hit,
-                s.stat_only
+                s.a.files,
+                s.c.hashed,
+                s.c.cache_hit,
+                s.c.stat_only
             );
         }
     }
@@ -196,12 +247,17 @@ fn every_file_lands_in_exactly_one_bucket() {
 fn hash_none_reads_nothing_and_says_so() {
     let (cold, warm) = cold_then_warm("stats_none", vec![]);
     assert_eq!(
-        (cold.hashed, cold.cache_hit, cold.stat_only),
+        (cold.c.hashed, cold.c.cache_hit, cold.c.stat_only),
         (0, 0, 3),
         "nothing read, nothing from a cache, nothing needed a digest"
     );
     assert_eq!(
-        (warm.hashed, warm.cache_hit, warm.stat_only),
+        (cold.a.hashed, cold.c.hashed),
+        (0, 0),
+        "and the cold run read nothing either, which is the bug this fixed"
+    );
+    assert_eq!(
+        (warm.c.hashed, warm.c.cache_hit, warm.c.stat_only),
         (0, 0, 3),
         "a row from a --hash none run is stat-only, not a cache hit"
     );
@@ -238,7 +294,7 @@ fn phase_a_never_hashes() {
     // Warm cache: phase A carries the digests, and still reads nothing. This is
     // the availability picture the planner needs.
     let db = open_db(&db_path, true, rw()).unwrap();
-    let _ = build_effective_folder(&dir, &db, &opts(), scan(false, false)).unwrap();
+    let _ = phased(&dir, &db, &opts(), scan(false, false));
     let pa = scan_stat_only(&dir, &db, &opts(), scan(false, false)).unwrap();
     assert_eq!(pa.stats.hashed, 0);
     assert!(pa.map["a.txt"].fresh);
@@ -267,7 +323,7 @@ fn phase_a_reports_the_same_decisions_when_it_cannot_write() {
     let db_path = dir.join(CACHE_PREFIX);
     {
         let db = open_db(&db_path, true, rw()).unwrap();
-        let _ = build_effective_folder(&dir, &db, &opts(), scan(false, false)).unwrap();
+        let _ = phased(&dir, &db, &opts(), scan(false, false));
         // An orphan row and a row whose stat no longer matches its file.
         db.put("vanished.txt", &FileRec::dir()).unwrap();
         let mut stale = load_all_records(&db).unwrap()["gone.txt"].clone();
@@ -341,7 +397,7 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     wfile(&dir, "a.txt", b"hello");
     let db_path = dir.join(CACHE_PREFIX);
     let db = open_db(&db_path, true, rw()).unwrap();
-    let _ = build_effective_folder(&dir, &db, &opts(), scan(false, false)).unwrap();
+    let _ = phased(&dir, &db, &opts(), scan(false, false));
     let real = load_all_records(&db).unwrap()["a.txt"].hashes["md5"].clone();
     let mut poisoned = load_all_records(&db).unwrap()["a.txt"].clone();
     poisoned.hashes.insert("md5".to_string(), vec![0u8; 16]);

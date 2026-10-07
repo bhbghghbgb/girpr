@@ -749,32 +749,6 @@ pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
     SideScan::of_map(map)
 }
 
-/// Build the effective map for a folder: phase A, a plan, then phase C.
-///
-/// Kept as one function so every existing caller behaves exactly as it did, with
-/// the one-sided plan that reproduces the pre-W2 request: every requested
-/// algorithm for every file. The commands that can plan across two sides open
-/// the phases themselves instead; this is the shape they converge on.
-pub fn build_effective_folder(
-    root: &Path,
-    cache: &CacheDb,
-    common: &CommonOpts,
-    mode: ScanMode,
-) -> Result<SideScan> {
-    let phase_a = scan_stat_only(root, cache, common, mode)?;
-    let plan = HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
-    let resolved = resolve_folder(root, cache, mode, &phase_a, &plan)?;
-    Ok(SideScan {
-        stats: ScanStats {
-            hashed: resolved.stats.hashed,
-            cache_hit: resolved.stats.cache_hit,
-            stat_only: resolved.stats.stat_only,
-            ..phase_a.stats
-        },
-        map: resolved.map,
-    })
-}
-
 /// **Phase A** for a record input: the DB read as-is, with no FS access and no
 /// writes. Cache rows and filtered paths are dropped.
 pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<SideScan<SideEntry>> {

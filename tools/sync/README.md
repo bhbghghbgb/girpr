@@ -31,7 +31,7 @@ and drive the public API.
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
-| `planner.rs` | `HashPlan` and `plan_pairs`: the only place that decides which digests a run must compute |
+| `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, the coverage check): the only place that decides which digests a run must compute |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
@@ -98,6 +98,15 @@ It recomputes every algorithm named by `--hash` on every run, but that does
 So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
 from a bad prune; it is a recovery aid, not a correctness mechanism.
+
+It runs the same three phases as every other command — stat-only scan, plan,
+resolve — via `HashPlan::plan_one_side`, which is the one-sided predicate: there
+is no other side to be lazy *relative to*, so every file is a candidate and every
+requested algorithm is asked for. That is also why `update` needs no exemption from
+the coverage check that stops a `compare` against an incomplete record: it asks a
+folder for digests of files the folder has, which a folder can always compute.
+The `hashed` counter in the run's log line is the answer to "how much would this
+read?", which is the question `--dry-run` exists to ask.
 
 ### compare
 

@@ -15,9 +15,11 @@
 //! - **The decision is made before any read.** A plan is total over the run, so
 //!   a run that cannot answer everything fails having read nothing.
 //!
-//! Today there is only one predicate, [`HashPlan::plan_one_side`], and it
-//! deliberately reproduces the pre-W2 behaviour exactly: request every requested
-//! algorithm for every file, minus whatever the cache already holds.
+//! There are two predicates, and they answer different questions. One side with no
+//! counterpart is [`HashPlan::plan_one_side`] — every requested algorithm for every
+//! file, which is `update` and the pre-W2 request it reproduces exactly. Two sides
+//! are [`plan_pairs`], which is [`plan_one_side`] plus a pairing step and a coverage
+//! requirement.
 //!
 //! ## Two questions, kept apart
 //!
@@ -106,6 +108,28 @@ impl HashPlan {
     /// There is no pairing step, so every file is a candidate. That is the right
     /// answer for a command with no other side to be lazy *relative to*, and the
     /// wrong one for a comparison — see [`plan_pairs`].
+    ///
+    /// ## Why this needs no coverage check
+    ///
+    /// `plan_pairs` fails a side that cannot supply a requested digest, because a
+    /// comparison cannot answer the question without it. `update` asks a folder for
+    /// everything it has, and a folder can always go and compute any digest of any
+    /// file it holds — so its own availability was never in question, and it needs
+    /// no exemption from the rule. That is the same reason a record fails all-of
+    /// *by construction* rather than by a special case: the predicate is "can this
+    /// side obtain it", and one side always can and the other never can.
+    ///
+    /// The two consequences worth stating, because one is easy to get wrong:
+    ///
+    /// - It returns `Self`, not `Result<Self>`, and there is no capability input.
+    ///   Not because coverage was skipped, but because a one-sided plan has nothing
+    ///   to check a shortfall *against* — the check is about a pair.
+    /// - `no_trust` is load-bearing here in a way it is not in `plan_pairs`.
+    ///   `update` passes `true` unconditionally, which is what makes it recompute
+    ///   every digest on every run rather than trusting a row whose stat still
+    ///   matches. `update_recomputes_every_digest_and_repairs_a_wrong_one` in
+    ///   `tests/update.rs` is the only test that would notice if it stopped, because
+    ///   idempotence cannot distinguish a reused digest from a recomputed one.
     ///
     /// `algos` order is preserved, because it is the user's flag order and the
     /// tie-break `--hash-any-of` will use is defined in terms of it.
