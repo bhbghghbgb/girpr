@@ -185,9 +185,9 @@ fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempRoot, PathBuf) {
 /// **The phases are driven here, not through `cmd_compare_self`,** and the reason
 /// is specific to this command rather than a general caveat: it writes *nothing*,
 /// by design, so there is no cache footprint left behind to read a counter out of.
-/// Stage 4 could gate `sync` on `digests_of` because a lazy scan writes stat-only
-/// rows where an eager one wrote digests; here neither mode writes, so the only
-/// honest observable of how much was read is the counter itself.
+/// A lazy scan leaves stat-only rows where an eager one would leave digests, so
+/// `sync` could be gated on `digests_of`; here nothing is written at all, so the
+/// only honest observable of how much was read is the counter itself.
 ///
 /// The cost of that is the usual one — this proves the phases decide correctly,
 /// not that the command calls them — which is why the wiring is pinned separately
@@ -268,10 +268,9 @@ fn an_audit_where_every_pair_differs_in_stat_reads_nothing() {
     let _ = &t;
 }
 
-/// The case the old stage-5 note called the largest win, and it is real — but only
-/// because the reads it skips are the ones that were never needed, not the ones
-/// that carry the verdict. Two stat-equal pairs remain undecided, so exactly two
-/// files are read.
+/// The largest win laziness has, and it is real — but only because the reads it
+/// skips are the ones that were never needed, not the ones that carry the verdict.
+/// Two stat-equal pairs remain undecided, so exactly two files are read.
 #[test]
 fn an_audit_of_a_snapshot_of_another_version_reads_only_the_undecided_pairs() {
     let (_t, dir) = audited("lz_self_snapshot", 2, 14);
@@ -726,9 +725,9 @@ fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() 
         ]
     );
     assert_eq!(r.hashed, 0, "size already differs");
-    // The real point: the stale digest is *dropped*, not merely unread. A row
-    // left holding a pre-change digest is what W1 fixed, and phase A's carry
-    // rule is what keeps it fixed now that the run never hashes this file.
+    // The real point: the stale digest is *dropped*, not merely unread. A row left
+    // holding a pre-change digest would survive a run that never hashes this file,
+    // and phase A's carry rule is what prevents that.
     assert!(
         digests_of(&src, "a.txt").is_empty(),
         "the stale digest was replaced by a stat-only row"
@@ -959,10 +958,10 @@ fn fixtures_classify_as_folders() {
 /// a row whose stat no longer matches disk loses its digests, and a row whose
 /// file is gone is dropped outright. Neither needs the other side.
 ///
-/// This is the ordering that makes stage 3 safe. The planner reads `SideEntry`,
-/// and if a stale digest could survive into that map the pair would be judged
-/// against a pre-change hash — so the correction has to happen inside the scan,
-/// not as a step someone remembers to run later.
+/// The ordering is what makes this safe. The planner reads `SideEntry`, and a stale
+/// digest surviving into that map would judge the pair against a pre-change hash —
+/// so the correction has to happen inside the scan, not as a step someone remembers
+/// to run later.
 ///
 /// Covers both triggers at once: `stale.txt` grows (row survives, digests
 /// dropped), `gone.txt` is deleted (row dropped entirely). `keep.txt` is the

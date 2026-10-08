@@ -1,32 +1,31 @@
 //! Deciding which digests a run has to compute.
 //!
-//! This module is the seam W2 introduces. Phase A reports what a side already
-//! knows, [`HashPlan`] turns that into the set of digests each side still has to
-//! produce, and phase C executes it. Three properties follow from the split, and
-//! each is load-bearing:
+//! Phase A reports what a side already knows, [`HashPlan`] turns that into the set
+//! of digests each side still has to produce, and phase C executes it. Three
+//! properties follow from the split, and each is load-bearing:
 //!
 //! - **Phase A never hashes.** It reports what the cache knows, nothing more.
 //!   That is what makes the cache *consultable* rather than fused with disk
 //!   access, and it is what lets this module pick an algorithm per path instead
-//!   of being handed whatever a monolithic scan already decided to read.
+//!   of being handed whatever a scan already decided to read.
 //! - **The decision is made here and nowhere else.** Phase A does not widen the
-//!   request, and phase C does not narrow it. `--hash-any-of` later becomes a
-//!   different predicate in [`HashPlan`] rather than a new pass over the tree.
+//!   request, and phase C does not narrow it. `--hash-any-of` is a different
+//!   predicate in [`HashPlan`] rather than a new pass over the tree.
 //! - **The decision is made before any read.** A plan is total over the run, so
 //!   a run that cannot answer everything fails having read nothing.
 //!
 //! There are two predicates, and they answer different questions. One side with no
 //! counterpart is [`HashPlan::plan_one_side`] — every requested algorithm for every
-//! file, which is `update` and the pre-W2 request it reproduces exactly. Two sides
-//! are [`plan_pairs`], which is [`plan_one_side`] plus a pairing step and a coverage
-//! requirement.
+//! file, which is `update`. Two sides are [`plan_pairs`], which is
+//! [`plan_one_side`] plus a pairing step and a coverage requirement.
 //!
 //! ## Two questions, kept apart
 //!
 //! [`HashPlan`] answers *what must be computed* and honours trust. Coverage
 //! answers *whether the run can be answered at all*, and it does **not**: a side's
 //! availability is `cached ∪ hashable`, with no trust term. Both halves matter,
-//! because conflating them produces the lenient default W2 exists to remove:
+//! because a side whose availability included trust could not be short of
+//! anything:
 //!
 //! | question | honours `no_trust` | who can fail |
 //! | --- | --- | --- |
@@ -48,10 +47,10 @@ use crate::effective::{SideCapability, SideEntry};
 /// How many of the requested algorithms an undecided pair must be able to answer
 /// with.
 ///
-/// This is the flag W2 exists to split, and the split is the whole of its point.
-/// Both modes ask a real question about content; the old behaviour asked neither —
-/// it fell back to size+mtime while reporting a content comparison, so a pair with
-/// no comparable digest on either side was reported as equal.
+/// Both modes ask a real question about content, and the split between them is the
+/// whole of their point. Without a requirement, a pair whose two sides hold no
+/// comparable digest falls back to a size+mtime that already agreed, and the run
+/// reports a content comparison it never performed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HashMode {
     /// `--hash-all-of`, and the default: **every** requested algorithm must be
@@ -67,27 +66,26 @@ pub enum HashMode {
     /// Weaker than all-of by design, and never weaker than the pick: every
     /// algorithm it chooses is obtainable on *both* sides, so a pair settled this
     /// way is still settled by a digest both sides hold rather than by a digest one
-    /// of them is missing. That is the difference between this mode and the old
-    /// silent fallback, and it is why the narrower mode cannot reopen the hole
-    /// `all-of` closed.
+    /// of them is missing. That is why the narrower mode cannot admit a pair whose
+    /// content was never read.
     AnyOf,
 }
 
 /// Which parts of a file's stat a run will accept as evidence that two sides differ.
 ///
 /// The short circuit in [`plan_pairs`] is an **optimisation**, so it has to be
-/// switchable — and it is better to name the two fields it consults than to add a
-/// switch for the optimisation itself. `--no-trust-size --no-trust-mtime` together
-/// is "disable it", expressed as the reason rather than as a third name for it.
+/// switchable — and naming the two fields it consults is better than adding a switch
+/// for the optimisation itself: `--no-trust-size --no-trust-mtime` together *is*
+/// "disable it", and no third spelling is needed to reach it.
 ///
-/// A field that is not trusted no longer settles a pair, so the pair becomes
-/// undecided and needs a digest. For `mtime` that can change the *verdict*: a file
-/// whose mtime moved but whose bytes did not is currently `CHANGED`, and distrusting
-/// mtime is how you ask whether that is really so. For `size` it cannot — different
-/// lengths are different content — so the verdict is unchanged and the flag buys the
-/// read instead, which is a different and narrower thing than
-/// `--no-trust-cached-hashes` (which distrusts a *digest*, and so only ever affects
-/// pairs that were going to be read anyway).
+/// An untrusted field does not settle a pair, so the pair becomes undecided and
+/// needs a digest. For `mtime` that can change the *verdict*: a file whose mtime
+/// moved but whose bytes did not is `CHANGED` on the strength of the timestamp
+/// alone, and distrusting mtime is how you ask whether that is really so. For
+/// `size` it cannot — different lengths are different content — so the verdict is
+/// unchanged and the flag buys the read instead, which is a different and
+/// narrower thing than `--no-trust-cached-hashes` (which distrusts a *digest*,
+/// and so only ever affects pairs that were going to be read anyway).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatTrust {
     /// `--no-trust-size` absent: a size difference settles a pair.
@@ -97,9 +95,9 @@ pub struct StatTrust {
 }
 
 impl Default for StatTrust {
-    /// **Trusts both.** Every case in this module that predates the flags is
-    /// describing this, and an unflagged run must keep meaning exactly that — the
-    /// flags are additive and default to the behaviour they optimise.
+    /// **Trusts both.** An unflagged run must mean exactly the thing the short
+    /// circuit optimises, so the flags are additive and default to the behaviour
+    /// they optimise.
     fn default() -> Self {
         StatTrust {
             size: true,
@@ -168,8 +166,8 @@ impl StatTrust {
 /// Produced by [`plan_pairs`] and consumed by [`crate::diff::diff_maps`]. Handing
 /// the diff *this* rather than the algorithm list is what lets one run settle path
 /// X by md5 and path Y by sha256: under `all-of` every entry is the whole requested
-/// list, so this is a superset of what `diff_maps` used to receive rather than a
-/// different mechanism.
+/// list, so a uniform run would be described just as well by passing that list
+/// straight through.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Required {
     /// src relative path -> the algorithms that settle it.
@@ -181,14 +179,14 @@ pub struct Required {
 impl Required {
     /// The algorithms that settle `srel`, which is a **src** path.
     ///
-    /// The fallback is the whole requested list, and it is unreachable under both
-    /// modes: a path reaches the digest comparison only when size and mtime already
-    /// agreed, every such path is undecided, and the planner has an entry for every
-    /// undecided file pair. It is still the right answer to give, because
+    /// The fallback is the whole requested list, and it is unreachable while the
+    /// planner and the diff agree on which pairs are undecided: a path reaches the
+    /// digest comparison only when size and mtime already agreed, every such path is
+    /// undecided, and the planner has an entry for every undecided file pair. It is
+    /// still the right answer to give, because
     /// [`crate::diff::hashes_differ`] is *silent* when a digest is missing — a
-    /// fallback of nothing would report every unplanned pair as equal, which is the
-    /// bug this whole module exists to prevent. A safe fallback and the reachable
-    /// answer coincide, so the safety costs nothing.
+    /// fallback of nothing would report every unplanned pair as equal. A safe fallback
+    /// and the reachable answer coincide, so the safety costs nothing.
     pub fn of(&self, srel: &str) -> &[String] {
         self.by_rel.get(srel).unwrap_or(&self.fallback)
     }
@@ -264,9 +262,8 @@ impl HashPlan {
     /// comparison cannot answer the question without it. `update` asks a folder for
     /// everything it has, and a folder can always go and compute any digest of any
     /// file it holds — so its own availability was never in question, and it needs
-    /// no exemption from the rule. That is the same reason a record fails all-of
-    /// *by construction* rather than by a special case: the predicate is "can this
-    /// side obtain it", and one side always can and the other never can.
+    /// no exemption from the rule. The predicate is the same one for both: "can this
+    /// side obtain it", and a folder always can.
     ///
     /// The two consequences worth stating, because one is easy to get wrong:
     ///
@@ -389,10 +386,8 @@ fn shared_pairs<'a>(
 /// This is where laziness comes from, and it is a *pair* decision, not a
 /// per-side one. A single side cannot know that its counterpart exists, or that
 /// their sizes already differ, so it can only answer "every file, every
-/// algorithm" — which is why the eager path read whole trees to conclude things
-/// size had already decided. A path needs a digest only when it is a file on
-/// **both** sides with equal size and equal mtime; everything else is already
-/// decided:
+/// algorithm". A path needs a digest only when it is a file on **both** sides with
+/// equal size and equal mtime; everything else is already decided:
 ///
 /// | path state                        | verdict         | digest needed |
 /// | --------------------------------- | --------------- | ------------- |
@@ -419,20 +414,19 @@ fn shared_pairs<'a>(
 /// always go and compute a missing digest; a record cannot, and a digest it does
 /// not hold is one the pair will never be compared on.
 ///
-/// That gap used to be silent, and the silence was the bug:
-/// [`crate::diff::hashes_differ`] skips any algorithm either side lacks, on the
-/// reasonable grounds that it has nothing to compare. So a record missing `md5`
-/// made the pair fall back to the size+mtime that had already agreed, and the run
-/// reported `CHANGED = 0` — a confident answer about content nobody read. Now it
-/// is [`Err`].
+/// The gap this closes: [`crate::diff::hashes_differ`] skips any algorithm either
+/// side lacks, on the reasonable grounds that it has nothing to compare. So a
+/// record missing `md5` would let the pair fall back to the size+mtime that had
+/// already agreed, and the run would report `CHANGED = 0` — a confident answer
+/// about content nobody read. A shortfall is therefore an [`Err`], not a verdict.
 ///
 /// Three properties of the failure, each deliberate:
 ///
 /// - **Scoped to the undecided set.** A record full of paths that exist on one
 ///   side only, or whose size differs, needs no coverage at all, and failing on
 ///   them would fail runs that are perfectly answerable. This is why the check is
-///   here and not in the record loader — a whole-record preflight was written and
-///   reverted once for exactly that reason.
+///   here and not in the record loader, which sees the whole record and cannot
+///   tell which of its paths are answerable.
 /// - **Trust is not part of availability.** `--no-trust-cached-hashes src` on a
 ///   record asks it to re-read, which it cannot do, so it changes nothing it owes.
 ///   Folding trust in would make the flag fatal for every record.
@@ -473,12 +467,12 @@ pub fn plan_pairs(
     mode: HashMode,
     stat: StatTrust,
 ) -> Result<PairPlan> {
-    // `stat` is set in the initialiser, and that is load-bearing rather than tidiness: it
-    // has to happen even on the early return below, because the diff reads
-    // `plan.stat` to decide its own short circuit. An unflagged default there would
-    // make `--hash-all-of none --no-trust-mtime` trust mtime in the diff while the user
-    // asked it not to, and the verdict would come from the field the run was told to
-    // ignore.
+    // `stat` is set in the initialiser, and that is load-bearing rather than
+    // tidiness: it has to happen even on the early return below, because the diff
+    // reads `plan.stat` to decide its own short circuit. An unflagged default there
+    // would make `--hash-all-of none --no-trust-mtime` trust mtime in the diff while
+    // the user asked it not to, and the verdict would come from the field the run
+    // was told to ignore.
     let mut plan = PairPlan {
         stat,
         ..PairPlan::default()
@@ -500,9 +494,9 @@ pub fn plan_pairs(
             continue;
         }
         // The short circuit. A stat field this run trusts settles the pair outright,
-        // and `diff_maps` would short-circuit the hash comparison anyway — the bytes
-        // just used to be read long before that. Coverage follows the same boundary:
-        // nothing was required of these paths, so nothing is owed.
+        // and `diff_maps` would report the same `CHANGED` without reading anything, so
+        // the read would buy nothing. Coverage follows the same boundary: nothing was
+        // required of these paths, so nothing is owed.
         //
         // Distrusting a field (`StatTrust`) is what puts it back here. The condition
         // is read through `StatTrust::settles` rather than inlined, so the planner
@@ -514,15 +508,14 @@ pub fn plan_pairs(
         }
         // Mode-independent. See the note above.
         //
-        // `missing` is recorded per algorithm, but it means different things in the
-        // two modes, and conflating them was a bug worth naming: under `all-of` an
-        // algorithm this side cannot obtain *is* the failure, so recording every one
-        // is right. Under `any-of` it is not — the run only needs one algorithm, and a
-        // record short of sha256 is perfectly answerable by md5. Recording every
-        // shortfall there would make any-of fatal for exactly the records it exists to
-        // rescue. So any-of records nothing in this loop and defers entirely to
-        // `pick_one`, which is the only place that knows whether *nothing* is
-        // obtainable.
+        // A shortfall here means a requested algorithm this side cannot obtain, and
+        // whether that is a failure depends on the mode: under `all-of` it *is* the
+        // failure, so recording every one is right. Under `any-of` it is not — the run
+        // only needs one algorithm, and a record short of sha256 is perfectly
+        // answerable by md5, so recording every shortfall would make any-of fatal for
+        // exactly the records it exists to rescue. `any-of` therefore records nothing
+        // in this loop and defers entirely to `pick_one`, which is the only place that
+        // knows whether *nothing* is obtainable on both sides.
         let sides = [(0usize, &src, s, srel), (1usize, &dst, d, drel)];
         // `coverage` is always counted: it is what the error message reports per
         // algorithm, and it is the same arithmetic under both modes.
@@ -867,8 +860,8 @@ mod tests {
         vec!["md5".to_string(), "sha256".to_string()]
     }
 
-    /// The predicate's whole job, before W2 adds laziness to it: a complete
-    /// cache row costs no read, an incomplete one costs only what is missing.
+    /// A complete cache row costs no read, an incomplete one costs only what is
+    /// missing.
     #[test]
     fn one_side_plans_only_what_the_cache_lacks() {
         let p = HashPlan::plan_one_side(&entries(), &algos(), false);
@@ -917,8 +910,8 @@ mod tests {
         assert_eq!(p.digest_count(), 0);
     }
 
-    /// An empty plan is the shape stage 3 will produce for the common lazy case,
-    /// so its accessors have to be right when nothing is pending.
+    /// An empty plan is the common lazy case — everything already decided — so its
+    /// accessors have to be right when nothing is pending.
     #[test]
     fn an_empty_plan_settles_everything() {
         let p = HashPlan::default();
@@ -940,11 +933,10 @@ mod tests {
         assert_eq!(p.digest_count(), 2);
     }
 
-    // -- pair planning -----------------------------------------------------
+    // -- pair planning -------------------------------------------------------
     //
     // The predicate, in isolation. Each path state from the table gets one case,
-    // because the whole claim of W2 is that the five states divide cleanly into
-    // "needs a digest" and "does not".
+    // because the five states divide cleanly into "needs a digest" and "does not".
 
     fn file(size: u64, mtime: i64) -> SideEntry {
         SideEntry {
@@ -974,7 +966,8 @@ mod tests {
         /// (no_trust_src, no_trust_dst)
         no_trust: (bool, bool),
         /// Which answerability rule the run asked for. Defaults to all-of, because
-        /// that is the default and every coverage case predates the second mode.
+        /// that is the default and these cases are about coverage rather than the
+        /// choice between the two.
         mode: HashMode,
     }
 
@@ -1241,8 +1234,8 @@ mod tests {
     // compute, so only a record can be short - which is the property, not a
     // special case.
 
-    /// The whole point of the change: a record missing a requested digest fails
-    /// the run instead of letting the pair fall back to size+mtime.
+    /// A record missing a requested digest fails the run rather than letting the
+    /// pair fall back to size+mtime.
     #[test]
     fn a_record_missing_a_requested_algorithm_fails_the_run() {
         let s = map(vec![("a.txt", cached_entry(&["sha256"]))]);
@@ -1259,8 +1252,9 @@ mod tests {
 
     /// **Scoped to the undecided set.** A record full of stat-differing or
     /// one-sided paths needs no coverage, and failing on it would fail runs that
-    /// are perfectly answerable - which is why this lives here and not in the
-    /// record loader, where such a preflight was written and reverted once.
+    /// are perfectly answerable — which is why this lives here and not in the
+    /// record loader, which sees the whole record and cannot tell which of its paths
+    /// are answerable.
     #[test]
     fn coverage_is_scoped_to_the_undecided_set() {
         // Undecided but covered: fine.
@@ -1351,8 +1345,9 @@ mod tests {
     }
 
     /// A record that *can* meet the request is never asked to compute, because it
-    /// cannot. The old planner inserted it anyway and `resolve_record` ignored the
-    /// entry, so this asserts the plan is clean rather than merely unused.
+    /// cannot. `plan_one` skips such a side, so the plan carries no entry for it at
+    /// all — which is asserted here rather than left as an unobservable consequence of
+    /// the skip.
     #[test]
     fn a_covered_record_is_never_asked_to_hash() {
         let s = map(vec![("a.txt", cached_entry(&["md5"]))]);
@@ -1407,17 +1402,12 @@ mod tests {
     }
     // -- distrusting the short circuit --------------------------------------------
 
-    /// The short circuit is an *optimisation*, so it must be switchable.
+    /// `--no-trust-size` and `--no-trust-mtime` each put one stat field back into the
+    /// undecided set, and both together leave the short circuit with nothing to act on.
     ///
-    /// `--no-trust-size` and `--no-trust-mtime` name the two stat fields it consults,
-    /// and each one puts that field back into the undecided set. Both together leave the
-    /// short circuit with nothing to act on, which is "disable it" without needing a
-    /// separate switch for the thing it switched.
-    ///
-    /// These start by stating the **default**, because the risk is not that the flags do
-    /// nothing — it is that they quietly change what an unflagged run means. If trusting
-    /// both were not the default, every other test in this file would be describing the
-    /// wrong thing.
+    /// The first case states the **default** alongside the flagged one, because the
+    /// property that matters is not that a flag does something — it is that it changes
+    /// only the named field, and only pairs that field decides.
 
     #[test]
     fn a_stat_differing_pair_is_undecided_when_the_field_it_differs_in_is_distrusted() {

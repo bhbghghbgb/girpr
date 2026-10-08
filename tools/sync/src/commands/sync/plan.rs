@@ -160,10 +160,8 @@ pub(super) fn build_plan(
 /// One struct, one field list, one [`Record`] constructor — so a dry run and a
 /// real run cannot disagree about the *vocabulary*, only about the numbers and
 /// `dry_run`. That is the whole of the `--dry-run` reporting contract: same field
-/// names, same order, same meaning. It was previously written out twice, and the
-/// two lists had in fact drifted (`copy`/`delete` against `copied`/`deleted`,
-/// with `rmdir` missing from one side), which is exactly the class of bug a
-/// duplicated field list invites.
+/// names, same order, same meaning. A duplicated field list would make that a
+/// property of two lists agreeing rather than of one list existing.
 ///
 /// `dry_run` is the only field that differs by design. The names describe the
 /// *result*, not the plan, so a dry run reports what it would reach; the numbers

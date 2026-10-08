@@ -24,9 +24,9 @@ use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 /// Counters, not a verdict: they describe how much work the run performed. They
 /// are the only honest measure of laziness — the diff output is identical either
 /// way, so a run that hashes nothing and a run that hashes everything print the
-/// same thing. They used to be local to the scan and emitted as log fields only,
-/// which made that distinction untestable; W2's whole performance claim rests on
-/// asserting them.
+/// same thing. They are returned from the scan rather than emitted as log fields
+/// alone, because a distinction nothing can assert is a distinction nothing
+/// distinguishes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScanStats {
     /// Entries the walk found, before glob filters.
@@ -47,13 +47,13 @@ pub struct ScanStats {
     /// honest answer: nothing was served from a cache, because nothing was
     /// needed and nothing was read.
     pub cache_hit: usize,
-    /// Files that needed no digest at all and so were never candidates for one:
-    /// the request set was empty (`--hash none`).
+    /// Files that needed no digest at all: either the request set was empty
+    /// (`--hash none`), or the pair was settled by stat before a digest was ever
+    /// asked for.
     ///
-    /// The bucket a lazily-resolved stat-differing pair will move into, once the
-    /// planner learns to skip it. Kept distinct from `cache_hit` from the start
-    /// so that transition does not make a run look like it read nothing *and*
-    /// served everything from cache.
+    /// Distinct from `cache_hit` because a run that read nothing and served nothing
+    /// is a different claim from one that read nothing and served everything, and
+    /// merging the two would let a run look efficient for the wrong reason.
     pub stat_only: usize,
     /// Cache rows dropped for paths no longer live (or now filtered out).
     pub pruned: usize,
@@ -141,21 +141,13 @@ fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) -> bool {
         .unwrap_or(false)
 }
 
-/// The row a scan stores for one file: W1's merge-write, as a pure function.
+/// The row a scan stores for one file: the merge-write rule, as a pure function.
 ///
 /// `computed` is what this run hashed (empty for `--hash none` and for a
 /// stat-only pass); `prior` is whatever the cache held, or `None`.
 ///
-/// **The write shape.** What the row keeps afterwards depends only on whether
-/// the stat still matches — never on what this run computed, and never on
-/// whether the run trusted the cache:
-///
-/// | stat            | digests stored                                    |
-/// | --------------- | ------------------------------------------------- |
-/// | changed         | only the algos computed this run (all old ones are suspect) |
-/// | unchanged       | those, merged over the algos already on the row  |
-///
-/// Trust is absent from that table on purpose. Distrusting the cache means
+/// **The write shape.** See [`scan_stat_only`] for the table; the property worth
+/// naming here is that trust is absent from it. Distrusting the cache means
 /// "re-read the file", not "forget what we already know about it"; keying the
 /// write on the trust flag would make every `update` run (which always distrusts)
 /// discard digests it never recomputed.
@@ -164,9 +156,9 @@ fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) -> bool {
 /// digests: `--hash none` and stat-only recording both land here with an empty
 /// `computed`, so they record the new stat and leave the rest of the row alone.
 ///
-/// It is kept as a named function rather than inlined in the scan loop because
-/// it is a cache-durability rule, not a scan detail, and two scan
-/// implementations would be two chances to spell it differently.
+/// A named function rather than an expression inside the scan loop because it is a
+/// cache-durability rule, not a scan detail, and the rule belongs in one place
+/// whatever calls it.
 fn merge_row(
     size: u64,
     mtime_ns: i64,
@@ -238,9 +230,9 @@ impl SideEntry {
         self.kind == "file"
     }
 
-    /// The cache row as phase C needs it back: reconstructible exactly when the
-    /// stat still matches, so [`merge_row`] sees the same prior row a single-pass
-    /// scan would have.
+    /// The cache row as phase C needs it back, or `None` when the stat moved —
+    /// which is what makes [`merge_row`] able to distinguish a merge over the
+    /// stored digests from a replacement of them.
     fn prior(&self) -> Option<FileRec> {
         self.fresh.then(|| FileRec {
             kind: "file".into(),
@@ -264,9 +256,9 @@ impl SideEntry {
 /// | folder, `sync --dry-run`, `compare-self` | ReadOnly | yes      | no              |
 /// | record                        | ReadOnly  | no                 | no              |
 ///
-/// Reading a read-only handle as "cannot hash" would make W2 refuse to hash a
-/// dry run's folder — the one case where hashing is the only thing left to do.
-/// Reading it as "can hash and write" would try to hash a record, which has no
+/// Reading a read-only handle as "cannot hash" would make the planner refuse to
+/// hash a dry run's folder — the one case where hashing is the only thing left to
+/// do. Reading it as "can hash and write" would try to hash a record, which has no
 /// filesystem to hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SideCapability {
@@ -303,7 +295,7 @@ impl SideCapability {
 /// scan would be pure write amplification on a tree with many directories. The
 /// write is still made when the row is absent or is a *file* row: a file that
 /// became a directory must lose its digests, or a later scan would read a
-/// directory's stat against a digest taken from the file that used to be there.
+/// directory's stat against a digest taken from the file that preceded it.
 fn put_dir_row(w: &mut CacheWrite<'_>, rel: &str) -> Result<()> {
     if w.get(rel)?.map(|c| c.kind != "dir").unwrap_or(true) {
         w.put(rel, &FileRec::dir())?;
@@ -311,44 +303,20 @@ fn put_dir_row(w: &mut CacheWrite<'_>, rel: &str) -> Result<()> {
     Ok(())
 }
 
-/// Build the effective map for a folder, using the embedded cache to short-circuit.
-///
-/// Writes back to the cache unless `mode.dry_run`, and prunes rows for paths
-/// that are no longer on disk (or are now filtered out). Writes are batched
-/// and committed periodically, so an interrupted scan keeps most of its
-/// progress (the commit is the durability point).
-///
-/// **Write shape.** A row is rewritten whenever a path is rehashed, and what it
-/// keeps afterwards depends only on whether the stat still matches:
-///
-/// | stat            | digests stored                                    |
-/// | --------------- | ------------------------------------------------- |
-/// | changed         | only the algos computed this run (all old ones are suspect) |
-/// | unchanged       | those, merged over the algos already on the row  |
-///
-/// So a run never destroys a digest it did not recompute, unless the file's
-/// stat says it changed. `--hash none` and `no_trust_cached_hashes` both write
-/// stat data while leaving unrequested digests intact.
-///
-/// Returns the map with the counters describing how it was built; see
-/// [`ScanStats`] for why those are part of the result rather than a log line.
-///
-/// In insensitive mode the on-disk name governs: cached keys are indexed by
-/// lowercase so a disk/cached casing difference is fixed to the disk name first,
-/// reusing the cached hashes when stat matches, instead of erroring. Multiple
-/// stale alternates are pruned below, not treated as a conflict.
 /// **Phase A.** Walk `root`, consult the cache, and report what it knows about
 /// every path — without reading a single file's bytes.
 ///
 /// The output is a [`SideEntry`] per path: its kind, its stat, and the digests
 /// the cache holds *for that exact stat*. Nothing here decides what still needs
 /// computing; that is [`HashPlan`]'s job, and keeping the two apart is what lets
-/// a later `--hash-any-of` choose an algorithm per path instead of inheriting
-/// whatever this pass decided to open.
+/// the plan choose an algorithm per path instead of inheriting whatever this pass
+/// decided to open.
 ///
 /// Writes back to the cache unless `mode.dry_run`, and prunes rows for paths that
-/// are no longer on disk (or are now filtered out). The writes are the ones that
-/// do not depend on any plan:
+/// are no longer on disk (or are now filtered out). Writes are batched and
+/// committed periodically, so an interrupted scan keeps most of its progress (the
+/// commit is the durability point). The writes are the ones that do not depend on
+/// any plan:
 ///
 /// - dir rows (presence-only);
 /// - an alternate-cased key being retired in favour of the disk name;
@@ -357,6 +325,20 @@ fn put_dir_row(w: &mut CacheWrite<'_>, rel: &str) -> Result<()> {
 ///   nothing cached, and the plan asks for a digest again. Writing it here rather
 ///   than waiting for a digest is what stops a changed file keeping a row that
 ///   still carries its pre-change hashes.
+///
+/// **Write shape.** What a rewritten row keeps depends only on whether the stat
+/// still matches — never on what this run computed, and never on whether the run
+/// trusted the cache:
+///
+/// | stat      | digests stored                                           |
+/// | --------- | -------------------------------------------------------- |
+/// | changed   | only the algos computed this run (all others are suspect) |
+/// | unchanged | those, merged over the algos already on the row          |
+///
+/// So a run never destroys a digest it did not recompute unless the file's stat
+/// says it changed. `--hash none` and `--no-trust-cached-hashes` both write stat
+/// data while leaving unrequested digests intact. This is [`merge_row`]'s rule,
+/// stated here because this is where the rows are written.
 ///
 /// Phase A opens, uses and commits its own batched write handle, so the row set
 /// is durable before the expensive phase begins.
@@ -728,8 +710,8 @@ pub fn resolve_folder(
 /// two reasons: the planner is the only place that holds both sides, so it can
 /// report every uncovered path in one message rather than stopping at the first;
 /// and a shortfall is a property of a (path, side) pair inside the undecided set,
-/// never of the record as a whole. A preflight over the record itself was written
-/// and reverted once for exactly that reason — see `plan_pairs`' module docs.
+/// never of the record as a whole — which a preflight over the record itself could
+/// not tell. See `plan_pairs`' module docs.
 pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
     let map = phase_a
         .map
@@ -749,21 +731,15 @@ pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
     SideScan::of_map(map)
 }
 
-/// **Phase A** for a record input: the DB read as-is, with no FS access and no
+/// **Phase A** for a record side: the DB read as-is, with no FS access and no
 /// writes. Cache rows and filtered paths are dropped.
-pub fn load_record_side(db_path: &Path, common: &CommonOpts) -> Result<SideScan<SideEntry>> {
-    let cache = CacheDb::open_record(db_path)?;
-    load_record_side_from(&cache, common, &db_path.display().to_string())
-}
-
-/// [`load_record_side`] against an already-open cache.
 ///
-/// Split out so a caller that needs the record view *and* a disk scan of the
-/// same folder can do both from one handle. That is not a lock requirement —
-/// two read-only handles share the file — it is a cost one: each `CacheDb`
-/// builds its own copy of the file's tables, so opening twice doubles the
-/// memory a large cache occupies. The same reasoning applies harder to a
-/// writable handle, where the second open would be refused outright.
+/// Takes an already-open cache rather than a path so a caller needing the record
+/// view *and* a disk scan of the same folder can do both from one handle. That is
+/// not a lock requirement — two read-only handles share the file — it is a cost
+/// one: each `CacheDb` builds its own copy of the file's tables, so opening twice
+/// doubles the memory a large cache occupies. The same reasoning applies harder to
+/// a writable handle, where the second open would be refused outright.
 ///
 /// `label` names the record in error messages; the caller knows the path.
 pub fn load_record_side_from(
@@ -861,10 +837,9 @@ impl OpenSide {
 
 /// **Phase A** for a record or folder side: open the cache and stat the tree.
 ///
-/// This replaces the old `load_side`, which scanned *and* resolved before
-/// returning and therefore dropped the handle. A caller that wants to plan across
-/// two sides needs this side's phase-A output while the other side's handle is
-/// still open, and both handles still open when phase C writes.
+/// Both handles stay open, because a caller that plans across two sides needs this
+/// side's phase-A output while the other side's handle is still open — and both
+/// still open when phase C writes.
 ///
 /// How a folder's cache is opened — and therefore whether anything touches disk
 /// — is [`open_folder_cache`]'s decision, not this function's. A record side is
@@ -1130,9 +1105,9 @@ mod tests {
         assert_eq!(out.hashes["md5"], vec![1u8; 16]);
     }
 
-    /// `--hash none` with a *changed* stat: the row becomes stat-only. A row
-    /// with a stat and no digest is a normal, valid state, and under W2 it is
-    /// the expected one for every file a lazy scan decided by stat.
+    /// `--hash none` with a *changed* stat: the row becomes stat-only. A row with
+    /// a stat and no digest is a normal, valid state, and it is the expected one for
+    /// every file a lazy scan decided by stat.
     #[test]
     fn merge_row_with_nothing_computed_drops_digests_when_the_stat_changed() {
         let prior = row(10, 99, 1, 2);

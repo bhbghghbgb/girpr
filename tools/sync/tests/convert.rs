@@ -25,9 +25,8 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
 /// load-bearing rather than incidental. The coverage rule says a record side must
 /// be able to supply every requested algorithm for every undecided pair, so a row
 /// holding only `md5` makes the run fail — which is the *correct* answer, not a
-/// converter bug. An earlier version of this fixture had `md5` on `a.txt` and
-/// `sha256` on `sub/b.bin` and nothing else, which made it an uncoverable record by
-/// accident; the lenient behaviour it leaned on is the hole stage 5b closed.
+/// converter bug. A fixture spread one algorithm per row would be uncoverable by
+/// accident rather than on purpose.
 ///
 /// The `blake3` row is the other point of the case: an algorithm this crate has
 /// never heard of must survive conversion untouched and must not affect a diff that

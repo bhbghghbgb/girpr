@@ -6,16 +6,16 @@
 //! and lets the planner choose it **per pair**.
 //!
 //! Three properties are worth stating before the cases, because they are what the
-//! cases check and each is easy to lose in a refactor:
+//! cases check and each is easy to lose:
 //!
 //! - **The choice is per pair, not per run.** Path X can be settled by md5 and
 //!   path Y by sha256 in the same `compare`, which is why the diff is handed a
 //!   per-path answer ([`Required`]) rather than an algorithm list.
 //! - **`any-of` never weakens the pair, only the request.** Every algorithm it
 //!   picks is obtainable on *both* sides, so `hashes_differ` cannot be silent for
-//!   it — the degradation stage 5b closed cannot re-enter through the narrower
-//!   mode. This is the property that makes a weaker mode safe, and it is asserted
-//!   directly rather than inferred from a verdict.
+//!   it — a narrower mode cannot admit a pair whose content was never read. This is
+//!   the property that makes a weaker mode safe, and it is asserted directly
+//!   rather than inferred from a verdict.
 //! - **The cost tiers are the flag's entire value for folder-vs-folder.** Both
 //!   sides can always backfill, so without "prefer what is already cached" the
 //!   mode would hash when it did not have to.
@@ -156,9 +156,8 @@ fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {
 ///
 /// **A fresh fixture per call.** Resolving a folder side *writes to its cache*, so
 /// this is not a pure function of its inputs: measuring two modes against one pair
-/// makes the second run find a warm cache the first one backfilled. An earlier
-/// version of `any_of_still_hashes_when_the_pair_shares_no_algorithm` did exactly
-/// that and reported `any-of` as free.
+/// makes the second run find a warm cache the first one backfilled, and reports the
+/// second mode as free.
 fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
     let s = classify(src);
     let d = classify(dst);
@@ -595,7 +594,7 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
     // And with an *empty* fallback the same maps come out clean, which is the whole
     // reason the fallback is populated rather than left as `Required::default()`:
     // `hashes_differ` is silent when handed nothing, so a missing entry read as
-    // "equal" would be the exact degradation stage 5b closed.
+    // "equal" would be a verdict about content nobody read.
     assert_eq!(
         diff_maps(&src, &dst, &Required::default(), StatTrust::default(), true).changed,
         Vec::<String>::new(),
@@ -780,16 +779,17 @@ fn the_two_modes_cannot_be_asked_for_at_once() {
     assert_eq!(bin(&["update", "--dir", &d]).0, 0);
 }
 
-/// `--hash-all-of` is what the flag used to be called, so the old spelling is
-/// gone rather than silently ignored — a typo that used to work must now say so.
+/// `--hash` is not an accepted spelling of `--hash-all-of`. It is rejected by name
+/// rather than silently ignored, so a script carrying it says so instead of quietly
+/// running with no digests at all.
 #[test]
-fn the_old_hash_spelling_is_rejected_by_name() {
+fn the_short_hash_spelling_is_rejected_by_name() {
     let t = TempRoot::new("hm_old");
     let dir = t.mkdirs("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     let (code, stderr) = bin(&["update", "--dir", &d, "--hash", "md5"]);
-    assert_ne!(code, 0, "the old spelling is not silently accepted");
+    assert_ne!(code, 0, "not silently accepted");
     assert!(
         stderr.contains("--hash"),
         "and clap says which flag it did not recognise: {stderr}"
@@ -810,12 +810,11 @@ fn the_old_hash_spelling_is_rejected_by_name() {
 /// settles every pair with the md5 both sides already hold and reads nothing.
 ///
 /// A separate fixture per mode, for the reason [`run_pair`] gives. Measuring both on
-/// one pair reported `any-of` as reading nothing for the wrong reason — the `all-of`
-/// run had just backfilled sha256 into both caches.
+/// one pair would report `any-of` as reading nothing for the wrong reason — the
+/// `all-of` run had just backfilled sha256 into both caches.
 ///
 /// The `all-of` half is the control and is deliberately first: a test asserting only
-/// "`any-of` reads 0" would also pass against a planner that never reads anything,
-/// which is the shape of bug stage 3 guarded against.
+/// "`any-of` reads 0" would also pass against a planner that never reads anything.
 #[test]
 fn any_of_avoids_backfilling_an_algorithm_the_pair_already_shares() {
     // `pair`'s last argument is the set each cache is warmed with, so md5 on both

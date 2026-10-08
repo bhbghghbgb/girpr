@@ -184,8 +184,8 @@ pub enum Cmd {
         #[arg(long)]
         dir: PathBuf,
         /// Accepted and ignored. The disk side has no cache to distrust, so an
-        /// undecided pair is always rehashed; this used to be the only way to
-        /// see content drift that preserved size and mtime.
+        /// undecided pair is always rehashed and content drift that preserved size
+        /// and mtime is already reported.
         #[arg(long, default_value_t = false)]
         no_trust_cached_hashes: bool,
         // `--dry-run` arrives here via `CommonArgs` and is accepted but has no

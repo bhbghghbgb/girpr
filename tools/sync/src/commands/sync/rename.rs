@@ -16,7 +16,7 @@ use crate::report::{Record, Report};
 /// Returns the number of renames performed (or that a dry run would perform).
 ///
 /// `dm` is always re-keyed to src's casing, including under `dry_run` — the plan
-/// computed after this pass reads `dm`, so leaving it on the old casing would
+/// computed after this pass reads `dm`, so a map left on dst's own casing would
 /// make a dry run report a case-only difference as both a copy and a delete.
 /// `dry_run` therefore suppresses only the filesystem and cache writes.
 pub(super) fn rename_to_src_casing(
@@ -33,10 +33,10 @@ pub(super) fn rename_to_src_casing(
         slow.insert(k.to_lowercase(), k);
     }
     // Iterate sorted, not in `HashMap` order. These become `RENAME` records on
-    // stdout, in both modes, and a plan a user reads must not reshuffle between
-    // two runs over the same tree — `HashMap` iteration is seeded per process, so
-    // the order was in fact different every run. It is also what makes the
-    // dry-run plan assertions in `tests/sync_plan.rs` possible at all.
+    // stdout, in both modes, and `HashMap` iteration is seeded per process, so
+    // unsorted order would reshuffle between two runs over the same tree. Sorting
+    // is also what makes the dry-run plan assertions in `tests/sync_plan.rs`
+    // possible at all.
     let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
     by_lower.sort();
     let mut renames: Vec<(PathBuf, PathBuf, String, String)> = Vec::new();
@@ -108,9 +108,9 @@ mod tests {
         }
     }
 
-    /// Regression: a dry run must still re-key the dst map to src's casing.
-    /// Leaving it on the old casing made the plan report a case-only
-    /// difference as both `COPY` and `DELETE`.
+    /// A dry run must re-key the dst map to src's casing, not just report that it
+    /// would: the plan computed afterwards reads `dm`, so a map left on dst's own
+    /// casing reports a case-only difference as both `COPY` and `DELETE`.
     #[test]
     fn dry_run_rekeys_the_dst_map_without_touching_disk() {
         let root = std::env::temp_dir().join(format!("girsync_rename_dry_{}", std::process::id()));

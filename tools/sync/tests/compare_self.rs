@@ -116,14 +116,13 @@ fn hidden_content_drift_is_reported_without_a_flag() {
     assert_eq!(recs(&dir), before, "reading it changes nothing");
 }
 
-/// `--no-trust-cached-hashes` used to be the *only* way to see that drift: the
-/// default audit served the disk side from the record's own cache, so a preserved
-/// stat meant the record's digest was compared with itself and always agreed.
+/// The disk side is cache-free, so a preserved stat means the file is rehashed and
+/// that drift is already reported — `--no-trust-cached-hashes` has nothing left to
+/// change.
 ///
-/// The disk side is now cache-free, so the flag has nothing left to change. It
-/// stays on the CLI because a script passing it everywhere must keep working —
-/// which is a claim about *accepting* it, so that is what this asserts: same
-/// verdict either way, and still no writes.
+/// The flag stays on the CLI because a script passing it everywhere must keep
+/// working, which is a claim about *accepting* it, so that is what this asserts:
+/// same verdict either way, and still no writes.
 #[test]
 fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
     let t = TempRoot::new("cs_flag");
@@ -184,17 +183,16 @@ fn paths(recs: &[serde_json::Value], event: &str) -> Vec<String> {
     v
 }
 
-/// Case-only pairing, insensitive mode. The disk side no longer adopts the
-/// record's alternate-cased row, so `Case.txt` on disk and `case.txt` in the
-/// record are two independent sides of a pair the planner matches by lowercase.
+/// Case-only pairing, insensitive mode. The disk side does not adopt the record's
+/// alternate-cased row, so `Case.txt` on disk and `case.txt` in the record are two
+/// independent sides of a pair the planner matches by lowercase.
 ///
 /// The content differs at the same length and the mtime is restored, so size and
 /// mtime agree and only a digest can decide: the pair is both a `CASE-MISMATCH`
-/// *and* `CHANGED`, from the one `diff_maps` pass. Before the disk side was made
-/// cache-free it settled this pair from the record's own md5, so only the
-/// `CASE-MISMATCH` could ever appear — which is why this uses different bytes
-/// rather than the identical bytes every other case-only fixture in the suite
-/// uses.
+/// *and* `CHANGED`, from the one `diff_maps` pass. Which is why this uses different
+/// bytes rather than the identical bytes every other case-only fixture in the
+/// suite uses — identical bytes would make the digest agree and prove nothing about
+/// the `CHANGED` half.
 #[test]
 fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched() {
     let t = TempRoot::new("cs_case");
@@ -276,9 +274,9 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
 /// The degradation is the dangerous part and it is silent: `hashes_differ` skips
 /// any algorithm either side lacks, so an uncovered pair falls back to the size
 /// and mtime that already agreed, and the audit reports a confident "in step"
-/// about content it never read. With the disk side cache-free (stage 5a) that
-/// silence is no longer masked by a tautology, so it is visible — and visible as
-/// a *wrong answer*, which is worse than an error.
+/// about content it never read. With the disk side cache-free that silence is not
+/// masked by a tautology, so it is visible — and visible as a *wrong answer*,
+/// which is worse than an error.
 #[test]
 fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
     let t = TempRoot::new("cs_cover");
@@ -289,7 +287,7 @@ fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
 
     let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
     let msg = format!("{:#}", err);
-    // Four signals, or the user cannot act (§5.4): which record, how many paths,
+    // Four signals, or the user cannot act: which record, how many paths,
     // one example path with the algorithm it lacks, per-algorithm coverage, and
     // a remedy.
     for (what, needle) in [
@@ -311,9 +309,9 @@ fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
 ///
 /// The row is stripped of its digest *and* the file is aged, so the pair differs
 /// in stat — which means size and mtime have already decided it and no digest was
-/// ever required. A whole-record preflight would fail here, and one already was
-/// written and reverted once (§3); the coverage requirement is a property of a
-/// (path, side) pair inside the undecided set, never of the record as a whole.
+/// ever required. A whole-record preflight would fail here; the coverage
+/// requirement is a property of a (path, side) pair inside the undecided set, never
+/// of the record as a whole.
 #[test]
 fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
     let t = TempRoot::new("cs_cover_differ");

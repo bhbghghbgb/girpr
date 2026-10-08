@@ -125,9 +125,9 @@ impl TryFrom<CommonArgs> for CommonOpts {
 
 /// How a single folder scan treats the cache and the filesystem.
 ///
-/// `fast` and `force_hash` used to be separate fields here, but they described
-/// the same decision — whether a size+mtime-matching cache entry may stand in
-/// for a digest — so they are one flag now.
+/// One flag for the cache, not two: "reuse a matching entry" and "re-read it" are
+/// the same decision, and a caller asking for both would be asking one question
+/// twice.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanMode {
     /// Rehash even when the cache holds a size+mtime match for this path.

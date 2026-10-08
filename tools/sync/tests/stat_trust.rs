@@ -1,8 +1,8 @@
 //! `--no-trust-size` / `--no-trust-mtime`: switching the stat short circuit off.
 //!
 //! The short circuit is an optimisation, so it has to be switchable. These two flags
-//! name the stat fields it consults, and **both together is "disable it"** — expressed
-//! as the reason rather than as a third name for the thing they switch.
+//! name the stat fields it consults, and **both together is "disable it"** — no third
+//! spelling is needed to reach the whole thing off.
 //!
 //! What each one does is stated in the planner's tests; what is left here is what can
 //! only be seen from outside:
@@ -183,11 +183,10 @@ fn distrusting_both_fields_reads_every_file_on_both_sides() {
     );
 }
 
-/// **The exact count for the whole tree, stated as the comparison to the eager
-/// baseline.** W2's promise was that a stat-settled tree costs nothing; this is the
-/// flag that lets a user pay for the old behaviour deliberately, and the number it
-/// should cost is *the same as `update` would* for those files — one pass per side, not
-/// two reads per file.
+/// **The exact count for the whole tree, stated against the eager baseline.** A
+/// stat-settled tree costs nothing by default, and these flags let a user pay for
+/// reading it deliberately. The number it should cost is *the same as `update`
+/// would* for those files — one pass per side, not two reads per file.
 ///
 /// Asserted against `hashed` rather than against a digest count, and against the
 /// default as a control. `hash_file` computes every algorithm in one pass, so a
@@ -567,7 +566,7 @@ fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
 }
 
 /// Both flags compose on the command line, and each alone is accepted — the two are
-/// independent, and "both is disable it" has to be reachable without a third spelling.
+/// independent, and "both is disable it" has to be reachable from the flags themselves.
 #[test]
 fn the_two_flags_are_independent_on_the_command_line() {
     let t = TempRoot::new("st_flags");

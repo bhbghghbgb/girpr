@@ -6,9 +6,8 @@ use tracing::error;
 ///
 /// `ExitCode` rather than `process::exit`, because the latter **skips
 /// destructors** and the log writer is a `tracing_appender` non-blocking queue
-/// whose `WorkerGuard` flushes on drop. Exiting explicitly therefore lost an
-/// unpredictable tail of `--log-file` — 13 lines one run and 16 the next on an
-/// unchanged tree — and the lines most likely to be in that tail are the `fatal`
+/// whose `WorkerGuard` flushes on drop. An explicit exit therefore loses the tail
+/// of `--log-file`, and the lines most likely to be in that tail are the `fatal`
 /// event written a statement earlier, which is the one line the file exists to
 /// keep.
 fn main() -> std::process::ExitCode {

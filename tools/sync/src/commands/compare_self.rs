@@ -11,30 +11,26 @@
 //! ## Why the disk side must have no cache
 //!
 //! A folder side's phase A takes `kind`, `size` and `mtime_ns` from the
-//! filesystem and takes **digests** from its cache. Handing it the record's
-//! cache therefore hands it the record's digests, so for every stat-equal pair
-//! the content comparison became [`crate::diff::diff_maps`] comparing the
-//! record's digest map against itself: always equal, and structurally unable to
-//! report anything. Content that changed while preserving both size and mtime
-//! was invisible, and `--no-trust-cached-hashes` was the only thing that could
-//! surface it — which made the difference between "the cache matches the
-//! folder's shape" and "the cache matches the folder's bytes" a matter of
-//! remembering a flag, on the one command whose entire job is the second.
+//! filesystem and takes **digests** from its cache. Handing the disk side the
+//! record's cache would therefore hand it the record's digests, so every
+//! stat-equal pair would compare [`crate::diff::diff_maps`]'s reading of the
+//! record against itself: always equal, and structurally unable to report
+//! anything. The difference between "the cache matches the folder's shape" and
+//! "the cache matches the folder's bytes" would then be a matter of remembering
+//! a flag, on the one command whose entire job is the second.
 //!
-//! A shared handle has a second, quieter problem, and it is in the logs of the
-//! code this replaced: a folder side prunes rows it does not recognise, and
-//! under a shared handle the record's own rows are in scope. Auditing a folder
-//! whose disk spells `Case.txt` where the record holds `case.txt` had the disk
-//! side decide to drop the record's `case.txt` row, while the record side was
-//! holding that very row in memory. `ScanMode::dry_run` suppressed the write, so
-//! nothing was lost — but the audit was one flag away from rewriting its own
-//! subject, which is the same reason `ensure_distinct_sides` refuses the
-//! two-sided spelling.
+//! A shared handle has a second, quieter problem. A folder side prunes rows it
+//! does not recognise, so a folder whose disk spells `Case.txt` where the record
+//! holds `case.txt` would have the disk side decide to drop the record's
+//! `case.txt` row while the record side was holding that very row in memory.
+//! `ScanMode::dry_run` suppresses the write, so nothing would be lost — but the
+//! audit would be one flag away from rewriting its own subject, which is the same
+//! reason `ensure_distinct_sides` refuses the two-sided spelling.
 //!
-//! [`CacheDb::open_temp`] is in-memory, so the guarantee is structural rather
+//! [`CacheDb::open_temp`] is in-memory, so both guarantees are structural rather
 //! than a flag that has to be threaded correctly: the disk side cannot reach the
-//! record because it is not the same file. The write promise then no longer rests
-//! on `ScanMode::dry_run` alone — which stays `true` here as a second,
+//! record because it is not the same file. The write promise therefore does not
+//! rest on `ScanMode::dry_run` alone — which stays `true` here as a second,
 //! independent reason rather than the only one.
 //!
 //! ## What this costs
@@ -115,8 +111,8 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         warn!(
             "--no-trust-cached-hashes is redundant for compare-self: the disk side \
              is scanned with no cache to consult, so an undecided pair is always \
-             rehashed. This flag used to be the only way to see content drift that \
-             preserved size and mtime"
+             rehashed and content drift that preserved size and mtime is already \
+             reported"
         );
     }
 

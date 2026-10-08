@@ -46,19 +46,19 @@ impl Diff {
 /// `required` is the planner's per-path answer to "which algorithms settle this
 /// pair", keyed by **src** path. Passing it rather than an algorithm list is what
 /// lets one run settle different pairs by different algorithms: under
-/// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so
-/// this is a superset of what this function used to be handed, not a different
-/// mechanism. Consulted only after stat has been consulted and found unconvincing,
-/// which is the same boundary the planner used — so a path that reaches it always has
-/// an entry.
+/// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so a
+/// uniform run would be described just as well by passing that list straight
+/// through. Consulted only once stat has been found unconvincing, which is the same
+/// boundary the planner applies — so a path that reaches it always has an entry.
 ///
-/// `stat` decides **which stat fields may settle a pair here**, and it must be the same
-/// value the planner was given. That is the load-bearing part: this function's
-/// short-circuit on size+mtime and the planner's are the same rule, and if they
-/// disagree then one of two silent things happens — the planner hashes a pair whose
-/// digest is never read, or (worse) a pair the planner called decided turns out to need
-/// a digest nobody computed. Sharing one predicate is what makes that unrepresentable
-/// rather than merely tested-for.
+/// `stat` decides **which stat fields may settle a pair here**, and it is the same
+/// value the planner was given — read from `plan.stat` rather than taken again, so
+/// there is only one copy of the rule. That is the load-bearing part: this function's
+/// short circuit and the planner's are the same predicate, and if they disagree then
+/// one of two silent things happens — the planner hashes a pair whose digest is never
+/// read, or (worse) a pair the planner called decided turns out to need a digest
+/// nobody computed. One predicate is what makes that unrepresentable rather than
+/// merely tested for.
 pub fn diff_maps(
     src: &HashMap<String, EffRec>,
     dst: &HashMap<String, EffRec>,
@@ -143,11 +143,11 @@ pub fn diff_maps(
 /// disagreeing.
 ///
 /// If either side lacks one of them this stays silent — the caller has already
-/// compared size+mtime. That silence is safe *because* the planner chose these
+/// consulted stat. That silence is safe *because* the planner chose these
 /// algorithms: every one of them is obtainable on both sides, so it has either
 /// been computed or was already cached. A digest that is absent here is a digest
-/// nobody asked for, which is what makes this a comparison rather than the
-/// degradation stage 5b closed.
+/// nobody asked for, which is what makes this a comparison rather than a silent
+/// fall-through to a verdict about content nobody read.
 pub fn hashes_differ(
     a: &HashMap<String, Vec<u8>>,
     b: &HashMap<String, Vec<u8>>,

@@ -135,10 +135,10 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
 
 /// **The exemption question, answered end to end rather than argued.
 ///
-/// Stage 5b made a side that cannot supply a requested digest fatal. `update` is
-/// not exempt from that rule by a special case — it is a folder asked to compute
-/// everything it has, so it can always comply, and the same fixture that makes
-/// `compare-self` exit `3` is one `update` away from being answerable.
+/// A side that cannot supply a requested digest is fatal. `update` is not exempt from
+/// that rule: it is a folder asked to compute everything it has, so it can always
+/// comply, and the same fixture that makes `compare-self` exit `3` is one `update`
+/// away from being answerable.
 ///
 /// The fixture is built by a real `sync`, so the stat-only row is one a lazy scan
 /// genuinely writes rather than one a test forged: `sync`'s phase A records a

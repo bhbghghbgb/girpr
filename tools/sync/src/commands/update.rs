@@ -114,15 +114,14 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
 
     // One stats value, and it is complete. `resolve_folder` carries phase A's
     // `live`/`files`/`dirs`/`pruned` forward and fills in the three counters phase C
-    // owns, so its returned `ScanStats` is the whole run. Which is why the merge
-    // `build_effective_folder` performed was duplicating work already done, and why
-    // nothing here has to decide which phase a number came from.
+    // owns, so its returned `ScanStats` is the whole run and nothing here has to
+    // decide which phase a number came from.
     //
-    // Mutation-tested both ways: reading `files` from `phase_a.stats` and from
-    // `resolved.stats` are indistinguishable, because they are the same value — so
-    // this is a choice about legibility, not correctness, and saying so is cheaper
-    // than letting a reader assume otherwise. Naming `resolved.stats` once is the
-    // version that cannot drift if the two ever stop agreeing.
+    // Reading `files` from `phase_a.stats` and from `resolved.stats` are
+    // indistinguishable, because they are the same value — so this is a choice about
+    // legibility, not correctness, and saying so is cheaper than letting a reader
+    // assume otherwise. Naming `resolved.stats` once is the version that cannot
+    // drift if the two ever stop agreeing.
     //
     // `hashed` is logged because it is the answer to the question `--dry-run` exists
     // to ask — how much would this read? A file count cannot distinguish a run that

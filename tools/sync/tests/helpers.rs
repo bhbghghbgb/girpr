@@ -5,28 +5,24 @@ mod common;
 use std::path::Path;
 
 use common::{TempRoot, md5arg, opts, rw, scan, wfile};
-use girsync::CommonOpts;
-use girsync::ScanStats;
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
-use girsync::effective::{SideScan, open_folder_cache};
-use girsync::effective::{resolve_folder, scan_stat_only};
+use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
 use girsync::hash::parse_hash_list;
 use girsync::planner::HashPlan;
+use girsync::{CommonOpts, ScanStats};
 
 /// A folder-side run's counters, kept **per phase** rather than merged.
 ///
-/// `build_effective_folder` handed back one merged `ScanStats` and these tests
-/// asserted it. Nothing merges any more: `cmd_update` reports phase A's
-/// `files`/`dirs` and phase C's `hashed`, because those are the only two it needs
-/// and they come from different phases — so a merged number here would assert a
-/// view nothing ships.
+/// Nothing merges the phases: `cmd_update` reports phase A's `files`/`dirs` and
+/// phase C's `hashed`, because those are the only two it needs and they come from
+/// different phases — so a merged number here would assert a view nothing ships.
 ///
 /// The split is also the better assertion. "Phase A hashed 0" is the property the
 /// whole planner rests on, and a merged total cannot show it: `update`'s eager
 /// `files = 3, hashed = 3` looks identical whether phase A read the bytes or phase
-/// C did, which is precisely the thing stage 2 moved and stage 3 depends on.
+/// C did.
 #[derive(Debug)]
 struct Run {
     /// Phase C's resolved map, keyed by relative path.
@@ -40,10 +36,9 @@ struct Run {
 /// Phase A, then [`HashPlan::plan_one_side`], then phase C — the pipeline a folder
 /// side runs, spelled out.
 ///
-/// `cmd_update` does the same three steps inline, and `build_effective_folder` used
-/// to hide them. Duplicating them here rather than calling the command is what lets
-/// a unit test assert on any one phase, which is the only reason these tests exist
-/// as units at all.
+/// `cmd_update` does the same three steps inline. Spelling them out here rather than
+/// calling the command is what lets a unit test assert on any one phase, which is the
+/// only reason these tests exist as units at all.
 fn phased(root: &Path, cache: &CacheDb, common: &CommonOpts, mode: ScanMode) -> Run {
     let phase_a: SideScan<girsync::SideEntry> = scan_stat_only(root, cache, common, mode).unwrap();
     let plan = HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
@@ -117,7 +112,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
     std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
 
-    // Previously this errored in open_db (meta mismatch). Must succeed now.
+    // Disk casing and recorded case mode disagree, and that must not be fatal:
+    // disk governs.
     let db = open_db(&db_path, false, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
@@ -163,9 +159,9 @@ fn cold_then_warm(tag: &str, algos: Vec<String>) -> (Run, Run) {
 /// nothing either way**, which is the property the planner depends on and the one a
 /// merged counter cannot show.
 ///
-/// This is the number stage 3 moves. Nothing about the *map* changes when it does,
-/// which is why the counters had to become part of the result in the first place —
-/// the diff output alone cannot tell a lazy run from an eager one.
+/// Nothing about the *map* changes when this number does, which is why the counters
+/// are part of the result at all — the diff output alone cannot tell a lazy run from
+/// an eager one.
 #[test]
 fn scan_counters_characterize_the_eager_baseline() {
     let (cold, warm) = cold_then_warm("stats_md5", md5arg());
@@ -232,17 +228,13 @@ fn every_file_lands_in_exactly_one_bucket() {
     }
 }
 
-/// `--hash none` used to misreport. `hash_file` with no algorithms returns empty
-/// *without opening the file*, yet the old single-pass scan still counted the
-/// file as hashed, because a cold cache took the rehash branch and that branch
-/// incremented the counter: a cold tree reported 3 files hashed and read none.
+/// `--hash none` is a case where a naive counter would lie. `hash_file` with no
+/// algorithms returns empty *without opening the file*, so a counter incremented on
+/// the rehash branch would report a cold tree as 3 files hashed having read none.
 ///
-/// The phase split fixes it for free — an empty algorithm set makes the plan
+/// The phase split makes it correct for free — an empty algorithm set makes the plan
 /// empty, so phase C never runs. The files land in `stat_only` rather than
 /// `cache_hit`, because nothing was served from a cache; nothing needed serving.
-///
-/// Recorded here because it is the first case where `hashed` stopped being
-/// honest, and the lazy-counts work depends on it being honest.
 #[test]
 fn hash_none_reads_nothing_and_says_so() {
     let (cold, warm) = cold_then_warm("stats_none", vec![]);
