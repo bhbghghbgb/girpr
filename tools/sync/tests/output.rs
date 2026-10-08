@@ -127,7 +127,15 @@ fn compare_json_is_the_verdict_the_library_builds() {
     // The same pair, through the library, resolving the way `cmd_compare` does.
     let o = common::compare(src, dst);
     let (sm, dm) = common::resolve_both(&o.src, &o.dst, o.trust);
-    let diff = girsync::diff::diff_maps(&sm.map, &dm.map, &o.common.algos, o.common.case_sensitive);
+    let diff = girsync::diff::diff_maps(
+        &sm.map,
+        &dm.map,
+        &girsync::planner::Required {
+            by_rel: Default::default(),
+            fallback: o.common.algos.clone(),
+        },
+        o.common.case_sensitive,
+    );
     let lib: Vec<Value> = girsync::report::verdict(&diff)
         .iter()
         .map(|rec| rec.json())

@@ -112,6 +112,7 @@ fn effective_maps(
             label: &d_label,
         },
         common.case_sensitive,
+        common.hash_mode,
     )
     .unwrap();
     let sm: SideScan = resolve_side(&mut so, mode, &plans.src).unwrap();

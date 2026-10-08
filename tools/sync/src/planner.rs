@@ -45,6 +45,65 @@ use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
 
+/// How many of the requested algorithms an undecided pair must be able to answer
+/// with.
+///
+/// This is the flag W2 exists to split, and the split is the whole of its point.
+/// Both modes ask a real question about content; the old behaviour asked neither —
+/// it fell back to size+mtime while reporting a content comparison, so a pair with
+/// no comparable digest on either side was reported as equal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HashMode {
+    /// `--hash-all-of`, and the default: **every** requested algorithm must be
+    /// available on both sides of every undecided pair.
+    ///
+    /// A folder side that lacks one backfills it by hashing. A record side cannot,
+    /// so that is fatal — which is what makes a comparison a comparison.
+    #[default]
+    AllOf,
+    /// `--hash-any-of`: **at least one** must be, and the planner picks one per
+    /// pair, cheapest first and then in the order the user gave.
+    ///
+    /// Weaker than all-of by design, and never weaker than the pick: every
+    /// algorithm it chooses is obtainable on *both* sides, so a pair settled this
+    /// way is still settled by a digest both sides hold rather than by a digest one
+    /// of them is missing. That is the difference between this mode and the old
+    /// silent fallback, and it is why the narrower mode cannot reopen the hole
+    /// `all-of` closed.
+    AnyOf,
+}
+
+/// The algorithms that settle each undecided pair, from one decision.
+///
+/// Produced by [`plan_pairs`] and consumed by [`crate::diff::diff_maps`]. Handing
+/// the diff *this* rather than the algorithm list is what lets one run settle path
+/// X by md5 and path Y by sha256: under `all-of` every entry is the whole requested
+/// list, so this is a superset of what `diff_maps` used to receive rather than a
+/// different mechanism.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Required {
+    /// src relative path -> the algorithms that settle it.
+    pub by_rel: HashMap<String, Vec<String>>,
+    /// Consulted for a path with no entry. See [`Required::of`].
+    pub fallback: Vec<String>,
+}
+
+impl Required {
+    /// The algorithms that settle `srel`, which is a **src** path.
+    ///
+    /// The fallback is the whole requested list, and it is unreachable under both
+    /// modes: a path reaches the digest comparison only when size and mtime already
+    /// agreed, every such path is undecided, and the planner has an entry for every
+    /// undecided file pair. It is still the right answer to give, because
+    /// [`crate::diff::hashes_differ`] is *silent* when a digest is missing — a
+    /// fallback of nothing would report every unplanned pair as equal, which is the
+    /// bug this whole module exists to prevent. A safe fallback and the reachable
+    /// answer coincide, so the safety costs nothing.
+    pub fn of(&self, srel: &str) -> &[String] {
+        self.by_rel.get(srel).unwrap_or(&self.fallback)
+    }
+}
+
 /// What a run must compute for one side.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HashPlan {
@@ -181,6 +240,8 @@ pub struct SideRequest<'a> {
 pub struct PairPlan {
     pub src: HashPlan,
     pub dst: HashPlan,
+    /// Which algorithms settle each pair — see [`Required`].
+    pub required: Required,
 }
 
 /// The paths both sides hold, paired the way [`crate::diff::diff_maps`] pairs
@@ -280,10 +341,24 @@ fn shared_pairs<'a>(
 /// - **Collected, not thrown at the first path.** Every uncovered path across both
 ///   sides is reported together, because a user who learns about one at a time will
 ///   not get to the end.
+///
+/// ## The two modes
+///
+/// [`HashMode::AllOf`] requires the whole requested list on an undecided pair, which
+/// is what the diff then compares. [`HashMode::AnyOf`] requires one and picks it per
+/// pair, so the answer is per *path* rather than per run — that is the entire reason
+/// [`Required`] exists instead of passing `algos` to the diff.
+///
+/// The availability bookkeeping below is shared by both, and deliberately so: "can
+/// this side obtain algorithm `a`" has the same answer either way — it holds it, or
+/// it has a filesystem to read it from. Only the *requirement* changes: every `a`, or
+/// one `a`. Under `any-of`, a side with a filesystem can therefore never be the
+/// short one, which is why an `any-of` coverage failure always names a record.
 pub fn plan_pairs(
     src: SideRequest<'_>,
     dst: SideRequest<'_>,
     case_sensitive: bool,
+    mode: HashMode,
 ) -> Result<PairPlan> {
     let mut plan = PairPlan::default();
     if src.algos.is_empty() {
@@ -291,6 +366,7 @@ pub fn plan_pairs(
         // short of.
         return Ok(plan);
     }
+    plan.required.fallback = src.algos.to_vec();
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
@@ -308,37 +384,91 @@ pub fn plan_pairs(
         if s.size != d.size || s.mtime_ns != d.mtime_ns {
             continue;
         }
+        // Mode-independent. See the note above.
+        //
+        // `missing` is recorded per algorithm, but it means different things in the
+        // two modes, and conflating them was a bug worth naming: under `all-of` an
+        // algorithm this side cannot obtain *is* the failure, so recording every one
+        // is right. Under `any-of` it is not — the run only needs one algorithm, and a
+        // record short of sha256 is perfectly answerable by md5. Recording every
+        // shortfall there would make any-of fatal for exactly the records it exists to
+        // rescue. So any-of records nothing in this loop and defers entirely to
+        // `pick_one`, which is the only place that knows whether *nothing* is
+        // obtainable.
         let sides = [(0usize, &src, s, srel), (1usize, &dst, d, drel)];
-        for (idx, req, e, rel) in sides {
+        // `coverage` is always counted: it is what the error message reports per
+        // algorithm, and it is the same arithmetic under both modes.
+        for (idx, req, e, _) in sides {
             let t = &mut tally[idx];
             for algo in req.algos {
                 let slot = t.coverage.entry(algo.clone()).or_insert((0, 0));
                 slot.1 += 1;
                 if e.cached.contains_key(algo) {
                     slot.0 += 1;
-                } else if !req.cap.can_hash_from_disk {
-                    // Nothing on this side can produce it: the row lacks it and
-                    // there is no filesystem to read.
-                    t.missing
-                        .entry((*rel).clone())
-                        .or_default()
-                        .push(algo.clone());
                 }
             }
         }
-        // What to compute. Only a side with a filesystem is ever asked, because a
-        // side that cannot hash would ignore the request and then quietly fail to
-        // deliver it — which is the gap the coverage check above exists to close.
-        if src.cap.can_hash_from_disk {
-            let want = HashPlan::missing(s, src.algos, src.no_trust);
-            if !want.is_empty() {
-                plan.src.by_rel.insert((*srel).clone(), want);
+        // What settles this pair, and therefore what the diff will compare. Only a
+        // side with a filesystem is ever asked to compute, because a side that
+        // cannot hash would ignore the request and then quietly fail to deliver it
+        // — which is the gap the coverage check above exists to close.
+        match mode {
+            HashMode::AllOf => {
+                // Every algorithm this side cannot obtain is a failure, because the
+                // run needs all of them.
+                for (idx, req, e, rel) in sides {
+                    if req.cap.can_hash_from_disk {
+                        continue;
+                    }
+                    let short: Vec<String> = req
+                        .algos
+                        .iter()
+                        .filter(|a| !obtainable(e, req.cap, a))
+                        .cloned()
+                        .collect();
+                    if !short.is_empty() {
+                        tally[idx].missing.insert((*rel).clone(), short);
+                    }
+                }
+                plan.required
+                    .by_rel
+                    .insert((*srel).clone(), src.algos.to_vec());
+                plan_one(&src, s, srel, src.algos, &mut plan.src);
+                plan_one(&dst, d, drel, dst.algos, &mut plan.dst);
             }
-        }
-        if dst.cap.can_hash_from_disk {
-            let want = HashPlan::missing(d, dst.algos, dst.no_trust);
-            if !want.is_empty() {
-                plan.dst.by_rel.insert((*drel).clone(), want);
+            HashMode::AnyOf => {
+                // `None` means no requested algorithm is obtainable on both sides.
+                // Nothing is planned and no entry is written; the failure is recorded
+                // against whichever side cannot hash, and reported at the bottom.
+                let Some(pick) = pick_one(src.algos, s, d, src.cap, dst.cap) else {
+                    // A side with a filesystem can obtain any of the requested
+                    // algorithms, so if nothing qualifies then the side that cannot
+                    // obtain anything is always a record — which makes this branch
+                    // naming a non-hashable side, by construction rather than by a
+                    // guess at which one it was.
+                    for (idx, req, e, rel) in sides {
+                        if req.cap.can_hash_from_disk {
+                            continue;
+                        }
+                        let t = &mut tally[idx];
+                        let short: Vec<String> = req
+                            .algos
+                            .iter()
+                            .filter(|a| !obtainable(e, req.cap, a))
+                            .cloned()
+                            .collect();
+                        if !short.is_empty() {
+                            t.missing.insert((*rel).clone(), short);
+                        }
+                    }
+                    continue;
+                };
+                let chosen = [pick];
+                plan.required
+                    .by_rel
+                    .insert((*srel).clone(), chosen.to_vec());
+                plan_one(&src, s, srel, &chosen, &mut plan.src);
+                plan_one(&dst, d, drel, &chosen, &mut plan.dst);
             }
         }
     }
@@ -349,6 +479,7 @@ pub fn plan_pairs(
             return Err(Coverage {
                 side: ["src", "dst"][idx],
                 label: req.label.to_string(),
+                mode,
                 missing: std::mem::take(&mut tally[idx].missing),
                 coverage: std::mem::take(&mut tally[idx].coverage),
             }
@@ -356,6 +487,66 @@ pub fn plan_pairs(
         }
     }
     Ok(plan)
+}
+
+/// Add whatever `req` still owes for `rel` to `into`.
+///
+/// Skipped for a side that cannot hash, which is why `plan.required` — not this
+/// function — is the record of what the run must produce: a side with no filesystem
+/// is never *asked*, so a plan entry for it would be a request nothing could honour.
+fn plan_one(
+    req: &SideRequest<'_>,
+    e: &SideEntry,
+    rel: &str,
+    algos: &[String],
+    into: &mut HashPlan,
+) {
+    if !req.cap.can_hash_from_disk {
+        return;
+    }
+    let want = HashPlan::missing(e, algos, req.no_trust);
+    if !want.is_empty() {
+        into.by_rel.insert(rel.to_string(), want);
+    }
+}
+
+/// The algorithm that settles one pair under [`HashMode::AnyOf`], or `None` when
+/// none is obtainable on both sides.
+///
+/// **Cheapest first**, which is the tier that makes the flag worth having for
+/// folder-vs-folder: an algorithm already on *both* rows costs no read at all,
+/// while one already on one row costs a read and one on neither costs two. Without
+/// this preference the mode would hash whenever it could have reused, because both
+/// sides are always able to backfill — so "pick something" would be a claim about
+/// nothing.
+///
+/// **Then the user's flag order.** `min_by_key` keeps the *first* minimum, and
+/// `algos` is the flag order, so `--hash-any-of md5 --hash sha256` prefers md5 and
+/// the choice is visible in the command they typed rather than in a rule they would
+/// have to look up.
+fn pick_one(
+    algos: &[String],
+    s: &SideEntry,
+    d: &SideEntry,
+    sc: SideCapability,
+    dc: SideCapability,
+) -> Option<String> {
+    algos
+        .iter()
+        .filter(|a| obtainable(s, sc, a) && obtainable(d, dc, a))
+        .min_by_key(|a| {
+            usize::from(!s.cached.contains_key(*a)) + usize::from(!d.cached.contains_key(*a))
+        })
+        .cloned()
+}
+
+/// Whether a side can supply `algo` at all: it holds it, or it can go and read it.
+///
+/// **No trust term**, for the reason the coverage check has none: trust asks a side
+/// to re-read rather than reuse, and a record has no filesystem to re-read. Folding
+/// it in would make `--no-trust-cached-hashes src` fatal for every record.
+fn obtainable(e: &SideEntry, cap: SideCapability, algo: &str) -> bool {
+    e.cached.contains_key(algo) || cap.can_hash_from_disk
 }
 
 /// What one side owes, and how much of it it could meet, over the undecided set.
@@ -383,6 +574,10 @@ pub struct Coverage {
     /// which is `'static`; the alternative would be for every caller to keep its
     /// labels alive for the life of the error.
     pub label: String,
+    /// Which mode was asked for. Carried because the two modes fail differently and
+    /// so are *remedied* differently — an all-of failure can be answered by asking
+    /// for any one algorithm, which is the whole of `any-of`.
+    pub mode: HashMode,
     /// rel path -> the requested algorithms it could not obtain.
     pub missing: BTreeMap<String, Vec<String>>,
     /// Requested algorithm -> (paths holding it, undecided paths).
@@ -392,12 +587,21 @@ pub struct Coverage {
 impl fmt::Display for Coverage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let undecided: usize = self.coverage.values().next().map_or(0, |c| c.1);
+        let flag = match self.mode {
+            HashMode::AllOf => "--hash-all-of",
+            HashMode::AnyOf => "--hash-any-of",
+        };
         writeln!(
             f,
             "this run cannot compare: the {} side cannot supply every digest it was asked for",
             self.side
         )?;
-        writeln!(f, "\n  {}: {}", self.side, self.label)?;
+        // Named up front, because the two modes are different requests and the
+        // remedies below are mode-specific — a reader who does not know which one
+        // failed cannot tell whether `--hash-any-of` is offered as the fix or as the
+        // thing that was already tried.
+        writeln!(f, "\n  asked under {flag}")?;
+        writeln!(f, "  {}: {}", self.side, self.label)?;
         writeln!(
             f,
             "  {} of {} undecided path(s) uncovered:",
@@ -420,27 +624,58 @@ impl fmt::Display for Coverage {
                 writeln!(f, "    {algo:<12} {have}/{total}")?;
             }
         }
+        // The requirement, stated in the mode the user actually asked for. The two
+        // sentences differ in exactly one clause, and that clause is the whole
+        // reason the mode exists — so it is worth the two branches.
+        let requirement = match self.mode {
+            HashMode::AllOf => {
+                "Every requested algorithm must be available on both sides of a \
+                 pair that\nsize+mtime cannot settle."
+            }
+            HashMode::AnyOf => {
+                "At least one requested algorithm must be available on both sides \
+                 of a pair that\nsize+mtime cannot settle, and none of them is."
+            }
+        };
         writeln!(
             f,
-            "\nEvery requested algorithm must be available on both sides of a pair that \
-             size+mtime\ncannot settle. This side has no filesystem to read the missing \
-             digest from, so the\npair would fall back to size+mtime and this run would \
-             report a confident answer\nabout content it never read."
+            "\n{requirement} This side has no filesystem to read a missing digest from, so the \
+             pair\nwould fall back to size+mtime and this run would report a confident answer \
+             about\ncontent it never read."
         )?;
-        // Remedies a user can act on without reading the rest of the message.
-        // `--hash any-of` is missing here because it does not exist yet; it is the
-        // fourth remedy and lands with the flag in stage 7.
+        // Remedies a user can act on without reading the rest of the message. Every
+        // one of them names a flag that exists.
+        writeln!(f, "\nTo answer this question, one of:")?;
+        // Only worth offering when some single algorithm would actually cover the
+        // undecided set — otherwise it is a command that fails the same way.
         let narrower = self
             .coverage
             .iter()
             .find(|(_, (have, total))| *total > 0 && have == total)
             .map(|(a, _)| a.clone());
-        writeln!(f, "\nTo answer this question, one of:")?;
-        if let Some(a) = narrower {
-            writeln!(
-                f,
-                "  - narrow the request to what it already holds: --hash {a}"
-            )?;
+        match self.mode {
+            HashMode::AllOf => {
+                if let Some(a) = narrower {
+                    writeln!(
+                        f,
+                        "  - narrow the request to what it already holds: --hash-all-of {a}"
+                    )?;
+                } else if self.coverage.len() > 1 {
+                    writeln!(
+                        f,
+                        "  - require only one of them: --hash-any-of {}",
+                        self.coverage.keys().cloned().collect::<Vec<_>>().join(" ")
+                    )?;
+                }
+            }
+            HashMode::AnyOf => {
+                writeln!(
+                    f,
+                    "  - require every one of them, which is stricter but equally \
+                     unanswerable:\n    --hash-all-of {}",
+                    self.coverage.keys().cloned().collect::<Vec<_>>().join(" ")
+                )?;
+            }
         }
         writeln!(
             f,
@@ -449,7 +684,8 @@ impl fmt::Display for Coverage {
         )?;
         writeln!(
             f,
-            "  - compare by stat only, and accept that content is unchecked: --hash none"
+            "  - compare by stat only, and accept that content is unchecked: \
+             --hash-all-of none"
         )?;
         Ok(())
     }
@@ -609,6 +845,9 @@ mod tests {
         algos: &'static [&'static str],
         /// (no_trust_src, no_trust_dst)
         no_trust: (bool, bool),
+        /// Which answerability rule the run asked for. Defaults to all-of, because
+        /// that is the default and every coverage case predates the second mode.
+        mode: HashMode,
     }
 
     impl Shape {
@@ -618,6 +857,7 @@ mod tests {
             hashable: (true, true),
             algos: &["md5"],
             no_trust: (false, false),
+            mode: HashMode::AllOf,
         };
 
         /// A record on the src side. The common coverage shape: the record cannot
@@ -627,6 +867,7 @@ mod tests {
                 hashable: (false, true),
                 algos,
                 no_trust: (false, false),
+                mode: HashMode::AllOf,
             }
         }
 
@@ -636,6 +877,7 @@ mod tests {
                 hashable: (false, false),
                 algos,
                 no_trust: (false, false),
+                mode: HashMode::AllOf,
             }
         }
 
@@ -672,6 +914,7 @@ mod tests {
                     label: "dst",
                 },
                 sensitive,
+                self.mode,
             )
         }
     }
@@ -744,6 +987,7 @@ mod tests {
             hashable: (true, true),
             algos: &[],
             no_trust: (false, false),
+            mode: HashMode::AllOf,
         }
         .run(&s, &d, true)
         .unwrap();
@@ -950,6 +1194,7 @@ mod tests {
             hashable: (true, true),
             algos: &["md5", "sha256"],
             no_trust: (false, false),
+            mode: HashMode::AllOf,
         }
         .run(&s, &d, true)
         .unwrap();

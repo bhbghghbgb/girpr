@@ -213,6 +213,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             label: &disk_label,
         },
         common.case_sensitive,
+        common.hash_mode,
     )?;
     info!(
         record_pending = plans.src.by_rel.len(),
@@ -235,7 +236,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         disk_entries = disk.len(),
         "diffing"
     );
-    let diff = diff_maps(&rec, &disk, &common.algos, common.case_sensitive);
+    let diff = diff_maps(&rec, &disk, &plans.required, common.case_sensitive);
     let code = report_diff(&diff, &log.report());
     info!(
         missing = diff.missing.len(),

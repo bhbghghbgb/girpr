@@ -171,6 +171,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             label: &format!("folder {}", dst.display()),
         },
         common.case_sensitive,
+        common.hash_mode,
     )?;
     info!(
         src_pending = plans.src.by_rel.len(),
@@ -201,10 +202,16 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     };
 
     // 6. Plan, then print or apply.
+    //
+    // `plans.required`, and it is keyed by **src** path — which survives the rename,
+    // because the rename re-keys dst onto src's casing and never touches src's own
+    // keys. That is the third reason the plan has to precede the rename: a per-path
+    // answer is only usable if the side it is keyed by is the side that does not
+    // move.
     let diff = diff_maps(
         &sm,
         &dm,
-        &common.algos,
+        &plans.required,
         true, /* post-rename: exact keys */
     );
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);

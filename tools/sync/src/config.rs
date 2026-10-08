@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use crate::cli::{CommonArgs, TrustArgs, TrustSide};
 use crate::filter::compile_patterns;
-use crate::hash::parse_hash_list;
+use crate::hash::{parse_any_of, parse_hash_list};
+use crate::planner::HashMode;
 use crate::report::{OutputFormat, Report};
 
 /// How the run reports itself: the log knobs and the stdout format.
@@ -50,8 +51,15 @@ impl LogCtx {
 /// algorithms are already compiled and validated by the time a command runs.
 #[derive(Debug, Clone)]
 pub struct CommonOpts {
-    /// Algorithms to record; empty means `--hash none` (size+mtime only).
+    /// Algorithms to record; empty means `--hash-all-of none` (size+mtime only).
     pub algos: Vec<String>,
+    /// Whether every one of `algos` must be available, or only one.
+    ///
+    /// Beside `algos` rather than inside it, because it is a *rule about the
+    /// request* and not part of it: the same list is meaningful under both modes,
+    /// and folding the mode into the list would make "which algorithms" and "how
+    /// many of them" the same value.
+    pub hash_mode: HashMode,
     /// `--include` globs; empty means "everything".
     pub includes: Vec<Pattern>,
     /// `--exclude` globs; these win over `includes`.
@@ -75,8 +83,22 @@ impl TryFrom<CommonArgs> for CommonOpts {
     type Error = anyhow::Error;
 
     fn try_from(a: CommonArgs) -> Result<Self> {
+        // One list, one mode. The two flags are mutually exclusive at the clap
+        // layer, so which one the user typed is decided by which is non-empty
+        // rather than by re-checking for a conflict here — a second check would be a
+        // second place for the two to disagree.
+        //
+        // The asymmetry is deliberate: `parse_any_of` rejects `none`, and
+        // `parse_hash_list` does not, because the rules differ. Under all-of an
+        // empty request is a mode; under any-of it is not a request at all.
+        let (hash_mode, algos) = if !a.hash_any_of.is_empty() {
+            (HashMode::AnyOf, parse_any_of(&a.hash_any_of)?)
+        } else {
+            (HashMode::AllOf, parse_hash_list(&a.hash_all_of)?)
+        };
         Ok(Self {
-            algos: parse_hash_list(&a.hash)?,
+            algos,
+            hash_mode,
             includes: compile_patterns(&a.include)?,
             excludes: compile_patterns(&a.exclude)?,
             case_sensitive: a.case_sensitive,

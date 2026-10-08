@@ -1,11 +1,11 @@
 //! `girsync update` — fully refresh a folder's cache from current disk state.
 
 use anyhow::{Result, bail};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::{LogCtx, ScanMode, UpdateOpts};
 use crate::effective::{open_folder_cache, resolve_folder, scan_stat_only};
-use crate::planner::HashPlan;
+use crate::planner::{HashMode, HashPlan};
 use crate::report::update_summary;
 use crate::util::elapsed_s;
 
@@ -54,6 +54,28 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         no_trust_cached_hashes: true,
         dry_run: common.dry_run,
     };
+    if common.hash_mode == HashMode::AnyOf {
+        // Warned rather than rejected, and rather than obeyed, for two reasons that
+        // point the same way.
+        //
+        // There is nothing to choose between: `any-of` is a rule about what a
+        // *comparison* requires, and this command has no counterpart. And obeying it
+        // would be actively harmful — a record that stored only the one algorithm
+        // this run happened to pick would leave the *next* comparison short of the
+        // others, which is the failure 5b made fatal. Storing everything named is a
+        // superset of what any-of can ask for, so it is never wrong, only possibly
+        // more work than the user expected.
+        //
+        // Rejecting would be defensible, but the precedent for a flag that cannot
+        // apply is `compare-self`'s `--no-trust-cached-hashes`: warn, keep the flag,
+        // carry on, so a script that passes one of these to every subcommand keeps
+        // working.
+        warn!(
+            "--hash-any-of does not change what update does: it stores every algorithm \
+             named, because it has no other side to choose between and a record missing \
+             one would fail the next comparison"
+        );
+    }
     let db = open_folder_cache(&dir, &common, mode, true)?;
 
     // The three phases, run here rather than inside a helper, which is the shape

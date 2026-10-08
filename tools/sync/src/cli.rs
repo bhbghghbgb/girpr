@@ -40,8 +40,36 @@ pub struct Cli {
 #[derive(Args, Debug, Clone)]
 pub struct CommonArgs {
     /// Hash algorithm; repeatable (md5, sha256). "none" disables hashing entirely.
-    #[arg(long = "hash", default_values_t = vec!["md5".to_string()])]
-    pub hash: Vec<String>,
+    ///
+    /// **Every** algorithm named here must be available on both sides of a pair that
+    /// size+mtime cannot settle. A folder backfills one it lacks; a record has no
+    /// filesystem to read from, so a record that lacks one is an error naming the
+    /// remedy, rather than the pair quietly falling back to stat.
+    ///
+    /// `--hash-any-of` asks for only one of several, and the run picks it per pair.
+    #[arg(
+        long = "hash-all-of",
+        default_values_t = vec!["md5".to_string()],
+        conflicts_with = "hash_any_of"
+    )]
+    pub hash_all_of: Vec<String>,
+    /// As `--hash-all-of`, but only **one** of the named algorithms is required.
+    ///
+    /// The run picks which, per pair: cheapest first — one both sides already hold
+    /// costs nothing, one costs a read, two cost two — and within a tier, the order
+    /// given here. So `--hash-any-of sha256 md5` prefers sha256.
+    ///
+    /// Use it when a side holds only some of what you would otherwise demand, which
+    /// is the common case for a record written by an older run: any-of then reads
+    /// the one the record has instead of refusing. Every algorithm it picks is
+    /// still obtainable on **both** sides, so a pair settled this way is settled by
+    /// a digest both sides hold — which is the difference between this and the old
+    /// behaviour of skipping whatever was missing.
+    ///
+    /// `none` is not accepted here: with nothing requested there is no "any of" to
+    /// choose, and `--hash-all-of none` is the stat-only audit.
+    #[arg(long = "hash-any-of", conflicts_with = "hash_all_of")]
+    pub hash_any_of: Vec<String>,
     /// Only sync paths matching this glob; repeatable.
     #[arg(long = "include")]
     pub include: Vec<String>,
@@ -96,7 +124,7 @@ pub struct TrustArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Build/refresh the record for a folder (always hashes per --hash, prunes missing).
+    /// Build/refresh the record for a folder (always hashes per --hash-all-of, prunes missing).
     Update {
         #[arg(long)]
         dir: PathBuf,

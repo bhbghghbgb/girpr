@@ -16,7 +16,8 @@ fn run_cli_dispatch_update_compare_sync() {
     wfile(&dst, "a.txt", b"bbb");
 
     let common = || CommonArgs {
-        hash: common::md5arg(),
+        hash_all_of: common::md5arg(),
+        hash_any_of: vec![],
         include: vec![],
         exclude: vec![],
         case_sensitive: true,

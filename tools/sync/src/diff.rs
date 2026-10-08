@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
+use crate::planner::Required;
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -41,10 +42,18 @@ impl Diff {
 /// In insensitive mode keys are matched by lowercase, so a casing-only
 /// difference surfaces as `case_mismatch` instead of missing+extra. Dirs are
 /// compared by presence alone.
+///
+/// `required` is the planner's per-path answer to "which algorithms settle this
+/// pair", keyed by **src** path. Passing it rather than an algorithm list is what
+/// lets one run settle different pairs by different algorithms: under
+/// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so
+/// this is a superset of what this function used to be handed, not a different
+/// mechanism. Consulted only after size+mtime have already agreed, which is the
+/// same boundary the planner used — so a path that reaches it always has an entry.
 pub fn diff_maps(
     src: &HashMap<String, EffRec>,
     dst: &HashMap<String, EffRec>,
-    algos: &[String],
+    required: &Required,
     case_sensitive: bool,
 ) -> Diff {
     let mut d = Diff::default();
@@ -68,7 +77,7 @@ pub fn diff_maps(
                         // presence only
                     } else if s.size != t.size
                         || s.mtime_ns != t.mtime_ns
-                        || hashes_differ(&s.hashes, &t.hashes, algos)
+                        || hashes_differ(&s.hashes, &t.hashes, required.of(k))
                     {
                         d.changed.push(k.clone());
                     }
@@ -105,7 +114,7 @@ pub fn diff_maps(
                     } else if s.kind == "dir" {
                     } else if s.size != t.size
                         || s.mtime_ns != t.mtime_ns
-                        || hashes_differ(&s.hashes, &t.hashes, algos)
+                        || hashes_differ(&s.hashes, &t.hashes, required.of(srel))
                     {
                         d.changed.push((*srel).clone());
                     }
@@ -122,10 +131,15 @@ pub fn diff_maps(
     d
 }
 
-/// True if any requested algorithm has both sides present and disagreeing.
+/// True if any of the algorithms that settle this pair has both sides present and
+/// disagreeing.
 ///
-/// If either side lacks a hash (e.g. a `--hash none` history) this stays
-/// silent: the caller has already compared size+mtime.
+/// If either side lacks one of them this stays silent — the caller has already
+/// compared size+mtime. That silence is safe *because* the planner chose these
+/// algorithms: every one of them is obtainable on both sides, so it has either
+/// been computed or was already cached. A digest that is absent here is a digest
+/// nobody asked for, which is what makes this a comparison rather than the
+/// degradation stage 5b closed.
 pub fn hashes_differ(
     a: &HashMap<String, Vec<u8>>,
     b: &HashMap<String, Vec<u8>>,

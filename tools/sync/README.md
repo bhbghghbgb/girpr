@@ -31,7 +31,7 @@ and drive the public API.
 | `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
-| `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, the coverage check): the only place that decides which digests a run must compute |
+| `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, `HashMode` and the coverage check): the only place that decides which digests a run must compute. `Required` carries the per-path answer to the diff |
 | `diff.rs` | `Diff` buckets and `diff_maps` |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
@@ -57,25 +57,65 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update --dir <DIR> [--hash md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare --src <DIR|RECORD> --dst <DIR|RECORD> [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR> [--hash md5] [--no-trust-cached-hashes] [--dry-run] [...]   # the last two are accepted and do nothing
-girsync sync --src <DIR> --dst <DIR> [--missing-only] [--keep-extra] [--jobs 4] [--hash md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes] [--dry-run] [...]   # the last two are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
 `--output text|json`. `sled2redb` takes `--force` and the same `--output`.
 
-`--hash` is repeatable (`md5`, `sha256`; default `md5`). `--hash none` is exclusive:
-no hashing at all, decisions by size+mtime only (verify-after-copy also size+mtime).
+### `--hash-all-of` / `--hash-any-of`
+
+Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive. They
+answer one question — *how many of the named algorithms must a comparison be able
+to use?* — and the difference is what happens when a side cannot supply them:
+
+| | requirement on an undecided pair | a folder side short of one | a **record** side short of one |
+| --- | --- | --- | --- |
+| `--hash-all-of` (default) | **every** algorithm named | backfills it by hashing | **exit 3**, naming the remedy |
+| `--hash-any-of` | **one**, chosen per pair | hashes the chosen one | **exit 3**, if *none* qualify |
+
+A pair is undecided when it is a file on both sides with equal size+mtime — the
+only state where a digest is consulted at all. Anything else is already decided by
+stat or presence, so no algorithm is required and no coverage is checked.
+
+`--hash-any-of` picks cheapest-first — an algorithm both sides already hold costs
+no read, one costs a read, two cost two — and within a tier it takes the **order you
+wrote the flags in**, so `--hash-any-of sha256 md5` prefers sha256. The
+choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
+
+That makes it strictly weaker than all-of, and never weaker than the pick: every
+algorithm it chooses is obtainable on *both* sides, so a pair settled this way is
+settled by a digest both sides hold. That is the whole difference from the old
+behaviour, which skipped whatever digest was missing and reported the pair equal on
+size+mtime alone.
+
+Reach for it when a side holds only some of what you would otherwise demand — a
+record written by an older run, typically. An `--hash-all-of md5` history compared with
+`--hash-any-of md5 sha256` succeeds wherever the record has md5, reading one digest
+instead of refusing and without repopulating the tree. On two *folders* it is mostly
+free money: both can always backfill, so the saving is whatever the caches already
+cover.
+
+`--hash-all-of none` is the stat-only audit — no hashing at all, decisions by
+size+mtime only (verify-after-copy also size+mtime). `none` is **not** accepted by
+`--hash-any-of`: with nothing requested there is no "any of" to choose.
+
+> **Breaking change.** `--hash` was renamed. A record missing a requested digest used
+> to degrade silently to size+mtime and report the pair equal; under the default
+> `--hash-all-of` it is an error. A script passing `--hash md5` must become
+> `--hash-all-of md5` — the old spelling is rejected rather than aliased, so a typo
+> that used to work now says so.
 
 `--no-trust-cached-hashes` is repeatable and takes a side: pass `src`, `dst`, or
 both. On a named side, a cached digest is never reused — every file is rehashed
 even when size+mtime match the cache. Off by default, and it only concerns
 *digest* reuse, not the stat data (which is always re-read from disk). Combining
-it with `--hash none` is harmless but pointless: there are no digests to distrust.
-`update` has no such flag — it is defined as a full repopulate, so it never
-trusts cached digests in the first place.
+it with `--hash-all-of none` is harmless but pointless: there are no digests to
+distrust. `update` has no such flag — it is defined as a full repopulate, so it
+never trusts cached digests in the first place.
 
 ### update
 
@@ -84,16 +124,16 @@ empty dirs (presence-only), prunes rows for deleted/excluded paths. Backs up
 the old DB first (see below). Reports one record: the directory, the file and
 dir counts, and the algorithms it computed.
 
-It recomputes every algorithm named by `--hash` on every run, but that does
-**not** mean every stored digest is replaced:
+It recomputes every algorithm named by `--hash-all-of` on every run, but that
+does **not** mean every stored digest is replaced:
 
 - **stat unchanged** — algorithms this run did not ask for are kept, so
-  `--hash none` records stat data without touching stored digests at all, and
-  `--hash md5` leaves an existing `sha256` alone. To refresh an algorithm, ask
-  for it by name.
+  `--hash-all-of none` records stat data without touching stored digests at all,
+  and `--hash-all-of md5` leaves an existing `sha256` alone. To refresh an
+  algorithm, ask for it by name.
 - **stat changed** — *all* stored digests are dropped, including algorithms
   this run did not request, since the content is assumed to have changed with
-  them. Only the `--hash` set is written back.
+  them. Only the requested set is written back.
 
 So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
@@ -172,7 +212,7 @@ folder side is resolved against an in-memory handle that is not the same file.
 A file whose size or mtime disagrees with the record is settled without a read,
 which makes an audit of a drifted tree cheap. A folder that is *in step* has
 every pair stat-equal, so every file is read — there is nothing else that could
-settle them. `--hash none` is the stat-only audit and costs nothing, if that is
+settle them. `--hash-all-of none` is the stat-only audit and costs nothing, if that is
 what you want. `--no-trust-cached-hashes` and `--dry-run` are both accepted and
 do nothing here; the command warns rather than erroring, so a script passing them
 to every subcommand keeps working.
@@ -195,8 +235,24 @@ digest, so phase A recorded the file's stat and nothing else — and that row is
 stat-equal pair the record cannot digest, and before this rule it exited **0**:
 `hashes_differ` skips an algorithm either side lacks, so the pair quietly fell back
 to the size+mtime that had already agreed and the audit reported the newcomer as
-in step. One command fixes it (`girsync update --dir src`), or `--hash none` if a
-stat-only audit is what you wanted.
+in step. Three ways out, all named in the error: one command
+(`girsync update --dir src`), a narrower request
+(`--hash-all-of md5` if the record holds only md5), or
+`--hash-all-of none` for a stat-only audit.
+
+**`--hash-any-of` is the fourth, and the one that needs no new work on the tree.**
+Where the record holds *some* of what you asked for, it reads one algorithm instead
+of refusing:
+
+```
+girsync compare-self --dir src --hash-any-of md5 sha256
+```
+
+An audit of a `--hash md5` history then succeeds wherever the record has md5, without
+repopulating. It reads one digest per undecided pair and cannot read zero — this
+command's disk side has no cache by design, so there is no tier-1 "already have it"
+to hit — which makes `any-of` here a way to *narrow the request to one algorithm*,
+not a way to skip the work.
 
 The same caveat as everywhere else applies to `--max-depth` and
 `--include`/`--exclude`: a run whose filters differ from the ones the cache was
@@ -269,7 +325,7 @@ Mirrors `src` → `dst`:
    `--keep-extra`, which spares directories as well as files).
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
-   (size+mtime when `--hash none`); the dst record entry is deleted *before* each
+   (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. No resume.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
@@ -452,6 +508,25 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   size+mtime that had already agreed and the run reported `CHANGED = 0` about
   content nobody read.
 
+  `--hash-all-of` / `--hash-any-of` (above) is the *which* half of the same
+  decision, and the planner's answer to it is also per pair:
+  `PairPlan::required` maps each src path to the algorithms that settle it, and
+  `diff_maps` consults that rather than a run-wide list — under `all-of` every entry
+  *is* the whole requested list, so it is a superset of the old signature rather
+  than a different mechanism. Availability bookkeeping is identical in both modes
+  ("can this side obtain algorithm `a`" does not depend on the mode); only the
+  requirement differs. Under `any-of` a side with a filesystem can therefore never
+  be the short one, which is why an `any-of` coverage failure always names a
+  record — by construction, not by a guess at which side it was.
+
+  The two modes are not equally strict about *which* algorithms fail, and conflating
+  that is a real trap: under `all-of` every algorithm a side cannot obtain is a
+  failure, but under `any-of` a record short of `sha256` is perfectly answerable by
+  `md5`. Recording every shortfall in both modes makes `any-of` fatal for exactly
+  the records it exists to rescue. So `all-of` accumulates the shortfall and
+  `any-of` defers entirely to `pick_one`, the one place that knows whether *nothing*
+  is obtainable.
+
   Separately, and needing no knowledge of the other side, a folder side
   **corrects its own cache** as it walks: a stale row (stat no longer matches
   disk) loses its digests, and an orphan (file gone) is dropped. That is phase A
@@ -527,13 +602,20 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
   it cannot compare content for that path. It used to exit `0` and call the pair
-  equal on size+mtime alone. `girsync update --dir <the folder>` is the fix; the
-  error names the folder, the count and the paths.
+  equal on size+mtime alone. `girsync update --dir <the folder>` is the fix, or
+  `--hash-any-of` if the record holds *some* of what you asked for; the error names
+  the folder, the count, the paths and the mode that failed.
+- **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
+  it. The old spelling is rejected rather than aliased, so a script passing
+  `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
+  none` is the stat-only audit; `none` is refused by `--hash-any-of`.
 - Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`,
+  `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick and its tiers, the
+  per-path answer reaching the diff, and the flag surface through the real binary),
   (per-fixture expected verdicts *and* expected read counts, each stated before
   the code it pins), `output.rs` (the stdout contract: `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
