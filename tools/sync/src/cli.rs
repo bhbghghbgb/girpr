@@ -70,6 +70,30 @@ pub struct CommonArgs {
     /// choose, and `--hash-all-of none` is the stat-only audit.
     #[arg(long = "hash-any-of", conflicts_with = "hash_all_of")]
     pub hash_any_of: Vec<String>,
+    /// Do not let a **size** difference settle a pair: treat those pairs as needing a
+    /// digest.
+    ///
+    /// A size difference already implies different content, so this cannot change a
+    /// verdict — the digest comparison will always disagree. What it buys is the read,
+    /// and that repairs the cache: a size-changed row arrives with its digests dropped
+    /// (a stale row's are all suspect), so under the default it stays stat-only forever
+    /// and can never become comparable again.
+    ///
+    /// Use `--no-trust-mtime` instead when a file's mtime moved but its bytes may not
+    /// have — that one *can* change a verdict, because mtime alone is not evidence.
+    #[arg(long, default_value_t = false)]
+    pub no_trust_size: bool,
+    /// Do not let an **mtime** difference settle a pair: treat those pairs as needing a
+    /// digest.
+    ///
+    /// This is the flag that can change a verdict. A file whose mtime moved but whose
+    /// bytes did not — a `touch`, an extractor rewriting identical bytes — is reported
+    /// `CHANGED` by default; with this flag it is compared on content and may come back
+    /// equal.
+    ///
+    /// The cost is a read of every mtime-changed pair on both sides.
+    #[arg(long, default_value_t = false)]
+    pub no_trust_mtime: bool,
     /// Only sync paths matching this glob; repeatable.
     #[arg(long = "include")]
     pub include: Vec<String>,

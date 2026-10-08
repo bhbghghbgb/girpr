@@ -29,7 +29,7 @@ use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{Required, SideRequest, plan_pairs};
+use girsync::planner::{Required, SideRequest, StatTrust, plan_pairs};
 use girsync::report::verdict;
 use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
 use serde_json::{Value, json};
@@ -96,12 +96,19 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap();
     let sm = resolve_side(&mut s, mode(trust.no_trust_src), &plans.src).unwrap();
     let dm = resolve_side(&mut d, mode(trust.no_trust_dst), &plans.dst).unwrap();
     Run {
-        diff: diff_maps(&sm.map, &dm.map, &plans.required, common.case_sensitive),
+        diff: diff_maps(
+            &sm.map,
+            &dm.map,
+            &plans.required,
+            plans.stat,
+            common.case_sensitive,
+        ),
         hashed: sm.stats.hashed + dm.stats.hashed,
         src_hashed: sm.stats.hashed,
         dst_hashed: dm.stats.hashed,
@@ -224,12 +231,19 @@ fn self_audit(dir: &Path) -> Run {
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap();
     let disk = resolve_folder(dir, &cold, mode, &disk_a, &plans.dst).unwrap();
     let rec = resolve_record(&rec);
     Run {
-        diff: diff_maps(&rec.map, &disk.map, &plans.required, common.case_sensitive),
+        diff: diff_maps(
+            &rec.map,
+            &disk.map,
+            &plans.required,
+            plans.stat,
+            common.case_sensitive,
+        ),
         hashed: disk.stats.hashed,
         src_hashed: plans.src.pending().len(),
         dst_hashed: disk.stats.hashed,
@@ -796,6 +810,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap();
     let sm = resolve_folder(src, &src_db, mode(trust.no_trust_src), &src_a, &plans.src).unwrap();
@@ -1000,6 +1015,8 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
     // change what the tree says. `gone.txt` was deleted from *src*, so dst still
     // has it — `EXTRA`, and still reported even though the orphan row on the src
     // side is gone.
+    // Built by hand rather than from a plan, so the trust is stated here too —
+    // and trusting both is what makes this the same diff the commands would produce.
     let d = diff_maps(
         &sm.map,
         &dm.map,
@@ -1007,6 +1024,7 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
             by_rel: HashMap::new(),
             fallback: vec!["md5".to_string()],
         },
+        StatTrust::default(),
         true,
     );
     let reported: Vec<Value> = verdict(&d).iter().map(|r| r.json()).collect();

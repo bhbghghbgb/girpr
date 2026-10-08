@@ -172,6 +172,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )?;
     info!(
         src_pending = plans.src.by_rel.len(),
@@ -212,6 +213,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         &sm,
         &dm,
         &plans.required,
+        plans.stat,
         true, /* post-rename: exact keys */
     );
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);

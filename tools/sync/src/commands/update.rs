@@ -54,6 +54,18 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         no_trust_cached_hashes: true,
         dry_run: common.dry_run,
     };
+    // Both flags are accepted and change nothing here, for the same reason they are
+    // accepted and change nothing for a record side: there is no short circuit to
+    // switch off. `plan_one_side` has no pairing step, so `StatTrust` is never
+    // consulted — and this command rehashes every file regardless, which is *more*
+    // than either flag asks for.
+    if !common.stat.settles_any() {
+        warn!(
+            "--no-trust-size/--no-trust-mtime do not change what update does: it \
+             rehashes every file either way, since there is no other side to be lazy \
+             relative to"
+        );
+    }
     if common.hash_mode == HashMode::AnyOf {
         // Warned rather than rejected, and rather than obeyed, for two reasons that
         // point the same way.

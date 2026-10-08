@@ -18,6 +18,8 @@ fn run_cli_dispatch_update_compare_sync() {
     let common = || CommonArgs {
         hash_all_of: common::md5arg(),
         hash_any_of: vec![],
+        no_trust_size: false,
+        no_trust_mtime: false,
         include: vec![],
         exclude: vec![],
         case_sensitive: true,

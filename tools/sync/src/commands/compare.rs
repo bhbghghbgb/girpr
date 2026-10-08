@@ -120,6 +120,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )?;
     info!(
         src_pending = plans.src.by_rel.len(),
@@ -149,7 +150,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let (sm, dm) = (sm.map, dm.map);
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
-    let diff = diff_maps(&sm, &dm, &plans.required, common.case_sensitive);
+    let diff = diff_maps(&sm, &dm, &plans.required, plans.stat, common.case_sensitive);
     let code = report_diff(&diff, &log.report());
     info!(
         missing = diff.missing.len(),

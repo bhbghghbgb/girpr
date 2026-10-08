@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
-use crate::planner::Required;
+use crate::planner::{Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -48,12 +48,22 @@ impl Diff {
 /// lets one run settle different pairs by different algorithms: under
 /// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so
 /// this is a superset of what this function used to be handed, not a different
-/// mechanism. Consulted only after size+mtime have already agreed, which is the
-/// same boundary the planner used — so a path that reaches it always has an entry.
+/// mechanism. Consulted only after stat has been consulted and found unconvincing,
+/// which is the same boundary the planner used — so a path that reaches it always has
+/// an entry.
+///
+/// `stat` decides **which stat fields may settle a pair here**, and it must be the same
+/// value the planner was given. That is the load-bearing part: this function's
+/// short-circuit on size+mtime and the planner's are the same rule, and if they
+/// disagree then one of two silent things happens — the planner hashes a pair whose
+/// digest is never read, or (worse) a pair the planner called decided turns out to need
+/// a digest nobody computed. Sharing one predicate is what makes that unrepresentable
+/// rather than merely tested-for.
 pub fn diff_maps(
     src: &HashMap<String, EffRec>,
     dst: &HashMap<String, EffRec>,
     required: &Required,
+    stat: StatTrust,
     case_sensitive: bool,
 ) -> Diff {
     let mut d = Diff::default();
@@ -75,8 +85,7 @@ pub fn diff_maps(
                         d.type_conflict.push(k.clone());
                     } else if s.kind == "dir" {
                         // presence only
-                    } else if s.size != t.size
-                        || s.mtime_ns != t.mtime_ns
+                    } else if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns)
                         || hashes_differ(&s.hashes, &t.hashes, required.of(k))
                     {
                         d.changed.push(k.clone());
@@ -112,8 +121,7 @@ pub fn diff_maps(
                     if s.kind != t.kind {
                         d.type_conflict.push((*srel).clone());
                     } else if s.kind == "dir" {
-                    } else if s.size != t.size
-                        || s.mtime_ns != t.mtime_ns
+                    } else if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns)
                         || hashes_differ(&s.hashes, &t.hashes, required.of(srel))
                     {
                         d.changed.push((*srel).clone());

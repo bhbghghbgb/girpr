@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use crate::cli::{CommonArgs, TrustArgs, TrustSide};
 use crate::filter::compile_patterns;
 use crate::hash::{parse_any_of, parse_hash_list};
-use crate::planner::HashMode;
+use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report};
 
 /// How the run reports itself: the log knobs and the stdout format.
@@ -53,6 +53,12 @@ impl LogCtx {
 pub struct CommonOpts {
     /// Algorithms to record; empty means `--hash-all-of none` (size+mtime only).
     pub algos: Vec<String>,
+    /// Which stat fields may settle a pair without a digest.
+    ///
+    /// See [`StatTrust`]. Trusting both is the default and is what makes the laziness
+    /// work; the flags take one field away at a time, and both together are "disable the
+    /// short circuit".
+    pub stat: StatTrust,
     /// Whether every one of `algos` must be available, or only one.
     ///
     /// Beside `algos` rather than inside it, because it is a *rule about the
@@ -96,9 +102,17 @@ impl TryFrom<CommonArgs> for CommonOpts {
         } else {
             (HashMode::AllOf, parse_hash_list(&a.hash_all_of)?)
         };
+        // Two independent switches on the short circuit's two inputs, and both
+        // default to trusting. Taken as flags rather than as a tri-state, so
+        // "trust nothing" is the composition and there is no third spelling to keep
+        // in sync with the first two.
+        let stat = StatTrust::default()
+            .without_size_if(a.no_trust_size)
+            .without_mtime_if(a.no_trust_mtime);
         Ok(Self {
             algos,
             hash_mode,
+            stat,
             includes: compile_patterns(&a.include)?,
             excludes: compile_patterns(&a.exclude)?,
             case_sensitive: a.case_sensitive,

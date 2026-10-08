@@ -58,13 +58,50 @@ trusting a half-written file.
 
 ```
 girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes] [--dry-run] [...]   # the last two are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
 `--output text|json`. `sled2redb` takes `--force` and the same `--output`.
+
+### `--no-trust-size` / `--no-trust-mtime`
+
+The stat short circuit is an optimisation, so it is switchable. These name the two
+fields it consults rather than adding a switch for the optimisation itself — **both
+together is "disable it"**, expressed as the reason:
+
+| | a pair is settled for free when |
+| --- | --- |
+| default | sizes differ, **or** mtimes differ |
+| `--no-trust-size` | mtimes differ (size alone no longer settles it) |
+| `--no-trust-mtime` | sizes differ (mtime alone no longer settles it) |
+| both | never — every file-on-both-sides pair needs a digest |
+
+Only *file on both sides* pairs are affected. Dirs are compared by presence, a kind
+conflict by kind, and a one-sided path is `MISSING`/`EXTRA` — none of which any flag
+here touches.
+
+The two flags are **not** interchangeable, and the difference is worth knowing:
+
+- **`--no-trust-mtime` can change a verdict.** A file whose mtime moved but whose
+  bytes did not — a `touch`, an extractor rewriting identical bytes — is currently
+  `CHANGED`. Distrusting mtime is how you ask whether that is really so, and it may
+  come back equal.
+- **`--no-trust-size` cannot.** Different lengths are different content, so the digest
+  comparison will always disagree and the verdict is unchanged. What the flag buys is
+  the *read* — and that repairs the cache: a size-changed row arrives in phase A with
+  its digests dropped (a stale row's are all suspect), so under the short circuit it
+  stays stat-only forever and can never become comparable again. This is what puts the
+  digest back.
+
+Neither is `--no-trust-cached-hashes`, which distrusts a **digest** rather than a
+**stat field**: it only ever affects pairs that were going to be read anyway, and it
+re-reads them even when the cache holds a matching one.
+
+`update` accepts both and ignores them, with a warning — it rehashes every file
+regardless, so there is no short circuit for them to switch off.
 
 ### `--hash-all-of` / `--hash-any-of`
 
@@ -495,6 +532,16 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   it is able to do. It is **not** a valid state for a *record* side, which is why
   the planner's coverage check exists — see below.
 
+  The stat short circuit is `planner::StatTrust::settles`, **one predicate read by
+  both the planner and the diff**. `--no-trust-size` and `--no-trust-mtime` switch
+  parts of it off, and both together switch all of it off. They have to be the
+  same rule in both places, and the mutation that matters is a disagreement:
+  a digest the planner computes that the diff never consults, or — worse, and
+  silently — a pair the planner called settled that needed a digest nobody
+  computed. The planner's decision travels out in `PairPlan::stat` rather than
+  being read from the flags a second time, so the two cannot drift. Both
+  directions of that mutation are caught by `stat_trust.rs`.
+
   The same `plan_pairs` call that decides what to read also decides whether the run
   *can* be answered, and it does so over the undecided set only, before any read.
   A side's availability is `cached ∪ hashable`, with deliberately **no trust term**:
@@ -605,6 +652,12 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   equal on size+mtime alone. `girsync update --dir <the folder>` is the fix, or
   `--hash-any-of` if the record holds *some* of what you asked for; the error names
   the folder, the count, the paths and the mode that failed.
+- **A size-changed cache row can get stuck.** Editing a file's length drops its digests
+  (a stale row's are all suspect), and a size difference settles the pair for free — so
+  nothing ever rehashes it and the row stays stat-only permanently, describing content
+  it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
+  undecided set. Worth knowing because the row looks healthy — it has the right size and
+  mtime.
 - **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
   it. The old spelling is rejected rather than aliased, so a script passing
   `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
@@ -613,11 +666,14 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`,
-  `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick and its tiers, the
-  per-path answer reaching the diff, and the flag surface through the real binary),
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`
   (per-fixture expected verdicts *and* expected read counts, each stated before
-  the code it pins), `output.rs` (the stdout contract: `--output json` is the
+  the code it pins), `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick
+  and its tiers, the per-path answer reaching the diff, and the flag surface
+  through the real binary), `stat_trust.rs` (`--no-trust-size` /
+  `--no-trust-mtime`: the stat short circuit switched off, measured in read
+  counts, in verdicts, and in cache rows), `output.rs` (the stdout contract:
+  `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
   narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
   against the public API, so anything they touch must stay `pub`.

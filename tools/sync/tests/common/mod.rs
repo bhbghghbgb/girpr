@@ -7,7 +7,7 @@
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::planner::{HashMode, SideRequest, plan_pairs};
+use girsync::planner::{HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
@@ -113,6 +113,7 @@ pub fn opts() -> CommonOpts {
     CommonOpts {
         algos: vec!["md5".to_string()],
         hash_mode: HashMode::default(),
+        stat: StatTrust::default(),
         includes: vec![],
         excludes: vec![],
         case_sensitive: true,
@@ -441,6 +442,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap();
     let sm = resolve_side(

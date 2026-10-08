@@ -73,6 +73,96 @@ pub enum HashMode {
     AnyOf,
 }
 
+/// Which parts of a file's stat a run will accept as evidence that two sides differ.
+///
+/// The short circuit in [`plan_pairs`] is an **optimisation**, so it has to be
+/// switchable — and it is better to name the two fields it consults than to add a
+/// switch for the optimisation itself. `--no-trust-size --no-trust-mtime` together
+/// is "disable it", expressed as the reason rather than as a third name for it.
+///
+/// A field that is not trusted no longer settles a pair, so the pair becomes
+/// undecided and needs a digest. For `mtime` that can change the *verdict*: a file
+/// whose mtime moved but whose bytes did not is currently `CHANGED`, and distrusting
+/// mtime is how you ask whether that is really so. For `size` it cannot — different
+/// lengths are different content — so the verdict is unchanged and the flag buys the
+/// read instead, which is a different and narrower thing than
+/// `--no-trust-cached-hashes` (which distrusts a *digest*, and so only ever affects
+/// pairs that were going to be read anyway).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatTrust {
+    /// `--no-trust-size` absent: a size difference settles a pair.
+    pub size: bool,
+    /// `--no-trust-mtime` absent: an mtime difference settles a pair.
+    pub mtime: bool,
+}
+
+impl Default for StatTrust {
+    /// **Trusts both.** Every case in this module that predates the flags is
+    /// describing this, and an unflagged run must keep meaning exactly that — the
+    /// flags are additive and default to the behaviour they optimise.
+    fn default() -> Self {
+        StatTrust {
+            size: true,
+            mtime: true,
+        }
+    }
+}
+
+impl StatTrust {
+    /// `--no-trust-size`
+    pub fn without_size(mut self) -> Self {
+        self.size = false;
+        self
+    }
+
+    /// `--no-trust-mtime`
+    pub fn without_mtime(mut self) -> Self {
+        self.mtime = false;
+        self
+    }
+
+    /// `--no-trust-size`, applied only when the flag was actually passed.
+    ///
+    /// The flag is a bool and the field is a `bool` meaning the opposite thing, and
+    /// negating at the boundary is where that belongs — a `StatTrust` built by
+    /// negating inside itself would be right only by accident.
+    pub fn without_size_if(self, distrusted: bool) -> Self {
+        if distrusted {
+            self.without_size()
+        } else {
+            self
+        }
+    }
+
+    /// `--no-trust-mtime`, applied only when the flag was actually passed.
+    pub fn without_mtime_if(self, distrusted: bool) -> Self {
+        if distrusted {
+            self.without_mtime()
+        } else {
+            self
+        }
+    }
+
+    /// True when this pair's stat, as trusted, settles it without a digest.
+    ///
+    /// The single definition of the short circuit's condition, so the planner and
+    /// anything else that has to agree with it read the same rule. `size` and
+    /// `mtime` are both present rather than compared here, so a caller cannot
+    /// accidentally ask about one and infer the other.
+    pub fn settles(&self, a_size: u64, a_mtime: i64, b_size: u64, b_mtime: i64) -> bool {
+        (self.size && a_size != b_size) || (self.mtime && a_mtime != b_mtime)
+    }
+
+    /// False when neither field is trusted — i.e. the short circuit is off.
+    ///
+    /// For a caller that has no pairing step and so never consults [`Self::settles`],
+    /// such as `update`. It asks whether there is anything left to switch off rather
+    /// than repeating the negation of two fields.
+    pub fn settles_any(&self) -> bool {
+        self.size || self.mtime
+    }
+}
+
 /// The algorithms that settle each undecided pair, from one decision.
 ///
 /// Produced by [`plan_pairs`] and consumed by [`crate::diff::diff_maps`]. Handing
@@ -242,6 +332,14 @@ pub struct PairPlan {
     pub dst: HashPlan,
     /// Which algorithms settle each pair — see [`Required`].
     pub required: Required,
+    /// Which stat fields settled a pair, as this run decided it.
+    ///
+    /// Carried out of the planner so the diff reads the *same* value rather than
+    /// taking the flags a second time. The planner's short circuit and the diff's are
+    /// the same rule, and reading it twice is how they drift — silently, and in both
+    /// directions: a digest computed that nobody consults, or a pair the planner
+    /// called settled that needed a digest nobody computed.
+    pub stat: StatTrust,
 }
 
 /// The paths both sides hold, paired the way [`crate::diff::diff_maps`] pairs
@@ -342,6 +440,20 @@ fn shared_pairs<'a>(
 ///   sides is reported together, because a user who learns about one at a time will
 ///   not get to the end.
 ///
+/// ## The short circuit, and how to switch it off
+///
+/// [`StatTrust`] decides which stat fields may settle a pair without a digest. Under
+/// the default both are trusted, which is what makes the whole laziness story work;
+/// [`StatTrust::without_size`] and [`StatTrust::without_mtime`] put a field back into
+/// the undecided set, and both together leave the short circuit with nothing to act
+/// on.
+///
+/// Coverage follows the same boundary as the short circuit, and for the same reason: a
+/// pair settled by a trusted stat field needed no digest, so none is required. Distrust
+/// a field and its pairs become answerable questions — which for a record side means
+/// they can now fail coverage, and that is the intended consequence rather than an
+/// accident of the check's placement.
+///
 /// ## The two modes
 ///
 /// [`HashMode::AllOf`] requires the whole requested list on an undecided pair, which
@@ -359,8 +471,18 @@ pub fn plan_pairs(
     dst: SideRequest<'_>,
     case_sensitive: bool,
     mode: HashMode,
+    stat: StatTrust,
 ) -> Result<PairPlan> {
-    let mut plan = PairPlan::default();
+    // `stat` is set in the initialiser, and that is load-bearing rather than tidiness: it
+    // has to happen even on the early return below, because the diff reads
+    // `plan.stat` to decide its own short circuit. An unflagged default there would
+    // make `--hash-all-of none --no-trust-mtime` trust mtime in the diff while the user
+    // asked it not to, and the verdict would come from the field the run was told to
+    // ignore.
+    let mut plan = PairPlan {
+        stat,
+        ..PairPlan::default()
+    };
     if src.algos.is_empty() {
         // `--hash none`: nothing to ask for, so nothing to read and nothing to be
         // short of.
@@ -377,11 +499,17 @@ pub fn plan_pairs(
         if !s.is_file() || !d.is_file() {
             continue;
         }
-        // The short circuit. Size or mtime differing decides the pair outright,
-        // and `diff_maps` would short-circuit the hash comparison anyway — the
-        // bytes just used to be read long before that. Coverage follows the same
-        // boundary: nothing was required of these paths, so nothing is owed.
-        if s.size != d.size || s.mtime_ns != d.mtime_ns {
+        // The short circuit. A stat field this run trusts settles the pair outright,
+        // and `diff_maps` would short-circuit the hash comparison anyway — the bytes
+        // just used to be read long before that. Coverage follows the same boundary:
+        // nothing was required of these paths, so nothing is owed.
+        //
+        // Distrusting a field (`StatTrust`) is what puts it back here. The condition
+        // is read through `StatTrust::settles` rather than inlined, so the planner
+        // and the diff cannot disagree about which pairs are undecided — the one way
+        // this could silently break is the planner hashing something the diff never
+        // consults, or the other way round.
+        if stat.settles(s.size, s.mtime_ns, d.size, d.mtime_ns) {
             continue;
         }
         // Mode-independent. See the note above.
@@ -892,6 +1020,7 @@ mod tests {
             s: &HashMap<String, SideEntry>,
             d: &HashMap<String, SideEntry>,
             sensitive: bool,
+            stat: StatTrust,
         ) -> Result<PairPlan> {
             let cap = |ok: bool| SideCapability {
                 can_hash_from_disk: ok,
@@ -915,6 +1044,7 @@ mod tests {
                 },
                 sensitive,
                 self.mode,
+                stat,
             )
         }
     }
@@ -928,7 +1058,7 @@ mod tests {
     ) -> PairPlan {
         Shape::FOLDERS
             .distrusting(no_trust, no_trust)
-            .run(s, d, sensitive)
+            .run(s, d, sensitive, StatTrust::default())
             .unwrap()
     }
 
@@ -989,7 +1119,7 @@ mod tests {
             no_trust: (false, false),
             mode: HashMode::AllOf,
         }
-        .run(&s, &d, true)
+        .run(&s, &d, true, StatTrust::default())
         .unwrap();
         assert!(p.src.by_rel.is_empty() && p.dst.by_rel.is_empty());
     }
@@ -1002,7 +1132,9 @@ mod tests {
         let s = map(vec![("equal.txt", file(10, 100))]);
         let d = map(vec![("equal.txt", file(10, 100))]);
         assert!(
-            Shape::record_src(&[]).run(&s, &d, true).is_ok(),
+            Shape::record_src(&[])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok(),
             "a stat-only audit asks for no digests and owes none"
         );
     }
@@ -1116,7 +1248,7 @@ mod tests {
         let s = map(vec![("a.txt", cached_entry(&["sha256"]))]);
         let d = map(vec![("a.txt", cached_entry(&["md5", "sha256"]))]);
         let err = Shape::record_src(&["md5", "sha256"])
-            .run(&s, &d, true)
+            .run(&s, &d, true, StatTrust::default())
             .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("src"), "names the side: {msg}");
@@ -1134,22 +1266,38 @@ mod tests {
         // Undecided but covered: fine.
         let s = map(vec![("ok.txt", cached_entry(&["md5"]))]);
         let d = map(vec![("ok.txt", cached_entry(&["md5"]))]);
-        assert!(Shape::record_src(&["md5"]).run(&s, &d, true).is_ok());
+        assert!(
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok()
+        );
 
         // Stat differs: already decided, so an empty record row costs nothing.
         let s = map(vec![("d.txt", file(10, 100))]);
         let d = map(vec![("d.txt", file(11, 100))]);
-        assert!(Shape::record_src(&["md5"]).run(&s, &d, true).is_ok());
+        assert!(
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok()
+        );
 
         // Record-only path: a MISSING verdict, decided by presence.
         let s = map(vec![("only_rec.txt", file(10, 100))]);
         let d = map(vec![]);
-        assert!(Shape::record_src(&["md5"]).run(&s, &d, true).is_ok());
+        assert!(
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok()
+        );
 
         // A dir on both sides: compared by presence, needs no digest.
         let s = map(vec![("sub", dir())]);
         let d = map(vec![("sub", dir())]);
-        assert!(Shape::record_src(&["md5"]).run(&s, &d, true).is_ok());
+        assert!(
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok()
+        );
     }
 
     /// Trust is **not** part of availability. `--no-trust-cached-hashes src` on a
@@ -1167,19 +1315,19 @@ mod tests {
         assert!(
             Shape::record_src(&["md5"])
                 .distrusting(true, false)
-                .run(&s, &d, true)
+                .run(&s, &d, true, StatTrust::default())
                 .is_ok()
         );
         // The folder side trusts: it already holds md5.
         let p = Shape::record_src(&["md5"])
             .distrusting(true, false)
-            .run(&s, &d, true)
+            .run(&s, &d, true, StatTrust::default())
             .unwrap();
         assert!(p.dst.pending().is_empty());
         // The folder side distrusts, and it *can* re-read, so it does.
         let p = Shape::record_src(&["md5"])
             .distrusting(true, true)
-            .run(&s, &d, true)
+            .run(&s, &d, true, StatTrust::default())
             .unwrap();
         assert_eq!(p.dst.pending(), vec!["a.txt"]);
     }
@@ -1196,7 +1344,7 @@ mod tests {
             no_trust: (false, false),
             mode: HashMode::AllOf,
         }
-        .run(&s, &d, true)
+        .run(&s, &d, true, StatTrust::default())
         .unwrap();
         assert_eq!(p.src.pending(), vec!["a.txt"]);
         assert_eq!(p.dst.pending(), vec!["a.txt"]);
@@ -1209,7 +1357,9 @@ mod tests {
     fn a_covered_record_is_never_asked_to_hash() {
         let s = map(vec![("a.txt", cached_entry(&["md5"]))]);
         let d = map(vec![("a.txt", file(10, 100))]);
-        let p = Shape::record_src(&["md5"]).run(&s, &d, true).unwrap();
+        let p = Shape::record_src(&["md5"])
+            .run(&s, &d, true, StatTrust::default())
+            .unwrap();
         assert!(
             p.src.pending().is_empty(),
             "a record has nothing to compute"
@@ -1224,7 +1374,9 @@ mod tests {
     fn two_records_report_the_src_shortfall_first() {
         let s = map(vec![("a.txt", file(10, 100))]);
         let d = map(vec![("a.txt", file(10, 100))]);
-        let err = Shape::both_records(&["md5"]).run(&s, &d, true).unwrap_err();
+        let err = Shape::both_records(&["md5"])
+            .run(&s, &d, true, StatTrust::default())
+            .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("the src side"), "{msg}");
     }
@@ -1238,13 +1390,177 @@ mod tests {
         let s = map(vec![("a.txt", cached_entry(&["md5", "blake3"]))]);
         let d = map(vec![("a.txt", cached_entry(&["md5", "blake3"]))]);
         assert!(
-            Shape::record_src(&["md5"]).run(&s, &d, true).is_ok(),
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_ok(),
             "md5 is what was asked for and it is there"
         );
         // And an algorithm the record does *not* hold is a shortfall even though
         // it holds something else.
         let s = map(vec![("a.txt", cached_entry(&["blake3"]))]);
         let d = map(vec![("a.txt", cached_entry(&["md5", "blake3"]))]);
-        assert!(Shape::record_src(&["md5"]).run(&s, &d, true).is_err());
+        assert!(
+            Shape::record_src(&["md5"])
+                .run(&s, &d, true, StatTrust::default())
+                .is_err()
+        );
+    }
+    // -- distrusting the short circuit --------------------------------------------
+
+    /// The short circuit is an *optimisation*, so it must be switchable.
+    ///
+    /// `--no-trust-size` and `--no-trust-mtime` name the two stat fields it consults,
+    /// and each one puts that field back into the undecided set. Both together leave the
+    /// short circuit with nothing to act on, which is "disable it" without needing a
+    /// separate switch for the thing it switched.
+    ///
+    /// These start by stating the **default**, because the risk is not that the flags do
+    /// nothing — it is that they quietly change what an unflagged run means. If trusting
+    /// both were not the default, every other test in this file would be describing the
+    /// wrong thing.
+
+    #[test]
+    fn a_stat_differing_pair_is_undecided_when_the_field_it_differs_in_is_distrusted() {
+        let s = map(vec![("a.txt", file(11, 100))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+
+        // Size differs, mtime agrees: trusting size settles it for free.
+        let free = Shape::FOLDERS
+            .run(&s, &d, true, StatTrust::default())
+            .unwrap();
+        assert!(
+            free.required.by_rel.is_empty(),
+            "nothing to settle by digest"
+        );
+        assert!(free.src.pending().is_empty() && free.dst.pending().is_empty());
+
+        // Distrust size and the same pair needs a digest.
+        let hashing = Shape::FOLDERS
+            .run(&s, &d, true, StatTrust::default().without_size())
+            .unwrap();
+        assert_eq!(
+            hashing.required.of("a.txt"),
+            ["md5"],
+            "the pair is now undecided, so it must be comparable"
+        );
+        assert_eq!(
+            hashing.dst.pending(),
+            vec!["a.txt"],
+            "and read to settle it"
+        );
+    }
+
+    /// The same pair with the *other* field distrusted is still free. This is the case
+    /// that distinguishes the two flags from one switch: `--no-trust-mtime` must not
+    /// rehash a pair whose sizes already differ.
+    #[test]
+    fn distrusting_mtime_leaves_a_size_difference_settling_the_pair() {
+        let s = map(vec![("a.txt", file(11, 100))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+        let p = Shape::FOLDERS
+            .run(&s, &d, true, StatTrust::default().without_mtime())
+            .unwrap();
+        assert!(
+            p.required.by_rel.is_empty() && p.src.pending().is_empty(),
+            "size still settles it: distrusting mtime must not widen this"
+        );
+    }
+
+    /// **Both flags is "disable the short circuit".** Four pair states, each of which is
+    /// free under the default, and none of which is free here.
+    #[test]
+    fn distrusting_both_fields_leaves_no_pair_settled_by_stat() {
+        for (a, b) in [
+            (file(11, 100), file(10, 100)), // size differs
+            (file(10, 101), file(10, 100)), // mtime differs
+            (file(11, 101), file(10, 100)), // both differ
+        ] {
+            let (s, d) = (map(vec![("a.txt", a)]), map(vec![("a.txt", b)]));
+            let off = StatTrust::default().without_size().without_mtime();
+            let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
+            assert_eq!(
+                p.required.of("a.txt"),
+                ["md5"],
+                "nothing is left for the short circuit to act on"
+            );
+        }
+    }
+
+    /// The **other** half of the point, and the reason `no-trust-size` is not
+    /// `no-trust-cached-hashes`.
+    ///
+    /// A size difference implies different content, so the digest comparison will always
+    /// disagree — the *verdict* cannot change. What changes is that the side is read, and
+    /// so its cache row is rewritten with a digest it did not have.
+    ///
+    /// That is the useful part: a size-changed row arrives in phase A with its digests
+    /// dropped (a stale row's are all suspect), so under the short circuit it keeps
+    /// *no* digest forever, and the stat-only row can never become comparable again. This
+    /// is what repairs it.
+    #[test]
+    fn a_distrusted_field_widens_the_undecided_set_without_changing_the_verdict() {
+        let s = map(vec![("a.txt", file(11, 100))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+        let off = StatTrust::default().without_size().without_mtime();
+        let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
+        // Both sides are read, and neither had a digest to reuse.
+        assert_eq!(p.src.pending().len(), 1);
+        assert_eq!(p.dst.pending().len(), 1);
+        // Under all-of the pair is settled by the whole requested list, so this is
+        // comparable rather than merely comparable-by-one-algorithm.
+        assert_eq!(p.required.of("a.txt"), ["md5"]);
+    }
+
+    /// A distrusted field must not resurrect a pair that stat cannot decide *even so* —
+    /// a dir, or a kind conflict. Those are settled by presence and kind, which no flag
+    /// here touches, and asking for a digest for a directory would fail.
+    #[test]
+    fn a_distrusted_field_does_not_widen_the_set_past_what_stat_can_decide() {
+        let off = StatTrust::default().without_size().without_mtime();
+        // Dirs on both sides.
+        let (s, d) = (map(vec![("sub", dir())]), map(vec![("sub", dir())]));
+        let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
+        assert!(
+            p.required.by_rel.is_empty(),
+            "a dir is compared by presence"
+        );
+
+        // File against dir.
+        let (s, d) = (
+            map(vec![("a.txt", file(10, 100))]),
+            map(vec![("a.txt", dir())]),
+        );
+        let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
+        assert!(
+            p.required.by_rel.is_empty(),
+            "a kind conflict is decided by kind"
+        );
+
+        // One-sided paths.
+        let (s, d) = (map(vec![("only.txt", file(10, 100))]), map(vec![]));
+        let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
+        assert!(
+            p.required.by_rel.is_empty(),
+            "MISSING is decided by presence"
+        );
+    }
+
+    /// **Trusting both is the default**, and it is the field that must not move: every
+    /// other case in this file is describing the unflagged run.
+    #[test]
+    fn the_default_distrusts_neither_field() {
+        let t = StatTrust::default();
+        assert!(t.size && t.mtime, "an unflagged run trusts both");
+        let s = map(vec![("a.txt", file(11, 100))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+        assert!(
+            Shape::FOLDERS
+                .run(&s, &d, true, t)
+                .unwrap()
+                .required
+                .by_rel
+                .is_empty(),
+            "so a size difference still settles the pair for free"
+        );
     }
 }

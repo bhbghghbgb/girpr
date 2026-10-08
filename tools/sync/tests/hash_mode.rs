@@ -33,7 +33,7 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{HashMode, PairPlan, Required, SideRequest, plan_pairs};
+use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
 // -- fixtures -----------------------------------------------------------------
@@ -83,6 +83,7 @@ fn plan(
     dc: SideCapability,
     algos: &[&str],
     mode: HashMode,
+    stat: StatTrust,
 ) -> anyhow::Result<PairPlan> {
     let algos: Vec<String> = algos.iter().map(|a| a.to_string()).collect();
     plan_pairs(
@@ -102,6 +103,7 @@ fn plan(
         },
         true,
         mode,
+        stat,
     )
 }
 
@@ -186,6 +188,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap_or_else(|e| panic!("two folders cannot fail coverage: {e:#}"));
     let digests = plans.src.digest_count() + plans.dst.digest_count();
@@ -227,11 +230,18 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
         },
         common.case_sensitive,
         common.hash_mode,
+        common.stat,
     )
     .unwrap_or_else(|e| panic!("the record holds md5, so this is answerable: {e:#}"));
     let disk = resolve_folder(dir, &cold, mode, &disk_a, &plans.dst).unwrap();
     let rec = resolve_record(&rec);
-    let diff = diff_maps(&rec.map, &disk.map, &plans.required, common.case_sensitive);
+    let diff = diff_maps(
+        &rec.map,
+        &disk.map,
+        &plans.required,
+        plans.stat,
+        common.case_sensitive,
+    );
     (disk.stats.hashed, if diff.is_empty() { 0 } else { 4 })
 }
 // -- the pick, at the planner --------------------------------------------------
@@ -252,6 +262,7 @@ fn any_of_prefers_the_algorithm_that_is_cached_on_both_sides() {
         folder(),
         &["md5", "sha256"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(p.required.of("a.txt"), ["md5"]);
@@ -281,6 +292,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
         folder(),
         &["md5", "sha256"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(md5_first.required.of("a.txt"), ["md5"]);
@@ -291,6 +303,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
         folder(),
         &["sha256", "md5"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(
@@ -309,6 +322,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
         folder(),
         &["sha256", "md5"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(
@@ -347,6 +361,7 @@ fn any_of_settles_each_pair_separately() {
         folder(),
         &["md5", "sha256"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(
@@ -379,6 +394,7 @@ fn any_of_answers_a_record_that_holds_one_of_the_two() {
         folder(),
         &["md5", "sha256"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .unwrap_or_else(|e| panic!("the record holds md5, so the pair is answerable: {e:#}"));
     assert_eq!(
@@ -411,6 +427,7 @@ fn any_of_fails_when_a_record_holds_none_of_the_requested_algorithms() {
         folder(),
         &["md5", "sha256"],
         HashMode::AnyOf,
+        StatTrust::default(),
     )
     .expect_err("an algorithm this crate has never heard of is not a substitute");
     let msg = format!("{err:#}");
@@ -439,6 +456,7 @@ fn all_of_requires_every_algorithm_on_both_sides() {
         folder(),
         &["md5", "sha256"],
         HashMode::AllOf,
+        StatTrust::default(),
     )
     .unwrap();
     assert_eq!(
@@ -463,7 +481,16 @@ fn a_stat_differing_pair_needs_no_coverage_in_either_mode() {
     let d = map(vec![("d.txt", file(11, 100, &[]))]);
     for mode in [HashMode::AllOf, HashMode::AnyOf] {
         assert!(
-            plan(&s, &d, record(), folder(), &["md5", "sha256"], mode).is_ok(),
+            plan(
+                &s,
+                &d,
+                record(),
+                folder(),
+                &["md5", "sha256"],
+                mode,
+                StatTrust::default()
+            )
+            .is_ok(),
             "{mode:?}: size already decided it, so nothing is owed"
         );
     }
@@ -476,7 +503,7 @@ fn an_empty_request_is_not_a_coverage_failure_in_either_mode() {
     let s = map(vec![("a.txt", file(10, 100, &[]))]);
     let d = map(vec![("a.txt", file(10, 100, &[]))]);
     for mode in [HashMode::AllOf, HashMode::AnyOf] {
-        let p = plan(&s, &d, record(), folder(), &[], mode).unwrap();
+        let p = plan(&s, &d, record(), folder(), &[], mode, StatTrust::default()).unwrap();
         assert!(p.src.pending().is_empty() && p.dst.pending().is_empty());
     }
 }
@@ -520,7 +547,7 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
 
-    let d = diff_maps(&src, &dst, &by_path, true);
+    let d = diff_maps(&src, &dst, &by_path, StatTrust::default(), true);
     assert_eq!(
         d.changed,
         vec!["two.txt"],
@@ -534,7 +561,7 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &uniform, true);
+    let d = diff_maps(&src, &dst, &uniform, StatTrust::default(), true);
     assert_eq!(
         d.changed,
         vec!["one.txt", "two.txt"],
@@ -559,7 +586,7 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &populated, true);
+    let d = diff_maps(&src, &dst, &populated, StatTrust::default(), true);
     assert_eq!(
         d.changed,
         vec!["a.txt"],
@@ -570,7 +597,7 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
     // `hashes_differ` is silent when handed nothing, so a missing entry read as
     // "equal" would be the exact degradation stage 5b closed.
     assert_eq!(
-        diff_maps(&src, &dst, &Required::default(), true).changed,
+        diff_maps(&src, &dst, &Required::default(), StatTrust::default(), true).changed,
         Vec::<String>::new(),
         "which is why `plan_pairs` always sets it"
     );
