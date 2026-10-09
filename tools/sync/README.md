@@ -100,8 +100,36 @@ Neither is `--no-trust-cached-hashes`, which distrusts a **digest** rather than 
 **stat field**: it only ever affects pairs that were going to be read anyway, and it
 re-reads them even when the cache holds a matching one.
 
-`update` accepts both and ignores them, with a warning — it rehashes every file
-regardless, so there is no short circuit for them to switch off.
+#### They need something to fall back on
+
+Both flags are a request to decide a pair *some other way*, and the "some other way" is
+a digest. So neither can be combined with a run that requests none:
+
+| | |
+| --- | --- |
+| `--hash-all-of none` | **refused** — there is nothing for the difference to fall back on |
+| `--hash-all-of md5 --no-trust-size` | fine — the digest decides |
+
+Refused rather than warned, and that is a deliberate break from how `update` treats the
+other flag it cannot honour. The distinction is whether the verdict stays right: ignoring
+a flag that does not apply still produces a correct answer, whereas ignoring *this* one
+produced a wrong one, so a warning would have been describing a choice the user
+believes protects them. Concretely, `--hash-all-of none --no-trust-size` used to report
+a size-differing pair as **equal**, and `sync` under it left `dst` stale while
+reporting success.
+
+Two guards, on purpose. The flag layer refuses the combination, so the user gets a
+message instead of a run — and it refuses it in one place, so every subcommand including
+`update` behaves the same way, since the combination is a property of the *request* and
+not of the command receiving it. Behind it, `diff::is_changed` refuses to report a pair
+equal when it consulted **no digest at all** and there was a difference it was told to
+ignore; that covers what the flag layer cannot reach, which is a caller assembling
+`CommonOpts` directly. While a digest *is* available it stays a real verdict, so a
+touched file whose bytes agree is still cleared.
+
+`update` accepts both otherwise and ignores them, with a warning — it rehashes every
+file regardless, so there is no short circuit for them to switch off, and obeying them
+by doing *less* would be wrong.
 
 ### `--hash-all-of` / `--hash-any-of`
 
@@ -542,6 +570,11 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   being read from the flags a second time, so the two cannot drift. Both
   directions of that mutation are caught by `stat_trust.rs`.
 
+  One consequence is load-bearing enough to state separately: the diff may only call a
+  pair equal when it actually compared something. That holds for every run with a
+  digest requested, and **stops holding when none is** — which is why the flags cannot
+  be combined with `--hash-all-of none`. See the refusal, above.
+
   The same `plan_pairs` call that decides what to read also decides whether the run
   *can* be answered, and it does so over the undecided set only, before any read.
   A side's availability is `cached ∪ hashable`, with deliberately **no trust term**:
@@ -658,6 +691,15 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
   undecided set. Worth knowing because the row looks healthy — it has the right size and
   mtime.
+- **`hashes_differ` is silent, and silence used to read as "equal".** Its `false` means
+  *"no difference detected"*, which is not the same claim as *"identical"* — it is safe
+  only while every pair reaching it has a digest to compare, which `Required` guarantees
+  for an undecided pair. A run that requested **no** algorithm has no entry, so the
+  silence became the whole of the answer and a changed pair came back clean. `is_changed`
+  now distinguishes the two: with no digest consulted at all, a difference that was
+  distrusted makes the pair `CHANGED` (*cannot confirm*) rather than equal. Worth knowing
+  because nothing else surfaces it — the row looks fine, the counters look fine, and only
+  the verdict is wrong.
 - **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
   it. The old spelling is rejected rather than aliased, so a script passing
   `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of

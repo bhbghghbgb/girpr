@@ -37,6 +37,40 @@ impl Diff {
     }
 }
 
+/// The one predicate `diff_maps` uses to decide `CHANGED`, in **both** of its
+/// key-matching branches.
+///
+/// Written once and called twice because the two branches are the same decision stated
+/// twice, and a predicate that has to be re-typed is a predicate that will drift.
+fn is_changed(stat: StatTrust, required: &Required, s: &EffRec, t: &EffRec, key: &str) -> bool {
+    // Evidence of difference, cheapest first: a stat field this run trusts, then the
+    // digests the planner said would settle this pair.
+    if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns) {
+        return true;
+    }
+    let need = required.of(key);
+    if hashes_differ(&s.hashes, &t.hashes, need) {
+        return true;
+    }
+    // **No digest was consulted, and there was a difference we were told to ignore.**
+    //
+    // `hashes_differ` returning false claims "no difference detected", which is not the
+    // same claim as "identical" — and with nothing requested that is the *only* thing
+    // the digest branch can say. Reaching here with an empty `need` means the pair was
+    // left undecided with no way left to decide it, so the honest verdict is `CHANGED`
+    // ("cannot confirm") rather than silently clean. Reporting it equal is how a
+    // size-differing pair once came back "identical" under `--hash-all-of none
+    // --no-trust-size`, and in `sync` that meant `dst` was left stale by a run that
+    // reported success.
+    //
+    // Guarded on `need.is_empty()` deliberately. While a digest **is** available the
+    // comparison above is a real verdict, and a pair whose content agrees is genuinely
+    // in step — that is the whole reason `--no-trust-mtime` can *clear* a touched
+    // file, and this clause must not take that away. The guard is what keeps this a fix
+    // for an unanswerable request rather than a general pessimism.
+    need.is_empty() && stat.untrusted_disagrees(s.size, s.mtime_ns, t.size, t.mtime_ns)
+}
+
 /// Compare two effective maps.
 ///
 /// In insensitive mode keys are matched by lowercase, so a casing-only
@@ -49,7 +83,11 @@ impl Diff {
 /// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so a
 /// uniform run would be described just as well by passing that list straight
 /// through. Consulted only once stat has been found unconvincing, which is the same
-/// boundary the planner applies — so a path that reaches it always has an entry.
+/// boundary the planner applies — so a path that reaches it has an entry, **except
+/// when the run requested no algorithm at all**. That exception used to be read as
+/// "equal" and is now handled explicitly in [`is_changed`]; it is the one case where
+/// `Required` has nothing to say and `hashes_differ`'s silence would otherwise be
+/// mistaken for a verdict.
 ///
 /// `stat` decides **which stat fields may settle a pair here**, and it is the same
 /// value the planner was given — read from `plan.stat` rather than taken again, so
@@ -85,9 +123,7 @@ pub fn diff_maps(
                         d.type_conflict.push(k.clone());
                     } else if s.kind == "dir" {
                         // presence only
-                    } else if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns)
-                        || hashes_differ(&s.hashes, &t.hashes, required.of(k))
-                    {
+                    } else if is_changed(stat, required, s, t, k) {
                         d.changed.push(k.clone());
                     }
                 }
@@ -121,9 +157,7 @@ pub fn diff_maps(
                     if s.kind != t.kind {
                         d.type_conflict.push((*srel).clone());
                     } else if s.kind == "dir" {
-                    } else if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns)
-                        || hashes_differ(&s.hashes, &t.hashes, required.of(srel))
-                    {
+                    } else if is_changed(stat, required, s, t, srel) {
                         d.changed.push((*srel).clone());
                     }
                 }

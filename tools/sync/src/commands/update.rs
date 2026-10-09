@@ -59,7 +59,7 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // switch off. `plan_one_side` has no pairing step, so `StatTrust` is never
     // consulted — and this command rehashes every file regardless, which is *more*
     // than either flag asks for.
-    if !common.stat.settles_any() {
+    if common.stat.distrusts_any() {
         warn!(
             "--no-trust-size/--no-trust-mtime do not change what update does: it \
              rehashes every file either way, since there is no other side to be lazy \

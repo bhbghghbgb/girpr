@@ -109,6 +109,45 @@ impl TryFrom<CommonArgs> for CommonOpts {
         let stat = StatTrust::default()
             .without_size_if(a.no_trust_size)
             .without_mtime_if(a.no_trust_mtime);
+        // Distrusting a stat field is a request to decide the pair some **other** way.
+        // With no algorithm requested there is no other way: no digest is computed, so
+        // `Required` is empty, so the diff has nothing to consult and a difference in a
+        // distrusted field has nowhere to go. The pair would then be reported **equal**
+        // having had its content compared by nobody — and exit 0 on a changed file is
+        // the one failure worse than refusing to run.
+        //
+        // Refused rather than warned, which is the opposite of how `update` treats flags
+        // it cannot honour. The distinction is whether the verdict stays right: ignoring
+        // a flag that does not apply still produces a correct answer, whereas ignoring
+        // this one produces a wrong one, and a warning would then be describing a
+        // choice the user believes protects them.
+        //
+        // Checked here, once, for every subcommand — the combination is a property of the
+        // *request* rather than of the command receiving it, so a script passing the
+        // flags everywhere should learn about it the same way whichever one it hit.
+        if algos.is_empty() && stat.distrusts_any() {
+            let mut named: Vec<&str> = Vec::new();
+            if a.no_trust_size {
+                named.push("--no-trust-size");
+            }
+            if a.no_trust_mtime {
+                named.push("--no-trust-mtime");
+            }
+            anyhow::bail!(
+                "{} says a stat field is not evidence of a difference, which only \
+                 means something if something else can decide the pair. \
+                 --hash-all-of none requests no digest, so there is nothing else: the \
+                 difference would have nothing to fall back on and the pair would be \
+                 reported equal without its content having been compared by anyone.\n\n\
+                 To ask for this, one of:\n  \
+                   - name a digest, which is what would settle the pair: \
+                 --hash-all-of md5\n  \
+                   - or trust stat, which is what --hash-all-of none is for: drop \
+                 {}",
+                named.join(" and "),
+                named.join(" and "),
+            );
+        }
         Ok(Self {
             algos,
             hash_mode,

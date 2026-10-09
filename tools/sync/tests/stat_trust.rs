@@ -615,3 +615,297 @@ fn the_flags_compose_with_both_hash_modes() {
         assert_eq!(bin(&args).0, 0, "{hash:?} with the flags");
     }
 }
+
+// -- no digest to fall back on ------------------------------------------------
+
+/// Restore a file's mtime to a value captured earlier.
+///
+/// Load-bearing wherever a *rewrite* is part of the fixture: rewriting moves the mtime,
+/// and a pair whose mtime also differs is settled by the field this run still trusts —
+/// so the flag under test would widen nothing and the fixture would appear broken.
+fn restore_mtime(p: &std::path::Path, t: std::time::SystemTime) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(p)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
+/// src and dst differing in length, with the mtime pinned so size is the only signal.
+fn size_differs(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "a.txt", b"short");
+    wfile(
+        &dst,
+        "a.txt",
+        b"a considerably longer body than the other side",
+    );
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    (src, dst)
+}
+
+/// **The false clean, in the form it actually takes.**
+///
+/// `--hash-all-of none` leaves `Required` empty, so `required.of(rel)` is `&[]` and
+/// `hashes_differ` loops over nothing and returns `false` — the digest half of the
+/// diff's predicate is *vacuous*, leaving `stat.settles` as the only thing standing
+/// between the pair and a verdict. Distrust the very field the pair differs in and the
+/// predicate is `false || false`: the path lands in none of `missing`/`extra`/
+/// `type_conflict`/`changed`, and is reported **equal**.
+///
+/// Built through `cmd_compare` with a hand-assembled `CommonOpts` rather than through
+/// the binary, because the binary refuses this combination — see
+/// `no_digest_available_with_a_distrusted_field_is_refused`. This test covers the path
+/// a refusal cannot reach: a caller that constructs `CommonOpts` directly, which is
+/// every other test in this file and every library user.
+#[test]
+fn a_distrusted_field_with_no_digest_to_fall_back_on_is_never_reported_equal() {
+    let t = TempRoot::new("st_unverifiable");
+    let (src, dst) = size_differs(&t);
+    let exit = |stat: StatTrust| {
+        cmd_compare(
+            girsync::CompareOpts {
+                src: src.clone(),
+                dst: dst.clone(),
+                trust: Default::default(),
+                common: distrusting(&[], stat),
+            },
+            &log(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        exit(StatTrust::default()),
+        4,
+        "no flags: size settles the pair, so CHANGED"
+    );
+    assert_eq!(
+        exit(StatTrust::default().without_size()),
+        4,
+        "size distrusted and no digest left to decide it: the pair cannot be confirmed \
+         identical, and `cannot be confirmed` is not `equal`"
+    );
+}
+
+/// The mtime half of the same hole, which is the one that can hide a real edit: a file
+/// touched but not rewritten is the most common way for two sides to agree on size and
+/// differ on nothing.
+#[test]
+fn a_distrusted_mtime_with_no_digest_to_fall_back_on_is_never_reported_equal() {
+    let t = TempRoot::new("st_unverifiable_mt");
+    let (src, dst) = size_differs(&t);
+    // Make the two sides byte-identical, then leave only the mtime differing.
+    wfile(&dst, "a.txt", b"short");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    age(&dst, "a.txt", 60);
+    let exit = |stat: StatTrust| {
+        cmd_compare(
+            girsync::CompareOpts {
+                src: src.clone(),
+                dst: dst.clone(),
+                trust: Default::default(),
+                common: distrusting(&[], stat),
+            },
+            &log(),
+        )
+        .unwrap()
+    };
+    assert_eq!(exit(StatTrust::default()), 4, "mtime settles it: CHANGED");
+    assert_eq!(
+        exit(StatTrust::default().without_mtime()),
+        4,
+        "mtime distrusted, nothing to replace it, so it stays CHANGED — the whole \
+         point of the flag is that this pair is *unverified*, and an unverified pair \
+         must not be reported equal"
+    );
+}
+
+/// **`sync`, where the hole does real damage.** Before the fix this reported success
+/// and left `dst` holding content it had just declared identical to `src`.
+#[test]
+fn sync_copies_a_pair_it_cannot_confirm_rather_than_declaring_it_equal() {
+    let t = TempRoot::new("st_unverifiable_sync");
+    let (src, dst) = size_differs(&t);
+    cmd_sync(
+        girsync::SyncOpts {
+            src: src.clone(),
+            dst: dst.clone(),
+            trust: Default::default(),
+            missing_only: false,
+            keep_extra: false,
+            jobs: 1,
+            common: distrusting(&[], StatTrust::default().without_size()),
+        },
+        &log(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(dst.join("a.txt")).unwrap(),
+        b"short",
+        "dst must hold src's bytes: not being able to confirm the pair is not a \
+         reason to leave it stale"
+    );
+}
+
+/// **`compare-self`, where the claim is about the tool's own cache being in step with
+/// its own disk.** This is the most misleading form of the false clean, because the
+/// audit is the thing a user trusts to tell them their cache is trustworthy.
+#[test]
+fn compare_self_does_not_claim_in_step_with_a_pair_it_cannot_verify() {
+    let t = TempRoot::new("st_unverifiable_self");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"short");
+    cmd_update(update(dir.clone()), &log()).unwrap();
+    let stamped = std::fs::metadata(dir.join("a.txt"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    wfile(&dir, "a.txt", b"a considerably longer body than before");
+    restore_mtime(&dir.join("a.txt"), stamped);
+
+    let run = |common: CommonOpts| {
+        cmd_compare_self(
+            girsync::CompareSelfOpts {
+                dir: dir.clone(),
+                no_trust_cached_hashes: false,
+                common,
+            },
+            &log(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        run(distrusting(&[], StatTrust::default())),
+        4,
+        "no flags: size settles it, so the cache is reported out of step"
+    );
+    assert_eq!(
+        run(distrusting(&[], StatTrust::default().without_size())),
+        4,
+        "size distrusted with nothing to replace it: the audit cannot verify the row, \
+         and a self-audit that answers `in step` without verifying is the worst case \
+         of this bug"
+    );
+}
+
+// -- refusing the combination at the flag layer -------------------------------
+
+/// **The refusal, through the real binary.**
+///
+/// The flags are a request to consult a digest. With `--hash-all-of none` there is no
+/// digest to consult, so the request cannot be honoured: a distrusted difference would
+/// have nothing to fall back on and the pair would be reported equal on no evidence.
+/// That is a contradiction rather than a weaker guarantee, so it is refused — the same
+/// call `parse_any_of` already makes for `none`, for the same reason.
+#[test]
+fn no_digest_available_with_a_distrusted_field_is_refused() {
+    let t = TempRoot::new("st_refuse");
+    let (src, dst) = size_differs(&t);
+    let (s, d) = (src.display().to_string(), dst.display().to_string());
+    for flags in [
+        vec!["--no-trust-size".to_string()],
+        vec!["--no-trust-mtime".to_string()],
+        vec![
+            "--no-trust-size".to_string(),
+            "--no-trust-mtime".to_string(),
+        ],
+    ] {
+        let mut args = vec![
+            "compare".to_string(),
+            "--src".to_string(),
+            s.clone(),
+            "--dst".to_string(),
+            d.clone(),
+            "--hash-all-of".to_string(),
+            "none".to_string(),
+            "--case-sensitive".to_string(),
+        ];
+        args.extend(flags.clone());
+        let (code, stderr) = bin(&args);
+        assert_ne!(
+            code, 0,
+            "{flags:?} with no digest cannot be honoured, so it must not exit 0 — and \
+             exit 0 here is a false clean"
+        );
+        assert!(
+            stderr.contains("no-trust"),
+            "the message names the flag the user typed: {stderr}"
+        );
+        assert!(
+            stderr.contains("hash-all-of"),
+            "and the one that has to change for it to work: {stderr}"
+        );
+    }
+}
+
+/// **The refusal must be narrow, or it has simply traded a false clean for a
+/// false alarm.** Every supported combination still runs, and — the part that matters —
+/// the stat-only audit is untouched, because trusting both fields means the predicate
+/// never becomes vacuous.
+#[test]
+fn the_refusal_leaves_every_supported_combination_alone() {
+    let t = TempRoot::new("st_narrow");
+    let (src, dst) = size_differs(&t);
+    let (s, d) = (src.display().to_string(), dst.display().to_string());
+    let base = |extra: &[String]| {
+        let mut args = vec![
+            "compare".to_string(),
+            "--src".to_string(),
+            s.clone(),
+            "--dst".to_string(),
+            d.clone(),
+            "--case-sensitive".to_string(),
+        ];
+        args.extend(extra.iter().cloned());
+        bin(&args)
+    };
+    // The stat-only audit, which is the mode `--hash-all-of none` exists for.
+    let (code, stderr) = base(&["--hash-all-of".into(), "none".into()]);
+    assert_eq!(
+        code, 4,
+        "and it still answers CHANGED on its own terms: {stderr}"
+    );
+    // A digest named alongside a distrusted field: the supported combination.
+    let (code, stderr) = base(&[
+        "--hash-all-of".into(),
+        "md5".into(),
+        "--no-trust-size".into(),
+    ]);
+    assert_eq!(
+        code, 4,
+        "size distrusted, digest decides: CHANGED: {stderr}"
+    );
+    // A distrusted field with the default request: likewise.
+    let (code, stderr) = base(&["--no-trust-mtime".into()]);
+    assert_eq!(
+        code, 4,
+        "mtime distrusted, md5 by default decides: {stderr}"
+    );
+}
+
+/// `update` never pairs anything, so it has no verdict to get wrong — but it must
+/// refuse on the same grounds, because the refusal is a property of the *request* and
+/// not of the command that happens to receive it. Uniformity here is the point: a
+/// script passing the flags to every subcommand should learn about it once, the same
+/// way, whichever subcommand it hit first.
+#[test]
+fn the_refusal_is_uniform_across_subcommands() {
+    let t = TempRoot::new("st_refuse_update");
+    let dir = t.mkdirs("w");
+    wfile(&dir, "a.txt", b"hello");
+    let (code, stderr) = bin(&[
+        "update".to_string(),
+        "--dir".to_string(),
+        dir.display().to_string(),
+        "--hash-all-of".to_string(),
+        "none".to_string(),
+        "--no-trust-size".to_string(),
+    ]);
+    assert_ne!(code, 0, "refused, rather than warned-and-ignored: {stderr}");
+    assert!(
+        stderr.contains("no-trust"),
+        "with the same message every other subcommand gives: {stderr}"
+    );
+}

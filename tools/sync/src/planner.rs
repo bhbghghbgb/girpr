@@ -151,13 +151,42 @@ impl StatTrust {
         (self.size && a_size != b_size) || (self.mtime && a_mtime != b_mtime)
     }
 
-    /// False when neither field is trusted — i.e. the short circuit is off.
+    /// True when a field this run does **not** trust differs between the two sides.
     ///
-    /// For a caller that has no pairing step and so never consults [`Self::settles`],
-    /// such as `update`. It asks whether there is anything left to switch off rather
-    /// than repeating the negation of two fields.
-    pub fn settles_any(&self) -> bool {
-        self.size || self.mtime
+    /// The companion to [`Self::settles`], and the question the diff has to ask when it
+    /// has *no* digest to fall back on. `settles` asks "is there trusted evidence of
+    /// difference?"; this asks "was there evidence we chose to ignore?" — and a pair
+    /// whose only evidence of difference was ignored has no evidence **of sameness**
+    /// either, so it cannot be reported equal.
+    ///
+    /// It exists because [`crate::diff::hashes_differ`] is silent when handed nothing to
+    /// compare, and that silence is only safe while every pair reaching it has a digest
+    /// — which is what [`Required`] guarantees: the diff reaches the digest comparison
+    /// only for an undecided pair, and the planner has an entry for every undecided
+    /// pair. A run that requested **no** algorithm has no entry, so the silence stops
+    /// being a fallback and becomes the whole of the answer.
+    pub fn untrusted_disagrees(
+        &self,
+        a_size: u64,
+        a_mtime: i64,
+        b_size: u64,
+        b_mtime: i64,
+    ) -> bool {
+        (!self.size && a_size != b_size) || (!self.mtime && a_mtime != b_mtime)
+    }
+
+    /// True when **at least one** field is not trusted.
+    ///
+    /// For a caller that never pairs anything, such as `update`, and for validating a
+    /// request that pairs with no digest available. Both need the same question — "did
+    /// the user take anything away?" — rather than the negation of two fields written
+    /// out, because the two questions are *not* complements and conflating them is a
+    /// real trap: `distrusts_any` is the safe condition, since with no digest to fall
+    /// back on, one untrusted field is enough to leave some pair undecidable. Its
+    /// complement would only be the right question if a single trusted field could
+    /// settle every pair, which it cannot.
+    pub fn distrusts_any(&self) -> bool {
+        !self.size || !self.mtime
     }
 }
 
