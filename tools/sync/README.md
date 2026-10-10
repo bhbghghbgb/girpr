@@ -32,7 +32,7 @@ and drive the public API.
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
 | `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, `HashMode` and the coverage check): the only place that decides which digests a run must compute. `Required` carries the per-path answer to the diff |
-| `diff.rs` | `Diff` buckets and `diff_maps` |
+| `diff.rs` | `Diff` buckets, `diff_maps`, and `Verdict` + `pair_verdict` — the per-pair classification and its reason tag |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
@@ -121,7 +121,7 @@ reporting success.
 Two guards, on purpose. The flag layer refuses the combination, so the user gets a
 message instead of a run — and it refuses it in one place, so every subcommand including
 `update` behaves the same way, since the combination is a property of the *request* and
-not of the command receiving it. Behind it, `diff::is_changed` refuses to report a pair
+not of the command receiving it. Behind it, `diff::pair_verdict` refuses to report a pair
 equal when it consulted **no digest at all** and there was a difference it was told to
 ignore; that covers what the flag layer cannot reach, which is a caller assembling
 `CommonOpts` directly. While a digest *is* available it stays a real verdict, so a
@@ -691,15 +691,15 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
   undecided set. Worth knowing because the row looks healthy — it has the right size and
   mtime.
-- **`hashes_differ` is silent, and silence used to read as "equal".** Its `false` means
+- **`hashes_differ` is silent, and silence used to read as "equal".** An empty result means
   *"no difference detected"*, which is not the same claim as *"identical"* — it is safe
   only while every pair reaching it has a digest to compare, which `Required` guarantees
   for an undecided pair. A run that requested **no** algorithm has no entry, so the
-  silence became the whole of the answer and a changed pair came back clean. `is_changed`
+  silence became the whole of the answer and a changed pair came back clean. `pair_verdict`
   now distinguishes the two: with no digest consulted at all, a difference that was
-  distrusted makes the pair `CHANGED` (*cannot confirm*) rather than equal. Worth knowing
-  because nothing else surfaces it — the row looks fine, the counters look fine, and only
-  the verdict is wrong.
+  distrusted makes the pair `CHANGED` (*cannot confirm*, tagged `unverifiable:<fields>`)
+  rather than equal. Worth knowing because nothing else surfaces it — the row looks fine,
+  the counters look fine, and only the verdict is wrong.
 - **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
   it. The old spelling is rejected rather than aliased, so a script passing
   `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
