@@ -13,21 +13,22 @@
 //! compared whole rather than field by field, so a counter added later cannot
 //! diverge between settings without this noticing.
 //!
-//! What is *not* here, and why: a `sync` driven at `split(1,1)` through the CLI.
-//! That needs the flags this change has not shipped yet, so it arrives with them.
-//! What is here instead is the same property stated directly — that concurrent
-//! two-permit acquisition terminates — which does not need a flag to be true.
+//! What is *not* here, and why: a `sync` driven at a **split** limit through the
+//! CLI. `--rw-threads-src 1 --rw-threads-dst 1` is spelled in `--rw-dual-drive`,
+//! so the flags below do reach that shape — but only for a shape a user asked for.
+//! The single-copy shape is asserted directly against the limiter, where the
+//! two-permit path is contended rather than incidentally exercised.
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
-use common::{Spec, TempRoot, pair, recs_of, serial_rw};
+use common::{Spec, TempRoot, pair, recs_of, serial_rw, wfile};
 use girsync::cache::CACHE_PREFIX;
 use girsync::cli::{Cli, RwArgs};
 use girsync::config::{CommonOpts, ScanMode};
@@ -183,13 +184,17 @@ fn rw_threads_rejects_a_zero_count() {
 /// four flags, six conflicting pairs.
 #[test]
 fn rw_flags_are_mutually_exclusive() {
+    // Every conflicting *pair*, each stated once. Enumerated rather than sampled
+    // because the table is small and a missing entry would be a hole in the surface:
+    // `--rw-threads` conflicts with all three, and `--rw-dual-drive` with both
+    // per-side flags, and the two per-side flags are deliberately NOT in conflict
+    // with each other.
     let conflicting = [
-        vec!["--rw-threads", "2", "--rw-dual-drive"],
         vec!["--rw-threads", "2", "--rw-threads-src", "2"],
         vec!["--rw-threads", "2", "--rw-threads-dst", "2"],
+        vec!["--rw-threads", "2", "--rw-dual-drive"],
         vec!["--rw-dual-drive", "--rw-threads-src", "2"],
         vec!["--rw-dual-drive", "--rw-threads-dst", "2"],
-        vec!["--rw-threads-src", "2", "--rw-dual-drive"],
     ];
     for args in conflicting {
         let argv: Vec<String> = ["girsync", "sync", "--src", "a", "--dst", "b"]
@@ -653,4 +658,209 @@ fn a_copy_is_bounded_by_its_tighter_side() {
         "and both permits came back"
     );
     assert!(rw.limiter().try_acquire(RwSide::Dst).is_some());
+}
+
+// -- through the binary -------------------------------------------------------
+
+/// Action events `sync` emits, as opposed to the records that describe why.
+///
+/// Copied rather than imported: `sync_plan.rs` owns this vocabulary and duplicating
+/// one match arm here would be a second place for it to be wrong. It is a *filter*
+/// either way -- the same events `plan::dry_run_records` and the applier phases
+/// announce -- so a new action event has to be added in two places, and that is
+/// visible in review.
+fn is_action(event: &str) -> bool {
+    matches!(event, "mkdir" | "fix-dir" | "delete" | "rmdir" | "copy")
+}
+
+/// An argv built from a subcommand, a fixture's two paths, and extra flags.
+///
+/// One helper rather than three inline `vec!`s, because the repeated part is exactly
+/// the part that is easy to get wrong in a way the assertions would not notice: a
+/// `--src`/`--dst` that does not parse leaves the run failing for a reason unrelated
+/// to concurrency.
+fn argv<'a>(sub: &'a str, src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Vec<&'a str> {
+    let s = src.to_str().unwrap();
+    let d = dst.to_str().unwrap();
+    let mut v = vec![sub, "--src", s, "--dst", d];
+    v.extend_from_slice(extra);
+    v
+}
+
+/// Run `girsync` with these arguments and return its exit code plus its
+/// `--output json` records.
+///
+/// Generic over the argument type so a caller can pass the `Vec<String>` the
+/// builder produces or a literal `&str` array without a conversion dance at every
+/// call site.
+fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(args)
+        .arg("--output")
+        .arg("json")
+        .output()
+        .expect("spawn girsync");
+    (
+        out.status.code().unwrap_or(-1),
+        common::parse_ndjson(&out.stdout),
+    )
+}
+
+/// Every rw spelling the CLI accepts, paired with what it should resolve to.
+fn flag_spellings() -> Vec<Vec<&'static str>> {
+    vec![
+        vec![],
+        vec!["--rw-threads", "4"],
+        vec!["--rw-dual-drive"],
+        vec!["--rw-threads-src", "3"],
+        vec!["--rw-threads-dst", "3"],
+        vec!["--rw-threads-src", "3", "--rw-threads-dst", "2"],
+    ]
+}
+
+/// **`sync` reports the same actions under every rw setting, through the binary.**
+///
+/// The resolver-level test above pins equal effective maps; this one pins the
+/// surface a caller actually reads, end to end through clap, config and the
+/// applier — so a setting that fails to *reach* a phase cannot pass.
+///
+/// Compared as a **multiset** with the count asserted separately, because actions
+/// are emitted as each one completes: order is a function of I/O timing and is not
+/// part of any contract. The count is what stops a duplicate hiding inside a set.
+#[test]
+fn sync_reports_the_same_actions_under_every_rw_setting() {
+    let acts = |recs: &[serde_json::Value]| -> (BTreeSet<String>, usize) {
+        let set: BTreeSet<String> = recs
+            .iter()
+            .filter(|r| r["event"].as_str().is_some_and(is_action))
+            .map(|r| r.to_string())
+            .collect();
+        let n = recs
+            .iter()
+            .filter(|r| r["event"].as_str().is_some_and(is_action))
+            .count();
+        (set, n)
+    };
+
+    let mut baseline: Option<(BTreeSet<String>, usize)> = None;
+    for flags in flag_spellings() {
+        let t = TempRoot::new("rw_sync");
+        let (src, dst) = fixture(&t);
+        let (code, recs) = run(&argv("sync", &src, &dst, &flags));
+        assert_eq!(code, 0, "{flags:?} exited {code}");
+
+        let got = acts(&recs);
+        assert!(
+            got.1 > 0,
+            "{flags:?}: the fixture must make the run do something"
+        );
+        // And every file really landed -- the action stream is not the filesystem.
+        // (Actions are not only copies; `mkdir` is one too, which is why this
+        // checks the copies individually rather than against the action count.)
+        for r in recs.iter().filter(|r| r["event"] == "copy") {
+            let path = r["path"].as_str().unwrap();
+            assert!(
+                dst.join(path).is_file(),
+                "{path} was copied but is not on disk"
+            );
+        }
+
+        match &baseline {
+            None => baseline = Some(got),
+            Some(want) => {
+                assert_eq!(&got.0, &want.0, "{flags:?} reported different actions");
+                assert_eq!(
+                    got.1, want.1,
+                    "{flags:?} reported a different number of actions, so a duplicate \
+                     or a dropped one is hiding in the set"
+                );
+            }
+        }
+    }
+}
+
+/// **`--dry-run` is unaffected by the rw limit.**
+///
+/// The dry-run contract has two halves and the limiter could plausibly break
+/// either: the run must still *do the work* (stat, read cached digests, hash
+/// whatever stat cannot settle) and must still *write nothing*. A limiter change
+/// that suppressed the hashing would keep the verdict identical while answering a
+/// different question, which is exactly the failure `SyncStats` exists to catch.
+#[test]
+fn a_dry_run_is_unaffected_by_the_rw_limit() {
+    let t = TempRoot::new("rw_dry");
+    let (src, dst) = fixture(&t);
+    let sp = |d: &Path| d.join(CACHE_PREFIX);
+
+    // Warm both caches, so the dry run has something real to leave alone.
+    let (code, _) = run(&argv("compare", &src, &dst, &[]));
+    assert_eq!(code, 4, "the fixture differs, so the caches were written");
+
+    let (before_src, before_dst) = (
+        std::fs::read(sp(&src)).unwrap(),
+        std::fs::read(sp(&dst)).unwrap(),
+    );
+    let (code, recs) = run(&argv(
+        "sync",
+        &src,
+        &dst,
+        &["--dry-run", "--rw-threads", "4"],
+    ));
+    assert_eq!(code, 0);
+    assert!(
+        recs.iter().any(|r| r["event"] == "missing"),
+        "the dry run still reports the real plan: {recs:?}"
+    );
+    assert_eq!(
+        std::fs::read(sp(&src)).unwrap(),
+        before_src,
+        "src's cache is byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(sp(&dst)).unwrap(),
+        before_dst,
+        "dst's cache is byte-identical"
+    );
+}
+
+/// **`update` hashes the same set of files at every limit.**
+///
+/// `update` rehashes every file and used to have no concurrency knob at all, so it
+/// gained one purely by this change. Asserting it reaches the same read count at
+/// every setting is what stops the knob from silently changing how much work the
+/// command does -- `update`'s entire output is the cache, and a run that hashed a
+/// different set would produce a different cache while still exiting 0.
+#[test]
+fn update_hashes_the_same_set_at_every_limit() {
+    for flags in flag_spellings() {
+        let t = TempRoot::new("rw_update");
+        let dir = t.mkdirs("w");
+        for i in 0..40usize {
+            let rel: &'static str = Box::leak(format!("u{i:02}.bin").into_boxed_str());
+            wfile(&dir, rel, &vec![b'z'; 256 + i]);
+        }
+        let mut args: Vec<String> =
+            vec!["update".into(), "--dir".into(), dir.display().to_string()];
+        args.extend(flags.iter().map(|s| s.to_string()));
+        let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let (code, _) = run(&argv);
+        assert_eq!(code, 0, "{flags:?} exited {code}");
+
+        let rows = recs_of(&dir);
+        let files = rows.values().filter(|r| !r.is_dir()).count();
+        assert_eq!(
+            files, 40,
+            "{flags:?} must record every file, so the counts below mean something"
+        );
+        for (rel, rec) in &rows {
+            if rec.is_dir() {
+                continue;
+            }
+            assert_eq!(
+                rec.hashes.len(),
+                1,
+                "{flags:?}: {rel} lost its md5, so this setting hashed less"
+            );
+        }
+    }
 }
