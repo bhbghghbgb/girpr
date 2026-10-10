@@ -7,8 +7,11 @@ use tracing::info;
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
-use crate::effective::{Side, classify, ensure_distinct_sides, open_side, resolve_side};
+use crate::effective::{
+    Side, classify, ensure_distinct_sides, open_side, resolve_side, resolve_sides_concurrently,
+};
 use crate::planner::{SideRequest, plan_pairs};
+use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -38,6 +41,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -45,6 +51,13 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let _span_guard = span.enter();
     info!("start");
+    // One runtime for the whole run.
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        "rw limits"
+    );
     if common.dry_run {
         info!(
             "dry-run: no cache will be created, updated, or backed up; \
@@ -127,22 +140,38 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         dst_pending = plans.dst.by_rel.len(),
         "planned"
     );
-    let sm = resolve_side(
-        &mut s,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: common.dry_run,
+    // Both sides resolve at once. Under one shared counter the gate serialises them,
+    // so this is the old sequential run; under a split limit they genuinely
+    // overlap, which is the whole point of a per-side budget. src's error is taken
+    // first so the message does not depend on which side failed sooner.
+    let (src_res, dst_res) = resolve_sides_concurrently(
+        || {
+            resolve_side(
+                &mut s,
+                ScanMode {
+                    no_trust_cached_hashes: trust.no_trust_src,
+                    dry_run: common.dry_run,
+                },
+                &plans.src,
+                RwSide::Src,
+                &rw,
+            )
         },
-        &plans.src,
-    )?;
-    let dm = resolve_side(
-        &mut d,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: common.dry_run,
+        || {
+            resolve_side(
+                &mut d,
+                ScanMode {
+                    no_trust_cached_hashes: trust.no_trust_dst,
+                    dry_run: common.dry_run,
+                },
+                &plans.dst,
+                RwSide::Dst,
+                &rw,
+            )
         },
-        &plans.dst,
-    )?;
+    );
+    let sm = src_res?;
+    let dm = dst_res?;
     info!(
         src_hashed = sm.stats.hashed,
         dst_hashed = dm.stats.hashed,

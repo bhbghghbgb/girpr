@@ -20,7 +20,7 @@
 
 mod common;
 
-use common::{TempRoot, age, log, opts, recs_of, sync_mtime, update, wfile};
+use common::{TempRoot, age, log, opts, recs_of, serial_rw, sync_mtime, update, wfile};
 use girsync::planner::StatTrust;
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -84,6 +84,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
     use girsync::config::ScanMode;
     use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
     use girsync::planner::{SideRequest, plan_pairs};
+    use girsync::rw::RwSide;
 
     let (s_side, d_side) = (classify(src), classify(dst));
     ensure_distinct_sides(&s_side, &d_side).unwrap();
@@ -115,8 +116,8 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
         common.stat,
     )
     .unwrap();
-    let sm = resolve_side(&mut s, mode, &plans.src).unwrap();
-    let dm = resolve_side(&mut d, mode, &plans.dst).unwrap();
+    let sm = resolve_side(&mut s, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
+    let dm = resolve_side(&mut d, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
     sm.stats.hashed + dm.stats.hashed
 }
 
@@ -450,7 +451,6 @@ fn sync_with_the_short_circuit_off_still_converges() {
                 trust: Default::default(),
                 missing_only: false,
                 keep_extra: false,
-                jobs: 1,
                 common: distrusting(&["md5"], off),
             },
             &log(),
@@ -471,7 +471,6 @@ fn sync_with_the_short_circuit_off_still_converges() {
                 trust: Default::default(),
                 missing_only: false,
                 keep_extra: false,
-                jobs: 1,
                 common: distrusting(&["md5"], off),
             },
             &log(),
@@ -735,7 +734,6 @@ fn sync_copies_a_pair_it_cannot_confirm_rather_than_declaring_it_equal() {
             trust: Default::default(),
             missing_only: false,
             keep_extra: false,
-            jobs: 1,
             common: distrusting(&[], StatTrust::default().without_size()),
         },
         &log(),

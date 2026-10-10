@@ -60,11 +60,14 @@ trusting a half-written file.
 girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
 girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
 `--output text|json`. `sled2redb` takes `--force` and the same `--output`.
+
+The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
+[Concurrency](#concurrency). `--jobs` is gone; see [Gotchas](#gotchas).
 
 ### `--no-trust-size` / `--no-trust-mtime`
 
@@ -181,6 +184,101 @@ even when size+mtime match the cache. Off by default, and it only concerns
 it with `--hash-all-of none` is harmless but pointless: there are no digests to
 distrust. `update` has no such flag — it is defined as a full repopulate, so it
 never trusts cached digests in the first place.
+
+## Concurrency
+
+How many file **reads and writes** may be in flight at once. Three flags, on every
+subcommand:
+
+| | |
+| --- | --- |
+| `--rw-threads N` | one counter for the whole run — src and dst together, as if they share a disk. **Default 1.** |
+| `--rw-threads-src S` | one counter for reads from src. The other side defaults to **1**, not to `S`. |
+| `--rw-threads-dst D` | one counter for writes to dst. Not mutually exclusive with `--rw-threads-src`. |
+| `--rw-dual-drive` | shorthand for `--rw-threads-src 1 --rw-threads-dst 1`. |
+
+| flags given | resolves to |
+| --- | --- |
+| *(none)* | one shared counter of 1 |
+| `--rw-threads N` | one shared counter of N |
+| `--rw-dual-drive` | one per side: 1 and 1 |
+| `--rw-threads-src S` | one per side: S and 1 |
+| `--rw-threads-dst D` | one per side: 1 and D |
+| `--rw-threads-src S --rw-threads-dst D` | one per side: S and D |
+
+`--rw-threads` conflicts with the other three (exit `2`). Giving both per-side flags
+is legal and is the explicit form of the point. `0` is refused per flag, naming it,
+with exit `3` — a runtime usage mistake, not a typo.
+
+### `--rw-dual-drive` is not `--rw-threads 1`
+
+Worth stating because it is the whole feature:
+
+| | concurrent rw operations in the whole run |
+| --- | --- |
+| `--rw-threads 1` | **one**, ever |
+| `--rw-dual-drive` | **one per side** |
+
+Under one shared counter, src being hashed waits for dst to finish being hashed.
+Under two counters they proceed at once — which is worth exactly what two separate
+drives can do. **A copy still runs one at a time under `--rw-dual-drive`**, because
+a copy is simultaneously reading src and writing dst and needs a permit for each.
+
+> **`--rw-dual-drive` asserts something about your hardware that this tool cannot
+> check.** On a single spinning disk it turns a sequential read/write pattern into a
+> seek storm, and `--rw-threads 1` will be faster. Use it when src and dst are
+> genuinely separate physical drives.
+
+### What an "rw operation" is
+
+The counter governs file **content** reads and writes. That is why the flags are
+called *rw* and not *io*:
+
+| gated | not gated |
+| --- | --- |
+| hashing a file in phase C | `stat` — `metadata()`, `is_file()`, `is_dir()` |
+| a copy: the stream plus both verify re-hashes | `mkdir` / `delete` / `rmdir` |
+| | the redb cache's own reads, writes and commits |
+
+`stat` is excluded deliberately: it is orders of magnitude cheaper than a read, and
+including it would let the counter be spent entirely on `stat` calls over a tree of
+many small files. The cache is excluded because it is not tree I/O the limiter is
+about; the two `fs::copy` snapshots of the cache file (`girpr-cache-backup-*`,
+`girpr-cache-old-*`) *are* whole-file copies on the same physical disk, but they run
+once, serially, before any parallel phase exists, so gating them would be a no-op.
+
+### What a copy costs
+
+A copy is **one operation**: under one shared counter it takes one permit; under
+per-side counters it takes **one src permit and one dst permit**, held for the whole
+copy including the verify. So `Split{s,d}` admits `min(s,d)` concurrent copies.
+Releasing around the halves would buy nothing — the file is not finished until it
+verifies.
+
+### What this never changes
+
+Only scheduling. Every setting resolves the same trees to the same effective maps —
+digests included — and reports the same `ScanStats`. Two runs can print identical
+`CHANGED` lines while having hashed different files, so the tests compare the maps,
+not the output: `tests/rw_threads.rs`.
+
+Two ordering properties changed, both inside `resolve_folder`:
+
+- **Write order is still sorted; read order is not.** Cache rows land in the same
+  order every run, so the cache bytes and the progress heartbeat stay reproducible.
+  Which files are *read* in which order is no longer part of any promise.
+- **Durability is per-window rather than per-digest.** Phase C hashes in windows
+  (`max(threads × 8, 32)`) and writes each window's rows through the batched handle
+  before starting the next. `COMMIT_INTERVAL` still bounds how much work an
+  interruption can lose, and peak memory stays bounded instead of holding one
+  digest map per pending file at once.
+
+### update, compare and compare-self
+
+They have the flags too, which is new: `--jobs` was on `sync` alone. `update`
+rehashes every file and gains real parallelism. One caveat — on `compare-self` the
+record side has **no filesystem**, so `--rw-threads-src` is a no-op there and the
+startup log says so rather than leaving you to work out why.
 
 ### update
 
@@ -477,7 +575,7 @@ The stream is three segments, in this order:
 | --- | --- | --- |
 | `RENAME` | dst's casing aligned to src's | before the diff — it has to be, or the diff has no exact keys to compare |
 | the **plan** | the diff, through the same `report::verdict` `compare` uses | up-front, once the diff exists |
-| the **actions** | what the apply phases do, in apply order | as they happen — so under `--jobs > 1` the `COPY` lines come out in **completion** order, not plan order |
+| the **actions** | what the apply phases do, in apply order | as they happen — so with more than one rw operation permitted the `COPY` lines come out in **completion** order, not plan order |
 
 Two things follow from that split, and both are the point:
 
@@ -517,8 +615,8 @@ Mirrors `src` → `dst`:
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
-   file change. The `COPY` line is printed **as each copy completes**, so under
-   `--jobs > 1` those lines come out in completion order. No resume.
+   file change. The `COPY` line is printed **as each copy completes**, so with more
+   than one rw operation permitted those lines come out in completion order. No resume.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -628,10 +726,11 @@ unavoidable rather than something to engineer around: the alternative is to keep
 emitting after the pool joins, which is the behaviour the as-done printing removes.
 
 **A dry run and a real run are no longer comparable as one ordered document.**
-`COPY` lines are emitted inside the copy worker, so a run with `--jobs 4` prints
-them in whatever order the files finish — 24 padded files under `--jobs 4` came out
-shuffled on 8 of 8 runs. The *set* and the *count* are unchanged and are what the
-tests assert; the order is not, and no test may depend on it.
+`COPY` lines are emitted inside the copy worker, so a run with
+`--rw-threads 4` prints them in whatever order the files finish — 24 padded files
+under `--rw-threads 4` came out shuffled on 8 of 8 runs. The *set* and the *count*
+are unchanged and are what the tests assert; the order is not, and no test may
+depend on it.
 
 The emit is serialised by a leaf mutex rather than left to each thread's
 `println!`. `Report::emit` prints a line and logs a matching event as one unit, and
@@ -783,7 +882,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
   stderr;
   note runtime usage mistakes also exit `3`, unlike `girpr`'s `1`)
-  · `4` compare found diff. `--jobs 0` is a runtime error → exit `3`.
+  · `4` compare found diff. `--rw-threads 0` is a runtime error → exit `3`;
+  conflicting `--rw-threads*` combinations are a parse error → exit `2`.
 
 ## Typical dev workflow
 
@@ -792,7 +892,7 @@ cargo build -p girsync
 .\target\debug\girsync update --dir D:\game-old          # record the reference
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 4 + diff list
 .\target\debug\girsync sync --src D:\game-old --dst D:\game-live --dry-run
-.\target\debug\girsync sync --src D:\game-old --dst D:\game-live --jobs 4
+.\target\debug\girsync sync --src D:\game-old --dst D:\game-live --rw-threads 4
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
@@ -849,7 +949,19 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   it. The old spelling is rejected rather than aliased, so a script passing
   `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
   none` is the stat-only audit; `none` is refused by `--hash-any-of`.
-- Tests: `cargo test -p girsync` (incl. case-adoption regression test, which uses a
+- **`--jobs` is gone.** Replaced by `--rw-threads N` / `--rw-threads-src S` /
+  `--rw-threads-dst D` / `--rw-dual-drive`, all on every subcommand rather than
+  `sync` alone. The old spelling is **rejected rather than aliased**, so a script
+  passing `--jobs 4` fails loudly at parse time (exit `2`) instead of quietly
+  getting a different default — same call as `--hash` → `--hash-all-of`.
+- **The default moved 4 → 1.** `--jobs` defaulted to `4`; `--rw-threads` defaults to
+  `1`. An unflagged `sync` therefore runs one copy at a time where it used to run
+  four, which is the right default for a single disk and a four-fold slowdown for
+  anyone who never passed the flag. If you want the old behaviour back, pass
+  `--rw-threads 4`; on two drives, `--rw-dual-drive`.
+- **`--rw-dual-drive` on one physical disk is slower than doing nothing special.**
+  It asserts a fact about your hardware that the tool cannot check. See
+  [Concurrency](#concurrency).
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
@@ -864,7 +976,10 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   counts, in verdicts, and in cache rows), `output.rs` (the stdout contract:
   `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
-  narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
+  narrates on stderr), `rw_threads.rs` (the rw limiter: the flag table, the
+  mutual exclusions, and — for every setting — the same effective maps, the same
+  `ScanStats`, the same action stream and the same files on disk), with shared
+  fixtures in `tests/common/mod.rs`. They run
   against the public API, so anything they touch must stay `pub`.
 - **No goldens.** A whole-run transcript is a change detector wearing the costume
   of a specification: once no eager implementation exists to compare against, the

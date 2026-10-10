@@ -4,13 +4,14 @@ mod common;
 
 use std::path::Path;
 
-use common::{TempRoot, md5arg, opts, rw, scan, wfile};
+use common::{TempRoot, md5arg, opts, rw, scan, serial_rw, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
 use girsync::hash::parse_hash_list;
 use girsync::planner::HashPlan;
+use girsync::rw::RwSide;
 use girsync::{CommonOpts, ScanStats};
 
 /// A folder-side run's counters, kept **per phase** rather than merged.
@@ -42,7 +43,16 @@ struct Run {
 fn phased(root: &Path, cache: &CacheDb, common: &CommonOpts, mode: ScanMode) -> Run {
     let phase_a: SideScan<girsync::SideEntry> = scan_stat_only(root, cache, common, mode).unwrap();
     let plan = HashPlan::plan_one_side(&phase_a.map, &common.algos, mode.no_trust_cached_hashes);
-    let resolved = resolve_folder(root, cache, mode, &phase_a, &plan).unwrap();
+    let resolved = resolve_folder(
+        root,
+        cache,
+        mode,
+        &phase_a,
+        &plan,
+        RwSide::Src,
+        &serial_rw(),
+    )
+    .unwrap();
     Run {
         map: resolved.map,
         a: phase_a.stats,

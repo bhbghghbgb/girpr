@@ -25,7 +25,7 @@ mod common;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{TempRoot, log, opts, pair, recs_of, sync_mtime, wfile};
+use common::{TempRoot, log, opts, pair, recs_of, serial_rw, sync_mtime, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
@@ -34,6 +34,7 @@ use girsync::effective::{
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
 use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
 // -- fixtures -----------------------------------------------------------------
@@ -191,8 +192,8 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
     )
     .unwrap_or_else(|e| panic!("two folders cannot fail coverage: {e:#}"));
     let digests = plans.src.digest_count() + plans.dst.digest_count();
-    let sm = resolve_side(&mut so, mode, &plans.src).unwrap();
-    let dm = resolve_side(&mut do_, mode, &plans.dst).unwrap();
+    let sm = resolve_side(&mut so, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
+    let dm = resolve_side(&mut do_, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
     (sm.stats.hashed + dm.stats.hashed, digests)
 }
 
@@ -232,7 +233,16 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
         common.stat,
     )
     .unwrap_or_else(|e| panic!("the record holds md5, so this is answerable: {e:#}"));
-    let disk = resolve_folder(dir, &cold, mode, &disk_a, &plans.dst).unwrap();
+    let disk = resolve_folder(
+        dir,
+        &cold,
+        mode,
+        &disk_a,
+        &plans.dst,
+        RwSide::Dst,
+        &serial_rw(),
+    )
+    .unwrap();
     let rec = resolve_record(&rec);
     let diff = diff_maps(
         &rec.map,

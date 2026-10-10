@@ -38,11 +38,12 @@ mod common;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use common::{TempRoot, age, sync_mtime, wfile};
+use common::{TempRoot, age, serial_rw, sync_mtime, wfile};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::rw::RwSide;
 use girsync::{CommonOpts, EffRec, cmd_update};
 
 // -- the table -----------------------------------------------------------------
@@ -356,9 +357,9 @@ fn resolved(
         common.stat,
     )
     .unwrap_or_else(|e| panic!("{temp_tag}: this pair is answerable: {e:#}"));
-    let sm = resolve_side(&mut s, mode, &plans.src)
+    let sm = resolve_side(&mut s, mode, &plans.src, RwSide::Src, &serial_rw())
         .unwrap_or_else(|e| panic!("{temp_tag}: resolving src: {e:#}"));
-    let dm = resolve_side(&mut d, mode, &plans.dst)
+    let dm = resolve_side(&mut d, mode, &plans.dst, RwSide::Dst, &serial_rw())
         .unwrap_or_else(|e| panic!("{temp_tag}: resolving dst: {e:#}"));
     (sm.map, dm.map, plans)
 }
