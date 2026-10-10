@@ -1,12 +1,21 @@
 //! Tracing setup: human console layer plus an optional always-trace JSON file.
 //!
+//! This module owns **stderr** only. The data plane — `MISSING`/`COPY`/`SUMMARY`
+//! and friends — is stdout, and it goes through [`crate::report::Report`], which
+//! `--output` chooses between a human line and a JSON object. Keeping the two
+//! apart is what lets `--output json` hand a caller a clean stream of JSON
+//! records with no log chatter mixed into it, while stderr stays the narration.
+//!
 //! Design:
 //! - Console (stderr, human-readable) is filtered by `--log-level`.
 //! - File (if `--log-file`, JSON) always captures TRACE and above, no matter
 //!   `--log-level`.
-//! - Data-plane output (MISSING/COPY/SUMMARY/...) stays on stdout via println!.
-//! - All operational chatter uses tracing events with structured fields.
+//! - Nothing is printed raw: every diagnostic is a `tracing` event with named
+//!   fields, so the JSON log and the console are the same records rendered twice.
 //! - Per-command spans carry config so every event inside is correlated.
+//! - Data-plane records reach this channel too: `Report::emit` logs each one as a
+//!   `debug` event with the same `event` name and fields it printed, so a log file
+//!   carries the answer without stdout having been captured.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;

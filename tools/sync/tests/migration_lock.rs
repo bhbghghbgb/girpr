@@ -384,9 +384,10 @@ fn lock_dry_run_changes_nothing() {
     let src_before = recs(&src);
     let dst_before = recs(&dst);
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
-    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(common::sync_dry(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     assert_eq!(common::rfile(&dst, "a.txt"), b"old");
     assert!(

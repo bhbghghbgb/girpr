@@ -8,9 +8,15 @@
 //!
 //! Phase order overall:
 //! 1. validate inputs, back up both caches, snapshot dst's pre-sync state,
-//! 2. open both caches and build the two effective maps,
-//! 3. rename dst paths to src's casing, so the diff lines up on exact keys,
-//! 4. plan, then either print it (`--dry-run`) or apply it.
+//! 2. open both caches and run phase A on each side,
+//! 3. plan across both sides at once, so a file is read only if the pair needs it,
+//! 4. phase C, then rename dst paths to src's casing,
+//! 5. diff, plan, then either print it (`--dry-run`) or apply it.
+//!
+//! Steps 4's rename still precedes the diff and always will: the diff is taken
+//! case-sensitively on exact keys. The plan in step 3 therefore runs *before* the
+//! rename, paired by lowercase in insensitive mode — see the comment at the call
+//! site, which is the one place the two case flags deliberately disagree.
 //!
 //! A record path (`girpr-cache*`) is not a valid sync input — that is
 //! `compare`-only. Errors propagate as `Err`; the exit code is always 0.
@@ -22,12 +28,14 @@ mod rename;
 use anyhow::{Result, bail};
 use tracing::info;
 
-use crate::cache::{
-    CACHE_PREFIX, CacheDb, CacheOpen, backup_db, open_db, remove_cache_path, snapshot_old,
-};
+use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
-use crate::effective::{build_effective_folder, classify, ensure_distinct_sides};
+use crate::effective::{
+    SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
+    scan_stat_only,
+};
+use crate::planner::{SideRequest, plan_pairs};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -37,16 +45,23 @@ use rename::rename_to_src_casing;
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let t0 = std::time::Instant::now();
+    // One writer for every record this run emits, in the requested format. Held
+    // across all three phases so `--dry-run` and a real run go through exactly
+    // the same code path to say the same thing.
+    let report = log.report();
     let SyncOpts {
         src,
         dst,
         trust,
         missing_only,
         keep_extra,
-        dry_run,
         jobs,
         common,
     } = opts;
+    // One flag, two halves. The cache half reaches the scans through
+    // `ScanMode::dry_run`; this local is the filesystem half, threaded into the
+    // rename and apply phases below.
+    let dry_run = common.dry_run;
 
     let span = tracing::info_span!(
         "girsync.sync",
@@ -68,6 +83,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
+        output = %log.output,
     );
     let _span_guard = span.enter();
     info!("start");
@@ -98,42 +114,105 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         }
     }
 
-    // 2. Open both caches and resolve each side's effective map.
-    let (src_db, dst_db) = open_caches(&src_db_path, &dst_db_path, &common, dry_run)?;
-    info!("loading src effective map");
-    let sm = build_effective_folder(
-        &src,
-        &src_db,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run,
-        },
-    )?;
-    info!("loading dst effective map");
-    let mut dm = build_effective_folder(
-        &dst,
-        &dst_db,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run,
-        },
-    )?;
-    info!(src_entries = sm.len(), dst_entries = dm.len(), "maps ready");
+    // 2. Open both caches, then phase A on each side.
+    //
+    // `backup_first: false` for both: this command has already taken its own
+    // backups and dst's old-state snapshot above, and doing it again here would
+    // produce a second timestamped pair mid-run. `open_folder_cache` is also the
+    // only thing that decides how a dry run opens a cache, so this stays a plain
+    // call rather than a second policy.
+    let scan_mode = |no_trust_cached_hashes| ScanMode {
+        no_trust_cached_hashes,
+        dry_run,
+    };
+    let src_mode = scan_mode(trust.no_trust_src);
+    let dst_mode = scan_mode(trust.no_trust_dst);
+    let src_db = open_folder_cache(&src, &common, src_mode, false)?;
+    let dst_db = open_folder_cache(&dst, &common, dst_mode, false)?;
+    info!("loading src side");
+    let src_a = scan_stat_only(&src, &src_db, &common, src_mode)?;
+    info!("loading dst side");
+    let dst_a = scan_stat_only(&dst, &dst_db, &common, dst_mode)?;
+    info!(
+        src_entries = src_a.map.len(),
+        dst_entries = dst_a.map.len(),
+        "phase A done"
+    );
 
-    // 3. Align casing before diffing, so the diff can be case-sensitive.
+    // 3. One decision, both sides in — the same shape `compare` uses. A file is
+    // read only if it is on *both* sides with equal size and mtime; every other
+    // pair state is already decided, and `diff_maps` short-circuits the digest
+    // comparison anyway.
+    //
+    // `common.case_sensitive` here, and a hardcoded `true` in the `diff_maps` call
+    // below. That asymmetry is deliberate. This pairs the sides as they are *on
+    // disk*, which in insensitive mode means by lowercase — and the rename pass in
+    // step 4 then collapses exactly those pairs onto exact keys, so the diff goes
+    // on to form the same pairs. Passing `true` here would make a case-only pair
+    // look one-sided and skip a digest it needs; passing `false` in the diff would
+    // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
+    let plans = plan_pairs(
+        SideRequest {
+            entries: &src_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_src,
+            // Both sides are folders, so both can hash and `sync` can never fail
+            // coverage. That is a property of the shape, not an omission: the check
+            // is the same one `compare` uses, and here it is vacuous.
+            cap: SideCapability::for_folder(&src_db, src_mode),
+            label: &format!("folder {}", src.display()),
+        },
+        SideRequest {
+            entries: &dst_a.map,
+            algos: &common.algos,
+            no_trust: trust.no_trust_dst,
+            cap: SideCapability::for_folder(&dst_db, dst_mode),
+            label: &format!("folder {}", dst.display()),
+        },
+        common.case_sensitive,
+        common.hash_mode,
+        common.stat,
+    )?;
+    info!(
+        src_pending = plans.src.by_rel.len(),
+        dst_pending = plans.dst.by_rel.len(),
+        "planned"
+    );
+
+    // 4. Resolve, then rename, then diff.
+    //
+    // Resolve before rename, always. `resolve_folder` hashes `root.join(rel)`, so
+    // re-keying dst first would have phase C read `dst/A.txt` while the file was
+    // still at `dst/a.txt` — silent success on a case-insensitive filesystem, a
+    // failure or a wrong file on a case-sensitive one. Planning pre-rename and
+    // re-keying only here makes that unrepresentable, and it is why
+    // `rename_to_src_casing` still takes resolved `EffRec` maps.
+    let sm = resolve_folder(&src, &src_db, src_mode, &src_a, &plans.src)?;
+    info!(side = "src", hashed = sm.stats.hashed, "src map built");
+    let sm = sm.map;
+    let dm = resolve_folder(&dst, &dst_db, dst_mode, &dst_a, &plans.dst)?;
+    info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
+    let mut dm = dm.map;
+
+    // 5. Align casing before diffing, so the diff can be case-sensitive.
     let renamed = if common.case_sensitive {
         0
     } else {
-        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run)?
+        rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
 
-    // 4. Plan, then print or apply.
+    // 6. Plan, then print or apply.
+    //
+    // `plans.required`, and it is keyed by **src** path — which survives the rename,
+    // because the rename re-keys dst onto src's casing and never touches src's own
+    // keys. That is the third reason the plan has to precede the rename: a per-path
+    // answer is only usable if the side it is keyed by is the side that does not
+    // move.
     let diff = diff_maps(
         &sm,
         &dm,
-        &common.algos,
+        &plans.required,
+        plans.stat,
         true, /* post-rename: exact keys */
     );
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
@@ -150,7 +229,9 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     tracing::debug!(mkdir = ?plan.mkdir, "plan mkdir list");
 
     if dry_run {
-        plan::print_dry_run(&plan, renamed, missing_only, keep_extra);
+        for rec in plan::dry_run_records(&plan, renamed, missing_only, keep_extra) {
+            report.emit(rec);
+        }
         info!(
             renamed,
             mkdir = plan.mkdir.len(),
@@ -168,26 +249,23 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         src: &src,
         dst: &dst,
         dst_db: &dst_db,
-        sm: &sm,
         dm: &dm,
         common: &common,
         jobs,
+        report: &report,
     }
     .apply(&plan)?;
     // No final flush: every apply phase commits its own mutations, and the
     // pre-drop commit before the filesystem changes is the crash-safety
     // point (a rerun re-copies rather than trusting half-written files).
 
-    println!(
-        "SUMMARY renamed={} mkdir={} copied={} deleted={} rmdir={} missing_only={} keep_extra={}",
+    report.emit(plan::summary_record(
         renamed,
-        plan.mkdir.len(),
-        applied.copied,
-        applied.deleted,
-        applied.removed_dirs,
+        &plan,
+        &applied,
         missing_only,
-        keep_extra
-    );
+        keep_extra,
+    ));
     info!(
         renamed,
         mkdir = plan.mkdir.len(),
@@ -219,43 +297,4 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
         bail!("--jobs must be >= 1");
     }
     Ok(())
-}
-
-/// Open both caches. Under `--dry-run` neither one is ever opened for writing.
-///
-/// A dry run has nothing to persist: `build_effective_folder` skips its batch
-/// handle and `rename_to_src_casing` returns before touching disk, so the only
-/// writes a read/write open could perform are the ones a dry run promises not to
-/// do — creating a missing cache, and rewriting `meta` when the case mode
-/// disagrees. So an existing cache is opened read-only, and a missing one falls
-/// back to an in-memory DB that leaves the folder exactly as it was. A corrupt
-/// cache falls back the same way: a dry run should still produce a plan.
-fn open_caches(
-    src_db_path: &std::path::Path,
-    dst_db_path: &std::path::Path,
-    common: &crate::config::CommonOpts,
-    dry_run: bool,
-) -> Result<(CacheDb, CacheDb)> {
-    let open = |p: &std::path::Path| -> Result<CacheDb> {
-        if !dry_run {
-            return open_db(
-                p,
-                common.case_sensitive,
-                CacheOpen::ReadWrite {
-                    ignore_cache: false,
-                    backup_first: false,
-                },
-            );
-        }
-        // `--dry-run --ignore-cache` asks for the cache to be rebuilt, and a dry
-        // run may not rebuild it. Act as though it were absent: the folder is
-        // then scanned from disk alone and the real cache is left untouched.
-        if common.ignore_cache || !p.exists() {
-            info!(path = %p.display(), "dry-run: using an in-memory cache");
-            return CacheDb::open_temp(common.case_sensitive);
-        }
-        open_db(p, common.case_sensitive, CacheOpen::ReadOnly)
-            .or_else(|_| CacheDb::open_temp(common.case_sensitive))
-    };
-    Ok((open(src_db_path)?, open(dst_db_path)?))
 }

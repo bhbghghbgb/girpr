@@ -36,6 +36,24 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
     Ok(v)
 }
 
+/// Validate repeated `--hash-any-of` values.
+///
+/// Separate from [`parse_hash_list`] for one reason: **`none` is not a value here.**
+/// "Any of the requested algorithms", with nothing requested, is not a weaker
+/// request — it is no request — and `--hash-all-of none` is the flag that says so.
+/// Accepting it would give a stat-only audit a name claiming a digest was optional
+/// but not required, which is the ambiguity all-of exists to remove.
+pub fn parse_any_of(input: &[String]) -> Result<Vec<String>> {
+    let algos = parse_hash_list(input)?;
+    if algos.is_empty() {
+        bail!(
+            "--hash-any-of needs at least one algorithm; for a stat-only audit use \
+             --hash-all-of none"
+        );
+    }
+    Ok(algos)
+}
+
 /// Digest `path` with every requested algorithm in a single pass.
 ///
 /// An empty `algos` returns an empty map without touching the file.

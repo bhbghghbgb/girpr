@@ -3,9 +3,14 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
+use crate::planner::{Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
-#[derive(Default)]
+///
+/// Derives `PartialEq` so a test can state a whole expected verdict at once
+/// rather than five fields one at a time; it has no interior state, so this
+/// costs nothing.
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Diff {
     /// src-only.
     pub missing: Vec<String>,
@@ -32,15 +37,71 @@ impl Diff {
     }
 }
 
+/// The one predicate `diff_maps` uses to decide `CHANGED`, in **both** of its
+/// key-matching branches.
+///
+/// Written once and called twice because the two branches are the same decision stated
+/// twice, and a predicate that has to be re-typed is a predicate that will drift.
+fn is_changed(stat: StatTrust, required: &Required, s: &EffRec, t: &EffRec, key: &str) -> bool {
+    // Evidence of difference, cheapest first: a stat field this run trusts, then the
+    // digests the planner said would settle this pair.
+    if stat.settles(s.size, s.mtime_ns, t.size, t.mtime_ns) {
+        return true;
+    }
+    let need = required.of(key);
+    if hashes_differ(&s.hashes, &t.hashes, need) {
+        return true;
+    }
+    // **No digest was consulted, and there was a difference we were told to ignore.**
+    //
+    // `hashes_differ` returning false claims "no difference detected", which is not the
+    // same claim as "identical" — and with nothing requested that is the *only* thing
+    // the digest branch can say. Reaching here with an empty `need` means the pair was
+    // left undecided with no way left to decide it, so the honest verdict is `CHANGED`
+    // ("cannot confirm") rather than silently clean. Reporting it equal is how a
+    // size-differing pair once came back "identical" under `--hash-all-of none
+    // --no-trust-size`, and in `sync` that meant `dst` was left stale by a run that
+    // reported success.
+    //
+    // Guarded on `need.is_empty()` deliberately. While a digest **is** available the
+    // comparison above is a real verdict, and a pair whose content agrees is genuinely
+    // in step — that is the whole reason `--no-trust-mtime` can *clear* a touched
+    // file, and this clause must not take that away. The guard is what keeps this a fix
+    // for an unanswerable request rather than a general pessimism.
+    need.is_empty() && stat.untrusted_disagrees(s.size, s.mtime_ns, t.size, t.mtime_ns)
+}
+
 /// Compare two effective maps.
 ///
 /// In insensitive mode keys are matched by lowercase, so a casing-only
 /// difference surfaces as `case_mismatch` instead of missing+extra. Dirs are
 /// compared by presence alone.
+///
+/// `required` is the planner's per-path answer to "which algorithms settle this
+/// pair", keyed by **src** path. Passing it rather than an algorithm list is what
+/// lets one run settle different pairs by different algorithms: under
+/// [`crate::planner::HashMode::AllOf`] every entry is the whole requested list, so a
+/// uniform run would be described just as well by passing that list straight
+/// through. Consulted only once stat has been found unconvincing, which is the same
+/// boundary the planner applies — so a path that reaches it has an entry, **except
+/// when the run requested no algorithm at all**. That exception used to be read as
+/// "equal" and is now handled explicitly in [`is_changed`]; it is the one case where
+/// `Required` has nothing to say and `hashes_differ`'s silence would otherwise be
+/// mistaken for a verdict.
+///
+/// `stat` decides **which stat fields may settle a pair here**, and it is the same
+/// value the planner was given — read from `plan.stat` rather than taken again, so
+/// there is only one copy of the rule. That is the load-bearing part: this function's
+/// short circuit and the planner's are the same predicate, and if they disagree then
+/// one of two silent things happens — the planner hashes a pair whose digest is never
+/// read, or (worse) a pair the planner called decided turns out to need a digest
+/// nobody computed. One predicate is what makes that unrepresentable rather than
+/// merely tested for.
 pub fn diff_maps(
     src: &HashMap<String, EffRec>,
     dst: &HashMap<String, EffRec>,
-    algos: &[String],
+    required: &Required,
+    stat: StatTrust,
     case_sensitive: bool,
 ) -> Diff {
     let mut d = Diff::default();
@@ -62,10 +123,7 @@ pub fn diff_maps(
                         d.type_conflict.push(k.clone());
                     } else if s.kind == "dir" {
                         // presence only
-                    } else if s.size != t.size
-                        || s.mtime_ns != t.mtime_ns
-                        || hashes_differ(&s.hashes, &t.hashes, algos)
-                    {
+                    } else if is_changed(stat, required, s, t, k) {
                         d.changed.push(k.clone());
                     }
                 }
@@ -99,10 +157,7 @@ pub fn diff_maps(
                     if s.kind != t.kind {
                         d.type_conflict.push((*srel).clone());
                     } else if s.kind == "dir" {
-                    } else if s.size != t.size
-                        || s.mtime_ns != t.mtime_ns
-                        || hashes_differ(&s.hashes, &t.hashes, algos)
-                    {
+                    } else if is_changed(stat, required, s, t, srel) {
                         d.changed.push((*srel).clone());
                     }
                 }
@@ -118,10 +173,15 @@ pub fn diff_maps(
     d
 }
 
-/// True if any requested algorithm has both sides present and disagreeing.
+/// True if any of the algorithms that settle this pair has both sides present and
+/// disagreeing.
 ///
-/// If either side lacks a hash (e.g. a `--hash none` history) this stays
-/// silent: the caller has already compared size+mtime.
+/// If either side lacks one of them this stays silent — the caller has already
+/// consulted stat. That silence is safe *because* the planner chose these
+/// algorithms: every one of them is obtainable on both sides, so it has either
+/// been computed or was already cached. A digest that is absent here is a digest
+/// nobody asked for, which is what makes this a comparison rather than a silent
+/// fall-through to a verdict about content nobody read.
 pub fn hashes_differ(
     a: &HashMap<String, Vec<u8>>,
     b: &HashMap<String, Vec<u8>>,

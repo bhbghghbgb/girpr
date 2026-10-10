@@ -14,6 +14,12 @@
 //! crash mid-run re-copies rather than trusting a half-written file. The
 //! commit is the durability point — there is no separate flush, and there is
 //! no resume beyond re-running.
+//!
+//! Every action a phase takes is announced through [`Applier::report`], and only
+//! there: `Report::emit` prints the record and logs the matching event in one
+//! place, so a phase cannot report an action the log never sees, nor narrate an
+//! action twice by hand. `--dry-run` reports the same records for the same plan,
+//! which is why the plan printer and these phases agree field for field.
 
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
@@ -26,6 +32,7 @@ use crate::config::CommonOpts;
 use crate::effective::EffRec;
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
+use crate::report::{Record, Report};
 use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
@@ -35,15 +42,21 @@ pub(super) struct Applier<'a> {
     pub src: &'a Path,
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
-    /// src effective map — decides which dst dirs are "unknown".
-    pub sm: &'a HashMap<String, EffRec>,
-    /// dst effective map, after the rename pass.
+    /// dst effective map, after the rename pass. Consulted for what dst actually
+    /// holds at a path; src's map is not needed here any more, because the
+    /// planner already decided which directories to remove (`Plan::rmdir`).
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
     pub jobs: usize,
+    /// Where the plan's records go, and in what format.
+    ///
+    /// The apply phases announce every action they take, and `--dry-run` reports
+    /// what it *would* take; both go through this one writer, so the two are the
+    /// same document rather than two printers that must agree.
+    pub report: &'a Report,
 }
 
-/// What a run actually did, for the `SUMMARY` line.
+/// What a run actually did, for the `SUMMARY` record.
 ///
 /// Field order matches the phase order in [`Applier::apply`].
 #[derive(Debug, Default)]
@@ -63,13 +76,19 @@ impl Applier<'_> {
         let applied = Applied {
             deleted: self.delete_extras(plan)?,
             copied: self.copy_files(plan)?,
-            removed_dirs: self.remove_unknown_dirs()?,
+            removed_dirs: self.remove_unknown_dirs(plan)?,
         };
         self.prune_dst_cache()?;
         Ok(applied)
     }
 
     /// Create every src directory that dst lacks.
+    ///
+    /// Each one is reported, like every other action in the plan. The apply
+    /// phases record what they do and `--dry-run` records what it would do, and
+    /// the two documents are supposed to be the same — a phase that works
+    /// silently is the one place a dry run cannot mirror, and a directory the
+    /// user did not know was being created is worth a record.
     fn mkdirs(&self, plan: &Plan) -> Result<()> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
         let mut w = self.dst_db.begin_write()?;
@@ -77,7 +96,7 @@ impl Applier<'_> {
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
             w.put(r, &FileRec::dir())?;
-            debug!(rel = %r, "mkdir");
+            self.report.emit(Record::path("MKDIR", r));
             if (i + 1) % 100 == 0 {
                 info!(done = i + 1, total = plan.mkdir.len(), "mkdir progress");
             }
@@ -110,8 +129,7 @@ impl Applier<'_> {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
             }
             std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
-            println!("FIX-DIR {}", r);
-            info!(rel = %r, "fix-dir");
+            self.report.emit(Record::path("FIX-DIR", r));
         }
         Ok(())
     }
@@ -164,13 +182,11 @@ impl Applier<'_> {
             }
             if p.is_file() || p.is_symlink() {
                 std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
-                println!("DELETE {}", r);
-                debug!(rel = %r, "delete");
+                self.report.emit(Record::path("DELETE", r));
                 deleted += 1;
             } else if p.is_dir() {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
-                println!("RMDIR {}", r);
-                debug!(rel = %r, "rmdir");
+                self.report.emit(Record::path("RMDIR", r));
                 deleted += 1;
             } else if p.exists() {
                 bail!("unsupported type {}", p.display());
@@ -219,8 +235,7 @@ impl Applier<'_> {
         let mut new_recs: Vec<(String, FileRec)> = Vec::new();
         for (rel, r) in plan.copy.iter().zip(results) {
             let rec = r.with_context(|| format!("copy {}", rel))?;
-            println!("COPY {}", rel);
-            debug!(rel = %rel, "copy done");
+            self.report.emit(Record::path("COPY", rel));
             new_recs.push((rel.clone(), rec));
             copied += 1;
         }
@@ -237,33 +252,21 @@ impl Applier<'_> {
 
     /// Remove dst directories that src does not have, deepest first.
     ///
-    /// Runs after the copies so directories emptied by them are collected too.
-    fn remove_unknown_dirs(&self) -> Result<usize> {
+    /// Runs after the copies so directories emptied by them are collected too,
+    /// and reads the list [`Plan::rmdir`] rather than deriving one here. That is
+    /// deliberate: the dry run must be able to state the same number before
+    /// anything is written, so the decision belongs to the planner and this pass
+    /// is left with nothing to decide. It also drops a full walk of dst, and
+    /// makes the set the one the `--dry-run` summary already promised.
+    ///
+    /// The list excludes any directory a planned copy was going to clear out of
+    /// the way, so nothing here can name a path that is already gone; the
+    /// `is_dir` check stays as a cheap guard rather than as the logic.
+    fn remove_unknown_dirs(&self, plan: &Plan) -> Result<usize> {
         let mut removed_dirs = 0usize;
-        info!("scan dst for unknown dirs");
-        let live_after = walk_live(self.dst, self.common.max_depth)?;
-        let mut unknown_dirs: Vec<String> = Vec::new();
-        for e in &live_after {
-            if !e.is_dir {
-                continue;
-            }
-            if is_excluded(
-                &e.rel,
-                &self.common.includes,
-                &self.common.excludes,
-                self.common.case_sensitive,
-            ) {
-                continue;
-            }
-            if !self.sm.contains_key(&e.rel) {
-                unknown_dirs.push(e.rel.clone());
-            }
-        }
-        // deepest first: a child may already be gone as part of its parent
-        unknown_dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        info!(unknown = unknown_dirs.len(), "rmdir pass");
+        info!(unknown = plan.rmdir.len(), "rmdir pass");
         let mut w = self.dst_db.begin_write()?;
-        for (i, r) in unknown_dirs.iter().enumerate() {
+        for (i, r) in plan.rmdir.iter().enumerate() {
             let p = self.dst.join(r);
             if p.is_dir() {
                 if let Err(e) = std::fs::remove_dir_all(&p)
@@ -272,14 +275,13 @@ impl Applier<'_> {
                     bail!("rmdir {}: {:#}", p.display(), e);
                 }
                 w.remove(r)?;
-                println!("RMDIR {}", r);
-                debug!(rel = %r, "rmdir");
+                self.report.emit(Record::path("RMDIR", r));
                 removed_dirs += 1;
             }
             if (i + 1) % 100 == 0 {
                 info!(
                     done = i + 1,
-                    total = unknown_dirs.len(),
+                    total = plan.rmdir.len(),
                     removed = removed_dirs,
                     "rmdir progress"
                 );

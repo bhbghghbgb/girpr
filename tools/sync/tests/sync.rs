@@ -3,16 +3,52 @@
 mod common;
 
 use common::{
-    TempRoot, compare, entry_names, has_backup_sibling, log, rfile, rw, sync, sync_mtime, update,
-    wfile,
+    TempRoot, compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync,
+    sync_dry, sync_mtime, update, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
 fn recs(dir: &Path) -> HashMap<String, FileRec> {
     load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+}
+
+/// Run the real binary and return the records it reported on stdout.
+///
+/// `--output json` throughout, so what a test reads is what a machine reads. The
+/// alternative — matching rendered text lines — makes every case a second,
+/// quieter statement of the vocabulary, and a reworded message fails a test whose
+/// point was the plan.
+fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(src)
+        .arg("--dst")
+        .arg(dst)
+        .arg("--output")
+        .arg("json")
+        .args(extra)
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "sync failed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    parse_ndjson(&out.stdout)
+}
+
+/// The `path` of every record with `event` `name`, in order.
+fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
+    recs.iter()
+        .filter(|r| r["event"] == name)
+        .map(|r| r["path"].as_str().expect("a path record has a path"))
+        .collect()
 }
 
 #[test]
@@ -24,8 +60,7 @@ fn run_sync_dry_run_writes_nothing() {
     wfile(&dst, "a.txt", b"old");
     wfile(&dst, "extra.txt", b"stay for now");
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let mut o = sync_dry(src.clone(), dst.clone());
     o.jobs = 2;
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
@@ -52,8 +87,7 @@ fn run_sync_dry_run_creates_no_cache() {
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let o = sync_dry(src.clone(), dst.clone());
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     for d in [&src, &dst] {
@@ -85,8 +119,7 @@ fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
     cmd_update(update(dst.clone()), &log()).unwrap();
     let (src_before, dst_before) = (recs(&src), recs(&dst));
 
-    let mut o = sync(src.clone(), dst.clone());
-    o.dry_run = true;
+    let mut o = sync_dry(src.clone(), dst.clone());
     o.common.ignore_cache = true;
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
@@ -132,6 +165,81 @@ fn run_sync_keep_extra_and_missing_only() {
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "common.txt"), b"v2-changed-and-longer");
     assert!(!dst.join("extra.txt").exists());
+}
+
+/// `--keep-extra` spares directories as well as files.
+///
+/// The flag name is not a promise about files only, and README's step 4 says the
+/// unknown-dir removal is skipped too. It was not: `remove_unknown_dirs` ran
+/// unconditionally, so a `--keep-extra` run deleted exactly the empty trees the
+/// user had asked it to leave. Worse, the deletion was invisible in the plan —
+/// the dry run announced `RMDIR` for the very directories a real run then
+/// removed, so the two agreed with each other and both contradicted the flag.
+#[test]
+fn run_sync_keep_extra_spares_extra_dirs_too() {
+    let t = TempRoot::new("keep_dirs");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "shared.txt", b"same");
+    wfile(&dst, "shared.txt", b"same");
+    wfile(&dst, "extra.txt", b"extra file");
+    wfile(&dst, "extradir/top.bin", b"x");
+    wfile(&dst, "extradir/nested/deep.bin", b"y");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.keep_extra = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(dst.join("extra.txt").is_file(), "extra file kept");
+    assert!(dst.join("extradir").is_dir(), "extra dir kept");
+    assert!(
+        dst.join("extradir/nested/deep.bin").is_file(),
+        "and its contents, since nothing was emptied"
+    );
+
+    // Without the flag the same tree is fully collected, dirs included.
+    let t2 = TempRoot::new("no_keep_dirs");
+    let src2 = t2.mkdirs("src");
+    let dst2 = t2.mkdirs("dst");
+    wfile(&src2, "shared.txt", b"same");
+    wfile(&dst2, "shared.txt", b"same");
+    wfile(&dst2, "extradir/nested/deep.bin", b"y");
+    assert_eq!(cmd_sync(sync(src2, dst2.clone()), &log()).unwrap(), 0);
+    assert!(!dst2.join("extradir").exists(), "collected by default");
+}
+
+/// A planned copy that lands on a dst *directory* clears it out of the way
+/// recursively, so that directory's whole subtree is gone before the rmdir pass
+/// could look at it. The plan must not promise removals that cannot happen: a
+/// dry run that counted `extradir` here would report an `rmdir` record the real
+/// run can never reach.
+///
+/// The fixture is deliberately the pathological one — src has `clash` as a
+/// *file*, dst has `clash/sub/deep/` as directories, so `clash/sub` and
+/// `clash/sub/deep` are unknown dirs that the copy wipes.
+#[test]
+fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
+    let t = TempRoot::new("wiped");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "clash", b"iamafile");
+    std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
+
+    let dry = run_binary(&src, &dst, &["--dry-run"]);
+    assert!(
+        !paths(&dry, "rmdir").iter().any(|p| p.starts_with("clash")),
+        "the subtree is wiped by the copy, not removed by the rmdir pass: {dry:?}"
+    );
+    assert_eq!(
+        common::summary_of(&dry)["rmdir"],
+        0,
+        "so the dry run must report zero, which is what the real run reaches: {dry:?}"
+    );
+
+    // And the real run agrees.
+    let real = run_binary(&src, &dst, &[]);
+    assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
+    assert!(dst.join("clash").is_file(), "and the copy happened");
 }
 
 #[test]
@@ -194,7 +302,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.case_sensitive = false;
-    dry.dry_run = true;
+    dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
         entry_names(&dst),
@@ -217,4 +325,66 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     same.common.case_sensitive = false;
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+}
+
+/// A case-only pair whose **content** also differs must be renamed *and* copied.
+///
+/// This is the one gate in this stage that catches a wrong planner case-flag, and
+/// it exists because the fixture above cannot. That fixture's two sides hold the
+/// same bytes, so a run that never learns a digest for the pair still concludes
+/// "equal" and reaches the right answer by luck. Same for the case-only pair in
+/// `sync_plan.rs`'s fixture table, whose row for this shape is `Case.txt`.
+///
+/// Here the bytes differ at the same length with the mtime pinned, so size+mtime
+/// agree and only a digest can tell them apart. If `plan_pairs` is handed
+/// `case_sensitive: true` it pairs by exact key *before* the rename pass
+/// collapses the pair, so neither side gets a digest; the rename then makes the
+/// keys match, `hashes_differ` stays silent on dst's absent digest and falls back
+/// to size+mtime, and the run reports success having copied nothing — leaving dst
+/// with the wrong bytes and the mirror quietly lying.
+///
+/// So this asserts the *outcome*, not the plan: a plan assertion would be
+/// satisfied by a `RENAME` line that is printed either way.
+#[test]
+fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
+    let t = TempRoot::new("caseren_content");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // Same length, different bytes. Different lengths would let size settle the
+    // pair, and the test would pass without a digest ever being needed.
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"PAYLOAD");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    // The dry run must plan the copy, so the failure is visible before it is
+    // committed to disk.
+    let mut dry = sync(src.clone(), dst.clone());
+    dry.common.case_sensitive = false;
+    dry.common.dry_run = true;
+    assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
+    assert_eq!(
+        rfile(&dst, "data.txt"),
+        b"PAYLOAD",
+        "a dry run copies nothing"
+    );
+
+    let mut real = sync(src.clone(), dst.clone());
+    real.common.case_sensitive = false;
+    assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
+
+    assert_eq!(
+        entry_names(&dst),
+        vec!["Data.txt".to_string()],
+        "dst adopts src casing"
+    );
+    assert_eq!(
+        rfile(&dst, "Data.txt"),
+        b"payload",
+        "and the bytes are src's, not the ones dst already had"
+    );
+    assert_eq!(
+        cmd_compare(compare(src, dst), &log()).unwrap(),
+        0,
+        "converged"
+    );
 }

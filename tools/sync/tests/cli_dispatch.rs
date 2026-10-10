@@ -4,6 +4,7 @@ mod common;
 
 use common::{TempRoot, rfile, wfile};
 use girsync::cli::{Cli, Cmd, CommonArgs, TrustArgs};
+use girsync::report::OutputFormat;
 use girsync::run;
 
 #[test]
@@ -15,16 +16,21 @@ fn run_cli_dispatch_update_compare_sync() {
     wfile(&dst, "a.txt", b"bbb");
 
     let common = || CommonArgs {
-        hash: common::md5arg(),
+        hash_all_of: common::md5arg(),
+        hash_any_of: vec![],
+        no_trust_size: false,
+        no_trust_mtime: false,
         include: vec![],
         exclude: vec![],
         case_sensitive: true,
         max_depth: 10,
         ignore_cache: false,
+        dry_run: false,
     };
     let mkcli = |cmd| Cli {
         log_level: "error".to_string(),
         log_file: None,
+        output: OutputFormat::Text,
         cmd,
     };
 
@@ -65,7 +71,6 @@ fn run_cli_dispatch_update_compare_sync() {
         dst: dst.clone(),
         missing_only: false,
         keep_extra: false,
-        dry_run: false,
         jobs: 1,
         trust: TrustArgs::default(),
         common: common(),
@@ -82,6 +87,39 @@ fn run_cli_dispatch_update_compare_sync() {
     }))
     .unwrap();
     assert_eq!(code, 0);
+
+    // `--output` is a global flag rather than a per-command one, so it reaches
+    // every subcommand through the same `Cli` -> `LogCtx` path. Dispatching with
+    // it set must not change any verdict; it only changes how the report renders.
+    let json_cli = |cmd| Cli {
+        output: OutputFormat::Json,
+        ..mkcli(cmd)
+    };
+    wfile(&src, "later.txt", b"added after the first sync");
+    assert_eq!(
+        run(json_cli(Cmd::CompareSelf {
+            dir: src.clone(),
+            no_trust_cached_hashes: false,
+            common: common(),
+        }))
+        .unwrap(),
+        4,
+        "a JSON run reaches the same verdict"
+    );
+    assert_eq!(
+        run(json_cli(Cmd::Sync {
+            src: src.clone(),
+            dst: dst.clone(),
+            missing_only: false,
+            keep_extra: false,
+            jobs: 1,
+            trust: TrustArgs::default(),
+            common: common(),
+        }))
+        .unwrap(),
+        0
+    );
+    assert_eq!(rfile(&dst, "later.txt"), b"added after the first sync");
 
     let _ = t.root();
 }

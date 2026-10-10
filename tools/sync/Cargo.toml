@@ -39,3 +39,6 @@ redb = "4.3.0"
 # so the crate the tests poke at directly is repeated here.
 [dev-dependencies]
 md5 = "0.7"
+# The stdout assertions read `--output json` records, so they build the expected
+# ones with `json!` rather than comparing rendered text.
+serde_json = "1"

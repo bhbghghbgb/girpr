@@ -5,8 +5,9 @@
 
 mod common;
 
-use common::{TempRoot, log, rw};
+use common::{TempRoot, log, parse_ndjson, rw};
 use girsync::cache::{load_all_records, open_db};
+use sha2::Digest;
 use std::collections::HashMap;
 
 fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json::Value {
@@ -18,6 +19,18 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
+/// A legacy sled DB, holding exactly what the case below needs.
+///
+/// **Both file rows carry every algorithm the case requests**, and that is
+/// load-bearing rather than incidental. The coverage rule says a record side must
+/// be able to supply every requested algorithm for every undecided pair, so a row
+/// holding only `md5` makes the run fail — which is the *correct* answer, not a
+/// converter bug. A fixture spread one algorithm per row would be uncoverable by
+/// accident rather than on purpose.
+///
+/// The `blake3` row is the other point of the case: an algorithm this crate has
+/// never heard of must survive conversion untouched and must not affect a diff that
+/// never asks for it.
 fn build_sled_db(dir: &std::path::Path) {
     let db_path = dir.join("legacy-cache");
     let db = sled::open(&db_path).unwrap();
@@ -30,13 +43,20 @@ fn build_sled_db(dir: &std::path::Path) {
         .unwrap(),
     )
     .unwrap();
-    let md5hex = format!("{:x}", md5::compute(b"hello"));
     db.insert(
         "a.txt",
         serde_json::to_vec(&old_rec(
             "file",
             5,
-            [("md5".to_string(), md5hex.clone())].into_iter().collect(),
+            [
+                ("md5".to_string(), format!("{:x}", md5::compute(b"hello"))),
+                (
+                    "sha256".to_string(),
+                    format!("{:x}", sha2::Sha256::digest(b"hello")),
+                ),
+            ]
+            .into_iter()
+            .collect(),
         ))
         .unwrap(),
     )
@@ -48,6 +68,7 @@ fn build_sled_db(dir: &std::path::Path) {
             "file",
             0,
             [
+                ("md5".to_string(), format!("{:x}", md5::compute(b""))),
                 (
                     "sha256".to_string(),
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
@@ -153,5 +174,61 @@ fn convert_rejects_missing_source() {
     assert!(
         girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
             .is_err()
+    );
+}
+
+/// The converter reports through the same writer as `girsync`, so `--output json`
+/// means the same thing in both binaries and a caller parsing one can parse the
+/// other. Asserted through the binary, because that is where the flag's parsing
+/// and its reporting live.
+#[test]
+fn the_converter_reports_json_records_on_stdout() {
+    let t = TempRoot::new("convert_json");
+    let work = t.mkdirs("w");
+    build_sled_db(&work);
+    let src = work.join("legacy-cache");
+    let dst = work.join("girpr-cache");
+
+    let run = |extra: &[&str]| -> (i32, String, String) {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sled2redb"))
+            .arg(&src)
+            .arg(&dst)
+            .args(extra)
+            .output()
+            .expect("spawn sled2redb");
+        (
+            out.status.code().expect("sled2redb exits with a code"),
+            String::from_utf8(out.stdout).expect("utf-8"),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them. The
+    // count tracks the fixture: `build_sled_db` gives every row both requested
+    // algorithms so the converted record can answer a `--hash md5 --hash sha256`
+    // audit, and `blake3` is the extra one that must survive untouched.
+    let want = serde_json::json!({"event": "converted", "src": src.display().to_string(),
+                                 "dst": dst.display().to_string(), "files": 2, "dirs": 1,
+                                 "hashes": 5});
+
+    let (code, stdout, stderr) = run(&["--output", "json"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(parse_ndjson(stdout.as_bytes()), vec![want.clone()]);
+
+    // The same record, text-rendered, and text is the default.
+    let (code, stdout, stderr) = run(&["--force", "--output", "text"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "converted src={} dst={} files=2 dirs=1 hashes=5\n",
+            src.display(),
+            dst.display()
+        )
+    );
+    let (code, stdout, stderr) = run(&["--force"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.starts_with("converted src="),
+        "text is the default: {stdout}"
     );
 }

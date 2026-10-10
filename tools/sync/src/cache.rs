@@ -502,8 +502,8 @@ impl CacheDb {
 /// transaction and are committed periodically — every `max_ops` operations,
 /// every `max_bytes` of `put` file content, or every `max_interval` of wall
 /// time, whichever comes first — plus once more at
-/// [`commit`](CacheWrite::commit). Reads see the handle's own pending
-/// writes, mirroring the old immediate-visibility semantics.
+/// [`commit`](CacheWrite::commit). Reads see the handle's own pending writes, so a
+/// write is visible to the writer before it is visible to anyone else.
 pub struct CacheWrite<'a> {
     db: &'a Database,
     txn: Option<redb::WriteTransaction>,
