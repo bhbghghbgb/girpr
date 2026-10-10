@@ -116,6 +116,31 @@ pub struct CommonArgs {
     /// work done.
     #[arg(long, default_value_t = false)]
     pub why: bool,
+    /// Also report the pairs that came out **equal**: one `IDENTICAL` record each,
+    /// with its own `why=` tag.
+    ///
+    /// The complement of the diff report, for a caller that wants to account for every
+    /// path rather than only the differing ones — "is this file in step, or did the
+    /// tool simply not look at it" is not a question the `CHANGED` list can answer.
+    ///
+    /// **Default off**, and for a real reason rather than tidiness: this is one record
+    /// per file on both sides, so on a matching tree it is the *entire* file list. It
+    /// clutters a human read and dominates a parsed stream.
+    ///
+    /// Reports what the diff already concluded and changes nothing about it:
+    ///
+    /// - a pair that came out equal is **not** a difference, so `total_diff` and the
+    ///   exit code are unaffected — a clean tree still exits `0` with the flag on;
+    /// - `SUMMARY` gains `identical=N` only when this flag is passed, so an unflagged
+    ///   run's output is byte-identical to one from before the flag existed;
+    /// - the tags come from the same `--why` vocabulary, and the two flags are
+    ///   independent — either alone is legal, together is legal.
+    ///
+    /// Independent of `--why` on purpose: a parser asking "which files are in step"
+    /// wants the list, and one asking "why is this file different" wants the reason.
+    /// Neither implies the other.
+    #[arg(long, default_value_t = false)]
+    pub show_identical: bool,
     /// Only sync paths matching this glob; repeatable.
     #[arg(long = "include")]
     pub include: Vec<String>,

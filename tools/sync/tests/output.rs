@@ -136,8 +136,9 @@ fn compare_json_is_the_verdict_the_library_builds() {
         },
         o.common.stat,
         o.common.case_sensitive,
+        false,
     );
-    let lib: Vec<Value> = girsync::report::verdict(&diff, false)
+    let lib: Vec<Value> = girsync::report::verdict(&diff, false, false)
         .iter()
         .map(|rec| rec.json())
         .collect();

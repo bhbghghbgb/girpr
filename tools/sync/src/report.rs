@@ -315,7 +315,20 @@ impl Report {
 ///
 /// A `CHANGED` path with no recorded reason prints without the field rather than
 /// with an empty one, so `why=` is never a value a parser has to special-case.
-pub fn verdict(diff: &Diff, why: bool) -> Vec<Record> {
+///
+/// ## `show_identical`
+///
+/// `show_identical` adds one `IDENTICAL` record per pair that came out equal,
+/// each with its own reason, and an `identical=N` field on the `SUMMARY`. It
+/// reports what is already in [`Diff::identical`] and computes nothing: the bucket
+/// is filled by [`crate::diff::diff_maps`] only when asked, so an unflagged caller
+/// has no equal set to print and this flag changes no verdict.
+///
+/// The field is conditional rather than always present so that an unflagged run
+/// stays byte-identical to one from before the flag existed. A consumer reading
+/// `SUMMARY` must therefore treat `identical` as optional, which is the same
+/// treatment `output`-format-dependent fields already get.
+pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
     let mut out: Vec<Record> = Vec::new();
     for r in &diff.missing {
         out.push(Record::path("MISSING", r));
@@ -336,15 +349,37 @@ pub fn verdict(diff: &Diff, why: bool) -> Vec<Record> {
     for (a, b) in &diff.case_mismatch {
         out.push(Record::pair("CASE-MISMATCH", "<=>", "src", a, "dst", b));
     }
-    out.push(
-        Record::keyed("SUMMARY")
-            .put("missing", diff.missing.len())
-            .put("extra", diff.extra.len())
-            .put("changed", diff.changed.len())
-            .put("type_conflict", diff.type_conflict.len())
-            .put("case_mismatch", diff.case_mismatch.len())
-            .put("total_diff", diff.total()),
-    );
+    // The equal set, between the differences and the summary. A directory on both
+    // sides is in here too: leaving it out would make the flag's output look
+    // arbitrarily partial, and "presence only" is a real answer to "are these in
+    // step".
+    //
+    // Gated on `show_identical` rather than on the bucket being non-empty. The
+    // bucket is empty whenever the diff was not asked for it, so the two usually
+    // agree — but a caller that fills `Diff::identical` by hand and passes the flag
+    // off must get the flag's answer, and a caller that passes the flag on against an
+    // empty bucket must get `identical=0` rather than a missing field.
+    if show_identical {
+        for r in &diff.identical {
+            let rec = Record::path("IDENTICAL", r);
+            out.push(match diff.why_tag(r) {
+                Some(tag) if why => rec.put("why", tag),
+                _ => rec,
+            });
+        }
+    }
+    let mut summary = Record::keyed("SUMMARY")
+        .put("missing", diff.missing.len())
+        .put("extra", diff.extra.len())
+        .put("changed", diff.changed.len())
+        .put("type_conflict", diff.type_conflict.len())
+        .put("case_mismatch", diff.case_mismatch.len());
+    if show_identical {
+        summary = summary.put("identical", diff.identical.len());
+    }
+    // `total_diff` last and last-but-one in the meaning too: it counts differences
+    // only, so `identical` never reaches it.
+    out.push(summary.put("total_diff", diff.total()));
     out
 }
 

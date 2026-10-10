@@ -154,6 +154,15 @@ pub struct Diff {
     pub type_conflict: Vec<String>,
     /// Same path ignoring case but different casing (insensitive mode only).
     pub case_mismatch: Vec<(String, String)>,
+    /// Pairs found equal. **Only populated when the caller asks** — see
+    /// `want_identical` in [`diff_maps`].
+    ///
+    /// Gated rather than always filled because an always-populated field would make
+    /// [`Self::total`] and [`Self::is_empty`] wrong *by default*, and `total()` is
+    /// what feeds the exit code. A field whose emptiness changes the answer is a
+    /// field whose emptiness has to be load-bearing in three places at once; an
+    /// always-empty-unless-asked field is empty in exactly one.
+    pub identical: Vec<String>,
     /// The classification of every pair found on **both** sides, keyed by src path.
     ///
     /// **Not a bucket.** Nothing here counts: `total()` and `is_empty()` must not read
@@ -173,19 +182,27 @@ impl Diff {
     /// Number of differences that force a nonzero exit, ignoring case mismatches
     /// (which `compare` counts separately but which are still a difference).
     ///
-    /// Counts the four difference buckets and nothing else. [`Self::verdicts`] is
-    /// absent here deliberately rather than by oversight: it holds pairs that were
-    /// *equal* as well as pairs that were not, so counting it would make every
-    /// `--show-identical` run exit 4 on a clean tree.
+    /// Counts the four difference buckets **and nothing else**.
+    ///
+    /// [`Self::identical`] is absent here deliberately rather than by oversight, and
+    /// this is the most consequential line in the crate: `total()` feeds the exit
+    /// code, so counting the equal set would turn "these two trees are identical"
+    /// into exit `4` — the exact inverse of the truth, on the one run where the user
+    /// is most entitled to confidence. A pair that came out equal is the *absence* of
+    /// a difference, and a count of differences cannot include it.
+    ///
+    /// [`Self::verdicts`] is absent for the same reason: it holds equal pairs too.
     pub fn total(&self) -> usize {
         self.missing.len() + self.extra.len() + self.changed.len() + self.type_conflict.len()
     }
 
     /// True when nothing at all differs.
     ///
-    /// Like [`Self::total`], blind to [`Self::verdicts`]: "nothing differs" and "we
-    /// have nothing to report" are different questions, and only the first decides
-    /// the exit code.
+    /// Like [`Self::total`], blind to [`Self::identical`] and [`Self::verdicts`].
+    /// This one is a separate predicate rather than a call to `total()` because it also
+    /// consults `case_mismatch`, which `total()` deliberately ignores — so the two can
+    /// be correct independently, and reporting "no differences" while a casing
+    /// difference exists would be its own kind of wrong answer.
     pub fn is_empty(&self) -> bool {
         self.total() == 0 && self.case_mismatch.is_empty()
     }
@@ -312,17 +329,21 @@ pub fn pair_verdict(
 /// nobody computed. One predicate is what makes that unrepresentable rather than
 /// merely tested for.
 ///
-/// Each both-sides pair is classified by [`pair_verdict`] — one value, of which only
-/// [`Verdict::is_changed`] decides the bucket here. The rest of the classification is
-/// what `--why` prints and what `--show-identical` buckets, so it is produced here
-/// whether or not anything asks for it: a diff that only computed a reason when a
-/// flag was on would be two diffs.
+/// Each both-sides pair is classified by [`pair_verdict`] — one value, of which
+/// [`Verdict::is_changed`] and [`Verdict::is_identical`] decide the buckets here. The
+/// classification itself is produced whether or not anything asks for it: a diff
+/// that only computed a reason when a flag was on would be two diffs.
+///
+/// `want_identical` fills [`Diff::identical`], and only that. It is off by default
+/// because the flag is — one record per equal file is a real cost in output volume,
+/// and a caller who has not asked for it should not pay it or read it.
 pub fn diff_maps(
     src: &HashMap<String, EffRec>,
     dst: &HashMap<String, EffRec>,
     required: &Required,
     stat: StatTrust,
     case_sensitive: bool,
+    want_identical: bool,
 ) -> Diff {
     let mut d = Diff::default();
     if case_sensitive {
@@ -345,6 +366,8 @@ pub fn diff_maps(
                         let v = pair_verdict(stat, required, s, t, k);
                         if v.is_changed() {
                             d.changed.push(k.clone());
+                        } else if want_identical {
+                            d.identical.push(k.clone());
                         }
                         d.verdicts.insert(k.clone(), v);
                     }
@@ -382,6 +405,8 @@ pub fn diff_maps(
                         let v = pair_verdict(stat, required, s, t, srel);
                         if v.is_changed() {
                             d.changed.push((*srel).clone());
+                        } else if want_identical {
+                            d.identical.push((*srel).clone());
                         }
                         d.verdicts.insert((*srel).clone(), v);
                     }
@@ -395,6 +420,7 @@ pub fn diff_maps(
     d.changed.sort();
     d.type_conflict.sort();
     d.case_mismatch.sort();
+    d.identical.sort();
     d
 }
 

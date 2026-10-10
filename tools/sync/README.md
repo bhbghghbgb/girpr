@@ -58,8 +58,8 @@ trusting a half-written file.
 
 ```
 girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
 girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
@@ -338,8 +338,9 @@ names — read them by name, never by position.
 | event | emitted by | fields |
 | --- | --- | --- |
 | `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` (plus `why` on `changed`, with `--why`) |
+| `identical` | compare, compare-self | `path` — only with `--show-identical` |
 | `case-mismatch` | compare, compare-self | `src`, `dst` |
-| `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` |
+| `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` (plus `identical` with `--show-identical`) |
 | `update` | update | `dir`, `files`, `dirs`, `algos` |
 | `rename` | sync | `from`, `to` |
 | `mkdir` / `fix-dir` / `delete` / `copy` / `rmdir` | sync | `path` |
@@ -360,6 +361,39 @@ SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2
 {"event":"changed","path":"a.txt"}
 {"changed":1,"event":"summary","extra":1,"missing":0,"total_diff":2,"type_conflict":0,"case_mismatch":0}
 ```
+
+### `--show-identical`
+
+The complement of the diff report: report the pairs that came out **equal**, one
+`IDENTICAL` record each, with its own `why=` tag.
+
+```
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --show-identical --why
+MISSING a.txt
+IDENTICAL b.txt why=digest-matches:md5
+IDENTICAL c_dir why=dir-present
+SUMMARY missing=1 extra=0 changed=0 type_conflict=0 case_mismatch=0 identical=2 total_diff=1
+```
+
+A `CHANGED` list cannot answer *"is this file in step, or did the tool simply not
+look at it"* — that is the question this flag is for. It reports what the diff
+already concluded and changes none of it:
+
+- **A pair that came out equal is not a difference.** `total_diff` and the exit
+  code are unaffected, so a clean tree still exits `0` with the flag on. This is
+  the property to check first if you touch `Diff::total()`: counting the equal set
+  would turn "these trees are identical" into exit `4`, the exact inverse of the
+  truth.
+- **`SUMMARY` gains `identical=N` only with the flag**, so an unflagged run is
+  byte-identical to one from before the flag existed. A consumer must treat the
+  field as optional.
+- **Directories are included** (`IDENTICAL ... why=dir-present`). Dirs compare by
+  presence, so "in step" is a real answer for them; leaving them out would make
+  the flag's output look arbitrarily partial.
+
+**Default off**, and for a real reason rather than tidiness: this is one record per
+file on both sides, so on a matching tree it is the *entire* file list. It is
+independent of `--why` — either alone is legal, together is legal.
 
 ### `--why`
 
@@ -389,7 +423,8 @@ Three things worth knowing:
   tag names whatever settled the pair. A stat difference needs no digest at all, and
   mentioning the digest that was *skipped* would be reporting an effort, not a reason.
 - **Only `CHANGED` gets one.** `MISSING`, `EXTRA`, `TYPE-CONFLICT` and `CASE-MISMATCH`
-  are self-explanatory — the bucket name is the reason.
+  are self-explanatory — the bucket name is the reason. (`IDENTICAL` records get one
+  too, when both flags are passed.)
 - **`unverifiable` means "cannot tell", not "differs."** It is reported as `CHANGED`
   because a pair whose only evidence of difference was ignored cannot be called equal,
   and folding it into a stat tag would claim a difference the run was told not to trust.
@@ -749,9 +784,9 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why`: a
-  table of pair state -> classification -> reason tag, plus the flag's surface
-  through the real binary), `lazy.rs`
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why` and `--show-identical`: a
+  table of pair state -> classification -> reason tag, the two buckets' exclusions
+  from the exit code, and both flags' surface through the real binary), `lazy.rs`
   (per-fixture expected verdicts *and* expected read counts, each stated before
   the code it pins), `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick
   and its tiers, the per-path answer reaching the diff, and the flag surface

@@ -150,8 +150,15 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let (sm, dm) = (sm.map, dm.map);
     info!(src_entries = sm.len(), dst_entries = dm.len(), "diffing");
-    let diff = diff_maps(&sm, &dm, &plans.required, plans.stat, common.case_sensitive);
-    let code = report_diff(&diff, &log.report(), common.why);
+    let diff = diff_maps(
+        &sm,
+        &dm,
+        &plans.required,
+        plans.stat,
+        common.case_sensitive,
+        common.show_identical,
+    );
+    let code = report_diff(&diff, &log.report(), common.why, common.show_identical);
     info!(
         missing = diff.missing.len(),
         extra = diff.extra.len(),

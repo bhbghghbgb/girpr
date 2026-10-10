@@ -208,12 +208,17 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // keys. That is the third reason the plan has to precede the rename: a per-path
     // answer is only usable if the side it is keyed by is the side that does not
     // move.
+    // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
+    // step 4 gives it a plan print that takes the equal set only if asked. Passing
+    // `common.show_identical` here would fill a bucket nothing reads, which is the one
+    // cost `--show-identical` is meant to avoid by default.
     let diff = diff_maps(
         &sm,
         &dm,
         &plans.required,
         plans.stat,
         true, /* post-rename: exact keys */
+        false,
     );
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
     info!(

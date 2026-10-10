@@ -115,6 +115,7 @@ pub fn opts() -> CommonOpts {
         hash_mode: HashMode::default(),
         stat: StatTrust::default(),
         why: false,
+        show_identical: false,
         includes: vec![],
         excludes: vec![],
         case_sensitive: true,

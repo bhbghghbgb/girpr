@@ -239,8 +239,9 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         &plans.required,
         plans.stat,
         common.case_sensitive,
+        common.show_identical,
     );
-    let code = report_diff(&diff, &log.report(), common.why);
+    let code = report_diff(&diff, &log.report(), common.why, common.show_identical);
     info!(
         missing = diff.missing.len(),
         extra = diff.extra.len(),

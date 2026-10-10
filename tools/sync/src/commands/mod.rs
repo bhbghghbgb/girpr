@@ -31,10 +31,13 @@ use crate::report::Report;
 /// definition of a `CHANGED` record, not one in the printer and another in each
 /// test.
 ///
-/// `why` is threaded in and nothing else is: the exit code is computed from
-/// [`Diff`] below, never from the record stream, so the flag cannot reach it.
-pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool) -> i32 {
-    for rec in verdict(diff, why) {
+/// The reporting flags are threaded in and nothing else is: the exit code is computed
+/// from [`Diff`] below, never from the record stream, so neither `--why` nor
+/// `--show-identical` can reach it. That is the property that lets a clean tree with
+/// `--show-identical` stay exit `0`, and it is why the two flags stop here rather than
+/// being read off the emitted records.
+pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool, show_identical: bool) -> i32 {
+    for rec in verdict(diff, why, show_identical) {
         report.emit(rec);
     }
     if diff.is_empty() { 0 } else { 4 }

@@ -52,7 +52,7 @@ impl Run {
         // `why: false` throughout this file: laziness is asserted on *which* pairs
         // were read, and a `why` field would be a reporting difference on records
         // whose content is not what's under test. `tests/why.rs` covers the flag.
-        verdict(&self.diff, false)
+        verdict(&self.diff, false, false)
             .iter()
             .map(|r| r.json())
             .collect()
@@ -114,6 +114,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             &plans.required,
             plans.stat,
             common.case_sensitive,
+            false,
         ),
         hashed: sm.stats.hashed + dm.stats.hashed,
         src_hashed: sm.stats.hashed,
@@ -249,6 +250,7 @@ fn self_audit(dir: &Path) -> Run {
             &plans.required,
             plans.stat,
             common.case_sensitive,
+            false,
         ),
         hashed: disk.stats.hashed,
         src_hashed: plans.src.pending().len(),
@@ -1031,8 +1033,9 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
         },
         StatTrust::default(),
         true,
+        false,
     );
-    let reported: Vec<Value> = verdict(&d, false).iter().map(|r| r.json()).collect();
+    let reported: Vec<Value> = verdict(&d, false, false).iter().map(|r| r.json()).collect();
     assert_eq!(
         reported,
         [
