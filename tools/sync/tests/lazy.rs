@@ -31,6 +31,7 @@ use girsync::effective::{
 };
 use girsync::planner::{Required, SideRequest, StatTrust, plan_pairs};
 use girsync::report::verdict;
+use girsync::rw::RwSide;
 use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
 use serde_json::{Value, json};
 
@@ -105,8 +106,22 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
         common.stat,
     )
     .unwrap();
-    let sm = resolve_side(&mut s, mode(trust.no_trust_src), &plans.src).unwrap();
-    let dm = resolve_side(&mut d, mode(trust.no_trust_dst), &plans.dst).unwrap();
+    let sm = resolve_side(
+        &mut s,
+        mode(trust.no_trust_src),
+        &plans.src,
+        RwSide::Src,
+        &serial_rw(),
+    )
+    .unwrap();
+    let dm = resolve_side(
+        &mut d,
+        mode(trust.no_trust_dst),
+        &plans.dst,
+        RwSide::Dst,
+        &serial_rw(),
+    )
+    .unwrap();
     Run {
         diff: diff_maps(
             &sm.map,
@@ -241,7 +256,16 @@ fn self_audit(dir: &Path) -> Run {
         common.stat,
     )
     .unwrap();
-    let disk = resolve_folder(dir, &cold, mode, &disk_a, &plans.dst).unwrap();
+    let disk = resolve_folder(
+        dir,
+        &cold,
+        mode,
+        &disk_a,
+        &plans.dst,
+        RwSide::Dst,
+        &serial_rw(),
+    )
+    .unwrap();
     let rec = resolve_record(&rec);
     Run {
         diff: diff_maps(
@@ -820,8 +844,26 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
         common.stat,
     )
     .unwrap();
-    let sm = resolve_folder(src, &src_db, mode(trust.no_trust_src), &src_a, &plans.src).unwrap();
-    let dm = resolve_folder(dst, &dst_db, mode(trust.no_trust_dst), &dst_a, &plans.dst).unwrap();
+    let sm = resolve_folder(
+        src,
+        &src_db,
+        mode(trust.no_trust_src),
+        &src_a,
+        &plans.src,
+        RwSide::Src,
+        &serial_rw(),
+    )
+    .unwrap();
+    let dm = resolve_folder(
+        dst,
+        &dst_db,
+        mode(trust.no_trust_dst),
+        &dst_a,
+        &plans.dst,
+        RwSide::Dst,
+        &serial_rw(),
+    )
+    .unwrap();
     (sm.stats.hashed, dm.stats.hashed)
 }
 

@@ -7,6 +7,7 @@ use crate::config::{LogCtx, ScanMode, UpdateOpts};
 use crate::effective::{open_folder_cache, resolve_folder, scan_stat_only};
 use crate::planner::{HashMode, HashPlan};
 use crate::report::update_summary;
+use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
 /// Rebuild `<dir>/girpr-cache` from scratch: stat + hash every file, record
@@ -88,6 +89,10 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
              one would fail the next comparison"
         );
     }
+    // One side, so there is nothing to overlap with — but the resolve still goes
+    // through the limiter, so `update`'s hashing is bounded by the same budget as
+    // every other phase. `serial()` until the CLI swap lands.
+    let rw = RwRuntime::serial()?;
     let db = open_folder_cache(&dir, &common, mode, true)?;
 
     // The three phases, run here rather than inside a helper, which is the shape
@@ -110,7 +115,10 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         digests = plan.digest_count(),
         "planned"
     );
-    let resolved = resolve_folder(&dir, &db, mode, &phase_a, &plan)?;
+    // `update` has no other side, so its files are all "src" as far as a
+    // per-side budget is concerned — the label only exists to pick a counter, and
+    // under one shared counter it makes no difference.
+    let resolved = resolve_folder(&dir, &db, mode, &phase_a, &plan, RwSide::Src, &rw)?;
 
     // One stats value, and it is complete. `resolve_folder` carries phase A's
     // `live`/`files`/`dirs`/`pruned` forward and fills in the three counters phase C

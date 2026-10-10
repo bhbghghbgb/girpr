@@ -9,6 +9,7 @@ use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::planner::{HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
+use girsync::rw::{RwRuntime, RwSide};
 use girsync::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
@@ -153,6 +154,17 @@ pub fn scan(no_trust_cached_hashes: bool, dry_run: bool) -> ScanMode {
         no_trust_cached_hashes,
         dry_run,
     }
+}
+
+/// The limiter a test gets when concurrency is not what it is testing: strictly
+/// one rw operation at a time, which is what a command built for itself before
+/// the rw flags existed.
+///
+/// A `RwRuntime` rather than a thread count, so a test calling `resolve_folder`
+/// directly threads through exactly the same gate a command does and cannot
+/// accidentally exercise a shape no command produces.
+pub fn serial_rw() -> RwRuntime {
+    RwRuntime::serial().unwrap()
 }
 
 pub fn update(dir: PathBuf) -> UpdateOpts {
@@ -454,6 +466,8 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             dry_run: false,
         },
         &plans.src,
+        RwSide::Src,
+        &serial_rw(),
     )
     .unwrap();
     let dm = resolve_side(
@@ -463,6 +477,8 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             dry_run: false,
         },
         &plans.dst,
+        RwSide::Dst,
+        &serial_rw(),
     )
     .unwrap();
     (sm, dm)

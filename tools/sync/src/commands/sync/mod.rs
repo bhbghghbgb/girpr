@@ -52,6 +52,7 @@ mod plan;
 mod rename;
 
 use anyhow::{Result, bail};
+use std::num::NonZeroUsize;
 use tracing::info;
 
 use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
@@ -59,10 +60,11 @@ use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
     SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
-    scan_stat_only,
+    resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{SideRequest, plan_pairs};
 use crate::report::verdict;
+use crate::rw::{RwLimits, RwRuntime, RwSide};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -116,6 +118,22 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
 
     validate_inputs(&src, &dst, jobs)?;
+
+    // One runtime for the whole run: one limiter, one worker pool. A runtime per
+    // phase would be two limiters wearing one flag's name, and two pools would
+    // each size themselves from the same number.
+    //
+    // Still built from `jobs`, so this step changes nothing a user can observe:
+    // one shared permit per copy worker *is* the old pool sizing, so the copy
+    // phase is unchanged. What changes is the hash phase, which was a sequential
+    // loop and is now `jobs` reads deep. The CLI swap lands next, and the
+    // 4 -> 1 default change belongs to *that* commit, where it can be loud about
+    // it rather than arriving here as a silent four-fold slowdown.
+    //
+    // `expect` is sound because `validate_inputs` refuses `jobs == 0` above.
+    let rw = RwRuntime::new(RwLimits::Shared(
+        NonZeroUsize::new(jobs).expect("validate_inputs refuses jobs == 0"),
+    ))?;
 
     // 1. Backups and snapshots, before either cache is touched.
     let src_db_path = src.join(CACHE_PREFIX);
@@ -214,10 +232,42 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // failure or a wrong file on a case-sensitive one. Planning pre-rename and
     // re-keying only here makes that unrepresentable, and it is why
     // `rename_to_src_casing` still takes resolved `EffRec` maps.
-    let sm = resolve_folder(&src, &src_db, src_mode, &src_a, &plans.src)?;
+    //
+    // The two resolves run at once. That is a no-op under one shared counter — the
+    // gate serialises them, which is why this is not a branch on the mode — and
+    // the point of a split limit, where src being read no longer waits for dst to
+    // finish being read. `ensure_distinct_sides` has already guaranteed the two
+    // caches are different files, so the two never touch one database.
+    let (src_res, dst_res) = resolve_sides_concurrently(
+        || {
+            resolve_folder(
+                &src,
+                &src_db,
+                src_mode,
+                &src_a,
+                &plans.src,
+                RwSide::Src,
+                &rw,
+            )
+        },
+        || {
+            resolve_folder(
+                &dst,
+                &dst_db,
+                dst_mode,
+                &dst_a,
+                &plans.dst,
+                RwSide::Dst,
+                &rw,
+            )
+        },
+    );
+    // src first, so the message a broken tree produces does not depend on which
+    // side's hash happened to fail sooner.
+    let sm = src_res?;
     info!(side = "src", hashed = sm.stats.hashed, "src map built");
     let sm = sm.map;
-    let dm = resolve_folder(&dst, &dst_db, dst_mode, &dst_a, &plans.dst)?;
+    let dm = dst_res?;
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
 
@@ -299,7 +349,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         dst_db: &dst_db,
         dm: &dm,
         common: &common,
-        jobs,
+        rw: &rw,
         report: &report,
     }
     .apply(&plan)?;

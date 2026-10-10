@@ -16,6 +16,7 @@ use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
 use crate::planner::HashPlan;
+use crate::rw::{RwRuntime, RwSide};
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::{elapsed_s, is_cache_rel, is_record_path};
 
@@ -563,12 +564,50 @@ pub fn scan_stat_only(
 /// costs no write: its row is already correct. A path that is hashed is written
 /// through [`merge_row`], which is the same write rule phase A used, so the two
 /// phases cannot spell it differently.
+///
+/// ## Two stages per window, and why they are not one
+///
+/// [`CacheWrite`] owns a live `redb::WriteTransaction`, so it is not `Sync` and
+/// must never be touched from a pool thread. So a window is **read** in parallel
+/// and then **written** in sequence:
+///
+/// 1. `pool.install`: every path in the window is hashed, each holding one permit
+///    on `side`'s counter. No cache handle is in scope.
+/// 2. the sequential loop: results are folded into the map and written through
+///    the batch handle, in the window's original order.
+///
+/// The `collect()` is over a slice, so it preserves index order. That is what
+/// makes stage 2's writes land in sorted order, and what makes the reported
+/// error the lowest-index one — a `collect::<Result<_, _>>()` would instead let
+/// rayon short-circuit and surface whichever failure happened to finish first,
+/// which is not reproducible.
+///
+/// Two promises changed shape here, and both deliberately:
+///
+/// - **Write order is still sorted; read order is not.** The old comment promised
+///   "a run reads the same paths in the same order every time", and that is gone:
+///   with more than one worker the reads interleave. What survives is the part
+///   that was load-bearing — the rows land in the same order every run, so the
+///   cache bytes are reproducible and so is the progress heartbeat.
+/// - **Durability is per-window rather than per-digest.**
+///   [`crate::cache::COMMIT_INTERVAL`] bounds how much hashing work an
+///   interruption can lose, and that only holds if a digest becomes durable
+///   shortly after it is computed. A window keeps it true and bounded; batching
+///   the whole phase until the last hash would keep all of it in memory and none
+///   of it on disk.
+///
+/// A window rather than one `collect()` over the whole pending set for a third
+/// reason: peak memory. Every pending file holds a live `HashMap<String,
+/// Vec<u8>>` until the batch writes it, which on a 200k-file tree is tens of MB
+/// of map structure the sequential form never allocated.
 pub fn resolve_folder(
     root: &Path,
     cache: &CacheDb,
     mode: ScanMode,
     phase_a: &SideScan<SideEntry>,
     plan: &HashPlan,
+    side: RwSide,
+    rw: &RwRuntime,
 ) -> Result<SideScan> {
     let ScanMode { dry_run, .. } = mode;
     let t_eff = std::time::Instant::now();
@@ -584,8 +623,9 @@ pub fn resolve_folder(
         Some(cache.begin_write()?)
     };
 
-    // Sorted, so a run reads the same paths in the same order every time and the
-    // progress heartbeat is reproducible.
+    // Sorted, so a window's **writes** land in the same order every run and the
+    // progress heartbeat is reproducible. The reads inside a window do not keep
+    // this order, and that is the promise that changed — see the doc comment.
     let mut pending: Vec<&String> = phase_a
         .map
         .iter()
@@ -597,40 +637,68 @@ pub fn resolve_folder(
     let mut map: HashMap<String, EffRec> = HashMap::new();
     let mut n_hashed = 0usize;
     let mut last_prog = std::time::Instant::now();
-    // Hashing and writing stay interleaved on purpose: `COMMIT_INTERVAL` bounds
-    // how much hashing work an interruption can lose, and that only holds if a
-    // digest becomes durable shortly after it is computed. Batching all the
-    // writes until after the last hash would keep the whole hash phase in
-    // memory and none of it on disk.
-    for (i, rel) in pending.iter().enumerate() {
-        let path = root.join(rel);
-        let algos = plan.get(rel);
-        let e = &phase_a.map[*rel];
-        debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
-        let computed =
-            hash_file(&path, algos).with_context(|| format!("hash {}", path.display()))?;
-        trace!(rel = %rel, algos = ?computed.keys().collect::<Vec<_>>(), "hashed");
-        let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
-        if let Some(w) = batch.as_mut() {
-            w.put(rel, &row)?;
+    let window = rw.window_size();
+    let total = pending.len();
+    for (w, chunk) in pending.chunks(window).enumerate() {
+        // Stage 1 — parallel, one permit per worker, no cache handle in scope.
+        //
+        // The permit is taken *around* the read rather than inside `hash_file`, so
+        // the gate stays a property of a phase and `hash_file` keeps the signature
+        // every other caller already has.
+        let computed: Vec<Result<HashMap<String, Vec<u8>>>> = rw.pool().install(|| {
+            use rayon::prelude::*;
+            chunk
+                .par_iter()
+                .map(|rel| {
+                    let _permit = rw.acquire(side);
+                    let path = root.join(rel);
+                    let algos = plan.get(rel);
+                    debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
+                    let r =
+                        hash_file(&path, algos).with_context(|| format!("hash {}", path.display()));
+                    trace!(
+                        rel = %rel,
+                        algos = ?r.as_ref().map(|h| h.keys().collect::<Vec<_>>()),
+                        "hashed"
+                    );
+                    r
+                })
+                .collect()
+        });
+
+        // Stage 2 — sequential, in the window's original order. The first `Err` in
+        // *index* order is the one that propagates, which is what keeps the
+        // reported path reproducible under any number of workers.
+        for (rel, computed) in chunk.iter().zip(computed) {
+            let computed = computed?;
+            let e = &phase_a.map[*rel];
+            let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
+            if let Some(w) = batch.as_mut() {
+                w.put(rel, &row)?;
+            }
+            map.insert(
+                (*rel).clone(),
+                EffRec {
+                    kind: "file".into(),
+                    size: row.size,
+                    mtime_ns: row.mtime_ns,
+                    hashes: row.hashes,
+                },
+            );
+            n_hashed += 1;
         }
-        map.insert(
-            (*rel).clone(),
-            EffRec {
-                kind: "file".into(),
-                size: row.size,
-                mtime_ns: row.mtime_ns,
-                hashes: row.hashes,
-            },
-        );
-        n_hashed += 1;
-        if (i + 1).is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
+
+        // Heartbeat per window, so it reports whole windows and `window_size` says
+        // how much of the run the counter spans.
+        if n_hashed.is_multiple_of(100) || n_hashed == total || last_prog.elapsed().as_secs() >= 5 {
             info!(
                 root = %root.display(),
-                done = i + 1,
-                total = pending.len(),
+                done = n_hashed,
+                total,
                 hashed = n_hashed,
                 cache_hit = 0,
+                window = w + 1,
+                window_size = window,
                 elapsed_s = t_eff.elapsed().as_secs_f64(),
                 "scan progress"
             );
@@ -943,11 +1011,22 @@ pub fn open_folder_cache(
 ///
 /// Dispatches on what the side *is*, not on whether its handle can write: a
 /// read-only folder still hashes freely, and a record cannot hash at all.
-pub fn resolve_side(opened: &mut OpenSide, mode: ScanMode, plan: &HashPlan) -> Result<SideScan> {
+///
+/// `side` is which side of the pair this is, and is only consulted under a split
+/// limit — under one shared counter both sides draw on the same gate. It is
+/// threaded in rather than inferred, because a [`Side::Record`] never reaches the
+/// hashing path that would need it.
+pub fn resolve_side(
+    opened: &mut OpenSide,
+    mode: ScanMode,
+    plan: &HashPlan,
+    side: RwSide,
+    rw: &RwRuntime,
+) -> Result<SideScan> {
     match &opened.side {
         Side::Folder(root) => {
             let root = root.clone();
-            resolve_folder(&root, &opened.cache, mode, &opened.phase_a, plan)
+            resolve_folder(&root, &opened.cache, mode, &opened.phase_a, plan, side, rw)
         }
         Side::Record(_) => Ok(resolve_record(&opened.phase_a)),
     }
@@ -1003,6 +1082,51 @@ fn cache_identity(side: &Side) -> PathBuf {
 fn display_path(p: &Path) -> String {
     let s = p.display().to_string();
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
+/// Resolve both sides of a pair at once, and report src's failure in preference
+/// to dst's.
+///
+/// Nothing here decides *whether* the two overlap — the limiter does. Under
+/// [`crate::RwLimits::Shared`] there is one counter, so the two hash phases take
+/// turns and this is the old sequential run with extra steps. Under a split limit
+/// each side has its own counter, so the two phases genuinely proceed at once,
+/// which is the entire point of the flag: on two separate physical drives, src
+/// being read no longer has to wait for dst to finish being read.
+///
+/// **Why this is sound.** [`ensure_distinct_sides`] already ran and guarantees the
+/// two sides are different cache files, and redb permits one writable handle per
+/// file — so the two resolves never touch the same database. Each takes its own
+/// batch handle from its own `CacheDb` before spawning, so the transaction
+/// lifetime never crosses a thread boundary.
+///
+/// **Why the error is src's.** Both sides can fail at once, and which one finished
+/// first is a function of I/O timing. Today the resolves are sequential, so src's
+/// failure is always the one reported; keeping that means two runs over the same
+/// broken tree print the same message. The cost is that a dst-only failure waits
+/// for src's to be seen, which is invisible — the run stops either way.
+///
+/// `std::thread::scope` rather than a detached spawn: both sides' borrows are live
+/// here, and a scoped thread cannot outlive them.
+pub fn resolve_sides_concurrently<S, D>(
+    src: impl FnOnce() -> Result<S> + Send,
+    dst: impl FnOnce() -> Result<D> + Send,
+) -> (Result<S>, Result<D>)
+where
+    S: Send,
+    D: Send,
+{
+    std::thread::scope(|scope| {
+        let src = scope.spawn(src);
+        let dst = dst();
+        // A panic on either side is a bug, not a run outcome: re-raise it with its
+        // original payload rather than folding it into the `Result` the caller is
+        // about to match on, so the backtrace that names the bug survives.
+        let src = src
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+        (src, dst)
+    })
 }
 
 #[cfg(test)]

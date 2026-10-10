@@ -33,6 +33,7 @@ use crate::effective::EffRec;
 use crate::filter::is_excluded;
 use crate::hash::hash_file;
 use crate::report::{Record, Report};
+use crate::rw::RwRuntime;
 use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
@@ -47,7 +48,14 @@ pub(super) struct Applier<'a> {
     /// planner already decided which directories to remove (`Plan::rmdir`).
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
-    pub jobs: usize,
+    /// The run's rw limits and the pool they size.
+    ///
+    /// A reference rather than a count, because a count is only half of what the
+    /// copy phase needs: the pool sizes the workers and the limiter caps how many
+    /// may be *doing I/O*, which under a split limit is not the same number as the
+    /// worker count. `&'a RwRuntime` rather than an owned one so a phase cannot
+    /// quietly build a second pool from the same flags.
+    pub rw: &'a RwRuntime,
     /// Where the plan's records go, and in what format.
     ///
     /// The apply phases announce every action they take, and `--dry-run` reports
@@ -211,8 +219,23 @@ impl Applier<'_> {
     }
 
     /// Copy every planned src file across, in parallel, returning the count.
+    ///
+    /// The pool is the run's, not one built here: two pools sized from the same
+    /// flags would mean twice the threads the user asked for, and a limit that
+    /// bounds I/O while the pool decides how many workers exist is two knobs
+    /// pretending to be one.
+    ///
+    /// Each copy holds **both** permits for its whole life — the stream copy and
+    /// both verify re-hashes — because the file is not finished until it verifies.
+    /// Under a shared counter that is one permit; under a split counter it is one
+    /// per side, which is what admits `min(src, dst)` concurrent copies.
     fn copy_files(&self, plan: &Plan) -> Result<usize> {
-        info!(files = plan.copy.len(), jobs = self.jobs, "copy start");
+        info!(
+            files = plan.copy.len(),
+            rw = %self.rw.describe(),
+            threads = self.rw.pool().current_num_threads(),
+            "copy start"
+        );
         let copy_total = plan.copy.len();
         let copy_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let copy_done_cb = copy_done.clone();
@@ -226,17 +249,17 @@ impl Applier<'_> {
         //
         // **It cannot deadlock.** It is a leaf: nothing is called while it is held,
         // no other lock is ever held while waiting for it, and it is released before
-        // the worker returns to the pool.
+        // the worker returns to the pool. It is also strictly *inside* the rw
+        // permit, which is held across the whole copy — so a copy waiting for the
+        // emit lock is never also holding a permit some other copy needs, and the
+        // permit wait-for graph stays the `src -> dst` DAG it has to be.
         let emit = std::sync::Mutex::new(());
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(self.jobs)
-            .build()
-            .context("build thread pool")?;
-        let results = pool.install(|| {
+        let results = self.rw.pool().install(|| {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
                 .map(|item| {
+                    let _rw = self.rw.acquire_copy();
                     debug!(rel = %item.rel, "copy start");
                     let r = copy_one(self.src, self.dst, &item.rel, &self.common.algos);
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

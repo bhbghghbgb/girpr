@@ -59,6 +59,7 @@ use crate::effective::{
     SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
 };
 use crate::planner::{SideRequest, plan_pairs};
+use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
 use super::report_diff;
@@ -217,7 +218,12 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         disk_pending = plans.dst.by_rel.len(),
         "planned"
     );
-    let disk = resolve_folder(&dir, &cold, mode, &disk_a, &plans.dst)?;
+    // Only the disk side reads anything — `resolve_record` is a map copy with no
+    // filesystem behind it — so there is nothing here for a concurrent resolve to
+    // overlap with. It still goes through the limiter, so the disk side's hashing
+    // is bounded by the run's budget. `serial()` until the CLI swap lands.
+    let rw = RwRuntime::serial()?;
+    let disk = resolve_folder(&dir, &cold, mode, &disk_a, &plans.dst, RwSide::Dst, &rw)?;
     let rec = resolve_record(&rec);
     info!(
         side = "disk",
