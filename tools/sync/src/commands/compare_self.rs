@@ -240,7 +240,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         plans.stat,
         common.case_sensitive,
     );
-    let code = report_diff(&diff, &log.report());
+    let code = report_diff(&diff, &log.report(), common.why);
     info!(
         missing = diff.missing.len(),
         extra = diff.extra.len(),

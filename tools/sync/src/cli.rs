@@ -94,6 +94,28 @@ pub struct CommonArgs {
     /// The cost is a read of every mtime-changed pair on both sides.
     #[arg(long, default_value_t = false)]
     pub no_trust_mtime: bool,
+    /// Say **why** each `CHANGED` record is `CHANGED`: add `why=<tag>` to it.
+    ///
+    /// A `CHANGED` line tells you *that* the two sides disagree; this tells you which
+    /// check decided it. The tag is a short machine-readable string a parser can switch
+    /// on — `stat-size`, `stat-mtime`, `stat-size+stat-mtime`, `digest-differs:<algos>`,
+    /// `digest-matches:<algos>`, `stat-match`, `unverifiable:<fields>`, `dir-present`
+    /// — split on the first `:` if there is detail after it.
+    ///
+    /// One tag per **decision**, never per check. The diff is a short circuit, so the
+    /// tag names whatever settled the pair: a stat difference needs no digest at all, and
+    /// mentioning the digest that was skipped would be reporting an effort rather than a
+    /// reason.
+    ///
+    /// Only `CHANGED` gets one. `MISSING`, `EXTRA`, `TYPE-CONFLICT` and `CASE-MISMATCH`
+    /// are self-explanatory — the bucket name is the reason — and a tag there would be
+    /// an explanation nobody asked for.
+    ///
+    /// **Default off**, and an unflagged run is byte-identical to a run without this
+    /// flag. It changes nothing but the text: not the exit code, not the counts, not the
+    /// work done.
+    #[arg(long, default_value_t = false)]
+    pub why: bool,
     /// Only sync paths matching this glob; repeatable.
     #[arg(long = "include")]
     pub include: Vec<String>,

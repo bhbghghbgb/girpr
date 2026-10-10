@@ -154,18 +154,50 @@ pub struct Diff {
     pub type_conflict: Vec<String>,
     /// Same path ignoring case but different casing (insensitive mode only).
     pub case_mismatch: Vec<(String, String)>,
+    /// The classification of every pair found on **both** sides, keyed by src path.
+    ///
+    /// **Not a bucket.** Nothing here counts: `total()` and `is_empty()` must not read
+    /// it, because a pair that came out equal is not a difference and counting one
+    /// would turn a clean tree into exit 4. It is the reason behind [`Self::changed`]
+    /// rather than a sixth list of paths, and [`crate::report::verdict`] reads it to
+    /// put a `why=` on the `CHANGED` records.
+    ///
+    /// Filled from the same [`pair_verdict`] value the bucket is filled from, so a
+    /// `CHANGED` record and the tag printed for it cannot disagree — one decision, read
+    /// twice, rather than a classification and a bucket that could each be computed
+    /// separately.
+    pub verdicts: HashMap<String, Verdict>,
 }
 
 impl Diff {
     /// Number of differences that force a nonzero exit, ignoring case mismatches
     /// (which `compare` counts separately but which are still a difference).
+    ///
+    /// Counts the four difference buckets and nothing else. [`Self::verdicts`] is
+    /// absent here deliberately rather than by oversight: it holds pairs that were
+    /// *equal* as well as pairs that were not, so counting it would make every
+    /// `--show-identical` run exit 4 on a clean tree.
     pub fn total(&self) -> usize {
         self.missing.len() + self.extra.len() + self.changed.len() + self.type_conflict.len()
     }
 
     /// True when nothing at all differs.
+    ///
+    /// Like [`Self::total`], blind to [`Self::verdicts`]: "nothing differs" and "we
+    /// have nothing to report" are different questions, and only the first decides
+    /// the exit code.
     pub fn is_empty(&self) -> bool {
         self.total() == 0 && self.case_mismatch.is_empty()
+    }
+
+    /// The reason tag for `rel`, if the diff classified it.
+    ///
+    /// `None` for a path with no classification — a one-sided path, a type conflict,
+    /// or a `CHANGED` entry added to the bucket by a caller rather than by the diff.
+    /// The reporter treats that as "no reason to give" rather than inventing one,
+    /// because a tag nobody derived is worse than no tag.
+    pub fn why_tag(&self, rel: &str) -> Option<String> {
+        self.verdicts.get(rel).map(Verdict::why_tag)
     }
 }
 
@@ -309,8 +341,12 @@ pub fn diff_maps(
                 (Some(s), Some(t)) => {
                     if s.kind != t.kind {
                         d.type_conflict.push(k.clone());
-                    } else if pair_verdict(stat, required, s, t, k).is_changed() {
-                        d.changed.push(k.clone());
+                    } else {
+                        let v = pair_verdict(stat, required, s, t, k);
+                        if v.is_changed() {
+                            d.changed.push(k.clone());
+                        }
+                        d.verdicts.insert(k.clone(), v);
                     }
                 }
                 (None, None) => {}
@@ -342,8 +378,12 @@ pub fn diff_maps(
                     let t = &dst[*trel];
                     if s.kind != t.kind {
                         d.type_conflict.push((*srel).clone());
-                    } else if pair_verdict(stat, required, s, t, srel).is_changed() {
-                        d.changed.push((*srel).clone());
+                    } else {
+                        let v = pair_verdict(stat, required, s, t, srel);
+                        if v.is_changed() {
+                            d.changed.push((*srel).clone());
+                        }
+                        d.verdicts.insert((*srel).clone(), v);
                     }
                 }
                 (None, None) => {}

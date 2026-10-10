@@ -30,8 +30,11 @@ use crate::report::Report;
 /// That is also why printing and asserting read the same list: there is one
 /// definition of a `CHANGED` record, not one in the printer and another in each
 /// test.
-pub(super) fn report_diff(diff: &Diff, report: &Report) -> i32 {
-    for rec in verdict(diff) {
+///
+/// `why` is threaded in and nothing else is: the exit code is computed from
+/// [`Diff`] below, never from the record stream, so the flag cannot reach it.
+pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool) -> i32 {
+    for rec in verdict(diff, why) {
         report.emit(rec);
     }
     if diff.is_empty() { 0 } else { 4 }

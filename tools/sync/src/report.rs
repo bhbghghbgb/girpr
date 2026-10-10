@@ -300,7 +300,22 @@ impl Report {
 /// the same list, so what a test states and what a user sees cannot drift apart
 /// — there is one definition of a `CHANGED` line, not one in the printer and
 /// another in each test.
-pub fn verdict(diff: &Diff) -> Vec<Record> {
+///
+/// ## `why`
+///
+/// `why` adds a `why=<tag>` field to the `CHANGED` records and changes nothing
+/// else — not the record count, not the order, not the summary, and not the exit
+/// code, which is computed from [`Diff`] before this function is called.
+///
+/// It is a parameter rather than a second list of records because the two would
+/// have to agree, and two definitions of the same document is the thing this
+/// module exists to prevent. `MISSING`, `EXTRA`, `TYPE-CONFLICT` and
+/// `CASE-MISMATCH` never carry one: the bucket name is already the explanation,
+/// and a tag there would be an invention.
+///
+/// A `CHANGED` path with no recorded reason prints without the field rather than
+/// with an empty one, so `why=` is never a value a parser has to special-case.
+pub fn verdict(diff: &Diff, why: bool) -> Vec<Record> {
     let mut out: Vec<Record> = Vec::new();
     for r in &diff.missing {
         out.push(Record::path("MISSING", r));
@@ -309,7 +324,11 @@ pub fn verdict(diff: &Diff) -> Vec<Record> {
         out.push(Record::path("EXTRA", r));
     }
     for r in &diff.changed {
-        out.push(Record::path("CHANGED", r));
+        let rec = Record::path("CHANGED", r);
+        out.push(match diff.why_tag(r) {
+            Some(tag) if why => rec.put("why", tag),
+            _ => rec,
+        });
     }
     for r in &diff.type_conflict {
         out.push(Record::path("TYPE-CONFLICT", r));

@@ -58,8 +58,8 @@ trusting a half-written file.
 
 ```
 girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
 girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
@@ -337,7 +337,7 @@ names — read them by name, never by position.
 
 | event | emitted by | fields |
 | --- | --- | --- |
-| `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` |
+| `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` (plus `why` on `changed`, with `--why`) |
 | `case-mismatch` | compare, compare-self | `src`, `dst` |
 | `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` |
 | `update` | update | `dir`, `files`, `dirs`, `algos` |
@@ -360,6 +360,47 @@ SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2
 {"event":"changed","path":"a.txt"}
 {"changed":1,"event":"summary","extra":1,"missing":0,"total_diff":2,"type_conflict":0,"case_mismatch":0}
 ```
+
+### `--why`
+
+`CHANGED` says *that* the two sides disagree; `--why` says **which check decided
+it**. The tag is appended to the `CHANGED` record and to nothing else:
+
+```
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --why
+CHANGED a.txt why=stat-size
+CHANGED b.txt why=digest-differs:md5
+SUMMARY missing=0 extra=0 changed=2 type_conflict=0 case_mismatch=0 total_diff=2
+```
+
+| tag | meaning |
+| --- | --- |
+| `stat-size` / `stat-mtime` | a stat field **this run trusts** differs, so no digest was read |
+| `stat-size+stat-mtime` | both differ — still one stat decision |
+| `digest-differs:<algos>` | the digests disagree; `<algos>` are the ones that **disagreed**, not the ones requested |
+| `digest-matches:<algos>` | digests agree (identical pairs; see `--show-identical`) |
+| `stat-match` | every trusted stat field agrees and no digest was consulted |
+| `unverifiable:<fields>` | no digest was available and a difference this run distrusts is unresolved |
+| `dir-present` | a directory on both sides — compared by presence |
+
+Three things worth knowing:
+
+- **One tag per *decision*, never per check.** The diff is a short circuit, so the
+  tag names whatever settled the pair. A stat difference needs no digest at all, and
+  mentioning the digest that was *skipped* would be reporting an effort, not a reason.
+- **Only `CHANGED` gets one.** `MISSING`, `EXTRA`, `TYPE-CONFLICT` and `CASE-MISMATCH`
+  are self-explanatory — the bucket name is the reason.
+- **`unverifiable` means "cannot tell", not "differs."** It is reported as `CHANGED`
+  because a pair whose only evidence of difference was ignored cannot be called equal,
+  and folding it into a stat tag would claim a difference the run was told not to trust.
+
+`digest-differs` names the algorithms that **actually disagreed**, which under
+`--hash-any-of` is not the list you asked for — the planner settles a pair with one
+digest, and the tag says which. A parser splits on the first `:`; the JSON form is a
+flat string (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
+
+**Default off, and it changes nothing but the text** — not the exit code, not the
+counts, not the work done. An unflagged run is byte-identical to one without the flag.
 
 `--output` affects **stdout only**. Diagnostics stay on stderr at every
 `--log-level`, so `--output json` is pipeable into a parser with no filtering:
@@ -708,7 +749,9 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why`: a
+  table of pair state -> classification -> reason tag, plus the flag's surface
+  through the real binary), `lazy.rs`
   (per-fixture expected verdicts *and* expected read counts, each stated before
   the code it pins), `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick
   and its tiers, the per-path answer reaching the diff, and the flag surface
