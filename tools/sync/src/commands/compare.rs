@@ -41,6 +41,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -48,8 +51,13 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let _span_guard = span.enter();
     info!("start");
-    // One runtime for the whole run; `serial()` until the CLI swap lands.
-    let rw = RwRuntime::serial()?;
+    // One runtime for the whole run.
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        "rw limits"
+    );
     if common.dry_run {
         info!(
             "dry-run: no cache will be created, updated, or backed up; \

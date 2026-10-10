@@ -9,7 +9,7 @@ use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::planner::{HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
-use girsync::rw::{RwRuntime, RwSide};
+use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
@@ -123,6 +123,8 @@ pub fn opts() -> CommonOpts {
         max_depth: 10,
         ignore_cache: false,
         dry_run: false,
+        // The unflagged run, which is `Shared(1)` -- see `RwLimits::default`.
+        rw: RwLimits::default(),
     }
 }
 
@@ -214,8 +216,19 @@ pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
         trust: TrustOpts::default(),
         missing_only: false,
         keep_extra: false,
-        jobs: 1,
         common: opts(),
+    }
+}
+
+/// [`sync`] at a chosen rw limit.
+///
+/// A limit rather than a flag string, so a case can reach a *split* shape — which
+/// no single command-line flag spelling maps to on its own, and which is the shape
+/// where a copy takes two permits.
+pub fn sync_at(src: PathBuf, dst: PathBuf, rw: RwLimits) -> SyncOpts {
+    SyncOpts {
+        common: CommonOpts { rw, ..opts() },
+        ..sync(src, dst)
     }
 }
 

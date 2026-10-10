@@ -36,6 +36,9 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
         dry_run = common.dry_run,
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -90,9 +93,14 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         );
     }
     // One side, so there is nothing to overlap with — but the resolve still goes
-    // through the limiter, so `update`'s hashing is bounded by the same budget as
-    // every other phase. `serial()` until the CLI swap lands.
-    let rw = RwRuntime::serial()?;
+    // through the limiter, so `update`'s hashing is bounded by the run's budget
+    // like every other phase.
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        "rw limits"
+    );
     let db = open_folder_cache(&dir, &common, mode, true)?;
 
     // The three phases, run here rather than inside a helper, which is the shape

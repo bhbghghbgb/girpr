@@ -52,7 +52,6 @@ mod plan;
 mod rename;
 
 use anyhow::{Result, bail};
-use std::num::NonZeroUsize;
 use tracing::info;
 
 use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
@@ -64,7 +63,7 @@ use crate::effective::{
 };
 use crate::planner::{SideRequest, plan_pairs};
 use crate::report::verdict;
-use crate::rw::{RwLimits, RwRuntime, RwSide};
+use crate::rw::{RwRuntime, RwSide};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -84,7 +83,6 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         trust,
         missing_only,
         keep_extra,
-        jobs,
         common,
     } = opts;
     // One flag, two halves. The cache half reaches the scans through
@@ -103,7 +101,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         missing_only,
         keep_extra,
         dry_run,
-        jobs,
+        // The shape of the run's concurrency, not just its size: "shared(4)" and
+        // "split(src=4, dst=4)" both allow four concurrent operations and schedule
+        // very differently, so one number would lose the half that matters.
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         include = ?common.includes,
         exclude = ?common.excludes,
         case_sensitive = common.case_sensitive,
@@ -117,23 +120,17 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let _span_guard = span.enter();
     info!("start");
 
-    validate_inputs(&src, &dst, jobs)?;
+    validate_inputs(&src, &dst)?;
 
     // One runtime for the whole run: one limiter, one worker pool. A runtime per
     // phase would be two limiters wearing one flag's name, and two pools would
     // each size themselves from the same number.
-    //
-    // Still built from `jobs`, so this step changes nothing a user can observe:
-    // one shared permit per copy worker *is* the old pool sizing, so the copy
-    // phase is unchanged. What changes is the hash phase, which was a sequential
-    // loop and is now `jobs` reads deep. The CLI swap lands next, and the
-    // 4 -> 1 default change belongs to *that* commit, where it can be loud about
-    // it rather than arriving here as a silent four-fold slowdown.
-    //
-    // `expect` is sound because `validate_inputs` refuses `jobs == 0` above.
-    let rw = RwRuntime::new(RwLimits::Shared(
-        NonZeroUsize::new(jobs).expect("validate_inputs refuses jobs == 0"),
-    ))?;
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        "rw limits"
+    );
 
     // 1. Backups and snapshots, before either cache is touched.
     let src_db_path = src.join(CACHE_PREFIX);
@@ -381,7 +378,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
 }
 
 /// Reject the inputs that make a mirror meaningless, before anything is touched.
-fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) -> Result<()> {
+fn validate_inputs(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     if is_record_path(src) || is_record_path(dst) {
         bail!("sync needs folder vs folder (record inputs are compare-only)");
     }
@@ -391,8 +388,5 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
     // One cache per run: two spellings of one folder would otherwise make the
     // mirror delete src out from under itself, on top of the handle clash.
     ensure_distinct_sides(&classify(src), &classify(dst))?;
-    if jobs == 0 {
-        bail!("--jobs must be >= 1");
-    }
     Ok(())
 }

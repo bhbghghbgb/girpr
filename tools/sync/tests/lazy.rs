@@ -164,7 +164,6 @@ fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncO
         trust: TrustOpts::default(),
         missing_only: false,
         keep_extra: false,
-        jobs: 1,
         common,
     }
 }

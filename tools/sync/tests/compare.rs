@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::num::NonZeroUsize;
+
 use common::{
     TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
     serial_rw, strip_algo, sync, sync_mtime, update, update_dry, wfile,
@@ -12,7 +14,7 @@ use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
 };
 use girsync::planner::{SideRequest, plan_pairs};
-use girsync::rw::RwSide;
+use girsync::rw::{RwLimits, RwSide};
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 /// A cache file's bytes, for "byte-identical" claims. Length alone would pass on
@@ -368,7 +370,7 @@ fn run_compare_detects_diff_then_sync_converges() {
     assert_eq!(code, 4, "differences must exit 4");
 
     let mut o = sync(src.clone(), dst.clone());
-    o.jobs = 2;
+    o.common.rw = RwLimits::Shared(NonZeroUsize::new(2).unwrap());
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
 

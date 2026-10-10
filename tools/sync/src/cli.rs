@@ -170,6 +170,92 @@ pub struct CommonArgs {
     /// still hashes whatever stat alone cannot settle. Only the writes are gone.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+    /// How many file reads and writes may be in flight, and whether the two
+    /// sides draw on one counter or two.
+    ///
+    /// **rw, not io.** The counter governs file *content* reads and writes —
+    /// hashing, and a copy's stream plus its verify re-hashes. It does not govern
+    /// `stat`, which is orders of magnitude cheaper and would otherwise eat the
+    /// whole budget on a tree of many small files.
+    #[command(flatten)]
+    pub rw: RwArgs,
+}
+
+/// Concurrency: how many **file reads and writes** may be in flight at once, and
+/// whether the two sides draw on one counter or two.
+///
+/// All four fields are `Option`/`bool` with **no clap default**, rather than
+/// `default_value_t`. A clap default is a value the user never typed, and
+/// `conflicts_with_all` would then be evaluated against it — whether clap 4 skips
+/// `ValueSource::DefaultValue` when detecting conflicts is not something to guess
+/// at. `Option` makes "did the user type this" unambiguous and moves the default
+/// into `TryFrom<CommonArgs>`, where this crate already validates every other
+/// value. The cost is that `--help` prints no `[default: 1]`; the default is in
+/// the flag's own doc comment instead, which is where a reader looks.
+#[derive(Args, Debug, Clone, Default)]
+pub struct RwArgs {
+    /// One counter for the whole run: at most N file reads or writes at a time,
+    /// counting src and dst together, as if they share a disk.
+    ///
+    /// **Default 1.** A single disk is the common case and the safe assumption,
+    /// and one read at a time is what a spinning disk is actually good at. Raise
+    /// it for an SSD, where more concurrent reads do go faster —
+    /// `girsync sync --src OLD --dst NEW --rw-threads 4`.
+    ///
+    /// This replaces `--jobs`, which sized the copy pool only and defaulted to 4.
+    /// See the Gotchas entry for the migration.
+    #[arg(
+        long = "rw-threads",
+        value_name = "N",
+        conflicts_with_all = ["rw_threads_src", "rw_threads_dst", "rw_dual_drive"]
+    )]
+    pub rw_threads: Option<usize>,
+
+    /// At most N reads **from src** at a time.
+    ///
+    /// Answering one side only is not a half-measure: it splits the run into two
+    /// independent counters, so src being read stops waiting for dst. That is
+    /// worth exactly what the hardware allows — and on one physical disk it is a
+    /// seek storm rather than a speedup. Give both sides a number if you mean it:
+    /// `girsync sync --src OLD --dst NEW --rw-threads-src 2 --rw-threads-dst 2`.
+    ///
+    /// The side you leave out defaults to 1, not to the number you gave the other.
+    #[arg(
+        long = "rw-threads-src",
+        value_name = "N",
+        conflicts_with_all = ["rw_threads", "rw_dual_drive"]
+    )]
+    pub rw_threads_src: Option<usize>,
+
+    /// At most N writes **to dst** at a time. See `--rw-threads-src` for why
+    /// answering one side is not a half-measure.
+    ///
+    /// Not mutually exclusive with `--rw-threads-src`: giving both is the explicit
+    /// form of "the two sides are independent".
+    #[arg(
+        long = "rw-threads-dst",
+        value_name = "N",
+        conflicts_with_all = ["rw_threads", "rw_dual_drive"]
+    )]
+    pub rw_threads_dst: Option<usize>,
+
+    /// src and dst are on **separate physical drives** — shorthand for
+    /// `--rw-threads-src 1 --rw-threads-dst 1`.
+    ///
+    /// Not the same request as `--rw-threads 1`, and the difference is the point:
+    /// one permits a single read or write in the entire run, while this permits one
+    /// *per side*, so the two trees are hashed at the same time instead of in turn.
+    /// A copy still runs one at a time — it needs both permits — so this buys
+    /// overlapping hash phases, not overlapping copies.
+    ///
+    /// **This flag asserts something about your hardware that the tool cannot
+    /// check.** Used on a single spinning disk it converts a sequential read/write
+    /// pattern into a seek storm, and `--rw-threads 1` will be faster.
+    #[arg(
+        long = "rw-dual-drive",
+        conflicts_with_all = ["rw_threads", "rw_threads_src", "rw_threads_dst"]
+    )]
+    pub rw_dual_drive: bool,
 }
 
 /// One side of a two-sided run, as named on the command line.
@@ -258,9 +344,10 @@ pub enum Cmd {
         // `--dry-run` arrives via `CommonArgs`. This command threads it into the
         // rename and apply phases too, so it means no cache writes *and* no
         // filesystem change.
-        /// Parallel copy workers.
-        #[arg(long, default_value_t = 4)]
-        jobs: usize,
+        //
+        // `--jobs` used to live here, sizing only the copy pool. It is replaced by
+        // the `--rw-threads*` family on `CommonArgs`, which bounds reads and writes
+        // everywhere rather than copies alone — see `RwArgs`.
         #[command(flatten)]
         trust: TrustArgs,
         #[command(flatten)]

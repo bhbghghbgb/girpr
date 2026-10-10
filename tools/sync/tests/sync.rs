@@ -2,6 +2,10 @@
 
 mod common;
 
+use std::num::NonZeroUsize;
+
+use girsync::rw::RwLimits;
+
 use common::{
     TempRoot, compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync,
     sync_dry, sync_mtime, update, wfile,
@@ -60,8 +64,11 @@ fn run_sync_dry_run_writes_nothing() {
     wfile(&dst, "a.txt", b"old");
     wfile(&dst, "extra.txt", b"stay for now");
 
+    // A dry run, at a limit other than 1, so the copy phase actually has more than
+    // one permitted operation in it -- the case where a limiter bug could do real
+    // work it was not supposed to.
     let mut o = sync_dry(src.clone(), dst.clone());
-    o.jobs = 2;
+    o.common.rw = RwLimits::Shared(NonZeroUsize::new(2).unwrap());
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
     // Nothing changed on disk.
@@ -257,10 +264,11 @@ fn run_sync_rejects_bad_inputs() {
     cmd_update(update(src.clone()), &log()).unwrap();
     assert!(cmd_sync(sync(src.join(CACHE_PREFIX), dst.clone()), &log()).is_err());
 
-    // jobs == 0 is a runtime error
-    let mut o = sync(src.clone(), dst.clone());
-    o.jobs = 0;
-    assert!(cmd_sync(o, &log()).is_err());
+    // The old `o.jobs = 0` case used to live here. It has no equivalent to assert:
+    // `SyncOpts` no longer carries a thread count, `RwLimits` cannot hold a zero
+    // (`NonZeroUsize`), and the flag that could name one is refused before it
+    // reaches `cmd_sync`. `rw_threads_rejects_a_zero_count` pins the user-visible
+    // half of that, through the real binary.
 }
 
 #[test]

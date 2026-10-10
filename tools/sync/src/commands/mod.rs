@@ -92,7 +92,6 @@ pub fn run(cli: Cli) -> Result<i32> {
             dst,
             missing_only,
             keep_extra,
-            jobs,
             trust,
             common,
         } => cmd_sync(
@@ -102,7 +101,6 @@ pub fn run(cli: Cli) -> Result<i32> {
                 trust: trust.into(),
                 missing_only,
                 keep_extra,
-                jobs,
                 common: CommonOpts::try_from(common)?,
             },
             &log,

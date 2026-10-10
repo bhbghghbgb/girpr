@@ -88,6 +88,9 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         exclude = ?common.excludes,
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         console_level = %log.level.to_ascii_lowercase(),
         file_level = "trace",
         log_file = %log.file_display(),
@@ -221,8 +224,19 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // Only the disk side reads anything — `resolve_record` is a map copy with no
     // filesystem behind it — so there is nothing here for a concurrent resolve to
     // overlap with. It still goes through the limiter, so the disk side's hashing
-    // is bounded by the run's budget. `serial()` until the CLI swap lands.
-    let rw = RwRuntime::serial()?;
+    // is bounded by the run's budget.
+    //
+    // **This is where `--rw-threads-src` is a no-op**, and silently so: the record
+    // side has no filesystem, so its permit is never drawn. That is not a bug and
+    // it is not worth refusing the flag over, but it is worth the `info!` below —
+    // a user who asked for two counters should be able to see what they got.
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        note = "only the disk side has a filesystem; the record side draws no permit",
+        "rw limits"
+    );
     let disk = resolve_folder(&dir, &cold, mode, &disk_a, &plans.dst, RwSide::Dst, &rw)?;
     let rec = resolve_record(&rec);
     info!(
