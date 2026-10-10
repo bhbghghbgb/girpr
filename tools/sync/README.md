@@ -450,6 +450,49 @@ being asked for it twice in two shapes.
 
 ### sync
 
+Mirrors `src` → `dst`. It prints its **plan** first — the diff, exactly as
+`compare` reports it — and then the actions, as it takes them.
+
+#### The plan print, and why there is only one summary
+
+```
+.\target\debug\girsync sync --src D:\game-old --dst D:\game-live --dry-run --why
+MISSING only_src.txt
+CHANGED changed.txt why=stat-size
+COPY only_src.txt because=missing        <- step 5
+COPY changed.txt because=changed
+SUMMARY renamed=0 mkdir=0 copied=2 ... dry_run=true
+```
+
+The stream is three segments, in this order:
+
+| segment | what it is | when |
+| --- | --- | --- |
+| `RENAME` | dst's casing aligned to src's | before the diff — it has to be, or the diff has no exact keys to compare |
+| the **plan** | the diff, through the same `report::verdict` `compare` uses | up-front, once the diff exists |
+| the **actions** | what the apply phases do, in apply order | as they happen |
+
+Two things follow from that split, and both are the point:
+
+- **The plan line answers *"why did it decide that"*, the action line answers *"what
+  is this tool doing"*.** A `COPY` names the bucket that caused it and never repeats
+  the reason, which lives on that path's plan line. A consumer wanting every
+  `CHANGED` with its cause reads the plan; one wanting what the run did reads the
+  actions. Neither has to join streams.
+- **A `MISSING` file appears twice** — once in the plan, once as a `COPY`. That is
+  deliberate: it is what makes the plan independently parseable without correlating
+  it against what followed.
+
+**The exit code stays `0`.** Printing a plan makes `sync` *look* like `compare`, and
+`compare` exits `4` on a difference. `sync` must not: its exit code reports whether
+the run *succeeded*, not whether it had anything to do, and returning `4` would break
+every script that syncs a partly-different tree — the normal case. The diff never
+reaches `report_diff`, so `Diff::total()` is not an exit code on this path.
+
+There is exactly one `SUMMARY`, and it is `sync`'s own — counting actions. The diff's
+own summary is dropped: two differently-shaped summaries in one stream would make
+"the last line is the summary" true only by luck.
+
 Mirrors `src` → `dst`:
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
@@ -565,10 +608,16 @@ names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 `keep_extra` — and the action records share one vocabulary and one order
 (`MKDIR`, `FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
 run's only addition is `dry_run=true`, so a caller reading either does not have to
-know which it got. `run_sync_dry_run_summary_matches_a_real_run` compares the
-whole `--output json` stream of the two modes with only that marker normalised
-away, so any future divergence in labels, ordering or counts fails there rather
-than reaching a caller.
+know which it got.
+
+`a_dry_run_reports_what_a_real_run_reports` compares the two modes and is now
+explicitly a **two-segment** comparison. The plan and the renames are decided
+before anything is written, so they are compared **ordered, field for field**. The
+actions are reported as they complete, and completion order is a function of I/O
+timing rather than of the plan, so they are compared as a **multiset** — with the
+count asserted separately, so a duplicate cannot hide in a set. That weakening is
+unavoidable rather than something to engineer around: the alternative is to keep
+emitting after the pool joins, which is the behaviour the as-done printing removes.
 
 `rmdir` is exact rather than omitted, which is why it is *planned*:
 `build_plan` decides the set (see `Plan::rmdir`), so the same count is available

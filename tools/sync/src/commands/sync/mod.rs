@@ -11,8 +11,34 @@
 //! 2. open both caches and run phase A on each side,
 //! 3. plan across both sides at once, so a file is read only if the pair needs it,
 //! 4. phase C, then rename dst paths to src's casing,
-//! 5. diff, plan, then either print it (`--dry-run`) or apply it.
+//! 5. diff, **print it**, plan, then either print the actions (`--dry-run`) or
+//!    apply them.
 //!
+//! ## The plan print
+//!
+//! The diff is reported the way `compare` reports it, through
+//! [`crate::report::verdict`], so `sync` and `compare` speak one vocabulary — one
+//! definition of what a `CHANGED` line means, not two. Then the actions are
+//! reported as they happen.
+//!
+//! Two segments, and the split is the point: the **plan** answers *"why did it
+//! decide that"* and the **actions** answer *"what is this tool doing"*. A consumer
+//! wanting every `CHANGED` with its cause reads the plan; a consumer wanting what
+//! the run did reads the actions. Neither has to join streams, and an action line
+//! never repeats a reason.
+//!
+//! A `MISSING` file therefore appears **twice** — once in the plan, once as a
+//! `COPY`. That is deliberate: it is what makes the plan independently parseable
+//! without correlating it against what followed.
+//!
+//! ## The exit code stays 0
+//!
+//! Printing a plan makes this command *look* like `compare`, which exits 4 on a
+//! difference. **It must not.** `sync`'s exit code reports whether the run
+//! *succeeded*, not whether it had anything to do, and returning 4 here would break
+//! every script that syncs a partly-different tree — which is the normal case. The
+//! diff never reaches [`super::report_diff`], so `Diff::total()` is not an exit code
+//! on this path at all.
 //! Steps 4's rename still precedes the diff and always will: the diff is taken
 //! case-sensitively on exact keys. The plan in step 3 therefore runs *before* the
 //! rename, paired by lowercase in insensitive mode — see the comment at the call
@@ -36,6 +62,7 @@ use crate::effective::{
     scan_stat_only,
 };
 use crate::planner::{SideRequest, plan_pairs};
+use crate::report::verdict;
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -209,17 +236,33 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // answer is only usable if the side it is keyed by is the side that does not
     // move.
     // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
-    // step 4 gives it a plan print that takes the equal set only if asked. Passing
-    // `common.show_identical` here would fill a bucket nothing reads, which is the one
-    // cost `--show-identical` is meant to avoid by default.
+    // step 4 gives it a plan print that takes the equal set only if asked.
     let diff = diff_maps(
         &sm,
         &dm,
         &plans.required,
         plans.stat,
         true, /* post-rename: exact keys */
-        false,
+        common.show_identical,
     );
+
+    // The plan print, the way `compare` prints it — every record except its
+    // `SUMMARY`. `sync` emits its **own** summary at the end, counting actions
+    // rather than differences, so keeping the diff's would put two differently-shaped
+    // summaries in one stream; a consumer reading "the last line is the summary"
+    // would get the right one only by luck.
+    //
+    // `want_identical` above is what fills the bucket this reads, so the two flags
+    // are the same question asked in two places — a plan print that could not show
+    // the equal set would make `--show-identical` look like it works everywhere but
+    // here.
+    for rec in verdict(&diff, common.why, common.show_identical)
+        .into_iter()
+        .filter(|rec| rec.label() != "SUMMARY")
+    {
+        report.emit(rec);
+    }
+
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
     info!(
         renamed,
