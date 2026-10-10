@@ -477,7 +477,7 @@ The stream is three segments, in this order:
 | --- | --- | --- |
 | `RENAME` | dst's casing aligned to src's | before the diff — it has to be, or the diff has no exact keys to compare |
 | the **plan** | the diff, through the same `report::verdict` `compare` uses | up-front, once the diff exists |
-| the **actions** | what the apply phases do, in apply order | as they happen |
+| the **actions** | what the apply phases do, in apply order | as they happen — so under `--jobs > 1` the `COPY` lines come out in **completion** order, not plan order |
 
 Two things follow from that split, and both are the point:
 
@@ -517,7 +517,8 @@ Mirrors `src` → `dst`:
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
-   file change. No resume.
+   file change. The `COPY` line is printed **as each copy completes**, so under
+   `--jobs > 1` those lines come out in completion order. No resume.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -625,6 +626,18 @@ timing rather than of the plan, so they are compared as a **multiset** — with 
 count asserted separately, so a duplicate cannot hide in a set. That weakening is
 unavoidable rather than something to engineer around: the alternative is to keep
 emitting after the pool joins, which is the behaviour the as-done printing removes.
+
+**A dry run and a real run are no longer comparable as one ordered document.**
+`COPY` lines are emitted inside the copy worker, so a run with `--jobs 4` prints
+them in whatever order the files finish — 24 padded files under `--jobs 4` came out
+shuffled on 8 of 8 runs. The *set* and the *count* are unchanged and are what the
+tests assert; the order is not, and no test may depend on it.
+
+The emit is serialised by a leaf mutex rather than left to each thread's
+`println!`. `Report::emit` prints a line and logs a matching event as one unit, and
+without it two workers could interleave between the two, putting a log event about
+one file between the line and the event for another. The lock is held for exactly one
+emit and never across the copy, so it does not serialise the work it protects.
 
 `rmdir` is exact rather than omitted, which is why it is *planned*:
 `build_plan` decides the set (see `Plan::rmdir`), so the same count is available

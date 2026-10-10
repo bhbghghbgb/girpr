@@ -216,6 +216,18 @@ impl Applier<'_> {
         let copy_total = plan.copy.len();
         let copy_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let copy_done_cb = copy_done.clone();
+        // Serialises the *emit*, not the copy.
+        //
+        // `Report::emit` prints a line and logs a matching event as one unit, and
+        // without this two workers could interleave between the two — putting a log
+        // event about one file between the line and the event for another. The lock
+        // is held for exactly one emit, never across the copy, so it does not
+        // serialise the work it is protecting.
+        //
+        // **It cannot deadlock.** It is a leaf: nothing is called while it is held,
+        // no other lock is ever held while waiting for it, and it is released before
+        // the worker returns to the pool.
+        let emit = std::sync::Mutex::new(());
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(self.jobs)
             .build()
@@ -233,18 +245,31 @@ impl Applier<'_> {
                     } else {
                         trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
                     }
+                    // **As done.** Announced the moment the file is in place, not
+                    // after every copy finishes — which is the whole difference from
+                    // the ordered emit this replaced.
+                    //
+                    // Only on success: a failed copy aborts the run before the
+                    // summary, so announcing one would be a claim about work that
+                    // did not happen.
+                    if r.is_ok() {
+                        let _guard = emit.lock().expect("emit lock is never poisoned");
+                        self.report.emit(
+                            Record::path("COPY", &item.rel).put("because", item.because.as_str()),
+                        );
+                    }
                     r
                 })
                 .collect::<Vec<_>>()
         });
         let mut copied = 0usize;
         let mut new_recs: Vec<(String, FileRec)> = Vec::new();
-        // Emitted after the pool joins, so the `COPY` records come out in plan order
-        // whatever `--jobs` is. Step 6 moves this into the worker closure.
+        // Records only — the `COPY` line was already emitted above, as each copy
+        // completed. The results come back in plan order because `collect` preserves
+        // input order, so the cache rows below are written deterministically even
+        // though the lines are not.
         for (item, r) in plan.copy.iter().zip(results) {
             let rec = r.with_context(|| format!("copy {}", item.rel))?;
-            self.report
-                .emit(Record::path("COPY", &item.rel).put("because", item.because.as_str()));
             new_recs.push((item.rel.clone(), rec));
             copied += 1;
         }
