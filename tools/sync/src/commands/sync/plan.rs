@@ -11,6 +11,44 @@ use crate::diff::Diff;
 use crate::effective::EffRec;
 use crate::report::Record;
 
+/// Which difference bucket caused a path to be copied.
+///
+/// The three ways a path can be on both sides and still need a copy. Named rather
+/// than spelled inline because the `COPY` record prints it: it is a **bucket**, not
+/// the reason the bucket applies — the reason for a `CHANGED` lives on that path's
+/// plan line, and repeating it on the action would put one fact in two places with
+/// two vocabularies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CopyBecause {
+    /// dst does not have it.
+    Missing,
+    /// Both have it and the content differs.
+    Changed,
+    /// Both have it and the **kind** differs, so the copy is over a blocking entry.
+    TypeConflict,
+}
+
+impl CopyBecause {
+    /// The value as it appears in `because=`, which is also the plan record's event
+    /// name — the two must match for the join to work.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CopyBecause::Missing => "missing",
+            CopyBecause::Changed => "changed",
+            CopyBecause::TypeConflict => "type-conflict",
+        }
+    }
+}
+
+/// One planned copy: the path, and the bucket that caused it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CopyItem {
+    /// `/`-separated relative path with src's casing.
+    pub rel: String,
+    /// Which difference put this path on the copy list.
+    pub because: CopyBecause,
+}
+
 /// The complete work list for one sync, computed before anything is written.
 ///
 /// Every list holds `/`-separated relative paths with src's casing.
@@ -18,8 +56,9 @@ use crate::report::Record;
 pub(super) struct Plan {
     /// Src directories absent from dst.
     pub mkdir: Vec<String>,
-    /// Src files to copy over: missing, changed, or type-conflicting.
-    pub copy: Vec<String>,
+    /// Src files to copy over: missing, changed, or type-conflicting — each
+    /// carrying the bucket that put it there.
+    pub copy: Vec<CopyItem>,
     /// Dst-only files to delete (empty when `keep_extra`).
     pub delete_files: Vec<String>,
     /// Type-conflicts where src is a dir and dst is a file, so the file is
@@ -60,27 +99,48 @@ pub(super) fn build_plan(
     let dst_is_file = |rel: &String| dm.get(rel).map(|e| e.kind == "file").unwrap_or(false);
     let dst_is_dir = |rel: &String| dm.get(rel).map(|e| e.kind == "dir").unwrap_or(false);
 
-    let mut copy: Vec<String> = Vec::new();
+    // Each bucket is pushed with itself attached, so the `COPY` record can say what
+    // caused it without the reporter having to re-derive the origin from a path that
+    // by now exists in three lists.
+    let mut copy: Vec<CopyItem> = Vec::new();
     for r in &diff.missing {
         if src_is_file(r) {
-            copy.push(r.clone());
+            copy.push(CopyItem {
+                rel: r.clone(),
+                because: CopyBecause::Missing,
+            });
         }
     }
     if !missing_only {
         for r in &diff.changed {
             if src_is_file(r) {
-                copy.push(r.clone());
+                copy.push(CopyItem {
+                    rel: r.clone(),
+                    because: CopyBecause::Changed,
+                });
             }
         }
         // Where src is a file, copy_one clears a blocking dst dir out of the way.
         for r in &diff.type_conflict {
             if src_is_file(r) {
-                copy.push(r.clone());
+                copy.push(CopyItem {
+                    rel: r.clone(),
+                    because: CopyBecause::TypeConflict,
+                });
             }
         }
     }
-    copy.sort();
-    copy.dedup();
+    // Sorted by path, then deduped **by path alone**.
+    //
+    // The dedup key matters now that a reason rides along. It is still correct,
+    // because `missing`, `changed` and `type_conflict` are disjoint buckets — a path
+    // cannot be on two of them at once — so no path ever arrives here twice carrying
+    // two different reasons. Deduplicating on the whole item instead would be
+    // equivalent *today* and would stop being equivalent the day two buckets could
+    // overlap, which is exactly the kind of quiet assumption that becomes a bug
+    // nobody can reproduce.
+    copy.sort_by(|a, b| a.rel.cmp(&b.rel));
+    copy.dedup_by(|a, b| a.rel == b.rel);
 
     let mut delete_files: Vec<String> = Vec::new();
     if !keep_extra {
@@ -130,8 +190,8 @@ pub(super) fn build_plan(
     if !keep_extra {
         let wiped: Vec<String> = copy
             .iter()
-            .filter(|r| dst_is_dir(r))
-            .map(|r| format!("{r}/"))
+            .filter(|item| dst_is_dir(&item.rel))
+            .map(|item| format!("{}/", item.rel))
             .collect();
         for (rel, rec) in dm {
             if rec.kind != "dir" || sm.contains_key(rel) {
@@ -233,8 +293,8 @@ pub(super) fn dry_run_records(
     for r in &plan.delete_files {
         out.push(Record::path("DELETE", r));
     }
-    for r in &plan.copy {
-        out.push(Record::path("COPY", r));
+    for item in &plan.copy {
+        out.push(Record::path("COPY", &item.rel).put("because", item.because.as_str()));
     }
     for r in &plan.rmdir {
         out.push(Record::path("RMDIR", r));

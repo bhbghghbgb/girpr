@@ -273,7 +273,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         dry_run,
         "plan"
     );
-    tracing::debug!(copy = ?plan.copy, "plan copy list");
+    tracing::debug!(copy = ?plan.copy.iter().map(|i| &i.rel).collect::<Vec<_>>(), "plan copy list");
     tracing::debug!(mkdir = ?plan.mkdir, "plan mkdir list");
 
     if dry_run {

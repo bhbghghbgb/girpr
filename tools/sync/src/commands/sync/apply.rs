@@ -160,7 +160,13 @@ impl Applier<'_> {
     /// to detect a crash.
     fn predrop_cache_entries(&self, plan: &Plan) -> Result<()> {
         let mut w = self.dst_db.begin_write()?;
-        for r in plan.copy.iter().chain(plan.delete_files.iter()) {
+        // Two loops rather than one chained iterator: `copy` holds `CopyItem`s and
+        // `delete_files` holds paths, so the only thing they have in common is the
+        // path, and a chain would have to borrow it from two different types.
+        for item in &plan.copy {
+            w.remove(&item.rel)?;
+        }
+        for r in &plan.delete_files {
             w.remove(r)?;
         }
         w.commit()?;
@@ -218,14 +224,14 @@ impl Applier<'_> {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map(|rel| {
-                    debug!(rel = %rel, "copy start");
-                    let r = copy_one(self.src, self.dst, rel, &self.common.algos);
+                .map(|item| {
+                    debug!(rel = %item.rel, "copy start");
+                    let r = copy_one(self.src, self.dst, &item.rel, &self.common.algos);
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     if n.is_multiple_of(25) || n == copy_total {
                         info!(done = n, total = copy_total, "copy progress");
                     } else {
-                        trace!(done = n, total = copy_total, rel = %rel, "copy progress");
+                        trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
                     }
                     r
                 })
@@ -233,10 +239,13 @@ impl Applier<'_> {
         });
         let mut copied = 0usize;
         let mut new_recs: Vec<(String, FileRec)> = Vec::new();
-        for (rel, r) in plan.copy.iter().zip(results) {
-            let rec = r.with_context(|| format!("copy {}", rel))?;
-            self.report.emit(Record::path("COPY", rel));
-            new_recs.push((rel.clone(), rec));
+        // Emitted after the pool joins, so the `COPY` records come out in plan order
+        // whatever `--jobs` is. Step 6 moves this into the worker closure.
+        for (item, r) in plan.copy.iter().zip(results) {
+            let rec = r.with_context(|| format!("copy {}", item.rel))?;
+            self.report
+                .emit(Record::path("COPY", &item.rel).put("because", item.because.as_str()));
+            new_recs.push((item.rel.clone(), rec));
             copied += 1;
         }
         info!(copied, total = copy_total, "copy done");

@@ -343,7 +343,8 @@ names — read them by name, never by position.
 | `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` (plus `identical` with `--show-identical`) |
 | `update` | update | `dir`, `files`, `dirs`, `algos` |
 | `rename` | sync | `from`, `to` |
-| `mkdir` / `fix-dir` / `delete` / `copy` / `rmdir` | sync | `path` |
+| `mkdir` / `fix-dir` / `delete` / `rmdir` | sync | `path` |
+| `copy` | sync | `path`, `because` (`missing` \| `changed` \| `type-conflict`) |
 | `summary` (sync) | sync | `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`, `keep_extra`, `dry_run` |
 
 Exactly one `summary` is emitted per run, and it is last. The event name is the
@@ -459,10 +460,16 @@ Mirrors `src` → `dst`. It prints its **plan** first — the diff, exactly as
 .\target\debug\girsync sync --src D:\game-old --dst D:\game-live --dry-run --why
 MISSING only_src.txt
 CHANGED changed.txt why=stat-size
-COPY only_src.txt because=missing        <- step 5
+COPY only_src.txt because=missing
 COPY changed.txt because=changed
 SUMMARY renamed=0 mkdir=0 copied=2 ... dry_run=true
 ```
+
+`because` is the **bucket**, not the reason: `missing`, `changed` or `type-conflict`.
+It is coarser than `why=` on purpose — the reason a path is `CHANGED` lives on that
+path's plan line, and repeating it on the action would put one fact in two places
+with two vocabularies. The hard rule is that **an action line carries `because=` and
+never `why=`**; anyone wanting the join has both records for the same path.
 
 The stream is three segments, in this order:
 

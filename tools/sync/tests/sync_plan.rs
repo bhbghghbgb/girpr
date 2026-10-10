@@ -1055,6 +1055,163 @@ fn the_plan_carries_reasons_when_why_is_passed() {
     );
 }
 
+/// **`COPY` says which bucket caused it, and never repeats why that bucket was
+/// reached.** The action line answers *"what is this tool doing"*; the plan line
+/// answers *"why did it decide that"*. A `COPY ... why=` would put the same fact in
+/// both places and force a consumer reading only the actions to parse a tag whose
+/// vocabulary is the diff's.
+///
+/// `because` is coarser than `why` on purpose: `because=changed` is the whole truth
+/// about the action, and the reason for the change belongs to the `CHANGED` plan line
+/// for the same path.
+#[test]
+fn copy_names_the_bucket_that_caused_it_and_never_a_why() {
+    let t = TempRoot::new("because");
+    let (src, dst) = build(&t);
+    let recs = run(&src, &dst, &["--dry-run", "--why"]);
+
+    let copies: Vec<&Value> = recs.iter().filter(|r| r["event"] == "copy").collect();
+    assert!(
+        !copies.is_empty(),
+        "the fixture must copy something: {recs:?}"
+    );
+    for r in &copies {
+        assert!(
+            r.get("why").is_none(),
+            "an action line must not repeat a reason: {r}"
+        );
+        assert!(
+            r["because"].is_string(),
+            "and must name the bucket that caused it: {r}"
+        );
+        assert!(
+            matches!(
+                r["because"].as_str().unwrap(),
+                "missing" | "changed" | "type-conflict"
+            ),
+            "and `because` is one of the three buckets: {r}"
+        );
+    }
+}
+
+/// **Every `because` value is true of that path's plan record.** The one-to-one join:
+/// a `COPY ... because=missing` must have a `MISSING` plan line for the same path,
+/// and the bucket must be the one that actually applied. Asserted as a table
+/// keyed by path rather than as a set, so a copy whose cause is merely *a* valid
+/// bucket — but the wrong one — fails.
+#[test]
+fn each_copy_because_matches_its_own_plan_record() {
+    let t = TempRoot::new("because_join");
+    let (src, dst) = build(&t);
+    let recs = run(&src, &dst, &["--dry-run"]);
+
+    // The bucket each `COPY` must name, derived from the path's plan record rather
+    // than written out — so a copy and a plan record cannot disagree here.
+    let bucket_of = |path: &str| -> String {
+        let event = recs
+            .iter()
+            .find(|r| {
+                matches!(
+                    r["event"].as_str(),
+                    Some("missing" | "changed" | "type-conflict")
+                ) && r["path"] == path
+            })
+            .map(|r| r["event"].as_str().unwrap())
+            .unwrap_or_else(|| panic!("{path} is copied but has no plan record: {recs:?}"));
+        event.to_string()
+    };
+    for r in recs.iter().filter(|r| r["event"] == "copy") {
+        let path = r["path"].as_str().unwrap();
+        assert_eq!(
+            r["because"].as_str().unwrap(),
+            bucket_of(path),
+            "{path}: the action must name the bucket its own plan record is in"
+        );
+    }
+}
+
+/// **A type conflict names `type-conflict`, not `missing` or `changed`.** The three
+/// buckets are the ones `build_plan` merges into one flat copy list, and they are
+/// exactly the three ways a path can be both present and wrong. The third is the one
+/// a table derived from "present on one side" would get wrong.
+#[test]
+fn a_copy_over_a_blocking_directory_names_the_type_conflict() {
+    let t = TempRoot::new("because_conflict");
+    let (src, dst) = build(&t);
+    let recs = run(&src, &dst, &["--dry-run"]);
+    let conflict_copy = recs
+        .iter()
+        .find(|r| r["event"] == "copy" && r["path"] == "conflict.txt")
+        .expect("conflict.txt is a file over a dst directory, so it is copied");
+    assert_eq!(
+        conflict_copy["because"], "type-conflict",
+        "src has the file and dst has the directory: {recs:?}"
+    );
+    assert!(
+        recs.iter()
+            .any(|r| r["event"] == "type-conflict" && r["path"] == "conflict.txt"),
+        "and the plan says the same: {recs:?}"
+    );
+}
+
+/// **`--missing-only` suppresses changed copies, and the surviving ones keep their
+/// bucket.** The flag removes paths from the copy list; it must not relabel the ones
+/// that remain, or `because` would describe a plan the run is not following.
+#[test]
+fn missing_only_keeps_the_bucket_of_the_copies_it_leaves() {
+    let t = TempRoot::new("because_missing_only");
+    let (src, dst) = build(&t);
+    let recs = run(&src, &dst, &["--dry-run", "--missing-only"]);
+
+    for r in recs.iter().filter(|r| r["event"] == "copy") {
+        assert_eq!(
+            r["because"], "missing",
+            "--missing-only copies only what is absent: {recs:?}"
+        );
+        assert!(
+            !recs
+                .iter()
+                .any(|p| p["event"] == "copy" && p["path"] == "differs.txt"),
+            "so a changed path is not copied at all: {recs:?}"
+        );
+    }
+}
+
+/// **One `COPY` per path, ever.** This is the invariant that lets `build_plan`
+/// deduplicate on the path alone: `missing`, `changed` and `type_conflict` are
+/// disjoint buckets, so a path can never reach the copy list twice carrying two
+/// different causes.
+///
+/// Asserted rather than assumed, because it is the thing that makes the dedup key
+/// safe — and a dedup keyed on the whole item instead of the path would behave
+/// identically *today* and start keeping duplicates the day two buckets could
+/// overlap. Nothing else in the suite would notice: the count would still be right
+/// until it was not, and by then a file would be copied twice.
+#[test]
+fn a_path_is_never_planned_for_copying_twice() {
+    let t = TempRoot::new("copy_once");
+    let (src, dst) = build(&t);
+    // `run` already passes `--output json`, so these are the extra flags only.
+    for extra in [vec!["--dry-run"], vec!["--dry-run", "--case-sensitive"]] {
+        let recs = run(&src, &dst, &extra);
+        let copies: Vec<&str> = recs
+            .iter()
+            .filter(|r| r["event"] == "copy")
+            .filter_map(|r| r["path"].as_str())
+            .collect();
+        let unique: BTreeSet<&&str> = copies.iter().collect();
+        assert_eq!(
+            copies.len(),
+            unique.len(),
+            "{extra:?}: the same path is copied more than once: {copies:?}"
+        );
+        assert!(
+            !copies.is_empty(),
+            "{extra:?}: the fixture must copy something"
+        );
+    }
+}
+
 /// **`--show-identical` reaches sync's plan print too.** It is a `compare`-shaped
 /// flag, and the plan print *is* a compare-shaped report — so accepting it on one and
 /// not the other would be an inconsistency a user could trip over.
