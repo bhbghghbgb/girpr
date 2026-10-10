@@ -240,6 +240,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
         &plans.required,
         plans.stat,
         common.case_sensitive,
+        false,
     );
     (disk.stats.hashed, if diff.is_empty() { 0 } else { 4 })
 }
@@ -546,7 +547,7 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
 
-    let d = diff_maps(&src, &dst, &by_path, StatTrust::default(), true);
+    let d = diff_maps(&src, &dst, &by_path, StatTrust::default(), true, false);
     assert_eq!(
         d.changed,
         vec!["two.txt"],
@@ -560,7 +561,7 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &uniform, StatTrust::default(), true);
+    let d = diff_maps(&src, &dst, &uniform, StatTrust::default(), true, false);
     assert_eq!(
         d.changed,
         vec!["one.txt", "two.txt"],
@@ -585,7 +586,7 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &populated, StatTrust::default(), true);
+    let d = diff_maps(&src, &dst, &populated, StatTrust::default(), true, false);
     assert_eq!(
         d.changed,
         vec!["a.txt"],
@@ -596,7 +597,15 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
     // `hashes_differ` is silent when handed nothing, so a missing entry read as
     // "equal" would be a verdict about content nobody read.
     assert_eq!(
-        diff_maps(&src, &dst, &Required::default(), StatTrust::default(), true).changed,
+        diff_maps(
+            &src,
+            &dst,
+            &Required::default(),
+            StatTrust::default(),
+            true,
+            false
+        )
+        .changed,
         Vec::<String>::new(),
         "which is why `plan_pairs` always sets it"
     );

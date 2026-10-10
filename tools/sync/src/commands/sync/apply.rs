@@ -160,7 +160,13 @@ impl Applier<'_> {
     /// to detect a crash.
     fn predrop_cache_entries(&self, plan: &Plan) -> Result<()> {
         let mut w = self.dst_db.begin_write()?;
-        for r in plan.copy.iter().chain(plan.delete_files.iter()) {
+        // Two loops rather than one chained iterator: `copy` holds `CopyItem`s and
+        // `delete_files` holds paths, so the only thing they have in common is the
+        // path, and a chain would have to borrow it from two different types.
+        for item in &plan.copy {
+            w.remove(&item.rel)?;
+        }
+        for r in &plan.delete_files {
             w.remove(r)?;
         }
         w.commit()?;
@@ -210,6 +216,18 @@ impl Applier<'_> {
         let copy_total = plan.copy.len();
         let copy_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let copy_done_cb = copy_done.clone();
+        // Serialises the *emit*, not the copy.
+        //
+        // `Report::emit` prints a line and logs a matching event as one unit, and
+        // without this two workers could interleave between the two — putting a log
+        // event about one file between the line and the event for another. The lock
+        // is held for exactly one emit, never across the copy, so it does not
+        // serialise the work it is protecting.
+        //
+        // **It cannot deadlock.** It is a leaf: nothing is called while it is held,
+        // no other lock is ever held while waiting for it, and it is released before
+        // the worker returns to the pool.
+        let emit = std::sync::Mutex::new(());
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(self.jobs)
             .build()
@@ -218,14 +236,27 @@ impl Applier<'_> {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map(|rel| {
-                    debug!(rel = %rel, "copy start");
-                    let r = copy_one(self.src, self.dst, rel, &self.common.algos);
+                .map(|item| {
+                    debug!(rel = %item.rel, "copy start");
+                    let r = copy_one(self.src, self.dst, &item.rel, &self.common.algos);
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     if n.is_multiple_of(25) || n == copy_total {
                         info!(done = n, total = copy_total, "copy progress");
                     } else {
-                        trace!(done = n, total = copy_total, rel = %rel, "copy progress");
+                        trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
+                    }
+                    // **As done.** Announced the moment the file is in place, not
+                    // after every copy finishes — which is the whole difference from
+                    // the ordered emit this replaced.
+                    //
+                    // Only on success: a failed copy aborts the run before the
+                    // summary, so announcing one would be a claim about work that
+                    // did not happen.
+                    if r.is_ok() {
+                        let _guard = emit.lock().expect("emit lock is never poisoned");
+                        self.report.emit(
+                            Record::path("COPY", &item.rel).put("because", item.because.as_str()),
+                        );
                     }
                     r
                 })
@@ -233,10 +264,13 @@ impl Applier<'_> {
         });
         let mut copied = 0usize;
         let mut new_recs: Vec<(String, FileRec)> = Vec::new();
-        for (rel, r) in plan.copy.iter().zip(results) {
-            let rec = r.with_context(|| format!("copy {}", rel))?;
-            self.report.emit(Record::path("COPY", rel));
-            new_recs.push((rel.clone(), rec));
+        // Records only — the `COPY` line was already emitted above, as each copy
+        // completed. The results come back in plan order because `collect` preserves
+        // input order, so the cache rows below are written deterministically even
+        // though the lines are not.
+        for (item, r) in plan.copy.iter().zip(results) {
+            let rec = r.with_context(|| format!("copy {}", item.rel))?;
+            new_recs.push((item.rel.clone(), rec));
             copied += 1;
         }
         info!(copied, total = copy_total, "copy done");

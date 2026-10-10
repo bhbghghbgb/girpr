@@ -20,6 +20,8 @@ fn run_cli_dispatch_update_compare_sync() {
         hash_any_of: vec![],
         no_trust_size: false,
         no_trust_mtime: false,
+        why: false,
+        show_identical: false,
         include: vec![],
         exclude: vec![],
         case_sensitive: true,

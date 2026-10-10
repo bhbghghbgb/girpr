@@ -66,6 +66,22 @@ pub struct CommonOpts {
     /// and folding the mode into the list would make "which algorithms" and "how
     /// many of them" the same value.
     pub hash_mode: HashMode,
+    /// `--why`: put a reason tag on every `CHANGED` record.
+    ///
+    /// A reporting knob and nothing else: it reaches [`crate::report::verdict`] and
+    /// nothing downstream, so it cannot move the exit code. It lives beside the other
+    /// output-shaping settings rather than in the commands that use it, because the
+    /// question "does this run explain itself?" is a property of the run and not of the
+    /// command that happened to be invoked.
+    pub why: bool,
+    /// `--show-identical`: also report the pairs that came out equal.
+    ///
+    /// Threaded to [`crate::diff::diff_maps`] rather than used at the printing site,
+    /// because the equal set is a property of the *diff*: it is the classification the
+    /// diff already reached, and deciding what to print about it at the reporter would
+    /// mean asking a question the diff has already answered. It is off by default
+    /// because it is one record per equal file.
+    pub show_identical: bool,
     /// `--include` globs; empty means "everything".
     pub includes: Vec<Pattern>,
     /// `--exclude` globs; these win over `includes`.
@@ -152,6 +168,8 @@ impl TryFrom<CommonArgs> for CommonOpts {
             algos,
             hash_mode,
             stat,
+            why: a.why,
+            show_identical: a.show_identical,
             includes: compile_patterns(&a.include)?,
             excludes: compile_patterns(&a.exclude)?,
             case_sensitive: a.case_sensitive,

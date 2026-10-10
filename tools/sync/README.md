@@ -32,7 +32,7 @@ and drive the public API.
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
 | `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, `HashMode` and the coverage check): the only place that decides which digests a run must compute. `Required` carries the per-path answer to the diff |
-| `diff.rs` | `Diff` buckets and `diff_maps` |
+| `diff.rs` | `Diff` buckets, `diff_maps`, and `Verdict` + `pair_verdict` — the per-pair classification and its reason tag |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
@@ -58,8 +58,8 @@ trusting a half-written file.
 
 ```
 girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
 girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--jobs 4] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
@@ -121,7 +121,7 @@ reporting success.
 Two guards, on purpose. The flag layer refuses the combination, so the user gets a
 message instead of a run — and it refuses it in one place, so every subcommand including
 `update` behaves the same way, since the combination is a property of the *request* and
-not of the command receiving it. Behind it, `diff::is_changed` refuses to report a pair
+not of the command receiving it. Behind it, `diff::pair_verdict` refuses to report a pair
 equal when it consulted **no digest at all** and there was a difference it was told to
 ignore; that covers what the flag layer cannot reach, which is a caller assembling
 `CommonOpts` directly. While a digest *is* available it stays a real verdict, so a
@@ -337,12 +337,14 @@ names — read them by name, never by position.
 
 | event | emitted by | fields |
 | --- | --- | --- |
-| `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` |
+| `missing` / `extra` / `changed` / `type-conflict` | compare, compare-self | `path` (plus `why` on `changed`, with `--why`) |
+| `identical` | compare, compare-self | `path` — only with `--show-identical` |
 | `case-mismatch` | compare, compare-self | `src`, `dst` |
-| `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` |
+| `summary` (diff) | compare, compare-self | `missing`, `extra`, `changed`, `type_conflict`, `case_mismatch`, `total_diff` (plus `identical` with `--show-identical`) |
 | `update` | update | `dir`, `files`, `dirs`, `algos` |
 | `rename` | sync | `from`, `to` |
-| `mkdir` / `fix-dir` / `delete` / `copy` / `rmdir` | sync | `path` |
+| `mkdir` / `fix-dir` / `delete` / `rmdir` | sync | `path` |
+| `copy` | sync | `path`, `because` (`missing` \| `changed` \| `type-conflict`) |
 | `summary` (sync) | sync | `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`, `keep_extra`, `dry_run` |
 
 Exactly one `summary` is emitted per run, and it is last. The event name is the
@@ -361,6 +363,81 @@ SUMMARY missing=0 extra=1 changed=1 type_conflict=0 case_mismatch=0 total_diff=2
 {"changed":1,"event":"summary","extra":1,"missing":0,"total_diff":2,"type_conflict":0,"case_mismatch":0}
 ```
 
+### `--show-identical`
+
+The complement of the diff report: report the pairs that came out **equal**, one
+`IDENTICAL` record each, with its own `why=` tag.
+
+```
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --show-identical --why
+MISSING a.txt
+IDENTICAL b.txt why=digest-matches:md5
+IDENTICAL c_dir why=dir-present
+SUMMARY missing=1 extra=0 changed=0 type_conflict=0 case_mismatch=0 identical=2 total_diff=1
+```
+
+A `CHANGED` list cannot answer *"is this file in step, or did the tool simply not
+look at it"* — that is the question this flag is for. It reports what the diff
+already concluded and changes none of it:
+
+- **A pair that came out equal is not a difference.** `total_diff` and the exit
+  code are unaffected, so a clean tree still exits `0` with the flag on. This is
+  the property to check first if you touch `Diff::total()`: counting the equal set
+  would turn "these trees are identical" into exit `4`, the exact inverse of the
+  truth.
+- **`SUMMARY` gains `identical=N` only with the flag**, so an unflagged run is
+  byte-identical to one from before the flag existed. A consumer must treat the
+  field as optional.
+- **Directories are included** (`IDENTICAL ... why=dir-present`). Dirs compare by
+  presence, so "in step" is a real answer for them; leaving them out would make
+  the flag's output look arbitrarily partial.
+
+**Default off**, and for a real reason rather than tidiness: this is one record per
+file on both sides, so on a matching tree it is the *entire* file list. It is
+independent of `--why` — either alone is legal, together is legal.
+
+### `--why`
+
+`CHANGED` says *that* the two sides disagree; `--why` says **which check decided
+it**. The tag is appended to the `CHANGED` record and to nothing else:
+
+```
+.\target\debug\girsync compare --src D:\game-old --dst D:\game-live --why
+CHANGED a.txt why=stat-size
+CHANGED b.txt why=digest-differs:md5
+SUMMARY missing=0 extra=0 changed=2 type_conflict=0 case_mismatch=0 total_diff=2
+```
+
+| tag | meaning |
+| --- | --- |
+| `stat-size` / `stat-mtime` | a stat field **this run trusts** differs, so no digest was read |
+| `stat-size+stat-mtime` | both differ — still one stat decision |
+| `digest-differs:<algos>` | the digests disagree; `<algos>` are the ones that **disagreed**, not the ones requested |
+| `digest-matches:<algos>` | digests agree (identical pairs; see `--show-identical`) |
+| `stat-match` | every trusted stat field agrees and no digest was consulted |
+| `unverifiable:<fields>` | no digest was available and a difference this run distrusts is unresolved |
+| `dir-present` | a directory on both sides — compared by presence |
+
+Three things worth knowing:
+
+- **One tag per *decision*, never per check.** The diff is a short circuit, so the
+  tag names whatever settled the pair. A stat difference needs no digest at all, and
+  mentioning the digest that was *skipped* would be reporting an effort, not a reason.
+- **Only `CHANGED` gets one.** `MISSING`, `EXTRA`, `TYPE-CONFLICT` and `CASE-MISMATCH`
+  are self-explanatory — the bucket name is the reason. (`IDENTICAL` records get one
+  too, when both flags are passed.)
+- **`unverifiable` means "cannot tell", not "differs."** It is reported as `CHANGED`
+  because a pair whose only evidence of difference was ignored cannot be called equal,
+  and folding it into a stat tag would claim a difference the run was told not to trust.
+
+`digest-differs` names the algorithms that **actually disagreed**, which under
+`--hash-any-of` is not the list you asked for — the planner settles a pair with one
+digest, and the tag says which. A parser splits on the first `:`; the JSON form is a
+flat string (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
+
+**Default off, and it changes nothing but the text** — not the exit code, not the
+counts, not the work done. An unflagged run is byte-identical to one without the flag.
+
 `--output` affects **stdout only**. Diagnostics stay on stderr at every
 `--log-level`, so `--output json` is pipeable into a parser with no filtering:
 ```powershell
@@ -373,6 +450,55 @@ Each record is *also* logged, as a `debug` `tracing` event carrying the same
 being asked for it twice in two shapes.
 
 ### sync
+
+Mirrors `src` → `dst`. It prints its **plan** first — the diff, exactly as
+`compare` reports it — and then the actions, as it takes them.
+
+#### The plan print, and why there is only one summary
+
+```
+.\target\debug\girsync sync --src D:\game-old --dst D:\game-live --dry-run --why
+MISSING only_src.txt
+CHANGED changed.txt why=stat-size
+COPY only_src.txt because=missing
+COPY changed.txt because=changed
+SUMMARY renamed=0 mkdir=0 copied=2 ... dry_run=true
+```
+
+`because` is the **bucket**, not the reason: `missing`, `changed` or `type-conflict`.
+It is coarser than `why=` on purpose — the reason a path is `CHANGED` lives on that
+path's plan line, and repeating it on the action would put one fact in two places
+with two vocabularies. The hard rule is that **an action line carries `because=` and
+never `why=`**; anyone wanting the join has both records for the same path.
+
+The stream is three segments, in this order:
+
+| segment | what it is | when |
+| --- | --- | --- |
+| `RENAME` | dst's casing aligned to src's | before the diff — it has to be, or the diff has no exact keys to compare |
+| the **plan** | the diff, through the same `report::verdict` `compare` uses | up-front, once the diff exists |
+| the **actions** | what the apply phases do, in apply order | as they happen — so under `--jobs > 1` the `COPY` lines come out in **completion** order, not plan order |
+
+Two things follow from that split, and both are the point:
+
+- **The plan line answers *"why did it decide that"*, the action line answers *"what
+  is this tool doing"*.** A `COPY` names the bucket that caused it and never repeats
+  the reason, which lives on that path's plan line. A consumer wanting every
+  `CHANGED` with its cause reads the plan; one wanting what the run did reads the
+  actions. Neither has to join streams.
+- **A `MISSING` file appears twice** — once in the plan, once as a `COPY`. That is
+  deliberate: it is what makes the plan independently parseable without correlating
+  it against what followed.
+
+**The exit code stays `0`.** Printing a plan makes `sync` *look* like `compare`, and
+`compare` exits `4` on a difference. `sync` must not: its exit code reports whether
+the run *succeeded*, not whether it had anything to do, and returning `4` would break
+every script that syncs a partly-different tree — the normal case. The diff never
+reaches `report_diff`, so `Diff::total()` is not an exit code on this path.
+
+There is exactly one `SUMMARY`, and it is `sync`'s own — counting actions. The diff's
+own summary is dropped: two differently-shaped summaries in one stream would make
+"the last line is the summary" true only by luck.
 
 Mirrors `src` → `dst`:
 
@@ -391,7 +517,8 @@ Mirrors `src` → `dst`:
    Type-conflicts resolve toward src kind.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
-   file change. No resume.
+   file change. The `COPY` line is printed **as each copy completes**, so under
+   `--jobs > 1` those lines come out in completion order. No resume.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -489,10 +616,28 @@ names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 `keep_extra` — and the action records share one vocabulary and one order
 (`MKDIR`, `FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
 run's only addition is `dry_run=true`, so a caller reading either does not have to
-know which it got. `run_sync_dry_run_summary_matches_a_real_run` compares the
-whole `--output json` stream of the two modes with only that marker normalised
-away, so any future divergence in labels, ordering or counts fails there rather
-than reaching a caller.
+know which it got.
+
+`a_dry_run_reports_what_a_real_run_reports` compares the two modes and is now
+explicitly a **two-segment** comparison. The plan and the renames are decided
+before anything is written, so they are compared **ordered, field for field**. The
+actions are reported as they complete, and completion order is a function of I/O
+timing rather than of the plan, so they are compared as a **multiset** — with the
+count asserted separately, so a duplicate cannot hide in a set. That weakening is
+unavoidable rather than something to engineer around: the alternative is to keep
+emitting after the pool joins, which is the behaviour the as-done printing removes.
+
+**A dry run and a real run are no longer comparable as one ordered document.**
+`COPY` lines are emitted inside the copy worker, so a run with `--jobs 4` prints
+them in whatever order the files finish — 24 padded files under `--jobs 4` came out
+shuffled on 8 of 8 runs. The *set* and the *count* are unchanged and are what the
+tests assert; the order is not, and no test may depend on it.
+
+The emit is serialised by a leaf mutex rather than left to each thread's
+`println!`. `Report::emit` prints a line and logs a matching event as one unit, and
+without it two workers could interleave between the two, putting a log event about
+one file between the line and the event for another. The lock is held for exactly one
+emit and never across the copy, so it does not serialise the work it protects.
 
 `rmdir` is exact rather than omitted, which is why it is *planned*:
 `build_plan` decides the set (see `Plan::rmdir`), so the same count is available
@@ -691,15 +836,15 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
   undecided set. Worth knowing because the row looks healthy — it has the right size and
   mtime.
-- **`hashes_differ` is silent, and silence used to read as "equal".** Its `false` means
+- **`hashes_differ` is silent, and silence used to read as "equal".** An empty result means
   *"no difference detected"*, which is not the same claim as *"identical"* — it is safe
   only while every pair reaching it has a digest to compare, which `Required` guarantees
   for an undecided pair. A run that requested **no** algorithm has no entry, so the
-  silence became the whole of the answer and a changed pair came back clean. `is_changed`
+  silence became the whole of the answer and a changed pair came back clean. `pair_verdict`
   now distinguishes the two: with no digest consulted at all, a difference that was
-  distrusted makes the pair `CHANGED` (*cannot confirm*) rather than equal. Worth knowing
-  because nothing else surfaces it — the row looks fine, the counters look fine, and only
-  the verdict is wrong.
+  distrusted makes the pair `CHANGED` (*cannot confirm*, tagged `unverifiable:<fields>`)
+  rather than equal. Worth knowing because nothing else surfaces it — the row looks fine,
+  the counters look fine, and only the verdict is wrong.
 - **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
   it. The old spelling is rejected rather than aliased, so a script passing
   `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
@@ -708,7 +853,9 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
   Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `lazy.rs`
+  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why` and `--show-identical`: a
+  table of pair state -> classification -> reason tag, the two buckets' exclusions
+  from the exit code, and both flags' surface through the real binary), `lazy.rs`
   (per-fixture expected verdicts *and* expected read counts, each stated before
   the code it pins), `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick
   and its tiers, the per-path answer reaching the diff, and the flag surface

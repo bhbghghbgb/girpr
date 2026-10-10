@@ -114,6 +114,8 @@ pub fn opts() -> CommonOpts {
         algos: vec!["md5".to_string()],
         hash_mode: HashMode::default(),
         stat: StatTrust::default(),
+        why: false,
+        show_identical: false,
         includes: vec![],
         excludes: vec![],
         case_sensitive: true,

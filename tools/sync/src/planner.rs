@@ -106,6 +106,64 @@ impl Default for StatTrust {
     }
 }
 
+/// One of the two stat fields a comparison consults.
+///
+/// A type rather than a string because the field is **named in output**: a reason
+/// tag says which field settled a pair, and a tag assembled from `&str`s would have
+/// two spellings and no compiler to catch them disagreeing. It lives beside
+/// [`StatTrust`] rather than in [`crate::diff`] because it is the vocabulary
+/// `StatTrust`'s own predicates speak — the diff reports it, but nothing here needs
+/// to know that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StatField {
+    /// Byte length.
+    Size,
+    /// Modification time.
+    Mtime,
+}
+
+impl StatField {
+    /// The spelling used inside a reason tag: `stat-size`, `unverifiable:size`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StatField::Size => "size",
+            StatField::Mtime => "mtime",
+        }
+    }
+}
+
+/// Which stat fields differ between two sides.
+///
+/// Two booleans rather than a `Vec<StatField>`, because the question is asked once
+/// per pair on a path that may hold hundreds of thousands of them and the answer is
+/// almost always "nothing". The list form exists too, as [`Self::fields`], for the
+/// one caller that has to *name* the fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DifferingFields {
+    /// The two sides' lengths differ.
+    pub size: bool,
+    /// The two sides' modification times differ.
+    pub mtime: bool,
+}
+
+impl DifferingFields {
+    /// True when at least one field differs.
+    pub fn any(&self) -> bool {
+        self.size || self.mtime
+    }
+
+    /// The fields that differ, **size first**.
+    ///
+    /// The order is the one [`StatTrust::settles`] tests them in, so it is both the
+    /// first one to have settled a pair and the first one a reason names. A caller
+    /// cannot depend on the reverse.
+    pub fn fields(&self) -> impl Iterator<Item = StatField> {
+        [(self.size, StatField::Size), (self.mtime, StatField::Mtime)]
+            .into_iter()
+            .filter_map(|(differing, field)| differing.then_some(field))
+    }
+}
+
 impl StatTrust {
     /// `--no-trust-size`
     pub fn without_size(mut self) -> Self {
@@ -141,23 +199,43 @@ impl StatTrust {
         }
     }
 
-    /// True when this pair's stat, as trusted, settles it without a digest.
+    /// Which fields differ **and are trusted** — so a pair for which this is
+    /// non-empty is settled without a digest.
     ///
     /// The single definition of the short circuit's condition, so the planner and
-    /// anything else that has to agree with it read the same rule. `size` and
-    /// `mtime` are both present rather than compared here, so a caller cannot
-    /// accidentally ask about one and infer the other.
-    pub fn settles(&self, a_size: u64, a_mtime: i64, b_size: u64, b_mtime: i64) -> bool {
-        (self.size && a_size != b_size) || (self.mtime && a_mtime != b_mtime)
+    /// anything else that has to agree with it read the same rule. Naming the fields
+    /// rather than comparing them here is what lets a caller that needs to *report*
+    /// the reason ask the same question and get the answer as a value, instead of
+    /// re-deriving which field happened to settle the pair.
+    pub fn trusted_differs(
+        &self,
+        a_size: u64,
+        a_mtime: i64,
+        b_size: u64,
+        b_mtime: i64,
+    ) -> DifferingFields {
+        DifferingFields {
+            size: self.size && a_size != b_size,
+            mtime: self.mtime && a_mtime != b_mtime,
+        }
     }
 
-    /// True when a field this run does **not** trust differs between the two sides.
+    /// True when this pair's stat, as trusted, settles it without a digest.
     ///
-    /// The companion to [`Self::settles`], and the question the diff has to ask when it
-    /// has *no* digest to fall back on. `settles` asks "is there trusted evidence of
-    /// difference?"; this asks "was there evidence we chose to ignore?" — and a pair
-    /// whose only evidence of difference was ignored has no evidence **of sameness**
-    /// either, so it cannot be reported equal.
+    /// Reads [`Self::trusted_differs`] rather than writing the condition out, so the
+    /// boolean and the reason it can give cannot drift apart: a predicate that has to
+    /// be re-typed is a predicate that will be.
+    pub fn settles(&self, a_size: u64, a_mtime: i64, b_size: u64, b_mtime: i64) -> bool {
+        self.trusted_differs(a_size, a_mtime, b_size, b_mtime).any()
+    }
+
+    /// Which fields differ **and are not trusted**.
+    ///
+    /// The companion to [`Self::trusted_differs`], and the question the diff has to
+    /// ask when it has *no* digest to fall back on. `trusted_differs` asks "is there
+    /// trusted evidence of difference?"; this asks "was there evidence we chose to
+    /// ignore?" — and a pair whose only evidence of difference was ignored has no
+    /// evidence **of sameness** either, so it cannot be reported equal.
     ///
     /// It exists because [`crate::diff::hashes_differ`] is silent when handed nothing to
     /// compare, and that silence is only safe while every pair reaching it has a digest
@@ -165,15 +243,24 @@ impl StatTrust {
     /// only for an undecided pair, and the planner has an entry for every undecided
     /// pair. A run that requested **no** algorithm has no entry, so the silence stops
     /// being a fallback and becomes the whole of the answer.
-    pub fn untrusted_disagrees(
+    pub fn untrusted_differs(
         &self,
         a_size: u64,
         a_mtime: i64,
         b_size: u64,
         b_mtime: i64,
-    ) -> bool {
-        (!self.size && a_size != b_size) || (!self.mtime && a_mtime != b_mtime)
+    ) -> DifferingFields {
+        DifferingFields {
+            size: !self.size && a_size != b_size,
+            mtime: !self.mtime && a_mtime != b_mtime,
+        }
     }
+
+    // Deliberately no `untrusted_disagrees() -> bool` alongside this one. It would
+    // have no caller, and a second spelling of a rule is a rule that can drift: when
+    // this was a boolean, the mutation that made *it* disagree with the diff while the
+    // diff agreed with the itemised form passed every test in the suite. One
+    // definition, and the caller that wants a bool asks `.any()`.
 
     /// True when **at least one** field is not trusted.
     ///
