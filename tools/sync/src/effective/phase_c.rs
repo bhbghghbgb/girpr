@@ -29,7 +29,7 @@ use super::side::{OpenSide, Side};
 ///
 /// A path the plan leaves alone is finalized from what phase A carried, and
 /// costs no write: its row is already correct. A path that is hashed is written
-/// through [`merge_row`], which is the same write rule phase A used, so the two
+/// through `merge_row`, which is the same write rule phase A used, so the two
 /// phases cannot spell it differently.
 ///
 /// ## Two stages per window, and why they are not one

@@ -108,7 +108,8 @@ impl RwRuntime {
         })
     }
 
-    /// [`RwLimits::Shared(1)`]: strictly one rw operation at a time, anywhere.
+    /// [`RwLimits::Shared(1)`](RwLimits::Shared): strictly one rw operation at a
+    /// time, anywhere.
     ///
     /// Not a user-facing setting — the CLI's answer for an unflagged run is a
     /// resolved [`RwLimits`] like any other. It exists for callers that have no run

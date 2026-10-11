@@ -208,7 +208,7 @@ pub struct SideEntry {
     /// Not derivable from `cached` being empty, because a fresh row can carry no
     /// digests at all — that is what a stat-only `--hash-all-of none` scan records,
     /// and it is a real state. Phase C needs the distinction to reconstruct the prior
-    /// row and hand it to [`merge_row`], so it is carried explicitly rather than
+    /// row and hand it to `merge_row`, so it is carried explicitly rather than
     /// inferred.
     pub fresh: bool,
 }

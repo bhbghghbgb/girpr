@@ -48,7 +48,7 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 ///
 /// So a run never destroys a digest it did not recompute unless the file's stat
 /// says it changed. `--hash none` and `--no-trust-cached-hashes` both write stat
-/// data while leaving unrequested digests intact. This is [`merge_row`]'s rule,
+/// data while leaving unrequested digests intact. This is `merge_row`'s rule,
 /// stated here because this is where the rows are written.
 ///
 /// Phase A opens, uses and commits its own batched write handle, so the row set

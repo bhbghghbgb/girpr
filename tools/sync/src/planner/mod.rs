@@ -17,7 +17,7 @@
 //! There are two predicates, and they answer different questions. One side with no
 //! counterpart is [`HashPlan::plan_one_side`] — every requested algorithm for every
 //! file, which is `update`. Two sides are [`plan_pairs`], which is
-//! [`plan_one_side`] plus a pairing step and a coverage requirement.
+//! [`HashPlan::plan_one_side`] plus a pairing step and a coverage requirement.
 //!
 //! ## Two questions, kept apart
 //!
