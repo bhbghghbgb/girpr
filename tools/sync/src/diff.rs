@@ -55,10 +55,10 @@ pub enum Verdict {
     /// No digest was available, and a difference this run distrusts is unresolved.
     ///
     /// Reported as `CHANGED` rather than equal. **Cannot tell is not the same claim
-    /// as differs**, and it is the one that must stay visible: this is the stage-8
-    /// hardening, where a size-differing pair under `--hash-all-of none
-    /// --no-trust-size` used to come back *identical* — and `sync` then left `dst`
-    /// stale by a run that reported success.
+    /// as differs**, and it is the one that must stay visible: a size-differing pair
+    /// under `--hash-all-of none --no-trust-size` has no digest to fall back on, so
+    /// calling it equal would let `sync` leave `dst` stale by a run that reported
+    /// success.
     Unverifiable {
         /// The distrusted fields that differ.
         fields: Vec<StatField>,
@@ -315,10 +315,9 @@ pub fn pair_verdict(
 /// uniform run would be described just as well by passing that list straight
 /// through. Consulted only once stat has been found unconvincing, which is the same
 /// boundary the planner applies — so a path that reaches it has an entry, **except
-/// when the run requested no algorithm at all**. That exception used to be read as
-/// "equal" and is now handled explicitly in [`pair_verdict`]; it is the one case where
-/// `Required` has nothing to say and `hashes_differ`'s silence would otherwise be
-/// mistaken for a verdict.
+/// when the run requested no algorithm at all**. That exception is handled explicitly
+/// in [`pair_verdict`]; it is the one case where `Required` has nothing to say and
+/// `hashes_differ`'s silence would otherwise be mistaken for a verdict.
 ///
 /// `stat` decides **which stat fields may settle a pair here**, and it is the same
 /// value the planner was given — read from `plan.stat` rather than taken again, so
@@ -445,8 +444,9 @@ pub fn hashes_differ(
 ) -> Vec<String> {
     let mut differ: Vec<String> = Vec::new();
     for algo in algos {
-        // If either side lacks the hash (e.g. --hash none history), fall back to
-        // size+mtime which the caller already compared; do not force differ here.
+        // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
+        // record), fall back to size+mtime which the caller already compared; do
+        // not force differ here.
         if let (Some(x), Some(y)) = (a.get(algo), b.get(algo))
             && x != y
         {

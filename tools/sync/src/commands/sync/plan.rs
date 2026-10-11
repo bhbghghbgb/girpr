@@ -274,9 +274,8 @@ impl Summary {
 /// rmdir — rather than grouped by plan category, so the sequence a dry run
 /// reports is the sequence a real run will perform, and the two report the same
 /// document. The action labels are shared verbatim too, including `FIX-DIR` for
-/// the file-blocking-a-directory case, which this used to spell `RMDIR-FILE`:
-/// that name reads as "remove a directory that is a file", which is backwards —
-/// the *file* goes and a directory takes its place.
+/// the file-blocking-a-directory case, which `FIX-DIR` names in the direction the
+/// action goes: the *file* is removed and a directory takes its place.
 pub(super) fn dry_run_records(
     plan: &Plan,
     renamed: usize,

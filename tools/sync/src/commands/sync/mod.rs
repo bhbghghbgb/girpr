@@ -39,8 +39,8 @@
 //! every script that syncs a partly-different tree — which is the normal case. The
 //! diff never reaches [`super::report_diff`], so `Diff::total()` is not an exit code
 //! on this path at all.
-//! Steps 4's rename still precedes the diff and always will: the diff is taken
-//! case-sensitively on exact keys. The plan in step 3 therefore runs *before* the
+//! The rename still precedes the diff and always will: the diff is taken
+//! case-sensitively on exact keys. The plan therefore runs *before* the
 //! rename, paired by lowercase in insensitive mode — see the comment at the call
 //! site, which is the one place the two case flags deliberately disagree.
 //!
@@ -188,8 +188,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     //
     // `common.case_sensitive` here, and a hardcoded `true` in the `diff_maps` call
     // below. That asymmetry is deliberate. This pairs the sides as they are *on
-    // disk*, which in insensitive mode means by lowercase — and the rename pass in
-    // step 4 then collapses exactly those pairs onto exact keys, so the diff goes
+    // disk*, which in insensitive mode means by lowercase — and the rename pass
+    // then collapses exactly those pairs onto exact keys, so the diff goes
     // on to form the same pairs. Passing `true` here would make a case-only pair
     // look one-sided and skip a digest it needs; passing `false` in the diff would
     // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
@@ -232,7 +232,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     //
     // The two resolves run at once. That is a no-op under one shared counter — the
     // gate serialises them, which is why this is not a branch on the mode — and
-    // the point of a split limit, where src being read no longer waits for dst to
+    // the point of a split limit, where src being read does not wait for dst to
     // finish being read. `ensure_distinct_sides` has already guaranteed the two
     // caches are different files, so the two never touch one database.
     let (src_res, dst_res) = resolve_sides_concurrently(
@@ -283,7 +283,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // answer is only usable if the side it is keyed by is the side that does not
     // move.
     // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
-    // step 4 gives it a plan print that takes the equal set only if asked.
+    // the plan print takes the equal set only if asked.
     let diff = diff_maps(
         &sm,
         &dm,

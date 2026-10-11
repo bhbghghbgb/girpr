@@ -67,7 +67,7 @@ Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
 `--output text|json`. `sled2redb` takes `--force` and the same `--output`.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
-[Concurrency](#concurrency). `--jobs` is gone; see [Gotchas](#gotchas).
+[Concurrency](#concurrency).
 
 ### `--no-trust-size` / `--no-trust-mtime`
 
@@ -78,8 +78,8 @@ together is "disable it"**, expressed as the reason:
 | | a pair is settled for free when |
 | --- | --- |
 | default | sizes differ, **or** mtimes differ |
-| `--no-trust-size` | mtimes differ (size alone no longer settles it) |
-| `--no-trust-mtime` | sizes differ (mtime alone no longer settles it) |
+| `--no-trust-size` | mtimes differ (size alone does not settle it) |
+| `--no-trust-mtime` | sizes differ (mtime alone does not settle it) |
 | both | never — every file-on-both-sides pair needs a digest |
 
 Only *file on both sides* pairs are affected. Dirs are compared by presence, a kind
@@ -116,10 +116,10 @@ a digest. So neither can be combined with a run that requests none:
 Refused rather than warned, and that is a deliberate break from how `update` treats the
 other flag it cannot honour. The distinction is whether the verdict stays right: ignoring
 a flag that does not apply still produces a correct answer, whereas ignoring *this* one
-produced a wrong one, so a warning would have been describing a choice the user
-believes protects them. Concretely, `--hash-all-of none --no-trust-size` used to report
-a size-differing pair as **equal**, and `sync` under it left `dst` stale while
-reporting success.
+would produce a wrong one, so a warning would be describing a choice the user
+believes protects them. Concretely, `--hash-all-of none --no-trust-size` would have
+nothing to fall back on, so a size-differing pair could only be reported as **equal** —
+and `sync` under it would leave `dst` stale while reporting success.
 
 Two guards, on purpose. The flag layer refuses the combination, so the user gets a
 message instead of a run — and it refuses it in one place, so every subcommand including
@@ -156,9 +156,8 @@ choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
 
 That makes it strictly weaker than all-of, and never weaker than the pick: every
 algorithm it chooses is obtainable on *both* sides, so a pair settled this way is
-settled by a digest both sides hold. That is the whole difference from the old
-behaviour, which skipped whatever digest was missing and reported the pair equal on
-size+mtime alone.
+settled by a digest both sides hold. That is what separates it from simply skipping
+whatever digest is missing and reporting the pair equal on size+mtime alone.
 
 Reach for it when a side holds only some of what you would otherwise demand — a
 record written by an older run, typically. An `--hash-all-of md5` history compared with
@@ -170,12 +169,6 @@ cover.
 `--hash-all-of none` is the stat-only audit — no hashing at all, decisions by
 size+mtime only (verify-after-copy also size+mtime). `none` is **not** accepted by
 `--hash-any-of`: with nothing requested there is no "any of" to choose.
-
-> **Breaking change.** `--hash` was renamed. A record missing a requested digest used
-> to degrade silently to size+mtime and report the pair equal; under the default
-> `--hash-all-of` it is an error. A script passing `--hash md5` must become
-> `--hash-all-of md5` — the old spelling is rejected rather than aliased, so a typo
-> that used to work now says so.
 
 `--no-trust-cached-hashes` is repeatable and takes a side: pass `src`, `dst`, or
 both. On a named side, a cached digest is never reused — every file is rehashed
@@ -262,23 +255,23 @@ digests included — and reports the same `ScanStats`. Two runs can print identi
 `CHANGED` lines while having hashed different files, so the tests compare the maps,
 not the output: `tests/rw_threads.rs`.
 
-Two ordering properties changed, both inside `resolve_folder`:
+Two ordering properties hold, both inside `resolve_folder`:
 
-- **Write order is still sorted; read order is not.** Cache rows land in the same
+- **Write order is sorted; read order is not.** Cache rows land in the same
   order every run, so the cache bytes and the progress heartbeat stay reproducible.
-  Which files are *read* in which order is no longer part of any promise.
+  Which files are *read* in which order is not part of any promise.
 - **Durability is per-window rather than per-digest.** Phase C hashes in windows
   (`max(threads × 8, 32)`) and writes each window's rows through the batched handle
-  before starting the next. `COMMIT_INTERVAL` still bounds how much work an
+  before starting the next. `COMMIT_INTERVAL` bounds how much work an
   interruption can lose, and peak memory stays bounded instead of holding one
   digest map per pending file at once.
 
 ### update, compare and compare-self
 
-They have the flags too, which is new: `--jobs` was on `sync` alone. `update`
-rehashes every file and gains real parallelism. One caveat — on `compare-self` the
-record side has **no filesystem**, so `--rw-threads-src` is a no-op there and the
-startup log says so rather than leaving you to work out why.
+They take the flags too. `update` rehashes every file and so does real parallelism
+on it. One caveat — on `compare-self` the record side has **no filesystem**, so
+`--rw-threads-src` is a no-op there and the startup log says so rather than leaving
+you to work out why.
 
 ### update
 
@@ -337,11 +330,11 @@ identical.
 if it cannot.** Coverage is checked *before* either side reads a byte, over the
 undecided set only. A folder can always go and compute a missing digest; a record
 cannot, so a digest it does not hold is a question this run cannot answer — and
-the alternative, which is what used to happen, was to fall back to size+mtime and
-report a confident answer about content nobody compared. `--no-trust-cached-hashes`
-on a record side is *not* a shortfall: it asks the record to re-read, and a record
-has nothing to re-read. `sync` runs the same check and cannot trip it, because
-both its sides are folders. Details, and the message shape, in `src/planner.rs`.
+the only alternative would be to fall back to size+mtime and report a confident
+answer about content nobody compared. `--no-trust-cached-hashes` on a record side
+is *not* a shortfall: it asks the record to re-read, and a record has nothing to
+re-read. `sync` runs the same check and cannot trip it, because both its sides are
+folders. Details, and the message shape, in `src/planner.rs`.
 
 ### compare-self
 
@@ -361,15 +354,15 @@ against (it never creates one — that would make the first run vacuously clean)
 or if `--ignore-cache` was passed (it would delete the record under audit).
 
 **The folder side is scanned with no cache to consult**, which is what makes this
-an audit. It used to share the record's cache, and a folder side's only
-cache-derived input is digests — so for every file whose size+mtime still
-matched, the "content comparison" was the record's digest compared with itself.
-Content that changed while preserving both was invisible, and
-`--no-trust-cached-hashes` was the only thing that could surface it. Now the
-folder is hashed against nothing, so it must be read to be compared, and a
-`CHANGED` means the bytes disagree. Two independent reasons nothing is written:
-the record is opened read-only (the handle has no write path at all), and the
-folder side is resolved against an in-memory handle that is not the same file.
+an audit. A folder side's only cache-derived input is digests — so if it shared the
+record's cache, every file whose size+mtime still matched would have its "content
+comparison" be the record's digest compared with itself, and content that changed
+while preserving both would be invisible. `--no-trust-cached-hashes` would be the
+only thing that could surface it. Instead the folder is hashed against nothing, so
+it must be read to be compared, and a `CHANGED` means the bytes disagree. Two
+independent reasons nothing is written: the record is opened read-only (the handle
+has no write path at all), and the folder side is resolved against an in-memory
+handle that is not the same file.
 
 **It reads the undecided pairs, so the cost runs opposite to what you'd guess.**
 A file whose size or mtime disagrees with the record is settled without a read,
@@ -380,10 +373,10 @@ what you want. `--no-trust-cached-hashes` and `--dry-run` are both accepted and
 do nothing here; the command warns rather than erroring, so a script passing them
 to every subcommand keeps working.
 
-**A record that cannot answer a pair it is asked about is now an error, not a
-pass.** Exits `3`, naming the record, how many undecided paths are uncovered, a
-few of them, the per-algorithm coverage, and the remedy. This is a behaviour
-change and the commonest way to hit it is worth knowing:
+**A record that cannot answer a pair it is asked about is an error, not a pass.**
+Exits `3`, naming the record, how many undecided paths are uncovered, a
+few of them, the per-algorithm coverage, and the remedy. This is the commonest way
+to hit it and it is worth knowing:
 
 ```
 girsync update src      # cache warm
@@ -395,10 +388,10 @@ girsync compare-self src   # exit 3: 1 of 3 undecided paths uncovered
 The `sync` is not at fault. It decided that pair by presence, so it needed no
 digest, so phase A recorded the file's stat and nothing else — and that row is
 *fresh*, so nothing will ever fill it in on its own. The audit then finds a
-stat-equal pair the record cannot digest, and before this rule it exited **0**:
-`hashes_differ` skips an algorithm either side lacks, so the pair quietly fell back
-to the size+mtime that had already agreed and the audit reported the newcomer as
-in step. Three ways out, all named in the error: one command
+stat-equal pair the record cannot digest, and without this rule it would have
+exited **0**: `hashes_differ` skips an algorithm either side lacks, so the pair
+quietly falls back to the size+mtime that had already agreed and the audit reports
+the newcomer as in step. Three ways out, all named in the error: one command
 (`girsync update --dir src`), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
 `--hash-all-of none` for a stat-only audit.
@@ -411,11 +404,11 @@ of refusing:
 girsync compare-self --dir src --hash-any-of md5 sha256
 ```
 
-An audit of a `--hash md5` history then succeeds wherever the record has md5, without
-repopulating. It reads one digest per undecided pair and cannot read zero — this
-command's disk side has no cache by design, so there is no tier-1 "already have it"
-to hit — which makes `any-of` here a way to *narrow the request to one algorithm*,
-not a way to skip the work.
+An audit of an `--hash-all-of md5` record then succeeds wherever the record has md5,
+without repopulating. It reads one digest per undecided pair and cannot read zero —
+this command's disk side has no cache by design, so there is no tier-1 "already have
+it" to hit — which makes `any-of` here a way to *narrow the request to one
+algorithm*, not a way to skip the work.
 
 The same caveat as everywhere else applies to `--max-depth` and
 `--include`/`--exclude`: a run whose filters differ from the ones the cache was
@@ -484,7 +477,7 @@ already concluded and changes none of it:
   would turn "these trees are identical" into exit `4`, the exact inverse of the
   truth.
 - **`SUMMARY` gains `identical=N` only with the flag**, so an unflagged run is
-  byte-identical to one from before the flag existed. A consumer must treat the
+  byte-identical to a run that never passes it. A consumer must treat the
   field as optional.
 - **Directories are included** (`IDENTICAL ... why=dir-present`). Dirs compare by
   presence, so "in step" is a real answer for them; leaving them out would make
@@ -671,31 +664,28 @@ which are the only filesystem writes in the crate; the cache half reaches every
 command through `ScanMode::dry_run`. `compare-self` accepts it and warns, since it
 opens the record read-only and resolves the folder side against an in-memory
 handle — a script passing `--dry-run` everywhere should not break on the one
-command that was already safe.
+command that is already safe.
 
 **A dry run must answer the same question, not a smaller one.** This is the part
-that is easy to get wrong and had never been enforced here: a dry run still
-stats the tree, still reads cached digests, and still hashes whatever stat alone
-cannot settle. It does the same work and takes the same decisions; only the writes
-are gone. Skipping the hashing would make it cheaper and *wrong* — it would report
-the answer to a different question. That is also why `SideCapability`'s
-`can_hash_from_disk` stays true under a dry run.
+that is easy to get wrong: a dry run still stats the tree, still reads cached
+digests, and still hashes whatever stat alone cannot settle. It does the same work
+and takes the same decisions; only the writes are gone. Skipping the hashing would
+make it cheaper and *wrong* — it would report the answer to a different question.
+That is also why `SideCapability`'s `can_hash_from_disk` stays true under a dry run.
 
 The testable form of that is **`ScanStats` is identical in both modes**, and it
 is asserted as a whole struct rather than field by field, so a counter added
 later cannot quietly start reporting a write's outcome instead of a decision.
-Two bugs that assertion caught, both instances of one mistake — gating a
-*decision* or a *count* behind the write handle instead of gating only the write:
+Two ways to get that wrong are both instances of one mistake — gating a *decision*
+or a *count* behind the write handle instead of gating only the write:
 
-- The prune set was computed inside `if let Some(w) = batch`, so a dry run never
-  worked out which rows were stale and reported `pruned = 0` over a tree a real
-  run prunes. How many rows *would* be dropped is an answer; only the `remove`
-  calls are writes.
-- A corrupt cache fell back to an in-memory one under `--dry-run`, "so a dry run
-  still answers rather than dying on a cache it is not allowed to rebuild". A real
-  run exits `3` with no answer at all, so this made a dry run report a confident
-  verdict over a cache neither mode could read — worse than crashing, because it
-  looks like an answer. It now refuses exactly as a real run does.
+- Computing the prune set inside `if let Some(w) = batch` makes a dry run report
+  `pruned = 0` over a tree a real run prunes. How many rows *would* be dropped is
+  an answer; only the `remove` calls are writes.
+- Falling back to an in-memory cache for a corrupt one under `--dry-run` makes a
+  dry run report a confident verdict over a cache neither mode could read — worse
+  than crashing, because it looks like an answer. A corrupt cache is a hard error
+  in both modes, and a dry run refuses exactly as a real run does.
 
 Enforcement is structural rather than per-command: `effective::open_folder_cache`
 is the single place a folder's cache is opened, so no command can honour the flag
@@ -716,21 +706,21 @@ names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 run's only addition is `dry_run=true`, so a caller reading either does not have to
 know which it got.
 
-`a_dry_run_reports_what_a_real_run_reports` compares the two modes and is now
-explicitly a **two-segment** comparison. The plan and the renames are decided
+`a_dry_run_reports_what_a_real_run_reports` compares the two modes as a
+**two-segment** comparison. The plan and the renames are decided
 before anything is written, so they are compared **ordered, field for field**. The
 actions are reported as they complete, and completion order is a function of I/O
 timing rather than of the plan, so they are compared as a **multiset** — with the
 count asserted separately, so a duplicate cannot hide in a set. That weakening is
 unavoidable rather than something to engineer around: the alternative is to keep
-emitting after the pool joins, which is the behaviour the as-done printing removes.
+emitting after the pool joins, which would serialise the reporting behind the work
+it reports on.
 
-**A dry run and a real run are no longer comparable as one ordered document.**
+**A dry run and a real run are not comparable as one ordered document.**
 `COPY` lines are emitted inside the copy worker, so a run with
 `--rw-threads 4` prints them in whatever order the files finish — 24 padded files
-under `--rw-threads 4` came out shuffled on 8 of 8 runs. The *set* and the *count*
-are unchanged and are what the tests assert; the order is not, and no test may
-depend on it.
+under `--rw-threads 4` come out shuffled on 8 of 8 runs. The *set* and the *count*
+are what the tests assert; the order is not, and no test may depend on it.
 
 The emit is serialised by a leaf mutex rather than left to each thread's
 `println!`. `Report::emit` prints a line and logs a matching event as one unit, and
@@ -828,16 +818,17 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   (exit `3`). `resolve_record` therefore never has to check anything — the planner
   does not plan work for a side that cannot hash, so there is nothing it could have
   failed to deliver. That is what closes the last false clean: `hashes_differ` skips
-  an algorithm either side lacks, so an uncovered pair used to fall back to the
-  size+mtime that had already agreed and the run reported `CHANGED = 0` about
-  content nobody read.
+  an algorithm either side lacks, so an uncovered pair would otherwise fall back to
+  the size+mtime that had already agreed and the run would report `CHANGED = 0`
+  about content nobody read.
 
   `--hash-all-of` / `--hash-any-of` (above) is the *which* half of the same
   decision, and the planner's answer to it is also per pair:
   `PairPlan::required` maps each src path to the algorithms that settle it, and
   `diff_maps` consults that rather than a run-wide list — under `all-of` every entry
-  *is* the whole requested list, so it is a superset of the old signature rather
-  than a different mechanism. Availability bookkeeping is identical in both modes
+  *is* the whole requested list, so a uniform run is described just as well by a
+  run-wide list, but the per-path form is what lets one run settle different pairs
+  by different algorithms. Availability bookkeeping is identical in both modes
   ("can this side obtain algorithm `a`" does not depend on the mode); only the
   requirement differs. Under `any-of` a side with a filesystem can therefore never
   be the short one, which is why an `any-of` coverage failure always names a
@@ -926,44 +917,33 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
-  it cannot compare content for that path. It used to exit `0` and call the pair
-  equal on size+mtime alone. `girsync update --dir <the folder>` is the fix, or
-  `--hash-any-of` if the record holds *some* of what you asked for; the error names
-  the folder, the count, the paths and the mode that failed.
+  it cannot compare content for that path. `girsync update --dir <the folder>` is
+  the fix, or `--hash-any-of` if the record holds *some* of what you asked for; the
+  error names the folder, the count, the paths and the mode that failed.
 - **A size-changed cache row can get stuck.** Editing a file's length drops its digests
   (a stale row's are all suspect), and a size difference settles the pair for free — so
   nothing ever rehashes it and the row stays stat-only permanently, describing content
   it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
   undecided set. Worth knowing because the row looks healthy — it has the right size and
   mtime.
-- **`hashes_differ` is silent, and silence used to read as "equal".** An empty result means
-  *"no difference detected"*, which is not the same claim as *"identical"* — it is safe
-  only while every pair reaching it has a digest to compare, which `Required` guarantees
-  for an undecided pair. A run that requested **no** algorithm has no entry, so the
-  silence became the whole of the answer and a changed pair came back clean. `pair_verdict`
-  now distinguishes the two: with no digest consulted at all, a difference that was
-  distrusted makes the pair `CHANGED` (*cannot confirm*, tagged `unverifiable:<fields>`)
-  rather than equal. Worth knowing because nothing else surfaces it — the row looks fine,
-  the counters look fine, and only the verdict is wrong.
-- **`--hash` is gone.** Renamed to `--hash-all-of`, with `--hash-any-of` alongside
-  it. The old spelling is rejected rather than aliased, so a script passing
-  `--hash md5` fails loudly instead of quietly getting the new default. `--hash-all-of
-  none` is the stat-only audit; `none` is refused by `--hash-any-of`.
-- **`--jobs` is gone.** Replaced by `--rw-threads N` / `--rw-threads-src S` /
-  `--rw-threads-dst D` / `--rw-dual-drive`, all on every subcommand rather than
-  `sync` alone. The old spelling is **rejected rather than aliased**, so a script
-  passing `--jobs 4` fails loudly at parse time (exit `2`) instead of quietly
-  getting a different default — same call as `--hash` → `--hash-all-of`.
-- **The default moved 4 → 1.** `--jobs` defaulted to `4`; `--rw-threads` defaults to
-  `1`. An unflagged `sync` therefore runs one copy at a time where it used to run
-  four, which is the right default for a single disk and a four-fold slowdown for
-  anyone who never passed the flag. If you want the old behaviour back, pass
-  `--rw-threads 4`; on two drives, `--rw-dual-drive`.
+- **`hashes_differ` is silent, and silence is not the same claim as "equal".** An empty
+  result means *"no difference detected"*, which is not the same claim as
+  *"identical"* — it is safe only while every pair reaching it has a digest to compare,
+  which `Required` guarantees for an undecided pair. A run that requested **no**
+  algorithm has no entry, so the silence would be the whole of the answer and a changed
+  pair would come back clean. `pair_verdict` distinguishes the two: with no digest
+  consulted at all, a difference that was distrusted makes the pair `CHANGED` (*cannot
+  confirm*, tagged `unverifiable:<fields>`) rather than equal. Worth knowing because
+  nothing else surfaces it — the row looks fine, the counters look fine, and only the
+  verdict is wrong.
+- **Concurrency defaults to one rw operation.** `--rw-threads` defaults to `1`, so an
+  unflagged `sync` runs one copy at a time. That is the right default for a single
+  disk and a slowdown for anyone who never passed the flag. Pass `--rw-threads 4` to
+  lift it; on two drives, `--rw-dual-drive`.
 - **`--rw-dual-drive` on one physical disk is slower than doing nothing special.**
   It asserts a fact about your hardware that the tool cannot check. See
   [Concurrency](#concurrency).
-  two-step rename since Windows FS can't hold `a.txt` + `A.txt` simultaneously).
-  Integration tests live in `tests/` and are grouped by concern: `helpers.rs`
+- **Integration tests** live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
   `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why` and `--show-identical`: a
   table of pair state -> classification -> reason tag, the two buckets' exclusions
@@ -999,8 +979,8 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   means the dry run took a different branch. It cannot catch a *systematic* error
   though — a summary wrong in both modes passes it — which is what the derived
   summary is for.
-- **Tests read records, not lines.** Anything that used to match rendered stdout
-  text now asserts `report::Record`s — as JSON objects via `json!`, or parsed from
+- **Tests read records, not lines.** Anything that asserts *what was reported*
+  asserts `report::Record`s — as JSON objects via `json!`, or parsed from
   `--output json` when the binary has to run (the `RENAME`/`FIX-DIR` records only
   exist there). The text rendering has its own cases in `report.rs`. A test whose
   point is *what was reported* should not also restate *how it is spelled*.

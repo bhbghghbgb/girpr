@@ -63,8 +63,9 @@ fn run_compare_self_reports_drift_with_record_as_src() {
 }
 
 /// The whole point of the command: reporting drift must not repair it. A plain
-/// `compare` of a record against its own folder used to do exactly that, so the
-/// cache came back clean and the next run had nothing left to report.
+/// `compare` of a record against its own folder would do exactly that, so the
+/// cache would come back clean and the next run would have nothing left to
+/// report.
 #[test]
 fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
     let t = TempRoot::new("cs_nowrite");
@@ -90,13 +91,13 @@ fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
     assert_eq!(recs(&dir), before);
 }
 
-/// A file whose size+mtime still match used to keep its recorded digest on *both*
-/// sides of the audit — the disk side read the record's own cache — so the content
-/// comparison was the record compared with itself and this reported "in step".
+/// A file whose size+mtime still match must be hashed against nothing, not against
+/// the record's own digest. Sharing the record's cache would make the content
+/// comparison the record compared with itself, and this would report "in step".
 ///
 /// Same length, mtime put back: nothing but the bytes differ, and no stat can
 /// tell. This is the pair the command exists for, and it is why the disk side is
-/// now scanned against an empty handle rather than the record's.
+/// scanned against an empty handle rather than the record's.
 #[test]
 fn hidden_content_drift_is_reported_without_a_flag() {
     let t = TempRoot::new("cs_hidden");
@@ -226,13 +227,13 @@ fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched
     assert_eq!(recs(&dir), before, "still writes nothing");
 }
 
-/// `--hash none` still means "decide by size+mtime", and it is now the only cheap
+/// `--hash-all-of none` still means "decide by size+mtime", and it is the only cheap
 /// way to run this audit — an in-step folder is otherwise read in full, because
 /// every one of its pairs is undecided.
 ///
 /// The contrast with `hidden_content_drift_is_reported_without_a_flag` is the
 /// point: on the same fixture the default reports `CHANGED` and this reports
-/// clean, and both are correct, because `--hash none` is a request for a
+/// clean, and both are correct, because `none` is a request for a
 /// stat-only audit rather than a weaker version of the same one.
 #[test]
 fn hash_none_is_a_stat_only_audit_and_still_runs() {
@@ -344,12 +345,9 @@ fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
 /// ever fill it in on its own. The next `compare-self` finds a stat-equal,
 /// undecided pair on a record that cannot answer it.
 ///
-/// Before the coverage rule this exited **0**: `hashes_differ` skips an algorithm
-/// either side lacks, so the pair fell back to the size+mtime that already agreed
-/// and the audit reported the newcomer as in step. That is the whole false-clean
-/// this check exists to stop, so the test uses a real `sync` rather than
-/// `strip_algo` — a hand-stripped digest is a hypothetical, a stat-only row
-/// written by a lazy scan is Tuesday.
+/// Reporting an uncovered pair as equal is the false-clean this check exists to
+/// stop, so the test uses a real `sync` rather than `strip_algo` — a hand-stripped
+/// digest is a hypothetical, a stat-only row written by a lazy scan is Tuesday.
 #[test]
 fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() {
     let t = TempRoot::new("cs_lazy_route");
@@ -404,11 +402,11 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
     );
 }
 
-/// `--hash none` is a request for a stat-only audit, not a coverage failure — so
-/// the same stripped record that fails above passes here.
+/// `--hash-all-of none` is a request for a stat-only audit, not a coverage
+/// failure — so the same stripped record that fails above passes here.
 ///
 /// This needs no special case in the planner: an empty request means there is
-/// nothing to cover, and the early return for `--hash none` is reached before the
+/// nothing to cover, and the early return for `none` is reached before the
 /// coverage check could fire. The test is here because "no special case" is the
 /// kind of claim that stops being true without one.
 #[test]

@@ -104,9 +104,8 @@ pub struct CommonOpts {
     /// `--rw-threads*`: how many file reads and writes may be in flight.
     ///
     /// A run-wide *resource*, so it lives beside the other run-wide settings
-    /// rather than on the one command that used to have `--jobs`. Phase C and the
-    /// copy phase are the two places that consume it, and both are reached from
-    /// every subcommand.
+    /// rather than on a single command. Phase C and the copy phase are the two
+    /// places that consume it, and both are reached from every subcommand.
     pub rw: RwLimits,
 }
 
@@ -368,9 +367,7 @@ pub struct SyncOpts {
     /// copy here: the cache half and the filesystem half are the same flag, and
     /// two fields for one flag is how they drift apart.
     ///
-    /// `--rw-threads*` is likewise `common.rw` and has no copy here. It used to be
-    /// a `jobs: usize` on this struct, which put the concurrency knob on the one
-    /// command that had a copy phase and left phase C — the other reader — with no
-    /// way to be told about it at all.
+    /// `--rw-threads*` is likewise `common.rw` and has no copy here, for the same
+    /// reason: the concurrency knob is a run-wide resource, not a `sync` one.
     pub common: CommonOpts,
 }

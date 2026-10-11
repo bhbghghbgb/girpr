@@ -1,13 +1,12 @@
-//! Backend-agnostic behavior lock for the sled -> redb migration.
+//! Backend-agnostic behaviour lock for the cache layer.
 //!
 //! These tests use only the public `cmd_*` API plus the public cache helpers
-//! (`open_db` / `load_all_records`), never the backend directly, so they must
-//! pass unchanged (modulo backend-specific assertions, which are deliberately
-//! avoided here) before AND after the migration.
+//! (`open_db` / `load_all_records`), never the backend directly, so they assert
+//! behaviour rather than a storage format.
 //!
 //! Deliberately avoided here:
-//! - asserting the cache path is a dir vs a file (sled dir -> redb file),
-//! - asserting exact hash encodings (hex today, raw bytes after).
+//! - asserting the cache path is a dir vs a file,
+//! - asserting exact hash encodings (hex vs raw bytes).
 //!   Hash expectations are always derived from `hash_file`, which moves with
 //!   the codebase.
 

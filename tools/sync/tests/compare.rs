@@ -199,7 +199,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
     assert_eq!(dry.1, real.1, "dst map");
 }
 
-/// The direct check on the fix: a dry run *decides* to prune and reports it, and
+/// The direct check on the rule: a dry run *decides* to prune and reports it, and
 /// still leaves the row on disk. The row surviving is the point — a dry run that
 /// dropped it would be writing.
 #[test]
@@ -589,7 +589,7 @@ fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
 /// it has no filesystem. Folding trust into availability would make
 /// `--no-trust-cached-hashes src` fatal for every record, including one holding
 /// exactly the right digests - which is what `convert.rs`'s unrequested-algorithm
-/// case does, so this is a live regression and not a hypothetical.
+/// case does, so this is a live hazard and not a hypothetical.
 ///
 /// Availability is `cached` plus `hashable`, and trust is absent from it on purpose.
 #[test]

@@ -132,7 +132,7 @@ pub struct CommonArgs {
     /// - a pair that came out equal is **not** a difference, so `total_diff` and the
     ///   exit code are unaffected — a clean tree still exits `0` with the flag on;
     /// - `SUMMARY` gains `identical=N` only when this flag is passed, so an unflagged
-    ///   run's output is byte-identical to one from before the flag existed;
+    ///   run's output is byte-identical to a run that never passes it;
     /// - the tags come from the same `--why` vocabulary, and the two flags are
     ///   independent — either alone is legal, together is legal.
     ///
@@ -201,9 +201,6 @@ pub struct RwArgs {
     /// and one read at a time is what a spinning disk is actually good at. Raise
     /// it for an SSD, where more concurrent reads do go faster —
     /// `girsync sync --src OLD --dst NEW --rw-threads 4`.
-    ///
-    /// This replaces `--jobs`, which sized the copy pool only and defaulted to 4.
-    /// See the Gotchas entry for the migration.
     #[arg(
         long = "rw-threads",
         value_name = "N",
@@ -345,9 +342,8 @@ pub enum Cmd {
         // rename and apply phases too, so it means no cache writes *and* no
         // filesystem change.
         //
-        // `--jobs` used to live here, sizing only the copy pool. It is replaced by
-        // the `--rw-threads*` family on `CommonArgs`, which bounds reads and writes
-        // everywhere rather than copies alone — see `RwArgs`.
+        // The `--rw-threads*` family is on `CommonArgs` too, and bounds reads and
+        // writes everywhere rather than copies alone — see `RwArgs`.
         #[command(flatten)]
         trust: TrustArgs,
         #[command(flatten)]

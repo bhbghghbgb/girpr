@@ -297,8 +297,8 @@ pub fn summary_of(recs: &[serde_json::Value]) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 //
 // These arrange a cache state rather than hoping the binary produces it. A row
-// whose stat matches and which is missing an algorithm is a state a real
-// `--hash none` history leaves behind, but the binary will not create it on
+// whose stat matches and which is missing an algorithm is a state a stat-only
+// `--hash-all-of none` scan leaves behind, but the binary will not create it on
 // request — so the cases build it directly, through the public cache API.
 
 /// A cache row edited in place, or a path to one.

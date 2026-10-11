@@ -313,14 +313,14 @@ fn an_audit_of_a_snapshot_of_another_version_reads_only_the_undecided_pairs() {
     );
 }
 
-/// **The reallocation, stated so it is not mistaken for a regression.** An audit of
-/// a folder that is genuinely in step has to read every file: the record's stat
-/// agrees with disk, so the pair is undecided, and the only thing that can settle
-/// it is a digest of the folder's bytes.
+/// **The reallocation, stated so it is not mistaken for an inefficiency.** An
+/// audit of a folder that is genuinely in step has to read every file: the
+/// record's stat agrees with disk, so the pair is undecided, and the only thing
+/// that can settle it is a digest of the folder's bytes.
 ///
-/// The shared-handle version reported `hashed == 0` here — and that zero was the
-/// bug, not a saving: it meant the audit was re-reading the record it had just
-/// loaded. This number going *up* is the fix becoming visible.
+/// A high count here is the command working, not a cost to be optimised: the
+/// disk side is hashed against nothing, so there is no cached digest it could
+/// have settled the pair with instead.
 #[test]
 fn an_audit_of_an_in_step_folder_reads_every_undecided_pair() {
     let (_t, dir) = audited("lz_self_instep", 8, 0);
@@ -472,8 +472,8 @@ fn warm_complete_caches_read_nothing() {
 }
 
 /// **stat-equal, one side missing an algo.** md5 is cached on both, sha256 on
-/// neither — the shape a `--hash md5` history leaves behind. Only the side that
-/// lacks the digest pays for it, and the pair still resolves.
+/// neither — the shape a record written with `--hash-all-of md5` leaves behind.
+/// Only the side that lacks the digest pays for it, and the pair still resolves.
 ///
 /// The verdict stays clean because the content is identical: this case is about
 /// the count, not about backfilling correctly.
@@ -536,7 +536,7 @@ fn hash_none_reads_nothing_on_a_differing_tree() {
     let t = TempRoot::new("lz_hash_none");
     let (src, dst) = four_differing(&t);
     let r = run_pair(&src, &dst, &with_algos(&[]), TrustOpts::default());
-    assert_eq!(r.hashed, 0, "post-stage-2: an empty plan means no read");
+    assert_eq!(r.hashed, 0, "an empty plan means no read");
     assert_eq!(r.diff.changed.len(), 4, "still four differences, by size");
 }
 

@@ -325,7 +325,7 @@ impl Report {
 /// has no equal set to print and this flag changes no verdict.
 ///
 /// The field is conditional rather than always present so that an unflagged run
-/// stays byte-identical to one from before the flag existed. A consumer reading
+/// stays byte-identical to a run that never passes it. A consumer reading
 /// `SUMMARY` must therefore treat `identical` as optional, which is the same
 /// treatment `output`-format-dependent fields already get.
 pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {

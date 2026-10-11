@@ -597,7 +597,7 @@ fn identical_records_are_reported_with_their_own_reasons() {
 }
 
 /// **`SUMMARY` gains `identical=N` only when the flag is on**, so an unflagged run
-/// stays byte-identical to one from before the flag existed.
+/// stays byte-identical to a run that never passes it.
 ///
 /// A conditional field rather than an unconditional one: a `SUMMARY` is a
 /// machine-read record, and adding a field to every consumer's parse on every run
@@ -989,7 +989,7 @@ fn the_reporter_takes_the_flag_and_adds_only_the_why_field() {
             "CASE-MISMATCH a.txt <=> A.txt",
             "SUMMARY missing=1 extra=1 changed=1 type_conflict=1 case_mismatch=1 total_diff=4",
         ],
-        "unflagged, byte for byte what this tool printed before the flag existed"
+        "unflagged, byte for byte what this tool prints without the flag"
     );
     assert_eq!(
         report(&diff, true),
@@ -1239,7 +1239,7 @@ fn the_table_covers_every_classification() {
     ] {
         assert!(
             seen.contains(required),
-            "no row covers `{required}`, so that classification is no longer pinned \
+            "no row covers `{required}`, so that classification is not pinned \
              by this table: {seen:?}"
         );
     }

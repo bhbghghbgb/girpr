@@ -207,8 +207,8 @@ pub struct SideEntry {
     /// Whether the cache row's stat still matches disk.
     ///
     /// Not derivable from `cached` being empty, because a fresh row can carry no
-    /// digests at all — that is what a `--hash none` history looks like, and it
-    /// is a real state. Phase C needs the distinction to reconstruct the prior
+    /// digests at all — that is what a stat-only `--hash-all-of none` scan records,
+    /// and it is a real state. Phase C needs the distinction to reconstruct the prior
     /// row and hand it to [`merge_row`], so it is carried explicitly rather than
     /// inferred.
     pub fresh: bool,
@@ -582,13 +582,12 @@ pub fn scan_stat_only(
 /// rayon short-circuit and surface whichever failure happened to finish first,
 /// which is not reproducible.
 ///
-/// Two promises changed shape here, and both deliberately:
+/// Two promises hold, and they differ in shape:
 ///
-/// - **Write order is still sorted; read order is not.** The old comment promised
-///   "a run reads the same paths in the same order every time", and that is gone:
-///   with more than one worker the reads interleave. What survives is the part
-///   that was load-bearing — the rows land in the same order every run, so the
-///   cache bytes are reproducible and so is the progress heartbeat.
+/// - **Write order is sorted; read order is not.** The rows must land in the same
+///   order every run, so the cache bytes are reproducible and so is the progress
+///   heartbeat. Which files are *read* in which order is not a promise at all: with
+///   more than one worker the reads interleave.
 /// - **Durability is per-window rather than per-digest.**
 ///   [`crate::cache::COMMIT_INTERVAL`] bounds how much hashing work an
 ///   interruption can lose, and that only holds if a digest becomes durable
@@ -625,7 +624,7 @@ pub fn resolve_folder(
 
     // Sorted, so a window's **writes** land in the same order every run and the
     // progress heartbeat is reproducible. The reads inside a window do not keep
-    // this order, and that is the promise that changed — see the doc comment.
+    // this order — see the doc comment.
     let mut pending: Vec<&String> = phase_a
         .map
         .iter()

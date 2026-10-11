@@ -721,8 +721,9 @@ fn a_distrusted_mtime_with_no_digest_to_fall_back_on_is_never_reported_equal() {
     );
 }
 
-/// **`sync`, where the hole does real damage.** Before the fix this reported success
-/// and left `dst` holding content it had just declared identical to `src`.
+/// **`sync`, where the hole does real damage.** Without this rule a run would
+/// report success and leave `dst` holding content it had just declared identical
+/// to `src`.
 #[test]
 fn sync_copies_a_pair_it_cannot_confirm_rather_than_declaring_it_equal() {
     let t = TempRoot::new("st_unverifiable_sync");

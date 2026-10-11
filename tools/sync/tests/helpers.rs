@@ -308,8 +308,8 @@ fn phase_a_never_hashes() {
 }
 
 /// **Phase A never hashes, and never withholds an answer because it may not
-/// write.** Asserted at the phase where the bug lived, so `update` and `sync`
-/// are covered as well as `compare`: they reach phase A through the same
+/// write.** Asserted at the phase that computes the answers, so `update` and
+/// `sync` are covered as well as `compare`: they reach phase A through the same
 /// function.
 ///
 /// The fixture leaves one orphan row and one stale row, so `pruned` is non-zero

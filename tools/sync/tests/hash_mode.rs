@@ -814,11 +814,11 @@ fn the_short_hash_spelling_is_rejected_by_name() {
         "and clap says which flag it did not recognise: {stderr}"
     );
     // Clap's suggestion is what a user who types `--hash` will actually read, so
-    // assert the suggestion rather than restating the fix: `--hash` must not be
+    // assert the suggestion rather than restating the rule: `--hash` must not be
     // accepted as an alias for anything.
     assert!(
         stderr.contains("--hash-all-of") || stderr.contains("--hash-any-of"),
-        "and it points at one of the two new names: {stderr}"
+        "and it points at one of the two names it could mean: {stderr}"
     );
 }
 

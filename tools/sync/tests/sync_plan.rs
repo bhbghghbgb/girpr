@@ -478,8 +478,8 @@ fn build(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
 ///
 /// Checked twice — once for the plan print, once for the actions — because they are
 /// two claims. Doing it as one set would pass for a run that printed the plan and no
-/// actions, or the actions and no plan, which is precisely the split step 4 is
-/// about.
+/// actions, or the actions and no plan, which is precisely the split the two-segment
+/// report is about.
 fn assert_plan_matches(cases: &[Case], recs: &[Value], mode: &str) {
     for (label, reported, required) in [
         (
@@ -580,8 +580,8 @@ fn assert_apply_order(recs: &[Value], mode: &str) {
         } else if is_plan(e) {
             1
         } else {
-            // The apply phases, in the order `APPLY_ORDER` states (which no longer
-            // holds `rename`).
+            // The apply phases, in the order `APPLY_ORDER` states (which does not
+            // include `rename`).
             APPLY_ORDER
                 .iter()
                 .position(|k| *k == e)
@@ -682,16 +682,16 @@ fn the_fixture_covers_every_apply_phase() {
             seen.insert(e);
         }
     }
-    // And the rename pass must stay covered, even though it is no longer an apply
+    // And the rename pass must stay covered, even though it is not an apply
     // phase: it is what makes the diff possible at all.
     assert!(
         seen.contains("rename"),
-        "no row expects a `rename`, so the casing pass is no longer covered"
+        "no row expects a `rename`, so the casing pass is uncovered"
     );
     for kind in APPLY_ORDER {
         assert!(
             seen.contains(kind),
-            "no row expects a `{kind}` record, so the fixture no longer covers that phase"
+            "no row expects a `{kind}` record, so the fixture does not cover that phase"
         );
     }
     // And the row that carries the planner's case flag, since it is the only thing
@@ -786,10 +786,10 @@ fn walk(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
 ///
 /// The plan is decided before anything is written, so it is **ordered** and compared
 /// field for field. The actions are *as-done*, and completion order is a function of
-/// I/O timing rather than of the plan — so from step 6 they are compared as a
+/// I/O timing rather than of the plan — so they are compared as a
 /// **multiset**. That is a real weakening, and it is not something to engineer around:
-/// the alternative is to keep the pool joining before emitting, which is exactly the
-/// behaviour step 6 removes.
+/// the alternative is to keep the pool joining before emitting, which would serialise
+/// the reporting behind the work it reports on.
 ///
 /// What the weakening does not touch is the count. A dropped or duplicated `COPY`
 /// changes the multiset, so a dry run that skipped a file, or copied one twice, still
@@ -1021,7 +1021,7 @@ fn a_missing_file_appears_in_both_the_plan_and_the_actions() {
 
 /// **`sync`'s plan carries reasons when asked, and only then.** The reasons appear on
 /// the *plan* line, not the action line: the plan says why the tool decided, the
-/// action says what it is doing, and those are different questions. Step 5 is why
+/// action says what it is doing, and those are different questions. That is why
 /// `COPY` never carries a `why=`.
 #[test]
 fn the_plan_carries_reasons_when_why_is_passed() {

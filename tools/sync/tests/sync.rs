@@ -176,12 +176,9 @@ fn run_sync_keep_extra_and_missing_only() {
 
 /// `--keep-extra` spares directories as well as files.
 ///
-/// The flag name is not a promise about files only, and README's step 4 says the
-/// unknown-dir removal is skipped too. It was not: `remove_unknown_dirs` ran
-/// unconditionally, so a `--keep-extra` run deleted exactly the empty trees the
-/// user had asked it to leave. Worse, the deletion was invisible in the plan —
-/// the dry run announced `RMDIR` for the very directories a real run then
-/// removed, so the two agreed with each other and both contradicted the flag.
+/// The flag name is not a promise about files only, so a `--keep-extra` run must
+/// also leave dst-only directories in place — `remove_unknown_dirs` is skipped
+/// by the same flag that skips `DELETE`.
 #[test]
 fn run_sync_keep_extra_spares_extra_dirs_too() {
     let t = TempRoot::new("keep_dirs");
@@ -264,11 +261,11 @@ fn run_sync_rejects_bad_inputs() {
     cmd_update(update(src.clone()), &log()).unwrap();
     assert!(cmd_sync(sync(src.join(CACHE_PREFIX), dst.clone()), &log()).is_err());
 
-    // The old `o.jobs = 0` case used to live here. It has no equivalent to assert:
-    // `SyncOpts` no longer carries a thread count, `RwLimits` cannot hold a zero
-    // (`NonZeroUsize`), and the flag that could name one is refused before it
-    // reaches `cmd_sync`. `rw_threads_rejects_a_zero_count` pins the user-visible
-    // half of that, through the real binary.
+    // A zero thread count has no equivalent to assert at this layer: `SyncOpts`
+    // carries no thread count, `RwLimits` cannot hold a zero (`NonZeroUsize`),
+    // and the flag that could name one is refused before it reaches `cmd_sync`.
+    // `rw_threads_rejects_a_zero_count` pins the user-visible half of that,
+    // through the real binary.
 }
 
 #[test]
@@ -294,8 +291,9 @@ fn run_sync_resolves_type_conflicts() {
 }
 
 /// A case-only difference must be settled by renaming dst, not by copying.
-/// Regression: the dry run used to leave its in-memory dst map on the old
-/// casing, so it planned both a COPY and a DELETE for the same file.
+///
+/// Both modes have to agree here: a dry run must not leave its in-memory dst map
+/// on the old casing, or it would plan both a COPY and a DELETE for one file.
 #[test]
 fn run_sync_case_only_difference_renames_instead_of_copying() {
     let t = TempRoot::new("caseren");

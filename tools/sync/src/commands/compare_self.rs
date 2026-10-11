@@ -44,10 +44,10 @@
 //!
 //! ## The flags
 //!
-//! `--no-trust-cached-hashes` is now redundant — there is nothing left for it to
-//! distrust — and `--dry-run` was already. Both are still accepted, so a script
-//! passing them to every subcommand keeps working, and [`cmd_compare_self`] warns
-//! rather than erroring.
+//! `--no-trust-cached-hashes` has nothing left to distrust and `--dry-run`
+//! nothing left to withhold, so both are inert here. Both are still accepted, so
+//! a script passing them to every subcommand keeps working, and
+//! [`cmd_compare_self`] warns rather than erroring.
 
 use anyhow::{Result, bail};
 use tracing::{info, warn};

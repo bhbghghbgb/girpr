@@ -110,11 +110,9 @@ fn rw_flags_resolve_to_the_documented_limits() {
 /// **The unflagged run is exactly `Shared(1)`.**
 ///
 /// Worth its own case because it is the *default*, and the default is what every
-/// script that never mentioned concurrency gets. It is also the largest behavioural
-/// change in the flag's history: `--jobs` defaulted to 4, so an unflagged `sync` now
-/// runs one copy at a time rather than four. That is the conservative choice — a
-/// single disk is the common case — but it is a change, so it is pinned rather than
-/// left to drift.
+/// script that never mentioned concurrency gets — one read at a time, which is
+/// the conservative choice for the single-disk case. A default is the thing most
+/// likely to drift unnoticed, so it is pinned rather than assumed.
 #[test]
 fn an_unflagged_run_is_exactly_one_shared_operation() {
     let l = RwLimits::default();
@@ -825,8 +823,8 @@ fn a_dry_run_is_unaffected_by_the_rw_limit() {
 
 /// **`update` hashes the same set of files at every limit.**
 ///
-/// `update` rehashes every file and used to have no concurrency knob at all, so it
-/// gained one purely by this change. Asserting it reaches the same read count at
+/// `update` rehashes every file, so the limit applies to it like any other reader.
+/// Asserting it reaches the same read count at
 /// every setting is what stops the knob from silently changing how much work the
 /// command does -- `update`'s entire output is the cache, and a run that hashed a
 /// different set would produce a different cache while still exiting 0.

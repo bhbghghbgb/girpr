@@ -296,8 +296,8 @@ impl RwLimiter {
     /// **The ordering here is the deadlock-freedom invariant.** A copy is the only
     /// operation that takes two permits, it always takes src first, and a thread
     /// holding dst takes nothing further — so every wait-for edge points forward
-    /// along `src → dst` and the graph has no cycle. Changing the order below
-    /// would not be a refactor; it would be the first way this crate can hang a
+    /// along `src → dst` and the graph has no cycle. Changing the order below is
+    /// not a cosmetic edit: it would be the first way this crate can hang a
     /// run rather than fail one.
     pub fn acquire_copy(&self) -> RwPermit<'_> {
         match self.limits {
