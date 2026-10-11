@@ -135,7 +135,7 @@ fn compare_json_is_the_verdict_the_library_builds() {
             fallback: o.common.algos.clone(),
         },
         o.common.stat,
-        o.common.case_sensitive,
+        girsync::planner::CasePairing::from(o.common.case_sensitive),
         false,
     );
     let lib: Vec<Value> = girsync::report::verdict(&diff, false, false)

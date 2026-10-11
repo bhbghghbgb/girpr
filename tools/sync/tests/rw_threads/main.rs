@@ -55,7 +55,7 @@ use girsync::effective::{
     EffRec, OpenSide, ScanStats, classify, ensure_distinct_sides, open_side, resolve_side,
     resolve_sides_concurrently,
 };
-use girsync::planner::{SideRequest, plan_pairs};
+use girsync::planner::{CasePairing, SideRequest, plan_pairs};
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 
 /// Resolve a flag combination the way the CLI does, without going through clap.

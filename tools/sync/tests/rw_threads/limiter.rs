@@ -47,7 +47,7 @@ fn plan_both<'a>(
             cap: do_.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )

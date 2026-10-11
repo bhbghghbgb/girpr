@@ -17,7 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
-use crate::planner::{Required, StatTrust};
+use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -215,6 +215,13 @@ pub fn pair_verdict(
 /// classification itself is produced whether or not anything asks for it: a diff
 /// that only computed a reason when a flag was on would be two diffs.
 ///
+/// `pairing` is which paths count as the same path, and it is the same
+/// [`CasePairing`] the planner was given — except where a rename has already made
+/// them line up. `sync` plans as on disk ([`CasePairing::Lowercase`]) and then
+/// diffs post-rename ([`CasePairing::Exact`]); passing [`CasePairing::Lowercase`]
+/// to the diff would resurrect the `CASE-MISMATCH` bucket the rename pass exists
+/// to eliminate.
+///
 /// `want_identical` fills [`Diff::identical`], and only that. It is off by default
 /// because the flag is — one record per equal file is a real cost in output volume,
 /// and a caller who has not asked for it should not pay it or read it.
@@ -223,11 +230,11 @@ pub fn diff_maps(
     dst: &HashMap<String, EffRec>,
     required: &Required,
     stat: StatTrust,
-    case_sensitive: bool,
+    pairing: CasePairing,
     want_identical: bool,
 ) -> Diff {
     let mut d = Diff::default();
-    if case_sensitive {
+    if pairing == CasePairing::Exact {
         let mut keys: HashSet<&String> = HashSet::new();
         for k in src.keys().chain(dst.keys()) {
             keys.insert(k);
@@ -391,7 +398,7 @@ mod tests {
             dst,
             &Required::default(),
             StatTrust::default(),
-            case_sensitive,
+            CasePairing::from(case_sensitive),
             want_identical,
         )
     }

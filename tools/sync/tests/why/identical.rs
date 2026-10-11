@@ -98,7 +98,7 @@ fn the_identical_bucket_is_empty_unless_it_was_asked_for() {
         &dm,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         false,
     );
     assert!(
@@ -114,7 +114,7 @@ fn the_identical_bucket_is_empty_unless_it_was_asked_for() {
         &dm,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         true,
     );
     assert_eq!(
@@ -152,7 +152,7 @@ fn a_pair_is_never_both_changed_and_identical() {
         &dm,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         true,
     );
     assert_eq!(d.changed, vec!["differing.txt".to_string()]);

@@ -10,7 +10,7 @@ use crate::diff::diff_maps;
 use crate::effective::{
     Side, classify, ensure_distinct_sides, open_side, resolve_side, resolve_sides_concurrently,
 };
-use crate::planner::{SideRequest, plan_pairs};
+use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
@@ -112,6 +112,11 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // the diff silently skipped.
     let s_label = describe(&src);
     let d_label = describe(&dst);
+    // One pairing for both calls. `compare` never renames, so the plan and the
+    // diff pair the same paths — unlike `sync`, which plans as on disk and diffs
+    // post-rename. Naming it once is what makes the difference between the two
+    // commands a difference in the *value* rather than in two bare booleans.
+    let pairing = CasePairing::from(common.case_sensitive);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
@@ -127,7 +132,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        pairing,
         common.hash_mode,
         common.stat,
     )?;
@@ -158,7 +163,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         &dm,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        pairing,
         common.show_identical,
     );
     let code = report_diff(&diff, &log.report(), common.why, common.show_identical);

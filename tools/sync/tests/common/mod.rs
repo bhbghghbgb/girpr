@@ -7,7 +7,7 @@
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::planner::{HashMode, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
@@ -467,7 +467,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )

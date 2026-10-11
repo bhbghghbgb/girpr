@@ -89,7 +89,7 @@ fn self_audit(dir: &Path) -> Run {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -111,7 +111,7 @@ fn self_audit(dir: &Path) -> Run {
             &disk.map,
             &plans.required,
             plans.stat,
-            common.case_sensitive,
+            CasePairing::from(common.case_sensitive),
             false,
         ),
         hashed: disk.stats.hashed,

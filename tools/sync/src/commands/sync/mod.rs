@@ -61,7 +61,7 @@ use crate::effective::{
     SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
     resolve_sides_concurrently, scan_stat_only,
 };
-use crate::planner::{SideRequest, plan_pairs};
+use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::report::verdict;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::{elapsed_s, is_record_path};
@@ -186,12 +186,13 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // pair state is already decided, and `diff_maps` short-circuits the digest
     // comparison anyway.
     //
-    // `common.case_sensitive` here, and a hardcoded `true` in the `diff_maps` call
-    // below. That asymmetry is deliberate. This pairs the sides as they are *on
-    // disk*, which in insensitive mode means by lowercase — and the rename pass
-    // then collapses exactly those pairs onto exact keys, so the diff goes
-    // on to form the same pairs. Passing `true` here would make a case-only pair
-    // look one-sided and skip a digest it needs; passing `false` in the diff would
+    // `CasePairing::from(common.case_sensitive)` here, and `CasePairing::Exact`
+    // in the `diff_maps` call below. **The two must differ**, and the values say
+    // so where a bare `true`/`false` pair could not. This pairs the sides as they
+    // are *on disk*, which in insensitive mode means by lowercase — and the rename
+    // pass then collapses exactly those pairs onto exact keys, so the diff goes on
+    // to form the same pairs. Planning post-rename would make a case-only pair
+    // look one-sided and skip a digest it needs; diffing pre-rename would
     // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
     let plans = plan_pairs(
         SideRequest {
@@ -211,7 +212,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&dst_db, dst_mode),
             label: &format!("folder {}", dst.display()),
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )?;
@@ -282,6 +283,9 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // keys. That is the third reason the plan has to precede the rename: a per-path
     // answer is only usable if the side it is keyed by is the side that does not
     // move.
+    // `CasePairing::Exact`: post-rename the two maps line up on exact keys, and
+    // the plan above was taken as on disk. See the note there on why the two
+    // differ.
     // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
     // the plan print takes the equal set only if asked.
     let diff = diff_maps(
@@ -289,7 +293,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         &dm,
         &plans.required,
         plans.stat,
-        true, /* post-rename: exact keys */
+        CasePairing::Exact,
         common.show_identical,
     );
 

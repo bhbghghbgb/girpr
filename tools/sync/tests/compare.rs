@@ -13,7 +13,7 @@ use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
 };
-use girsync::planner::{SideRequest, plan_pairs};
+use girsync::planner::{CasePairing, SideRequest, plan_pairs};
 use girsync::rw::{RwLimits, RwSide};
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -114,7 +114,7 @@ fn effective_maps(
             cap: do_.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
