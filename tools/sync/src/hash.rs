@@ -61,19 +61,18 @@ pub fn parse_any_of(input: &[String]) -> Result<Vec<String>> {
 /// stores them as-is instead of hex, halving hash disk cost.
 pub fn hash_file(path: &Path, algos: &[String]) -> Result<HashMap<String, Vec<u8>>> {
     use sha2::Digest;
-    let mut md5ctx = if algos.contains(&"md5".to_string()) {
-        Some(md5::Context::new())
-    } else {
-        None
-    };
-    let mut sha2ctx = if algos.contains(&"sha256".to_string()) {
-        Some(sha2::Sha256::new())
-    } else {
-        None
-    };
+    // Before any context is built: with nothing requested there is nothing to
+    // digest, and opening the file at all would turn a stat-only decision into a
+    // read. The empty map below is the whole answer.
     if algos.is_empty() {
         return Ok(HashMap::new());
     }
+    // Borrowed comparison, not `algos.contains(&"md5".to_string())`. This runs
+    // once per file per phase C and twice per copied file, and the `String` that
+    // form allocates exists only to be compared against borrowed data.
+    let wants = |a: &str| algos.iter().any(|x| x == a);
+    let mut md5ctx = wants("md5").then(md5::Context::new);
+    let mut sha2ctx = wants("sha256").then(sha2::Sha256::new);
     let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut buf = vec![0u8; 512 * 1024];
     loop {
