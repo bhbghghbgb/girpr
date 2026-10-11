@@ -39,7 +39,9 @@ mod record;
 
 pub use record::Record;
 
+use tracing::Level;
 use tracing::debug;
+use tracing::level_filters::STATIC_MAX_LEVEL;
 
 use crate::diff::Diff;
 
@@ -95,8 +97,29 @@ impl Report {
     /// record whose payload has no natural fields of its own still lands in the
     /// log file. It is `debug`: the data plane is the answer, the log is the
     /// narration around it.
+    ///
+    /// ## Why the payload is built conditionally
+    ///
+    /// `event()` lowercases a string and `fields_json()` builds and serialises a
+    /// whole JSON object, and `tracing` evaluates both *before* deciding whether
+    /// the event is enabled. At the default `--log-level info` that is a JSON
+    /// serialisation per record, built and thrown away — on a `--show-identical`
+    /// run over 200k files, 200k of them.
+    ///
+    /// `enabled!` consults the installed subscriber, so the check is against what
+    /// this run actually logs, not against a constant. `STATIC_MAX_LEVEL` is the
+    /// compile-time ceiling and is checked first so a release build with debug
+    /// compiled out folds the whole branch away rather than calling into
+    /// `enabled!` per record.
+    ///
+    /// The gate is on *construction*, not on *emission*: whenever debug is
+    /// enabled the log event is emitted exactly as before, carrying the same
+    /// event name and the same fields. `tests/output.rs` asserts that against the
+    /// file log, so this cannot later be read as "logging was dropped".
     pub fn emit(&self, rec: Record) {
-        debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
+        if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
+            debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
+        }
         println!("{}", self.render(&rec));
     }
 
