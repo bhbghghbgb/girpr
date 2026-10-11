@@ -78,28 +78,24 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // but a folder side does write its cache as it resolves, so `--dry-run` is
     // carried into `ScanMode` and `open_folder_cache` turns that into a read-only
     // or in-memory handle. Every decision below is unchanged either way.
-    let mut s = open_side(
-        &s,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: common.dry_run,
-        },
-    )?;
+    //
+    // Built once per side rather than at each of the four use sites: `dry_run` is
+    // a property of the run, so a field added to `ScanMode` has one place to be
+    // threaded through here, the same shape `sync` uses.
+    let scan_mode = |no_trust_cached_hashes| ScanMode {
+        no_trust_cached_hashes,
+        dry_run: common.dry_run,
+    };
+    let src_mode = scan_mode(trust.no_trust_src);
+    let dst_mode = scan_mode(trust.no_trust_dst);
+    let mut s = open_side(&s, &common, src_mode)?;
     info!(
         side = "src",
         entries = s.phase_a.map.len(),
         "src side opened"
     );
     info!(dst = %dst.display(), dst_kind = side_kind(&d), "load dst side");
-    let mut d = open_side(
-        &d,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: common.dry_run,
-        },
-    )?;
+    let mut d = open_side(&d, &common, dst_mode)?;
     info!(
         side = "dst",
         entries = d.phase_a.map.len(),
@@ -148,10 +144,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         || {
             resolve_side(
                 &mut s,
-                ScanMode {
-                    no_trust_cached_hashes: trust.no_trust_src,
-                    dry_run: common.dry_run,
-                },
+                src_mode,
                 &plans.src,
                 RwSide::Src,
                 &rw,
@@ -160,10 +153,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         || {
             resolve_side(
                 &mut d,
-                ScanMode {
-                    no_trust_cached_hashes: trust.no_trust_dst,
-                    dry_run: common.dry_run,
-                },
+                dst_mode,
                 &plans.dst,
                 RwSide::Dst,
                 &rw,
