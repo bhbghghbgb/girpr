@@ -43,7 +43,14 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
 
-    let d = diff_maps(&src, &dst, &by_path, StatTrust::default(), CasePairing::Exact, false);
+    let d = diff_maps(
+        &src,
+        &dst,
+        &by_path,
+        StatTrust::default(),
+        CasePairing::Exact,
+        false,
+    );
     assert_eq!(
         d.changed,
         vec!["two.txt"],
@@ -57,7 +64,14 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &uniform, StatTrust::default(), CasePairing::Exact, false);
+    let d = diff_maps(
+        &src,
+        &dst,
+        &uniform,
+        StatTrust::default(),
+        CasePairing::Exact,
+        false,
+    );
     assert_eq!(
         d.changed,
         vec!["one.txt", "two.txt"],
@@ -82,7 +96,14 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
         by_rel: HashMap::new(),
         fallback: vec!["md5".to_string(), "sha256".to_string()],
     };
-    let d = diff_maps(&src, &dst, &populated, StatTrust::default(), CasePairing::Exact, false);
+    let d = diff_maps(
+        &src,
+        &dst,
+        &populated,
+        StatTrust::default(),
+        CasePairing::Exact,
+        false,
+    );
     assert_eq!(
         d.changed,
         vec!["a.txt"],

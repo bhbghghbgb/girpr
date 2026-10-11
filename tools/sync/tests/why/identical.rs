@@ -288,4 +288,3 @@ fn the_summary_gains_identical_only_when_the_flag_is_on() {
         "and with both flags, each record names why it landed in its bucket"
     );
 }
-

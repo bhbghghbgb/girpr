@@ -54,7 +54,9 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{
+    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
+};
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
