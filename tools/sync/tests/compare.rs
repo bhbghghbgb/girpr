@@ -2,9 +2,11 @@
 
 mod common;
 
+use std::num::NonZeroUsize;
+
 use common::{
     TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
-    strip_algo, sync, sync_mtime, update, update_dry, wfile,
+    serial_rw, strip_algo, sync, sync_mtime, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, open_db};
 use girsync::config::{CommonOpts, ScanMode};
@@ -12,6 +14,7 @@ use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
 };
 use girsync::planner::{SideRequest, plan_pairs};
+use girsync::rw::{RwLimits, RwSide};
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 /// A cache file's bytes, for "byte-identical" claims. Length alone would pass on
@@ -116,8 +119,8 @@ fn effective_maps(
         common.stat,
     )
     .unwrap();
-    let sm: SideScan = resolve_side(&mut so, mode, &plans.src).unwrap();
-    let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst).unwrap();
+    let sm: SideScan = resolve_side(&mut so, mode, &plans.src, RwSide::Src, &serial_rw()).unwrap();
+    let dm: SideScan = resolve_side(&mut do_, mode, &plans.dst, RwSide::Dst, &serial_rw()).unwrap();
     // `ScanStats` derives `PartialEq`, so this can be asserted whole rather than
     // field by field — which is the point: a new counter added later cannot
     // quietly diverge between the two modes without this test noticing.
@@ -367,7 +370,7 @@ fn run_compare_detects_diff_then_sync_converges() {
     assert_eq!(code, 4, "differences must exit 4");
 
     let mut o = sync(src.clone(), dst.clone());
-    o.jobs = 2;
+    o.common.rw = RwLimits::Shared(NonZeroUsize::new(2).unwrap());
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
 

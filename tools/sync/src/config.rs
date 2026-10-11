@@ -6,13 +6,15 @@
 
 use anyhow::Result;
 use glob::Pattern;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use crate::cli::{CommonArgs, TrustArgs, TrustSide};
+use crate::cli::{CommonArgs, RwArgs, TrustArgs, TrustSide};
 use crate::filter::compile_patterns;
 use crate::hash::{parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report};
+use crate::rw::RwLimits;
 
 /// How the run reports itself: the log knobs and the stdout format.
 ///
@@ -99,6 +101,86 @@ pub struct CommonOpts {
     /// its rename and apply phases, which are the only filesystem writes anywhere
     /// in the crate.
     pub dry_run: bool,
+    /// `--rw-threads*`: how many file reads and writes may be in flight.
+    ///
+    /// A run-wide *resource*, so it lives beside the other run-wide settings
+    /// rather than on the one command that used to have `--jobs`. Phase C and the
+    /// copy phase are the two places that consume it, and both are reached from
+    /// every subcommand.
+    pub rw: RwLimits,
+}
+
+impl TryFrom<RwArgs> for RwLimits {
+    type Error = anyhow::Error;
+
+    /// Resolve the flag combination into the two shapes the limiter has.
+    ///
+    /// | flags given | limits |
+    /// | --- | --- |
+    /// | *(none)* | `Shared(1)` |
+    /// | `--rw-threads N` | `Shared(N)` |
+    /// | `--rw-dual-drive` | `Split { src: 1, dst: 1 }` |
+    /// | `--rw-threads-src S` | `Split { src: S, dst: 1 }` |
+    /// | `--rw-threads-dst D` | `Split { src: 1, dst: D }` |
+    /// | `--rw-threads-src S --rw-threads-dst D` | `Split { src: S, dst: D }` |
+    ///
+    /// The combinations that are not rows of that table are already refused by
+    /// clap's `conflicts_with_all`, so they exit `2` before reaching here. The
+    /// match still has to be total, because this is a public `TryFrom` and a
+    /// caller can hand it an `RwArgs` it built by hand — so the impossible arm
+    /// names the conflict rather than being an `unreachable!` that panics on a
+    /// caller who did nothing wrong.
+    ///
+    /// `0` is refused here rather than by clap, so it exits `3` with a message
+    /// naming the flag — the same treatment `--jobs 0` got, and the same code the
+    /// README documents for a runtime usage mistake. A clap range validator would
+    /// have made it exit `2`, which reads as "you typed it wrong" rather than "you
+    /// asked for zero of something".
+    fn try_from(a: RwArgs) -> Result<Self> {
+        let one = RwLimits::one();
+        let nz = |flag: &str, n: usize| -> Result<NonZeroUsize> {
+            NonZeroUsize::new(n).ok_or_else(|| {
+                anyhow::anyhow!("{flag} must be >= 1 (got {n}); it is how many reads or writes may be in flight at once")
+            })
+        };
+        match (
+            a.rw_threads,
+            a.rw_threads_src,
+            a.rw_threads_dst,
+            a.rw_dual_drive,
+        ) {
+            (None, None, None, false) => Ok(RwLimits::Shared(one)),
+            (Some(n), None, None, false) => Ok(RwLimits::Shared(nz("--rw-threads", n)?)),
+            (None, None, None, true) => Ok(RwLimits::Split { src: one, dst: one }),
+            (None, Some(s), None, false) => Ok(RwLimits::Split {
+                src: nz("--rw-threads-src", s)?,
+                dst: one,
+            }),
+            (None, None, Some(d), false) => Ok(RwLimits::Split {
+                src: one,
+                dst: nz("--rw-threads-dst", d)?,
+            }),
+            (None, Some(s), Some(d), false) => Ok(RwLimits::Split {
+                src: nz("--rw-threads-src", s)?,
+                dst: nz("--rw-threads-dst", d)?,
+            }),
+            (threads, src, dst, dual) => {
+                let show =
+                    |v: Option<usize>| v.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+                anyhow::bail!(
+                    "--rw-threads={}, --rw-threads-src={}, --rw-threads-dst={}, \
+                     --rw-dual-drive={} cannot be combined: name either one counter \
+                     for both sides (--rw-threads N) or one per side \
+                     (--rw-threads-src S --rw-threads-dst D), or assert two physical \
+                     drives (--rw-dual-drive)",
+                    show(threads),
+                    show(src),
+                    show(dst),
+                    dual,
+                )
+            }
+        }
+    }
 }
 
 impl TryFrom<CommonArgs> for CommonOpts {
@@ -176,6 +258,7 @@ impl TryFrom<CommonArgs> for CommonOpts {
             max_depth: a.max_depth,
             ignore_cache: a.ignore_cache,
             dry_run: a.dry_run,
+            rw: RwLimits::try_from(a.rw)?,
         })
     }
 }
@@ -281,10 +364,13 @@ pub struct SyncOpts {
     pub missing_only: bool,
     /// Leave dst-only files alone instead of deleting them.
     pub keep_extra: bool,
-    /// Copy worker threads; must be >= 1.
-    pub jobs: usize,
     /// `--dry-run` is `common.dry_run`. Read it from there rather than keeping a
     /// copy here: the cache half and the filesystem half are the same flag, and
     /// two fields for one flag is how they drift apart.
+    ///
+    /// `--rw-threads*` is likewise `common.rw` and has no copy here. It used to be
+    /// a `jobs: usize` on this struct, which put the concurrency knob on the one
+    /// command that had a copy phase and left phase C — the other reader — with no
+    /// way to be told about it at all.
     pub common: CommonOpts,
 }

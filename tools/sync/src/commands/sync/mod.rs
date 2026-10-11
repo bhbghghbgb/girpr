@@ -59,10 +59,11 @@ use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
     SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
-    scan_stat_only,
+    resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{SideRequest, plan_pairs};
 use crate::report::verdict;
+use crate::rw::{RwRuntime, RwSide};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
@@ -82,7 +83,6 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         trust,
         missing_only,
         keep_extra,
-        jobs,
         common,
     } = opts;
     // One flag, two halves. The cache half reaches the scans through
@@ -101,7 +101,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         missing_only,
         keep_extra,
         dry_run,
-        jobs,
+        // The shape of the run's concurrency, not just its size: "shared(4)" and
+        // "split(src=4, dst=4)" both allow four concurrent operations and schedule
+        // very differently, so one number would lose the half that matters.
+        rw_mode = common.rw.mode(),
+        rw_threads_src = common.rw.src_threads(),
+        rw_threads_dst = common.rw.dst_threads(),
         include = ?common.includes,
         exclude = ?common.excludes,
         case_sensitive = common.case_sensitive,
@@ -115,7 +120,17 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let _span_guard = span.enter();
     info!("start");
 
-    validate_inputs(&src, &dst, jobs)?;
+    validate_inputs(&src, &dst)?;
+
+    // One runtime for the whole run: one limiter, one worker pool. A runtime per
+    // phase would be two limiters wearing one flag's name, and two pools would
+    // each size themselves from the same number.
+    let rw = RwRuntime::new(common.rw)?;
+    info!(
+        rw = %rw.describe(),
+        threads = rw.pool().current_num_threads(),
+        "rw limits"
+    );
 
     // 1. Backups and snapshots, before either cache is touched.
     let src_db_path = src.join(CACHE_PREFIX);
@@ -214,10 +229,42 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // failure or a wrong file on a case-sensitive one. Planning pre-rename and
     // re-keying only here makes that unrepresentable, and it is why
     // `rename_to_src_casing` still takes resolved `EffRec` maps.
-    let sm = resolve_folder(&src, &src_db, src_mode, &src_a, &plans.src)?;
+    //
+    // The two resolves run at once. That is a no-op under one shared counter — the
+    // gate serialises them, which is why this is not a branch on the mode — and
+    // the point of a split limit, where src being read no longer waits for dst to
+    // finish being read. `ensure_distinct_sides` has already guaranteed the two
+    // caches are different files, so the two never touch one database.
+    let (src_res, dst_res) = resolve_sides_concurrently(
+        || {
+            resolve_folder(
+                &src,
+                &src_db,
+                src_mode,
+                &src_a,
+                &plans.src,
+                RwSide::Src,
+                &rw,
+            )
+        },
+        || {
+            resolve_folder(
+                &dst,
+                &dst_db,
+                dst_mode,
+                &dst_a,
+                &plans.dst,
+                RwSide::Dst,
+                &rw,
+            )
+        },
+    );
+    // src first, so the message a broken tree produces does not depend on which
+    // side's hash happened to fail sooner.
+    let sm = src_res?;
     info!(side = "src", hashed = sm.stats.hashed, "src map built");
     let sm = sm.map;
-    let dm = resolve_folder(&dst, &dst_db, dst_mode, &dst_a, &plans.dst)?;
+    let dm = dst_res?;
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
 
@@ -299,7 +346,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         dst_db: &dst_db,
         dm: &dm,
         common: &common,
-        jobs,
+        rw: &rw,
         report: &report,
     }
     .apply(&plan)?;
@@ -331,7 +378,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
 }
 
 /// Reject the inputs that make a mirror meaningless, before anything is touched.
-fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) -> Result<()> {
+fn validate_inputs(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     if is_record_path(src) || is_record_path(dst) {
         bail!("sync needs folder vs folder (record inputs are compare-only)");
     }
@@ -341,8 +388,5 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path, jobs: usize) ->
     // One cache per run: two spellings of one folder would otherwise make the
     // mirror delete src out from under itself, on top of the handle clash.
     ensure_distinct_sides(&classify(src), &classify(dst))?;
-    if jobs == 0 {
-        bail!("--jobs must be >= 1");
-    }
     Ok(())
 }

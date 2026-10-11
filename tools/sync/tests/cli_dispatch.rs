@@ -3,7 +3,7 @@
 mod common;
 
 use common::{TempRoot, rfile, wfile};
-use girsync::cli::{Cli, Cmd, CommonArgs, TrustArgs};
+use girsync::cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs};
 use girsync::report::OutputFormat;
 use girsync::run;
 
@@ -28,6 +28,7 @@ fn run_cli_dispatch_update_compare_sync() {
         max_depth: 10,
         ignore_cache: false,
         dry_run: false,
+        rw: RwArgs::default(),
     };
     let mkcli = |cmd| Cli {
         log_level: "error".to_string(),
@@ -73,7 +74,6 @@ fn run_cli_dispatch_update_compare_sync() {
         dst: dst.clone(),
         missing_only: false,
         keep_extra: false,
-        jobs: 1,
         trust: TrustArgs::default(),
         common: common(),
     }))
@@ -114,7 +114,6 @@ fn run_cli_dispatch_update_compare_sync() {
             dst: dst.clone(),
             missing_only: false,
             keep_extra: false,
-            jobs: 1,
             trust: TrustArgs::default(),
             common: common(),
         }))

@@ -12,6 +12,8 @@
 //! - [`scan`] — live filesystem walk
 //! - [`effective`] — phase A (stat + cache) and phase C (hash) for one side
 //! - [`planner`] — [`HashPlan`]: the only place that decides what must be hashed
+//! - [`rw`] — [`RwLimits`]/[`RwRuntime`]: how many file reads and writes may be in
+//!   flight, and whether the two sides draw on one counter or two
 //! - [`diff`] — path-set diffing
 //! - [`commands`] — `update`, `compare`, `compare-self`, `sync`
 //! - [`filter`], [`hash`], [`util`], [`logging`] — supporting primitives
@@ -35,10 +37,11 @@ pub mod hash;
 pub mod logging;
 pub mod planner;
 pub mod report;
+pub mod rw;
 pub mod scan;
 pub mod util;
 
-pub use cli::{Cli, Cmd, CommonArgs, TrustArgs, TrustSide};
+pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
@@ -47,3 +50,4 @@ pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 pub use logging::init_tracing;
 pub use planner::HashPlan;
 pub use report::{OutputFormat, Record, Report, verdict};
+pub use rw::{RwLimits, RwPermit, RwRuntime, RwSide};

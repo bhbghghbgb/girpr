@@ -42,3 +42,7 @@ md5 = "0.7"
 # The stdout assertions read `--output json` records, so they build the expected
 # ones with `json!` rather than comparing rendered text.
 serde_json = "1"
+# `tests/rw_threads.rs` checks the flag surface with `Cli::try_parse_from` rather
+# than spawning the binary, so a mutual-exclusion table can be stated exhaustively
+# for the price of a table. Same crate the lib already uses, so it costs no build.
+clap = { version = "4", features = ["derive"] }

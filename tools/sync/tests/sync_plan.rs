@@ -1217,14 +1217,15 @@ fn a_path_is_never_planned_for_copying_twice() {
 /// **`COPY` records are emitted as each copy completes, not after the pool joins.**
 ///
 /// The only honest observable is that the *set* is unchanged and every file is still
-/// copied: completion **order** is a function of I/O timing under `--jobs > 1`, so
-/// asserting an order here would be asserting the machine's mood. What must hold is
-/// that moving the emit into the worker changed nothing about *what* was reported.
+/// copied: completion **order** is a function of I/O timing when more than one rw
+/// operation is permitted, so asserting an order here would be asserting the
+/// machine's mood. What must hold is that moving the emit into the worker changed
+/// nothing about *what* was reported.
 #[test]
-fn actions_are_reported_as_they_complete_under_parallel_jobs() {
+fn actions_are_reported_as_they_complete_under_a_parallel_rw_limit() {
     let t = TempRoot::new("asdone");
     let (src, dst) = build(&t);
-    let recs = run(&src, &dst, &["--jobs", "4"]);
+    let recs = run(&src, &dst, &["--rw-threads", "4"]);
 
     // Everything still copied, each exactly once, with the same reasons.
     let copies: BTreeSet<(&str, &str)> = recs
@@ -1242,7 +1243,10 @@ fn actions_are_reported_as_they_complete_under_parallel_jobs() {
     ]
     .into_iter()
     .collect();
-    assert_eq!(copies, expected, "--jobs 4 must report the same copies");
+    assert_eq!(
+        copies, expected,
+        "--rw-threads 4 must report the same copies"
+    );
     assert_eq!(
         recs.iter().filter(|r| r["event"] == "copy").count(),
         copies.len(),
@@ -1255,18 +1259,25 @@ fn actions_are_reported_as_they_complete_under_parallel_jobs() {
     );
 }
 
-/// **`--jobs 1` and `--jobs 4` report the same set of actions.** The point of the
-/// as-done change is that the *only* thing `--jobs` affects is which thread finishes
-/// first. If it changed what was reported, `--jobs` would be a correctness flag.
+/// **`--rw-threads 1` and `--rw-threads 4` report the same set of actions.** The
+/// point of the as-done change is that the *only* thing the rw limit affects is
+/// which thread finishes first. If it changed what was reported, the limit would be
+/// a correctness flag.
+///
+/// This is the general form of the crate's rule — the limiter changes scheduling and
+/// nothing else — on the surface that reports actions. `rw_threads.rs` pins the same
+/// property on the resolver, against effective maps and `ScanStats` rather than
+/// printed records; this one is here because the action stream is what a caller
+/// actually reads.
 #[test]
-fn the_number_of_jobs_does_not_change_what_is_reported() {
+fn the_rw_limit_does_not_change_what_is_reported() {
     let t1 = TempRoot::new("asdone_1");
     let (src1, dst1) = build(&t1);
-    let one = run(&src1, &dst1, &["--jobs", "1"]);
+    let one = run(&src1, &dst1, &["--rw-threads", "1"]);
 
     let t4 = TempRoot::new("asdone_4");
     let (src4, dst4) = build(&t4);
-    let four = run(&src4, &dst4, &["--jobs", "4"]);
+    let four = run(&src4, &dst4, &["--rw-threads", "4"]);
 
     let acts = |recs: &[Value]| -> BTreeSet<String> {
         recs.iter()
@@ -1277,7 +1288,7 @@ fn the_number_of_jobs_does_not_change_what_is_reported() {
     assert_eq!(
         acts(&one),
         acts(&four),
-        "--jobs changes who finishes first, not what is reported"
+        "the rw limit changes who finishes first, not what is reported"
     );
     assert_eq!(
         one.iter().filter(|r| r["event"] == "copy").count(),
@@ -1286,10 +1297,10 @@ fn the_number_of_jobs_does_not_change_what_is_reported() {
     );
 }
 
-/// **Every planned copy really happened**, under parallel jobs. The as-done change
-/// moves the emit into a worker closure, which is exactly the kind of move that can
-/// leave a file copied but unreported — so the filesystem is asserted, not only the
-/// stream.
+/// **Every planned copy really happened**, under a parallel rw limit. The as-done
+/// change moves the emit into a worker closure, which is exactly the kind of move
+/// that can leave a file copied but unreported — so the filesystem is asserted, not
+/// only the stream.
 #[test]
 fn parallel_copies_actually_land_on_disk() {
     let t = TempRoot::new("asdone_disk");
@@ -1301,7 +1312,7 @@ fn parallel_copies_actually_land_on_disk() {
         .arg(&src)
         .arg("--dst")
         .arg(&dst)
-        .arg("--jobs")
+        .arg("--rw-threads")
         .arg("4")
         .arg("--output")
         .arg("json")
@@ -1333,10 +1344,11 @@ fn parallel_copies_actually_land_on_disk() {
 ///
 /// A single-file fixture finishes too fast to shuffle, so an order assertion would
 /// pass against the as-done implementation and give false comfort. Twenty-four files
-/// of increasing size under `--jobs 4` do shuffle, and it is this one — the multiset
-/// comparison — that has to hold. Asserted as a *property of the fixture* rather than
-/// of a particular run: the order may still come out sorted on a lucky machine, and a
-/// test that depended on it would be the flaky test the plan is trying to avoid.
+/// of increasing size under `--rw-threads 4` do shuffle, and it is this one — the
+/// multiset comparison — that has to hold. Asserted as a *property of the fixture*
+/// rather than of a particular run: the order may still come out sorted on a lucky
+/// machine, and a test that depended on it would be the flaky test the plan is
+/// trying to avoid.
 #[test]
 fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
     let t = TempRoot::new("asdone_many");
@@ -1351,7 +1363,7 @@ fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
             &vec![b'x'; i * 200_000 + 1024],
         );
     }
-    let recs = run(&src, &dst, &["--jobs", "4"]);
+    let recs = run(&src, &dst, &["--rw-threads", "4"]);
     let copies: Vec<&str> = recs
         .iter()
         .filter(|r| r["event"] == "copy")
