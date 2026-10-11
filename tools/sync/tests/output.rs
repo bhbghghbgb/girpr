@@ -352,3 +352,55 @@ fn a_record_is_logged_with_its_fields_at_debug_level() {
         }
     }
 }
+
+/// **The file log carries every record at the *default* `--log-level`.**
+///
+/// The case that pins `Report::emit`'s gate to the installed subscriber rather
+/// than to the console level. The console layer is filtered by `--log-level` and
+/// defaults to `info`, but the file layer is always `trace` — so with
+/// `--log-file` and *no* `--log-level`, the record event is wanted by the file
+/// layer even though the console would discard it. A gate that consulted
+/// `--log-level` instead would silently drop every record from the log file.
+///
+/// The previous test pins the opposite pole: the console at `debug` wants the
+/// event. This one pins the case where only the file layer does.
+///
+/// What this does *not* currently discriminate is the `STATIC_MAX_LEVEL` term in
+/// that gate: `tracing` is depended on without a `release_max_level_*` feature,
+/// so that ceiling is `TRACE` in every profile and a gate of `STATIC_MAX_LEVEL`
+/// alone passes this test too (verified in both debug and release). It becomes
+/// discriminating the day such a feature is added. The promise being pinned here
+/// is the one that is real today.
+#[test]
+fn a_record_reaches_the_file_log_at_the_default_log_level() {
+    let t = TempRoot::new("out_default_log");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    // No --log-level at all: the default `info`, where the console layer discards
+    // a debug event and only the file layer wants it.
+    let mut args = compare_args(&src, &dst, &["--output", "json"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+
+    let r = run(&args);
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let report_events: Vec<&serde_json::Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "report")
+        .collect();
+    assert_eq!(
+        report_events.len(),
+        r.records.len(),
+        "the always-trace file layer captured every record at the default level: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    // And with its fields, so the gate did not degenerate into logging the name.
+    assert!(
+        report_events.iter().all(|e| e["fields"]["fields"]
+            .as_str()
+            .is_some_and(|f| !f.is_empty())),
+        "each logged record carries its payload"
+    );
+}

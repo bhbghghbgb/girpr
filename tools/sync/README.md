@@ -320,6 +320,14 @@ So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
 from a bad prune; it is a recovery aid, not a correctness mechanism.
 
+The prune keeps rows for what the run *created* — new directories, copied files,
+directories that replaced a file — as well as what it found, and drops rows for
+what it *destroyed*, including the whole subtree under a directory a copy had to
+clear out of the way. One case reaches neither: with `--case-sensitive` on a
+case-insensitive filesystem, a directory the run creates can be the same
+directory a later step removes, and its row then survives until the next run
+prunes it.
+
 It runs the same three phases as every other command — stat-only scan, plan,
 resolve — via `HashPlan::plan_one_side`, which is the one-sided predicate: there
 is no other side to be lazy *relative to*, so every file is a candidate and every
@@ -565,6 +573,11 @@ counts, not the work done. An unflagged run is byte-identical to one without the
 Each record is *also* logged, as a `debug` `tracing` event carrying the same
 `event` name and fields, so a `--log-file` contains the same data plane without
 being asked for it twice in two shapes.
+
+Whether that event is written is decided by what the run has a subscriber for,
+not by `--log-level`: the console layer is filtered by that flag, but a
+`--log-file` layer always records at `trace`, so a file log captures every record
+even at the default `info`.
 
 ### sync
 

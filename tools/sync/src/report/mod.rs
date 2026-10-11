@@ -107,15 +107,25 @@ impl Report {
     /// run over 200k files, 200k of them.
     ///
     /// `enabled!` consults the installed subscriber, so the check is against what
-    /// this run actually logs, not against a constant. `STATIC_MAX_LEVEL` is the
-    /// compile-time ceiling and is checked first so a release build with debug
-    /// compiled out folds the whole branch away rather than calling into
-    /// `enabled!` per record.
+    /// *this run* actually logs — which is not the same as the console level. With
+    /// `--log-file` the console layer may discard a debug event while the always-
+    /// `trace` file layer still wants it, and a check against `--log-level` would
+    /// drop those records from the log file. A compile-time constant cannot express
+    /// that either.
     ///
-    /// The gate is on *construction*, not on *emission*: whenever debug is
-    /// enabled the log event is emitted exactly as before, carrying the same
-    /// event name and the same fields. `tests/output.rs` asserts that against the
-    /// file log, so this cannot later be read as "logging was dropped".
+    /// `STATIC_MAX_LEVEL` is checked first so the branch folds away entirely in a
+    /// build that has debug compiled out. **Today it never does**: `tracing` is
+    /// depended on without a `release_max_level_*` feature, so the ceiling is
+    /// `TRACE` in every profile and this term is currently just a cheaper test
+    /// ahead of the call. It is kept because it is the term that starts doing the
+    /// work the day someone adds such a feature, and because `enabled!` must not
+    /// be the only thing standing between a release build and a file log.
+    ///
+    /// The gate is on *construction*, not on *emission*: whenever debug is enabled
+    /// the log event is emitted exactly as before, carrying the same event name and
+    /// the same fields. `tests/output.rs` pins that at both ends — the console at
+    /// `debug`, and the file layer at the default level — so this cannot later be
+    /// read as "logging was dropped".
     pub fn emit(&self, rec: Record) {
         if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
             debug!(event = %rec.event(), fields = %rec.fields_json(), "report");

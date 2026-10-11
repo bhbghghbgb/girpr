@@ -473,3 +473,110 @@ fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
         rows.keys().collect::<Vec<_>>()
     );
 }
+
+/// **A row for a path a copy wiped must be dropped, with the whole subtree.**
+///
+/// src has `x` as a file; dst has `x/` as a directory holding `x/sub/f.txt`.
+/// The type conflict puts `x` on the copy list, and `copy_one` clears a
+/// blocking dst directory *recursively* — so `x/sub` and `x/sub/f.txt` leave the
+/// disk without anything scheduled to remove their rows.
+///
+/// `Plan::rmdir` deliberately skips that subtree (`plan.rs`): the directory is
+/// gone by the time the removal pass runs, so listing it would promise an
+/// `rmdir` the run cannot reach. That leaves `prune_dst_cache` as the only
+/// thing that can drop those rows, which makes it the only place that can tell
+/// "dst held this before the run" from "dst holds it now".
+///
+/// Asserted against the cache, like the two tests above: a wrong answer here is
+/// invisible in the run's own output and shows up later as cache bloat.
+#[test]
+fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
+    let t = TempRoot::new("prune_wiped_subtree");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // src: x is a file.
+    wfile(&src, "x", b"file contents");
+    // dst: x is a directory, with a subtree under it. Two levels, so the
+    // subtraction is pinned by prefix at depth rather than by one exact entry.
+    wfile(
+        &dst,
+        "x/sub/f.txt",
+        b"a much longer body under a blocking directory",
+    );
+    wfile(
+        &dst,
+        "x/sub/deeper/g.txt",
+        b"and a second level under that too",
+    );
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    // The wipe actually happened: x is now a file and the subtree is gone.
+    assert!(
+        dst.join("x").is_file(),
+        "the blocking dir was replaced by a file"
+    );
+    assert!(
+        !dst.join("x/sub").exists(),
+        "and it went with its whole subtree"
+    );
+
+    let rows = recs(&dst);
+    assert!(
+        rows.contains_key("x"),
+        "the copied file keeps its row: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    for stale in ["x/sub", "x/sub/f.txt", "x/sub/deeper", "x/sub/deeper/g.txt"] {
+        assert!(
+            !rows.contains_key(stale),
+            "a row survived for {stale}, which no longer exists: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// **Trigger (b): a directory this run created and then removed in the same run.**
+///
+/// Reachable only with `--case-sensitive` on a case-insensitive filesystem: src
+/// holds `Sub/`, dst holds `sub/`, and the two name the same directory. `mkdir`
+/// creates `Sub` and `rmdir` then removes `sub` — which is `Sub` — taking the
+/// freshly created tree with it. Nothing is left on disk, so nothing should be
+/// left in the cache.
+///
+/// Recorded here as a **known limitation of the derived present set**, not as a
+/// passing assertion. The walk this replaced would have dropped these rows
+/// because it asked the filesystem. Deriving cannot, without also case-folding
+/// the prune against the plan — in the one mode that deliberately does not
+/// case-fold. The rows are stale until the next run's phase A prunes them, and
+/// `compare-self` builds a cold cache so it cannot be misled.
+#[test]
+#[ignore = "known: the derived present set keeps rows for a dir created and rmdir'd in the same run"]
+fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
+    let t = TempRoot::new("prune_create_then_rmdir");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "Sub/One.txt", b"one");
+    wfile(&src, "Sub/Two.txt", b"two");
+    // Only reachable on a case-insensitive filesystem; skip elsewhere rather
+    // than assert something that cannot happen.
+    if !std::fs::metadata(src.join("Sub"))
+        .map(|_| src.join("sub").exists())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.case_sensitive = true;
+    let _ = cmd_sync(o, &log());
+
+    let rows = recs(&dst);
+    for stale in ["Sub", "Sub/One.txt", "Sub/Two.txt"] {
+        assert!(
+            !rows.contains_key(stale),
+            "a row survived for {stale}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+}
