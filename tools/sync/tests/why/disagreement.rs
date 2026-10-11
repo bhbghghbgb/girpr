@@ -1,0 +1,125 @@
+//! "What disagreed" is not "what was asked for".
+//!
+//! The harness and the fixture builders are in the parent module.
+
+use super::*;
+
+/// A file record with the given stat and digests. Hand-built rather than scanned,
+/// because the state under test is one a scan will not produce on request: a pair
+/// whose answer was decided over an algorithm one side does not hold.
+///
+/// The digest bytes are keyed by algorithm, so two records naming the same algorithm
+/// still disagree — a fixture that made every digest equal would report every pair in
+/// step, and the case under test is a pair that is not.
+fn rec(hashes: &[&str]) -> EffRec {
+    EffRec {
+        kind: "file".into(),
+        size: 10,
+        mtime_ns: 100,
+        hashes: hashes
+            .iter()
+            .map(|a| (a.to_string(), vec![a.len() as u8; 16]))
+            .collect(),
+    }
+}
+
+/// **The one case that separates "what was asked for" from "what disagreed."**
+///
+/// The table above cannot: whenever two algorithms both disagree, the request and
+/// the disagreement are the same list, and under `--hash-any-of` the planner has
+/// already narrowed the request to the single algorithm it picked. So a reason
+/// assembled from `required.of(key)` would satisfy every row there.
+///
+/// Here they differ. `hashes_differ` skips an algorithm one side does not hold —
+/// there is nothing to compare it against — so the planner's answer names **two**
+/// algorithms while only one actually disagreed. A tag built from the request says
+/// `digest-differs:md5+sha256` about a pair that was never compared on sha256; the
+/// honest tag is `digest-differs:md5`.
+///
+/// Reached through `diff_maps`'s public API rather than through a run, because the
+/// coverage check makes it unreachable from the command line: a side that cannot
+/// hash from disk and is short an algorithm fails the run before the diff sees it.
+/// It is exactly the case `hashes_differ` documents as its skip branch, and it is
+/// the reason the disagreement is returned as a *list* rather than as a `bool` that
+/// no caller could name.
+#[test]
+fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
+    // src holds both algorithms; dst holds only md5, and its md5 is a *different*
+    // digest — so md5 disagrees and sha256 is silent because there is nothing on the
+    // other side to compare it against.
+    let s = rec(&["md5", "sha256"]);
+    let d = EffRec {
+        hashes: [("md5".to_string(), vec![9u8; 16])].into_iter().collect(),
+        ..rec(&[])
+    };
+    let required = Required {
+        by_rel: [(
+            "a.txt".to_string(),
+            vec!["md5".to_string(), "sha256".to_string()],
+        )]
+        .into_iter()
+        .collect(),
+        fallback: vec![],
+    };
+    let differs = hashes_differ(&s.hashes, &d.hashes, required.of("a.txt"));
+    let got = pair_verdict(StatTrust::default(), &required, &s, &d, "a.txt");
+
+    assert_eq!(differs, vec!["md5".to_string()], "only md5 was comparable");
+    assert_eq!(
+        got,
+        Verdict::Differs {
+            algos: vec!["md5".into()]
+        },
+        "and only md5 is named, though the planner's answer named two"
+    );
+    assert_eq!(
+        got.why_tag(),
+        "digest-differs:md5",
+        "a tag built from the request would name an algorithm nobody compared"
+    );
+}
+
+/// The mirror of the above, and the reason it needed saying twice: when the
+/// algorithms that *were* compared agree, silence must not be read as a
+/// disagreement. `hashes_differ` is silent either way, so a reader of its `bool`
+/// could not tell the two apart — which is the `Required::fallback` trap this crate
+/// has already paid for once.
+#[test]
+fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
+    let s = rec(&["md5", "sha256"]);
+    let required = Required {
+        by_rel: [(
+            "a.txt".to_string(),
+            vec!["md5".to_string(), "sha256".to_string()],
+        )]
+        .into_iter()
+        .collect(),
+        fallback: vec![],
+    };
+    // Same shape, but the digests both sides actually hold agree.
+    let agreeing = EffRec {
+        hashes: [
+            ("md5".to_string(), vec![3u8; 16]),
+            ("sha256".to_string(), vec![6u8; 16]),
+        ]
+        .into_iter()
+        .collect(),
+        ..rec(&[])
+    };
+    assert_eq!(
+        hashes_differ(&s.hashes, &agreeing.hashes, required.of("a.txt")),
+        Vec::<String>::new(),
+        "nothing disagreed"
+    );
+    let got = pair_verdict(StatTrust::default(), &required, &s, &agreeing, "a.txt");
+
+    assert!(
+        matches!(got, Verdict::Matches { .. }),
+        "a digest that was compared and agreed is not a disagreement: {got:?}"
+    );
+    assert_eq!(
+        got.why_tag(),
+        "digest-matches:md5+sha256",
+        "and both are named, because both were consulted"
+    );
+}

@@ -260,10 +260,10 @@ impl Summary {
 /// `dry_run` marker differing, so any future divergence in labels, ordering or
 /// counts fails there rather than being discovered by a user.
 ///
-/// [`a_dry_run_reports_what_a_real_run_reports`]: ../../sync_plan.rs
+/// [`a_dry_run_reports_what_a_real_run_reports`]: ../../sync_plan/
 ///
 /// Which path gets which action is not pinned here as a transcript. It is asserted
-/// per path by the fixture table in `tests/sync_plan.rs`, which also derives the
+/// per path by the fixture table in `tests/sync_plan/`, which also derives the
 /// summary counts from the plan rather than stating them.
 ///
 /// `rmdir` is exact rather than omitted: the apply phase reads [`Plan::rmdir`]

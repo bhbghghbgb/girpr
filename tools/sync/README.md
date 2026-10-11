@@ -278,7 +278,7 @@ verifies.
 Only scheduling. Every setting resolves the same trees to the same effective maps —
 digests included — and reports the same `ScanStats`. Two runs can print identical
 `CHANGED` lines while having hashed different files, so the tests compare the maps,
-not the output: `tests/rw_threads.rs`.
+not the output: `tests/rw_threads/`.
 
 Two ordering properties hold, both inside `resolve_folder`:
 
@@ -971,26 +971,30 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
   [Concurrency](#concurrency).
 - **Integration tests** live in `tests/` and are grouped by concern: `helpers.rs`
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
-  `sync.rs`, `sync_plan.rs` (the `sync` plan, asserted per path), `why.rs` (`--why` and `--show-identical`: a
-  table of pair state -> classification -> reason tag, the two buckets' exclusions
-  from the exit code, and both flags' surface through the real binary), `lazy.rs`
-  (per-fixture expected verdicts *and* expected read counts, each stated before
-  the code it pins), `hash_mode.rs` (`--hash-all-of` / `--hash-any-of`: the pick
-  and its tiers, the per-path answer reaching the diff, and the flag surface
-  through the real binary), `stat_trust.rs` (`--no-trust-size` /
-  `--no-trust-mtime`: the stat short circuit switched off, measured in read
-  counts, in verdicts, and in cache rows), `output.rs` (the stdout contract:
-  `--output json` is the
+  `sync.rs`, `output.rs` (the stdout contract: `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
-  narrates on stderr), `rw_threads.rs` (the rw limiter: the flag table, the
-  mutual exclusions, and — for every setting — the same effective maps, the same
-  `ScanStats`, the same action stream and the same files on disk), with shared
-  fixtures in `tests/common/mod.rs`. They run
+  narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
   against the public API, so anything they touch must stay `pub`.
+
+  The six largest are **directories**: each is a test target at
+  `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`
+  and the cases grouped into sibling modules along the concern boundaries below.
+  (`main.rs` rather than `mod.rs` because Cargo only auto-discovers a test target
+  from a top-level `.rs` file; the shared fixtures are one level up, so each
+  declares them with an explicit `#[path]`.)
+  
+  | target | grouped into |
+  | --- | --- |
+  | `sync_plan/` | the table itself, `dry_run` (same document, no writes), `plan_print` (first segment), `as_done` (second segment) |
+  | `why/` | `table` (the pair-state table), `identical` (the second bucket), `flags` (both flags through the reporter and the binary), `disagreement` (what disagreed vs what was asked for) |
+  | `lazy/` | `compare_self` (the audit), `compare` (verdict *and* read count per case), `sync` (its scan, and the folder side's own cache) |
+  | `hash_mode/` | `planner` (the pick), `reaching_diff` (the diff consults it, per path), `end_to_end`, `read_count` (the tiers, measured) |
+  | `stat_trust/` | `counters`, `verdict`, `cache_repair`, `other_commands`, `flag_surface`, `no_fallback`, `refusal` |
+  | `rw_threads/` | `flag_surface` (what the family parses into), `limiter` (the gate, contended), `through_the_binary` |
 - **No goldens.** A whole-run transcript is a change detector wearing the costume
   of a specification: once no eager implementation exists to compare against, the
   only way to update one is to paste the actual output, which requires no
-  understanding of whether that output is right. `sync_plan.rs` states a **table
+  understanding of whether that output is right. `sync_plan/` states a **table
   keyed by path** instead — each row says what a path is on each side and what the
   plan must therefore do about it — which survives a change of implementation, fails
   naming the path, and makes new behaviour a new row rather than an edited vector.

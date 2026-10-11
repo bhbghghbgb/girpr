@@ -35,7 +35,7 @@ pub(super) fn rename_to_src_casing(
     // Iterate sorted, not in `HashMap` order. These become `RENAME` records on
     // stdout, in both modes, and `HashMap` iteration is seeded per process, so
     // unsorted order would reshuffle between two runs over the same tree. Sorting
-    // is also what makes the dry-run plan assertions in `tests/sync_plan.rs`
+    // is also what makes the dry-run plan assertions in `tests/sync_plan/`
     // possible at all.
     let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
     by_lower.sort();

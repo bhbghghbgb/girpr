@@ -39,7 +39,7 @@
 //! so the audit is cheap on a drifted tree. An in-step tree is the other way
 //! round: every pair is undecided, and a digest of the folder's bytes is the only
 //! thing that can settle it, so the audit reads every file. That is the audit
-//! doing its job rather than a regression, and `tests/lazy.rs` pins the counts
+//! doing its job rather than a regression, and `tests/lazy/` pins the counts
 //! either way.
 //!
 //! ## The flags
