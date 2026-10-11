@@ -14,14 +14,17 @@ Separate from the `girpr` binary; shares no flags, no exit-code contract, no cod
 `src/lib.rs` holds the module tree; `src/main.rs` is just
 parse -> init tracing -> `run` -> exit. Tests are integration tests in `tests/`
 and drive the public API. Modules that carry more than one idea are split into
-directories (`mod.rs` is the facade; the leaf files each own one concern, and
-their inline `#[cfg(test)]` tests travel with the code they exercise).
+directories (`mod.rs` is the facade re-exporting the same items, so no public
+path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
+tests travel with the code they exercise).
 
 | File | Responsibility |
 | --- | --- |
 | `cli.rs` | clap surface: `Cli`, `Cmd`, and `CommonArgs` (flattened into all four subcommands) |
-| `config.rs` | validated per-run options: `CommonOpts`, `ScanMode`, `LogCtx`, `Update/Compare/SyncOpts` |
-| `report.rs` | the stdout data plane: `Record` + `Report`, `--output text\|json`; `verdict` (every record a diff reports) |
+| `config/mod.rs` | the per-command input structs: `TrustOpts`, `Update/Compare/CompareSelf/SyncOpts` |
+| `config/common.rs` | settings every subcommand shares: `CommonOpts`, `LogCtx`, `ScanMode`, and the `TryFrom` impls that validate raw flags into them |
+| `report/mod.rs` | the stdout data plane: `OutputFormat`, `Report`, `verdict`, `update_summary` |
+| `report/record.rs` | `Record`: the event name, its fields, and the three text layouts |
 | `commands/mod.rs` | `run` dispatch; converts raw CLI strings into `CommonOpts` (where they are validated); the diff reporter/exit code shared by `compare` and `compare-self` |
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
@@ -49,18 +52,22 @@ their inline `#[cfg(test)]` tests travel with the code they exercise).
 | `planner/pairs.rs` | `plan_pairs`: the two-sided decision, pairing, and the coverage bookkeeping |
 | `planner/coverage.rs` | `Coverage`: the error (and its message) when a side cannot answer |
 | `planner/fixtures.rs` | `#[cfg(test)]` entry fixtures shared by the planner's own test modules |
-| `diff.rs` | `Diff` buckets, `diff_maps`, and `Verdict` + `pair_verdict` — the per-pair classification and its reason tag |
-| `rw.rs` | `RwLimits`/`RwLimiter`/`RwRuntime`: how many file reads and writes may be in flight, and whether the two sides draw on one counter or two |
+| `diff/mod.rs` | `Diff` buckets, `diff_maps`, `pair_verdict` and `hashes_differ`: the set of per-pair classifications |
+| `diff/verdict.rs` | `Verdict`: the per-pair classification and its reason tag — the one place a `why=` tag is assembled |
+| `rw/mod.rs` | `RwRuntime`: the limits, the counters and the worker pool, as one run's resource |
+| `rw/limits.rs` | `RwLimits`/`RwSide`: the *shape* the `--rw-threads*` flags resolve to |
+| `rw/gate.rs` | `RwLimiter`/`RwPermit` and the counting gate: the counters, and the src-then-dst lock ordering |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
-`CommonArgs` in `config.rs`'s `TryFrom`, then use `common.<field>` in the command.
+`CommonArgs` in `config/common.rs`'s `TryFrom`, then use
+`common.<field>` in the command.
 
 **Two channels, and nothing is printed raw.** **stdout** is the answer —
 differences, plan actions, summaries — and it is made of `report::Record`s
 rendered by `--output` (see "Output" below). **stderr** is the narration:
 `tracing` events with named fields, filtered by `--log-level` and optionally
-mirrored to a JSON `--log-file`. `logging.rs` owns stderr and `report.rs` owns
+mirrored to a JSON `--log-file`. `logging.rs` owns stderr and `report/` owns
 stdout; neither writes to the other's, which is what lets `--output json` hand a
 caller a clean stream of JSON records with no log chatter mixed in. The only
 `println!` in the crate is `Report::emit`, and the only raw stderr writes are the
@@ -1001,5 +1008,5 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 - **Tests read records, not lines.** Anything that asserts *what was reported*
   asserts `report::Record`s — as JSON objects via `json!`, or parsed from
   `--output json` when the binary has to run (the `RENAME`/`FIX-DIR` records only
-  exist there). The text rendering has its own cases in `report.rs`. A test whose
+  exist there). The text rendering has its own cases in `report/record.rs`. A test whose
   point is *what was reported* should not also restate *how it is spelled*.
