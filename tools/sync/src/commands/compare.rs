@@ -141,24 +141,8 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // overlap, which is the whole point of a per-side budget. src's error is taken
     // first so the message does not depend on which side failed sooner.
     let (src_res, dst_res) = resolve_sides_concurrently(
-        || {
-            resolve_side(
-                &mut s,
-                src_mode,
-                &plans.src,
-                RwSide::Src,
-                &rw,
-            )
-        },
-        || {
-            resolve_side(
-                &mut d,
-                dst_mode,
-                &plans.dst,
-                RwSide::Dst,
-                &rw,
-            )
-        },
+        || resolve_side(&mut s, src_mode, &plans.src, RwSide::Src, &rw),
+        || resolve_side(&mut d, dst_mode, &plans.dst, RwSide::Dst, &rw),
     );
     let sm = src_res?;
     let dm = dst_res?;
