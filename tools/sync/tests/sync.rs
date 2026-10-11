@@ -394,3 +394,82 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
         "converged"
     );
 }
+
+/// **A copy into a directory this same run created must leave a cache row.**
+///
+/// `prune_dst_cache` drops dst cache rows for paths that are no longer on disk,
+/// and it has to know what is on disk *after* this run's own writes. The files it
+/// copies are not in the map phase A read, so a prune that answered "what did
+/// dst hold before I started" would delete the rows for everything it just wrote.
+///
+/// The fixture is the smallest shape where that can go wrong: `mkdir` creates
+/// `fresh/`, `copy_one` then creates `fresh/a.txt` and `fresh/b.txt` inside it.
+/// Neither file existed when phase A read dst.
+///
+/// Asserted against **the cache**, not against a reported prune count: a wrong
+/// derivation does not necessarily report a wrong count, it deletes live rows,
+/// and the damage only surfaces later as phantom drift from a `compare-self`.
+#[test]
+fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
+    let t = TempRoot::new("prune_keeps_copied");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // One file at the root, so the run has work beyond the new directory and the
+    // prune is not trivially looking at an empty table.
+    wfile(&src, "top.txt", b"top");
+    wfile(&src, "fresh/a.txt", b"a");
+    wfile(&src, "fresh/b.txt", b"b");
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    // On disk, everything this run wrote is there...
+    assert!(dst.join("top.txt").is_file());
+    assert!(dst.join("fresh/a.txt").is_file());
+    assert!(dst.join("fresh/b.txt").is_file());
+    // ...and so is every one of them in dst's cache, including the directory.
+    let rows = recs(&dst);
+    for rel in ["top.txt", "fresh", "fresh/a.txt", "fresh/b.txt"] {
+        assert!(
+            rows.contains_key(rel),
+            "no cache row for {rel}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// **A row for a path that is genuinely gone must be dropped.**
+///
+/// The other half of the same prune, and the half that makes it worth doing at
+/// all: without it a deleted file's row would sit in the cache describing
+/// content that no longer exists. The path is removed from disk *after* the run
+/// that created it, so nothing this run writes can put it back.
+///
+/// Asserted against the cache, per the reasoning above.
+#[test]
+fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
+    let t = TempRoot::new("prune_drops_gone");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "kept.txt", b"kept");
+    wfile(&src, "doomed.txt", b"doomed");
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert!(recs(&dst).contains_key("doomed.txt"), "the run recorded it");
+
+    // A later run, after the file is gone from both sides.
+    std::fs::remove_file(src.join("doomed.txt")).unwrap();
+    std::fs::remove_file(dst.join("doomed.txt")).unwrap();
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    let rows = recs(&dst);
+    assert!(
+        !rows.contains_key("doomed.txt"),
+        "the row for a deleted path must not survive: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        rows.contains_key("kept.txt"),
+        "and the rows for live paths must not be collateral: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+}

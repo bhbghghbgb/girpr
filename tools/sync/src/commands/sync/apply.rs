@@ -30,11 +30,9 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::filter::is_excluded;
 use crate::hash::hash_file;
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
-use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
 /// Everything the apply phases share: both roots, the dst cache, the two
@@ -86,7 +84,7 @@ impl Applier<'_> {
             copied: self.copy_files(plan)?,
             removed_dirs: self.remove_unknown_dirs(plan)?,
         };
-        self.prune_dst_cache()?;
+        self.prune_dst_cache(plan)?;
         Ok(applied)
     }
 
@@ -349,22 +347,40 @@ impl Applier<'_> {
     }
 
     /// Drop dst cache rows for paths that no longer exist on disk.
-    fn prune_dst_cache(&self) -> Result<()> {
-        let live = walk_live(self.dst, self.common.max_depth)?;
-        let mut present: HashSet<String> = HashSet::new();
-        for e in live {
-            if !is_excluded(
-                &e.rel,
-                &self.common.includes,
-                &self.common.excludes,
-                self.common.case_sensitive,
-            ) {
-                present.insert(e.rel);
-            }
+    ///
+    /// The present set is derived rather than walked. `dm` is the post-rename dst
+    /// map — the same filtered, depth-capped set of paths a live walk would report,
+    /// which is why `Plan::rmdir` reads it instead of deriving a second one — so the
+    /// only thing it cannot know is what *this run* has written since.
+    ///
+    /// That is the three lists the apply phases create: `mkdir` for new directories,
+    /// `copy` for copied files, and `fix_dirs` for the directories that replaced a
+    /// file. All three put their path in the cache as they go, so all three have to
+    /// count as present; leaving one out deletes a row for a path that is on disk,
+    /// and the damage does not show up here — it surfaces later as a `compare-self`
+    /// reporting drift for a file that never moved.
+    ///
+    /// Paths the run *removed* need no handling in either direction: `delete_extras`
+    /// and `remove_unknown_dirs` drop their own rows, and `predrop_cache_entries`
+    /// has already committed that.
+    ///
+    /// Cost: one pass over three in-memory lists, against a full traversal of dst
+    /// with a `stat` per entry. On a large tree that walk is a real fraction of the
+    /// run, and it was the only remaining full walk of dst in a real `sync`.
+    fn prune_dst_cache(&self, plan: &Plan) -> Result<()> {
+        let mut present: HashSet<&str> = self.dm.keys().map(String::as_str).collect();
+        for r in &plan.mkdir {
+            present.insert(r);
+        }
+        for r in &plan.fix_dirs {
+            present.insert(r);
+        }
+        for item in &plan.copy {
+            present.insert(&item.rel);
         }
         let mut w = self.dst_db.begin_write()?;
         for rel in w.load_all()?.keys() {
-            if !present.contains(rel) {
+            if !present.contains(rel.as_str()) {
                 w.remove(rel)?;
             }
         }
