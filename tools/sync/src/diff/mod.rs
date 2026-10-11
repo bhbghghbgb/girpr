@@ -1,6 +1,6 @@
 //! Path-set diffing between two effective maps.
 //!
-//! [`Verdict`] (in [`verdict`]) is what the diff concluded about one pair and why;
+//! [`Verdict`] (in `verdict`) is what the diff concluded about one pair and why;
 //! `Diff` (here) is the set of those conclusions bucketed by class. Splitting them
 //! keeps the vocabulary separate from the container — a reason tag is read off a
 //! [`Verdict`], never off a bucket.

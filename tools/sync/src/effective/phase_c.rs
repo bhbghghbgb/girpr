@@ -34,7 +34,7 @@ use super::side::{OpenSide, Side};
 ///
 /// ## Two stages per window, and why they are not one
 ///
-/// [`CacheWrite`] owns a live `redb::WriteTransaction`, so it is not `Sync` and
+/// [`crate::cache::CacheWrite`] owns a live `redb::WriteTransaction`, so it is not `Sync` and
 /// must never be touched from a pool thread. So a window is **read** in parallel
 /// and then **written** in sequence:
 ///

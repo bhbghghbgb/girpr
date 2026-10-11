@@ -11,12 +11,12 @@
 //!
 //! | module | phase | what it does |
 //! | --- | --- | --- |
-//! | [`side`] | — | what a *side* is, how its cache is opened, and which one-cache-per-run rule holds |
-//! | [`phase_a`] | A | [`scan_stat_only`] — walk the tree, consult the cache, **read no bytes** |
-//! | [`phase_c`] | C | [`resolve_folder`] / [`resolve_record`] — hash what the planner asked for, and finalize |
+//! | `side` | — | what a *side* is, how its cache is opened, and which one-cache-per-run rule holds |
+//! | `phase_a` | A | [`scan_stat_only`] — walk the tree, consult the cache, **read no bytes** |
+//! | `phase_c` | C | [`resolve_folder`] / [`resolve_record`] — hash what the planner asked for, and finalize |
 //!
-//! [`entry`] holds what they all exchange: [`EffRec`], [`SideEntry`], [`ScanStats`],
-//! and the cache **write rule** ([`merge_row`]), which is the one thing a reader of
+//! `entry` holds what they all exchange: [`EffRec`], [`SideEntry`], [`ScanStats`],
+//! and the cache **write rule** (`merge_row`), which is the one thing a reader of
 //! either phase has to be able to check.
 //!
 //! A record side has no filesystem, so its phase C is [`resolve_record`] — a map

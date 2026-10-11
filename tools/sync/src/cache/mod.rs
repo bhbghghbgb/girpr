@@ -3,7 +3,7 @@
 //! A cache is `<root>/girpr-cache`, a redb **file** (backups and `old-*`
 //! snapshots are files too). Keys are `/`-separated relative paths (UTF-8,
 //! casing as stored) in the `entries` table; values are [`FileRec`] encoded
-//! with the binary codec in [`codec`]. The `meta` table holds a single `meta` key
+//! with the binary codec in `codec`. The `meta` table holds a single `meta` key
 //! with the schema [`Meta`].
 //!
 //! ## Durability / resumability contract
@@ -23,11 +23,11 @@
 //!
 //! | module | what it owns |
 //! | --- | --- |
-//! | [`schema`] | [`Meta`] and [`FileRec`]: what a row *is* |
-//! | [`codec`] | the binary encoding of both, and its tests |
-//! | [`db`] | [`CacheDb`]: the read/write-or-read-only handle |
-//! | [`write`] | [`CacheWrite`]: batched mutations and when they commit |
-//! | [`open`] | [`open_db`], the backups and snapshots, and the free functions over a handle |
+//! | `schema` | [`Meta`] and [`FileRec`]: what a row *is* |
+//! | `codec` | the binary encoding of both, and its tests |
+//! | `db` | [`CacheDb`]: the read/write-or-read-only handle |
+//! | `write` | [`CacheWrite`]: batched mutations and when they commit |
+//! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
 
 mod codec;
 mod db;

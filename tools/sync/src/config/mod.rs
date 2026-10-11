@@ -4,7 +4,7 @@
 //! vocabulary, so it is parsed once into [`CommonOpts`] and passed around as a
 //! struct instead of a dozen positional arguments.
 //!
-//! [`common`] holds the settings every subcommand shares, and the `TryFrom`
+//! `common` holds the settings every subcommand shares, and the `TryFrom`
 //! impls that validate the raw flags into them — including the two refusals that
 //! are properties of the *request* rather than of the command receiving it. This
 //! file holds the per-command input structs a caller fills in: one per

@@ -3,7 +3,9 @@
 //! A dry run has to answer the same question as a real run, so the comparison here
 //! is between two runs of the same code differing only in the write gate. That is
 //! the one whole-document comparison the suite keeps, and it earns it: a divergence
-//! means the dry run took a different branch.
+//! means the dry run took a different branch. It shares this fixture with the rest
+//! of the target, so a change to the tree the plan runs over fails every segment at
+//! once rather than quietly making one of them vacuous.
 
 use super::*;
 

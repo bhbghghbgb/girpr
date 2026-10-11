@@ -19,7 +19,7 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 ///
 /// The output is a [`SideEntry`] per path: its kind, its stat, and the digests
 /// the cache holds *for that exact stat*. Nothing here decides what still needs
-/// computing; that is [`HashPlan`]'s job, and keeping the two apart is what lets
+/// computing; that is [`crate::planner::HashPlan`]'s job, and keeping the two apart is what lets
 /// the plan choose an algorithm per path instead of inheriting whatever this pass
 /// decided to open.
 ///

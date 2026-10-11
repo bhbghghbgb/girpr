@@ -58,8 +58,8 @@
 //!
 //! | module | what it owns |
 //! | --- | --- |
-//! | [`limits`] | [`RwLimits`] and [`RwSide`]: **the shape** the flags resolve to |
-//! | [`gate`] | [`RwLimiter`], [`RwPermit`] and the counting gate: **the counters** |
+//! | `limits` | [`RwLimits`] and [`RwSide`]: **the shape** the flags resolve to |
+//! | `gate` | [`RwLimiter`], [`RwPermit`] and the counting gate: **the counters** |
 //! | this file | [`RwRuntime`]: the limits, the counters and the worker pool, as one run's resource |
 
 mod gate;

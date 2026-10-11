@@ -41,10 +41,10 @@
 //!
 //! | module | what it owns |
 //! | --- | --- |
-//! | [`stat_trust`] | [`StatTrust`] and the field vocabulary: **which stat fields may settle a pair** |
-//! | [`plan`] | [`HashPlan`] and [`Required`]: **what must be computed, and what settles each pair** |
-//! | [`pairs`] | [`plan_pairs`]: **the two-sided decision**, including the pairing step |
-//! | [`coverage`] | [`Coverage`]: **whether the run can be answered at all**, and what it says when it cannot |
+//! | `stat_trust` | [`StatTrust`] and the field vocabulary: **which stat fields may settle a pair** |
+//! | `plan` | [`HashPlan`] and [`Required`]: **what must be computed, and what settles each pair** |
+//! | `pairs` | [`plan_pairs`]: **the two-sided decision**, including the pairing step |
+//! | `coverage` | [`Coverage`]: **whether the run can be answered at all**, and what it says when it cannot |
 
 mod coverage;
 mod pairs;
