@@ -11,9 +11,11 @@ Separate from the `girpr` binary; shares no flags, no exit-code contract, no cod
 
 ## Source layout
 
-`src/lib.rs` holds the whole implementation; `src/main.rs` is just
+`src/lib.rs` holds the module tree; `src/main.rs` is just
 parse -> init tracing -> `run` -> exit. Tests are integration tests in `tests/`
-and drive the public API.
+and drive the public API. Modules that carry more than one idea are split into
+directories (`mod.rs` is the facade; the leaf files each own one concern, and
+their inline `#[cfg(test)]` tests travel with the code they exercise).
 
 | File | Responsibility |
 | --- | --- |
@@ -26,13 +28,29 @@ and drive the public API.
 | `commands/compare_self.rs` | diff a folder against its own cache, folder side scanned with no cache |
 | `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
-| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective.rs`) is what makes `--dry-run` mean the same thing in every command |
+| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
-| `cache.rs` | redb schema (`Meta`, `FileRec`, binary codec), `open_db` (`CacheOpen` read/write vs read-only), backup/snapshot helpers |
+| `cache/mod.rs` | redb schema (`Meta`, `FileRec`), open/rebuild, backup/snapshot helpers — the facade and the table definitions |
+| `cache/schema.rs` | `Meta` + `FileRec`: what a row *is*, with no encoding |
+| `cache/codec.rs` | the binary entry/meta codec and its roundtrip/rejection tests |
+| `cache/db.rs` | `CacheDb`: the read/write-or-read-only handle (`CacheOpen`) and its tests |
+| `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
+| `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
-| `effective.rs` | the two phases for one side: `open_side`/`scan_stat_only` (stat + cache, never hashes) and `resolve_side`/`resolve_folder`/`resolve_record` (produce what was planned); `merge_row`, the cache write rule |
-| `planner.rs` | `HashPlan::plan_one_side` (one side, `update`) and `plan_pairs` (two sides, `HashMode` and the coverage check): the only place that decides which digests a run must compute. `Required` carries the per-path answer to the diff |
+| `effective/mod.rs` | the two-phase facade for one side of a comparison |
+| `effective/entry.rs` | the entries (`EffRec`, `SideEntry`, `SideScan`, `ScanStats`, `SideCapability`) and the cache write rule (`merge_row`) |
+| `effective/side.rs` | `Side`/`OpenSide`, `open_side`/`open_folder_cache`, `classify`, `ensure_distinct_sides`, `resolve_sides_concurrently` |
+| `effective/phase_a.rs` | phase A: `scan_stat_only` — walk + cache, never hashes |
+| `effective/phase_c.rs` | phase C: `resolve_folder`/`resolve_record`/`resolve_side` — hash what the plan asked for |
+| `effective/record.rs` | phase A for a record side: `load_record_side_from` |
+| `planner/mod.rs` | the "what must be computed" facade, `HashMode`, and the submodule map |
+| `planner/stat_trust.rs` | `StatTrust` + `StatField`/`DifferingFields`: which stat fields may settle a pair |
+| `planner/plan.rs` | `HashPlan` + `Required`: what a run must compute, and what settles each pair |
+| `planner/pairs.rs` | `plan_pairs`: the two-sided decision, pairing, and the coverage bookkeeping |
+| `planner/coverage.rs` | `Coverage`: the error (and its message) when a side cannot answer |
+| `planner/fixtures.rs` | `#[cfg(test)]` entry fixtures shared by the planner's own test modules |
 | `diff.rs` | `Diff` buckets, `diff_maps`, and `Verdict` + `pair_verdict` — the per-pair classification and its reason tag |
+| `rw.rs` | `RwLimits`/`RwLimiter`/`RwRuntime`: how many file reads and writes may be in flight, and whether the two sides draw on one counter or two |
 | `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
@@ -334,7 +352,8 @@ the only alternative would be to fall back to size+mtime and report a confident
 answer about content nobody compared. `--no-trust-cached-hashes` on a record side
 is *not* a shortfall: it asks the record to re-read, and a record has nothing to
 re-read. `sync` runs the same check and cannot trip it, because both its sides are
-folders. Details, and the message shape, in `src/planner.rs`.
+folders. Details, and the message shape, in `src/planner/pairs.rs` and
+`src/planner/coverage.rs`.
 
 ### compare-self
 

@@ -1,0 +1,289 @@
+//! What a run must compute: [`HashPlan`] and [`Required`].
+//!
+//! The two answers [`crate::planner::plan_pairs`] produces, and nothing else. A
+//! [`HashPlan`] is per side and says *which digests that side still owes*;
+//! [`Required`] is per pair and says *which digests settle it*. They are separate
+//! because they answer separate questions, and because only the second one travels
+//! into [`crate::diff`].
+//!
+//! [`plan_one`] lives here rather than beside the pair planner: it is the one
+//! function that writes into a [`HashPlan`], so it belongs with the type whose
+//! invariant it maintains — a side that cannot hash is never given an entry.
+
+use std::collections::HashMap;
+
+use crate::effective::SideEntry;
+
+use super::pairs::SideRequest;
+
+/// The algorithms that settle each undecided pair, from one decision.
+///
+/// Produced by [`crate::planner::plan_pairs`] and consumed by [`crate::diff::diff_maps`]. Handing
+/// the diff *this* rather than the algorithm list is what lets one run settle path
+/// X by md5 and path Y by sha256: under `all-of` every entry is the whole requested
+/// list, so a uniform run would be described just as well by passing that list
+/// straight through.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Required {
+    /// src relative path -> the algorithms that settle it.
+    pub by_rel: HashMap<String, Vec<String>>,
+    /// Consulted for a path with no entry. See [`Required::of`].
+    pub fallback: Vec<String>,
+}
+
+impl Required {
+    /// The algorithms that settle `srel`, which is a **src** path.
+    ///
+    /// The fallback is the whole requested list, and it is unreachable while the
+    /// planner and the diff agree on which pairs are undecided: a path reaches the
+    /// digest comparison only when size and mtime already agreed, every such path is
+    /// undecided, and the planner has an entry for every undecided file pair. It is
+    /// still the right answer to give, because
+    /// [`crate::diff::hashes_differ`] is *silent* when a digest is missing — a
+    /// fallback of nothing would report every unplanned pair as equal. A safe fallback
+    /// and the reachable answer coincide, so the safety costs nothing.
+    pub fn of(&self, srel: &str) -> &[String] {
+        self.by_rel.get(srel).unwrap_or(&self.fallback)
+    }
+}
+
+/// What a run must compute for one side.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HashPlan {
+    /// Relative path -> the algorithms phase C must produce for it. An absent
+    /// or empty list means "this path needs no read".
+    ///
+    /// This is the set to *compute*, not the set to *end up holding*. The
+    /// distinction is what makes `--no-trust-cached-hashes` expressible: it
+    /// asks for the digest again, while phase A keeps reporting the cached one
+    /// so the planner can still see what is on hand.
+    pub by_rel: HashMap<String, Vec<String>>,
+}
+
+impl HashPlan {
+    /// The algorithms to compute for `rel`; empty when the path needs no read.
+    pub fn get(&self, rel: &str) -> &[String] {
+        self.by_rel.get(rel).map(|v| &v[..]).unwrap_or(&[])
+    }
+
+    /// True when `rel` needs no read at all, because everything it needs is
+    /// already cached.
+    pub fn is_settled(&self, rel: &str) -> bool {
+        self.get(rel).is_empty()
+    }
+
+    /// Every path the plan asks to hash, in sorted order.
+    pub fn pending(&self) -> Vec<&String> {
+        let mut v: Vec<&String> = self
+            .by_rel
+            .iter()
+            .filter(|(_, a)| !a.is_empty())
+            .map(|(r, _)| r)
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Total number of digests the plan will compute.
+    pub fn digest_count(&self) -> usize {
+        self.by_rel.values().map(|a| a.len()).sum()
+    }
+
+    /// The algorithms this side still has to compute for `entry`, in `algos`
+    /// order.
+    ///
+    /// `no_trust` overrides the subtraction: distrusting the cache is a refusal
+    /// to *reuse* a digest, never an instruction to forget it — see
+    /// [`crate::effective::merge_row`], which stores the same row either way —
+    /// so the plan asks again while phase A keeps reporting the old value.
+    fn missing(entry: &SideEntry, algos: &[String], no_trust: bool) -> Vec<String> {
+        algos
+            .iter()
+            .filter(|a| no_trust || !entry.cached.contains_key(*a))
+            .cloned()
+            .collect()
+    }
+
+    /// The plan for a side with no counterpart, and the one `update` uses: every
+    /// requested algorithm, for every file, minus what the cache already holds.
+    ///
+    /// There is no pairing step, so every file is a candidate. That is the right
+    /// answer for a command with no other side to be lazy *relative to*, and the
+    /// wrong one for a comparison — see [`crate::planner::plan_pairs`].
+    ///
+    /// ## Why this needs no coverage check
+    ///
+    /// [`crate::planner::plan_pairs`] fails a side that cannot supply a requested digest, because a
+    /// comparison cannot answer the question without it. `update` asks a folder for
+    /// everything it has, and a folder can always go and compute any digest of any
+    /// file it holds — so its own availability was never in question, and it needs
+    /// no exemption from the rule. The predicate is the same one for both: "can this
+    /// side obtain it", and a folder always can.
+    ///
+    /// The two consequences worth stating, because one is easy to get wrong:
+    ///
+    /// - It returns `Self`, not `Result<Self>`, and there is no capability input.
+    ///   Not because coverage was skipped, but because a one-sided plan has nothing
+    ///   to check a shortfall *against* — the check is about a pair.
+    /// - `no_trust` is load-bearing here in a way it is not in `plan_pairs`.
+    ///   `update` passes `true` unconditionally, which is what makes it recompute
+    ///   every digest on every run rather than trusting a row whose stat still
+    ///   matches. `update_recomputes_every_digest_and_repairs_a_wrong_one` in
+    ///   `tests/update.rs` is the only test that would notice if it stopped, because
+    ///   idempotence cannot distinguish a reused digest from a recomputed one.
+    ///
+    /// `algos` order is preserved, because it is the user's flag order and the
+    /// tie-break `--hash-any-of` will use is defined in terms of it.
+    pub fn plan_one_side(
+        entries: &HashMap<String, SideEntry>,
+        algos: &[String],
+        no_trust: bool,
+    ) -> Self {
+        let mut by_rel = HashMap::new();
+        for (rel, e) in entries {
+            if !e.is_file() || algos.is_empty() {
+                continue;
+            }
+            let want = Self::missing(e, algos, no_trust);
+            if !want.is_empty() {
+                by_rel.insert(rel.clone(), want);
+            }
+        }
+        Self { by_rel }
+    }
+}
+
+/// Add whatever `req` still owes for `rel` to `into`.
+///
+/// Skipped for a side that cannot hash, which is why `plan.required` — not this
+/// function — is the record of what the run must produce: a side with no filesystem
+/// is never *asked*, so a plan entry for it would be a request nothing could honour.
+pub(super) fn plan_one(
+    req: &SideRequest<'_>,
+    e: &SideEntry,
+    rel: &str,
+    algos: &[String],
+    into: &mut HashPlan,
+) {
+    if !req.cap.can_hash_from_disk {
+        return;
+    }
+    let want = HashPlan::missing(e, algos, req.no_trust);
+    if !want.is_empty() {
+        into.by_rel.insert(rel.to_string(), want);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn entry(cached: &[&str]) -> SideEntry {
+        SideEntry {
+            kind: "file".into(),
+            size: 10,
+            mtime_ns: 99,
+            cached: cached
+                .iter()
+                .map(|a| (a.to_string(), vec![1u8; 16]))
+                .collect(),
+            fresh: !cached.is_empty(),
+        }
+    }
+
+    fn dir() -> SideEntry {
+        SideEntry {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            cached: HashMap::new(),
+            fresh: true,
+        }
+    }
+
+    fn entries() -> HashMap<String, SideEntry> {
+        let mut m = HashMap::new();
+        m.insert("cached.txt".to_string(), entry(&["md5"]));
+        m.insert("stale.txt".to_string(), entry(&[]));
+        m.insert("sub".to_string(), dir());
+        m
+    }
+
+    fn algos() -> Vec<String> {
+        vec!["md5".to_string(), "sha256".to_string()]
+    }
+
+    /// A complete cache row costs no read, an incomplete one costs only what is
+    /// missing.
+    #[test]
+    fn one_side_plans_only_what_the_cache_lacks() {
+        let p = HashPlan::plan_one_side(&entries(), &algos(), false);
+        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
+        assert_eq!(
+            p.get("stale.txt"),
+            &["md5".to_string(), "sha256".to_string()]
+        );
+        assert!(p.is_settled("sub"), "a dir never needs a read");
+    }
+
+    /// A row with nothing cached is indistinguishable, to this predicate, from
+    /// a row whose stat moved — which is correct, because phase A carries no
+    /// digests for a stat-changed path. Both need everything.
+    #[test]
+    fn one_side_ignores_digests_phase_a_declined_to_carry() {
+        let mut e = entries();
+        let stale = e.get("cached.txt").unwrap().clone();
+        e.insert("cached.txt".to_string(), stale);
+        let p = HashPlan::plan_one_side(&e, &algos(), false);
+        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
+    }
+
+    /// A distrusting run must pay for the read even against a complete cache —
+    /// that is the flag's entire purpose.
+    #[test]
+    fn no_trust_plans_every_algorithm_regardless_of_the_cache() {
+        let p = HashPlan::plan_one_side(&entries(), &algos(), true);
+        assert_eq!(
+            p.get("cached.txt"),
+            &["md5".to_string(), "sha256".to_string()]
+        );
+        assert_eq!(
+            p.get("stale.txt"),
+            &["md5".to_string(), "sha256".to_string()]
+        );
+    }
+
+    /// `--hash none` is a distinct mode, not all-of over an empty set that
+    /// happens to succeed: no path may appear in the plan at all, so phase C
+    /// never runs and no file is opened.
+    #[test]
+    fn no_algorithms_plans_nothing() {
+        let p = HashPlan::plan_one_side(&entries(), &[], false);
+        assert!(p.by_rel.is_empty());
+        assert_eq!(p.digest_count(), 0);
+    }
+
+    /// An empty plan is the common lazy case — everything already decided — so its
+    /// accessors have to be right when nothing is pending.
+    #[test]
+    fn an_empty_plan_settles_everything() {
+        let p = HashPlan::default();
+        assert!(p.is_settled("anything"));
+        assert!(p.pending().is_empty());
+        assert_eq!(p.digest_count(), 0);
+    }
+
+    #[test]
+    fn pending_is_sorted_and_excludes_settled_paths() {
+        let mut p = HashPlan::default();
+        p.by_rel
+            .insert("z.txt".to_string(), vec!["md5".to_string()]);
+        p.by_rel
+            .insert("a.txt".to_string(), vec!["md5".to_string()]);
+        p.by_rel.insert("done.txt".to_string(), vec![]);
+        assert_eq!(p.pending(), vec!["a.txt", "z.txt"]);
+        assert!(p.is_settled("done.txt"));
+        assert_eq!(p.digest_count(), 2);
+    }
+}

@@ -20,6 +20,9 @@
 //! - [`report`] — the stdout data plane: [`report::Record`] rendered as text
 //!   or JSON by `--output`
 //!
+//! `cache`, `effective` and `planner` are each a directory module whose `mod.rs`
+//! is a facade; the leaves own one concern apiece.
+//!
 //! Two channels, deliberately separate. **stdout** is the answer: differences,
 //! plan actions and summaries, as [`report::Record`]s in the `--output` format.
 //! **stderr** is the narration: `tracing` events, filtered by `--log-level` and
