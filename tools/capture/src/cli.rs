@@ -44,6 +44,11 @@ pub struct Cli {
 }
 
 /// The four commands.
+///
+/// The variants are uneven by nature — `capture` has twenty flags and `list` has
+/// one — and the enum is built exactly once per process, so the size difference
+/// is not worth a `Box` that would only move the bytes.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
     /// Fetch from the live APIs and write an artifact bundle.
@@ -143,6 +148,15 @@ pub struct CaptureArgs {
     /// Per-request timeout, seconds.
     #[arg(long, value_name = "S", default_value_t = 60)]
     pub timeout: u64,
+
+    /// Override the HoYoPlay base. Testing seam: points every endpoint at a
+    /// local server. Defaults to the production base for `--biz`.
+    #[arg(long, value_name = "URL")]
+    pub hyp_base: Option<String>,
+
+    /// Override the Sophon `getBuild` base. Testing seam; see `--hyp-base`.
+    #[arg(long, value_name = "URL")]
+    pub sophon_base: Option<String>,
 
     #[command(flatten)]
     pub common: CommonArgs,

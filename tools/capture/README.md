@@ -34,9 +34,18 @@ Start with the spec.
 
 ## Status
 
-Built to milestone **M0** (crate skeleton, CLI surface, workspace member). The
-four commands parse and dispatch; none fetches anything yet, so `capture`
-currently exits `3` rather than writing an empty bundle — a deliberate
-exclusion is not a failure, but a fabricated artifact is. The build order lives
-in `docs/02-plan.md` §3 and each module's own header says which milestone it
-lands in.
+Built to milestone **M1** (transport and provenance). `capture` reaches the live
+HoYoPlay and Sophon APIs, resolves the version pair, fetches both `getBuild`s,
+probes which tags are servable, and writes `api/requests.ndjson`. The response
+*bodies*, the manifests, the chunks and the fixture tree land in M2, M3, M6 and
+M8; `verify` / `materialize` / `list` are M9. The build order lives in
+`docs/02-plan.md` §3 and each module's own header says which milestone it lands
+in.
+
+```powershell
+# Writes artifacts/hk4e_global/<old>__<new>/<id>/api/requests.ndjson
+.\target\release\gircap.exe capture --out artifacts
+
+# Metadata-only, against a local server (the testing seam M10 needs)
+.\target\release\gircap.exe capture --hyp-base http://127.0.0.1:8080 --sophon-base http://127.0.0.1:8080
+```

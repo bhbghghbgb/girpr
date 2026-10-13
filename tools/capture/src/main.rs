@@ -46,21 +46,21 @@ async fn main() {
             Ok(plan) => run::capture(plan).await,
             Err(e) => {
                 tracing::error!(error = %e, "usage error");
-                Err(e.exit_code())
+                Err(run::Failure::usage(&e))
             }
         },
         Cmd::Verify(a) => match verify_plan(a) {
             Ok(plan) => run::verify(plan).await,
             Err(e) => {
                 tracing::error!(error = %e, "usage error");
-                Err(e.exit_code())
+                Err(run::Failure::usage(&e))
             }
         },
         Cmd::Materialize(a) => match materialize_plan(a) {
             Ok(plan) => run::materialize(plan).await,
             Err(e) => {
                 tracing::error!(error = %e, "usage error");
-                Err(e.exit_code())
+                Err(run::Failure::usage(&e))
             }
         },
         Cmd::List(a) => run::list(a.root.clone(), common.output).await,
@@ -72,7 +72,7 @@ async fn main() {
 
     let (summary, code) = match outcome {
         Ok(outcome) => outcome,
-        Err(code) => (run::failure_summary(event, code), code),
+        Err(f) => (f.summary(event), f.code),
     };
     summary.emit(common.output);
 

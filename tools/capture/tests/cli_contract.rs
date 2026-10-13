@@ -6,9 +6,12 @@
 //! decided. Asserting it here is what stops a future refactor from moving it
 //! back into clap's default.
 //!
-//! No case touches a network or a game directory. A `--artifact` that does not
-//! exist is a legitimate argument to a command whose job is to discover that,
-//! and `capture` with no implementation is likewise a legitimate argument.
+//! **No case touches a network.** `capture` really does reach the live APIs, so
+//! every `capture` case here points `--hyp-base`/`--sophon-base` at
+//! `127.0.0.1:1`, where nothing is listening: the request is refused immediately
+//! and the run takes its documented exit `2` without a packet leaving the host.
+//! That is what makes the seam worth having — the contract is asserted against a
+//! run that started, failed, and reported, rather than against a stub.
 
 use std::process::Command;
 
@@ -24,22 +27,49 @@ fn bin() -> std::path::PathBuf {
     p
 }
 
+/// Flags that point `capture` at a dead loopback port.
+///
+/// `--retries 1` keeps the test to one attempt: a backoff would make a contract
+/// test take seconds to prove something that is true immediately.
+const OFFLINE: &[&str] = &[
+    "--hyp-base",
+    "http://127.0.0.1:1/hyp",
+    "--sophon-base",
+    "http://127.0.0.1:1/sophon",
+    "--retries",
+    "1",
+    "--timeout",
+    "2",
+];
+
+/// `capture` with the offline seam appended.
+fn offline_capture(extra: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = ["capture"].iter().map(|s| s.to_string()).collect();
+    v.extend(OFFLINE.iter().map(|s| s.to_string()));
+    v.extend(extra.iter().map(|s| s.to_string()));
+    v
+}
+
 struct Run {
     code: i32,
     stdout: String,
     stderr: String,
 }
 
-fn run(args: &[&str]) -> Run {
+fn run_owned(argv: &[String]) -> Run {
     let out = Command::new(bin())
-        .args(args)
+        .args(argv)
         .output()
-        .unwrap_or_else(|e| panic!("running {args:?}: {e}"));
+        .unwrap_or_else(|e| panic!("running {argv:?}: {e}"));
     Run {
         code: out.status.code().expect("the process was not killed"),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
+}
+
+fn run(args: &[&str]) -> Run {
+    run_owned(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
 }
 
 fn assert_code(args: &[&str], want: i32) -> Run {
@@ -116,37 +146,80 @@ fn the_summary_is_the_only_thing_on_stdout() {
         assert!(r.stdout.contains(cmd), "{cmd} missing from --help:\n{}", r.stdout);
     }
 
-    let r = assert_code(&["capture", "--output", "json"], 3);
+    let r = run_owned(&offline_capture(&["--output", "json"]));
+    assert_eq!(r.code, 2, "an unreachable base is exit 2\n{}", r.stderr);
     let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(lines.len(), 1, "expected exactly one line: {lines:?}");
     let v: serde_json::Value = serde_json::from_str(lines[0]).expect("one JSON object");
     assert_eq!(v["event"], "capture");
-    assert_eq!(v["exit_code"], 3);
+    assert_eq!(v["exit_code"], 2);
+    assert_eq!(v["exit_code_slug"], "network");
     assert_eq!(v["tool"], "gircap");
+}
+
+/// An api/base override is a seam, so a typo in it must not become a request.
+#[test]
+fn a_bad_base_override_is_a_usage_error_not_a_request() {
+    for bad in [
+        "not a url",
+        "ftp://example.com/api",
+        "http://example.com/api",
+        "http://",
+    ] {
+        let argv: Vec<String> = ["capture", "--hyp-base", bad]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let r = run_owned(&argv);
+        assert_eq!(r.code, 1, "{bad:?} exited {}\n{}", r.code, r.stderr);
+        assert!(
+            r.stdout.contains("exit_code_slug=usage"),
+            "{bad:?}: {:?}",
+            r.stdout
+        );
+        assert!(
+            !r.stderr.contains("GET"),
+            "{bad:?} issued a request anyway:\n{}",
+            r.stderr
+        );
+    }
+}
+
+/// Plaintext is allowed to loopback and nowhere else, so a mistyped override
+/// cannot quietly downgrade a production capture. The positive (loopback) half
+/// is every other case in this file, which uses exactly that.
+#[test]
+fn a_plaintext_override_to_a_remote_host_is_refused_and_says_why() {
+    let r = run(&["capture", "--hyp-base", "http://example.com/api"]);
+    assert_eq!(r.code, 1, "{}", r.stderr);
+    assert!(
+        r.stdout.contains("plaintext"),
+        "the refusal must say why: {:?}",
+        r.stdout
+    );
 }
 
 #[test]
 fn the_text_summary_is_key_value_pairs() {
-    let r = assert_code(&["capture"], 3);
+    let r = run_owned(&offline_capture(&[]));
+    assert_eq!(r.code, 2);
     let line = r.stdout.trim();
     assert!(line.starts_with("SUMMARY "), "{line:?}");
     for kv in line.split_whitespace().skip(1) {
-        assert!(kv.contains('='), "not a k=v pair: {kv:?}");
+        assert!(kv.contains('='), "not a k=v pair: {kv:?} in {line:?}");
     }
 }
 
 #[test]
 fn stderr_carries_the_narration_and_stdout_carries_none_of_it() {
-    let r = run(&["capture", "--log-level", "info"]);
-    // The unimplemented command warns on stderr and nothing on stdout: that is
-    // the two-channel rule holding from the first release.
+    let r = run_owned(&offline_capture(&["--log-level", "debug"]));
     assert!(
-        r.stderr.to_lowercase().contains("not implemented"),
-        "expected the narration on stderr, got {:?}",
+        r.stderr.contains("\"GET\"") || r.stderr.contains("GET"),
+        "expected the request on stderr, got {:?}",
         r.stderr
     );
     assert!(
-        !r.stdout.contains("not implemented"),
+        !r.stdout.contains("GET"),
         "narration leaked onto stdout: {:?}",
         r.stdout
     );
@@ -158,8 +231,8 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
     let _ = std::fs::remove_dir_all(&dir);
     let log = dir.join("nested").join("run.ndjson");
 
-    let r = assert_code(&["capture", "--log-file", log.to_str().unwrap()], 3);
-    assert_eq!(r.code, 3);
+    let r = run_owned(&offline_capture(&["--log-file", log.to_str().unwrap()]));
+    assert_eq!(r.code, 2);
 
     let text = std::fs::read_to_string(&log)
         .unwrap_or_else(|e| panic!("--log-file was not written: {e}"));
@@ -176,12 +249,13 @@ fn rust_log_overrides_the_flag() {
     let _ = std::fs::remove_dir_all(&dir);
     let log = dir.join("run.ndjson");
 
+    let argv = offline_capture(&["--log-level", "error", "--log-file", log.to_str().unwrap()]);
     let out = Command::new(bin())
-        .args(["capture", "--log-level", "error", "--log-file", log.to_str().unwrap()])
+        .args(&argv)
         .env("RUST_LOG", "warn")
         .output()
         .expect("spawn");
-    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(out.status.code(), Some(2));
 
     let text = std::fs::read_to_string(&log).expect("log written");
     assert!(

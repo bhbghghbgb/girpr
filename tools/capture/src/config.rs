@@ -69,10 +69,43 @@ pub struct CapturePlan {
     pub retries: u32,
     /// Per-request timeout.
     pub timeout: std::time::Duration,
+    /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
+    pub hyp_base: Option<String>,
+    /// Sophon base override; `None` = the production base for [`Self::biz`].
+    pub sophon_base: Option<String>,
     /// stdout rendering.
     pub output: OutputFormat,
     /// The argv as given, recorded in the artifact so a bundle says how it was made.
     pub argv: Vec<String>,
+}
+
+/// Validate an API base override.
+///
+/// This is a **testing seam**, and the two things that makes it safe to have are
+/// both checked here: the URL must be absolute, and `https` unless it is loopback.
+/// Without the second check a mistyped override could silently downgrade a
+/// production capture to plaintext, which is the one failure mode a seam like
+/// this has to earn the right to have.
+fn validate_base(raw: Option<&str>, flag: &str) -> Result<Option<String>> {
+    let Some(raw) = raw else { return Ok(None) };
+    let url = reqwest::Url::parse(raw)
+        .map_err(|e| UsageError::new(format!("{flag} {raw:?} is not a URL: {e}")))?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(UsageError::new(format!(
+            "{flag} {raw:?} must be http or https, not {}",
+            url.scheme()
+        )));
+    }
+    let loopback = matches!(url.host_str(), Some("127.0.0.1") | Some("localhost") | Some("::1"));
+    if url.scheme() != "https" && !loopback {
+        return Err(UsageError::new(format!(
+            "{flag} {raw:?} is plaintext to a non-loopback host; only https is allowed \
+             outside 127.0.0.1"
+        )));
+    }
+    // Trailing slashes are stripped once here rather than trimmed at every join
+    // site, so there is exactly one place that decides how a base meets a path.
+    Ok(Some(url.as_str().trim_end_matches('/').to_string()))
 }
 
 /// `--audio` resolved: the codes selected, or the `none` sentinel.
@@ -181,6 +214,8 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         jobs: transport.jobs,
         retries: transport.retries,
         timeout: transport.timeout,
+        hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
+        sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
         output: args.common.output.parse::<OutputFormat>().map_err(UsageError::new)?,
         argv,
     })
@@ -395,6 +430,26 @@ pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf 
         .join(format!("{old_tag}__{new_tag}"))
 }
 
+/// The capture id: a UTC timestamp, `YYYYMMDDTHHMMSSZ`.
+///
+/// Time-ordered so a directory listing of a root sorts as a history, and named
+/// for the moment the capture started rather than finished, so a long run's id
+/// still says when the run began.
+pub fn capture_id(now: chrono::DateTime<chrono::Utc>) -> String {
+    now.format("%Y%m%dT%H%M%SZ").to_string()
+}
+
+/// The full bundle directory: `<out>/<biz>/<old>__<new>/<id>/`.
+pub fn artifact_dir(
+    out: &Path,
+    biz: Biz,
+    old_tag: &str,
+    new_tag: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> PathBuf {
+    pair_dir(out, biz, old_tag, new_tag).join(capture_id(now))
+}
+
 /// Render a filesystem path with forward slashes, for a document field.
 ///
 /// Bundle documents carry `/`-separated paths regardless of host, so an artifact
@@ -451,6 +506,8 @@ mod tests {
             jobs: 4,
             retries: 3,
             timeout: 60,
+            hyp_base: None,
+            sophon_base: None,
             common: CommonArgs {
                 log_level: "info".into(),
                 log_file: None,
@@ -655,9 +712,69 @@ mod tests {
     }
 
     #[test]
-    fn the_bundle_lives_under_biz_then_the_pair() {
+    fn the_bundle_lives_under_biz_then_the_pair_then_the_id() {
         let d = pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0");
         assert_eq!(d, PathBuf::from("artifacts").join("hk4e_global").join("7.0.0__7.1.0"));
+    }
+
+    #[test]
+    fn base_overrides_must_be_absolute_and_https_unless_loopback() {
+        for good in [
+            "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api",
+            "http://127.0.0.1:8080/hyp",
+            "http://localhost:8080/hyp",
+        ] {
+            assert!(validate_base(Some(good), "--hyp-base").is_ok(), "{good}");
+        }
+        for bad in ["not a url", "ftp://x/api", "http://example.com/api", "/relative"] {
+            let e = validate_base(Some(bad), "--sophon-base").unwrap_err();
+            assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage, "{bad:?}");
+        }
+        let e = validate_base(Some("http://example.com/api"), "--hyp-base").unwrap_err();
+        assert!(e.message().contains("plaintext"), "{}", e.message());
+    }
+
+    /// Normalised once, here, so no join site has to remember.
+    #[test]
+    fn a_base_override_loses_its_trailing_slash() {
+        assert_eq!(
+            validate_base(Some("https://x/api///"), "--hyp-base").unwrap(),
+            Some("https://x/api".to_string())
+        );
+        assert_eq!(validate_base(None, "--hyp-base").unwrap(), None);
+    }
+
+    #[test]
+    fn an_override_reaches_the_plan_and_defaults_to_none() {
+        let p = plan(|a| {
+            a.hyp_base = Some("http://127.0.0.1:9/hyp".into());
+            a.sophon_base = None;
+        })
+        .unwrap();
+        assert_eq!(p.hyp_base.as_deref(), Some("http://127.0.0.1:9/hyp"));
+        assert_eq!(p.sophon_base, None);
+        assert_eq!(plan(|_| {}).unwrap().hyp_base, None);
+    }
+
+    /// A directory listing of a root has to sort as a history, which is the whole
+    /// reason the id is a timestamp and not a random or content-derived name.
+    #[test]
+    fn the_capture_id_is_a_sortable_utc_timestamp() {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:15:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(capture_id(t), "20261014T101500Z");
+        let later = t + chrono::Duration::seconds(1);
+        assert!(capture_id(later) > capture_id(t));
+
+        let full = artifact_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0", t);
+        assert!(full.ends_with("20261014T101500Z"));
+        assert_eq!(full.parent().unwrap(), pair_dir(
+            Path::new("artifacts"),
+            Biz::Hk4eGlobal,
+            "7.0.0",
+            "7.1.0"
+        ));
     }
 
     #[test]
