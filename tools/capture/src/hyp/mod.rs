@@ -1,7 +1,706 @@
 //! The four HoYoPlay endpoints and Sophon's `getBuild`.
 //!
-//! **M2.** Bodies are captured byte-exact rather than re-serialized, so a reader
-//! can `diff` a captured file against a fresh request. `retcode != 0` anywhere
-//! is exit `2` with the URL named — never a silent skip.
+//! **M2.** Every body is captured **byte-exact** rather than re-serialized, so a
+//! reader can `diff` a captured file against a fresh request and see nothing. The
+//! typed views in [`types`] are what the run *acts on*; they are never what gets
+//! written, because a typed round-trip through this API's string-encoded numbers
+//! and its non-ASCII category names is one lossy step away from the truth.
+//!
+//! `retcode != 0` is exit `2` with the URL named, and that check lives in
+//! [`crate::http::Fetcher::get_json`] so no endpoint can be read without it.
+//! A `200` carrying `retcode -202` is how this API says *no such tag*, and for
+//! `getBuild` that is a hard failure: a capture that quietly patched 7.1.0 to
+//! 7.1.0 would be worse than no capture at all.
+//!
+//! ## Order
+//!
+//! `getGameBranches` has to come first — it carries the `package_id` and
+//! `password` that every `getBuild` URL is built from — which means the tag
+//! selectors are resolved *between* the two groups. [`HypClient::capture_all`]
+//! hides that ordering rather than leaving each caller to get it right.
+
+use crate::biz::{Biz, BranchParams, Endpoints, HypEndpoint};
+use crate::config::{NewTagSelector, OldTagSelector, VersionPair};
+use crate::http::{ApiError, Fetcher, Kind, RequestLog};
+use crate::report::OutputFormat;
 
 pub mod types;
+
+pub use types::{
+    DOWNLOAD_MODE_CHUNK, DeprecatedFile, DeprecatedFiles, GameBranch, GameBranches, GameConfigs,
+    GamePackages, GetBuild, IntOrStr, LaunchConfig, Stats, Wrapper,
+};
+
+/// The language every HoYoPlay endpoint is asked in.
+///
+/// `gircap` captures bytes, not locales, and the responses are byte-exact either
+/// way. `en-us` is the international launcher's own default, so a capture made
+/// with `--biz hk4e_global` is a capture of what that launcher actually asks for.
+pub const CAPTURE_LANGUAGE: &str = "en-us";
+
+/// One captured response: the bytes as served, plus the request that got them.
+#[derive(Debug, Clone)]
+pub struct CapturedBody {
+    /// The endpoint name, e.g. `getGameConfigs`.
+    pub endpoint: &'static str,
+    /// The file name under `api/`, e.g. `getBuild.7.1.0.json`.
+    pub file: String,
+    /// The request's sequence number, for filling in `stored_as`.
+    pub seq: u64,
+    /// The body, byte-exact.
+    pub bytes: Vec<u8>,
+}
+
+impl CapturedBody {
+    /// Parse the body as `T`.
+    ///
+    /// Separate from the fetch on purpose: the run must be able to keep the raw
+    /// bytes even when the typed view is rejected, because a body this tool
+    /// cannot understand is still evidence about what the API said.
+    pub fn parse<T: serde::de::DeserializeOwned>(&self) -> Result<T, ApiError> {
+        serde_json::from_slice(&self.bytes)
+            .map_err(|e| ApiError::shape(self.endpoint, e))
+    }
+
+    /// The `data` payload.
+    pub fn data<T: serde::de::DeserializeOwned>(&self) -> Result<T, ApiError> {
+        self.parse::<Wrapper<T>>().map(|w| w.data)
+    }
+}
+
+/// All six bodies of a capture, plus the derived pair.
+#[derive(Debug, Clone)]
+pub struct Captured {
+    /// `api/getGameConfigs.json`.
+    pub configs: CapturedBody,
+    /// `api/getGameBranches.json`.
+    pub branches: CapturedBody,
+    /// `api/getGameDeprecatedFileConfigs.json`.
+    pub deprecated: CapturedBody,
+    /// `api/getGamePackages.json`. Evidence only.
+    pub packages: CapturedBody,
+    /// `api/getBuild.<new>.json`.
+    pub build_new: CapturedBody,
+    /// `api/getBuild.<old>.json`.
+    pub build_old: CapturedBody,
+    /// The resolved pair, with both build ids attached.
+    pub versions: VersionPair,
+}
+
+impl Captured {
+    /// Every body, in the order they were fetched.
+    pub fn bodies(&self) -> [&CapturedBody; 6] {
+        [
+            &self.configs,
+            &self.branches,
+            &self.deprecated,
+            &self.packages,
+            &self.build_new,
+            &self.build_old,
+        ]
+    }
+
+    /// The launcher configuration.
+    pub fn game_configs(&self) -> Result<GameConfigs, ApiError> {
+        self.configs.data()
+    }
+
+    /// The branch parameters, re-derived from the captured body.
+    ///
+    /// Re-parsed rather than carried over from the fetch so that a bundle's
+    /// claim about its own downloader parameters can be checked against the bytes
+    /// stored beside it. They come from the same body, so this is cheap.
+    pub fn branch_params(&self) -> Result<BranchParams, ApiError> {
+        BranchParams::from_branches(&self.branches.bytes)
+    }
+
+    /// The new build.
+    pub fn new_build(&self) -> Result<GetBuild, ApiError> {
+        self.build_new.data()
+    }
+
+    /// The old build.
+    pub fn old_build(&self) -> Result<GetBuild, ApiError> {
+        self.build_old.data()
+    }
+
+    /// Assert the launcher is on chunk delivery, and that the two builds agree
+    /// with the pair they were fetched for.
+    ///
+    /// The tag echo is checked because a `getBuild` that answers with a *different*
+    /// tag than was asked for is the one case where the whole capture would be
+    /// silently about the wrong version pair: every URL in the bundle would be
+    /// right and the bundle would be wrong.
+    pub fn validate(&self) -> Result<(), ApiError> {
+        self.game_configs()?.require_chunk_mode()?;
+
+        let new = self.new_build()?;
+        if new.tag != self.versions.new.tag {
+            return Err(ApiError::shape(
+                self.build_new.endpoint,
+                format!(
+                    "asked for tag {:?} and the build echoes {:?}; the capture would be \
+                     about the wrong version pair",
+                    self.versions.new.tag, new.tag
+                ),
+            ));
+        }
+        let old = self.old_build()?;
+        if old.tag != self.versions.old.tag {
+            return Err(ApiError::shape(
+                self.build_old.endpoint,
+                format!(
+                    "asked for tag {:?} and the build echoes {:?}",
+                    self.versions.old.tag, old.tag
+                ),
+            ));
+        }
+
+        // Storage is asserted once, here, before M3 fetches a single blob. A
+        // compression value this tool cannot decode would otherwise surface as
+        // garbage far downstream, with nothing to point at.
+        for (which, build) in [("new", &new), ("old", &old)] {
+            for m in &build.manifests {
+                m.manifest_download
+                    .require_zstd_plaintext(&format!("{which} manifest_download"))?;
+                m.chunk_download
+                    .require_zstd_plaintext(&format!("{which} chunk_download"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// How stale the legacy package endpoint is, as `(major_versions, patches)`.
+    ///
+    /// Recorded because the whole reason the legacy path is irrelevant is a claim
+    /// about this endpoint being frozen, and a bundle should be able to show it.
+    pub fn legacy_staleness(&self) -> Option<(u64, Vec<String>)> {
+        self.packages
+            .data::<GamePackages>()
+            .ok()?
+            .staleness(&self.versions.new.tag)
+    }
+}
+
+/// Issues the metadata requests for one capture.
+#[derive(Debug)]
+pub struct HypClient<'a> {
+    endpoints: Endpoints<'a>,
+    biz: Biz,
+    fetcher: &'a Fetcher,
+}
+
+impl<'a> HypClient<'a> {
+    /// Build a client over an existing fetcher, so the request log is shared.
+    pub fn new(endpoints: Endpoints<'a>, biz: Biz, fetcher: &'a Fetcher) -> Self {
+        HypClient {
+            endpoints,
+            biz,
+            fetcher,
+        }
+    }
+
+    /// The log every request through this client is recorded in.
+    pub fn log(&self) -> &RequestLog {
+        self.fetcher.log()
+    }
+
+    /// Fetch one HoYoPlay endpoint, byte-exact.
+    pub async fn endpoint(&self, endpoint: HypEndpoint) -> Result<CapturedBody, ApiError> {
+        let url = self.endpoints.hyp_url(&self.biz, endpoint, CAPTURE_LANGUAGE);
+        self.fetch(&url, endpoint.path(), format!("{}.json", endpoint.path()))
+            .await
+    }
+
+    /// Fetch one `getBuild`, byte-exact.
+    pub async fn get_build(
+        &self,
+        params: &BranchParams,
+        tag: &str,
+    ) -> Result<CapturedBody, ApiError> {
+        let url = self.endpoints.get_build_url(params, Some(tag));
+        self.fetch(&url, "getBuild", format!("getBuild.{tag}.json")).await
+    }
+
+    async fn fetch(
+        &self,
+        url: &str,
+        endpoint: &'static str,
+        file: String,
+    ) -> Result<CapturedBody, ApiError> {
+        let (bytes, _value) = self.fetcher.get_json(url, Kind::Api).await?;
+        tracing::debug!(endpoint, file, bytes = bytes.len(), "captured");
+        Ok(CapturedBody {
+            endpoint,
+            file,
+            seq: 0, // filled in by the caller from the request log
+            bytes,
+        })
+    }
+
+    /// Fetch all six bodies and resolve the version pair.
+    ///
+    /// The order is load-bearing and is the reason this is one function rather
+    /// than six: `getGameBranches` supplies the `package_id` and `password` that
+    /// every `getBuild` URL needs, so the tag selectors can only be resolved
+    /// after it, and a caller that got the order wrong would build a URL with no
+    /// package in it.
+    pub async fn capture_all(
+        &self,
+        new: NewTagSelector<'_>,
+        old: OldTagSelector<'_>,
+    ) -> Result<Captured, ApiError> {
+        let configs = self.endpoint(HypEndpoint::GameConfigs).await?;
+        let branches = self.endpoint(HypEndpoint::GameBranches).await?;
+        let params = BranchParams::from_branches(&branches.bytes)?;
+
+        let mut versions =
+            VersionPair::select(&params, new, old).map_err(|m| ApiError::shape("version pair", m))?;
+
+        let deprecated = self.endpoint(HypEndpoint::GameDeprecatedFileConfigs).await?;
+        let packages = self.endpoint(HypEndpoint::GamePackages).await?;
+
+        let build_new = self.get_build(&params, &versions.new.tag).await?;
+        let build_old = self.get_build(&params, &versions.old.tag).await?;
+
+        versions.attach_build_ids(
+            &build_new.data::<GetBuild>()?.build_id,
+            &build_old.data::<GetBuild>()?.build_id,
+        );
+
+        Ok(Captured {
+            configs,
+            branches,
+            deprecated,
+            packages,
+            build_new,
+            build_old,
+            versions,
+        })
+    }
+}
+
+/// Attach each body's request sequence number, so the request log's `stored_as`
+/// can be filled in once the files are on disk.
+///
+/// Done after the fact and by lookup rather than threaded through, because the
+/// sequence number is the fetcher's business and the capture's is to know where
+/// its bytes ended up.
+pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
+    let records = log.records();
+    for b in bodies.iter_mut() {
+        // The endpoint name appears in the URL path, with or without a trailing
+        // slash and with or without a query after it. Matched on the last
+        // successful row so a retried request contributes one body, not two.
+        let hit = records
+            .iter()
+            .rev()
+            .find(|r| r.url.contains(b.endpoint) && r.status == 200);
+        b.seq = hit.map(|r| r.seq).unwrap_or(0);
+    }
+}
+
+/// Render a document for writing under `api/`.
+pub fn render_json(value: &impl serde::Serialize) -> Result<String, ApiError> {
+    serde_json::to_string_pretty(value).map_err(|e| ApiError::shape("serialize", e))
+}
+
+/// The `--output` spelling a capture's generated documents use, so a text run and
+/// a json run produce the same tree.
+pub fn document_format(output: OutputFormat) -> OutputFormat {
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::biz::BranchParams;
+    use crate::http::{RequestLog, Transport};
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+
+    /// A scripted API, served over loopback. Own code, no borrowing.
+    struct Mock {
+        port: u16,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    fn branch_body() -> String {
+        r#"{"retcode":0,"message":"OK","data":{"game_branches":[{"game":{"id":"gopR6Cufr3","biz":"hk4e_global"},"main":{"package_id":"ScSYQBFhu9","branch":"main","password":"bDL4JUHL625x","tag":"7.1.0","diff_tags":["7.0.0","6.7.0"],"categories":[]}}]}}"#.into()
+    }
+
+    fn build_body(tag: &str, id: &str) -> String {
+        format!(
+            r#"{{"retcode":0,"message":"OK","data":{{"build_id":"{id}","tag":"{tag}","manifests":[{{"category_id":"10016","category_name":"g","manifest":{{"id":"manifest_aaaaaaaaaaaaaaaa_{id}","checksum":"{id}","compressed_size":"1","uncompressed_size":"2"}},"chunk_download":{{"encryption":0,"password":"","compression":1,"url_prefix":"https://c/{id}","url_suffix":""}},"manifest_download":{{"encryption":0,"password":"","compression":1,"url_prefix":"https://m/{id}","url_suffix":""}},"matching_field":"game","stats":{{"file_count":"1","chunk_count":"1"}}}}]}}}}"#
+        )
+    }
+
+    /// Answers by path, so the order the run uses is visible in the assertions.
+    fn spawn(routes: Vec<(&'static str, String)>) -> Mock {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            for (route, body) in routes {
+                let Ok((stream, _)) = listener.accept() else {
+                    return;
+                };
+                serve(stream, route, &body, &s);
+            }
+        });
+        Mock { port, seen }
+    }
+
+    fn serve(
+        mut stream: TcpStream,
+        route: &str,
+        body: &str,
+        seen: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).ok();
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                break;
+            }
+        }
+        seen.lock().unwrap().push(line.trim().to_string());
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(body.as_bytes());
+        let _ = stream.flush();
+        assert!(
+            line.contains(route),
+            "the run requested {} but the script had {route}",
+            line.trim()
+        );
+    }
+
+    fn params() -> BranchParams {
+        BranchParams::from_branches(branch_body().as_bytes()).unwrap()
+    }
+
+    fn mock_captured() -> Captured {
+        let mut captured = Captured {
+            configs: CapturedBody {
+                endpoint: "getGameConfigs",
+                file: "getGameConfigs.json".into(),
+                seq: 0,
+                bytes: br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#.to_vec(),
+            },
+            branches: CapturedBody {
+                endpoint: "getGameBranches",
+                file: "getGameBranches.json".into(),
+                seq: 0,
+                bytes: branch_body().into_bytes(),
+            },
+            deprecated: CapturedBody {
+                endpoint: "getGameDeprecatedFileConfigs",
+                file: "getGameDeprecatedFileConfigs.json".into(),
+                seq: 0,
+                bytes: br#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.to_vec(),
+            },
+            packages: CapturedBody {
+                endpoint: "getGamePackages",
+                file: "getGamePackages.json".into(),
+                seq: 0,
+                bytes: br#"{"retcode":0,"data":{"game_packages":[{"main":{"major":{"version":"5.5.0"},"patches":[]}}]}}"#.to_vec(),
+            },
+            build_new: CapturedBody {
+                endpoint: "getBuild",
+                file: "getBuild.7.1.0.json".into(),
+                seq: 0,
+                bytes: build_body("7.1.0", "newBUILD").into_bytes(),
+            },
+            build_old: CapturedBody {
+                endpoint: "getBuild",
+                file: "getBuild.7.0.0.json".into(),
+                seq: 0,
+                bytes: build_body("7.0.0", "oldBUILD").into_bytes(),
+            },
+            versions: VersionPair::select(
+                &params(),
+                NewTagSelector::BranchHead,
+                OldTagSelector::FirstDiffTag,
+            )
+            .unwrap(),
+        };
+        captured.versions.attach_build_ids("newBUILD", "oldBUILD");
+        captured
+    }
+
+    // ------------------------------------------------------------- the bodies
+
+    /// The six documents, byte-exact and named the way a reader expects.
+    #[test]
+    fn a_capture_is_six_bodies_named_by_endpoint() {
+        let c = mock_captured();
+        let files: Vec<&str> = c.bodies().iter().map(|b| b.file.as_str()).collect();
+        assert_eq!(
+            files,
+            vec![
+                "getGameConfigs.json",
+                "getGameBranches.json",
+                "getGameDeprecatedFileConfigs.json",
+                "getGamePackages.json",
+                "getBuild.7.1.0.json",
+                "getBuild.7.0.0.json",
+            ]
+        );
+        for b in c.bodies() {
+            assert!(!b.bytes.is_empty(), "{} is empty", b.file);
+            // Every one re-parses as its wrapper: that is the acceptance clause.
+            let w: Wrapper<serde_json::Value> = b.parse().expect("re-parses");
+            assert_eq!(w.retcode, 0, "{}", b.file);
+        }
+    }
+
+    /// Byte-exact means byte-exact: the stored bytes are the response, not a
+    /// re-serialization of a typed view of it.
+    #[test]
+    fn the_stored_bytes_are_the_response_not_a_reserialization() {
+        let c = mock_captured();
+        let raw = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+        assert_eq!(c.configs.bytes, raw);
+        // And a typed round-trip would *not* reproduce them: the whitespace is
+        // the server's, and nothing here preserves it.
+        let typed = c.game_configs().unwrap();
+        assert_eq!(
+            render_json(&typed).unwrap(),
+            serde_json::to_string_pretty(&typed).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_pair_is_resolved_from_the_captured_branch_not_carried_in() {
+        let c = mock_captured();
+        // Re-derived from the stored bytes.
+        assert_eq!(c.branch_params().unwrap().package_id, "ScSYQBFhu9");
+        assert_eq!(c.versions.new.tag, "7.1.0");
+        assert_eq!(c.versions.old.tag, "7.0.0");
+        assert_eq!(c.versions.new.build_id, "newBUILD");
+    }
+
+    // ------------------------------------------------------------- validation
+
+    #[test]
+    fn a_good_capture_validates() {
+        mock_captured().validate().expect("the mock is self-consistent");
+    }
+
+    /// The one failure mode that would make every URL in the bundle right and the
+    /// bundle wrong.
+    #[test]
+    fn a_build_that_echoes_another_tag_is_refused() {
+        let mut c = mock_captured();
+        c.build_new.bytes = build_body("7.0.0", "newBUILD").into_bytes();
+        let e = c.validate().unwrap_err();
+        assert!(e.to_string().contains("7.1.0"), "{e}");
+        assert!(e.to_string().contains("7.0.0"), "{e}");
+    }
+
+    #[test]
+    fn a_non_chunk_launcher_is_refused_before_a_blob_is_fetched() {
+        let mut c = mock_captured();
+        c.configs.bytes = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_LDIFF"}]}}"#.to_vec();
+        let e = c.validate().unwrap_err();
+        assert!(e.to_string().contains("DOWNLOAD_MODE_LDIFF"), "{e}");
+        assert!(e.to_string().contains("DOWNLOAD_MODE_CHUNK"), "{e}");
+    }
+
+    #[test]
+    fn an_undecodable_storage_declaration_is_refused() {
+        let mut c = mock_captured();
+        let s = String::from_utf8(c.build_new.bytes.clone()).unwrap();
+        c.build_new.bytes = s.replacen("\"compression\":1", "\"compression\":0", 1).into_bytes();
+        let e = c.validate().unwrap_err();
+        assert!(e.to_string().contains("compression"), "{e}");
+    }
+
+    #[test]
+    fn legacy_staleness_is_derived_from_the_captured_legacy_body() {
+        assert_eq!(mock_captured().legacy_staleness(), Some((2, vec![])));
+    }
+
+    // ------------------------------------------------------------- the client
+
+    #[tokio::test]
+    async fn capture_all_issues_the_six_requests_in_the_only_order_that_works() {
+        let mock = spawn(vec![
+            ("getGameConfigs", r#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK","audio_pkg_scan_dir":"x"}]}}"#.into()),
+            ("getGameBranches", branch_body()),
+            ("getGameDeprecatedFileConfigs", r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()),
+            ("getGamePackages", r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()),
+            ("getBuild", build_body("7.1.0", "newBUILD")),
+            ("getBuild", build_body("7.0.0", "oldBUILD")),
+        ]);
+        let fetcher = Fetcher::new(Transport::local(), RequestLog::new()).unwrap();
+        let hyp_base = format!("http://127.0.0.1:{}/hyp", mock.port);
+        let sophon_base = format!("http://127.0.0.1:{}/sophon", mock.port);
+        let client = HypClient::new(
+            Endpoints::new(&hyp_base, &sophon_base),
+            Biz::resolve(crate::cli::Biz::Hk4eGlobal),
+            &fetcher,
+        );
+        let captured = client
+            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag)
+            .await
+            .expect("all six answered");
+
+        assert_eq!(captured.bodies().len(), 6);
+        assert_eq!(captured.versions.new.tag, "7.1.0");
+        assert_eq!(captured.versions.new.build_id, "newBUILD");
+        assert_eq!(captured.versions.old.build_id, "oldBUILD");
+
+        // The order is the point: getBuild cannot be built before the branch is
+        // known, and the mock asserts each route as it is served.
+        let seen = mock.seen.lock().unwrap().clone();
+        assert!(seen[0].contains("getGameConfigs"), "{seen:?}");
+        assert!(seen[1].contains("getGameBranches"), "{seen:?}");
+        assert!(seen[3].contains("getGamePackages"), "{seen:?}");
+        assert!(seen[4].contains("tag=7.1.0"), "{seen:?}");
+        assert!(seen[5].contains("tag=7.0.0"), "{seen:?}");
+        assert_eq!(fetcher.log().len(), 6);
+    }
+
+    /// The channel tuple is only on one endpoint, and it is the per-launcher pair
+    /// — a cn or bili capture sent `1/0` would be filtered against the wrong list.
+    #[tokio::test]
+    async fn only_the_deprecated_request_carries_the_channel_tuple() {
+        let mock = spawn(vec![
+            ("getGameConfigs", r#"{"retcode":0,"data":{"launch_configs":[]}}"#.into()),
+            ("getGameBranches", branch_body()),
+            ("getGameDeprecatedFileConfigs", r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()),
+            ("getGamePackages", r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()),
+            ("getBuild", build_body("7.1.0", "n")),
+            ("getBuild", build_body("7.0.0", "o")),
+        ]);
+        let fetcher = Fetcher::new(Transport::local(), RequestLog::new()).unwrap();
+        let hyp_base = format!("http://127.0.0.1:{}/hyp", mock.port);
+        let sophon_base = format!("http://127.0.0.1:{}/sophon", mock.port);
+        let client = HypClient::new(
+            Endpoints::new(&hyp_base, &sophon_base),
+            Biz::resolve(crate::cli::Biz::Hk4eGlobal),
+            &fetcher,
+        );
+        client
+            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag)
+            .await
+            .unwrap();
+        let seen = mock.seen.lock().unwrap().clone();
+        assert!(seen[2].contains("channel=1") && seen[2].contains("sub_channel=0"), "{:?}", seen[2]);
+        for i in [0, 1, 3] {
+            assert!(!seen[i].contains("channel="), "request {i} carried it: {}", seen[i]);
+        }
+    }
+
+    /// An unservable tag is exit 2, named, with the URL in the message.
+    #[tokio::test]
+    async fn an_unservable_tag_fails_the_capture_by_name() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for i in 0..6 {
+                let Ok((stream, _)) = listener.accept() else { return };
+                let body = if i == 5 {
+                    // The first getBuild is for the pair's new tag and succeeds;
+                    // the second, for the unservable old tag, is the one that
+                    // answers HTTP 200 and then says no.
+                    r#"{"data":null,"message":"not found","retcode":-202}"#.to_string()
+                } else if i == 4 {
+                    build_body("7.1.0", "n")
+                } else if i == 3 {
+                    r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()
+                } else if i == 2 {
+                    r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()
+                } else if i == 1 {
+                    branch_body()
+                } else {
+                    r#"{"retcode":0,"data":{"launch_configs":[]}}"#.into()
+                };
+                serve_raw(stream, &body);
+            }
+        });
+        let fetcher = Fetcher::new(Transport::local(), RequestLog::new()).unwrap();
+        let hyp_base = format!("http://127.0.0.1:{port}/hyp");
+        let sophon_base = format!("http://127.0.0.1:{port}/sophon");
+        let client = HypClient::new(
+            Endpoints::new(&hyp_base, &sophon_base),
+            Biz::resolve(crate::cli::Biz::Hk4eGlobal),
+            &fetcher,
+        );
+        let e = client
+            .capture_all(
+                NewTagSelector::BranchHead,
+                OldTagSelector::Explicit("0.0.1"),
+            )
+            .await
+            .expect_err("an unservable old tag is fatal");
+        assert_eq!(e.exit_code(), crate::exit::ExitCode::Network);
+        assert!(e.to_string().contains("tag=0.0.1"), "{e}");
+        assert!(e.to_string().contains("-202"), "{e}");
+    }
+
+    fn serve_raw(mut stream: TcpStream, body: &str) {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                break;
+            }
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(body.as_bytes());
+        let _ = stream.flush();
+    }
+
+    // ----------------------------------------------------------- sequence ids
+
+    #[test]
+    fn each_body_finds_the_request_that_produced_it() {
+        let log = RequestLog::new();
+        for (url, tag) in [("https://x/getGameConfigs", "api"), ("https://y/getBuild", "api")] {
+            let seq = log.reserve();
+            log.push(crate::http::RequestRecord {
+                seq,
+                ts: crate::http::now_rfc3339(),
+                kind: Kind::Api,
+                method: "GET",
+                url: url.to_string(),
+                range: None,
+                status: 200,
+                final_url: url.to_string(),
+                redirected: false,
+                elapsed_ms: 1,
+                req_headers: Default::default(),
+                resp_headers: Default::default(),
+                bytes_in: 1,
+                stored_as: None,
+                attempts: 1,
+            });
+            let _ = tag;
+        }
+        let mut a = CapturedBody { endpoint: "getBuild", file: "f".into(), seq: 0, bytes: vec![] };
+        let mut b = CapturedBody { endpoint: "getGameConfigs", file: "f".into(), seq: 0, bytes: vec![] };
+        attach_seq(&log, &mut [&mut a, &mut b]);
+        assert_eq!(a.seq, 2);
+        assert_eq!(b.seq, 1);
+    }
+
+    #[test]
+    fn documents_render_as_pretty_json_and_are_stable() {
+        let a = render_json(&serde_json::json!({"b":1,"a":2})).unwrap();
+        assert_eq!(a, serde_json::to_string_pretty(&serde_json::json!({"b":1,"a":2})).unwrap());
+        assert!(a.contains('\n'), "a document is not one long line");
+    }
+}

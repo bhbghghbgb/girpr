@@ -13,12 +13,12 @@
 
 use std::path::PathBuf;
 
-use crate::biz::{BranchParams, Biz, Endpoints, HypEndpoint};
+use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::exit::ExitCode;
-use crate::http::{ApiError, Fetcher, Kind, RequestLog, Transport, probe};
+use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::report::{OutputFormat, Summary};
-use crate::{emit, exit};
+use crate::{emit, exit, hyp};
 
 /// What a command hands back: its summary line, and the code to exit with.
 ///
@@ -64,25 +64,19 @@ impl Failure {
     }
 }
 
-/// The language every HoYoPlay endpoint is asked in.
-///
-/// `gircap` captures bytes, not locales, and the responses are byte-exact either
-/// way. `en-us` is the international launcher's own default, so a capture made
-/// with `--biz hk4e_global` is a capture of what that launcher actually asks for.
-const CAPTURE_LANGUAGE: &str = "en-us";
-
 /// `gircap capture` — fetch from the live APIs and write a bundle.
 ///
-/// **M1 slice.** The transport is exercised end to end: both HoYoPlay calls, the
-/// version pair, both `getBuild`s, and the tag probe. It writes
-/// `api/requests.ndjson` and stops there — the response *bodies*, the manifests,
-/// the chunks and the fixture tree land in M2, M3, M6 and M8.
+/// **M2.** Writes the seven `api/` documents: the four HoYoPlay bodies and both
+/// `getBuild`s byte-exact, plus the generated tag probe, and
+/// `api/requests.ndjson` beside them. Manifests, chunks and the `game/` fixture
+/// land in M3, M6 and M8.
 ///
-/// The version pair is resolved here rather than in M2 for one reason: the
-/// bundle's directory is `<biz>/<old>__<new>/<id>/`, so a capture that wrote a
-/// log before it knew the pair would have to move it afterwards. Resolving two
-/// strings early is cheaper than a rename later, and the full byte-exact capture
-/// of both bodies is still M2's job.
+/// The order is [`hyp::HypClient::capture_all`]'s, not this function's:
+/// `getGameBranches` carries the `package_id` every `getBuild` URL is built from,
+/// so nothing after it can be requested before it.
+///
+/// The bundle's directory is `<biz>/<old>__<new>/<id>/`, which is why the pair
+/// is resolved before anything is written rather than after.
 pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let started = chrono::Utc::now();
     let biz = Biz::resolve(plan.biz);
@@ -117,39 +111,39 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         "endpoints resolved"
     );
 
-    // 1. Launcher configuration. Cheap, and the source of the fixture's paths.
-    let configs_url = endpoints.hyp_url(&biz, HypEndpoint::GameConfigs, CAPTURE_LANGUAGE);
-    let (_configs_body, _configs) = fetcher
-        .get_json(&configs_url, Kind::Api)
+    // 1-4. All six metadata bodies, byte-exact, and the version pair.
+    //
+    // `capture_all` owns the ordering because it has to: `getGameBranches`
+    // carries the `package_id` every `getBuild` URL is built from, so a caller
+    // that fetched them out of order would request a URL with no package in it.
+    let client = hyp::HypClient::new(endpoints.clone(), biz, &fetcher);
+    let captured = client
+        .capture_all(plan.new_selector(), plan.old_selector())
         .await
-        .map_err(|e| apierr("getGameConfigs", &e))?;
+        .map_err(|e| apierr("metadata capture", &e))?;
 
-    // 2. Branch parameters. This is what replaces a hardcoded package_id.
-    let branches_url = endpoints.hyp_url(&biz, HypEndpoint::GameBranches, CAPTURE_LANGUAGE);
-    let (branches_body, _branches) = fetcher
-        .get_json(&branches_url, Kind::Api)
-        .await
-        .map_err(|e| apierr("getGameBranches", &e))?;
-    let params = BranchParams::from_branches(&branches_body).map_err(|e| apierr("getGameBranches", &e))?;
+    // Assert what the capture depends on, before a blob is fetched: the launcher
+    // must be on chunk delivery, both builds must echo the tags they were asked
+    // for, and every published manifest must be storable.
+    captured.validate().map_err(|e| assertion("validate the capture", &e))?;
+
+    let versions = &captured.versions;
+    let params = captured
+        .branch_params()
+        .map_err(|e| apierr("re-read the captured branch", &e))?;
     tracing::info!(
         biz = biz.as_str(),
         package_id = %params.package_id,
-        branch_tag = %params.tag,
-        diff_tags = ?params.diff_tags,
-        "branch resolved"
+        old_tag = %versions.old.tag,
+        old_source = %versions.old.source,
+        old_build_id = %versions.old.build_id,
+        new_tag = %versions.new.tag,
+        new_source = %versions.new.source,
+        new_build_id = %versions.new.build_id,
+        diff_tags = ?versions.diff_tags,
+        "version pair resolved"
     );
-
-    // 3. The pair. `latest` is resolved *here*, against a live answer, which is
-    //    the whole point of making it a flag value rather than a lookup.
-    let new_tag = resolve_new_tag(&plan, &params).map_err(|m| usage("resolve --new-tag", &m))?;
-    let old_tag = resolve_old_tag(&plan, &params)
-        .map_err(|m| apierr("resolve --old-tag", &ApiError::shape("diff_tags", &m)))?;
-    tracing::info!(%old_tag, %new_tag, "version pair resolved");
-
-    // 4. Both builds. An unservable tag is exit 2 here, not a silent fallback:
-    //    a capture that quietly patched 7.1.0 to 7.1.0 would be worse than none.
-    let new_build = get_build(&fetcher, &endpoints, &params, &new_tag).await?;
-    let old_build = get_build(&fetcher, &endpoints, &params, &old_tag).await?;
+    let (new_tag, old_tag) = (versions.new.tag.clone(), versions.old.tag.clone());
 
     // 5. Which tags the API will serve at all. Cheap, and the fact that decides
     //    whether an old file is reconstructible today.
@@ -159,11 +153,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &plan.probe_tags,
     );
     // The pair's `getBuild` was already fetched, so the probe does not pay for it
-    // twice. This is the largest avoidable cost in a metadata-only run: three
-    // extra requests out of seven, for answers already in hand.
+    // twice. This is the largest avoidable cost in a metadata-only run.
     let known = vec![
-        (old_tag.clone(), build_id(&old_build)),
-        (new_tag.clone(), build_id(&new_build)),
+        (old_tag.clone(), versions.old.build_id.clone()),
+        (new_tag.clone(), versions.new.build_id.clone()),
     ];
     let probe = probe::probe_tags(
         &fetcher,
@@ -177,105 +170,51 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("tag probe", &e))?;
     tracing::info!(probe = %probe.describe(), served = ?probe.served(), "tag probe complete");
 
-    // 6. The provenance log. Written even though the run is incomplete: what was
-    //    asked, and what it cost, is the part that stays useful.
+    // 6. The tree. Both writes happen even though the run is incomplete: what
+    //    was asked, and what it cost, is the part that stays useful, and the
+    //    bodies are the evidence behind every number in the summary.
     let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
-    let written = emit::write_requests_log(&dir, &log).map_err(|e| {
+    // `write_api` returns the relative paths it wrote, so the count in the
+    // summary is the count on disk rather than a second bookkeeping total.
+    let written = emit::write_api(&dir, &captured, &probe)
+        .map_err(|e| {
+            apierr(
+                &format!("write {}", dir.display()),
+                &ApiError::shape("artifact writer", e),
+            )
+        })?;
+    emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
             &ApiError::shape("artifact writer", e),
         )
     })?;
-    tracing::info!(dir = %dir.display(), records = written, "request log written");
+    tracing::info!(dir = %dir.display(), records = log.len(), documents = written.len(), "api/ written");
 
+    let legacy_behind = captured
+        .legacy_staleness()
+        .map(|(n, _)| n)
+        .unwrap_or(0);
     let summary = Summary::new("capture")
         .set("result", "ok")
-        .set("stage", "m1-transport")
+        .set("stage", "m2-metadata")
         .set("biz", biz.as_str())
         .set("old_tag", &old_tag)
         .set("new_tag", &new_tag)
         .set("package_id", &params.package_id)
-        .set("old_build_id", build_id(&old_build))
-        .set("new_build_id", build_id(&new_build))
+        .set("old_build_id", &versions.old.build_id)
+        .set("new_build_id", &versions.new.build_id)
         .set("artifact", dir.as_path())
+        .set("api_documents", written.len() as u64)
         .set("requests", log.len() as u64)
         .set("bytes_downloaded", log.bytes_in())
         .set("tags_probed", probe.summary.requested as u64)
         .set("tags_served", probe.summary.served as u64)
         .set("tags_served_outside_diff_tags", probe.summary.not_in_diff_tags_but_served as u64)
+        .set("legacy_endpoint_majors_behind", legacy_behind)
         .set("exit_code", ExitCode::Ok.code());
 
     Ok((summary, ExitCode::Ok))
-}
-
-/// Fetch one `getBuild` and return its `data`.
-///
-/// A `retcode != 0` — `-202` for a tag the API does not serve — is raised as a
-/// shape error, which is exit `2`. That is the documented acceptance case: a
-/// deliberately bad tag must fail the run, not fall back to something servable.
-async fn get_build(
-    fetcher: &Fetcher,
-    endpoints: &Endpoints<'_>,
-    params: &BranchParams,
-    tag: &str,
-) -> Result<serde_json::Value, Failure> {
-    let url = endpoints.get_build_url(params, Some(tag));
-    let (_body, v) = fetcher
-        .get_json(&url, Kind::Api)
-        .await
-        .map_err(|e| apierr(&format!("getBuild tag={tag}"), &e))?;
-    v.get("data")
-        .cloned()
-        .filter(|d| !d.is_null())
-        .ok_or_else(|| {
-            let rc = v.get("retcode").and_then(|r| r.as_i64()).unwrap_or(-1);
-            apierr(
-                &format!("getBuild tag={tag}"),
-                &ApiError::shape(
-                    "getBuild",
-                    format!("retcode {rc} with no data; this tag is not servable"),
-                ),
-            )
-        })
-}
-
-/// `data.build_id`, or `null` — the thing a chunk URL is namespaced by.
-fn build_id(data: &serde_json::Value) -> String {
-    data.get("build_id")
-        .and_then(|b| b.as_str())
-        .unwrap_or("none")
-        .to_string()
-}
-
-/// `--new-tag`, with `latest` (and its absence) resolved against the branch.
-fn resolve_new_tag(plan: &CapturePlan, params: &BranchParams) -> Result<String, String> {
-    match plan.new_tag.as_deref() {
-        None => Ok(params.tag.clone()),
-        Some(t) if t.eq_ignore_ascii_case(crate::cli::NEW_TAG_LATEST) => Ok(params.tag.clone()),
-        Some(t) => Ok(t.to_string()),
-    }
-}
-
-/// `--old-tag`, defaulting to `diff_tags[0]` — "current minus one".
-///
-/// `diff_tags` is a *patch-support* list, not a retention list, so this default
-/// is the newest patch the vendor still offers rather than the newest version the
-/// API can serve. `--old-tag` is how a caller asks for the latter, and
-/// `--probe-tags` is how they find out whether it is there.
-fn resolve_old_tag(plan: &CapturePlan, params: &BranchParams) -> Result<String, String> {
-    if let Some(t) = plan.old_tag.as_deref() {
-        return Ok(t.to_string());
-    }
-    params
-        .diff_tags
-        .first()
-        .cloned()
-        .ok_or_else(|| {
-            "the branch lists no diff_tags, so there is no default old version; \
-             pass --old-tag with a tag the API serves (see `gircap capture \
-             --probe-tags`, or spec section 3.4)"
-                .to_string()
-        })
 }
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
@@ -302,10 +241,25 @@ fn apierr(what: &str, e: &ApiError) -> Failure {
     Failure::api(what, e)
 }
 
-/// See [`Failure::usage`]; this adds the narration.
-fn usage(what: &str, message: &str) -> Failure {
+/// See [`Failure::usage`]; this adds the narration, so the dispatch in `main.rs`
+/// has one place to report a rejected request rather than three.
+pub fn usage(what: &str, message: &str) -> Failure {
     tracing::error!(subject = what, error = %message, "usage error");
     Failure::usage(message)
+}
+
+/// An assertion on captured API state: the answer arrived and it says something
+/// this capture cannot be built from.
+///
+/// Exit `3`, not `2`. The request worked — a `2` would blame the network for a
+/// fact about the world — and not `1`, because the request was not wrong either.
+/// What is wrong is the artifact, and `3` is the code that says so.
+fn assertion(what: &str, e: &ApiError) -> Failure {
+    tracing::error!(subject = what, error = %e, "assertion failed");
+    Failure {
+        code: ExitCode::AssertionFailed,
+        detail: format!("{what}: {e}"),
+    }
 }
 
 /// The summary a command prints when it failed before it could build one.
@@ -347,96 +301,31 @@ pub use exit::exit_with;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Biz as BizId;
+    use crate::report::Val;
 
-    fn params() -> BranchParams {
-        BranchParams {
-            package_id: "p".into(),
-            password: "w".into(),
-            branch: "main".into(),
-            tag: "7.1.0".into(),
-            diff_tags: vec!["7.0.0".into(), "6.7.0".into()],
-        }
-    }
-
-    fn plan_with(new_tag: Option<&str>, old_tag: Option<&str>) -> CapturePlan {
-        CapturePlan {
-            biz: BizId::Hk4eGlobal,
-            out: PathBuf::from("artifacts"),
-            new_tag: new_tag.map(str::to_string),
-            old_tag: old_tag.map(str::to_string),
-            per_class: 1,
-            max_download_bytes: None,
-            require_class: vec![],
-            files: vec![],
-            audio: crate::config::AudioSelection::Codes(vec!["en-us".into()]),
-            manifest_detail: crate::cli::ManifestDetail::Full,
-            gzip_threshold: 1_048_576,
-            probe_tags: vec![],
-            no_chunk_blobs: false,
-            jobs: 4,
-            retries: 3,
-            timeout: std::time::Duration::from_secs(60),
-            hyp_base: None,
-            sophon_base: None,
-            output: OutputFormat::Text,
-            argv: vec![],
-        }
-    }
-
-    /// The default is `diff_tags[0]` — "current minus one" — measured on
-    /// 2026-10-14 as 7.1.0 -> 7.0.0.
+    /// An assertion on captured API state is exit 3, and says why: neither the
+    /// network nor the request is at fault.
     #[test]
-    fn the_pair_defaults_to_the_branch_head_and_its_first_diff_tag() {
-        let p = params();
+    fn an_assertion_failure_is_three_and_is_not_mistaken_for_a_network_error() {
+        let f = assertion("validate the capture", &ApiError::shape("x", "y"));
+        assert_eq!(f.code, ExitCode::AssertionFailed);
+        assert!(f.detail.contains("validate the capture"), "{}", f.detail);
+        assert!(f.detail.contains("y"), "{}", f.detail);
         assert_eq!(
-            resolve_new_tag(&plan_with(None, None), &p).unwrap(),
-            "7.1.0"
+            f.summary("capture").get("exit_code"),
+            Some(&Val::Int(3)),
+            "not 2: the request worked and said something unusable"
         );
-        assert_eq!(resolve_old_tag(&plan_with(None, None), &p).unwrap(), "7.0.0");
     }
 
     #[test]
-    fn the_latest_sentinel_resolves_against_the_branch_not_the_flag() {
-        let p = params();
+    fn a_usage_failure_is_one_and_carries_the_message() {
+        let f = usage("--jobs", "--jobs must be at least 1");
+        assert_eq!(f.code, ExitCode::Usage);
         assert_eq!(
-            resolve_new_tag(&plan_with(Some("latest"), None), &p).unwrap(),
-            "7.1.0"
+            f.summary("capture").get("detail"),
+            Some(&Val::Str("--jobs must be at least 1".into()))
         );
-        assert_eq!(
-            resolve_new_tag(&plan_with(Some("LATEST"), None), &p).unwrap(),
-            "7.1.0",
-            "the sentinel is case-insensitive"
-        );
-        assert_eq!(
-            resolve_new_tag(&plan_with(Some("6.6.0"), None), &p).unwrap(),
-            "6.6.0",
-            "an explicit tag is taken as written; whether it is servable is \
-             getBuild's answer, not this function's"
-        );
-    }
-
-    /// A branch with no `diff_tags` cannot supply a default old version, and
-    /// inventing one would mean capturing the wrong version pair.
-    #[test]
-    fn an_empty_diff_tags_is_an_error_naming_the_remedy() {
-        let mut p = params();
-        p.diff_tags.clear();
-        let e = resolve_old_tag(&plan_with(None, None), &p).unwrap_err();
-        assert!(e.contains("--old-tag"), "{e}");
-        assert!(e.contains("diff_tags"), "{e}");
-        // An explicit tag still works: the caller asked, and getBuild will say.
-        assert_eq!(resolve_old_tag(&plan_with(None, Some("5.5.0")), &p).unwrap(), "5.5.0");
-    }
-
-    #[test]
-    fn build_ids_are_read_or_reported_as_absent() {
-        assert_eq!(
-            build_id(&serde_json::json!({"build_id": "sMXGW2ll3Fuu"})),
-            "sMXGW2ll3Fuu"
-        );
-        assert_eq!(build_id(&serde_json::json!({})), "none");
-        assert_eq!(build_id(&serde_json::json!({"build_id": 7})), "none");
     }
 
     #[test]

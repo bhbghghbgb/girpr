@@ -41,27 +41,20 @@ async fn main() {
     };
     let mut log_guard = logging::init(common.level, common.log_file.as_deref());
 
+    // Resolving the plan is where flag validation happens, so a rejected request
+    // is reported here rather than inside each command — one place, three calls.
     let outcome = match &cli.cmd {
         Cmd::Capture(a) => match capture_plan(a, std::env::args().collect()) {
             Ok(plan) => run::capture(plan).await,
-            Err(e) => {
-                tracing::error!(error = %e, "usage error");
-                Err(run::Failure::usage(&e))
-            }
+            Err(e) => Err(run::usage("capture", e.message())),
         },
         Cmd::Verify(a) => match verify_plan(a) {
             Ok(plan) => run::verify(plan).await,
-            Err(e) => {
-                tracing::error!(error = %e, "usage error");
-                Err(run::Failure::usage(&e))
-            }
+            Err(e) => Err(run::usage("verify", e.message())),
         },
         Cmd::Materialize(a) => match materialize_plan(a) {
             Ok(plan) => run::materialize(plan).await,
-            Err(e) => {
-                tracing::error!(error = %e, "usage error");
-                Err(run::Failure::usage(&e))
-            }
+            Err(e) => Err(run::usage("materialize", e.message())),
         },
         Cmd::List(a) => run::list(a.root.clone(), common.output).await,
     };

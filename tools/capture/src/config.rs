@@ -34,6 +34,149 @@ pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
 pub const METADATA_ONLY_NOTE: &str =
     "metadata-only run: assertions A7-A10 are not provable without chunk blobs";
 
+/// How `--new-tag` chose a tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewTagSelector<'a> {
+    /// `--new-tag latest`, or the flag left off: whatever the branch serves.
+    BranchHead,
+    /// `--new-tag <tag>`: exactly what was written.
+    Explicit(&'a str),
+}
+
+/// How `--old-tag` chose a tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldTagSelector<'a> {
+    /// `--old-tag`, or the flag left off: `diff_tags[0]`.
+    FirstDiffTag,
+    /// `--old-tag <tag>`.
+    Explicit(&'a str),
+}
+
+/// The version pair a capture is about, and where each half came from.
+///
+/// The `source` strings are the artifact's own vocabulary: a bundle says
+/// `diff_tags[0]` because that is a claim a reader can check against the captured
+/// `getGameBranches`, and it says so whether the default was taken or a flag was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionPair {
+    /// The version the fixture is materialized at.
+    pub old: VersionRef,
+    /// The version it is patched to.
+    pub new: VersionRef,
+    /// The branch's patch-support list, verbatim.
+    pub diff_tags: Vec<String>,
+}
+
+/// One half of the pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionRef {
+    /// The tag.
+    pub tag: String,
+    /// The build id, once `getBuild` has been asked. Empty until then.
+    pub build_id: String,
+    /// How the tag was chosen: `main.tag`, `diff_tags[0]`, `--new-tag`,
+    /// `--old-tag`.
+    pub source: String,
+}
+
+impl VersionRef {
+    /// Whether the build id has been filled in.
+    pub fn resolved(&self) -> bool {
+        !self.build_id.is_empty()
+    }
+}
+
+impl VersionPair {
+    /// Choose the two tags, before anything has been fetched.
+    ///
+    /// Pure: it needs only the branch parameters and the flags, so the pair can
+    /// be tested without a socket — which is also how a bad flag is rejected
+    /// before the bundle's directory is named after it.
+    pub fn select(
+        params: &crate::biz::BranchParams,
+        new: NewTagSelector<'_>,
+        old: OldTagSelector<'_>,
+    ) -> std::result::Result<Self, String> {
+        let (new_tag, new_source) = match new {
+            // The sentinel is resolved *here*, against a live answer, which is
+            // the whole point of making it a flag value rather than a lookup.
+            NewTagSelector::BranchHead => (params.tag.clone(), "main.tag".to_string()),
+            NewTagSelector::Explicit(t) => (t.to_string(), "--new-tag".to_string()),
+        };
+        let (old_tag, old_source) = match old {
+            OldTagSelector::FirstDiffTag => (
+                params
+                    .diff_tags
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| NO_DIFF_TAGS.to_string())?,
+                "diff_tags[0]".to_string(),
+            ),
+            OldTagSelector::Explicit(t) => (t.to_string(), "--old-tag".to_string()),
+        };
+        Ok(VersionPair {
+            old: VersionRef {
+                tag: old_tag,
+                build_id: String::new(),
+                source: old_source,
+            },
+            new: VersionRef {
+                tag: new_tag,
+                build_id: String::new(),
+                source: new_source,
+            },
+            diff_tags: params.diff_tags.clone(),
+        })
+    }
+
+    /// Record both build ids, after the two `getBuild`s are in.
+    ///
+    /// Takes them positionally in `new, old` order because that is the order the
+    /// fetches happen in; swapping them would silently attach a build id to the
+    /// wrong tag, and every chunk URL in the bundle is namespaced by it.
+    pub fn attach_build_ids(&mut self, new_build_id: &str, old_build_id: &str) {
+        self.new.build_id = new_build_id.to_string();
+        self.old.build_id = old_build_id.to_string();
+    }
+
+    /// The tags, new first — the order a report reads in.
+    pub fn tags(&self) -> [&str; 2] {
+        [&self.new.tag, &self.old.tag]
+    }
+}
+
+/// Why there is no default old version, stated as a remedy rather than a fact.
+const NO_DIFF_TAGS: &str =
+    "the branch lists no diff_tags, so there is no default old version; pass --old-tag with a \
+     tag the API serves (see `gircap capture --probe-tags`, or spec section 3.4)";
+
+impl CapturePlan {
+    /// The `--new-tag` selector this plan asks for.
+    ///
+    /// The sentinel match is case-insensitive: `latest`, `LATEST` and `Latest`
+    /// are the same request, and a flag that only honoured the exact spelling
+    /// would turn a case slip into a capture of a tag called `LATEST` — which
+    /// the API would answer `-202` for, and which the run would report as an
+    /// unservable tag rather than as the typo it was.
+    pub fn new_selector(&self) -> NewTagSelector<'_> {
+        match self.new_tag.as_deref() {
+            Some(t) if t.eq_ignore_ascii_case(crate::cli::NEW_TAG_LATEST) => {
+                NewTagSelector::BranchHead
+            }
+            None => NewTagSelector::BranchHead,
+            Some(t) => NewTagSelector::Explicit(t),
+        }
+    }
+
+    /// The `--old-tag` selector this plan asks for.
+    pub fn old_selector(&self) -> OldTagSelector<'_> {
+        match self.old_tag.as_deref() {
+            None => OldTagSelector::FirstDiffTag,
+            Some(t) => OldTagSelector::Explicit(t),
+        }
+    }
+}
+
 /// `gircap capture` resolved and checked.
 #[derive(Debug, Clone)]
 pub struct CapturePlan {
@@ -715,6 +858,105 @@ mod tests {
     fn the_bundle_lives_under_biz_then_the_pair_then_the_id() {
         let d = pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0");
         assert_eq!(d, PathBuf::from("artifacts").join("hk4e_global").join("7.0.0__7.1.0"));
+    }
+
+    /// The measured branch of `hk4e_global`, 2026-10-14.
+    fn branch() -> crate::biz::BranchParams {
+        crate::biz::BranchParams {
+            package_id: "ScSYQBFhu9".into(),
+            password: "bDL4JUHL625x".into(),
+            branch: "main".into(),
+            tag: "7.1.0".into(),
+            diff_tags: vec!["7.0.0".into(), "6.7.0".into()],
+        }
+    }
+
+    fn pair_plan(new_tag: Option<&str>, old_tag: Option<&str>) -> CapturePlan {
+        plan(move |a| {
+            a.new_tag = new_tag.map(str::to_string);
+            a.old_tag = old_tag.map(str::to_string);
+        })
+        .unwrap()
+    }
+
+    /// The default is `diff_tags[0]` — "current minus one" — measured on
+    /// 2026-10-14 as 7.1.0 -> 7.0.0, and each half records which rule chose it.
+    #[test]
+    fn the_pair_defaults_to_the_branch_head_and_its_first_diff_tag() {
+        let p = pair_plan(None, None);
+        let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
+        assert_eq!(v.tags(), ["7.1.0", "7.0.0"]);
+        assert_eq!(v.new.source, "main.tag");
+        assert_eq!(v.old.source, "diff_tags[0]");
+        assert!(!v.new.resolved(), "no build id before getBuild is asked");
+        assert!(!v.old.resolved());
+        assert_eq!(v.diff_tags, vec!["7.0.0", "6.7.0"]);
+    }
+
+    #[test]
+    fn the_latest_sentinel_selects_the_branch_head_and_an_explicit_tag_does_not() {
+        for (flag, want) in [
+            (None, NewTagSelector::BranchHead),
+            (Some("latest"), NewTagSelector::BranchHead),
+            (Some("LATEST"), NewTagSelector::BranchHead),
+            (Some("6.6.0"), NewTagSelector::Explicit("6.6.0")),
+        ] {
+            assert_eq!(pair_plan(flag, None).new_selector(), want, "{flag:?}");
+        }
+        assert_eq!(pair_plan(None, None).old_selector(), OldTagSelector::FirstDiffTag);
+        assert_eq!(
+            pair_plan(None, Some("5.5.0")).old_selector(),
+            OldTagSelector::Explicit("5.5.0")
+        );
+    }
+
+    /// The `source` string is a claim a reader checks against the captured
+    /// `getGameBranches`, so it has to distinguish the two routes to each tag.
+    #[test]
+    fn an_explicit_tag_records_that_it_was_explicit() {
+        let p = pair_plan(Some("6.6.0"), Some("5.5.0"));
+        let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
+        assert_eq!(v.tags(), ["6.6.0", "5.5.0"]);
+        assert_eq!(v.new.source, "--new-tag");
+        assert_eq!(v.old.source, "--old-tag");
+    }
+
+    /// A branch with no `diff_tags` cannot supply a default old version, and
+    /// inventing one would mean capturing the wrong version pair.
+    #[test]
+    fn an_empty_diff_tags_is_an_error_naming_the_remedy() {
+        let mut b = branch();
+        b.diff_tags.clear();
+        let p = pair_plan(None, None);
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(e.contains("--old-tag"), "{e}");
+        assert!(e.contains("diff_tags"), "{e}");
+        // An explicit tag still works: the caller asked, and getBuild will say.
+        let p2 = pair_plan(None, Some("5.5.0"));
+        assert_eq!(
+            VersionPair::select(&b, p2.new_selector(), p2.old_selector())
+                .unwrap()
+                .old
+                .tag,
+            "5.5.0"
+        );
+    }
+
+    /// Swapping them would attach a build id to the wrong tag, and every chunk
+    /// URL in the bundle is namespaced by build id.
+    #[test]
+    fn build_ids_attach_new_then_old() {
+        let mut v = VersionPair::select(
+            &branch(),
+            NewTagSelector::BranchHead,
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap();
+        v.attach_build_ids("sMXGW2ll3Fuu", "3XnPviMfoILi");
+        assert_eq!(v.new.tag, "7.1.0");
+        assert_eq!(v.new.build_id, "sMXGW2ll3Fuu");
+        assert_eq!(v.old.build_id, "3XnPviMfoILi");
+        assert!(v.new.resolved() && v.old.resolved());
     }
 
     #[test]

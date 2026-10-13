@@ -34,16 +34,16 @@ Start with the spec.
 
 ## Status
 
-Built to milestone **M1** (transport and provenance). `capture` reaches the live
-HoYoPlay and Sophon APIs, resolves the version pair, fetches both `getBuild`s,
-probes which tags are servable, and writes `api/requests.ndjson`. The response
-*bodies*, the manifests, the chunks and the fixture tree land in M2, M3, M6 and
-M8; `verify` / `materialize` / `list` are M9. The build order lives in
-`docs/02-plan.md` §3 and each module's own header says which milestone it lands
-in.
+Built to milestone **M2** (metadata endpoints). A live `capture` writes the
+seven `api/` documents — the four HoYoPlay bodies and both `getBuild`s
+**byte-exact**, plus the generated tag probe — and `api/requests.ndjson` beside
+them, then validates what the capture depends on. Manifests, chunks and the
+`game/` fixture land in M3, M6 and M8; `verify` / `materialize` / `list` are M9.
+The build order lives in `docs/02-plan.md` §3 and each module's own header says
+which milestone it lands in.
 
 ```powershell
-# Writes artifacts/hk4e_global/<old>__<new>/<id>/api/requests.ndjson
+# artifacts/hk4e_global/<old>__<new>/<id>/api/*.json
 .\target\release\gircap.exe capture --out artifacts
 
 # Metadata-only, against a local server (the testing seam M10 needs)
