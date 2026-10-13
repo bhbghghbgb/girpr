@@ -30,4 +30,13 @@ the chunks the artifact says it must fetch.
 | [`docs/01-artifact-schema.md`](docs/01-artifact-schema.md) | the bundle's byte layout and every field of every document |
 | [`docs/02-plan.md`](docs/02-plan.md) | module tree, build order, tests, risks |
 
-Start with the spec. Nothing is built yet.
+Start with the spec.
+
+## Status
+
+Built to milestone **M0** (crate skeleton, CLI surface, workspace member). The
+four commands parse and dispatch; none fetches anything yet, so `capture`
+currently exits `3` rather than writing an empty bundle — a deliberate
+exclusion is not a failure, but a fabricated artifact is. The build order lives
+in `docs/02-plan.md` §3 and each module's own header says which milestone it
+lands in.

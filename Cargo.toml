@@ -9,7 +9,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "tools/sync"]
+members = [".", "tools/sync", "tools/capture"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
