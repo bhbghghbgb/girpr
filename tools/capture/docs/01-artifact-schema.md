@@ -86,8 +86,13 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
     "old": { "tag": "7.0.0", "build_id": "3XnPviMfoILi", "source": "diff_tags[0]" },
     "diff_tags": ["7.0.0", "6.7.0"]
   },
-  "field": "game",                       // manifest matching_field selected from
+  "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
+  "selection_pool": {                    // matching_fields scored and diffed
+    "fields": ["game", "en-us"],
+    "manifest_entries": { "game": 2744, "en-us": 177 },
+    "note": "--audio widens this pool; captures may come from any listed field"
+  },
   "totals": {
     "files_captured": 8,
     "chunks_blobs": 41,
@@ -96,16 +101,17 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   },
   "matrix": [                            // one row per required class, in admission order
     { "class": "identical", "status": "captured", "capture_id": "identical",
-      "path": "GenshinImpact_Data/Resources/browser_assets", "also_satisfies": [] },
+      "path": "GenshinImpact_Data/Resources/browser_assets", "matching_field": "game",
+      "also_satisfies": [] },
     { "class": "partial_same_offset", "status": "captured", "capture_id": "partial_same_offset",
-      "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+      "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll", "matching_field": "game",
       "also_satisfies": ["partial_same_offset"] },
     { "class": "partial_size_changed", "status": "covered_by",
       "covered_by": "partial_same_offset",
       "reason": "cheapest candidate already captured for a cheaper class" },
     { "class": "full_reuse_reordered", "status": "unavailable",
-      "reason": "no path in this version pair has reused==nchunks && md5 differs",
-      "candidates_considered": 2662 }
+      "reason": "no path in any selected field has reused==nchunks && md5 differs",
+      "candidates_considered": 2839 }
   ],
   "files": [                             // every file under the artifact root
     { "path": "game/GenshinImpact_Data/Plugins/HoYoChannel.dll",
@@ -262,12 +268,21 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 ```jsonc
 { "schema_version": 1,
   "old_tag": "7.0.0", "new_tag": "7.1.0",
+  "fields": ["game", "en-us"],
   "counts": { "common": 2662, "identical": 1592, "changed": 1070,
               "added": 82, "removed": 11, "folders": 0 },
   "byte_counts": { "added": 954110883, "removed": 215743102 },
   "added":   ["GenshinImpact_Data/Plugins/libHttpClient.GDK.dll", …],
-  "removed": ["GenshinImpact_Data/…/00664172.blk", …] }
+  "removed": ["GenshinImpact_Data/…/00664172.blk", …],
+  "by_field": { "game": { "common": 2662, "identical": 1592, "added": 82, "removed": 11 },
+                "en-us": { "common": 0, "identical": 0, "added": 0, "removed": 0 } } }
 ```
+
+Counts at the top level are aggregated over `fields`; `by_field` is the
+breakdown, and every `added`/`removed` entry is prefixed with its field so a
+path from two pools cannot collide. The `game` row is the **measured** one for
+7.0.0→7.1.0; the `en-us` row is a placeholder — the value depends on which
+audio languages `--audio` selected.
 
 `diff/paths.tsv` is the flat per-path form (`path \t state \t old_size \t
 new_size \t reused \t moved \t patch_bytes \t total_cost`), sorted by `path`.
@@ -353,6 +368,7 @@ Per target chunk: where its bytes come from.
 { "schema_version": 1,
   "capture_id": "partial_same_offset",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+  "matching_field": "game",
   "classes": ["partial_same_offset"],
   "old": { "tag": "7.0.0", "size": 2340264, "md5": "1e210ff1…", "nchunks": 3 },
   "new": { "tag": "7.1.0", "size": 2340264, "md5": "d992a789…", "nchunks": 3 },
@@ -410,10 +426,18 @@ For `removed` captures there is no `new`, no `plan`, and no `expectations`; for
 
 Plain bytes at their real relative paths — no wrappers, no metadata. `game/`
 contains old-version files only; `expected/` contains new-version files only.
+`game/` additionally holds the tool-read config: `config.ini` and the audio scan
+file at `getGameConfigs.audio_pkg_scan_dir`.
 
-Both are covered by `MANIFEST.json → files[]` and `verify/checksums.json`. A
-consumer can `diff -r` `game/` against `expected/` and every differing file is
-exactly one that needs patching.
+Both trees are covered by `MANIFEST.json → files[]` and
+`verify/checksums.json`. A consumer can `diff -r` `game/` against `expected/`
+and every differing file is exactly one that needs patching.
+
+> **Consuming `game/` with the main tool is blocked** on `girpr` gaining path
+> inclusion/exclusion. Run against this directory as-is, the main tool builds its
+> plan from the whole live manifest and would fetch the entire game. See
+> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle--and-one-external-blocker)
+> for the intended invocation and why the fix belongs in `girpr`, not here.
 
 ## 15. `verify/checksums.json`
 

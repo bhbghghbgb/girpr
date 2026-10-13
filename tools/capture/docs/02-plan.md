@@ -6,7 +6,45 @@ milestone 0 starts. Companions: [`00-spec.md`](00-spec.md) (what),
 
 ---
 
-## 0. Shape of the crate
+## 0. Decisions
+
+All four questions from scoping are settled; nothing below re-opens them.
+
+| decision | value |
+|---|---|
+| workspace membership | **workspace member** — `members = [".", "tools/sync", "tools/capture"]`, same as `girsync` |
+| artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and fully regenerable |
+| `--audio` default | **`en-us`** — a launchable-install default, and it widens the selection pool (§0.1) |
+| per-class variants | **no individual flags**; `--per-class N` only, default 1 |
+| commit discipline | **one commit per milestone. No milestone lands uncommitted.** |
+
+### 0.1 `--audio` and the selection pool (why the default matters)
+
+`--audio` sets the scan file written into `game/` **and** the set of
+`matching_field` manifests captured and scored. *(measured)* each audio manifest
+is ~1 MB compressed and carries 177 further file entries. Widening the audio
+selection therefore widens the candidate corpus for the matrix — the backstop
+when the `game` pool has no candidate for a required class in a given version
+pair. Cost ranking keeps this safe: audio files average ~80 MB each, so
+smallest-first naturally avoids them unless a class has no cheaper candidate.
+
+---
+
+## 1. External blocker (does not gate the build)
+
+`girpr` has **no path include/exclude**. Run against `game/`, it builds the plan
+from the whole live manifest and would fetch the entire game instead of the one
+captured file. The fix is a `girpr` feature; `gircap` neither depends on it nor
+works around it.
+
+Consequence for this plan: **M11 step 2 is blocked and is recorded as blocked**,
+not skipped. Everything up to and including M10 is unblocked, and `gircap verify`
+/ `gircap materialize` give the offline half of the acceptance check regardless.
+Full detail and the intended invocation: [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle--and-one-external-blocker).
+
+---
+
+## 2. Shape of the crate
 
 ```
 tools/capture/
@@ -81,17 +119,24 @@ unused code asserting something false.
 
 ---
 
-## 1. Milestones
+## 3. Milestones
 
-Each ends with something runnable and a stated acceptance check. Nothing starts
-before the previous milestone's check passes.
+Each ends with something runnable, a stated acceptance check, and **its own
+commit**. Nothing starts before the previous milestone's check passes, and no
+milestone is left uncommitted — if a milestone is abandoned, the work is
+reverted or the reason is in the commit message.
+
+Commit messages use `gircap: M<N> — <summary>` as the subject, so
+`git log --oneline` reads as the build order.
 
 ### M0 — skeleton and independence
 Add the workspace entry (`Cargo.toml` `members`), the module tree with empty
-modules, `cli.rs`, `exit.rs`, `report.rs`, `logging.rs`.
+modules, `cli.rs`, `exit.rs`, `report.rs`, `logging.rs`. Add `artifacts/` to
+`.gitignore`.
 **Accept:** `cargo build -p gircap` and `cargo test -p gircap` pass;
 `gircap --help` exits 0; a grep for `girpr` in `src/` and `Cargo.toml` returns
 only doc comments; `cargo clippy -p gircap --all-targets` is clean.
+**Commit:** `gircap: M0 — crate skeleton, CLI surface, workspace member`
 
 ### M1 — transport and provenance
 `biz.rs`, `http/mod.rs` (retries, timeout, UA, `attempts` count), `http/probe.rs`.
@@ -99,6 +144,7 @@ only doc comments; `cargo clippy -p gircap --all-targets` is clean.
 status/elapsed/headers for a `getGameConfigs` and a `getBuild`; a deliberately
 bad tag exits `2`. Unit tests for URL building, retry/backoff counting, and the
 `Range` header path run offline.
+**Commit:** `gircap: M1 — HTTP fetcher with request provenance log and tag probe`
 
 ### M2 — metadata endpoints
 `hyp/mod.rs`, `hyp/types.rs`. Capture all four HoYoPlay bodies byte-exact plus
@@ -107,6 +153,7 @@ both `getBuild` bodies; resolve the version pair and validate the download mode.
 every captured body re-parses; `retcode != 0` anywhere exits `2` with the URL
 named. `types.rs` models `stats`, `compression`, `encryption`, `password`,
 `categories[]` — the fields a minimal client discards.
+**Commit:** `gircap: M2 — HoYoPlay + Sophon getBuild capture and version-pair resolution`
 
 ### M3 — manifests
 `manifest/{mod,proto,dump}.rs`. zstd-decode, verify decompressed MD5 against
@@ -116,12 +163,14 @@ named. `types.rs` models `stats`, `compression`, `encryption`, `password`,
 `diff` shape present in `meta.json → decoded.structure`; gzip rule observed and
 recorded (`encoding` in `MANIFEST.json`). Unit tests cover the protobuf decoder
 including an empty file entry and an `is_folder` entry.
+**Commit:** `gircap: M3 — manifest fetch, verify, decode and dump`
 
 ### M4 — diff and the reuse pool
 `manifest/diff.rs`.
 **Accept:** live run reproduces the measured numbers — 2 662 common, 1 592
 identical, 82 added, 11 removed, 98 910 same-manifest md5 hits, 2 cross-file-only.
 These are asserted in a test against a frozen fixture, not just eyeballed.
+**Commit:** `gircap: M4 — path diff and cross-file reuse-pool measurement`
 
 ### M5 — scoring, classes, budget
 `select/{mod,classes,budget}.rs`.
@@ -129,6 +178,7 @@ These are asserted in a test against a frozen fixture, not just eyeballed.
 reproduces the measured candidate table for all nine classes; greedy admission
 produces the expected winner per class; `--per-class 2` admits two and tags the
 second `over_budget` under a tight ceiling. Pure unit tests, no network.
+**Commit:** `gircap: M5 — scoring, variant classes and smallest-first budget admission`
 
 ### M6 — the chunk store
 `blobs/{mod,props,chunks}.rs`. Content-addressed by chunk id; one fetch per id;
@@ -136,6 +186,7 @@ second `over_budget` under a tight ceiling. Pure unit tests, no network.
 **Accept:** live run on the `partial_same_offset` candidate fetches 5 distinct
 chunk ids (3 old + 2 new), stores 5 blobs, and produces the
 `chunks/index.json` shape in the schema doc byte-for-byte in field names.
+**Commit:** `gircap: M6 — content-addressed chunk store with the three retention sets`
 
 ### M7 — assembly
 `assemble/{mod,ranges}.rs`. Build old from `materialize_old`, new from
@@ -143,6 +194,7 @@ chunk ids (3 old + 2 new), stores 5 blobs, and produces the
 then assert the patch result byte-equals the direct new assembly.
 **Accept:** A7/A8/A9/A10/A11/A12 all green live. Ranges tests cover gap,
 overlap, out-of-order, and moved-offset cases.
+**Commit:** `gircap: M7 — assemble old, new and the patch flow from retained chunks`
 
 ### M8 — the artifact
 `emit/{mod,gamedir,index,selfcheck}.rs`. Full tree, `game/`, `expected/`,
@@ -150,6 +202,7 @@ overlap, out-of-order, and moved-offset cases.
 **Accept:** a live capture produces a tree that passes `emit`'s own completeness
 check; `game/` contains nothing but `config.ini`, the audio scan file, and the
 variant files; A13–A17 green.
+**Commit:** `gircap: M8 — artifact writer: game fixture, expected ground truth, index and selfcheck`
 
 ### M9 — offline re-verification
 `verify/{mod,materialize}.rs`.
@@ -158,6 +211,7 @@ of one chunk blob it exits `3` naming the blob and the assertion. `gircap
 materialize` rebuilds both files from `chunks/` with the network unplugged and
 matches `game/` and `expected/`. **This milestone is what makes the artifact
 trustworthy**, so it is not optional.
+**Commit:** `gircap: M9 — offline verify and materialize subcommands`
 
 ### M10 — tests
 `tests/*` against a local mock server.
@@ -166,21 +220,29 @@ serves synthetic manifests built by the test, exactly as `girpr`'s own suite doe
 against its own mock. A test asserting a captured artifact has zero failed
 selfcheck rows. A test asserting the gzip rule fires on a >threshold body and not
 below.
+**Commit:** `gircap: M10 — offline integration suite against a local mock`
 
 ### M11 — first real capture
-Run against `hk4e_global` 7.0.0 → 7.1.0, `game` field, all nine classes.
+Run against `hk4e_global` 7.0.0 → 7.1.0, selection pool `game` + `en-us`, all
+nine classes.
 **Accept:** exit 0; `selfcheck.json` `result: "pass"`; artifact under
 `artifacts/hk4e_global/7.0.0__7.1.0/<id>/`; then:
 1. `gircap verify` on it, offline, exit 0;
-2. hand `game/` to `girpr` and confirm it reaches `7.1.0` and that
-   `SUMMARY download_bytes` equals `patch_fetch` totals — **this is the
-   acceptance test for the whole tool, and it is run by hand once, not
-   automated, because `gircap` must not depend on `girpr`.**
-3. `diff -r game/ expected/` lists exactly the non-`identical` variant files.
+2. `gircap materialize` on it, offline, and the rebuilt files match `game/` and
+   `expected/` byte-for-byte;
+3. `diff -r game/ expected/` lists exactly the non-`identical` variant files;
+4. **BLOCKED** — hand `game/` to `girpr` and confirm it reaches `7.1.0` with
+   `SUMMARY download_bytes` equal to each capture's
+   `patchmaps/<id>.json → totals.download_bytes`. This cannot run until `girpr`
+   has path include/exclude (see §1); without it the run would fetch the whole
+   game. It is **not** skipped — it is left open, and M11 is not "done" until it
+   runs. Run by hand once when unblocked, never automated, because `gircap` must
+   not depend on `girpr`.
+**Commit:** `gircap: M11 — first live capture (end-to-end check blocked on girpr path filters)`
 
 ---
 
-## 2. Test strategy
+## 4. Test strategy
 
 | layer | what it pins | network |
 |---|---|---|
@@ -199,36 +261,32 @@ drift is legible rather than mysterious.
 
 ---
 
-## 3. Risks
+## 5. Risks
 
 | risk | impact | handling |
 |---|---|---|
 | HoYo retires a tag mid-run | manifest 404s partway | exit `2`, `MANIFEST.json` `complete:false`, selfcheck names the missing tag; partial artifacts are never presented as good |
-| A future version violates the structural invariants of §3.6 (non-gapless chunks, unsorted offsets, folders) | assembly or diff logic silently wrong | they are **assertions** (A11) and recorded per manifest in `decoded.structure`; a violation exits `3`, it does not pass quietly |
+| A future version violates the structural invariants of spec §3.6 (non-gapless chunks, unsorted offsets, folders) | assembly or diff logic silently wrong | they are **assertions** (A11) and recorded per manifest in `decoded.structure`; a violation exits `3`, it does not pass quietly |
 | A matrix class has no candidate | incomplete test matrix | `status:"unavailable"` + reason, run still exits `0`; `--require-class` turns it into exit `4` |
 | `partial_moved_offset` and `partial_size_changed` are ~22 MB each | a default capture is ~96 MB | `--max-download-bytes`, smallest-first admission, and the exact cost is printed *before* fetching so a run is never a surprise |
 | gzip hurts agent readability | an agent tries to `cat` a `.gz` | the threshold is a flag, every gzipped doc ships a plain `.tsv` sidecar, and `MANIFEST.json → files[].encoding` is authoritative |
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` covers the *decompressed* digest for gzipped files (`container:"gzip"`, `md5` of the plain body) so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | M7/M9 assemble purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
+| **The end-to-end check cannot run** because `girpr` has no path include/exclude | the artifact is never validated against the real tool | recorded as an external blocker (plan §1, spec §8). Mitigated by `verify`/`materialize` giving the offline half now; the online half is left visibly open, not dropped |
+| An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
 
 ---
 
-## 4. Explicitly deferred
+## 6. Explicitly deferred
 
 - `hk4e_cn` / `hk4e_bilibili` captures (code paths exist from M1; only `hk4e_global`
   is exercised live in M11)
-- audio / non-`game` manifests
+- audio **bulk** — audio manifests are captured for the selection pool and a
+  selected audio file is materialised like any other, but no audio data is ever
+  fetched speculatively
 - capture diffing or deduplicating across two capture runs
 - any variant that needs a *third* version as input
 
-## 5. Open questions carried into M0
+## 7. Resolved
 
-1. **Workspace member vs detached.** Default plan: workspace member
-   (`members = [".", "tools/sync", "tools/capture"]`), matching `girsync`'s
-   precedent. Detaching instead costs one empty `[workspace]` table.
-2. **`--audio` default.** Spec says `en-us` (mirrors the main tool's fallback).
-   An artifact whose `game/` contains `en-us` will make a repair run pull the
-   `en-us` manifest too. Confirm `en-us` is the right default for a fixture.
-3. **Artifact root location.** `artifacts/` in the repo (gitignored) vs outside
-   it. Default: `artifacts/`, added to `.gitignore`, since bundles are large and
-   regenerable.
+All scoping questions are closed and recorded in §0. Nothing is carried into M0.

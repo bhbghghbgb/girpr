@@ -183,6 +183,17 @@ count; there are no per-variant flags.
 `partial_same_offset` 29, `partial_moved_offset` 430, `partial_size_changed`
 447, `zero_reuse_single` 120, `zero_reuse_multi` 491, `added` 82, `removed` 11.
 
+**Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
+a `matching_field` pool, and every pool is scored and diffed, not just `game`:
+*(measured)* each audio manifest carries 177 further file entries for ~1 MB
+compressed. Widening `--audio` therefore widens the candidate corpus, which is
+the backstop when a class has no `game`-field candidate in a given version pair.
+Ranking prefers `game` on a cost tie (`field` asc after `total_cost`, so the
+choice stays deterministic), and every capture records which `matching_field` it
+came from. Audio files are real game files and are materialised exactly like
+`game` ones when selected — the only difference is that they are, on average,
+~80 MB each, so cost ranking matters there.
+
 Predicates overlap in general (a file can satisfy several). The admission step
 is **greedy by cost with an exclusion set**:
 
@@ -253,9 +264,17 @@ sub_channel=0
 
 The audio scan file holds display names, one per line, in the order the game
 writes them: `Chinese` / `English(US)` / `Japanese` / `Korean`. `gircap` writes
-`English(US)` by default and `--audio <langs>` changes it (including `--audio
-none`, which writes an empty file). Its path comes from
-`getGameConfigs.audio_pkg_scan_dir` — never hardcoded.
+`English(US)` by default; `--audio <code>…` changes it, and `--audio none`
+writes an empty file. Its path comes from `getGameConfigs.audio_pkg_scan_dir` —
+never hardcoded.
+
+`--audio` has a **second** effect beyond the fixture file: each selected
+language adds a manifest to the capture and to the selection pool (§4.1). The
+default of `en-us` is therefore both a launchable-install default *and* a
+deliberate widening of the candidate corpus — a second audio language costs
+~1.2 MB of manifest and adds 177 more file entries to score. It exists as a
+backstop for the case where the `game`-field pool yields no candidate for a
+required class in a given version pair.
 
 ### 4.4 `expected/` — ground truth
 
@@ -283,9 +302,10 @@ total_cost    : old_bytes + new_bytes                       # ← the ranking ke
 must be materialized in full for the fixture to be real. On 7.0.0→7.1.0 that
 puts `HoYoChannel.dll` at 1.83 MB rather than its 274 KB patch size.
 
-Tie-break order: `total_cost`, then `moved` desc, then `reused` desc, then
-`path` asc. Fully deterministic; re-running on the same version pair picks the
-same files.
+Tie-break order: `total_cost`, then `matching_field` asc (`game` before the
+audio fields), then `moved` desc, then `reused` desc, then `path` asc. Fully
+deterministic; re-running on the same version pair and `--audio` picks the same
+files.
 
 ### Budget
 
@@ -338,8 +358,8 @@ gircap capture
   [--max-download-bytes N]                    (default: unlimited)
   [--require-class <id>…]                     (fail if unmet; default: all required)
   [--files <rel-path>…]                       (bypass selection; still scored + recorded)
-  [--field <matching_field>]                  (default game)
-  [--audio <code>…|none]                      (default en-us; written into game/)
+  [--audio <code>…|none]                      (default en-us; sets the scan file AND
+                                               the selection pool — see §4.1/§4.3)
   [--manifest-detail full|paths-only]         (default full)
   [--gzip-threshold <bytes>]                  (default 1048576)
   [--probe-tags <tag>…]                       (default: diff_tags ∪ {old,new}; JSON only)
@@ -371,11 +391,77 @@ crate is the summary emitter.
 
 ---
 
-## 8. Out of scope
+## 8. Consuming the bundle — and one external blocker
+
+The bundle is built to be handed to the main tool. Two of the three consumption
+paths work today; the third is blocked on a `girpr` feature that does not exist
+yet.
+
+| what you want to do | needs | status |
+|---|---|---|
+| inspect / assert from the metadata alone | nothing — `MANIFEST.json`, `patchmaps/`, `verify/` | ✅ works |
+| rebuild old/new files offline | `gircap materialize` | ✅ works |
+| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ❌ **blocked** |
+
+### 8.1 The blocker
+
+`game/` holds a handful of files. Run the main tool against it as-is and the
+main tool does what it is specified to do: build the plan from the **whole live
+manifest** and fetch every file in it. A run meant to repair one 2.3 MB DLL would
+pull ~130 GB, and a `--purge-after` run would also delete every file in the
+bundle that the live manifest happens not to contain.
+
+That is correct behaviour for the main tool and is not something `gircap` should
+work around. The fix belongs in `girpr`: a repeatable path include/exclude
+(glob, rooted at the game dir) that narrows both the repair work list and the
+files-cleanup keep-set. With it, the intended invocation is roughly:
+
+```
+girpr --game-path <artifact>/game --biz hk4e_global
+      --include "GenshinImpact_Data/Plugins/HoYoChannel.dll"
+      --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"
+      …
+```
+
+and `SUMMARY download_bytes` can then be compared against each capture's
+`patchmaps/<id>.json → totals.download_bytes`.
+
+**Until that flag exists, the end-to-end check is a manual step and is recorded
+as such.** `gircap` does not depend on `girpr`, does not invoke it, and does not
+shim the missing flag; `docs/02-plan.md` M11 runs the check by hand and marks it
+blocked rather than quietly skipping it.
+
+### 8.2 What the artifact provides so that check is cheap when it unblocks
+
+- `expected/` gives the exact bytes a correct run must produce, so the
+  comparison is `md5`, not eyeballing.
+- `patchmaps/<id>.json → expectations` gives `download_bytes` (must equal),
+  `result_md5` (must equal) and **`must_not_fetch`** (must not be requested) —
+  the last one names the chunk ids a working reuse path skips, so a broken reuse
+  path is a specific, nameable failure rather than a byte-count mismatch.
+- `game/config.ini` already reads the old version, so the run takes the
+  `getBuild(old)` reuse path without extra flags.
+- `verify/` makes the fixture's own integrity a precondition, so a bundle that
+  fails the check can be ruled out as the cause.
+
+---
+
+## 9. Decisions taken
+
+| decision | value | where |
+|---|---|---|
+| workspace membership | **workspace member** (`members = [".", "tools/sync", "tools/capture"]`), matching `girsync` | plan M0 |
+| artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and regenerable | plan M0 |
+| `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
+| `--per-class` default | **1** | §4.1 |
+| per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
+| commit discipline | **one commit per milestone, no milestone lands uncommitted** | plan §3 |
+
+---
+
+## 10. Out of scope
 
 - No patching, no hdiff, no 7z, no predownload, no purge simulation
-- Audio/`matching_field != game` manifests are never selected from (their blobs
-  are enormous); `--field` exists for exploration, not for the matrix
 - No `getGameScanInfo`, SDK, WPF, or plugin enumeration
 - No cross-build *cross-file* chunk reuse modelling beyond **measuring and
   recording** it — *(measured)* 98 910 new chunks have an MD5 present somewhere
@@ -383,3 +469,6 @@ crate is the summary emitter.
   different old file (1 776 356 B forgone by same-file-only reuse). That number
   is recorded in `diff/reuse_pool.json` because it quantifies a deliberate
   simplification, not because `gircap` acts on it.
+- Audio manifests are captured for the selection pool and can supply a capture
+  when the `game` pool has no candidate for a class, but no audio *bulk* beyond
+  the selected files is ever downloaded
