@@ -30,12 +30,12 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
 /// The three roles a blob is retained for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Set {
     /// Needed to rebuild the old file — every chunk of it.
@@ -93,7 +93,7 @@ impl Identity {
 }
 
 /// One use of a blob: which file, which build, which role, at which offset.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reference {
     /// The build this use belongs to.
     pub tag: String,
@@ -135,14 +135,14 @@ pub struct Want {
 }
 
 /// A build that declares a chunk, and therefore a CDN that serves it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Source {
     /// The tag, which is the only thing the store needs to resolve a URL.
     pub tag: String,
 }
 
 /// A source whose declaration disagrees with the one the store will measure.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conflict {
     /// The build that disagreed.
     pub tag: String,

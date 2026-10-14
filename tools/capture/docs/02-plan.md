@@ -316,6 +316,64 @@ matches `game/` and `expected/`. **This milestone is what makes the artifact
 trustworthy**, so it is not optional.
 **Commit:** `gircap: M9 — offline verify and materialize subcommands`
 
+**Landed.** Verified live against `20261014T040448Z`: `verify` exits 0 with 83
+re-derived rows and 62 216 590 B rebuilt from `chunks/` in 1.7 s; after flipping
+one byte inside one blob's zstd frame it exits `3` with the chunk id and the
+decode failure as the headline; `materialize` reproduces all 14 manifest-derived
+files byte-for-byte (SHA-256), leaving the bundle itself untouched. Five
+departures from the text above, each of which a later milestone inherits:
+
+1. **`verify` re-derives seven of the seventeen, not all of them, and says so.**
+   A1-A5, A9, A10, A12, A14 and A15 are statements about the API bodies, the
+   manifests and the diff. Re-running them inside the bundle would be re-running
+   the capture's own algorithm against the capture's own output — a check that
+   can only ever agree. `verify` therefore reports `checks_derived=` and
+   `checks_covered_by_recording=` on stdout, and `REDERIVED` is the `&'static`
+   list of the overlap. "Verified" is a claim about how much was checked, and a
+   reader who cannot see the split will read seventeen when seven were looked at.
+2. **There is an eighteenth id, `A18`, for the closure check.** None of the
+   seventeen asks whether `game/` is what the retained blobs say it is, which is
+   the bundle's central claim and the reason `materialize` exists. It gets its own
+   id so it cannot be mistaken for one of the seventeen, and so a reader diffing
+   two `selfcheck.json` files sees a row only a verifier could have written. It is
+   deliberately absent from `REDERIVED`: the capture cannot record it, because it
+   is a statement about the bundle rather than about the run.
+3. **A6 is re-derived against `chunks/index.json`, not against the manifests.**
+   The four manifest-declared checks are already recorded in the index; re-deriving
+   them needs the manifest, and a verifier that reaches for the manifest to check
+   the manifest's own blob is checking the wrong thing. What `verify` re-derives is
+   the part the index is responsible for — that the file at `stored_path` is the
+   bytes the index describes. A blob the index lists with no path is **red, not
+   skipped**: that is exactly the `--no-chunk-blobs` bundle, and reporting it as a
+   failure is what tells an operator their bundle cannot be materialized.
+4. **`materialize` writes *beside* the bundle, never inside it.** The config doc
+   said "beside" and the first implementation wrote `<artifact>/materialized`,
+   which adds a file `checksums.json` does not list — so the next `verify` fails
+   A16 on the bundle this command had just "repaired". The default is now
+   `<bundle-dir-name>-materialized` as a sibling, and an explicit `--out` inside
+   the artifact warns rather than refuses.
+5. **Every bundle document now derives `Deserialize` as well as `Serialize`.**
+   `verify` has to read back what `capture` wrote, and mirroring the structs as
+   separate read types would let the two drift silently — which is the one class
+   of bug a round-trip test cannot see. Three fields could not carry a borrowed
+   lifetime out of a document and became owned: `BlobProps.container`,
+   `Assertion.id` and `Assertion.assertion`. **No wire format changed** — the JSON
+   is byte-identical, and the full suite was green before the sweep.
+
+Two smaller things the milestone forced. `Checksums::a16` reports the *first*
+mismatch, which is right for a capture that stops at the first and wrong for a
+verifier over 95 files, so it now has `Checksums::findings` returning all of them
+and `a16` is defined in terms of it. And `verify` checks the recomputation
+against the recorded selfcheck **last**, after the rebuild, because a
+disagreement is a finding about the *recording* and a reader who met it before
+A18 would go looking for the wrong thing.
+
+The one bug this milestone found in itself, worth keeping: the A6 row first
+compared a blob against the index *and* against itself, which always agreed.
+Both sides now render the same five fields in the same order, and the test that
+caught it (`a_blob_whose_bytes_were_altered_turns_its_row_red`) is the one that
+matters.
+
 ### M10 — tests
 `tests/*` against a local mock server.
 **Accept:** `cargo test -p gircap` is green and **touches no network** — the mock

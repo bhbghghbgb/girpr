@@ -340,9 +340,38 @@ Each row is `{assertion, subject, expected, actual, ok}`.
 | A14 | `game/` contains no path outside `expected/`'s manifest set + the tool-read config files |
 | A15 | `diff/` counts equal the recomputed set differences |
 | A16 | `checksums.json` covers every file written under the artifact root, and re-hashing matches |
-| A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` — never absent |
+| A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` - never absent |
 
-**`gircap capture` exits non-zero if any of A1–A14 fails.**
+**`gircap capture` exits non-zero if any of A1-A14 fails.**
+
+### A18, added by M9 — and what `verify` does *not* re-derive
+
+None of the seventeen asks whether `game/` is what the retained blobs say it is.
+That is the bundle's central claim and the reason `materialize` exists, so M9
+gives it an id of its own:
+
+| A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
+
+A18 is a `verify`-only row. The capture cannot record it, because it is a
+statement about the bundle rather than about the run, so it never appears in a
+capture's `selfcheck.json`.
+
+`gircap verify` re-derives **seven** of the seventeen — A6, A7, A8, A11, A13, A16
+and A17 — plus A18. It does not re-derive A1-A5, A9, A10, A12, A14 or A15: those
+are statements about the API bodies, the manifests and the diff, and re-running
+them inside the bundle would be re-running the capture's own algorithm against
+the capture's own output, which can only ever agree. Both sets are named on
+stdout as `checks_derived=` and `checks_covered_by_recording=`, because "verified"
+is a claim about how much was actually checked.
+
+One asymmetry worth stating: **A6 is re-derived against `chunks/index.json`, not
+against the manifests.** The four manifest-declared checks are already recorded in
+the index; re-deriving them would need the manifest, and a verifier that reaches
+for the manifest to check the manifest's own blob is checking the wrong thing.
+What `verify` re-derives is the part the index is responsible for — that the file
+at `stored_path` is the bytes the index describes. A blob the index lists with no
+path (which is what `--no-chunk-blobs` produces) is **red, not skipped**: that is
+the finding that the bundle cannot be materialized.
 
 ---
 
@@ -367,7 +396,7 @@ gircap capture
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file P]
   [--output text|json]
 
-gircap verify      --artifact <DIR>            # re-run A3–A17 from stored bytes, no network
+gircap verify      --artifact <DIR>            # re-derive A6,A7,A8,A11,A13,A16,A17 + A18, no network
 gircap materialize --artifact <DIR> [--out DIR] # rebuild old/new files from chunks/, no network
 gircap list        --root <DIR>               # index every capture under a root
 ```

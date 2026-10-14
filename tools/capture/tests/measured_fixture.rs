@@ -1105,7 +1105,7 @@ mod m7_assembly {
     fn the_measured_pair_is_green_on_a7_through_a12() {
         let a = assemble_measured(&hoyo_pair());
         let rows = a.selfcheck_rows();
-        let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.id).collect();
+        let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             kinds,
             ["A7", "A8", "A9", "A10", "A11", "A12"].into_iter().collect(),

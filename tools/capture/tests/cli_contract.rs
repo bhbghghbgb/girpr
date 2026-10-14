@@ -264,3 +264,97 @@ fn rust_log_overrides_the_flag() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ------------------------------------------------ M9: the offline three's codes
+//
+// `verify`, `materialize` and `list` are checked here for their exit codes
+// against paths that are *wrong*, because a bundle that is right is a fixture's
+// job (see `offline_bundle.rs`) and these tests must not grow one.
+
+/// A scratch directory that does not exist yet, named per test.
+fn scratch(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("gircap-contract-{name}-{}", std::process::id()))
+}
+
+/// A path that is not a bundle is a usage error, not an assertion failure: the
+/// operator named something that does not exist, and exit `3` would say the
+/// artifact is broken when the artifact was never named.
+#[test]
+fn verify_on_a_directory_that_is_not_a_bundle_is_a_usage_error() {
+    let d = scratch("verify-not-a-bundle");
+    std::fs::create_dir_all(&d).unwrap();
+    let r = assert_code(&["verify", "--artifact", d.to_str().unwrap()], 1);
+    assert!(r.stdout.contains("event=verify"), "{}", r.stdout);
+    assert!(r.stdout.contains("MANIFEST.json"), "{}", r.stdout);
+    assert!(r.stdout.contains("exit_code=1"), "{}", r.stdout);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// The same for `materialize`, and the same code - the two read the same bundle.
+#[test]
+fn materialize_on_a_directory_that_is_not_a_bundle_is_a_usage_error() {
+    let d = scratch("materialize-not-a-bundle");
+    std::fs::create_dir_all(&d).unwrap();
+    let r = assert_code(&["materialize", "--artifact", d.to_str().unwrap()], 1);
+    assert!(r.stdout.contains("event=materialize"), "{}", r.stdout);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--out` equal to `--artifact` is refused before anything is written.
+#[test]
+fn materialize_refuses_to_write_into_the_bundle_it_is_proving() {
+    let d = scratch("materialize-same-dir");
+    std::fs::create_dir_all(&d).unwrap();
+    let r = assert_code(
+        &[
+            "materialize",
+            "--artifact",
+            d.to_str().unwrap(),
+            "--out",
+            d.to_str().unwrap(),
+        ],
+        1,
+    );
+    assert!(r.stdout.contains("--out"), "{}", r.stdout);
+    assert!(r.stdout.contains("--artifact"), "{}", r.stdout);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `list` over an empty tree is a success with zero bundles, not a failure.
+#[test]
+fn list_over_an_empty_tree_is_a_success_with_nothing_in_it() {
+    let d = scratch("list-empty");
+    std::fs::create_dir_all(&d).unwrap();
+    let r = assert_code(&["list", "--root", d.to_str().unwrap()], 0);
+    assert!(r.stdout.contains("bundles=0"), "{}", r.stdout);
+    assert!(r.stdout.contains("result=ok"), "{}", r.stdout);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A root that is not there is a usage error - again, the operator's mistake.
+#[test]
+fn list_over_a_root_that_does_not_exist_is_a_usage_error() {
+    let d = scratch("list-missing");
+    let r = assert_code(&["list", "--root", d.to_str().unwrap()], 1);
+    // The summary is whitespace-free, so the detail arrives percent-encoded.
+    assert!(r.stdout.contains("not%20a%20directory"), "{}", r.stdout);
+}
+
+/// `verify` takes no base flags, so it has no `--hyp-base` to point somewhere
+/// useless: a reader must not be left wondering whether it phoned home. Asserted
+/// by the fact that a stray flag is *rejected* rather than silently ignored.
+#[test]
+fn verify_takes_no_base_flags_and_needs_none() {
+    let d = scratch("verify-flags");
+    std::fs::create_dir_all(&d).unwrap();
+    let r = run(&[
+        "verify",
+        "--artifact",
+        d.to_str().unwrap(),
+        "--hyp-base",
+        "http://127.0.0.1:1",
+    ]);
+    assert_eq!(r.code, 1, "an unknown flag is a usage error, as every argument error is: {}", r.stderr);
+    assert!(r.stderr.contains("--hyp-base"), "and clap names the flag: {}", r.stderr);
+    let _ = std::fs::remove_dir_all(&d);
+}

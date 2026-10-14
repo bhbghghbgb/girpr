@@ -32,7 +32,7 @@ pub mod props;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::http::{ApiError, Fetcher, Kind};
 use crate::manifest::CapturedManifest;
@@ -40,7 +40,7 @@ use chunks::{FilePair, Reference, Set, Want};
 use props::BlobProps;
 
 /// `chunks/index.json`, the bundle's own table of contents for its blobs.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChunkIndex {
     /// The artifact schema version.
     pub schema_version: u32,
@@ -51,7 +51,7 @@ pub struct ChunkIndex {
 }
 
 /// One blob as `chunks/index.json` lists it: the measurement plus who wanted it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexedBlob {
     /// The measurement.
     #[serde(flatten)]

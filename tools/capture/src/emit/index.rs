@@ -20,12 +20,12 @@ use std::path::{Path, PathBuf};
 
 use super::selfcheck;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::hash;
 
 /// One file under the artifact root, as both index documents record it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
     /// Artifact-relative, `/`-separated.
     pub path: String,
@@ -125,7 +125,7 @@ pub fn rel(root: &Path, path: &Path) -> String {
 }
 
 /// `verify/checksums.json`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checksums {
     /// The artifact schema version.
     pub schema_version: u32,
@@ -172,55 +172,79 @@ impl Checksums {
         self.entries.iter().find(|e| e.path == path)
     }
 
-    /// A16: every file under the root is listed, and re-hashing matches.
+/// A16: every file under the root is listed, and re-hashing matches.
     ///
     /// Both halves, because a list that omits a file is a silent gap while a list
     /// whose digests are stale is a lie, and only checking one leaves the other.
+    ///
+    /// The first finding only. A capture wants one row and stops there; M9's
+    /// `verify` wants them all and calls [`Checksums::findings`] instead.
     pub fn a16(&self, root: &Path) -> (bool, String) {
+        match self.findings(root).into_iter().next() {
+            Some(f) => (false, f),
+            None => (
+                true,
+                format!(
+                    "{} files, {} B, every digest re-hashed and matched",
+                    self.file_count, self.total_bytes
+                ),
+            ),
+        }
+    }
+
+    /// Every A16 failure, in a stable order.
+    ///
+    /// Exhaustive on purpose. A capture reports the first because it stops at the
+    /// first anyway; a *verifier* that reported only the first would send an
+    /// operator round a 95-file bundle once per round trip, and the second
+    /// finding is usually in the same directory as the first.
+    pub fn findings(&self, root: &Path) -> Vec<String> {
+        let mut out = Vec::new();
         let on_disk: std::collections::BTreeSet<String> = match walk(root) {
             Ok(v) => v
                 .into_iter()
                 .map(|p| rel(root, &p))
                 .filter(|r| r != "verify/checksums.json")
                 .collect(),
-            Err(e) => return (false, format!("walk {root:?}: {e}")),
+            Err(e) => {
+                out.push(format!("walk {}: {e}", root.display()));
+                return out;
+            }
         };
         let listed: std::collections::BTreeSet<String> =
             self.entries.iter().map(|e| e.path.clone()).collect();
-        if let Some(missing) = on_disk.difference(&listed).next() {
-            return (false, format!("{missing} exists but is not in checksums.json"));
+        for extra in on_disk.difference(&listed) {
+            out.push(format!("{extra} exists but is not in checksums.json"));
         }
-        if let Some(ghost) = listed.difference(&on_disk).next() {
-            return (false, format!("{ghost} is listed but does not exist"));
+        for ghost in listed.difference(&on_disk) {
+            out.push(format!("{ghost} is listed but does not exist"));
         }
         if self.file_count as usize != self.entries.len() {
-            return (false, format!("file_count {} but {} entries", self.file_count, self.entries.len()));
+            out.push(format!(
+                "file_count {} but {} entries",
+                self.file_count,
+                self.entries.len()
+            ));
         }
         if self.total_bytes != self.entries.iter().map(|e| e.bytes).sum::<u64>() {
-            return (false, "total_bytes disagrees with the entries".into());
+            out.push("total_bytes disagrees with the entries".into());
         }
+        // Only re-hash a file that still exists: a ghost above already named it,
+        // and digesting it would report the same problem a second way.
         for e in &self.entries {
+            if !on_disk.contains(&e.path) {
+                continue;
+            }
             match digest_file(&root.join(&e.path), e.encoding) {
                 Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
-                Ok(got) => {
-                    return (
-                        false,
-                        format!(
-                            "{}: listed {} B md5 {}, on disk {} B md5 {}",
-                            e.path, e.bytes, e.md5, got.bytes, got.md5
-                        ),
-                    );
-                }
-                Err(io) => return (false, format!("{}: {io}", e.path)),
+                Ok(got) => out.push(format!(
+                    "{}: listed {} B md5 {}, on disk {} B md5 {}",
+                    e.path, e.bytes, e.md5, got.bytes, got.md5
+                )),
+                Err(io) => out.push(format!("{}: {io}", e.path)),
             }
         }
-        (
-            true,
-            format!(
-                "{} files, {} B, every digest re-hashed and matched",
-                self.file_count, self.total_bytes
-            ),
-        )
+        out
     }
 }
 
@@ -404,7 +428,7 @@ mod tests {
 /// reader can answer "what is this, what does it cover, and is it complete"
 /// without parsing `api/` and `diff/`, and so `README.md` has one source to
 /// render rather than two that could disagree.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     /// The artifact schema version.
     pub schema_version: u32,
@@ -433,7 +457,7 @@ pub struct Manifest {
 }
 
 /// Which tool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tool {
     /// Always `gircap`.
     pub name: String,
@@ -442,7 +466,7 @@ pub struct Tool {
 }
 
 /// Which run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capture {
     /// The `<capture_id>` directory component, `20261014T101500Z`.
     pub id: String,
@@ -457,7 +481,7 @@ pub struct Capture {
 }
 
 /// Which region.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Biz_ {
     /// The `--biz` value.
     pub id: String,
@@ -478,7 +502,7 @@ pub struct Biz_ {
 }
 
 /// Which builds.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Versions {
     /// The build being upgraded *to*.
     pub new: Build,
@@ -489,7 +513,7 @@ pub struct Versions {
 }
 
 /// One build.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Build {
     /// The tag.
     pub tag: String,
@@ -500,7 +524,7 @@ pub struct Build {
 }
 
 /// The fields that were scored, and how many entries each carried.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectionPool {
     /// The `matching_field`s.
     pub fields: Vec<String>,
@@ -511,7 +535,7 @@ pub struct SelectionPool {
 }
 
 /// The headline numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Totals {
     /// Admitted captures.
     pub files_captured: u64,
@@ -524,7 +548,7 @@ pub struct Totals {
 }
 
 /// One matrix row as `MANIFEST.json` records it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestMatrixRow {
     /// The class.
     pub class: String,

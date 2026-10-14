@@ -45,7 +45,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// How a stored document is encoded on disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Encoding {
     /// Plain bytes. The filename carries no extension.

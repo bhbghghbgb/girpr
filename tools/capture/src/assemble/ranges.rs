@@ -22,10 +22,10 @@
 //! that violates A11 rather than refuse to describe it — the same rule M6's
 //! `measure` follows, and for the same reason: the finding is the deliverable.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A half-open byte range `[start, end)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Range {
     /// First byte included.
     pub start: i64,
@@ -116,7 +116,7 @@ impl std::fmt::Display for Range {
 }
 
 /// Where a file's chunks sit, and what is wrong with that if anything is.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Layout {
     /// The ranges, in the order the manifest listed the chunks.
     pub ranges: Vec<Range>,

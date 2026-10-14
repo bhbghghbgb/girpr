@@ -12,7 +12,7 @@
 //! every one of the nine can be tested against a table of shapes in the same
 //! breath, and a future tenth class is a new arm rather than a new fixture.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What a class predicate is allowed to look at.
 ///
@@ -58,7 +58,7 @@ impl Shape {
 }
 
 /// The nine variant classes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Class {
     /// `old.md5 == new.md5`: the skip branch. Size and MD5 match, 0 bytes.

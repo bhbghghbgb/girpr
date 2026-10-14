@@ -19,6 +19,7 @@ use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, VersionPair, artif
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
+use crate::emit::selfcheck::Selfcheck;
 use crate::report::{OutputFormat, Summary};
 use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
 use crate::manifest::diff;
@@ -962,21 +963,222 @@ fn verify_manifest(m: &CapturedManifest, tag: &str, field: &str) -> Result<(), F
 }
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
-pub async fn verify(_plan: VerifyPlan) -> Result<Outcome, Failure> {
-    tracing::warn!("verify is not implemented yet");
-    Err(Failure { code: ExitCode::AssertionFailed, detail: "verify is not implemented yet".into() })
+///
+/// **M9.** Exits `0` when every re-derived row holds and `3` when one does not;
+/// there is no network failure to distinguish, because there is no network.
+///
+/// The summary names `checks_derived` and `checks_covered_by_recording` because
+/// "verified" is a claim about how much was actually checked, and a reader who
+/// cannot tell those two apart will read seventeen when six were looked at.
+pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
+    let bundle = crate::verify::Bundle::open(&plan.artifact).map_err(|e| {
+        Failure::usage(format!(
+            "verify: {} is not a readable gircap bundle: {e}",
+            plan.artifact.display()
+        ))
+    })?;
+    tracing::info!(artifact = %plan.artifact.display(), bundle = %bundle.describe(), "opened");
+    let report = crate::verify::reverify(bundle);
+    let (total, passed, failed) = report.counts();
+    for r in report.failures() {
+        tracing::error!(
+            assertion = %r.id,
+            subject = %r.subject,
+            expected = %r.expected,
+            actual = %r.actual,
+            "re-derived assertion does not hold"
+        );
+    }
+    for f in &report.findings {
+        tracing::error!(detail = %f, "finding");
+    }
+    if !report.agrees {
+        tracing::error!(
+            "the bundle's recorded selfcheck claims rows hold that re-derivation does not; \
+             the bundle has changed since it was written"
+        );
+    }
+    let ok = failed == 0 && report.agrees;
+    let summary = Summary::new("verify")
+        .set("result", if ok { "pass" } else { "fail" })
+        .set("artifact", plan.artifact.as_path())
+        .set("bundle", report.bundle.manifest.capture.id.clone())
+        .set("old_tag", report.bundle.manifest.versions.old.tag.clone())
+        .set("new_tag", report.bundle.manifest.versions.new.tag.clone())
+        .set("files_checked", report.bundle.checksums.entries.len() as u64)
+        .set("blobs_checked", report.bundle.index.blobs.len() as u64)
+        .set("captures_rebuilt", report.rebuilt.len() as u64)
+        .set("bytes_rebuilt", report.rebuilt_bytes())
+        .set("checks_derived", crate::verify::REDERIVED.join(","))
+        .set("checks_covered_by_recording", covered_ids(&report.bundle.recorded))
+        .set("checks_total", total)
+        .set("checks_passed", passed)
+        .set("checks_failed", failed)
+        .set("agrees_with_recording", report.agrees)
+        .set("findings", report.findings.len() as u64)
+        .set("recorded_result", selfcheck_slug(&report.bundle.recorded))
+        .set(
+            "exit_code",
+            if ok { ExitCode::Ok.code() } else { ExitCode::AssertionFailed.code() },
+        );
+    if let Some(h) = report.headline() {
+        return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
+    }
+    Ok((summary, if ok { ExitCode::Ok } else { ExitCode::AssertionFailed }))
 }
 
 /// `gircap materialize` — rebuild both files from `chunks/`, no network.
-pub async fn materialize(_plan: MaterializePlan) -> Result<Outcome, Failure> {
-    tracing::warn!("materialize is not implemented yet");
-    Err(Failure { code: ExitCode::AssertionFailed, detail: "materialize is not implemented yet".into() })
+///
+/// **M9.** The same rebuild `verify` performs, written out rather than only
+/// compared. It is a separate command because the two answer different questions:
+/// `verify` asks *is the bundle closed*, `materialize` hands a consumer the bytes
+/// and lets *it* do the comparing — which is the only way to answer "does a
+/// downstream tool accept these bytes" without `gircap` guessing what it does.
+pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
+    let bundle = crate::verify::Bundle::open(&plan.artifact).map_err(|e| {
+        Failure::usage(format!(
+            "materialize: {} is not a readable gircap bundle: {e}",
+            plan.artifact.display()
+        ))
+    })?;
+    // Beside the bundle, never inside it. Writing the rebuild into the tree it is
+    // proving would add a file that `checksums.json` does not list, so the very
+    // next `verify` would fail A16 on a bundle this command had just "repaired".
+    // A sibling named `<capture_id>-materialized` keeps the two comparable and the
+    // bundle untouched.
+    let out = match &plan.out {
+        Some(d) => d.clone(),
+        None => {
+            // Named after the bundle's own directory, not its capture id: the
+            // two are the same string today, but the directory name is what the
+            // operator is looking at, and the output lands *beside* the bundle
+            // either way.
+            let stem = plan
+                .artifact
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| bundle.manifest.capture.id.clone());
+            match plan.artifact.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.join(format!("{stem}-materialized")),
+                // The artifact is at a filesystem root, so there is no beside.
+                _ => PathBuf::from(format!("{stem}-materialized")),
+            }
+        }
+    };
+    if out.starts_with(&plan.artifact) {
+        tracing::warn!(
+            out = %out.display(),
+            "the rebuild is written inside the bundle it is proving; A16 will fail on the \
+             next verify until checksums.json is regenerated"
+        );
+    }
+    let report = crate::verify::reverify(bundle);
+    let mut written: Vec<String> = Vec::new();
+    let mut bytes: u64 = 0;
+    for pair in &report.rebuilt {
+        for (side, tree) in [(&pair.old, "game"), (&pair.new, "expected")] {
+            let Some(s) = side else { continue };
+            let rel = format!("{tree}/{}", s.path);
+            let dest = out.join(&rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| write_err(&plan.artifact, e))?;
+            }
+            std::fs::write(&dest, &s.bytes).map_err(|e| write_err(&dest, e))?;
+            written.push(rel);
+            bytes += s.bytes.len() as u64;
+        }
+    }
+    written.sort();
+    tracing::info!(
+        artifact = %plan.artifact.display(),
+        out = %out.display(),
+        files = written.len(),
+        bytes,
+        "rebuilt both files from chunks/"
+    );
+    let (total, passed, failed) = report.counts();
+    let ok = failed == 0 && report.agrees;
+    let summary = Summary::new("materialize")
+        .set("result", if ok { "pass" } else { "fail" })
+        .set("artifact", plan.artifact.as_path())
+        .set("out", out.as_path())
+        .set("captures_rebuilt", report.rebuilt.len() as u64)
+        .set("files_written", written.len() as u64)
+        .set("bytes_written", bytes)
+        .set("first_file", written.first().cloned().unwrap_or_default())
+        .set("last_file", written.last().cloned().unwrap_or_default())
+        .set("checks_total", total)
+        .set("checks_passed", passed)
+        .set("checks_failed", failed)
+        .set("agrees_with_recording", report.agrees)
+        .set(
+            "exit_code",
+            if ok { ExitCode::Ok.code() } else { ExitCode::AssertionFailed.code() },
+        );
+    if let Some(h) = report.headline() {
+        return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
+    }
+    Ok((summary, if ok { ExitCode::Ok } else { ExitCode::AssertionFailed }))
 }
 
 /// `gircap list` — index every capture under a root.
-pub async fn list(_root: PathBuf, _output: OutputFormat) -> Result<Outcome, Failure> {
-    tracing::warn!("list is not implemented yet");
-    Err(Failure { code: ExitCode::AssertionFailed, detail: "list is not implemented yet".into() })
+///
+/// **M9.** The only command that takes a root rather than a bundle, because its
+/// job is to find bundles. A directory that looks like one and does not open is
+/// listed as a skip rather than aborting the walk: `list` exists to be run over a
+/// tree that may contain a half-finished capture.
+pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
+    let found = crate::verify::list(&root)
+        .map_err(|e| Failure::usage(e.to_string()))?;
+    let capturing = found.iter().filter(|f| f.selfcheck == "pass").count() as u64;
+    let blobs: u64 = found.iter().map(|f| f.blobs as u64).sum();
+    for f in &found {
+        tracing::info!(
+            path = %f.path,
+            id = %f.capture_id,
+            tags = %f.tags,
+            patchmaps = f.patchmaps,
+            blobs = f.blobs,
+            selfcheck = %f.selfcheck,
+            complete = f.complete,
+            "capture"
+        );
+    }
+    let summary = Summary::new("list")
+        .set("result", "ok")
+        .set("root", root.as_path())
+        .set("bundles", found.len() as u64)
+        .set("bundles_passing", capturing)
+        .set("bundles_incomplete", found.iter().filter(|f| !f.complete).count() as u64)
+        .set("patchmaps", found.iter().map(|f| f.patchmaps as u64).sum::<u64>())
+        .set("blobs", blobs)
+        .set("first", found.first().map(|f| f.path.clone()).unwrap_or_default())
+        .set("last", found.last().map(|f| f.path.clone()).unwrap_or_default())
+        .set("exit_code", ExitCode::Ok.code());
+    let _ = output;
+    Ok((summary, ExitCode::Ok))
+}
+
+/// The ids a recorded selfcheck covers that `verify` did not re-derive.
+fn covered_ids(s: &Selfcheck) -> String {
+    let mut ids: Vec<&str> = s
+        .assertions
+        .iter()
+        .map(|a| a.id.as_str())
+        .filter(|id| !crate::verify::REDERIVED.contains(id))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.join(",")
+}
+
+/// The recorded `result`, as its lowercase wire spelling.
+fn selfcheck_slug(s: &Selfcheck) -> String {
+    serde_json::to_string(&s.result)
+        .unwrap_or_else(|_| "?".into())
+        .trim_matches('"')
+        .to_string()
 }
 
 /// Turn an [`ApiError`] into exit `2`, having named it on stderr.

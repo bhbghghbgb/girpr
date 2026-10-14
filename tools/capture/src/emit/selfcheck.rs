@@ -16,15 +16,15 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One assertion, checked once against one subject.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assertion {
     /// `A1` … `A17`.
-    pub id: &'static str,
+    pub id: String,
     /// What was checked, in the spec's words.
-    pub assertion: &'static str,
+    pub assertion: String,
     /// What it was checked against: a blob path, a chunk id, a file name.
     pub subject: String,
     /// What the manifest or the plan said it should be.
@@ -39,8 +39,8 @@ impl Assertion {
     /// A green row.
     pub fn pass(id: &'static str, assertion: &'static str, subject: &str, value: &str) -> Assertion {
         Assertion {
-            id,
-            assertion,
+            id: id.to_string(),
+            assertion: assertion.to_string(),
             subject: subject.to_string(),
             expected: value.to_string(),
             actual: value.to_string(),
@@ -57,8 +57,8 @@ impl Assertion {
         actual: &str,
     ) -> Assertion {
         Assertion {
-            id,
-            assertion,
+            id: id.to_string(),
+            assertion: assertion.to_string(),
             subject: subject.to_string(),
             expected: expected.to_string(),
             actual: actual.to_string(),
@@ -75,8 +75,8 @@ impl Assertion {
         actual: &str,
     ) -> Assertion {
         Assertion {
-            id,
-            assertion,
+            id: id.to_string(),
+            assertion: assertion.to_string(),
             subject: subject.to_string(),
             expected: expected.to_string(),
             actual: actual.to_string(),
@@ -128,7 +128,7 @@ pub fn is_fatal(id: &str) -> bool {
 }
 
 /// How a run ended, as the selfcheck says it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Result_ {
     /// Every assertion held.
@@ -141,7 +141,7 @@ pub enum Result_ {
 }
 
 /// `verify/selfcheck.json`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Selfcheck {
     /// The artifact schema version.
     pub schema_version: u32,
@@ -156,7 +156,7 @@ pub struct Selfcheck {
 }
 
 /// The three numbers, kept consistent with the rows by construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counts {
     /// How many rows.
     pub total: u64,
@@ -167,7 +167,7 @@ pub struct Counts {
 }
 
 /// A matrix row as the selfcheck repeats it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatrixRow {
     /// The class.
     pub class: String,
@@ -175,6 +175,18 @@ pub struct MatrixRow {
     pub status: String,
     /// Whether that is one of the three acceptable answers.
     pub ok: bool,
+}
+
+impl MatrixRow {
+    /// Whether a `status` string is one A17 accepts.
+    ///
+    /// Takes the string rather than a `&MatrixRow` because M9's `verify` has a
+    /// status it read out of `MANIFEST.json` and no row to hang the answer on.
+    /// `over_budget` is excluded for the reason [`crate::select::MatrixRow`]
+    /// gives: the caller was told to take it and the tool could not afford to.
+    pub fn ok_status(status: &str) -> bool {
+        matches!(status, "captured" | "covered_by" | "unavailable")
+    }
 }
 
 impl Selfcheck {
@@ -222,7 +234,7 @@ impl Selfcheck {
     pub fn by_id(&self) -> BTreeMap<&str, u64> {
         let mut m: BTreeMap<&str, u64> = BTreeMap::new();
         for a in &self.assertions {
-            *m.entry(a.id).or_default() += 1;
+            *m.entry(a.id.as_str()).or_default() += 1;
         }
         m
     }
@@ -230,7 +242,7 @@ impl Selfcheck {
     /// The ids that could not be run at all, and why they were skipped.
     pub fn skipped(&self) -> Vec<&'static str> {
         let present: std::collections::BTreeSet<&str> =
-            self.assertions.iter().map(|a| a.id).collect();
+            self.assertions.iter().map(|a| a.id.as_str()).collect();
         WORDING
             .iter()
             .map(|(id, _)| *id)

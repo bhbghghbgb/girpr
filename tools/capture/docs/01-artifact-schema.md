@@ -358,6 +358,14 @@ when several files or both builds reference it.
 `role` ∈ `materialize_old` | `materialize_new` | `patch_fetch`. `patch_fetch` is
 always a subset of `materialize_new` for the same file (assertion A12).
 
+`referenced_by` is also the **only** thing `gircap materialize` consults: the
+chunk list of a side is rebuilt from `referenced_by`'s `offset`s and each
+blob's `uncompressed_size`, and the retained manifests are not read at all.
+That is deliberate - a rebuild that consulted the manifests would only prove they
+are still readable, whereas rebuilding from the closure set proves the thing the
+bundle actually claims, which is that the blobs alone are enough. A bundle whose
+manifests survived but whose index is incomplete fails here, and should.
+
 ---
 
 ## 13. `patchmaps/<capture_id>.json` — the core
@@ -476,6 +484,12 @@ Sorted by `path`. Covers every regular file under the artifact root except
 One row per assertion **instance**, not per assertion kind — 71 chunks produce 71
 A6 rows. `ok:false` rows are never dropped; a failing capture leaves them in
 place so the failure is inspectable rather than summarized away.
+
+A capture's `selfcheck.json` never contains an `A18` row: A18 is a statement
+about the bundle rather than about the run, so only `gircap verify` can assert
+it. A reader who sees an `A18` row in this file has been handed a `verify`
+report, not a capture's own account of itself — which is exactly why it carries
+an id outside the seventeen rather than being folded into A7/A8.
 
 ## 17. `README.md`
 

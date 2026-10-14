@@ -13,7 +13,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::blobs::chunks::{FilePair, Set};
 use crate::blobs::{ChunkIndex, Sources};
@@ -53,7 +53,7 @@ struct IndexEntry {
 }
 
 /// One chunk's contribution to an assembled file.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanEntry {
     /// Its index in the target file's chunk list.
     pub i: usize,
@@ -78,7 +78,7 @@ pub struct PlanEntry {
 }
 
 /// A local range in the old file.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceRange {
     /// First byte.
     pub start: i64,
@@ -89,7 +89,7 @@ pub struct SourceRange {
 }
 
 /// What a chunk's bytes are taken from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Decision {
     /// Verified byte-identical to a slice of the old file.
@@ -115,7 +115,7 @@ impl std::fmt::Display for Decision {
 }
 
 /// `patchmaps/<capture_id>.json`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PatchMap {
     /// The artifact schema version.
     pub schema_version: u32,
@@ -140,7 +140,7 @@ pub struct PatchMap {
 }
 
 /// One side of the pair.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Side {
     /// The build.
     pub tag: String,
@@ -153,7 +153,7 @@ pub struct Side {
 }
 
 /// The arithmetic of a patchmap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Totals {
     /// New-side chunks.
     pub chunks: usize,
@@ -172,7 +172,7 @@ pub struct Totals {
 }
 
 /// What a consumer can assert against.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expectations {
     /// Where the rebuilt file belongs.
     pub result_path: String,
@@ -1194,7 +1194,7 @@ mod tests {
     fn a_green_capture_produces_one_row_per_assertion_and_no_red_ones() {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
         let rows = a.selfcheck_rows();
-        let kinds: Vec<&str> = rows.iter().map(|r| r.id).collect();
+        let kinds: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             kinds.iter().filter(|k| **k == "A7").count(),
             1,

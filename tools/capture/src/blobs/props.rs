@@ -20,7 +20,7 @@
 //! between those two steps would be tens of megabytes of peak RSS to avoid a
 //! second decompress.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::hash;
 use crate::http::ApiError;
@@ -28,7 +28,7 @@ use crate::manifest::proto::SophonChunk;
 
 /// The four A6 checks, kept apart so a failing capture can name which one
 /// broke rather than only that something did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Verified {
     /// `len(raw) == compressed_size` — the blob arrived whole.
     pub raw_size_matches: bool,
@@ -83,7 +83,7 @@ impl std::fmt::Display for Verified {
 }
 
 /// One stored blob and everything known about it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobProps {
     /// The content address: the manifest's `chunk.id`.
     pub chunk_id: String,
@@ -92,7 +92,11 @@ pub struct BlobProps {
     /// `len(raw)`, which is what the CDN sent and what the file holds.
     pub bytes: u64,
     /// The sniff result. `"zstd"` or `"identity"`, never a guess.
-    pub container: &'static str,
+    ///
+    /// An owned `String` rather than a `&'static str`: M9's `verify` reads this
+    /// field back out of `chunks/index.json`, and a value that arrived from a
+    /// document is not `'static`.
+    pub container: String,
     /// MD5 of the bytes as served.
     pub md5_compressed: String,
     /// MD5 of the bytes after zstd.
@@ -157,7 +161,7 @@ impl BlobProps {
             chunk_id: chunk.id.clone(),
             stored_path: None,
             bytes: raw.len() as u64,
-            container: "zstd",
+            container: "zstd".to_string(),
             sha256_compressed: hash::sha256_hex(raw),
             md5_compressed: md5_compressed.clone(),
             md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
@@ -186,7 +190,7 @@ impl BlobProps {
             chunk_id: chunk.id.clone(),
             stored_path: None,
             bytes: 0,
-            container: "zstd",
+            container: "zstd".to_string(),
             md5_compressed: String::new(),
             md5_decompressed: chunk.uncompressed_md5.clone(),
             sha256_compressed: String::new(),
