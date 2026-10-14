@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::hash::{self, Encoding};
+use crate::cli::ManifestDetail;
 use crate::manifest::proto::SophonChunkFile;
 use crate::manifest::{CapturedManifest, ManifestMeta, Stored};
 
@@ -63,11 +64,18 @@ pub struct StoredAs {
 /// Returns the paths and encodings written, in the order they were, so the
 /// caller can put them in `MANIFEST.json → files[]` without keeping a second
 /// bookkeeping list that could disagree with the tree.
+///
+/// `detail` decides whether the full decode is written at all. Under
+/// [`crate::cli::ManifestDetail::PathsOnly`] the archive, the meta document and
+/// the sidecar all still land — a sidecar with no archive beside it describes
+/// nothing a reader can check — and only the multi-megabyte decode is dropped.
 pub fn write(
     root: &Path,
     captured: &mut CapturedManifest,
     gzip_threshold: u64,
+    detail: crate::cli::ManifestDetail,
 ) -> std::io::Result<Vec<StoredAs>> {
+    
     let tag = captured.tag.clone();
     let field = captured.matching_field.clone();
     let mut out = Vec::with_capacity(4);
@@ -88,41 +96,47 @@ pub fn write(
     //    the body is compressed, so the pair is one document with two encodings
     //    rather than two documents that differ in name. `MANIFEST.json ->
     //    files[].encoding` says which one is on disk.
-    let full = FullDecode::from_captured(captured);
-    let body = serde_json::to_string_pretty(&full)
-        .map_err(|e| std::io::Error::other(format!("serialise the decode: {e}")))?;
-    let gzipped = hash::should_gzip(body.len(), gzip_threshold);
-    let uncompressed_bytes = body.len() as u64;
-    let (rel, encoding) = if gzipped {
-        (format!("{}.json.gz", full_prefix(&tag, &field)), Encoding::Gzip)
-    } else {
-        (
-            format!("{}.json", full_prefix(&tag, &field)),
-            Encoding::Identity,
-        )
-    };
-    let payload = if gzipped {
-        hash::gzip(body.as_bytes())?
-    } else {
-        body.into_bytes()
-    };
-    write_file(root, &rel, &payload)?;
-    out.push(StoredAs {
-        path: rel,
-        encoding,
-        uncompressed_bytes,
-    });
+    if detail == ManifestDetail::Full {
+        let full = FullDecode::from_captured(captured);
+        let body = serde_json::to_string_pretty(&full)
+            .map_err(|e| std::io::Error::other(format!("serialise the decode: {e}")))?;
+        let gzipped = hash::should_gzip(body.len(), gzip_threshold);
+        let uncompressed_bytes = body.len() as u64;
+        let (rel, encoding) = if gzipped {
+            (format!("{}.json.gz", full_prefix(&tag, &field)), Encoding::Gzip)
+        } else {
+            (
+                format!("{}.json", full_prefix(&tag, &field)),
+                Encoding::Identity,
+            )
+        };
+        let payload = if gzipped {
+            hash::gzip(body.as_bytes())?
+        } else {
+            body.into_bytes()
+        };
+        write_file(root, &rel, &payload)?;
+        out.push(StoredAs {
+            path: rel,
+            encoding,
+            uncompressed_bytes,
+        });
+    }
 
     // 3. The sidecar. Always plain, always tab-separated, always with a header:
-    //    it is the thing a reader greps when the decode beside it is `.gz`.
-    write_file(root, &paths_rel(&tag, &field), paths_tsv(&captured.entries).as_bytes())?;
+    //    it is the thing a reader greps when the decode beside it is `.gz`, and
+    //    under `paths-only` it is the *only* per-path document there is.
+    let tsv = paths_tsv(&captured.entries);
+    write_file(root, &paths_rel(&tag, &field), tsv.as_bytes())?;
     out.push(StoredAs {
         path: paths_rel(&tag, &field),
         encoding: Encoding::Identity,
-        uncompressed_bytes: paths_tsv(&captured.entries).len() as u64,
+        uncompressed_bytes: tsv.len() as u64,
     });
 
-    // 4. The meta document, written last so it can carry the archive's path.
+    // 4. The meta document, written last so it can carry the archive's path and
+    //    record that the decode was not written.
+    captured.meta.full_decode_written = detail == ManifestDetail::Full;
     let meta = serde_json::to_string_pretty(&captured.meta)
         .map_err(|e| std::io::Error::other(format!("serialise the manifest meta: {e}")))?;
     write_file(
@@ -324,6 +338,7 @@ mod tests {
                     id_prefix_verified: false,
                 },
                 decoded: Decoded::default(),
+                full_decode_written: true,
             },
         }
     }
@@ -342,7 +357,7 @@ mod tests {
     fn the_four_files_land_where_the_schema_documents_them() {
         let root = tmp("layout");
         let mut c = captured();
-        let written = write(&root, &mut c, 1_048_576).unwrap();
+        let written = write(&root, &mut c, 1_048_576, ManifestDetail::Full).unwrap();
         let paths: Vec<&str> = written.iter().map(|w| w.path.as_str()).collect();
         assert_eq!(
             paths,
@@ -372,7 +387,7 @@ mod tests {
     fn the_archive_is_stored_verbatim() {
         let root = tmp("verbatim");
         let mut c = captured();
-        write(&root, &mut c, 1_048_576).unwrap();
+        write(&root, &mut c, 1_048_576, ManifestDetail::Full).unwrap();
         let on_disk = std::fs::read(root.join(archive_rel("7.1.0", "game"))).unwrap();
         assert_eq!(on_disk, c.raw);
         assert_eq!(hash::md5_hex(&on_disk), hash::md5_hex(&c.raw));
@@ -391,7 +406,7 @@ mod tests {
     fn the_gzip_rule_fires_above_the_threshold_and_not_below() {
         let plain_root = tmp("gzip-plain");
         let mut a = captured();
-        let w = write(&plain_root, &mut a, 10_000_000).unwrap();
+        let w = write(&plain_root, &mut a, 10_000_000, ManifestDetail::Full).unwrap();
         let full = w
             .iter()
             .find(|w| w.path.contains("game.manifest.json"))
@@ -406,7 +421,7 @@ mod tests {
 
         let gz_root = tmp("gzip-gz");
         let mut b = captured();
-        let w = write(&gz_root, &mut b, 0).unwrap();
+        let w = write(&gz_root, &mut b, 0, ManifestDetail::Full).unwrap();
         let full = w
             .iter()
             .find(|w| w.path.contains("game.manifest.json.gz"))
@@ -455,7 +470,7 @@ mod tests {
     fn the_sidecar_is_always_plain_even_when_the_dump_is_gzipped() {
         let root = tmp("tsv");
         let mut c = captured();
-        let w = write(&root, &mut c, 0).unwrap();
+        let w = write(&root, &mut c, 0, ManifestDetail::Full).unwrap();
         let tsv = w.iter().find(|w| w.path.ends_with(".tsv")).unwrap();
         assert_eq!(tsv.encoding, Encoding::Identity);
         assert!(!tsv.path.ends_with(".gz"));
@@ -489,11 +504,55 @@ mod tests {
         );
     }
 
+    /// `--manifest-detail paths-only` was a flag that did nothing until now.
+    /// The archive, the sidecar and the meta document all still land — a
+    /// sidecar with no archive beside it describes nothing checkable — and only
+    /// the multi-megabyte decode is dropped, with the omission recorded.
+    #[test]
+    fn paths_only_drops_the_decode_and_records_that_it_did() {
+        let root = tmp("paths-only");
+        let mut c = captured();
+        let w = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap();
+        let paths: Vec<&str> = w.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "manifests/7.1.0/game.manifest.zst",
+                "manifests/7.1.0/game.paths.tsv",
+                "manifests/7.1.0/game.manifest.meta.json",
+            ]
+        );
+        assert!(!root.join(full_prefix("7.1.0", "game") + ".json").exists());
+        assert!(root.join(archive_rel("7.1.0", "game")).exists(), "the archive stays");
+        assert!(root.join(paths_rel("7.1.0", "game")).exists(), "the sidecar stays");
+
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(paths[2])).unwrap()).unwrap();
+        assert_eq!(
+            meta["full_decode_written"], false,
+            "recorded, so it cannot read as damage"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_full_detail_records_that_the_decode_was_written() {
+        let root = tmp("detail-full");
+        let mut c = captured();
+        write(&root, &mut c, 1_048_576, ManifestDetail::Full).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(meta_rel("7.1.0", "game"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["full_decode_written"], true);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_full_decode_carries_every_entry_verbatim_including_field_six() {
         let root = tmp("full");
         let mut c = captured();
-        write(&root, &mut c, 10_000_000).unwrap();
+        write(&root, &mut c, 10_000_000, ManifestDetail::Full).unwrap();
         let v: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(format!("{}.json", full_prefix("7.1.0", "game"))))
                 .unwrap(),

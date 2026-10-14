@@ -209,6 +209,14 @@ pub struct ManifestMeta {
     pub verified: Verified,
     /// Totals of the decode.
     pub decoded: Decoded,
+    /// Whether the full JSON decode was written beside the archive.
+    ///
+    /// Recorded rather than inferred: under `--manifest-detail paths-only` the
+    /// archive is still on disk and still decodable, so a reader cannot tell
+    /// from the tree alone that the convenience copy is missing. It is also not
+    /// a loss — the protobuf round-trips from the archive — so it must not read
+    /// as damage.
+    pub full_decode_written: bool,
 }
 
 /// The `manifest` sub-object of the API's entry, carried verbatim.
@@ -260,6 +268,68 @@ impl CapturedManifest {
     /// The decoded entries.
     pub fn entries(&self) -> &[SophonChunkFile] {
         &self.entries
+    }
+
+    /// A manifest with no bytes behind it — for a caller that already holds the
+    /// decoded entries.
+    ///
+    /// Exists for the offline test corpus in `tests/`, where assembling a full
+    /// [`ManifestMeta`] would be 200 lines of boilerplate around a pure
+    /// function. **Not** for the capture path: nothing this tool fetches skips
+    /// the archive, and a `CapturedManifest` that claims otherwise would be a
+    /// lie a later stage could act on.
+    pub fn empty(tag: &str, matching_field: &str, entries: Vec<SophonChunkFile>) -> Self {
+        CapturedManifest {
+            tag: tag.to_string(),
+            build_id: String::new(),
+            matching_field: matching_field.to_string(),
+            seq: 0,
+            raw: Vec::new(),
+            meta: ManifestMeta {
+                schema_version: crate::SCHEMA_VERSION,
+                tag: tag.to_string(),
+                build_id: String::new(),
+                matching_field: matching_field.to_string(),
+                category_id: String::new(),
+                category_name: String::new(),
+                manifest: DeclaredManifest {
+                    id: String::new(),
+                    checksum: String::new(),
+                    compressed_size: String::new(),
+                    uncompressed_size: String::new(),
+                },
+                declared: Declared::default(),
+                id_parts: IdParts {
+                    prefix_16hex: String::new(),
+                    prefix_semantics: "opaque",
+                    suffix_32hex: String::new(),
+                    suffix_equals_checksum: false,
+                },
+                stored: Stored {
+                    path: String::new(),
+                    bytes: 0,
+                    container: "zstd",
+                    md5_compressed: String::new(),
+                    sha256_compressed: String::new(),
+                    md5_decompressed: String::new(),
+                    bytes_decompressed: 0,
+                    encoding: Encoding::Identity,
+                },
+                verified: Verified {
+                    decompressed_md5_matches_checksum: false,
+                    checksum_matches_id_suffix: false,
+                    id_prefix_verified: false,
+                },
+                decoded: Decoded::default(),
+                full_decode_written: false,
+            },
+            entries,
+        }
+    }
+
+    /// Recompute the decode counters over the current entries.
+    pub fn recompute_decoded(&mut self) {
+        self.meta.decoded = decode_counts(&self.entries);
     }
 
     /// The archive URL it came from.
@@ -393,6 +463,7 @@ pub async fn capture(
         },
         verified: verified.clone(),
         decoded,
+        full_decode_written: true,
     };
 
     tracing::info!(

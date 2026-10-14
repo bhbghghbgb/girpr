@@ -13,9 +13,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::rel_path_string;
-use crate::http::probe::TagProbe;
 use crate::http::RequestLog;
+use crate::http::probe::TagProbe;
 use crate::hyp::{self, Captured};
+use crate::manifest;
 
 /// Write `api/requests.ndjson` inside the bundle at `root`.
 ///
@@ -52,6 +53,35 @@ pub fn write_api(root: &Path, captured: &Captured, probe: &TagProbe) -> std::io:
     )?;
     written.push("api/tag_probe.json".to_string());
     Ok(written)
+}
+
+/// Write `diff/paths.diff.json`, `diff/paths.tsv` and `diff/reuse_pool.json`.
+///
+/// Returns the paths written, in bundle order. `reuse_pool.json` is the first
+/// pool when more than one field was scored — it is the *game* pool that
+/// measures what same-file-only reuse costs, and an audio pool's numbers would
+/// answer a different question.
+pub fn write_diff(
+    root: &Path,
+    diff: &manifest::diff::PathDiff,
+    pool: &manifest::diff::ReusePool,
+    diffs: &[manifest::diff::FieldDiff],
+) -> std::io::Result<Vec<String>> {
+    let mut out = Vec::with_capacity(3);
+    out.push(write_doc(root, "diff/paths.diff.json", diff)?);
+    out.push(write_doc(root, "diff/reuse_pool.json", pool)?);
+    let tsv = manifest::diff::paths_tsv(diffs);
+    write_bytes(root, "diff/paths.tsv", tsv.as_bytes())?;
+    out.push("diff/paths.tsv".to_string());
+    Ok(out)
+}
+
+/// Write one artifact-relative document, pretty-printed, newline-terminated.
+fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::Result<String> {
+    let body = serde_json::to_string_pretty(value)
+        .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
+    write_bytes(root, rel, format!("{body}\n").as_bytes())?;
+    Ok(rel.to_string())
 }
 
 /// Write one artifact-relative file, creating its parents.

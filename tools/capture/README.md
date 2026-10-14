@@ -34,18 +34,17 @@ Start with the spec.
 
 ## Status
 
-Built to milestone **M3** (manifests). A live `capture` writes the seven
-`api/` documents byte-exact, then fetches, verifies and decodes the `game`
-manifest for **both** builds — archive stored verbatim, decompressed MD5 checked
-against `checksum` and against the id's 32-hex suffix, the full decode gzipped
-past `--gzip-threshold` with a plain `paths.tsv` beside it, and the decode
-reconciled against `getBuild.stats`. Chunk blobs, the `game/` fixture and the
-ground truth land in M6, M7 and M8; `verify` / `materialize` / `list` are M9. The
-build order lives in `docs/02-plan.md` §3 and each module's own header says
-which milestone it lands in.
+Built to milestone **M4** (diff and the reuse pool). A live `capture` writes the
+seven `api/` documents byte-exact, fetches and verifies the `game` manifest for
+both builds, then diffs them: `diff/paths.diff.json`, the greppable
+`diff/paths.tsv`, and `diff/reuse_pool.json` measuring what same-file-only reuse
+forgoes. Chunk blobs, the `game/` fixture and the ground truth land in M6, M7 and
+M8; `verify` / `materialize` / `list` are M9. The build order lives in
+`docs/02-plan.md` §3 and each module's own header says which milestone it lands
+in.
 
 ```powershell
-# artifacts/hk4e_global/<old>__<new>/<id>/{api,manifests}/
+# artifacts/hk4e_global/<old>__<new>/<id>/{api,manifests,diff}/
 .\target\release\gircap.exe capture --out artifacts
 
 # Metadata-only, against a local server (the testing seam M10 needs)

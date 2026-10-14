@@ -19,6 +19,7 @@ use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::report::{OutputFormat, Summary};
 use crate::{emit, exit, hyp, manifest};
+use crate::manifest::diff;
 
 /// The `matching_field` whose manifests M3 captures.
 ///
@@ -233,6 +234,27 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         manifests.push(m);
     }
 
+    // 6b. The diff and the reuse pool, computed from the two decoded manifests.
+    //     `manifests` is built oldest-first, so index 0 is the old tag and
+    //     index 1 the new one — the same order the loop above fetched them in.
+    let mut diffs = Vec::new();
+    let field_diff = diff::diff_field(&manifests[0], &manifests[1])
+        .map_err(|m| assertion("diff the manifests", &ApiError::shape("diff", m)))?;
+    tracing::info!(
+        field = %field_diff.field,
+        common = field_diff.counts.common,
+        identical = field_diff.counts.identical,
+        changed = field_diff.counts.changed(),
+        added = field_diff.counts.added,
+        removed = field_diff.counts.removed,
+        pool_chunks = field_diff.pool.new_chunks_total,
+        pool_md5_hits = field_diff.pool.new_chunks_md5_present_in_old_manifest,
+        cross_file_only = field_diff.pool.cross_file_only_chunks,
+        cross_file_bytes = field_diff.pool.cross_file_only_bytes_forgone,
+        "diff computed"
+    );
+    diffs.push(field_diff);
+
     // 7. The tree. All three writes happen even though the run is incomplete:
     //    what was asked, what it cost, and what came back are the parts that
     //    stay useful, and the bytes are the evidence behind every number in the
@@ -245,17 +267,32 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         )
     })?;
     for m in &mut manifests {
-        let stored = manifest::dump::write(&dir, m, plan.gzip_threshold).map_err(|e| {
-            apierr(
-                &format!("write {}", dir.display()),
-                &ApiError::shape("artifact writer", e),
-            )
-        })?;
+        let stored =
+            manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail).map_err(|e| {
+                apierr(
+                    &format!("write {}", dir.display()),
+                    &ApiError::shape("artifact writer", e),
+                )
+            })?;
         // `stored_as` is filled in here rather than by the writer: only now is it
         // known where the archive ended up, and only the request log can say it.
         manifest::mark_stored(&log, m, &stored[0].path);
         written.extend(stored.into_iter().map(|s| s.path));
     }
+    written.extend(
+        emit::write_diff(
+            &dir,
+            &diff::aggregate(&old_tag, &new_tag, &diffs),
+            &diffs[0].pool,
+            &diffs,
+        )
+        .map_err(|e| {
+            apierr(
+                &format!("write {}", dir.display()),
+                &ApiError::shape("artifact writer", e),
+            )
+        })?,
+    );
     emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
@@ -284,9 +321,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map(|m| m.meta.decoded.max_chunk_compressed_bytes)
         .max()
         .unwrap_or(0);
+    // The diff's numbers are the run's headline result, so they go on the data
+    // plane and not only into the stderr narration: this is what a caller reads.
+    let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
+    let pool = &diffs[0].pool;
     let summary = Summary::new("capture")
         .set("result", "ok")
-        .set("stage", "m3-manifests")
+        .set("stage", "m4-diff")
         .set("biz", biz.as_str())
         .set("old_tag", &old_tag)
         .set("new_tag", &new_tag)
@@ -300,6 +341,15 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("manifest_entries", manifest_entries)
         .set("manifest_chunks", manifest_chunks)
         .set("max_chunk_compressed_bytes", max_chunk)
+        .set("diff_common", agg.counts.common)
+        .set("diff_identical", agg.counts.identical)
+        .set("diff_changed", agg.counts.changed)
+        .set("diff_added", agg.counts.added)
+        .set("diff_removed", agg.counts.removed)
+        .set("diff_patch_bytes", agg.byte_counts.patch)
+        .set("reuse_md5_present_in_old", pool.new_chunks_md5_present_in_old_manifest)
+        .set("reuse_cross_file_only_chunks", pool.cross_file_only_chunks)
+        .set("reuse_cross_file_bytes_forgone", pool.cross_file_only_bytes_forgone)
         .set("documents_written", documents as u64)
         .set("requests", log.len() as u64)
         .set("bytes_downloaded", log.bytes_in())
