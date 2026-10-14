@@ -37,11 +37,11 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `fetch_chunk_bytes`, `build_local_chunk_map`, `join_url` |
-| `src/repair/mod.rs` | phase coordinator, exit-code contract | `run` |
+| `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/plan.rs` | work list (4) | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `PlannedFile` |
-| `src/repair/purge.rs` | Collapse files-cleanup (5, 7) | `purge_extra`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
+| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `PlannedFile` |
+| `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
@@ -61,9 +61,9 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["plan::build_plan: sort, dedup, blacklist-filter"]
+    D --> E["plan::build_plan: sort, dedup, blacklist-filter<br/>+ deprecated list"]
     E --> F{"purge-before?"}
-    F -->|yes, not check-only| G["purge::purge_extra<br/>count → deleted_extra_bytes"]
+    F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
     F -->|no| H{"check-only?"}
     G --> H
     H -->|yes| I["check::verify_plan<br/>exit 0 clean / 4 damaged<br/>writes nothing"]
@@ -100,9 +100,11 @@ flowchart TD
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0; purge lists are only logged).
-- purge: `--purge-before` and `--purge-after` run the **same** `purge::purge_extra`
+- purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
+  calls — `plan::purge::plan_purge` decides, `plan::purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + `audio_lang_*`/`Audio_*_pkg_version`
   patterns; **everything else purges**, incl. temps, exe, logs, `ScreenShot/`).
+  The whole plan is built before the first delete.
 - audio: omitted flag = keep scan file (default `en-us` if unreadable); explicit list/`none`
   overwrites the scan file. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.

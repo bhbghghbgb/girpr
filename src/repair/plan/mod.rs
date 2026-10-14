@@ -1,13 +1,24 @@
 //! The work list: which files the run will touch, in what order, and where each
-//! one's chunks are downloaded from (docs/02 step 4).
+//! one's chunks are downloaded from (docs/02 step 4) — plus the purge
+//! candidates the run would delete (docs/02 steps 5 and 7).
 //!
-//! The plan is derived from the **latest** manifest alone, which is what makes
-//! any-version → latest work: the local manifest is only ever an optimization
-//! (chunk reuse), never an input to correctness.
+//! Both are **plans**: they decide, they do not act. As of docs/05 M0 the run
+//! builds both of them before it mutates anything, so "what will this run do?"
+//! is answerable at one point in the pipeline — which is what the scope-of-work
+//! ceilings ([`docs/04` B1/B2/B4]) and `--print-plan` (C1) are written against.
+//! [`purge`] owns the cleanup half; the repair half is this module.
+//!
+//! The repair plan is derived from the **latest** manifest alone, which is what
+//! makes any-version → latest work: the local manifest is only ever an
+//! optimization (chunk reuse), never an input to correctness.
+
+pub mod purge;
 
 use std::collections::{HashMap, HashSet};
 
 use crate::sophon::{SophonChunk, SophonChunkFile};
+
+pub use purge::{PurgeCandidate, PurgePlan};
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 pub struct PlannedFile {

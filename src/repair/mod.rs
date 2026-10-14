@@ -8,8 +8,7 @@
 //! | local state + server metadata | [`metadata`] | steps 1–2 |
 //! | begin `REPORT` | [`crate::report`] | step 2.5 |
 //! | manifests + local chunk map | [`manifest`] | step 3 |
-//! | work list | [`plan`] | step 4 |
-//! | files-cleanup before | [`purge`] | step 5 |
+//! | work list + purge candidates | [`plan`] | steps 4, 5, 7 |
 //! | `--check-only` verify | [`check`] | step 6.5 |
 //! | per-file repair | [`file`] | step 6 |
 //! | post-phase | [`post`] | step 7 |
@@ -17,12 +16,23 @@
 //! [`audio`] owns the audio scan-file format used by [`metadata`] and
 //! [`post`].
 //!
+//! Since docs/05 M0 the run has two halves:
+//!
+//! **Plan** — metadata → `REPORT` → manifests → [`plan::build_plan`] → the
+//! server's deprecated list. Nothing on disk has been touched at the end of
+//! this half, so every decision the run will act on is already made and
+//! inspectable.
+//!
+//! **Execute** — `create_dir_all` → `--purge-before` → `--check-only` → the
+//! repair loop → the post-phase. Every write and delete lives here, which is
+//! what lets the scope-of-work ceilings refuse *before* any of it runs.
+//!
 //! Phase order overall:
 //! 1. prepare `game_dir` (create when missing, unless read-only),
 //! 2. metadata, then the begin report, so a parser sees the on-disk and target
 //!    versions before anything is downloaded,
-//! 3. manifests → work list,
-//! 4. `--purge-before` cleanup, to free room for the repair,
+//! 3. manifests → work list → deprecated list (nothing written yet),
+//! 4. `create_dir_all` + `--purge-before` cleanup, to free room for the repair,
 //! 5. `--check-only` returns here, before any download (exit `0` clean / `4`
 //!    damaged),
 //! 6. the repair loop; any failed file returns exit `3` and skips the
@@ -36,11 +46,10 @@ mod manifest;
 mod metadata;
 mod plan;
 mod post;
-mod purge;
 
 pub use metadata::Meta;
-pub use plan::{PlannedFile, RepairPlan};
-pub use purge::PurgeVerdict;
+pub use plan::purge::PurgeVerdict;
+pub use plan::{PlannedFile, PurgeCandidate, PurgePlan, RepairPlan};
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -48,6 +57,7 @@ use std::sync::atomic::Ordering;
 use anyhow::Context;
 
 use crate::config::{RunCtx, RunFailure};
+use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 
 /// Bring one install to the latest live version.
@@ -61,18 +71,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only.
     let readonly = ctx.readonly();
-    if !readonly {
-        std::fs::create_dir_all(&ctx.game_dir)
-            .context("create game dir")
-            .map_err(RunFailure::usage)?;
-    }
+    // NOTE: `game_dir` is NOT created here. M0 moved `create_dir_all` into the
+    // execution phase so a run that refuses before doing any work leaves no
+    // directory behind (docs/05 M0 step 3 — the one documented behavior
+    // change of that milestone). Reads tolerate a missing dir, so the plan
+    // phase can proceed against it.
     let game_dir = ctx
         .game_dir
         .canonicalize()
         .unwrap_or_else(|_| ctx.game_dir.clone());
 
     // NOTE: no unconditional temp sweep. All cleanup is the single
-    // Collapse-style files-cleanup (`purge::purge_extra`), run before and/or
+    // Collapse-style files-cleanup (`plan::purge`), run before and/or
     // after patching only when the corresponding flag is set.
     // `--purge-before` and `--purge-after` delete the same things; only the
     // timing differs.
@@ -112,16 +122,37 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     ));
     tracing::info!("work list: {} files", plan.files.len());
 
-    // 5. files-cleanup before: same Collapse-style cleanup as purge-after, run
-    // here to free space for the repair itself. Skipped entirely in
-    // `--check-only` (verification reports damage; it must not delete). In
-    // `--dry-run` it runs in log-only mode.
+    // 4.5 the server's deprecated-file list, fetched here rather than lazily in
+    // the post-phase: it is part of what the run will act on, so it belongs with
+    // the rest of the plan. Still best-effort (the list is advisory).
+    let deprecated = fetch_deprecated(&meta.hyp).await;
+
+    // === execution phase: everything below may touch the disk ===
+
+    // 5. prepare `game_dir` (create when missing, unless read-only). Deferred
+    // from the top of the run on purpose — see the note above.
+    if !readonly {
+        std::fs::create_dir_all(&ctx.game_dir)
+            .context("create game dir")
+            .map_err(RunFailure::usage)?;
+    }
+    // The directory may have been created by the line above, so canonicalize
+    // again before any path is built from it.
+    let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
+
+    // 5.2 files-cleanup before: same Collapse-style cleanup as purge-after,
+    // planned then executed here to free space for the repair itself. Skipped
+    // entirely in `--check-only` (verification reports damage; it must not
+    // delete). In `--dry-run` it runs in log-only mode.
+    let mut purge_logged = false;
     if ctx.purge_before && !ctx.check_only {
-        let bytes = purge::purge_extra(&game_dir, &plan, &purge::keep_set(), ctx.dry_run)
-            .map_err(RunFailure::write)?;
+        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set());
+        let bytes =
+            plan::purge::apply_purge(&purge_plan, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
+        purge_logged = true;
     }
 
     // 5.5 check-only: verify only, then return. Nothing is written.
@@ -151,13 +182,28 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // (check-only already returned, but gating on `readonly` keeps the
     // invariant obvious).
     if !readonly {
-        post::run(&ctx, &game_dir, &plan, &meta, &summary).await?;
-    } else if ctx.dry_run && ctx.purge_after {
+        post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+    } else if ctx.dry_run && ctx.purge_after && !purge_logged {
         // Dry-run logging only: list what the files-cleanup would delete (writes
-        // nothing; the byte count stays 0 by design).
-        purge::purge_extra(&game_dir, &plan, &purge::keep_set(), true)
-            .map_err(RunFailure::write)?;
+        // nothing; the byte count stays 0 by design). Skipped when the
+        // purge-before pass above already listed the same candidates, so
+        // `--purge-before --purge-after --dry-run` does not log each file twice.
+        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set());
+        plan::purge::apply_purge(&purge_plan, true).map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))
+}
+
+/// The server's deprecated-file list, fetched with the rest of the plan.
+/// Best-effort: the list is advisory, so a failed call only warns and the run
+/// continues with nothing to delete.
+async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
+    match hyp.deprecated_files().await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("deprecated list unavailable: {e:#}");
+            Vec::new()
+        }
+    }
 }

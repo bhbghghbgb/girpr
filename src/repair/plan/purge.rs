@@ -1,9 +1,15 @@
 //! Collapse-style files-cleanup (v1 scope) — docs/02 steps 5 and 7.
 //!
 //! There is exactly **one** cleanup: `--purge-before` and `--purge-after` call
-//! [`purge_extra`]; only the timing differs. It is a set-difference of the files
-//! on disk against the live manifest, the same idea as Collapse's
-//! `GetUnusedFileInfoList`.
+//! [`plan_purge`] then [`apply_purge`]; only the timing differs. It is a
+//! set-difference of the files on disk against the live manifest, the same idea
+//! as Collapse's `GetUnusedFileInfoList`.
+//!
+//! The walk and the delete are **separate calls** (docs/05 M0), so the whole
+//! decision — which files, which directories, how many bytes — exists before
+//! anything is deleted. That is what makes "how much would this purge delete?"
+//! answerable (`--max-delete-bytes`, docs/04 B4) and printable (`--print-plan`,
+//! docs/04 C1). Nothing else about the cleanup changed.
 //!
 //! The keep rules are a pure function ([`classify_purge_path`]) so they can be
 //! unit-tested exhaustively without touching a filesystem.
@@ -14,7 +20,31 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use walkdir::WalkDir;
 
-use super::plan::RepairPlan;
+use super::RepairPlan;
+
+/// One file the files-cleanup has decided to delete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurgeCandidate {
+    /// `/`-separated rel path, i.e. exactly what [`classify_purge_path`] saw.
+    pub rel: String,
+    /// Absolute-or-game-relative path to remove.
+    pub path: PathBuf,
+    pub bytes: u64,
+}
+
+/// The complete, unexecuted files-cleanup decision (docs/05 M0).
+///
+/// Built by [`plan_purge`], consumed by [`apply_purge`]. Everything the run will
+/// delete is here before the first byte is deleted.
+#[derive(Debug, Clone, Default)]
+pub struct PurgePlan {
+    /// Delete candidates, sorted by path so a rerun's log is comparable.
+    pub files: Vec<PurgeCandidate>,
+    /// Directories the purge empties, deepest first; `game_dir` excluded.
+    pub dirs: Vec<PathBuf>,
+    /// `files` summed — the number a delete-bytes ceiling is checked against.
+    pub total_bytes: u64,
+}
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
 /// See https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
@@ -33,42 +63,92 @@ use super::plan::RepairPlan;
 /// counter.
 ///
 /// `server_keep` comes from [`keep_set`]: files that live inside `game_dir` but
-/// NEVER appear in chunk manifests. Returns the number of bytes actually
-/// deleted, which is always `0` in dry-run.
-pub fn purge_extra(
-    game_dir: &Path,
-    plan: &RepairPlan,
-    server_keep: &HashSet<String>,
-    dry_run: bool,
-) -> Result<u64> {
+/// NEVER appear in chunk manifests.
+///
+/// Pure with respect to the walk's contents: it reads the filesystem and
+/// decides, but deletes nothing.
+pub fn plan_purge(game_dir: &Path, plan: &RepairPlan, server_keep: &HashSet<String>) -> PurgePlan {
     let expected = plan.expected_paths();
-    let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
+    let mut files: Vec<PurgeCandidate> = Vec::new();
+    let mut all_dirs: Vec<PathBuf> = Vec::new();
+    // Ancestors of every `Keep`-classified file: anything else is left empty by
+    // the purge and eligible for the emptied-dir sweep.
+    let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
+
     for e in WalkDir::new(game_dir)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if e.file_type().is_dir() {
+            all_dirs.push(e.path().to_path_buf());
+            continue;
+        }
         if !e.file_type().is_file() {
             continue;
         }
-        let rel = rel_path(e.path(), game_dir);
-        if classify_purge_path(&rel, &expected, server_keep) == PurgeVerdict::Purge {
-            let sz = e.metadata().map(|m| m.len()).unwrap_or(0);
-            candidates.push((e.path().to_path_buf(), sz));
+        let path = e.path();
+        let rel = rel_path(path, game_dir);
+        match classify_purge_path(&rel, &expected, server_keep) {
+            PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
+            PurgeVerdict::Purge => {
+                let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
+                files.push(PurgeCandidate {
+                    rel,
+                    path: path.to_path_buf(),
+                    bytes,
+                });
+            }
         }
     }
-    // Deterministic delete order, so a rerun's log is comparable.
-    candidates.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Deterministic delete order, so a rerun's log is comparable.
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut dirs: Vec<PathBuf> = all_dirs
+        .into_iter()
+        .filter(|d| *d != game_dir && !kept_dirs.contains(d))
+        .collect();
+    dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
+    let total_bytes = files.iter().map(|c| c.bytes).sum();
+    PurgePlan {
+        files,
+        dirs,
+        total_bytes,
+    }
+}
+
+/// Carry "this directory still has something to keep" up from a kept file to
+/// `game_dir`, so the emptied-dir sweep never sweeps a dir whose only contents
+/// were kept. `game_dir` itself is excluded (it is never removed).
+fn mark_kept_ancestors(file: &Path, game_dir: &Path, out: &mut HashSet<PathBuf>) {
+    let Some(mut dir) = file.parent() else {
+        return;
+    };
+    while dir != game_dir {
+        if !dir.starts_with(game_dir) {
+            return;
+        }
+        out.insert(dir.to_path_buf());
+        let Some(parent) = dir.parent() else {
+            return;
+        };
+        dir = parent;
+    }
+}
+
+/// Execute a decided [`PurgePlan`]. Returns the number of bytes actually
+/// deleted, which is always `0` in dry-run (the candidates are only logged,
+/// and the sweep is skipped entirely).
+pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
     let mut deleted_bytes = 0u64;
     let mut would_be = 0u64;
-    for (p, sz) in candidates {
+    for c in &plan.files {
         if dry_run {
-            would_be += sz;
-            tracing::info!("would purge extra {} ({} bytes)", p.display(), sz);
-        } else if std::fs::remove_file(&p).is_ok() {
-            deleted_bytes += sz;
-            tracing::info!("purged extra {} ({} bytes)", p.display(), sz);
+            would_be += c.bytes;
+            tracing::info!("would purge extra {} ({} bytes)", c.path.display(), c.bytes);
+        } else if std::fs::remove_file(&c.path).is_ok() {
+            deleted_bytes += c.bytes;
+            tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
         }
     }
     if dry_run {
@@ -76,26 +156,17 @@ pub fn purge_extra(
             "purge dry-run: {would_be} bytes would be freed (deleted_extra_bytes stays 0 by design)"
         );
     } else {
-        remove_emptied_dirs(game_dir);
+        remove_emptied_dirs(&plan.dirs);
     }
     Ok(deleted_bytes)
 }
 
-/// Remove directories left empty by the purge, deepest first. Only ever removes
-/// empty dirs, and never `game_dir` itself.
-fn remove_emptied_dirs(game_dir: &Path) {
-    let mut dirs: Vec<PathBuf> = WalkDir::new(game_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_dir())
-        .map(|e| e.path().to_path_buf())
-        .collect();
-    dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
+/// Remove the directories the purge emptied, deepest first. The set is already
+/// derived from the walk ([`PurgePlan::dirs`]), so this no longer re-walks; only
+/// the `remove_dir` calls remain, which still fail harmlessly if something
+/// appeared since the plan was built. `game_dir` is never in the set.
+fn remove_emptied_dirs(dirs: &[PathBuf]) {
     for d in dirs {
-        if d == game_dir {
-            continue;
-        }
         let _ = std::fs::remove_dir(d);
     }
 }
@@ -127,7 +198,7 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 /// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
-/// [`super::plan::build_plan`] and the purge walk).
+/// [`super::build_plan`] and the purge walk).
 pub fn keep_set() -> HashSet<String> {
     HashSet::from(["config.ini".to_string()])
 }
@@ -209,6 +280,10 @@ mod tests {
         }
     }
 
+    fn purge_now(dir: &Path, plan: &RepairPlan, dry_run: bool) -> u64 {
+        apply_purge(&plan_purge(dir, plan, &keep_set()), dry_run).unwrap()
+    }
+
     #[test]
     fn purge_keeps_manifest_and_config_only() {
         let (expected, keep) = purge_fixture();
@@ -239,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_keeps_audio_version_files_case_insensitive() {
+    fn purge_keeps_audio_version_files_case_insensitively() {
         let (expected, keep) = purge_fixture();
         // Collapse GenshinInstall.cs:232-241 parity (audio_lang_14 + per-lang pkg_version).
         for rel in [
@@ -285,7 +360,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("stray.dat"), b"drop").unwrap();
-        let bytes = purge_extra(&dir, &plan_of("game.dat"), &keep_set(), true).unwrap();
+        let bytes = purge_now(&dir, &plan_of("game.dat"), true);
         assert_eq!(bytes, 0);
         assert!(dir.join("stray.dat").exists());
         assert!(dir.join("game.dat").exists());
@@ -298,7 +373,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("login.dat"), b"drop").unwrap();
-        let bytes = purge_extra(&dir, &plan_of("game.dat"), &keep_set(), false).unwrap();
+        let bytes = purge_now(&dir, &plan_of("game.dat"), false);
         assert_eq!(bytes, 4);
         assert!(!dir.join("login.dat").exists());
         assert!(dir.join("game.dat").exists());
@@ -311,9 +386,48 @@ mod tests {
         std::fs::create_dir_all(dir.join("emptied/nested")).unwrap();
         std::fs::write(dir.join("emptied/nested/orphan.dat"), b"x").unwrap();
         let plan = plan_of("game.dat");
-        purge_extra(&dir, &plan, &keep_set(), false).unwrap();
+        purge_now(&dir, &plan, false);
         assert!(!dir.join("emptied").exists(), "emptied dir tree removed");
         assert!(dir.exists(), "game_dir itself survives");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn purge_keeps_dirs_that_still_hold_a_manifest_file() {
+        let dir = std::env::temp_dir().join("girpr_test_purge_kept_dirs");
+        std::fs::create_dir_all(dir.join("deep/nested")).unwrap();
+        std::fs::write(dir.join("deep/nested/game.dat"), b"keep").unwrap();
+        std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
+        let plan = plan_of("deep/nested/game.dat");
+        let pp = plan_purge(&dir, &plan, &keep_set());
+        // `deep` has a kept descendant, so neither it nor `deep/nested` may be
+        // swept, even though every sibling of the kept file is being purged.
+        assert!(
+            !pp.dirs.iter().any(|d| d.ends_with("deep")),
+            "dir with a kept file must not be swept: {:?}",
+            pp.dirs
+        );
+        purge_now(&dir, &plan, false);
+        assert!(dir.join("deep").exists(), "kept dir survives");
+        assert!(dir.join("deep/nested/game.dat").exists());
+        assert!(!dir.join("orphan.dat").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_purge_totals_bytes_and_deletes_nothing() {
+        let dir = std::env::temp_dir().join("girpr_test_purge_plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("game.dat"), b"keep").unwrap();
+        std::fs::write(dir.join("a.dat"), b"12345").unwrap();
+        std::fs::write(dir.join("b.dat"), b"123").unwrap();
+        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set());
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        assert_eq!(rels, vec!["a.dat", "b.dat"], "sorted by path");
+        assert_eq!(pp.total_bytes, 8);
+        // Planning alone mutates nothing (M0's whole point).
+        assert!(dir.join("a.dat").exists());
+        assert!(dir.join("b.dat").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -323,7 +437,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("empty_dir")).unwrap();
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
         let plan = plan_of("game.dat");
-        purge_extra(&dir, &plan, &keep_set(), true).unwrap();
+        purge_now(&dir, &plan, true);
         assert!(
             dir.join("empty_dir").exists(),
             "dry-run must not sweep dirs"

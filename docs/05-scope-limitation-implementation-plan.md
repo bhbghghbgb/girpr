@@ -24,6 +24,42 @@ why). The repair-spec series (`01-`, `02-`, `03-`) is background, not a target
 
 ---
 
+## 0.1 Landed
+
+Appended per milestone, newest last. What each one actually did, and anything it
+discovered about the tool that the repair-spec series (`docs/01-03`) does not
+say — §1 of this file is the only place that is allowed to record that.
+
+### M0 — the plan restructure
+
+- `src/repair/plan.rs` → `src/repair/plan/mod.rs`, `src/repair/purge.rs` →
+  `src/repair/plan/purge.rs`; `purge_extra` split into `plan_purge` (walk +
+  `classify_purge_path` + sort) and `apply_purge` (the delete loop, line for
+  line). `classify_purge_path` and `keep_set` took no new parameter.
+- `PurgePlan.dirs` is derived **during the same walk** (`mark_kept_ancestors`
+  marks the ancestors of every `Keep`-classified file), so
+  `remove_emptied_dirs` no longer re-walks. This is equivalent to the old
+  "try `remove_dir` on every directory" — a dir with kept content fails
+  `remove_dir` harmlessly — but it is decided up front, which is the property
+  the later scope work needs.
+- The deprecated-file list moved from `post::delete_deprecated` to the plan
+  phase as `repair::fetch_deprecated(&meta.hyp)`, and is now an argument to
+  `post::run` instead of a lazy call from inside it. The call is the same
+  `getGameDeprecatedFileConfigs` request with the same per-launcher channel
+  (pinned by `deprecated_files_call_carries_the_per_launcher_channel`), it just
+  happens one phase earlier — before the manifest fetches rather than after the
+  repair loop.
+- `create_dir_all` moved from the top of `run` into the execution phase.
+  **The one documented behaviour delta**: a run that stops in the plan phase no
+  longer leaves an empty `game_dir` behind. Pinned by
+  `a_run_that_stops_before_acting_creates_no_game_dir`.
+- `--purge-before --purge-after --dry-run` logged every candidate twice; the
+  dry-run purge-after listing is now skipped when purge-before already listed
+  it. Non-dry-run runs still get two real passes, because purge-after's plan is
+  built after the repair and must see the `*_tmp` files it sweeps.
+
+---
+
 ## 1. What this plan does not touch
 
 `docs/01-repair-findings-and-verdict.md`, `docs/02-repair-chunk-spec.md` and

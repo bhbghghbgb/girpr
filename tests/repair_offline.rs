@@ -413,6 +413,36 @@ async fn non_chunk_download_mode_is_a_usage_error() {
 }
 
 #[tokio::test]
+async fn a_run_that_stops_before_acting_creates_no_game_dir() {
+    // M0: `create_dir_all` moved from the top of the run into the execution
+    // phase, so a run that never reaches it (here: the non-chunk download-mode
+    // refusal) leaves nothing on disk. This is the one documented behavior
+    // change of docs/05 M0.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let parent = temp_dir("nodir");
+    let missing = parent.join("never-created");
+    let err = repair::run(ctx_for(missing.clone(), &mock, 1))
+        .await
+        .expect_err("non-chunk mode must fail");
+    assert_eq!(err.exit_code, 1);
+    assert!(
+        !missing.exists(),
+        "a run that refuses must not create game_dir"
+    );
+
+    mock.stop();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[tokio::test]
 async fn deprecated_files_call_carries_the_per_launcher_channel() {
     // `getGameDeprecatedFileConfigs` is the one call that needs
     // channel/sub_channel, and the values are per launcher: bilibili is 14/0,

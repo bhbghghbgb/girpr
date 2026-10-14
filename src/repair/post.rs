@@ -11,6 +11,8 @@
 //!    bytes are in place.
 //!
 //! The whole phase is skipped in read-only modes and whenever any file failed.
+//! The deprecated list itself is **not** fetched here — it arrives as an
+//! argument, having been read during the plan phase (docs/05 M0).
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -23,24 +25,27 @@ use crate::report::Summary;
 use crate::util;
 
 use super::metadata::Meta;
-use super::plan::RepairPlan;
-use super::purge;
+use super::plan::{RepairPlan, purge};
 
 /// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
 /// the bytes are already repaired, so a half-finished bookkeeping write would
 /// desync the launcher from the game.
+///
+/// `deprecated` is the server's deprecated-file list, already fetched (and
+/// already possibly empty, if the call failed) during the plan phase.
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
     plan: &RepairPlan,
     meta: &Meta,
     summary: &Summary,
+    deprecated: &[String],
 ) -> Result<(), RunFailure> {
-    delete_deprecated(game_dir, meta, summary).await;
+    delete_deprecated(game_dir, deprecated, summary);
     move_audio_cache(game_dir, &meta.config);
     if ctx.purge_after {
-        let bytes = purge::purge_extra(game_dir, plan, &purge::keep_set(), false)
-            .map_err(RunFailure::write)?;
+        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set());
+        let bytes = purge::apply_purge(&purge_plan, false).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
@@ -58,18 +63,12 @@ pub async fn run(
     Ok(())
 }
 
-/// Delete every path the server still lists as deprecated. Best-effort: the
-/// list is advisory, so a failed call only warns and the run continues.
-async fn delete_deprecated(game_dir: &Path, meta: &Meta, summary: &Summary) {
-    let list = match meta.hyp.deprecated_files().await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!("deprecated list unavailable: {e:#}");
-            return;
-        }
-    };
+/// Delete every path the server still lists as deprecated. The list was
+/// fetched during the plan phase and is advisory: an empty list (failed call)
+/// simply means there is nothing to do.
+fn delete_deprecated(game_dir: &Path, list: &[String], summary: &Summary) {
     for n in list {
-        let p = game_dir.join(util::normalize_rel(&n));
+        let p = game_dir.join(util::normalize_rel(n));
         if p.is_file() {
             let sz = util::file_len(&p).unwrap_or(0);
             if std::fs::remove_file(&p).is_ok() {
