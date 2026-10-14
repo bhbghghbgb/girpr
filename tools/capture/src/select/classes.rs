@@ -82,6 +82,16 @@ pub enum Class {
 }
 
 impl Class {
+    /// Whether this class is the skip branch.
+    ///
+    /// Named rather than spelled at the call site because A19 turns on it: it is
+    /// the *only* class whose two sides are expected to be byte-identical, and
+    /// every other class means the file must change. Getting that backwards
+    /// would make the assertion pass for exactly the wrong bundles.
+    pub const fn is_identical(self) -> bool {
+        matches!(self, Class::Identical)
+    }
+
     /// Every class, in no particular order.
     pub const ALL: [Class; 9] = [
         Class::Identical,

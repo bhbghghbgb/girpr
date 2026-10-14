@@ -523,6 +523,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         plan.no_chunk_blobs,
     );
     let mut assembled_ids: Vec<String> = Vec::new();
+    // (old md5, new md5) per capture, for A19. The digests, not the bytes:
+    // A19 only asks whether the two sides differ, and holding the assembled
+    // files here would keep a whole patch resident twice.
+    let mut side_digests: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut prelude: Vec<String> = Vec::new();
     let (mut reused_total, mut fetched_total, mut moved_total) = (0_u64, 0_u64, 0_u64);
     if !plan.no_chunk_blobs {
@@ -563,6 +567,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                     // carried through rather than re-derived here.
                     rows.extend(out.selfcheck_rows());
                     assembled_ids.push(a.capture_id.clone());
+                    side_digests.insert(
+                        a.capture_id.clone(),
+                        (
+                            out.old.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
+                            out.new.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
+                        ),
+                    );
                     written.push(
                         emit::write_patchmap(&dir, &a.capture_id, &out.map).map_err(|e| {
                             apierr(
@@ -674,6 +685,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &scan_dir,
         &selection,
         &diffs,
+        &side_digests,
         &written,
         plan.no_chunk_blobs,
     ));
@@ -733,7 +745,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing to
     // assemble and nothing to prove. A declared gap is `incomplete`, not `fail`.
     let skipped: Vec<&str> = if plan.no_chunk_blobs {
-        vec!["A6", "A7", "A8", "A9", "A10", "A11", "A12"]
+        vec!["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"]
     } else {
         Vec::new()
     };
@@ -1294,6 +1306,7 @@ fn closing_assertions(
     scan_dir: &str,
     selection: &select::Selection,
     diffs: &[diff::FieldDiff],
+    side_digests: &BTreeMap<String, (String, String)>,
     written: &[String],
     no_chunk_blobs: bool,
 ) -> Vec<emit::selfcheck::Assertion> {
@@ -1368,6 +1381,70 @@ fn closing_assertions(
             &format!("{} stray path(s): {}", strays.len(), strays.join(", ")),
         )
     });
+
+    // A19: the *converse* of A14 - every captured file differs between the two
+    // trees exactly when its class says it should.
+    //
+    // A14 asks "is `game/` free of paths the tool under test would plan
+    // against", which is one direction. It cannot see the other failure: a
+    // capture admitted for `partial_same_offset` whose two variant files came
+    // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
+    // side matches its own declared MD5), and be useless - the fixture would
+    // hold no evidence of the patch it was captured for. M11 found the gap by
+    // comparing the two trees by hand, which is the argument for checking it.
+    //
+    // A capture with only one side - `added` or `removed` - is skipped: its file
+    // is absent from one tree *by construction*, which is the whole point of the
+    // class rather than a disagreement.
+    // Skipped under `--no-chunk-blobs`, for the reason A6 is: there are no
+    // assembled sides to compare, so the check would pass vacuously and a green
+    // row would be a claim about nothing. Exactly the failure mode A6 had.
+    let mut agree: Vec<&str> = Vec::new();
+    let mut disagree: Vec<String> = Vec::new();
+    if !no_chunk_blobs {
+        for a in &selection.admitted {
+            let Some((old, new)) = side_digests.get(&a.capture_id) else {
+                continue;
+            };
+            if old.is_empty() || new.is_empty() {
+                // One-sided: absent from the other tree by design.
+                continue;
+            }
+            let differs = old != new;
+            let should_differ = !a.primary_class.is_identical();
+            if differs == should_differ {
+                agree.push(a.path.as_str());
+            } else {
+                disagree.push(format!(
+                    "{} ({}) {} but its class says it should {}",
+                    a.path,
+                    a.capture_id,
+                    if differs { "differs" } else { "is unchanged" },
+                    if should_differ { "differ" } else { "be unchanged" }
+                ));
+            }
+        }
+        rows.push(if disagree.is_empty() {
+            Assertion::pass(
+                "A19",
+                wording("A19"),
+                "game/ vs expected/",
+                &format!(
+                    "{} two-sided capture(s): each file differs exactly when its class says \
+                     it should",
+                    agree.len()
+                ),
+            )
+        } else {
+            Assertion::fail(
+                "A19",
+                wording("A19"),
+                "game/ vs expected/",
+                "each two-sided file differs exactly when its class says it should",
+                &format!("{} disagree: {}", disagree.len(), disagree.join("; ")),
+            )
+        });
+    }
     // data it counted is caught rather than copied.
     for f in diffs {
         let recomputed_common = f

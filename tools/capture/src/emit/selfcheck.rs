@@ -89,7 +89,12 @@ impl Assertion {
 ///
 /// A reader looking at a failed bundle should not have to open another file to
 /// find out what A11 means, and a one-line table is cheap.
-pub const WORDING: [(&str, &str); 17] = [
+///
+/// `A19` is **M11's**, added after running the whole thing against the live API:
+/// it is the converse of A14, and without it a capture whose two variant files
+/// came out identical would pass every other assertion while holding no evidence
+/// of the patch it was taken for.
+pub const WORDING: [(&str, &str); 18] = [
     ("A1", "every API response captured has retcode == 0"),
     ("A2", "getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag"),
     ("A3", "manifest blob md5(decompressed) == manifest.checksum"),
@@ -107,6 +112,7 @@ pub const WORDING: [(&str, &str); 17] = [
     ("A15", "diff/ counts equal the recomputed set differences"),
     ("A16", "checksums.json covers every file written under the artifact root, and re-hashing matches"),
     ("A17", "each required matrix class is captured | covered_by | unavailable - never absent"),
+    ("A19", "each two-sided captured file differs between game/ and expected/ exactly when its class says it should"),
 ];
 
 /// The wording for an id, or a placeholder for one this build does not know.
@@ -124,7 +130,16 @@ pub fn wording(id: &str) -> &'static str {
 /// branch so that widening it later is a one-line change with the reasoning
 /// still attached.
 pub fn is_fatal(id: &str) -> bool {
-    matches!(id, "A1" | "A2" | "A3" | "A4" | "A5" | "A6" | "A7" | "A8" | "A9" | "A10" | "A11" | "A12" | "A13" | "A14" | "A15" | "A16" | "A17")
+    matches!(
+        id,
+        "A1" | "A2" | "A3" | "A4" | "A5" | "A6" | "A7" | "A8" | "A9" | "A10" | "A11" | "A12"
+            | "A13"
+            | "A14"
+            | "A15"
+            | "A16"
+            | "A17"
+            | "A19"
+    )
 }
 
 /// How a run ended, as the selfcheck says it.
@@ -304,11 +319,24 @@ mod tests {
     fn skipped_is_derived_from_the_rows_that_are_present() {
         let s = Selfcheck::build(vec![row("A1", true), row("A13", true)], Vec::new(), &[]);
         let sk = s.skipped();
-        assert_eq!(sk.len(), 15);
+        // Everything in `WORDING` that produced no row. Derived, so the count is
+        // `WORDING.len() - 2` rather than a second literal to keep in step.
+        assert_eq!(sk.len(), WORDING.len() - 2);
         assert!(!sk.contains(&"A1") && !sk.contains(&"A13"));
         assert!(sk.contains(&"A9"));
+        // The ids are also unique, so a count is not hiding a duplicate.
+        let mut dedup = sk.clone();
+        dedup.sort_unstable();
+        dedup.dedup();
+        assert_eq!(dedup.len(), sk.len(), "a duplicated id in the skipped list");
     }
 
+    /// The eighteen ids (seventeen from the spec plus M11's A19) each have wording
+    /// and each is fatal.
+    ///
+    /// Eighteen rather than seventeen is the point of asserting the length: a new
+    /// assertion added without wording would otherwise pass, and a wording entry
+    /// added without a producer would be a promise nothing keeps.
     #[test]
     fn every_assertion_id_has_wording_and_is_fatal() {
         for (id, w) in WORDING {
@@ -316,8 +344,20 @@ mod tests {
             assert_eq!(wording(id), w);
             assert!(is_fatal(id), "{id}");
         }
-        assert_eq!(WORDING.len(), 17);
+        assert_eq!(WORDING.len(), 18);
         assert_eq!(wording("A99"), "an assertion this build does not describe");
+    }
+
+    /// A19 and A18 are the two that are not the spec's, and both are named.
+    #[test]
+    fn the_two_added_assertions_are_present_and_distinct() {
+        assert!(WORDING.iter().any(|(id, _)| *id == "A19"));
+        // A18 is verify-only and deliberately has no capture-side wording: a
+        // capture cannot assert it, because it is a statement about the bundle.
+        assert!(
+            !WORDING.iter().any(|(id, _)| *id == "A18"),
+            "A18 belongs to `verify`, not to a capture's selfcheck"
+        );
     }
 
     /// A red row must say both numbers, or a reader cannot tell which side

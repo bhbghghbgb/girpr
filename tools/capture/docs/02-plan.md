@@ -475,8 +475,71 @@ nine classes.
    game. It is **not** skipped — it is left open, and M11 is not "done" until it
    runs. Run by hand once when unblocked, never automated, because `gircap` must
    not depend on `girpr`.
-**Commit:** `gircap: M11 — first live capture (end-to-end check blocked on girpr path filters)`
+**Commit:** `gircap: M11 - first live capture (end-to-end check blocked on girpr path filters)`
 
+**Landed for steps 1-3. Step 4 remains BLOCKED and M11 is not complete.**
+
+Run: `gircap capture --out artifacts --audio en-us --old-tag 7.0.0 --new-tag
+7.1.0`, 27 s, exit `0`, bundle at
+`artifacts/hk4e_global/7.0.0__7.1.0/20261014T055348Z/`. 8 captures admitted, 8
+classes satisfied, `full_reuse_reordered` `unavailable` with its reason.
+38 blobs / 27 612 723 B, 0 A6 failures, 49 requests, 47 591 582 B down, 56
+documents written. `selfcheck.json` is `pass`: **115 rows, 115 passed, 0
+failed** - A1 6, A2 2, A3 4, A4 8, A5 0, A6 38, A7 7, A8 7, A9 6, A10 4, A11 14,
+A12 6, A13 1, A14 1, A15 8, A16 1, A17 1, **A19 1**. A5 is 0 because
+`getBuild.stats` reconciled for all four manifests, which is the correct outcome
+and not a gap.
+
+1. **`gircap verify` on it, offline: exit 0.** 83 re-derived rows, 0 failed,
+   `agrees_with_recording=true`, 8 captures and 62 216 590 B rebuilt from
+   `chunks/`, 0 findings.
+2. **`gircap materialize` on it, offline: exit 0**, and **14 of 14**
+   manifest-derived files reproduced byte-for-byte by SHA-256. The two files it
+   does not write are `game/config.ini` and `game/.../audio_lang_14`, which come
+   from `getGameConfigs` and `--audio` rather than from a chunk - and the bundle
+   still passes A16 afterwards, which is the point of M9's writing beside rather
+   than inside.
+3. **The variant set is exactly the non-`identical` captures.** `game/` only:
+   `config.ini`, `audio_lang_14`, `00664172.blk` (the `removed` capture).
+   `expected/` only: `libHttpClient.GDK.dll` (the `added` capture). In both and
+   differing: `HoYoChannel.dll`, `unity default resources`, `00981562.blk`,
+   `09801749.blk`, `data_revision`. In both and **identical**:
+   `browser_assets` - the `identical` capture, and the only file the pair leaves
+   untouched. 7 non-identical captures, 7 variant files, plus the 2 tool-written
+   ones. No capture is silent and no variant is unaccounted for.
+4. **BLOCKED - not skipped.** Re-confirmed against `girpr --help`: the flag set is
+   `--game-path`, `--biz`, `--audio`, `--io-threads`, `--purge-after`,
+   `--purge-before`, `--check-only`, `--dry-run`, `--json-summary`,
+   `--log-level`. Nothing narrows a path, so a run against this 9-file fixture
+   would plan from the whole live manifest and fetch ~130 GB - and
+   `--purge-after` would then delete most of the fixture. The procedure and the
+   exact expected numbers are written into
+   [`00-spec.md` &sect;8.1.1](00-spec.md) (the six patchable captures sum to
+   **2 373 385 B**), so the check is a comparison to run rather than a procedure
+   to reconstruct. It stays manual: `gircap` must not depend on `girpr`.
+
+**One assertion was added because M11 ran the thing.** Comparing `game/` against
+`expected/` by hand - step 3 - turned out to be checking something nothing
+asserted. A14 asks whether `game/` is free of paths the tool under test would
+build a plan against, and it cannot see the converse: a capture admitted for
+`partial_same_offset` whose two variant files came out byte-identical would pass
+A14, pass A7/A8 (each side matches its own declared MD5), and be useless, because
+the fixture would hold no evidence of the patch it was taken for. That is
+**A19**, and it is the second id this project has added beyond the spec's
+seventeen (A18 being `verify`'s closure check). It skips one-sided captures,
+whose file is absent from one tree by construction, and it is **skipped** under
+`--no-chunk-blobs` for the same reason A6 is: with no assembled sides the check
+would pass vacuously, and a green row about nothing is the exact failure mode M10
+had to fix twice already.
+
+Two things M10 changed showed up here, which is the argument for running M11 after
+M10 rather than before. `MANIFEST.json` carries `gzip_threshold`, and
+`checksums.json` re-hashed 95 files / 208 295 423 B with every digest matching -
+under the corrected rule, so the bundle is consistent in the sense the schema
+documents. And the matrix spells `covered_by`; no row came out `coveredby`. The
+eleven bundles written before those fixes are archived under
+`artifacts/_pre-m10/` and now fail A16 by design, which is the honest reading of
+a digest list that recorded compressed bytes while promising decompressed ones.
 ---
 
 ## 4. Test strategy

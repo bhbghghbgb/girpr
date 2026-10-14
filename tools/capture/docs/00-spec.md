@@ -356,6 +356,25 @@ A18 is a `verify`-only row. The capture cannot record it, because it is a
 statement about the bundle rather than about the run, so it never appears in a
 capture's `selfcheck.json`.
 
+### A19, added by M11 — the converse of A14
+
+A14 asks one direction: is `game/` free of paths the tool under test would build
+a plan against? It cannot see the other failure — a capture admitted for
+`partial_same_offset` whose two variant files came out byte-identical. That
+bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared
+MD5), and be useless, because the fixture would hold no evidence of the patch it
+was captured for.
+
+| A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
+
+A19 is found by comparing the two trees by hand, which is why it exists: M11's
+step 3 does exactly that comparison and nothing in the suite asserted it. It
+skips one-sided captures (`added`, `removed`) — their file is absent from one
+tree *by construction*, which is the point of the class.
+
+So there are **nineteen** ids: seventeen from this spec, A18 from `verify` only,
+A19 from a capture.
+
 `gircap verify` re-derives **seven** of the seventeen — A6, A7, A8, A11, A13, A16
 and A17 — plus A18. It does not re-derive A1-A5, A9, A10, A12, A14 or A15: those
 are statements about the API bodies, the manifests and the diff, and re-running
@@ -459,6 +478,53 @@ and `SUMMARY download_bytes` can then be compared against each capture's
 as such.** `gircap` does not depend on `girpr`, does not invoke it, and does not
 shim the missing flag; `docs/02-plan.md` M11 runs the check by hand and marks it
 blocked rather than quietly skipping it.
+
+**Re-confirmed at M11**, against the tool as it stands: `girpr --help` offers
+`--game-path`, `--biz`, `--audio`, `--io-threads`, `--purge-after`,
+`--purge-before`, `--check-only`, `--dry-run`, `--json-summary` and
+`--log-level`. Nothing narrows a path. The blocker is unchanged.
+
+### 8.1.1 The manual procedure, and the numbers it must produce
+
+Recorded so that whoever runs it does not have to reconstruct it, and so that a
+result can be checked rather than believed. Against
+`artifacts/hk4e_global/7.0.0__7.1.0/20261014T055348Z`:
+
+1. Copy the bundle's `game/` somewhere writable. `girpr` writes into the game
+   directory, and the bundle must stay byte-identical for `gircap verify` to
+   still pass afterwards.
+2. Run the repair once per capture, with an `--include` set of exactly one
+   path — the capture's own `patchmaps/<id>.json → path`. One run per capture is
+   what makes `SUMMARY download_bytes` attributable; a single run over all eight
+   sums to the same total but cannot be compared per capture.
+3. Check three things per capture: `SUMMARY download_bytes` equals
+   `patchmaps/<id>.json → totals.download_bytes`; the patched file's MD5 equals
+   `expectations.result_md5`; and **no chunk in `expectations.must_not_fetch` was
+   requested** — that last one is what catches a broken reuse path, and it is
+   invisible in a byte count.
+4. Do **not** pass `--purge-after` or `--purge-before`. Without path filters they
+   delete every file the live manifest does not contain, which for a 9-file
+   fixture is most of it.
+
+Expected per-capture `download_bytes` for that bundle:
+
+| capture | class | `download_bytes` | reuse / fetch / moved | `must_not_fetch` |
+|---|---|---|---|---|
+| `identical` | `identical` | 0 | 1 / 0 / 0 | 1 |
+| `zero_reuse_single` | `zero_reuse_single` | 21 | 0 / 1 / 0 | 0 |
+| `zero_reuse_multi` | `zero_reuse_multi` | 336 852 | 0 / 2 / 0 | 0 |
+| `partial_same_offset` | `partial_same_offset` | 274 426 | 1 / 2 / 0 | 1 |
+| `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
+| `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
+| `added` | `added` | *(no `totals`)* | 0 / 1 / 0 | 0 |
+| `removed` | `removed` | *(no `totals`)* | 2 / 0 / 0 | 0 |
+
+The two `null` totals are not missing data: `added` has no old side to patch
+*from* and `removed` has no new side to patch *to*, so neither has a patch to
+cost. A consumer asked to reproduce those two is being asked to create or delete
+a file, not to patch one.
+
+The six that do carry `totals` sum to **2 373 385 B**.
 
 ### 8.2 What the artifact provides so that check is cheap when it unblocks
 
