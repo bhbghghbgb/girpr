@@ -265,6 +265,7 @@ fn manifest() -> Manifest {
         },
         field: "game".into(),
         audio: Vec::new(),
+        gzip_threshold: 1_048_576,
         selection_pool: gircap::emit::index::SelectionPool {
             fields: vec!["game".into()],
             manifest_entries: BTreeMap::from([("game".to_string(), 2744)]),

@@ -258,6 +258,14 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             "admitted"
         );
     }
+    for p in &selection.forced_skipped {
+        // Named individually: the count says something was missed and the path
+        // says what, and a caller who asked for five files needs both.
+        tracing::warn!(
+            path = %p,
+            "--files named a path neither manifest carries; nothing to capture for it"
+        );
+    }
     for row in &selection.matrix {
         if row.is_satisfied() {
             continue;
@@ -470,6 +478,15 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     };
     let index = blobs::ChunkIndex::build(entries);
     tracing::info!(detail = %blobs::describe(&wants, &index), "chunk store done");
+    // `patchmaps/` is created whether or not anything lands in it.
+    //
+    // `--no-chunk-blobs` admits captures and then stores no blobs, so there is
+    // nothing to write a map for, and the directory simply never appeared - which
+    // made `verify` refuse the bundle as unreadable (exit 1, "a bundle with no
+    // patchmaps has no captures to verify") rather than report the finding a
+    // reader actually wants, which is that the bundle cannot be materialized. An
+    // empty directory costs nothing and makes the layout uniform.
+    std::fs::create_dir_all(dir.join("patchmaps")).map_err(|e| write_err(&dir, e))?;
     written.push(
         emit::write_chunk_index(&dir, &index).map_err(|e| {
             apierr(
@@ -503,6 +520,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         versions,
         &manifests,
         &index,
+        plan.no_chunk_blobs,
     );
     let mut assembled_ids: Vec<String> = Vec::new();
     let mut prelude: Vec<String> = Vec::new();
@@ -592,20 +610,26 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                 }
             }
         }
-        prelude.extend(
-            emit::gamedir::write_prelude(
-                &dir,
-                &biz,
-                &old_tag,
-                &scan_dir,
-                plan.audio.codes(),
-            )
-            .map_err(|e| write_err(&dir, e))?,
-        );
-        written.extend(prelude);
-    } else {
-        tracing::warn!("--no-chunk-blobs: nothing to assemble, so A7-A12 are not asserted");
     }
+    // `write_prelude` always runs, including under `--no-chunk-blobs`.
+    //
+    // `config.ini` and the audio scan file are derived from `getGameConfigs` and
+    // the `--audio` flag, not from a single chunk. Putting them behind the
+    // flag made a metadata-only bundle have no `game/` at all, so A13 - "the
+    // config re-parses with `game_version == --old-tag`" - failed on a tree that
+    // simply had no config in it, and reported a missing file as a broken
+    // assertion. The flag suppresses *chunk blobs*, not the launcher metadata.
+    prelude.extend(
+        emit::gamedir::write_prelude(
+            &dir,
+            &biz,
+            &old_tag,
+            &scan_dir,
+            plan.audio.codes(),
+        )
+        .map_err(|e| write_err(&dir, e))?,
+    );
+    written.extend(prelude);
     let assembly_failures = rows.iter().filter(|a| !a.ok).count();
     for a in rows.iter().filter(|a| !a.ok) {
         tracing::error!(assertion = a.id, subject = %a.subject, detail = %a.actual, "selfcheck row failed");
@@ -671,6 +695,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         diff_tags: &params.diff_tags,
         audio: plan.audio.codes(),
         fields: &fields,
+        gzip_threshold: plan.gzip_threshold,
         diffs: &diffs,
         selection: &selection,
         index: &index,
@@ -705,8 +730,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     manifest.files = manifest_file_list(&dir).map_err(|e| write_err(&dir, e))?;
     manifest.totals.bytes_on_disk = manifest.files.iter().map(|f| f.bytes).sum::<u64>();
 
+    // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing to
+    // assemble and nothing to prove. A declared gap is `incomplete`, not `fail`.
     let skipped: Vec<&str> = if plan.no_chunk_blobs {
-        vec!["A7", "A8", "A9", "A10", "A11", "A12"]
+        vec!["A6", "A7", "A8", "A9", "A10", "A11", "A12"]
     } else {
         Vec::new()
     };
@@ -716,10 +743,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map(|m| emit::selfcheck::MatrixRow {
             class: m.class.clone(),
             status: m.status.clone(),
-            ok: matches!(
-                m.status.as_str(),
-                "captured" | "covered_by" | "unavailable"
-            ),
+            // One definition of "an acceptable state", not a second copy of the
+            // literal: the A17 row and the selfcheck's matrix row must not be
+            // able to disagree about what `ok` means.
+            ok: emit::selfcheck::MatrixRow::ok_status(&m.status),
         })
         .collect();
 
@@ -817,6 +844,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("candidates_scored", pool.len() as u64)
         .set("captures_admitted", selection.admitted.len() as u64)
         .set("captures_over_budget", selection.rejected.len() as u64)
+        .set("forced_files_requested", plan.files.len() as u64)
+        .set("forced_files_skipped", selection.forced_skipped.len() as u64)
         .set("chunk_blobs_wanted", wants.len() as u64)
         .set("chunk_blobs_stored", index.blobs.iter().filter(|b| b.props.stored_path.is_some()).count() as u64)
         .set("chunk_bytes_projected", projected)
@@ -1378,16 +1407,17 @@ fn closing_assertions(
         }
     }
 
+    // `--no-chunk-blobs` contributes **no** A7-A12 rows.
+//
+// This used to emit one red row per id, reading
+// `expected: asserted` / `actual: not asserted`. That is the second half of the
+// same bug the A6 rows had: a declared gap rendered as a failure. The gap is
+// declared the way the design already declares it - by listing the ids in
+// `skipped`, which is what makes `Selfcheck::build` answer `incomplete` rather
+// than `fail`. A row that says "not asserted" and is marked `ok: false` tells a
+// reader the bundle is broken when it is honestly incomplete.
     if no_chunk_blobs {
-        for id in ["A7", "A8", "A9", "A10", "A11", "A12"] {
-            rows.push(Assertion::check(
-                id,
-                wording(id),
-                "--no-chunk-blobs",
-                "asserted",
-                "not asserted: the flag deliberately stores no blobs",
-            ));
-        }
+        tracing::debug!("--no-chunk-blobs: A7-A12 are declared skipped, not asserted");
     }
     rows
 }
@@ -1409,6 +1439,8 @@ struct ManifestInput<'a> {
     pub audio: &'a [String],
     /// The fields that were scored.
     pub fields: &'a [String],
+    /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
+    pub gzip_threshold: u64,
     /// The diffs, in the same order as `fields`.
     pub diffs: &'a [diff::FieldDiff],
     /// The selection.
@@ -1454,7 +1486,7 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
                 .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
             emit::index::ManifestMatrixRow {
                 class: row.class.id().to_string(),
-                status: format!("{:?}", row.status).to_lowercase(),
+                status: row.status.id().to_string(),
                 capture_id: row.capture_id.clone(),
                 path: row.path.clone(),
                 matching_field: admission.map(|a| a.matching_field.clone()),
@@ -1511,6 +1543,7 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
         },
         field: MANIFEST_FIELD.to_string(),
         audio: i.audio.to_vec(),
+        gzip_threshold: i.gzip_threshold,
         selection_pool: emit::index::SelectionPool {
             fields: i.fields.to_vec(),
             manifest_entries,
@@ -1559,6 +1592,7 @@ fn api_and_manifest_assertions(
     versions: &VersionPair,
     manifests: &[Vec<manifest::CapturedManifest>],
     index: &blobs::ChunkIndex,
+    no_chunk_blobs: bool,
 ) -> Vec<emit::selfcheck::Assertion> {
     use crate::emit::selfcheck::{Assertion, wording};
     let mut rows = Vec::new();
@@ -1641,39 +1675,55 @@ fn api_and_manifest_assertions(
     // A6: one row per stored chunk, four checks folded into one verdict with the
     // failing ones named — a blob failing three of four is one finding about
     // one blob, not three findings about three blobs.
-    for b in &index.blobs {
-        let subject = b
-            .props
-            .stored_path
-            .clone()
-            .unwrap_or_else(|| format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id));
-        let v = b.props.verified;
-        rows.push(match v {
-            Some(v) if v.all_green() && b.props.decode_error.is_none() => {
-                Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
-            }
-            Some(v) => Assertion::fail(
-                "A6",
-                wording("A6"),
-                &subject,
-                "all four checks hold",
-                &format!(
-                    "{}; md5(decompressed) {}",
-                    v.failures().join(", "),
-                    b.props.md5_decompressed
+    // A6: one row per **stored** chunk, four checks folded into one verdict with
+    // the failing ones named — a blob failing three of four is one finding about
+    // one blob, not three findings about three blobs.
+    //
+    // `--no-chunk-blobs` emits **no** A6 rows at all, and `A6` joins the skipped
+    // list. This was a real bug and the shape of it is worth stating: an
+    // unmeasured blob used to produce a *red* row (`expected "measured"`,
+    // `actual "not measured"`), so a metadata-only run could never be green and
+    // `--no-chunk-blobs` was effectively an assertion that always failed. The
+    // distinction `BlobProps` already draws — `verified: null` means "not
+    // measured", which is a different kind of fact from four `false` — has to
+    // reach the selfcheck too, or a declared gap reads as a broken artifact.
+    if !no_chunk_blobs {
+        for b in &index.blobs {
+            let subject = b.props.stored_path.clone().unwrap_or_else(|| {
+                format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
+            });
+            let v = b.props.verified;
+            rows.push(match v {
+                Some(v) if v.all_green() && b.props.decode_error.is_none() => {
+                    Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
+                }
+                Some(v) => Assertion::fail(
+                    "A6",
+                    wording("A6"),
+                    &subject,
+                    "all four checks hold",
+                    &format!(
+                        "{}; md5(decompressed) {}",
+                        v.failures().join(", "),
+                        b.props.md5_decompressed
+                    ),
                 ),
-            ),
-            None => Assertion::check(
-                "A6",
-                wording("A6"),
-                &subject,
-                "measured",
-                b.props
-                    .decode_error
-                    .as_deref()
-                    .unwrap_or("not measured"),
-            ),
-        });
+                // Reachable only when a blob is *wanted* but neither fetched nor
+                // measured — a hole the store reported rather than one the run
+                // chose. `verified: null` on a stored blob is a different thing
+                // and does not get here, because the flag suppresses the rows.
+                None => Assertion::fail(
+                    "A6",
+                    wording("A6"),
+                    &subject,
+                    "measured",
+                    b.props
+                        .decode_error
+                        .as_deref()
+                        .unwrap_or("wanted but never measured"),
+                ),
+            });
+        }
     }
     rows
 }

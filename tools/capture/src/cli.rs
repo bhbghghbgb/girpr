@@ -80,6 +80,14 @@ pub struct CommonArgs {
     pub output: String,
 }
 
+/// `--gzip-threshold`'s default, in bytes.
+///
+/// A named constant rather than a literal in two places: the flag's default and
+/// [`crate::emit::index::Manifest::gzip_threshold`]'s *read* default have to be
+/// the same number, and a bundle written before that field existed used exactly
+/// this.
+pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
+
 /// `gircap capture`.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct CaptureArgs {
@@ -126,7 +134,7 @@ pub struct CaptureArgs {
     pub manifest_detail: ManifestDetail,
 
     /// Documents larger than this are gzipped, and the decision is recorded.
-    #[arg(long, value_name = "BYTES", default_value_t = 1_048_576)]
+    #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_GZIP_THRESHOLD)]
     pub gzip_threshold: u64,
 
     /// Extra tags to probe with `getBuild` (JSON metadata only, no blob).

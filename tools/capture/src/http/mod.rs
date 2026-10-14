@@ -358,7 +358,19 @@ impl RequestLog {
 
     /// Every record, in `seq` order.
     pub fn records(&self) -> Vec<RequestRecord> {
-        self.0.lock().expect("request log is not poisoned").records.clone()
+        let mut v = self.0.lock().expect("request log is not poisoned").records.clone();
+        // Sorted here, not appended in order. `reserve()` assigns `seq` at issue
+        // time, so a `--jobs 8` capture reserves 1..N and then *lands* them in
+        // whatever order the network finished; appending would leave the file's
+        // rows in completion order while its `seq` column claimed otherwise,
+        // and a reader who trusted the row order would reconstruct the wrong
+        // provenance. Sorted on read rather than on push because `push` is
+        // called once per chunk - a 113 610-chunk capture would spend O(n²)
+        // keeping a vector ordered - and `records()` is read a handful of times.
+        //
+        // `reserve()` makes `seq` unique, so this is a total order.
+        v.sort_by_key(|r| r.seq);
+        v
     }
 
     /// Total bytes received across the run.
@@ -837,8 +849,19 @@ mod tests {
         };
         log.push(mk(b, "/second"));
         log.push(mk(a, "/first"));
-        let seqs: Vec<u64> = log.records().iter().map(|r| r.seq).collect();
-        assert_eq!(seqs, vec![2, 1], "records keep the order they were pushed");
+        // Pushed out of order, read back in **seq** order.
+        //
+        // This assertion used to be `vec![2, 1]` - "records keep the order they
+        // were pushed" - which is what `records()` used to do and which is why
+        // `requests.ndjson` came out in completion order while its `seq` column
+        // claimed otherwise. A `--jobs 8` capture lands its chunk fetches
+        // whenever the network finishes, so the two were different in exactly
+        // the run that had the most of them.
+        let records = log.records();
+        let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![a, b], "records come back in seq order");
+        let urls: Vec<&str> = records.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(urls, vec!["/first", "/second"], "so issue order is recoverable");
         assert_eq!(log.bytes_in(), 20);
         assert_eq!(log.len(), 2);
         assert!(!log.is_empty());

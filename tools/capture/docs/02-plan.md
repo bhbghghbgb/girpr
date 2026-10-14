@@ -383,6 +383,82 @@ selfcheck rows. A test asserting the gzip rule fires on a >threshold body and no
 below.
 **Commit:** `gircap: M10 — offline integration suite against a local mock`
 
+**Landed.** `tests/common/mod.rs` is a hand-rolled HTTP/1.1 server on
+`127.0.0.1:0` serving all three base families from a `World` the test writes — the
+four HoYoPlay bodies, both `getBuild`s, the manifest archives and the chunk
+blobs, all synthesised, none checked in as a fixture file. `capture_layout.rs`
+(18 tests) drives the real **binary** end to end; `matrix.rs` (8) and `schema.rs`
+(11) read the bundles those runs wrote back off disk.
+
+**"Touches no network" is proven, not asserted.** Two tests read
+`api/requests.ndjson` out of a captured bundle and check that *every* recorded
+URL is a loopback address the mock owns — including the manifest and chunk CDN
+requests, whose bases come from the `getBuild` body the mock itself wrote. There
+was no other address to reach.
+
+**Four real defects the suite found, all now fixed.** Each is a bug that could
+not have been found any other way, which is the argument for the milestone.
+
+1. **`--no-chunk-blobs` could never be green.** A blob the index lists but does
+   not store produced an A6 row with `expected: measured` /
+   `actual: not measured` — i.e. **red**. The same held for A7-A12, which emitted
+   `expected: asserted` / `actual: not asserted` as red rows. A declared gap was
+   being rendered as a failure, so the flag was effectively an assertion that
+   always failed. The design already had the right mechanism — the `skipped` list
+   is what makes `Selfcheck::build` answer `incomplete` rather than `fail` — and
+   A6 has now joined A7-A12 in it. A metadata-only run is `incomplete`, with zero
+   red rows.
+2. **`--no-chunk-blobs` also skipped `game/config.ini`.** `write_prelude` was
+   inside the "are we assembling?" branch, but `config.ini` and the audio scan
+   file come from `getGameConfigs` and `--audio`, not from a chunk. A
+   metadata-only bundle had no `game/` at all, so A13 failed on a tree that simply
+   had no config in it. The prelude now always runs.
+3. **The matrix spelled `coveredby` and `overbudget`.** The status came from
+   `format!("{:?}", row.status).to_lowercase()`, which is right for the two
+   single-word variants and wrong for the two that matter. A bundle in which one
+   class was covered by another wrote a status **its own A17 row rejects** — and
+   the run still exited `0`, because the only test that could have seen it
+   compared against the same wrong string. `MatrixStatus::id()` now spells each
+   variant once, and a unit test pins the four spellings against the schema doc.
+4. **`checksums.json` digested the stored bytes of a `.gz` file** while
+   `Encoding::Gzip`'s own doc comment promised the decompressed ones. A reader who
+   gunzipped a document and ran `md5sum` got a different answer than the document
+   gave them. Nothing caught it because A16 re-hashes with the same function that
+   wrote the digests, so both sides agreed. `digest_file` now streams a
+   `GzDecoder`. **Bundles written before this fail A16 on re-verification**, by
+   design — re-capture for a consistent bundle.
+
+Three more, smaller and also fixed: `RequestLog::records()` was documented as
+returning records "in `seq` order" and returned completion order, so
+`requests.ndjson` had a `seq` column that contradicted its own row order under
+`--jobs > 1` (the existing unit test asserted the bug); `--files` named a path
+neither manifest carries and nothing reported it, despite a comment promising
+"M8 reports it" — the run now carries `forced_files_requested` /
+`forced_files_skipped` and warns per path; and `patchmaps/` was never created
+when nothing landed in it, so `verify` refused a `--no-chunk-blobs` bundle as
+unreadable (exit `1`) instead of reporting the finding a reader wants.
+
+Two additions to the artifact, both because a test asked a question the bundle
+could not answer. `MANIFEST.json` gained **`gzip_threshold`**, because the
+`--gzip-threshold` help says "the decision is recorded" and it was not recorded
+anywhere — a reader holding a bundle could see which files were `.gz` but not
+why. It **defaults on read** rather than being required: `schema_version` is still
+`1`, so making a newly-added field mandatory would have turned a
+backwards-compatible addition into `verify` refusing a perfectly good bundle.
+And `MatrixStatus` now has `is_acceptable()` and `selfcheck::MatrixRow::ok_status()`
+cross-checked against each other, because two copies of the A17 literal could
+disagree and nothing would have said so.
+
+The mock's own design notes are worth keeping, because both were bugs: its
+`categories` were originally hardcoded to `[game, en-us]` while `five_classes()`
+published only `game`, and it lied — the branch claimed a manifest the build did
+not carry and the capture failed at the join for a reason that had nothing to do
+with the code under test. They are derived from the builds now. And every body is
+rendered by a 40-line order-preserving JSON value rather than by `json!`, because
+`serde_json::Value` is a `BTreeMap` and would sort every key — which is invisible
+to the tool and fatal to the "stored exactly as served" claim the byte-exactness
+test exists to check.
+
 ### M11 — first real capture
 Run against `hk4e_global` 7.0.0 → 7.1.0, selection pool `game` + `en-us`, all
 nine classes.

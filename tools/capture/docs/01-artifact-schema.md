@@ -88,6 +88,7 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   },
   "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
+  "gzip_threshold": 1048576,             // --gzip-threshold this run used (M10; defaults on read)
   "selection_pool": {                    // matching_fields scored and diffed
     "fields": ["game", "en-us"],
     "manifest_entries": { "game": 2744, "en-us": 177 },
@@ -455,15 +456,26 @@ and every differing file is exactly one that needs patching.
   "entries": [
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "bytes": 2340264,
-      "md5": "d992a78915ebc0cc31edb9c6d5250c47",
-      "sha256": "…", "container": "identity" }
+      "md5": "d992a78915ebc0cc31b86d10b05c14e4f",
+      "sha256": "…", "encoding": "identity" }
   ],
   "file_count": 96, "total_bytes": 98812044 }
 ```
 
-Sorted by `path`. Covers every regular file under the artifact root except
-`verify/checksums.json` itself.
+**`encoding: gzip` means the digest is of the _decompressed_ body**, and `bytes`
+is the decompressed length too. That is the only way a reader can check the
+document rather than the container, and it means a digest does not change if the
+file is recompressed. It also means verifying a `.gz` entry means decompressing it
+first — which is what `gircap verify` does, and why A16 would fail if the rule and
+the implementation disagreed.
 
+> **Changed in M10.** Before it, `checksums.json` and `MANIFEST.json → files[]`
+> digested the *stored* bytes for `.gz` entries while `Encoding::Gzip`'s own
+> documentation promised the decompressed ones. Nothing caught it because A16
+> re-hashes with the same function that wrote the digests, so both sides agreed on
+> the wrong answer. A bundle written by that build fails A16 on re-verification,
+> naming each affected file — which is the honest answer, not a regression.
+> Re-capture for a consistent bundle.
 ## 16. `verify/selfcheck.json`
 
 ```jsonc

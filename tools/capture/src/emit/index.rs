@@ -64,6 +64,19 @@ impl std::io::Write for Tee<'_> {
 }
 
 /// Digest one file, streaming so a 22 MB `.blk` does not have to be resident.
+///
+/// **A gzipped document is digested as the document, not as the file that happens
+/// to hold it.** `Encoding::Gzip` says so in its own doc comment and
+/// `encoding_of` exists precisely to decide this - so ignoring `encoding` here
+/// meant `checksums.json` recorded the *compressed* digest while promising the
+/// decompressed one, and `MANIFEST.json → files[]` did the same. A reader who
+/// gunzipped the file and ran `md5sum` on the result got a different answer than
+/// either document gave them.
+///
+/// Nothing in the suite caught it because A16 re-hashes with the same function
+/// that wrote the digests, so both sides agreed on the wrong answer. The test
+/// that catches it is in `tests/schema.rs`, and it is the reason that file reads
+/// the bytes back off disk rather than trusting the document.
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
     let mut file = std::fs::File::open(path)?;
     let mut md5c = md5::Context::new();
@@ -73,7 +86,15 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
             md5: &mut md5c,
             sha: &mut sha,
         };
-        std::io::copy(&mut file, &mut tee)?
+        match encoding {
+            crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut tee)?,
+            // Streamed rather than buffered, for the same reason as above: a
+            // full manifest decode is several megabytes.
+            crate::hash::Encoding::Gzip => {
+                let mut gz = flate2::read::GzDecoder::new(file);
+                std::io::copy(&mut gz, &mut tee)?
+            }
+        }
     };
     let to_hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
     Ok(FileEntry {
@@ -424,6 +445,15 @@ mod tests {
 
 /// `MANIFEST.json` — the bundle's own index.
 ///
+/// The value `Manifest::gzip_threshold` falls back to when a bundle written
+/// before the field existed is read back.
+///
+/// The flag's own default, so the number a reader is shown is the number that
+/// run actually used.
+fn default_gzip_threshold() -> u64 {
+    crate::cli::DEFAULT_GZIP_THRESHOLD
+}
+
 /// Every field here is something the run already knew. The document exists so a
 /// reader can answer "what is this, what does it cover, and is it complete"
 /// without parsing `api/` and `diff/`, and so `README.md` has one source to
@@ -444,6 +474,21 @@ pub struct Manifest {
     pub field: String,
     /// Audio codes written into the scan file.
     pub audio: Vec<String>,
+    /// The `--gzip-threshold` this run used, in bytes.
+    ///
+    /// Recorded because the flag's own help promises the decision is, and
+    /// because a reader holding a bundle cannot otherwise tell *why* one
+    /// document is `.gz` and the next is not. `checksums.json` names the
+    /// encoding of each file; this is the number that produced those choices,
+    /// and without it a re-run with different flags would produce a different
+    /// tree with no recorded reason.
+    ///
+    /// **Defaults on read** rather than being required. It was added after the
+    /// first bundles were written and `schema_version` is still `1`, so making
+    /// it mandatory would have turned a backwards-compatible addition into
+    /// `verify` refusing a bundle that is internally perfect.
+    #[serde(default = "default_gzip_threshold")]
+    pub gzip_threshold: u64,
     /// The fields that were scored and diffed.
     pub selection_pool: SelectionPool,
     /// The headline numbers.

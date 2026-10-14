@@ -114,6 +114,93 @@ pub enum MatrixStatus {
     Unavailable,
 }
 
+impl MatrixStatus {
+    /// The wire spelling, as `MANIFEST.json → matrix[].status` records it.
+    ///
+    /// **Not** `format!("{:?}", self).to_lowercase()`, which is what this used
+    /// to do and which produced `coveredby` and `overbudget`. Those are not the
+    /// spellings A17 checks for and the schema doc writes, so a bundle in which
+    /// one class was covered by another wrote a status its own A17 row rejected -
+    /// and the run still exited `0`, because the only test that could have seen
+    /// it compared against the same wrong string. `Class::id()` is the model: a
+    /// variant has one spelling and it is written down here.
+    pub const fn id(self) -> &'static str {
+        match self {
+            MatrixStatus::Captured => "captured",
+            MatrixStatus::CoveredBy => "covered_by",
+            MatrixStatus::OverBudget => "over_budget",
+            MatrixStatus::Unavailable => "unavailable",
+        }
+    }
+
+    /// Whether A17 accepts this state.
+    ///
+    /// `over_budget` is **not** accepted, for the reason
+    /// [`MatrixRow::is_satisfied`] gives: the caller was told to take the class
+    /// and this run would not pay for it. `unavailable` is accepted because it
+    /// is a fact about the manifests rather than about this run.
+    pub const fn is_acceptable(self) -> bool {
+        matches!(
+            self,
+            MatrixStatus::Captured | MatrixStatus::CoveredBy | MatrixStatus::Unavailable
+        )
+    }
+}
+
+impl std::fmt::Display for MatrixStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::MatrixStatus::*;
+
+    /// The spellings are what `MANIFEST.json`, A17 and the schema doc all agree
+    /// on, and they are **not** the lowercased Rust variant names.
+    #[test]
+    fn every_status_has_the_spelling_the_schema_documents() {
+        assert_eq!(Captured.id(), "captured");
+        assert_eq!(CoveredBy.id(), "covered_by");
+        assert_eq!(OverBudget.id(), "over_budget");
+        assert_eq!(Unavailable.id(), "unavailable");
+        // The bug this replaced: `format!("{:?}", s).to_lowercase()`. It happens to be
+        // right for the single-word variants, which is exactly why it survived -
+        // two of the four agreed by coincidence and the two that mattered did not.
+        assert_eq!(format!("{:?}", CoveredBy).to_lowercase(), "coveredby");
+        assert_eq!(format!("{:?}", OverBudget).to_lowercase(), "overbudget");
+        assert_ne!(CoveredBy.id(), "coveredby");
+        assert_ne!(OverBudget.id(), "overbudget");
+    }
+
+    /// `Display` and `id()` cannot drift, because one calls the other.
+    #[test]
+    fn display_is_the_id() {
+        for s in [Captured, CoveredBy, OverBudget, Unavailable] {
+            assert_eq!(s.to_string(), s.id());
+        }
+    }
+
+    /// A17 accepts three of the four; `over_budget` is a statement about this
+    /// run's flags rather than about the manifests.
+    #[test]
+    fn only_over_budget_is_unacceptable_to_a17() {
+        assert!(Captured.is_acceptable());
+        assert!(CoveredBy.is_acceptable());
+        assert!(Unavailable.is_acceptable());
+        assert!(!OverBudget.is_acceptable());
+        // And the two spellings cannot disagree about it.
+        for s in [Captured, CoveredBy, OverBudget, Unavailable] {
+            assert_eq!(
+                s.is_acceptable(),
+                crate::emit::selfcheck::MatrixRow::ok_status(s.id()),
+                "{s:?}: `is_acceptable` and the selfcheck's `ok_status` disagree"
+            );
+        }
+    }
+}
+
 /// One row of the matrix: what happened to one required class.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MatrixRow {
@@ -165,6 +252,14 @@ pub struct Selection {
     /// ask. A silent omission and a shortfall are the same bytes and very
     /// different findings.
     pub rejected: Vec<Rejection>,
+    /// `--files` paths the manifests do not carry.
+    ///
+    /// Kept because a caller who names five files and gets one capture has
+    /// otherwise no way to learn what happened to the other four. Not an error -
+    /// the caller may be naming a file for a future version - but a silent
+    /// omission and a refusal are the same bytes and very different findings, so
+    /// the run reports the count and the names on stderr.
+    pub forced_skipped: Vec<String>,
     /// One row per required class, in admission order.
     pub matrix: Vec<MatrixRow>,
     /// Total charged against the budget.
@@ -308,10 +403,14 @@ pub fn select(
     // every class it happens to answer.
     let mut admitted: Vec<Admission> = Vec::new();
     let mut spent = Budget::unlimited();
+    let mut forced_skipped: Vec<String> = Vec::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
-            // may be naming a file for a future version. M8 reports it.
+            // may be naming a file for a future version. It is *recorded*, which
+            // is the difference between "I captured that file" and "I did not,
+            // and here is the list".
+            forced_skipped.push(want.clone());
             continue;
         };
         let Some(primary) = c.candidate.classes.first().copied() else {
@@ -497,6 +596,7 @@ pub fn select(
         bytes_admitted: admitted.iter().map(|a| a.budget_cost).sum(),
         admitted,
         rejected,
+        forced_skipped,
         matrix,
         budget: final_budget,
     }

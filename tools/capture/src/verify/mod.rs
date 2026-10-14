@@ -134,15 +134,27 @@ impl Bundle {
 /// Keyed by `capture_id` rather than by filename: the filename is a convenience
 /// and the field is the identity, so trusting it would let a renamed file
 /// masquerade as a second capture.
+///
+/// **A missing directory is an empty set, not an error.** `MANIFEST.json` is what
+/// makes a directory a bundle; `patchmaps/` is where its captures live, and a
+/// bundle can legitimately have none - `--no-chunk-blobs` admits captures and
+/// stores no blobs, so there is nothing to map. Refusing to open such a bundle
+/// would hide the finding a reader wants behind a layout complaint.
 fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
     let dir = root.join("patchmaps");
-    let rd = std::fs::read_dir(&dir).map_err(|e| {
-        format!(
-            "no patchmaps/ under {}: {e}; a bundle with no patchmaps has no captures to \
-             verify",
-            root.display()
-        )
-    })?;
+    let rd = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                artifact = %root.display(),
+                "no patchmaps/ directory: the bundle has no captures to verify"
+            );
+            return Ok(BTreeMap::new());
+        }
+        Err(e) => {
+            return Err(format!("cannot read {}: {e}", dir.display()));
+        }
+    };
     let mut paths: Vec<PathBuf> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
