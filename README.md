@@ -45,6 +45,8 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
+| `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope` |
+| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `compile_patterns` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |

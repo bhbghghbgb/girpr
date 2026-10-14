@@ -58,6 +58,26 @@ say — §1 of this file is the only place that is allowed to record that.
   it. Non-dry-run runs still get two real passes, because purge-after's plan is
   built after the repair and must see the `*_tmp` files it sweeps.
 
+### M1 — the path filter
+
+- `src/repair/scope/{mod,filter}.rs`, ported from `tools/sync/src/filter.rs`.
+  `PathScope::new(includes, excludes)`, `is_visible`, `is_active`, `is_open`,
+  `has_includes`. Not wired into the pipeline yet — that is M2.
+- `glob 0.3` added to `Cargo.toml`; already in `Cargo.lock` via `girsync`, so
+  the edge resolved offline.
+- Two refinements over a literal port, both forced by this tool's path shape:
+  - `compile_patterns` rewrites `\` to `/` before compiling. The rel paths being
+    matched are `/`-separated and a Windows user writing `--include
+    "game\*.dat"` means a separator, not a glob escape. The cost is that `\`
+    cannot escape a metacharacter, which nobody types at a game install.
+  - `is_active` vs `is_open`: an `--exclude`-only scope hides paths, so it
+    counts as *scoped* even though no `--include` was given. §4.6's `scoped=1`
+    and §2.2's `config.ini` rule care about that; `--include`-matched-nothing
+    does not.
+- The `glob` crate's `**/` is recursive *and* matches at the root, i.e. `**/x`
+  and `x` agree — `require_literal_separator: false` already makes `*` do
+  that. Pinned by a test so nobody "fixes" the help text's advice later.
+
 ---
 
 ## 1. What this plan does not touch

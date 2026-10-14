@@ -46,10 +46,12 @@ mod manifest;
 mod metadata;
 mod plan;
 mod post;
+mod scope;
 
 pub use metadata::Meta;
 pub use plan::purge::PurgeVerdict;
 pub use plan::{PlannedFile, PurgeCandidate, PurgePlan, RepairPlan};
+pub use scope::PathScope;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
