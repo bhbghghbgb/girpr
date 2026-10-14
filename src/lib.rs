@@ -7,8 +7,9 @@
 //! Core = Starward's repair-in-chunk-mode (version-agnostic, per-file
 //! `{path}_tmp` streaming repair, verified local-chunk reuse, atomic promote)
 //! plus Collapse's extra-file purge as a pre/post phase. Background:
-//! `docs/01-findings-and-verdict.md`, spec: `docs/02-repair-chunk-spec.md`,
-//! module plan: `docs/03-rust-implementation-plan.md`.
+//! `docs/01-repair-findings-and-verdict.md`, spec:
+//! `docs/02-repair-chunk-spec.md`, module plan:
+//! `docs/03-repair-rust-implementation-plan.md`.
 //!
 //! Module map:
 //! - [`cli`] / [`config`] — the argument surface and the validated per-run

@@ -7,11 +7,16 @@ args in, exit code + `REPORT`/`SUMMARY` stdout lines out, no UI.
 Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 `{path}_tmp` streaming repair, verified local-chunk reuse, atomic promote)
 **+ Collapse's extra-file purge** as a pre/post phase.
-Background: `docs/01-findings-and-verdict.md`, spec: `docs/02-repair-chunk-spec.md`,
-module plan: `docs/03-rust-implementation-plan.md`. Proposal (not implemented):
-scope-of-work limitations — `--include`/`--exclude`, byte/file ceilings, plan
-printing, endpoint override — in `docs/04-scope-limitation-options.md`, with the
-build order in `docs/05-scope-limitation-implementation-plan.md`.
+**Docs are two series.** The `repair-` prefix is load-bearing:
+
+| series | docs | describes |
+|---|---|---|
+| **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
+| **scope limitations** (proposal, nothing built) | [`docs/04-scope-limitation-options.md`](docs/04-scope-limitation-options.md) · [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
+
+The repair-spec series is not amended by the scope-limitations work; its build
+plan is [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md)
+and it names the milestone that may touch them (none).
 
 ## For developers / AI agents — read this first
 

@@ -1,6 +1,12 @@
-# Rust implementation plan — `girpr` v1 (Genshin low-disk repair patcher)
+# Repair spec - Rust implementation plan - `girpr` v1 (Genshin low-disk repair patcher)
 
-Spec: `docs/02-repair-chunk-spec.md`. Findings: `docs/01-findings-and-verdict.md`.
+Implements `docs/02-repair-chunk-spec.md`. Findings:
+`docs/01-repair-findings-and-verdict.md`.
+
+The `repair-` prefix on all three documents is load-bearing: this file, the spec
+and the findings are one series describing the whole-install repair patcher.
+Later series in `docs/` (`04-`, `05-`) are separate feature work and do not
+amend any of the three.
 
 ## 1. Crate layout (single binary, std + tokio)
 
