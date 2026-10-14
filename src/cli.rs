@@ -82,6 +82,14 @@ pub struct Args {
     #[arg(long, value_name = "N")]
     pub max_download_bytes: Option<u64>,
 
+    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
+    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
+    /// the disk cost: every reuse-copy and every chunk write is counted, so a
+    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
+    /// success is decided per chunk at runtime.
+    #[arg(long, value_name = "N")]
+    pub max_write_bytes: Option<u64>,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -95,21 +103,13 @@ pub struct Args {
     pub purge_only: bool,
 
     /// Stop the run as soon as one file exhausts its retries: no further files
-    /// are started and in-flight ones stop retrying. Without it one unreachable
-    /// chunk costs ~85 s of pure sleeping (5 file attempts × linear backoff,
-    /// each with its own 5× chunk retry), so a failing run can take hours to
-    /// reach its SUMMARY. Counters stay honest: the file that failed still
-    /// counts as failed, and the run exits `3`.
+    /// are started, and a file gets one attempt instead of five. Without it one
+    /// failing file costs ~125 s of pure retry sleeping (5 file attempts ×
+    /// linear backoff, each with its own 5× chunk retry), so a plan of a few
+    /// thousand files can hang for hours before reaching its SUMMARY. Counters
+    /// stay honest: the file that failed still counts as failed, exit `3`.
     #[arg(long, default_value_t = false)]
     pub fail_fast: bool,
-
-    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
-    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
-    /// the disk cost: every reuse-copy and every chunk write is counted, so a
-    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
-    /// success is decided per chunk at runtime.
-    #[arg(long, value_name = "N")]
-    pub max_write_bytes: Option<u64>,
 
     /// Print actions without writing anything
     #[arg(long, default_value_t = false)]
@@ -136,6 +136,20 @@ pub struct Args {
     /// Log level
     #[arg(long, default_value = "info")]
     pub log_level: String,
+
+    /// Point the HoYoPlay API at this base URL instead of the production CDN.
+    /// Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects
+    /// `getGameConfigs`/`getGameBranches`/`getBuild`/`getGameDeprecatedFileConfigs`
+    /// only — the manifest and chunk URLs come from `url_prefix` inside the
+    /// *response bodies*, so a mock server must return bodies pointing at itself.
+    #[arg(long, value_name = "URL")]
+    pub hyp_base: Option<String>,
+
+    /// Point the Sophon `getBuild` API at this base URL. Overrides
+    /// `GIRPR_SOPHON_BASE`. Same caveat as `--hyp-base`: only `getBuild` is
+    /// redirected; manifests and chunks follow `url_prefix` in the bodies.
+    #[arg(long, value_name = "URL")]
+    pub sophon_base: Option<String>,
 }
 
 impl Args {
@@ -173,10 +187,11 @@ impl Args {
             purge_after: self.purge_after,
             purge_before: self.purge_before,
             json_summary: self.json_summary,
-            // Production run: no overrides (env GIRPR_HYP_BASE/GIRPR_SOPHON_BASE
-            // are still honored by `RunCtx::api_bases` for binary-level e2e).
-            hyp_base_override: None,
-            sophon_base_override: None,
+            // Endpoint overrides: explicit flag > GIRPR_*_BASE env > production, resolved
+            // by `RunCtx::api_bases`. Omitted flags stay `None`, so the env seam
+            // every offline test already uses is untouched.
+            hyp_base_override: self.hyp_base,
+            sophon_base_override: self.sophon_base,
         })
     }
 }

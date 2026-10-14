@@ -12,7 +12,7 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 | series | docs | describes |
 |---|---|---|
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
-| **scope limitations** (proposal, nothing built) | [`docs/04-scope-limitation-options.md`](docs/04-scope-limitation-options.md) · [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
+| **scope limitations** (shipped) | [`docs/04-scope-limitation-options.md`](docs/04-scope-limitation-options.md) · [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 
 The repair-spec series is not amended by the scope-limitations work; its build
 plan is [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md)
@@ -201,6 +201,12 @@ cargo build --release
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
 | `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |
 | `--log-level <LVL>` | `info` | `error`/`warn`/`info`/`debug`/`trace` (`RUST_LOG` also honored) |
+| `--hyp-base <URL>` | production | Point the HoYoPlay API at another base (overrides `GIRPR_HYP_BASE`) |
+| `--sophon-base <URL>` | production | Point Sophon `getBuild` at another base (overrides `GIRPR_SOPHON_BASE`) |
+
+`--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest
+and chunk URLs come from the `url_prefix` inside the response *bodies*, not from
+the configured base, so a local mock must return bodies pointing at itself.
 
 ## Testing (offline by construction)
 
@@ -215,8 +221,10 @@ cargo clippy --all-targets
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/metadata.rs`;
   `HypClient::new_with_bases` in `src/hyp.rs`).
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
-  env vars (explicit overrides win over env; both win over production) — resolved
-  in `RunCtx::api_bases`.
+  env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
+  resolved in `RunCtx::api_bases`). `tests/repair_offline.rs` drives the real
+  binary through the flags against the mock, which is the only way to prove a flag
+  actually reaches `HypClient` — the library tests inject `RunCtx` directly.
 - Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.

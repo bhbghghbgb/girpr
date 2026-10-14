@@ -287,6 +287,35 @@ case means paying the 125 s, and it is already covered structurally by
 `repairs_missing_and_corrupt_files_end_to_end`, which shows every planned file is
 attempted when nothing is flagged.
 
+### M7 — `--hyp-base` / `--sophon-base`, and closing the loop
+
+`Args::into_ctx` stops hardcoding `None` and passes the two flags through. The
+seam already existed end to end — `RunCtx::api_bases` resolves explicit > env >
+production, `HypClient::new_with_bases` takes them — so this is two `Option<String>`
+fields and a precedence line.
+
+**The acceptance case that actually matters** is the one this milestone could
+not previously have: `tests/repair_offline.rs` now runs the **real binary**
+(`tokio::process::Command`, not the blocking one — inside `#[tokio::test]` it
+would occupy the single runtime thread the mock needs to answer on) against the
+mock through `--hyp-base` / `--sophon-base`, with a scope and a purge flag. Every
+other test in the file injects `RunCtx::hyp_base_override` directly, which proves
+nothing about whether a *flag* reaches `HypClient`.
+
+Two further cases: the env vars pointed at a dead port while the flags point at
+the mock (proves explicit beats env — env winning would be exit `2`), and the
+env vars alone (proves M7 did not break the seam every offline e2e already used).
+
+`tools/capture/docs/00-spec.md` §8.1 is marked resolved, with §8.1.1 step 4
+struck through as obsolete (a scoped purge is now safe, because a hidden path is
+invisible to the cleanup too) and two steps added. The shim caveat is recorded
+in the flag help, in the README, and at the end of §8.1.1: `--sophon-base`
+redirects `getBuild` only; manifest and chunk URLs come from `url_prefix` in the
+response bodies. That is why the **artifact-serving shim** is still outstanding,
+and it is consumer-side work in `tools/capture` by design.
+
+That is the last milestone. See §0.2 for what the plan does *not* cover.
+
 ---
 
 ## 1. What this plan does not touch
@@ -606,16 +635,39 @@ filesystem-free.
 
 **Integration** (`tests/repair_offline.rs`): one `#[tokio::test]` per behaviour
 against the existing `MockServer`, asserting `(summary, exit code)` plus on-disk
-state. `MockOpts` gains nothing — two files and three chunks is enough to make a
-ceiling trip.
+state. Two files and three chunks turned out to be enough to make every ceiling
+trip; the one addition to `MockOpts` is `fail_chunks`, for `--fail-fast`.
 
 **Binary** (`tests/cli_contract.rs`): the new flag surface and the exit contract.
 The existing "every argument error is `1`" rule gains one carve-out — `5` is not
 an argument error — so it becomes an explicit assertion rather than a blanket.
 
+`tests/repair_offline.rs` also runs the **real binary** three times, through
+`tokio::process::Command`, for M7. `cli_contract.rs` stays pure-argument
+handling; this is the level at which "the flag reaches `HypClient`" is actually
+observable, and a blocking `Command` there deadlocks the single-threaded test
+runtime against its own mock.
+
 Nothing new touches the network. The `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE` env
 seam is what every offline test already uses; `--hyp-base` only makes it
 reachable from a flag.
+
+---
+
+## 4.1 How this section's predictions held up
+
+Kept because §3 was written before any of it was built, and the gaps are the
+useful part.
+
+| §3 said | what actually happened |
+|---|---|
+| M3 "the refusal happens before any of it runs" | held, and M0's `create_dir_all` move is what made it true rather than nearly true |
+| M4 "the estimate is documented as a lower bound, not a promise" | held, but the stop needed a CAS *reservation*, not a check: a check overshoots by `io_threads − 1` chunks |
+| M5 "`--print-plan --dry-run` — the plan prints, then the loop's hashing still happens" | **wrong**: `--print-plan` returns before the loop regardless, so the combination is just `--print-plan` |
+| M6 "`--fail-fast` … the run reaches its `SUMMARY` in seconds" | **only after adding something the plan did not ask for** — the flag also has to cap a file at one attempt, or the *first* file still costs ~125 s |
+| M6 "three independent flags, independent commits" | shipped as one commit; the three share `Summary`'s new fields and a `SummaryFlags` key |
+| §4 test strategy: "`MockOpts` gains nothing" | gained `fail_chunks` — a 500 origin is the only way to exercise the retry path without a dead host's connection timeouts |
+| §5 risks: "M0 is the largest milestone" | correct; M2 and M4 were the ones that grew beyond their sketches |
 
 ---
 
@@ -650,11 +702,27 @@ reachable from a flag.
 
 ## 7. Definition of done
 
-M0 through M5 — the set that unblocks `gircap/docs/00-spec.md` §8.1 — plus:
+M0 through M7 — the set that unblocks `gircap/docs/00-spec.md` §8.1 — plus:
 
-- [ ] every `SUMMARY` key verified **absent** when its flag is absent
-- [ ] README flag table, machine-contract table and exit-code table updated
-- [ ] [`04` §7.2](04-scope-limitation-options.md) §7.2 decisions confirmed or
-      corrected, and §7.3 closed
-- [ ] the three repair-spec docs **unmodified** — `git diff --stat` says so
-- [ ] `cargo test` green and fully offline; `cargo clippy --all-targets` clean
+- [x] every `SUMMARY` key verified **absent** when its flag is absent
+      (`the_summary_growth_keys_appear_only_when_their_flag_is_active`, plus the
+      `an_unscoped_purge_still_deletes_orphans` control)
+- [x] README flag table, machine-contract table and exit-code table updated
+- [x] [`04` §7.2](04-scope-limitation-options.md) §7.2 decisions confirmed or
+      corrected, and §7.3 closed (Q1 in M3, Q2 in M5; the `stopped=` vocabulary
+      corrected in M6)
+- [x] the three repair-spec docs **unmodified** — `git diff --stat` says so
+- [x] `cargo test` green and fully offline; `cargo clippy --all-targets` clean
+
+### §7.2 decisions, as they landed
+
+| # | decision | outcome |
+|---|---|---|
+| 1 | `--include` matching nothing → exit `1`, not `5` | **as decided** (M2) |
+| 2 | `config.ini` not bumped under a scope | **as decided**, and widened in M6 to `--purge-only` for the same reason |
+| 3 | ceilings apply in `--check-only` and `--dry-run` | **as decided** (M3; `check_only_trips_a_ceiling_with_exit_five_not_four`) |
+| 4 | B2 keeps a runtime hard stop alongside its refusal | **as decided**, and the CAS reservation was needed to make "ceiling" mean what it says (M4) |
+
+Two things this plan did not anticipate, both recorded above: `--fail-fast` had
+to gain a per-file attempt cap to deliver its own stated value (M6), and
+`--print-plan` short-circuits `--dry-run` rather than following it (M5).

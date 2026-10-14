@@ -165,6 +165,8 @@ fn help_text_lists_every_documented_flag() {
         "--log-level",
         "--include",
         "--exclude",
+        "--hyp-base",
+        "--sophon-base",
         "--max-files",
         "--max-delete-bytes",
         "--max-download-bytes",

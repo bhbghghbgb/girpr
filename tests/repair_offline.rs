@@ -1532,6 +1532,144 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ---------------------------------------------------------------------------
+// docs/04 D1/M7: endpoint overrides, through the real binary
+// ---------------------------------------------------------------------------
+
+/// Run the shipped binary. The endpoint overrides are the only seam a
+/// *binary-level* test can use, and this is where that seam is finally
+/// exercised: the library tests inject `RunCtx::hyp_base_override` directly,
+/// which proves nothing about whether a flag reaches `HypClient`.
+///
+/// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
+/// the single runtime thread the mock server needs to answer on.
+async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
+    cmd.args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().await.expect("run girpr");
+    (
+        out.status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[tokio::test]
+async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
+    // A mock at 127.0.0.1 standing in for the whole CDN, driven by the real
+    // binary through `--hyp-base` / `--sophon-base`. This is the shape
+    // `gircap`'s artifact-serving shim will take.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("base_flags");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    // A purge flag *and* a scope, so the run exercises the whole narrowed
+    // pipeline rather than the trivial path.
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
+    let game = dir.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--include",
+            "game/foo.dat",
+            "--purge-after",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("REPORT "), "{stdout}");
+    assert!(stdout.contains("SUMMARY "), "{stdout}");
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the included file was repaired against the mock"
+    );
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_some(),
+        "the out-of-scope orphan survives the purge"
+    );
+    // The flags reached `HypClient::new_with_bases`: a miss would have been a
+    // connection failure against production, i.e. exit 2.
+    assert!(mock.first_target_with("getBuild").is_some());
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn an_explicit_base_beats_the_env_var() {
+    // The env seams are pointed at a **dead** port, so if the env won the run
+    // would fail with exit 2 instead of exiting 0.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("base_precedence");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--check-only",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[
+            ("GIRPR_HYP_BASE", "http://127.0.0.1:1"),
+            ("GIRPR_SOPHON_BASE", "http://127.0.0.1:1"),
+        ],
+    )
+    .await;
+    assert_eq!(code, 0, "the flag must win over the env var: {stderr}");
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn the_env_seam_still_works_without_the_flags() {
+    // M7 must not break the seam every offline e2e run already used.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("base_env");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &["--game-path", &game, "--biz", "hk4e_global", "--check-only"],
+        &[
+            ("GIRPR_HYP_BASE", &mock.hyp_base),
+            ("GIRPR_SOPHON_BASE", &mock.sophon_base),
+        ],
+    )
+    .await;
+    assert_eq!(code, 0, "env overrides must still work: {stderr}");
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[tokio::test]
 async fn deprecated_files_call_carries_the_per_launcher_channel() {
     // `getGameDeprecatedFileConfigs` is the one call that needs

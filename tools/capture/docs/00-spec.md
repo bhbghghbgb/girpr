@@ -449,9 +449,19 @@ yet.
 |---|---|---|
 | inspect / assert from the metadata alone | nothing — `MANIFEST.json`, `patchmaps/`, `verify/` | ✅ works |
 | rebuild old/new files offline | `gircap materialize` | ✅ works |
-| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ❌ **blocked** |
+| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **unblocked** — `--include`/`--exclude`, `--max-*` ceilings, `--print-plan`, `--hyp-base`/`--sophon-base` (M0–M7) |
 
-### 8.1 The blocker
+### 8.1 The blocker — RESOLVED
+
+> **Status: resolved by `girpr` M0–M7** (scope-of-work limitations,
+> `docs/05-scope-limitation-implementation-plan.md`). The include/exclude
+> requested below shipped as `--include <GLOB>` / `--exclude <GLOB>`, and the
+> same work added `--max-files` / `--max-download-bytes` /
+> `--max-write-bytes` / `--max-delete-bytes` (refuse with exit `5` rather than
+> trim), `--print-plan` + `--plan-out`, `--purge-only`, `--fail-fast`, and
+> `--hyp-base` / `--sophon-base`. §8.1.1's procedure is now runnable; the
+> **artifact-serving shim** is still outstanding and is the only thing between
+> this and an automated assertion — see the note at the end of §8.1.1.
 
 `game/` holds a handful of files. Run the main tool against it as-is and the
 main tool does what it is specified to do: build the plan from the **whole live
@@ -460,29 +470,31 @@ pull ~130 GB, and a `--purge-after` run would also delete every file in the
 bundle that the live manifest happens not to contain.
 
 That is correct behaviour for the main tool and is not something `gircap` should
-work around. The fix belongs in `girpr`: a repeatable path include/exclude
+work around. The fix belonged in `girpr`: a repeatable path include/exclude
 (glob, rooted at the game dir) that narrows both the repair work list and the
-files-cleanup keep-set. With it, the intended invocation is roughly:
+files-cleanup keep-set. It did, with one refinement over what was asked for: a
+filtered-out path is treated as nonexistent on **both** sides, so the cleanup's
+keep-set widens rather than narrows — which is what makes `--purge-*` safe to
+pass at all here, and is why §8.1.1's step 4 caveat is now moot. The intended
+invocation is roughly:
 
 ```
 girpr --game-path <artifact>/game --biz hk4e_global
       --include "GenshinImpact_Data/Plugins/HoYoChannel.dll"
       --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"
       …
+      --max-download-bytes 2400000     # verify the scope, don't trim it
 ```
 
 and `SUMMARY download_bytes` can then be compared against each capture's
-`patchmaps/<id>.json → totals.download_bytes`.
+`patchmaps/<id>.json → totals.download_bytes`. `--print-plan` reports the
+expected total as `est_download_bytes` before any of it runs.
 
-**Until that flag exists, the end-to-end check is a manual step and is recorded
-as such.** `gircap` does not depend on `girpr`, does not invoke it, and does not
-shim the missing flag; `docs/02-plan.md` M11 runs the check by hand and marks it
-blocked rather than quietly skipping it.
+`gircap` still does not depend on `girpr`, does not invoke it, and does not shim
+anything: the flags are used by whoever runs the check.
 
-**Re-confirmed at M11**, against the tool as it stands: `girpr --help` offers
-`--game-path`, `--biz`, `--audio`, `--io-threads`, `--purge-after`,
-`--purge-before`, `--check-only`, `--dry-run`, `--json-summary` and
-`--log-level`. Nothing narrows a path. The blocker is unchanged.
+**Re-confirmed at M11**, against the tool as it stands: `girpr --help` offered
+no way to narrow a path. That statement is now historical — see above.
 
 ### 8.1.1 The manual procedure, and the numbers it must produce
 
@@ -502,9 +514,22 @@ result can be checked rather than believed. Against
    `expectations.result_md5`; and **no chunk in `expectations.must_not_fetch` was
    requested** — that last one is what catches a broken reuse path, and it is
    invisible in a byte count.
-4. Do **not** pass `--purge-after` or `--purge-before`. Without path filters they
+4. ~~Do **not** pass `--purge-after` or `--purge-before`. Without path filters they
    delete every file the live manifest does not contain, which for a 9-file
-   fixture is most of it.
+   fixture is most of it.~~ **Obsolete since M2:** a filtered-out path is
+   invisible to the cleanup as well as to the repair, so a purge flag is now safe
+   under a scope. Keeping it off is still the *right* advice for this procedure —
+   a scoped purge run would leave the bundle's `config.ini` unbumped and the
+   other fixture files untouched, but the `removed` class wants it and the
+   `removed` capture is the one class that genuinely needs a purge
+   (`--purge-only` exists for exactly that, and likewise does not bump
+   `config.ini`, which is what keeps `gircap verify` passing afterwards).
+5. Add `--print-plan` first if you want the expected total before committing:
+   `PLAN files=… est_download_bytes=…` is the same number the eventual
+   `SUMMARY download_bytes` must land on, for a plan where reuse succeeds.
+6. `--max-download-bytes <that number>` turns step 3's first assertion into a
+   gate: a typo in the `--include` set exits `5` with nothing written instead of
+   quietly reporting a different total.
 
 Expected per-capture `download_bytes` for that bundle:
 
@@ -525,6 +550,17 @@ cost. A consumer asked to reproduce those two is being asked to create or delete
 a file, not to patch one.
 
 The six that do carry `totals` sum to **2 373 385 B**.
+
+**What is still missing: the artifact-serving shim.** `--hyp-base` /
+`--sophon-base` make a mock reachable, but they redirect **`getBuild` only** —
+manifest and chunk URLs are built from the `url_prefix` read out of the *response
+bodies*, so pointing the tool at a local server still sends every manifest and
+every chunk wherever those bodies say. To run §8.1.1 against a bundle, the shim
+has to serve `api/*.json`, `manifests/*` and `chunks/blobs/*` from the bundle
+with each body's `url_prefix` rewritten to the shim's own origin. That is
+consumer-side work in `tools/capture`, it is the last thing standing between
+this procedure and an automated assertion, and it is deliberately **not** in
+`girpr` (`gircap` and `girpr` share no code by design, §2).
 
 ### 8.2 What the artifact provides so that check is cheap when it unblocks
 
