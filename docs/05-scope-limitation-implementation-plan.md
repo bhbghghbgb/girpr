@@ -209,6 +209,40 @@ foo's bytes are corrupted in *both* halves, every local slice fails its MD5, and
 the first download reservation trips the ceiling. `SUMMARY plan_download_bytes=0`
 and `stopped=bytes` on the same line is the whole argument in one output.
 
+### M5 — `--print-plan`
+
+`scope/report.rs`: `PlanTotals` (pure, from the two finished plans),
+`format_plan_line`, and `PlanDocument::write_to` for `--plan-out`.
+
+Placement is 4.7 — **after** the ceilings assert, before `create_dir_all`. So a
+`--print-plan` run is read-only by construction, and a ceiling still trips it
+(verified: `a_ceiling_trips_print_plan_like_any_other_mode`). The purge plan is
+now built when `--print-plan` asks for it too, not only on a purge flag, which is
+the M0 refactor paying off: `PLAN purge_files=… purge_bytes=…` is available
+without passing a purge flag that would delete things.
+
+`--plan-out` writes **JSON** (docs/04 §7.3.2, closed here). Two shapes per
+plane rather than one vocabulary everywhere, because `SERDE` JSON is what the
+artifact side of this repo already speaks.
+
+`PlanDocument::new` takes the plan's own `est_download_bytes` and reconciles the
+per-file split into it, so the document and the `PLAN` line can never disagree —
+a JSON file that contradicts the line above it would be worse than no file.
+
+`max_chunk_bytes` is reported but not enforced (that is docs/04 E3 /
+`--max-chunk-bytes`, still P2): it is the number that bounds peak RAM (a whole
+chunk is buffered compressed + uncompressed) and, times `io_threads`,
+transient disk. Printing it costs one line and is the measurement
+`gircap`'s §3.6 made.
+
+`--print-plan --dry-run` is coherent, as the plan predicted: `--print-plan`
+returns first, so `--dry-run` never gets to run its hashing pass in that
+combination. The milestone said "the plan prints, then the loop's hashing
+happens". It does not — `--print-plan` returns before the loop regardless of
+`--dry-run`, which is the *safer* reading of "read-only by construction" and
+means the combination is just `--print-plan`. Pinned by
+`print_plan_with_dry_run_is_coherent`, whose name says what it pins.
+
 ---
 
 ## 1. What this plan does not touch

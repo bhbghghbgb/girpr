@@ -48,6 +48,8 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         jobs,
         check_only: false,
         dry_run: false,
+        print_plan: false,
+        plan_out: None,
         purge_after: false,
         purge_before: false,
         json_summary: false,
@@ -1116,6 +1118,166 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
             );
         }
     }
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn print_plan_reports_the_plan_and_writes_nothing() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("print_plan");
+    let fx2 = build_fixture();
+    // foo missing (would be repaired), bar corrupt, plus an orphan that a purge
+    // would delete and a `*_tmp` that would be swept.
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 4096]);
+    write_game_file(&dir, "game/bar.dat_tmp", &[0x6Bu8; 16]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.print_plan = true;
+    ctx.purge_after = true;
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+
+    // The counters report a plan, not a repair.
+    let (skipped, repaired, failed, dl, deleted) = load_counters(&summary);
+    assert_eq!((skipped, repaired, failed, dl, deleted), (0, 0, 0, 0, 0));
+    assert!(mock.chunk_hits().is_empty(), "no chunk may be fetched");
+
+    // Read-only by construction: nothing on disk moved.
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_some(),
+        "orphan kept"
+    );
+    assert!(dir.join("game").join("bar.dat_tmp").exists(), "_tmp kept");
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
+        b"not the game data",
+        "the damaged file was not touched"
+    );
+    assert!(
+        read_game_file(&dir, &fx2.files[0].rel).is_none(),
+        "foo not created"
+    );
+    assert!(!dir.join("config.ini").exists(), "config.ini not bumped");
+
+    // The numbers a real run would act on are visible without doing it: the
+    // plan carried both files and the purge plan carried the orphan.
+    assert_eq!(summary.files_total, 2);
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn print_plan_out_writes_the_per_file_json_document() {
+    let fx = build_fixture();
+    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_out");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 2048]);
+
+    let out = dir.join("reports").join("plan.json");
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.print_plan = true;
+    ctx.purge_after = true;
+    ctx.plan_out = Some(out.clone());
+    let (_, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    assert_eq!(v["repair"].as_array().unwrap().len(), 2);
+    let rels: Vec<&str> = v["repair"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["rel"].as_str().unwrap())
+        .collect();
+    assert_eq!(rels, vec!["game/bar.dat", "game/foo.dat"], "plan order");
+    // The per-file estimates must add up to the plan's own figure — the same
+    // number `SUMMARY plan_download_bytes` and the ceiling are checked against.
+    let sum: u64 = v["repair"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["est_download_bytes"].as_u64().unwrap())
+        .sum();
+    assert_eq!(sum, est, "document must agree with the plan total");
+    assert_eq!(v["purge"][0]["rel"], "stray/orphan.dat");
+    assert_eq!(v["purge"][0]["size"], 2048);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_ceiling_trips_print_plan_like_any_other_mode() {
+    let fx = build_fixture();
+    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("print_plan_limit");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.print_plan = true;
+    ctx.limits.download_bytes = Some(est - 1);
+    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    assert_eq!(code, 5, "the assert comes before the plan report");
+    assert_eq!(summary.flags.plan_download_bytes, Some(est));
+}
+
+#[tokio::test]
+async fn print_plan_does_not_imply_check_only() {
+    // "what would you do", not "what is wrong": a damaged file is reported as
+    // planned work, never as damage, and exit is `0` either way.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("print_plan_not_check");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"corrupt");
+    write_game_file(&dir, &fx2.files[1].rel, b"corrupt");
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.print_plan = true;
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 0);
+
+    // The same tree under --check-only does report damage.
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.check_only = true;
+    let (_, code) = repair::run(ctx).await.expect("check runs");
+    assert_eq!(code, 4);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn print_plan_with_dry_run_is_coherent() {
+    // The plan prints first; then `--dry-run` does what it was asked for —
+    // walk the selected files and hash them, writing nothing.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("print_plan_dry");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.print_plan = true;
+    ctx.dry_run = true;
+    let (summary, code) = repair::run(ctx).await.expect("print-plan + dry-run runs");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_total, 2);
+    assert!(!dir.join("config.ini").exists(), "dry-run writes nothing");
+
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();
 }

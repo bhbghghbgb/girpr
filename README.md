@@ -48,6 +48,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
+| `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `format_plan_line`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `adjust_download_bytes`, `stop_downloads` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
@@ -69,6 +70,7 @@ flowchart TD
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
+    E2 -->|"--print-plan"| P["emit PLAN … (+ --plan-out JSON)<br/>exit 0, writes nothing"]
     F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
     F -->|no| H{"check-only?"}
     G --> H
@@ -90,7 +92,7 @@ flowchart TD
 **Machine contracts (do not break without updating tests + this table).**
 
 - stdout: `REPORT …` once after metadata; `PROGRESS …` every 10 s;
-  `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
+  `PLAN …` with `--print-plan`; `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
   `--json-summary` emits `REPORT`/`SUMMARY` as JSON objects instead.
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
@@ -135,6 +137,11 @@ flowchart TD
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0; purge lists are only logged).
+  `--print-plan` is read-only by construction too (it returns before
+  `create_dir_all`) but is **not** the same thing as `--check-only`: it answers
+  "what would you do", not "what is wrong". `--print-plan --dry-run` is
+  coherent — the plan prints, then the loop's hashing happens, which is what
+  `--dry-run` asked for. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `plan::purge::plan_purge` decides, `plan::purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + `audio_lang_*`/`Audio_*_pkg_version`
@@ -180,6 +187,8 @@ cargo build --release
 | `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. Does **not** bound metadata or manifest traffic |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--dry-run` | off | Log actions; writes nothing |
+| `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
+| `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
 | `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |
 | `--log-level <LVL>` | `info` | `error`/`warn`/`info`/`debug`/`trace` (`RUST_LOG` also honored) |
 

@@ -149,6 +149,8 @@ fn help_text_lists_every_documented_flag() {
         "--purge-before",
         "--check-only",
         "--dry-run",
+        "--print-plan",
+        "--plan-out",
         "--json-summary",
         "--log-level",
         "--include",

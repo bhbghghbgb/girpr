@@ -23,6 +23,8 @@
 pub mod filter;
 pub mod ledger;
 pub mod limits;
+pub mod report;
 
 pub use filter::PathScope;
 pub use limits::{LimitHit, Limits, Preflight};
+pub use report::{PlanDocument, PlanTotals, format_plan_line};

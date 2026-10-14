@@ -90,6 +90,20 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 
+    /// Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=…`)
+    /// to stdout and exit 0 without repairing, purging or bumping anything.
+    /// NOT an offline mode: the plan *is* the manifest, so this still fetches
+    /// the API and the manifests, exactly as any other run does.
+    #[arg(long, default_value_t = false)]
+    pub print_plan: bool,
+
+    /// Also write the per-file plan detail to this file as JSON
+    /// `{repair:[{rel,size,chunks_total,est_download_bytes}],purge:[{rel,size}]}`.
+    /// Implies nothing: use it with `--print-plan`, or on its own to dump the
+    /// plan of a run that does the work.
+    #[arg(long, value_name = "FILE")]
+    pub plan_out: Option<PathBuf>,
+
     /// Emit the begin REPORT and final SUMMARY stdout lines as JSON
     #[arg(long, default_value_t = false)]
     pub json_summary: bool,
@@ -127,6 +141,8 @@ impl Args {
             jobs: self.io_threads,
             check_only: self.check_only,
             dry_run: self.dry_run,
+            print_plan: self.print_plan,
+            plan_out: self.plan_out,
             purge_after: self.purge_after,
             purge_before: self.purge_before,
             json_summary: self.json_summary,

@@ -153,16 +153,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     let deprecated = fetch_deprecated(&meta.hyp).await;
 
     // 4.6 the purge candidates, planned up front and unconditionally whenever a
-    // purge flag is set — for the same reason: "how much would this delete?" is
-    // only answerable before the first delete. `game_dir` may not exist yet;
-    // planning a missing directory yields an empty plan, which is what planning
-    // the freshly-created empty directory would have yielded too.
+    // purge flag is set **or** `--print-plan` is asking for them — for the same
+    // reason: "how much would this delete?" is only answerable before the first
+    // delete, and `--print-plan` has to report it whether or not a purge was
+    // requested. `game_dir` may not exist yet; planning a missing directory
+    // yields an empty plan, which is what planning the freshly-created empty
+    // directory would have yielded too.
     //
     // This is the union both purge passes would act on as of now. A `*_tmp` the
     // repair creates mid-run is deliberately not counted: it did not exist at
     // plan time, it is purged after the repair by a re-plan, and the write
     // ceiling is the flag that bounds it.
-    let purge_plan = (ctx.purge_before || ctx.purge_after)
+    let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.print_plan)
         .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
 
     // === assert: the ceilings, before anything is mutated ===
@@ -200,6 +202,43 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // Nothing has been written at this point — no directory created, no
         // `_tmp` opened, no file deleted, no `config.ini` touched.
         return Ok((summary, 5));
+    }
+
+    // 4.7 `--print-plan`: report the whole plan and stop. Read-only by
+    // construction — this returns before `create_dir_all`, so no `game_dir`,
+    // no `_tmp`, no delete, no `config.ini` write. It does **not** imply
+    // `--check-only`: it answers "what would you do", not "what is wrong".
+    //
+    // The ceilings above still apply, and still trip here: narrowing what is
+    // verified is not a licence to skip the assertion.
+    if ctx.print_plan {
+        let totals = scope::report::PlanTotals::new(
+            &plan,
+            purge_plan.as_ref(),
+            est_download_bytes,
+            scope.is_active(),
+        );
+        let line = scope::report::format_plan_line(&totals);
+        report::emit(&line);
+        if ctx.json_summary {
+            let v = serde_json::json!({
+                "plan": totals.files,
+                "est_download_bytes": totals.est_download_bytes,
+                "purge_files": totals.purge_files,
+                "purge_bytes": totals.purge_bytes,
+                "max_chunk_bytes": totals.max_chunk_bytes,
+                "scoped": totals.scoped,
+                "exit": 0,
+            });
+            report::emit(&v.to_string());
+        }
+        if let Some(out) = ctx.plan_out.as_deref() {
+            let doc =
+                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
+            doc.write_to(std::path::Path::new(out))
+                .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
+        }
+        return Ok((summary, 0));
     }
 
     // === execution phase: everything below may touch the disk ===
