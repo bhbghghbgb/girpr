@@ -52,15 +52,23 @@ pub async fn run(
             .fetch_add(bytes, Ordering::Relaxed);
     }
     // docs/04 §2.2: `config.ini` is bumped last so the on-disk version only
-    // advances once the bytes are in place. Under an active path scope that
-    // premise is false by construction — the bytes were deliberately *not*
-    // put in place — so bumping would be exactly the launcher desync the
-    // ordering exists to prevent. Skip it, say so, and let `SUMMARY` carry
-    // `config_bumped=0` so a test can assert it instead of reading the file.
+    // advances once the bytes are in place. Two situations make that premise
+    // false by construction — the bytes were deliberately *not* put in place:
+    //
+    // - an active path scope (M2): the run only repaired a subset of the tree,
+    // - `--purge-only` (M6): a cleanup put no bytes in place at all.
+    //
+    // Bumping would be exactly the launcher desync the ordering exists to
+    // prevent. Skip it, say so, and let `SUMMARY` carry `config_bumped=0` so a
+    // test can assert it instead of reading the file.
     if ctx.path_scope.is_active() {
         tracing::warn!(
             "path scope active: not bumping config.ini, so its game_version still describes the un-scoped parts of the install"
         );
+        return Ok(());
+    }
+    if ctx.purge_only {
+        tracing::warn!("--purge-only: not bumping config.ini; no bytes were repaired");
         return Ok(());
     }
     let (ch, sub, cps) = ctx.biz.channel_tuple();

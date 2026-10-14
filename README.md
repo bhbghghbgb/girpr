@@ -49,7 +49,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `format_plan_line`, `PlanDocument` |
-| `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `adjust_download_bytes`, `stop_downloads` |
+| `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `reserve_write_bytes`, `adjust_download_bytes`, `stop_downloads`, `stop_writes`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
@@ -116,7 +116,9 @@ flowchart TD
   files behind — safe, because resume-by-length makes the next run resume rather
   than restart — and says so: `SUMMARY stopped=<files|bytes|delete>` is what
   distinguishes "nothing was written because the plan was too big" from
-  "something was written and then we ran out".
+  "something was written and then we ran out". `stopped=bytes` is the download
+  ceiling, `stopped=write` the write ceiling — the key is *which* ceiling bound,
+  so it cannot be a single value.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
@@ -137,6 +139,11 @@ flowchart TD
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0; purge lists are only logged).
+  `--purge-only` is read-only *in the repair sense* — it does the cleanup half
+  and skips the repair loop. It does **not** bump `config.ini`: a cleanup puts no
+  bytes in place, so claiming the newer version would desync the launcher
+  (same rule as a scoped run), and on an already-current install it is a no-op
+  anyway. `SUMMARY config_bumped=0` says so.
   `--print-plan` is read-only by construction too (it returns before
   `create_dir_all`) but is **not** the same thing as `--check-only`: it answers
   "what would you do", not "what is wrong". `--print-plan --dry-run` is
@@ -185,7 +192,10 @@ cargo build --release
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
 | `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Counted once, over both purge passes; out-of-scope paths are never candidates |
 | `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. Does **not** bound metadata or manifest traffic |
+| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into `*_tmp`. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees |
 | `--check-only` | off | Verify size+MD5; writes nothing |
+| `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop**. The inverse of `--check-only`. Does not bump `config.ini` |
+| `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Without it one bad file costs ~125 s of pure retry sleeping |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |

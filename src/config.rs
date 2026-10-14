@@ -77,6 +77,11 @@ pub struct RunCtx {
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,
+    /// `--purge-only`: `check_only` inverted. Runs the files-cleanup and the
+    /// post-phase, skips the repair loop.
+    pub purge_only: bool,
+    /// `--fail-fast`: stop the run once one file exhausts its retries.
+    pub fail_fast: bool,
     pub dry_run: bool,
     /// `--print-plan`: report the plan and stop. Read-only by construction —
     /// the pipeline returns before `create_dir_all` — and **not** the same thing

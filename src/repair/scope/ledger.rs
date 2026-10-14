@@ -90,6 +90,81 @@ impl Summary {
     pub fn stop_downloads(&self) {
         self.download_stopped.store(true, Ordering::Relaxed);
     }
+
+    /// `--max-write-bytes`, or `None`.
+    pub fn max_write_bytes(&self) -> Option<u64> {
+        let l = self.write_limit.load(Ordering::Relaxed);
+        (l != u64::MAX).then_some(l)
+    }
+
+    /// Install the write ceiling.
+    pub fn set_write_limit(&mut self, limit: Option<u64>) {
+        self.write_limit
+            .store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Reserve `n` bytes of disk writes against the ceiling — see
+    /// [`Self::reserve_download_bytes`] for why this is a reservation and not a
+    /// check-then-add.
+    ///
+    /// **This is the only genuinely un-counted cost in the tool.**
+    /// `SUMMARY download_bytes` counts the network; this counts the disk. Every
+    /// reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
+    /// downloaded-chunk write lands in `*_tmp` and appears in *neither*
+    /// `download_bytes` nor the plan's estimate, so a zero-reuse run writes its
+    /// entire payload to disk while reporting a network cost of almost nothing.
+    pub fn reserve_write_bytes(&self, n: u64) -> bool {
+        let limit = self.write_limit.load(Ordering::Relaxed);
+        let mut cur = self.write_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_add(n);
+            if next > limit {
+                return false;
+            }
+            match self.write_bytes.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    /// Trip the runtime **write** hard stop. Separate from
+    /// [`Self::stop_downloads`] so `SUMMARY stopped=` can say which ceiling
+    /// bound — that distinction is the entire point of the key.
+    pub fn stop_writes(&self) {
+        self.write_stopped.store(true, Ordering::Relaxed);
+    }
+
+    /// `true` once the write ceiling has fired.
+    pub fn write_stopped(&self) -> bool {
+        self.write_stopped.load(Ordering::Relaxed)
+    }
+
+    /// `--fail-fast` armed?
+    pub fn fail_fast(&self) -> bool {
+        self.fail_fast.load(Ordering::Relaxed)
+    }
+
+    /// Arm (or disarm) `--fail-fast`. Called once, before any task starts.
+    pub fn set_fail_fast(&mut self, on: bool) {
+        self.fail_fast.store(on, Ordering::Relaxed);
+    }
+
+    /// `true` once `--fail-fast` has seen a file exhaust its retries: no further
+    /// files are started and in-flight ones stop retrying.
+    pub fn aborted(&self) -> bool {
+        self.aborted.load(Ordering::Relaxed)
+    }
+
+    /// Trip the `--fail-fast` abort.
+    pub fn abort(&self) {
+        self.aborted.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]

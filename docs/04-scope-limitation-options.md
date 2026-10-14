@@ -663,12 +663,11 @@ non-breaking:
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
 | `write_bytes=<N>` | `--max-write-bytes` active |
-| `config_bumped=0` | any path scope active (§2.2) |
-| `stopped=<files>\|bytes\|delete` | a runtime hard stop fired, not a refusal |
+| `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran (§2.2) |
+| `stopped=<bytes>\|write` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`; the key says *which* ceiling bound, so the two cannot share a value |
 
 `stopped=` is what distinguishes "nothing was written because the plan was too
 big" from "something was written and then we ran out" (§4.3).
-
 ---
 
 ## 5. Suggested module layout

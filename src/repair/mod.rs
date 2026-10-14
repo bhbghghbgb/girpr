@@ -277,8 +277,22 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 
+    // 5.6 purge-only: `check_only` inverted — phases 1–5 and 7, skipping 6.
+    // One early return, beside the `--check-only` one. `config.ini` is **not**
+    // bumped: a cleanup does not put the bytes in place, so claiming the newer
+    // version would be the same launcher desync docs/04 §2.2 describes, and on
+    // an already-current install it is a no-op anyway.
+    if ctx.purge_only {
+        summary.flags.config_bumped_zero = true;
+        tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
+        post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        return Ok((summary, 0));
+    }
+
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
+    summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_fail_fast(ctx.fail_fast);
     summary = file::repair_all(
         http,
         game_dir.clone(),
@@ -289,6 +303,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.dry_run,
     )
     .await;
+    if ctx.limits.write_bytes.is_some() {
+        summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
+    }
     // A runtime hard stop is the one place the run writes *some* of what it was
     // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3
     // resume-by-length makes the next run resume rather than restart — but it is
@@ -300,6 +317,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             summary.download_bytes.load(Ordering::Relaxed)
         );
         summary.flags.stopped = Some("bytes");
+        return Ok((summary, 5));
+    }
+    // Same shape, different ceiling: `stopped=write` (not `bytes`) so a parser
+    // can tell which one bound without re-deriving it from the flags.
+    if summary.write_stopped() {
+        tracing::error!(
+            "stopped after {} written bytes: --max-write-bytes is a hard stop; \
+             *_tmp files left in place are resumed by the next run",
+            summary.write_bytes.load(Ordering::Relaxed)
+        );
+        summary.flags.stopped = Some("write");
         return Ok((summary, 5));
     }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {

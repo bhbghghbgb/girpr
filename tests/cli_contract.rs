@@ -126,6 +126,14 @@ fn argument_errors_exit_one_not_two() {
             "--max-download-bytes",
             "abc",
         ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--max-write-bytes",
+            "abc",
+        ],
     ];
     for args in cases {
         let (code, _, stderr) = run(&args);
@@ -149,6 +157,8 @@ fn help_text_lists_every_documented_flag() {
         "--purge-before",
         "--check-only",
         "--dry-run",
+        "--purge-only",
+        "--fail-fast",
         "--print-plan",
         "--plan-out",
         "--json-summary",
@@ -186,10 +196,17 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
         "0",
         "--max-download-bytes",
         "0",
+        "--max-write-bytes",
+        "0",
+        "--fail-fast",
+        "--purge-only",
     ]);
     let ctx = args.into_ctx().expect("0 is a ceiling, not a usage error");
     assert_eq!(ctx.limits.files, Some(0));
     assert_eq!(ctx.limits.delete_bytes, Some(0));
     assert_eq!(ctx.limits.download_bytes, Some(0));
+    assert_eq!(ctx.limits.write_bytes, Some(0));
     assert!(ctx.limits.is_active());
+    assert!(ctx.fail_fast);
+    assert!(ctx.purge_only);
 }

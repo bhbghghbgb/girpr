@@ -86,6 +86,31 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
 
+    /// Make the install match the live manifest without repairing anything:
+    /// runs the files-cleanup and the post-phase, skips the repair loop. The
+    /// inverse of `--check-only` ("is it intact?" → "make it match").
+    /// `config.ini` is **not** bumped — a cleanup does not put the bytes in
+    /// place, so claiming the newer version would desync the launcher.
+    #[arg(long, default_value_t = false)]
+    pub purge_only: bool,
+
+    /// Stop the run as soon as one file exhausts its retries: no further files
+    /// are started and in-flight ones stop retrying. Without it one unreachable
+    /// chunk costs ~85 s of pure sleeping (5 file attempts × linear backoff,
+    /// each with its own 5× chunk retry), so a failing run can take hours to
+    /// reach its SUMMARY. Counters stay honest: the file that failed still
+    /// counts as failed, and the run exits `3`.
+    #[arg(long, default_value_t = false)]
+    pub fail_fast: bool,
+
+    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
+    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
+    /// the disk cost: every reuse-copy and every chunk write is counted, so a
+    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
+    /// success is decided per chunk at runtime.
+    #[arg(long, value_name = "N")]
+    pub max_write_bytes: Option<u64>,
+
     /// Print actions without writing anything
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
@@ -136,10 +161,12 @@ impl Args {
                 files: self.max_files,
                 delete_bytes: self.max_delete_bytes,
                 download_bytes: self.max_download_bytes,
-                ..Default::default()
+                write_bytes: self.max_write_bytes,
             },
             jobs: self.io_threads,
             check_only: self.check_only,
+            purge_only: self.purge_only,
+            fail_fast: self.fail_fast,
             dry_run: self.dry_run,
             print_plan: self.print_plan,
             plan_out: self.plan_out,

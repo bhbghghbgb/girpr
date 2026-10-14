@@ -199,6 +199,10 @@ pub struct MockOpts {
     /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
     /// `Some("")` to model the API omitting the field.
     pub download_mode: Option<String>,
+    /// Serve every chunk request as `500`. Models a reachable-but-broken origin,
+    /// which is what exercises the retry/backoff paths (`--fail-fast`) without
+    /// a dead host and its connection timeouts.
+    pub fail_chunks: bool,
 }
 
 pub struct MockServer {
@@ -291,6 +295,7 @@ struct Responses {
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     latest_tag: String,
+    fail_chunks: bool,
 }
 
 fn build_responses(
@@ -382,6 +387,7 @@ fn build_responses(
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         latest_tag: fx.latest_tag.clone(),
+        fail_chunks: opts.fail_chunks,
     }
 }
 
@@ -466,12 +472,23 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        match fx.chunk_store.get(id) {
-            Some(bytes) => {
-                log.lock().unwrap().push(id.to_string());
-                ("200 OK", "application/octet-stream", bytes.clone())
+        if r.fail_chunks {
+            // Still logged: "was this chunk even asked for" is the assertion a
+            // `--fail-fast` test needs, and a 500 is still a request.
+            log.lock().unwrap().push(id.to_string());
+            (
+                "500 Internal Server Error",
+                "text/plain",
+                b"chunk store is down".to_vec(),
+            )
+        } else {
+            match fx.chunk_store.get(id) {
+                Some(bytes) => {
+                    log.lock().unwrap().push(id.to_string());
+                    ("200 OK", "application/octet-stream", bytes.clone())
+                }
+                None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
             }
-            None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
         }
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())

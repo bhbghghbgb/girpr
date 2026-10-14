@@ -43,6 +43,19 @@ pub struct Summary {
     /// `*_tmp` files behind by design: S3 resume-by-length makes the next run a
     /// smaller run, not a corrupt one.
     pub download_stopped: AtomicBool,
+    /// `--max-write-bytes`, same `u64::MAX` sentinel as `download_limit`.
+    pub write_limit: AtomicU64,
+    /// Bytes written into `*_tmp`. Reported as `write_bytes` **only** when
+    /// `--max-write-bytes` is active — this is the cumulative counterpart of
+    /// peak disk (`io_threads × largest file`), and it is invisible to
+    /// `download_bytes`, which counts the network, not the disk.
+    pub write_bytes: AtomicU64,
+    /// Set when the runtime **write** hard stop fired (see `write_bytes`).
+    pub write_stopped: AtomicBool,
+    /// `--fail-fast` armed.
+    pub fail_fast: AtomicBool,
+    /// `--fail-fast` has tripped: stop starting files, stop retrying.
+    pub aborted: AtomicBool,
 }
 
 impl Default for Summary {
@@ -64,6 +77,11 @@ impl Summary {
             flags: SummaryFlags::default(),
             download_limit: AtomicU64::new(u64::MAX),
             download_stopped: AtomicBool::new(false),
+            write_limit: AtomicU64::new(u64::MAX),
+            write_bytes: AtomicU64::new(0),
+            write_stopped: AtomicBool::new(false),
+            fail_fast: AtomicBool::new(false),
+            aborted: AtomicBool::new(false),
         }
     }
 
@@ -82,6 +100,11 @@ impl Summary {
             // moment either can be meaningful.
             download_limit: AtomicU64::new(self.download_limit.load(Ordering::Relaxed)),
             download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
+            write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
+            write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
+            write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
+            fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
+            aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
         }
     }
 }
@@ -102,9 +125,12 @@ pub struct SummaryFlags {
     pub plan_download_bytes: Option<u64>,
     /// Bytes written into `*_tmp`, when `--max-write-bytes` is active.
     pub write_bytes: Option<u64>,
-    /// What a **runtime** hard stop cut short (`files` / `bytes` /
-    /// `delete`), vs a pre-flight refusal which wrote nothing at all.
+    /// What a **runtime** hard stop cut short (`bytes` / `write`), vs a
+    /// pre-flight refusal which wrote nothing at all.
     pub stopped: Option<&'static str>,
+    /// `config.ini` was deliberately not bumped, because a scoped (or
+    /// `--purge-only`) run has deliberately not put the bytes in place.
+    pub config_bumped_zero: bool,
 }
 
 /// One conditional `SUMMARY` entry. Rendered as `key=value` on the `key=value`
@@ -151,9 +177,11 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if f.scoped {
         out.push(Extra::Num("scoped", 1));
-        // A scoped run deliberately did not put the bytes in place, so it does
-        // not advance config.ini (docs/04 §2.2). Emitted as a key rather than
-        // left to be discovered by reading the file.
+    }
+    if f.scoped || f.config_bumped_zero {
+        // A scoped (or `--purge-only`) run deliberately did not put the bytes
+        // in place, so it does not advance config.ini (docs/04 §2.2). Emitted
+        // as a key rather than left to be discovered by reading the file.
         out.push(Extra::Num("config_bumped", 0));
     }
     if f.limited || f.scoped {
@@ -394,6 +422,7 @@ mod tests {
             plan_download_bytes: Some(4242),
             write_bytes: Some(77),
             stopped: Some("bytes"),
+            config_bumped_zero: false,
         };
         let line = format_summary_line(&s, 5, false);
         assert_eq!(

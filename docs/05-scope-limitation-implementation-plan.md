@@ -243,6 +243,50 @@ happens". It does not — `--print-plan` returns before the loop regardless of
 means the combination is just `--print-plan`. Pinned by
 `print_plan_with_dry_run_is_coherent`, whose name says what it pins.
 
+### M6 — `--max-write-bytes`, `--fail-fast`, `--purge-only`
+
+**`--max-write-bytes`.** `Summary::reserve_write_bytes` on the same CAS shape as
+the download reservation, called at the two `write_all` sites in `file.rs` — the
+reuse-copy and the downloaded-chunk write. The first is the important one: it is
+a path `download_bytes` never sees, and the case the milestone was written for.
+
+`SUMMARY stopped=` is `write` here, **not** `bytes` as docs/04 §4.6's table
+said. Two flags now emit `stopped=`, and the whole point of the key is to say
+*which* ceiling bound; a value that means two things says neither. The §4.6
+table in docs/04 is corrected accordingly.
+
+**`--fail-fast`.** Two mechanisms, because one was measurably not enough:
+
+1. *As specified*: no new file task is started and in-flight ones stop
+   retrying once a file exhausts its retries. `files_failed` stays honest and the
+   run exits `3`.
+2. *Added*: the flag also caps a file at **one** attempt instead of
+   `MAX_ATTEMPTS`. Measured, one failing file costs `5 × (15 s inside
+   `fetch_chunk_bytes` + 10 s of file backoff)` = **~125 s of pure sleeping** —
+   the docs' E1 estimated 85 s. Mechanism 1 alone cannot help the *first* file,
+   so "reaches its SUMMARY in seconds" is false with only it, and the test suite
+   paid 174 s to prove that. The flag is an explicit "tell me fast"; a user who
+   wants the full retry budget does not pass it. Counter semantics are unchanged.
+
+`MockOpts.fail_chunks` makes the mock answer every chunk with a `500` and still
+log the id, so "was this chunk even asked for" is assertable — that is how
+`fail_fast_reaches_its_summary_in_seconds_against_a_500_origin` proves
+`bar.dat` sorts first, fails, and `foo.dat` never opens a connection. The
+suite's integration time went 174 s → 15.5 s.
+
+**`--purge-only`.** One early return beside `--check-only`, calling
+`post::run` and skipping the repair loop. It does **not** bump `config.ini`, for
+the same reason a scoped run does not: a cleanup puts no bytes in place, so
+bumping would be the launcher desync the ordering exists to prevent — and on an
+already-current install it is a no-op anyway. `config_bumped=0` is emitted, which
+meant widening that key from "any path scope" to "the scope **or** `--purge-only`
+deliberately did not bump" (`SummaryFlags.config_bumped_zero`).
+
+There is deliberately **no** "without `--fail-fast`" control test: proving that
+case means paying the 125 s, and it is already covered structurally by
+`repairs_missing_and_corrupt_files_end_to_end`, which shows every planned file is
+attempted when nothing is flagged.
+
 ---
 
 ## 1. What this plan does not touch

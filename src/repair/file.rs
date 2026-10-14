@@ -94,6 +94,16 @@ pub async fn repair_all(
 
     let mut handles = Vec::with_capacity(total_files);
     for idx in 0..total_files {
+        // `--fail-fast`: once a file has exhausted its retries, no further file
+        // is started. The unstarted ones are simply not counted — the caller
+        // sees `done < total` in `PROGRESS` and `failed > 0` in `SUMMARY`.
+        if ctx.summary.aborted() {
+            tracing::warn!(
+                remaining = total_files - idx,
+                "fail-fast: not starting the remaining files"
+            );
+            break;
+        }
         let sem = sem.clone();
         let ctx = ctx.clone();
         handles.push(tokio::spawn(async move {
@@ -125,6 +135,13 @@ pub async fn repair_all(
                     Err(e) => {
                         ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
                         tracing::error!("repair failed: {e:#}");
+                        // `--fail-fast`: the file that failed is honestly
+                        // counted and the run now stops instead of grinding
+                        // through hours of retry backoff. No new counter — the
+                        // fact is already visible as `failed > 0` + exit 3.
+                        if ctx.summary.fail_fast() {
+                            ctx.summary.abort();
+                        }
                     }
                 }
             }
@@ -157,7 +174,7 @@ struct FileCtx {
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // A runtime hard stop already fired: drop out without touching the file.
     // Its `*_tmp` (if any) stays, and the next run resumes from it.
-    if ctx.summary.download_stopped() {
+    if ctx.summary.download_stopped() || ctx.summary.write_stopped() || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
@@ -201,18 +218,34 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
 
-    for attempt in 1..=MAX_ATTEMPTS {
+    // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
+    // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
+    // mean that while the *first* file alone spends 5 × (15 s of chunk-fetch
+    // backoff + 10 s of file-level backoff) ≈ 125 s of pure sleeping before anyone
+    // else is spared. The flag is an explicit "tell me fast"; a user who wants the
+    // full budget does not pass it. Counter semantics are unchanged: a file that
+    // fails on its first attempt is still just `files_failed`.
+    let max_attempts = if ctx.summary.fail_fast() {
+        1
+    } else {
+        MAX_ATTEMPTS
+    };
+    for attempt in 1..=max_attempts {
         match repair_attempt(ctx, file, &prefix, &tmp_path).await {
             Ok(stats) => return Ok(Repaired::Repaired(stats)),
-            // The ceiling, not the file: this must not be counted as a failure
-            // and must not be retried (docs/04 §3 B2).
-            Err(_e) if ctx.summary.download_stopped() => {
-                tracing::warn!(file = %file.rel, "download-bytes ceiling reached -> stopped");
+            // The ceiling, not the file: this must not be counted as a
+            // failure and must not be retried (docs/04 §3 B2/B3).
+            Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
+                tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
                 return Ok(Repaired::Stopped);
             }
             Err(e) => {
                 tracing::warn!(attempt, "attempt failed: {e:#}");
-                if attempt == MAX_ATTEMPTS {
+                // `--fail-fast` cuts the backoff short. Without it, one bad
+                // file spends 5 × linear sleep (and each of those attempts has
+                // its own 5× chunk retry inside `fetch_chunk_bytes`) before the
+                // run even starts on the next file.
+                if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
@@ -221,7 +254,6 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     }
     unreachable!("attempt loop always returns")
 }
-
 /// One full pass over a file's chunks, then verify + promote.
 async fn repair_attempt(
     ctx: &FileCtx,
@@ -331,6 +363,9 @@ fn try_reuse_slice(
                     tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
                     return Ok(ChunkOutcome::Download);
                 }
+                // The write ceiling counts *this* copy: it goes into `*_tmp` and
+                // appears in neither `download_bytes` nor the plan's estimate.
+                reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
                 remaining -= n as u64;
             }
@@ -401,9 +436,31 @@ async fn write_downloaded_chunk(
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
     out.seek(SeekFrom::Start(c.offset as u64))?;
+    reserve_write(ctx, decoded.len() as u64)?;
     out.write_all(&decoded)?;
     stats.chunks_downloaded += 1;
     Ok(())
+}
+
+/// Reserve `n` bytes of disk write against `--max-write-bytes`, or trip the
+/// runtime hard stop.
+///
+/// Reserving **before** the write is what makes the ceiling meaningful: the
+/// bytes land in `*_tmp` as soon as `write_all` returns, so a check-then-write
+/// under `--io-threads N` would overshoot by up to N-1 buffers. On refusal the
+/// file is left where it is and `*_tmp` keeps whatever prefix it already had,
+/// which S3 resume-by-length picks up next run.
+fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
+    if ctx.summary.reserve_write_bytes(n) {
+        return Ok(());
+    }
+    ctx.summary.stop_writes();
+    tracing::warn!(
+        limit = ?ctx.summary.max_write_bytes(),
+        have = ctx.summary.write_bytes.load(Ordering::Relaxed),
+        "write-bytes ceiling reached -> stopping the run"
+    );
+    anyhow::bail!("write-bytes ceiling reached")
 }
 
 /// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the

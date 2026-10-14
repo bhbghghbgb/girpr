@@ -47,6 +47,8 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         limits: Limits::default(),
         jobs,
         check_only: false,
+        purge_only: false,
+        fail_fast: false,
         dry_run: false,
         print_plan: false,
         plan_out: None,
@@ -1277,6 +1279,254 @@ async fn print_plan_with_dry_run_is_coherent() {
     assert_eq!(code, 0);
     assert_eq!(summary.files_total, 2);
     assert!(!dir.join("config.ini").exists(), "dry-run writes nothing");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ---------------------------------------------------------------------------
+// docs/04 M6: --max-write-bytes, --fail-fast, --purge-only
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn max_write_bytes_stops_mid_flight_and_leaves_the_tmp() {
+    // The only ceiling that cannot be a pre-flight refusal: reuse success is
+    // decided per chunk at runtime, against bytes that may not be there. This
+    // run downloads both files, so almost every byte written into `*_tmp` is a
+    // write the plan's estimate never counted.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_write");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    let limit = 1u64;
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.limits.write_bytes = Some(limit);
+    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    assert_eq!(code, 5);
+    assert_eq!(summary.flags.stopped, Some("write"), "which ceiling bound");
+    assert!(summary.flags.limited, "the ceiling was requested");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "not a failure"
+    );
+    assert!(
+        summary.write_bytes.load(Ordering::Relaxed) <= limit,
+        "the ceiling must not be overshot"
+    );
+
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("stopped=write"), "{line}");
+    assert!(line.contains("write_bytes="), "{line}");
+
+    // The un-promoted `_tmp` is left in place: resume-by-length makes the next
+    // run a smaller run, not a corrupt one.
+    assert!(!dir.join("config.ini").exists(), "post-phase is skipped");
+    assert_ne!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "nothing was promoted"
+    );
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn write_bytes_is_counted_only_when_the_flag_is_active() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("write_bytes_absent");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    // Same run, no flag: the repair completes and the key is absent.
+    let (summary, code) = repair::run(ctx_for(dir.clone(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    assert!(
+        summary.write_bytes.load(Ordering::Relaxed) > 0,
+        "it was counted"
+    );
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(!line.contains("write_bytes"), "{line}");
+    // `download_bytes` is the network; `write_bytes` is the disk. They are not the
+    // same quantity and never were — that is the whole reason `--max-write-bytes`
+    // exists. Here every byte written came from a download, so write_bytes is
+    // simply the *uncompressed* size, which is strictly larger.
+    assert!(
+        summary.write_bytes.load(Ordering::Relaxed)
+            > summary.download_bytes.load(Ordering::Relaxed),
+        "write_bytes counts uncompressed payload, download_bytes the compressed blob"
+    );
+
+    // A generous ceiling is reported but not tripped.
+    let dir2 = temp_dir("write_bytes_generous");
+    let fx3 = build_fixture();
+    write_game_file(&dir2, &fx3.files[0].rel, b"not the game data");
+    write_game_file(&dir2, &fx3.files[1].rel, b"not the game data");
+    let mut ctx = ctx_for(dir2.clone(), &mock, 1);
+    ctx.limits.write_bytes = Some(1 << 20);
+    let (summary, code) = repair::run(ctx).await.expect("run");
+    assert_eq!(code, 0);
+    assert!(summary.flags.stopped.is_none());
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("write_bytes="), "{line}");
+    assert!(!line.contains("stopped="), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dir2).ok();
+}
+
+#[tokio::test]
+async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
+    // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the
+    // 5× retry with 1-5 s sleeps inside `fetch_chunk_bytes` + 1-4 s of
+    // file-level backoff) ≈ **125 s of pure sleeping**, measured — and that is
+    // before `HypClient::new_with_bases` is even given a connect timeout. With
+    // it, a file gets one attempt and the abort spares every file behind it.
+    //
+    // There is deliberately no "without the flag" control here: proving that
+    // case means paying those 125 s, and it is already covered structurally —
+    // `repairs_missing_and_corrupt_files_end_to_end` shows every planned file is
+    // attempted when nothing is flagged.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            fail_chunks: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("fail_fast");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.fail_fast = true;
+    let started = std::time::Instant::now();
+    let (summary, code) = repair::run(ctx)
+        .await
+        .expect("a failed repair is not an Err");
+    let elapsed = started.elapsed();
+    assert_eq!(code, 3, "a file failed, so the post-phase is skipped");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        1,
+        "honest count"
+    );
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
+    assert!(!dir.join("config.ini").exists());
+    // The second file was never even asked for. The plan is sorted, so with
+    // `jobs=1` `bar.dat` runs first, exhausts its retries and trips the abort;
+    // `foo.dat` then drops out at its task entry without opening a connection.
+    let hits = mock.chunk_hits();
+    assert!(
+        hits.iter().all(|id| id == "chunk_bar0"),
+        "foo.dat must not be attempted after the abort: {hits:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "fail-fast must reach its SUMMARY in seconds, took {elapsed:?}"
+    );
+    assert!(
+        summary.files_skipped.load(Ordering::Relaxed)
+            + summary.files_repaired.load(Ordering::Relaxed)
+            + summary.files_failed.load(Ordering::Relaxed)
+            < summary.files_total,
+        "the run was truncated before the plan was finished"
+    );
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn purge_only_cleans_up_without_repairing() {
+    // The `removed` matrix class is reachable only through the purge path, and
+    // `gircap`'s own procedure says not to pass a purge flag — so it needed
+    // this. `check_only` inverted: "is it intact?" vs "make it match".
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("purge_only");
+    let fx2 = build_fixture();
+    // One damaged file: purge-only must NOT repair it, but must not fail either.
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.purge_after = true;
+    ctx.purge_only = true;
+    let (summary, code) = repair::run(ctx).await.expect("purge-only runs");
+    assert_eq!(code, 0);
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        0,
+        "purge-only never repairs"
+    );
+    assert!(mock.chunk_hits().is_empty(), "no chunk may be fetched");
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        777,
+        "the orphan was deleted"
+    );
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
+    // The damaged file was left exactly as it was.
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        b"not the game data"
+    );
+    // A cleanup puts no bytes in place, so it does not advance config.ini.
+    assert!(
+        !dir.join("config.ini").exists(),
+        "purge-only must not bump config.ini"
+    );
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("config_bumped=0"), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
+    // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
+    // rules, and neither repairs.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("purge_only_pair");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
+
+    // check-only: damage found, nothing written, orphan kept.
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.check_only = true;
+    let (_, code) = repair::run(ctx).await.expect("check runs");
+    assert_eq!(code, 4);
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_some());
+
+    // purge-only: the orphan is gone, the damage is untouched.
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.purge_after = true;
+    ctx.purge_only = true;
+    let (_, code) = repair::run(ctx).await.expect("purge-only runs");
+    assert_eq!(code, 0);
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        b"not the game data"
+    );
 
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();
