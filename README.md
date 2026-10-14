@@ -10,7 +10,8 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 Background: `docs/01-findings-and-verdict.md`, spec: `docs/02-repair-chunk-spec.md`,
 module plan: `docs/03-rust-implementation-plan.md`. Proposal (not implemented):
 scope-of-work limitations — `--include`/`--exclude`, byte/file ceilings, plan
-printing, endpoint override — in `docs/04-scope-limitation-options.md`.
+printing, endpoint override — in `docs/04-scope-limitation-options.md`, with the
+build order in `docs/05-scope-limitation-implementation-plan.md`.
 
 ## For developers / AI agents — read this first
 

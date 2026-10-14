@@ -4,6 +4,18 @@
 problem, evaluates the options, and recommends a first milestone — decisions and
 deletions are marked as such inline.
 
+**Revision 2 (ceilings are enforcement bounds, not selectors).** The ceilings
+were first proposed as *admission* — admit what fits, withhold the rest. They are
+now **refuse / hard-stop**: a run whose plan exceeds a manually requested ceiling
+**fails before doing the work**, exit `5`. The "ceilings are assertions, not
+selectors" reframing and the three reasons are in §1.5; the design follow-through
+is Group B; the open questions from revision 1 are closed in §7.
+
+**Prerequisite.** Everything here needs `girpr` to build its whole plan — repair
+work list *and* purge candidate list — before it mutates anything. It does not
+today. That refactor is Phase 0 of `docs/05-scope-limitation-implementation-plan.md`
+and it is a prerequisite for Groups B and C, not a nice-to-have.
+
 **Scope:** `girpr` (the main crate) only. `gircap` is named here because it is
 the consumer that motivated the work, not because anything in this document
 changes it. `tools/sync` is named because two of the options are specified to
@@ -87,6 +99,50 @@ byte and file ceilings.
 This document treats them as two tiers because they answer different questions
 and have different failure modes, and because the backstop tier is worthless
 without the selector tier being right most of the time.
+
+### 1.5 Why refusal, not admission — and what it reframes
+
+The ceilings were first proposed as *admission*: sort the plan, take what fits,
+withhold the rest, exit `0`. Revision 2 makes every ceiling a **refusal**.
+Three reasons, in order of how much they matter:
+
+**1. These flags are for testing, and testing wants a failure, not a subset.**
+A ceiling exists to stop a 130 GB run from happening. Admission stops the
+*downloads* — but the run has already paid for the part that costs the most on a
+real install: the metadata calls, the manifest fetches, and a plan of thousands of
+paths. What it returns is an install that reports success and is still 99% broken.
+Refusal returns in seconds, writes nothing, and says by how much it was over.
+
+**2. A refusal is a better assertion than an admission.** This is the real
+insight and it is worth stating plainly — same flags, only the ceiling's
+semantics differ:
+
+| `--include "<the 8 you meant>" --max-files 8` | admission | refusal |
+|---|---|---|
+| glob correct | repairs 8, exit `0` | repairs 8, exit `0` |
+| glob is a typo | repairs 8 **wrong** files, exit `0` | exit `5` before any write: `plan_files=0 limit=8` |
+| what the ceiling checked | "did I stay under N" | "did the scope select what you meant" |
+
+Under refusal, the two flags stop being redundant. `--include` **selects**;
+`--max-files` **verifies the selection**. That is the whole answer to "use it in
+case the globs could miss something" — the backstop is not a weaker selector, it
+is a *check on* the selector, and it can only be a check if it fails rather than
+adjusts.
+
+**3. Admission wants a different verb.** "Take the first N" / "take the cheapest
+N" is a *selection*, not an *enforcement*. It should be `--first <N>` or
+`--limit <N>`, and a name that says "limit" for a flag that quietly truncates is
+its own hazard. Out of scope for this work; noted so it is not forgotten.
+
+**What refusal costs.** A limited run no longer produces a partially-scoped
+install — which is the desired outcome, not a regression: every option in this
+document produces an install that is not a working install, and the sooner the
+tool says so, the better.
+
+**What refusal does not bound.** Metadata and manifest traffic. Those fetches
+happen before the plan exists, and nothing here changes them (~2–3 MB per run
+measured against a live pair). A ceiling bounds chunk downloads, writes and
+deletes. It is not a bandwidth cap and should not be described as one.
 
 ---
 
@@ -183,15 +239,25 @@ Three spec details worth copying rather than re-deriving:
 - **A bad pattern is exit `1`**, via a `compile_patterns` shaped exactly like
   `girsync`'s (`anyhow::Context` naming the offending glob).
 
-**Two guards that are not optional.** A filter that matches nothing currently
+**Three guards that are not optional.** A filter that matches nothing currently
 produces a cheerful `exit 0` having done nothing, which is the single most likely
 way this feature is misused:
 
-1. `--include` present and matching **zero** planned paths → exit `1` with the
-   offending globs named. (`--exclude` matching zero is fine and unremarkable.)
-2. Any active scope plus `--purge-*` plus a purge that would touch a path the
-   scope hides → `warn` at plan time, listing the count. Silent agreement here is
-   correct, but silence should be visible once.
+1. **`--include` matching zero planned paths → exit `1`**, with the offending
+   globs named. (`--exclude` matching zero is fine and unremarkable.) A scope that
+   selected nothing is a typo, and a typo that costs 130 GB to discover is the
+   failure mode this whole document exists to remove.
+2. **Explicit `--audio` under an active path scope → exit `1`, unless the audio
+   scan file is itself in scope.** `metadata` writes
+   `audio_pkg_scan_dir` on any explicit `--audio` (`metadata.rs`, gated only on
+   `!readonly`). Under a scope that write is a mutation of a path the scope may
+   not have admitted — so the combination is refused outright, and the escape
+   hatch is to include the scan file's own rel path (`GenshinImpact_Data/Persistent/audio_lang_14`
+   for a global install; never hardcode it, it comes from `getGameConfigs`).
+   Two flags asking for opposite scopes is a contradiction, not a merge.
+3. **Any active scope plus `--purge-*` plus a purge that would touch a path the
+   scope hides → `warn` at plan time**, listing the count. Silent agreement here
+   is correct, but silence should be visible once.
 
 **Cost.** `glob` is already in `Cargo.lock` via `girsync`, so the dependency edge
 resolves with no network. ~40 lines for the filter, plus the purge/`post` gating
@@ -205,28 +271,28 @@ one path.
 
 ### Group B — resource ceilings
 
-The ceiling is only meaningful once the semantics of *tripping* it are pinned
-down. There are three, and they are not interchangeable:
+**Revised (rev 2). Every ceiling here is an enforcement bound, not a selector.**
+A run whose plan exceeds one **refuses before it does the work**, exit `5`. There
+are exactly two enforcement points and they are not interchangeable:
 
 | semantic | when | suits |
 |---|---|---|
-| **plan-time admission** | after the plan exists, before any I/O | work you want the run to *complete* over a known subset — deterministic, and the counters stay meaningful |
-| **runtime hard stop** | mid-flight, when the counter crosses the line | work you cannot predict up front, where exceeding the line must not happen even once |
-| **pre-flight refusal** | before any mutation | destructive work, where a partial execution is worse than none |
+| **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
+| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp` |
 
-Recommendation: **admission for download/files, hard stop for writes, refusal for
-deletes.**
+Both produce exit `5`. There is deliberately no third form; see §1.5 for why
+admission is gone.
 
-#### B1 · `--max-files <N>` — **P0** — plan-time admission
+A refusal is checked on the **filtered** plan, so `--include` selects and a
+ceiling verifies. Without a filter, a ceiling is a refusal on any real install —
+which is the correct answer, not a limitation of the design.
 
-Admit the first `N` planned files and withhold the rest; the run then completes
-normally over exactly that set. Admission order is the existing stable sort
-(`plan::build_plan`: path ascending) — already deterministic, so a test can name
-the set.
+#### B1 · `--max-files <N>` — **P0** — pre-flight refusal
 
-Add `--select-order path|cost` only if B2 lands too; see §4.2.
+Refuse when `plan.files.len() > N`: before any file task spawns, before any
+directory is created, before any `_tmp` is opened. One comparison, one exit.
 
-#### B2 · `--max-download-bytes <N>` — **P0** — plan-time admission, **plus** a runtime hard stop
+#### B2 · `--max-download-bytes <N>` — **P0** — pre-flight refusal, **plus** a runtime hard stop
 
 This is the one the `gircap` assertion is written against
 (`SUMMARY download_bytes == patchmaps/<id>.json → totals.download_bytes`), so its
@@ -250,42 +316,41 @@ because capture invariant **A6** asserts `len(raw blob) == compressed_size` whil
 runner's counter are the same quantity by construction — a testable prediction,
 not a hope.
 
-**But the estimate is a lower bound, not a promise.** `try_reuse_slice` falls
-back to a download whenever the local slice MD5 does not verify
-(`file.rs::try_reuse_slice`), so a file admitted at 0 estimated bytes can still
-download its whole body. Hence **two mechanisms**:
+**Both mechanisms are needed, and the second is the one that actually enforces.**
 
-- **admission** — sort by `est_download_bytes` ascending, take until the ceiling,
-  withhold the rest. Smallest-first across the whole set, which is the rule
-  `gircap` already proved in `tools/capture/src/select/budget.rs` and the reason it
-  is its own module there: admitting per-class independently lets a cheap class
-  drain the budget and strand an expensive one. Sorted ascending, admission takes
-  exactly a **prefix**, so the result is a pure function of `(plan, local_map, N)`
-  and is reproducible across runs.
-- **hard stop** — a live atomic counter in `Summary`; when a chunk fetch would
-  push the run past the ceiling, stop fetching, mark remaining files withheld,
-  leave their `*_tmp` files in place. `_tmp` is already resume-safe (S3,
-  resume-by-length), so an aborted run is not a corrupt run — it is a run that
-  did less.
+- **Refusal (primary, deterministic, pre-flight).**
+  `Σ est_download_bytes over the filtered plan > N` → exit `5`, nothing written,
+  no `_tmp` created. The same predicate as B1 measured in bytes. Its value is
+  that it fails *before* the expensive part.
+- **Hard stop (the enforcement).** The estimate is a **lower bound, not a
+  promise**: `try_reuse_slice` falls back to a download whenever the local slice
+  fails its MD5, so a file estimated at 0 bytes can still download its whole
+  body. A refusal on the estimate alone would therefore not bound anything. A
+  live atomic on `Summary` trips at the real ceiling; the in-flight and remaining
+  files are dropped, their `*_tmp` files left in place — S3 resume-by-length
+  means an aborted run is not a corrupt run, it is a run that did less — and the
+  run exits `5`.
 
 **Cost.** ~120 lines. The `Budget` shape is liftable in spirit from
-`gircap/src/select/budget.rs` (saturating arithmetic, `admits`-before-`charge`,
-`describe()` for the log) — **lift the shape, not the code**: `gircap` shares no
-code with `girpr` by design (`gircap/docs/00-spec.md` §2) and a shared crate
-would violate that rule.
+`gircap/src/select/budget.rs` (saturating arithmetic, `describe()` for the log) —
+**lift the shape, not the code**: `gircap` shares no code with `girpr` by design
+(`gircap/docs/00-spec.md` §2) and a shared crate would violate that rule.
 
 #### B3 · `--max-write-bytes <N>` — **P1** — runtime hard stop
 
-Distinct from B2 and the reason the user listed write separately: **`download_bytes`
-does not count most of the disk the run touches.** Every reuse-copy
-(`out.write_all(&buf[..n])` in `try_reuse_slice`) and every downloaded-chunk write
-goes into `*_tmp` and **none of it appears in `SUMMARY.download_bytes`**. A
-zero-reuse run writes its entire payload to disk while reporting a network cost
-only.
+The only one that *cannot* be a refusal, and the reason the user listed write
+separately: **`download_bytes` does not count most of the disk the run touches.**
+Every reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
+downloaded-chunk write goes into `*_tmp` and **none of it appears in
+`SUMMARY.download_bytes`**. A zero-reuse run writes its entire payload to disk
+while reporting a network cost only.
 
-The number that matters is peak disk, which `README` states as
-`io_threads × largest file`. This option bounds the *cumulative* counterpart,
-which is the one a 130 GB runaway actually blows.
+Bytes written are also not knowable from the plan — reuse success is decided per
+chunk at runtime, against bytes that may not be there. So this one is a
+mid-flight stop and nothing else.
+
+The number the README cares about is *peak* disk (`io_threads × largest file`).
+This bounds the cumulative counterpart, which is what a runaway actually blows.
 
 **Cost.** One atomic on `Summary`, incremented at the two `write_all` sites, one
 check before each chunk. ~40 lines.
@@ -294,22 +359,24 @@ check before each chunk. ~40 lines.
 
 Deletion is the one irreversible act in the tool, and a partial purge is worse
 than no purge: it leaves a tree that is neither the old install nor the new one.
-So this one **refuses up front**, it does not stop midway.
+Refusal is therefore the only acceptable shape, and it is cheap — but only once
+the plan is up front. Today `purge_extra` walks and deletes in one pass, so there
+is no point at which "how much would this delete" is answerable without already
+having started. This is the clearest single justification for the Phase 0
+refactor (`docs/05`, Phase 0).
 
-`purge_extra` already enumerates every candidate into a `Vec<(PathBuf, u64)>`
-before touching anything (`purge.rs`), so the total is free to compute. If
-`Σ candidate sizes > N`, delete nothing and fail. `post::delete_deprecated`
-is a handful of files and needs no ceiling.
-
-This is the option that answers *"use in case the exclusion/inclusion globs could
-miss something"* for the one case where missing something is unrecoverable: a
-glob that should have hidden `ScreenShot/` and did not, against a real 100 GB
-install.
+Once planned: if `Σ candidate sizes > N`, delete nothing, exit `5`.
+`post::delete_deprecated` is a handful of files and needs no ceiling.
 
 **Interaction with `--purge-before`.** `--purge-before` exists to free room for
-the repair. Refusing it because the ceiling is low defeats its purpose — so
-`--max-delete-bytes` should be evaluated **once over the union of both purge
-passes**, not per pass, or the pre-flight number is wrong in both directions.
+the repair. Refusing it because the ceiling is low defeats its purpose — so the
+ceiling is evaluated **once over the union of both purge passes**, not per pass,
+or the pre-flight number is wrong in both directions.
+
+**Interaction with path scope.** A filtered-out path is not a purge candidate, so
+it never counts toward the total. That is the correct interaction and the reason
+the scope and the ceiling are complementary rather than redundant: the glob
+narrows what is *counted*, the ceiling bounds what is *done*.
 
 ---
 
@@ -324,8 +391,8 @@ not one:
    `util::file_len` **then `util::md5_file`** and only *then* hits
    `if ctx.dry_run { return Repaired::DryRun }`. So `--dry-run` on a real install
    **full-file MD5s every planned file** — on the 130 GB case, exactly the cost
-   the limitation is meant to avoid. `--print-plan` needs only the manifests
-   already fetched, plus O(plan) arithmetic.
+   the limitation is meant to avoid. `--print-plan` stops before the repair loop
+   entirely, so it pays none of it.
 2. **Plane.** `--dry-run` answers on **stderr / the log file**, via `tracing`.
    Asserting on it means scraping a log with `--log-level debug` turned up. The
    stdout data plane (`REPORT` / `PROGRESS` / `SUMMARY`) exists precisely so a
@@ -334,21 +401,38 @@ not one:
    files would this touch, and how many bytes would it download?" without reading
    per-file `tracing` lines and summing them by hand.
 
+**What it does, precisely.** Run phases 1–4 — prepare, metadata, `REPORT`,
+manifests, plan — print the `PLAN` line, and stop. Nothing after the plan is
+executed: no purge, no repair, no post-phase.
+
+**It is not an offline mode and does not pretend to be.** Fetching the manifests
+is not part of what `--print-plan` does differently; every run does it, exactly
+as it calls the API first. The plan *is* the manifest — there is no plan without
+it. So `--print-plan` fetches, and the fetches are logged at the usual level like
+any other run. The help text says so, because "print the plan" invites the
+assumption that it is a local, free operation.
+
 Proposed line, same shape as the rest of the contract:
 
 ```
-PLAN files_total=2662 admitted=8 withheld=2654 est_download_bytes=2373385 \
-     est_purge_bytes=0 est_max_chunk_bytes=3689476 limited=files
+PLAN files=8 est_download_bytes=2373385 purge_files=0 purge_bytes=0 \
+     max_chunk_bytes=3689476 scoped=1
 ```
 
-`--plan-out <FILE>` writes the per-file list as JSON
-(`{rel, size, chunks_total, est_download_bytes, decision}`) for the
-`--per-class`-sized cases where eight lines of diffing beats eight `--include`
-flags.
+`--plan-out <FILE>` writes the per-file detail as JSON —
+`{"repair": [{rel, size, chunks_total, est_download_bytes}], "purge": [{rel, size}]}`
+— for the `--per-class`-sized cases where diffing eight lines beats eight
+`--include` flags.
 
-**Interaction.** `--print-plan` + `--dry-run` is coherent (`--dry-run` then costs
-nothing extra, since the plan is printed before the loop and the loop still
-hashes). `--print-plan` alone must still be **read-only**, and must not imply
+**The purge half needs the Phase 0 refactor.** To-be-purged files are enumerated
+by a `WalkDir` over `game_dir` that today happens *after* the repair loop and
+*only* when a purge flag is set. `--print-plan` needs that list up front and
+unconditionally. Phase 0 splits `purge_extra` into plan and apply
+(`docs/05`, Phase 0); until then `--print-plan` can report the repair plan only.
+
+**Interaction.** `--print-plan` + `--dry-run` is coherent (the plan is printed
+before the loop, so the loop's hashing still happens but is what `--dry-run`
+asked for). `--print-plan` alone must still be **read-only**, and must not imply
 `--check-only`: it answers "what would you do", not "what is wrong".
 
 #### C2 · `PLAN` guard: an `--include` that matches nothing — folded into A1
@@ -444,11 +528,11 @@ Two different jobs in one flag, both real:
 
 `repair_one_file`'s fast path is `size + full-file MD5`. On a 100 GB install that
 is a 100 GB read before a single byte is downloaded — the largest fixed cost in
-the tool, and under A1 it is paid only for the admitted files, which is already a
-big improvement. This flag skips the check and forces every admitted file down
-the download path, so a test can exercise reuse/downloading **without** paying for
-the hash. Deliberately does not exist for production: it forfeits the skip, which
-is the main reason the tool is low-disk.
+the tool, and under A1 it is paid only for the files the scope selected, which is
+already a big improvement. This flag skips the check and forces every selected
+file down the download path, so a test can exercise reuse/downloading **without**
+paying for the hash. Deliberately does not exist for production: it forfeits the
+skip, which is the main reason the tool is low-disk.
 
 #### E5 · `--manifest-field <NAME>` (repeatable) — **P2**
 
@@ -463,121 +547,178 @@ manifests", so it is listed last and should be cut if the surface needs trimming
 
 ## 4. Interactions, and the decisions they force
 
-### 4.1 Ordering: filter first, then admission
+### 4.1 Ordering: filter, then assert, then work
 
 ```
-manifests ──▶ plan::build_plan ──▶ scope filter ──▶ budget admission ──▶ work
-                 (blacklist)         (A1)             (B1, B2)
+metadata ──▶ manifests ──▶ build_plan ──▶ purge plan ──┐
+                              │                          │
+                          scope filter (A1)          purge plan
+                              ▼                          │
+                        ┌─────────────┐                  │
+                        │ assert      │  ◀── exit 5 on ──┘
+                        │ ceilings    │      violation
+                        │ (B1 B2 B4)  │
+                        └──────┬──────┘
+                               ▼  exit 0-or-execute
+                    purge-before ──▶ repair loop ──▶ post
 ```
 
-Filter before admission, so `--max-files 8 --include "*.dll"` means *the first 8
-DLLs*, not *8 arbitrary files, of which some are DLLs*. The opposite order makes
-`--max-files` non-deterministic under `--include`, which defeats the purpose.
+Two consequences worth stating:
 
-### 4.2 One admission order, chosen once
+- **Filter before assert.** The ceilings are checked on the *filtered* plan, so
+  `--max-files` always means "the files the scope selected", never "the files the
+  scope happened to keep from a bigger number". Checking before filtering would
+  make every ceiling unusable — they would always refuse on a real install.
+- **Assert before everything mutates.** The purge plan is built here too, so a
+  `--max-delete-bytes` refusal happens before a single byte is deleted. This is
+  the whole reason for the Phase 0 refactor.
 
-| flag | admission order | use |
-|---|---|---|
-| `--max-files N` | path ascending (the existing sort) | "repair these N specific files" |
-| `--max-download-bytes N` | `est_download_bytes` ascending | "cover as much of the code path as the budget affords" |
+### 4.2 Admission order is no longer a question
 
-Two orders, one knob: `--select-order path|cost` with the above as defaults. Worth
-building only if both B1 and B2 ship; if only B2 does, skip the flag.
+Revision 1 had to choose an admission order (`path` ascending for
+`--max-files`, `est_download_bytes` ascending for `--max-download-bytes`) and
+considered a `--select-order` knob. Refusal never chooses, so the question is
+gone and the knob is not proposed. `est_download_bytes` is still *computed* per
+file, for B2's assertion and for the `PLAN` line.
 
-### 4.3 What a withheld file is, and what it is not
+### 4.3 A refusal has no partial state — except one
 
-It is **not** a failed file. `files_failed` must stay 0 for a clean scoped run —
-conflating "I chose not to do this" with "this went wrong" would make every
-limited run indistinguishable from a broken one in the existing `SUMMARY`.
+For B1, B2's pre-flight half and B4: **nothing has been written when the run
+exits `5`.** No directory created, no `_tmp` opened, no file deleted, no
+`config.ini` touched. A caller can retry with a bigger ceiling and get the same
+run.
 
-Proposed `Summary` additions, **emitted only when the corresponding limit is
-active** — the same discipline `girsync` used for `identical=N` ("an unflagged
-run's output is byte-identical to a run that never passes it"), which is what
-keeps the machine contract non-breaking:
+The single exception is **B2's runtime hard stop**, which by definition fires
+mid-flight. It leaves `*_tmp` files behind. That is safe — S3 resume-by-length
+means the next run picks up from the existing prefix — but it is state, and the
+`SUMMARY` must say so rather than leaving it to be discovered.
 
-| key | when |
-|---|---|
-| `limited=1` | any limit active |
-| `limited_files=<N>` / `withheld_files=<N>` | any limit active |
-| `write_bytes=<N>` | `--max-write-bytes` active |
-| `config_bumped=0` | any path scope active (§2.2) |
-| `est_download_bytes=<N>` | `--max-download-bytes` active |
+There is no `files_withheld` counter and no `admitted`/`withheld` framing any
+more. What a limited run reports is what it *would* have done and why it stopped.
 
 ### 4.4 Exit codes
 
 | code | meaning | change |
 |---|---|---|
-| `1` | usage — bad glob, `--max-files 0`, `--include` matched nothing | extended |
+| `1` | usage — bad glob, `--include` matched nothing, `--audio` under a scope | extended |
 | `2` | metadata / network | — |
 | `3` | write / verify | — |
 | `4` | `--check-only` found damage | — |
-| **`5`** | **stopped by a scope limit — work was withheld** | **new** |
+| **`5`** | **a manually requested enforcement limit was exceeded** | **new** |
 
-**Recommendation: exit `5` whenever a limit actually bound** (`withheld > 0`),
-even when the work that *was* admitted succeeded. `exit 0` must mean "this run did
-everything it was scoped to do"; if it also means "and the scope covered
-everything", a limited run and a full run are indistinguishable, and the first
-thing a test script will do is assert `0`. A script that wants the
-weaker guarantee tests `[ $? -ne 5 ]`.
+**Why `5` and not `1`.** It is worth being explicit, because the usual instinct is
+that a flag check is a usage error. It is not: **the API has to be fetched
+first**, and whether a limit is exceeded is only knowable from the server's
+answer. `--max-files 0` against an empty plan is not an error; the identical flag
+against a 3000-file plan is. A code that means "the run was misconfigured" cannot
+mean both, so `5` means "the run failed", and it is deliberately paired with the
+`SUMMARY` line and exit `0` on success.
 
-`--check-only` keeps its `0`/`4` semantics: a limit narrows *what is verified*,
-and `4` must not be masked by narrowing.
+This is also why `--max-files 0` is **not** rejected at parse time: `0` is a
+perfectly meaningful ceiling. Only an unparseable value (negative, non-numeric) is
+exit `1`, via clap.
 
-This is additive. The README's machine-contract table is updated, `tests/cli_contract.rs`
-is unaffected (new flags parse; their runtime validation is exit `1` like every
-other usage error).
+**`exit 5` whenever a limit actually bound**, even when the work that *was* meant
+to happen would have succeeded. `exit 0` means "this run did everything it was
+scoped to do"; if it also meant "and the scope covered everything", a limited run
+and a full run would be indistinguishable and the first thing a test script would
+do is assert `0`. A script that wants the weaker guarantee tests `$? -ne 5`.
+
+`--check-only` keeps its `0`/`4` semantics: a ceiling narrows *what is verified*,
+and `4` must not be masked by narrowing — but a ceiling that trips during
+`--check-only` is still `5`, because that is a different fact from "damage found".
+
+This is additive. The README's machine-contract table is updated;
+`tests/cli_contract.rs` is unaffected (new flags parse; their runtime validation
+is exit `1` like every other usage error, and exit `5` is a new `assert` case).
 
 ### 4.5 Read-only modes
 
-`RunCtx::readonly()` already unifies `--dry-run` and `--check-only` and every
-delete/write is gated on it. Path scope and budgets **compose** with both:
+`RunCtx::readonly()` already unifies `--dry-run` and `--check-only`, and every
+delete/write is gated on it. Ceilings apply in read-only modes too — that is
+where they are most useful, since a read-only run is the natural first probe:
 
-| | `--dry-run` | `--check-only` |
-|---|---|---|
-| `--include` | predicts exactly the narrowed work | verifies exactly the narrowed set |
-| `--max-files N` | previews the admitted subset | verifies the admitted subset, exit `0`/`4` |
-| `--print-plan` | redundant output, but harmless and cheap | the cheap way to see what will be verified |
+| | `--dry-run` | `--check-only` | `--print-plan` |
+|---|---|---|---|
+| `--include` | predicts exactly the narrowed work | verifies exactly the narrowed set | reports exactly the narrowed set |
+| `--max-files N` | refuses before the hash storm | refuses before verifying | reports `files=` and refuses if over |
+| exit on a tripped ceiling | `5` | `5` | `5` |
 
-Nothing here needs a new readonly concept. That is worth noting explicitly: the
-existing `readonly` gate is the reason the whole tier is additive rather than a
-new mode.
+A read-only run that trips a ceiling has written nothing at all, so there is no
+partial-state question. Nothing here needs a new readonly concept: the existing
+`readonly` gate is why this whole tier is additive rather than a new mode.
+
+### 4.6 `SUMMARY` additions
+
+Emitted **only when the corresponding limit is active** — the same discipline
+`girsync` used for `identical=N` ("an unflagged run's output is byte-identical to
+a run that never passes it"), which is what keeps the machine contract
+non-breaking:
+
+| key | when |
+|---|---|
+| `limited=1` | any ceiling active |
+| `scoped=1` | any path scope active |
+| `plan_files=<N>` | any ceiling or scope active |
+| `plan_download_bytes=<N>` | `--max-download-bytes` active |
+| `write_bytes=<N>` | `--max-write-bytes` active |
+| `config_bumped=0` | any path scope active (§2.2) |
+| `stopped=<files>\|bytes\|delete` | a runtime hard stop fired, not a refusal |
+
+`stopped=` is what distinguishes "nothing was written because the plan was too
+big" from "something was written and then we ran out" (§4.3).
 
 ---
 
 ## 5. Suggested module layout
 
-Four concerns — the filter, the budget, the admission walk and the plan report —
-so this is a directory, not a file. The layout mirrors `tools/sync/src/rw/`
-(`mod.rs` wiring, `limits.rs` pure config, `gate.rs` counting), which is the
-pattern this repo already uses for exactly this split:
+Two directories, because this work adds a concern (`scope`) *and* introduces one
+(`the up-front plan`).
+
+**The plan restructure** is the prerequisite and it belongs next to the work it
+exists for, mirroring `girsync`'s `planner/` → `apply` split:
+
+```
+src/repair/plan/
+  mod.rs        RepairPlan, PlannedFile, est_download_bytes, build_plan
+  purge.rs      PurgePlan, PurgeCandidate, plan_purge, apply_purge   (was purge.rs)
+```
+
+`purge_extra` currently walks and deletes in one pass; splitting it into
+`plan_purge` (walk + classify → `Vec<PurgeCandidate>` + the emptied-dir set) and
+`apply_purge` (delete a decided list) is what makes B4's refusal and C1's purge
+half possible at all. **No behaviour change with no flags** — the existing tests
+must pass through this refactor untouched.
+
+**The scope layer** is new. Four concerns — the filter, the ceilings, the
+assertion, the plan report — so it is a directory too. The layout mirrors
+`tools/sync/src/rw/` (`mod.rs` wiring, `limits.rs` pure config, `gate.rs`
+counting), the pattern this repo already uses for exactly this split:
 
 ```
 src/repair/scope/
-  mod.rs      re-exports; PathScope + Budget + admit_plan + the run ledger
-  filter.rs   PathScope, is_visible, compile_patterns   (pure)
-  budget.rs   Budget, admit_in_order                   (pure, gircap-shaped)
-  admit.rs    plan -> (admitted, withheld)             (pure)
+  mod.rs      re-exports; the assertion that turns a plan into pass/refuse
+  filter.rs   PathScope, is_visible, compile_patterns     (pure)
+  limits.rs   Limits (files / download / write / delete) (pure)
+  ledger.rs   the runtime atomics B3 and B2's hard stop share
   report.rs   PLAN line + --plan-out JSON
 ```
 
-The three pure modules unit-test without a filesystem, exactly like
+The pure modules unit-test without a filesystem, exactly like
 `purge::classify_purge_path` and `plan::build_plan` do today. The impure part is
-the run ledger (atomics on `Summary`) and the gate call in `file.rs` /
-`purge.rs`.
+the ledger and the gate calls in `file.rs`.
 
-Touch points outside the module, all of them one-line insertions at an existing
-branch:
+Touch points outside the two directories, all of them one-line insertions at an
+existing branch:
 
 | file | change |
 |---|---|
 | `src/cli.rs` | flags + `into_ctx` |
-| `src/config.rs` | `PathScope` + `Budget` fields on `RunCtx`; `RunFailure::limit` |
-| `src/repair/mod.rs` | filter + admit after `build_plan`; `PLAN` emit; gate `config.ini` |
-| `src/repair/plan.rs` | — (build the filtered plan, keep `build_plan` pure) |
-| `src/repair/purge.rs` | scope arg on `classify_purge_path` + pre-flight refusal |
+| `src/config.rs` | `PathScope` + `Limits` on `RunCtx`; `RunFailure::limit` |
+| `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
 | `src/repair/post.rs` | scope gate on deprecated deletes and audio move |
-| `src/repair/file.rs` | fail-fast + write-bytes gate |
-| `src/report.rs` | conditional `Summary` keys + `format_plan_line` |
+| `src/repair/file.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
+| `src/report.rs` | conditional `SUMMARY` keys + `format_plan_line` |
 | `README.md` | flag table, machine-contract table, exit-code table |
 
 ---
@@ -598,40 +739,76 @@ branch:
 
 ---
 
-## 7. Open questions
+## 7. Decisions taken, and what is still open
 
-1. **`--max-files` with no `--include` on a real install** — is admitting the
-   first 8 paths alphabetically a useful thing to be able to do, or is it only
-   meaningful in combination with `--include`? Affects whether B1 ships alone.
-2. **`--include` and the audio scan file.** `metadata` writes it on explicit
-   `--audio`. A scoped run that also passes `--audio` — does it write, or refuse
-   the combination as contradictory? (Recommendation: refuse, exit `1`; the two
-   flags are asking for opposite scopes.)
-3. **Should `--print-plan` imply fetching manifests at all?** It must — the plan
-   *is* the manifest. But that means it is not an offline operation, and the help
-   text should say so.
-4. **Is `5` acceptable as an exit code?** It is the one change here that touches
-   the published contract. Additive, but a caller written against `0`–`4` will
-   need updating.
+### 7.1 Closed in revision 2
+
+| # | question | decision |
+|---|---|---|
+| 1 | `--max-files` without `--include` — useful, or only meaningful in combination? | **Void.** The premise was admission ("admit the first 8 alphabetically"). Under refusal the question does not exist: `--max-files 8` alone is a refusal, and the flag's purpose is to *verify* an `--include` set. |
+| 2 | `--include` + explicit `--audio` — write, or refuse? | **Refuse, exit `1`**, unless the audio scan file's own rel path (from `getGameConfigs.audio_pkg_scan_dir`) is inside the scope. Two flags asking for opposite scopes is a contradiction. See A1 guard 2. |
+| 3 | Should `--print-plan` avoid fetching manifests? | **No, and it does not try.** Manifest fetch is not part of what `--print-plan` does differently — every run does it, like the API call before it. It fetches, logs at the usual level, and the help text says so. |
+| 4 | Is exit `5` acceptable? | **Yes.** `5` = a manually requested enforcement limit was exceeded. Not `1`, because the API must be fetched first and whether a limit trips depends on the server's answer — `--max-files 0` is not an error on an empty plan and is on a 3000-file plan. A "misconfigured" code cannot mean both. |
+
+### 7.2 Decided here, flag them if wrong
+
+These were not asked; they are the calls that had to be made to write the plan.
+Each is cheap to reverse before anything is built.
+
+1. **`--include` matching nothing → exit `1`, not `5`.** Split from Q4 on purpose:
+   `1` is "your request cannot be satisfied for a reason that is a property of
+   your request" (a glob that matches nothing is a typo); `5` is "your request was
+   well-formed and the answer was too big". Both are detected after the fetch, but
+   the diagnosis a caller acts on is different.
+2. **`config.ini` is not bumped under an active path scope** (§2.2). Unanswered so
+   far because it was not asked; it changes what a scoped run leaves on disk and
+   a test will notice.
+3. **Ceilings apply in `--check-only` and `--dry-run`** (§4.5). They are read-only
+   runs, so a ceiling there costs nothing and refuses for free.
+4. **B2 keeps a runtime hard stop alongside its refusal** (§3 B2). The pre-flight
+   estimate is a lower bound because reuse can fall back to a download, so
+   refusing on it alone would not actually bound anything.
+
+### 7.3 Still open
+
+1. **Should a refusal still emit `SUMMARY`?** Recommendation: yes, plus the
+   `PLAN`-derived keys, so a parser gets one uniform tail for every exit path. But
+   `3`-style fatal errors today emit `FATAL` and no `SUMMARY`, and a refusal is
+   arguably closer to those than to a completed run. Either is defensible; this
+   one changes the published stdout contract, so it should be chosen rather than
+   defaulted.
+2. **`--plan-out` file format.** JSON is proposed. It could equally be the
+   `key=value` shape the rest of the data plane uses, which would keep one
+   vocabulary instead of two. The `girsync --output json` precedent argues for
+   JSON; `girpr`'s single-vocabulary argument argues the other way.
 
 ---
 
-## 8. Recommended first milestone
+## 8. Milestones
 
-Scoped to what unblocks `gircap` §8.1.1, nothing more.
+Scoped to what unblocks `gircap/docs/00-spec.md` §8.1.1, nothing more. Detail in
+`docs/05-scope-limitation-implementation-plan.md`.
+
+**Phase 0 — the plan restructure. No new flags, no behaviour change.**
+Build the whole plan — repair work list *and* purge candidate list — before
+mutating anything. Groups B and C are both blocked on it: B4's refusal has no
+"how much would this delete" question to ask, and C1 has nothing to print, until
+the purge list exists up front. Ships green against the existing suite.
+
+**Phase 1 — the limits.** P0 set, in the order that keeps the suite green:
 
 | # | option | why in scope |
 |---|---|---|
-| 1 | **A1** `--include` / `--exclude` + purge/post gating + "matched nothing" guard | the named blocker |
-| 2 | **B1** `--max-files N` | cheapest hard backstop; makes the run deterministic |
-| 3 | **B4** `--max-delete-bytes N` (pre-flight refusal) | the irreversible case |
+| 1 | **A1** `--include` / `--exclude` + purge/post gating + the two guards | the named blocker |
+| 2 | **B1** `--max-files N` | the assertion that A1 selected what you meant |
+| 3 | **B4** `--max-delete-bytes N` | the irreversible case, now answerable thanks to Phase 0 |
 | 4 | **C1** `--print-plan` | makes A1/B1 auditable before committing |
-| 5 | **B2** `--max-download-bytes N` (admission + hard stop) | the assertion §8.1.1 step 3 is actually written against |
+| 5 | **B2** `--max-download-bytes N` | the assertion §8.1.1 step 3 is written against |
 
 `D1`, `B3`, `E1`, `E2` are the natural second milestone: D1 because the
 artifact-serving shim needs it, E1 because every mock-server test needs it, E2
-because the `removed` class needs it, B3 because it closes the last
-un-counted write path.
+because the `removed` class needs it, B3 because it closes the last un-counted
+write path.
 
 Follow-on work that this unblocks but does not include: the **artifact-serving
 shim** (serve a `gircap` bundle on `127.0.0.1` with `url_prefix` bodies rewritten
