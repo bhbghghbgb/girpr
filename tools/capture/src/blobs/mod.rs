@@ -155,6 +155,11 @@ pub struct Store {
 }
 
 impl Store {
+    /// The chunk sources, for a caller that has to build a URL itself.
+    pub fn sources(&self) -> &Sources {
+        &self.sources
+    }
+
     /// A store writing under `root`, fetching from `sources`.
     ///
     /// Owns its root rather than borrowing it so [`Store::fill`] can spawn

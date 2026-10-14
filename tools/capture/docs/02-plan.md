@@ -246,6 +246,29 @@ then assert the patch result byte-equals the direct new assembly.
 overlap, out-of-order, and moved-offset cases.
 **Commit:** `gircap: M7 — assemble old, new and the patch flow from retained chunks`
 
+**Landed.** Live, across all eight admitted captures: **44 selfcheck rows, 0
+failures**. Every file hashes to its declared MD5 and every patch flow byte-equals
+the direct assembly. The `partial_same_offset` patchmap matches the schema doc's
+worked example field for field — 3 chunks, 1 REUSE, 2 FETCH, 0 moved,
+`download_bytes` 274 426, `must_not_fetch` the one `f5dc3ca1…` chunk.
+
+Three decisions:
+
+1. **A11 is checked before any byte is placed**, and it stops the assembly. A
+   manifest whose chunks do not tile the file could otherwise produce bytes that
+   happen to hash correctly, which is the one failure mode an MD5 check cannot
+   see.
+2. **A failed REUSE becomes a FETCH, and the downgrade is recorded.** The spec
+   says "REUSE slice verified by MD5, else FETCH", so the decision is made
+   *after* verification — but a reader who sees FETCH has no way to know a REUSE
+   was attempted, so the plan entry carries `note` and the outcome carries
+   `rewrites`. A silent downgrade is indistinguishable from one that was never a
+   candidate, and the two demand opposite debugging.
+3. **`Layout::of` returns violations rather than an error.** Same rule as M6's
+   `measure`: the finding is the deliverable. `assemble_side` then refuses to
+   build from a violating layout, so the record and the behaviour agree — the
+   layout is described in full and *then* not used.
+
 ### M8 — the artifact
 `emit/{mod,gamedir,index,selfcheck}.rs`. Full tree, `game/`, `expected/`,
 `config.ini`, audio scan file, `MANIFEST.json`, `checksums.json`, `README.md`.

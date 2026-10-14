@@ -20,7 +20,7 @@ use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
 use crate::report::{OutputFormat, Summary};
-use crate::{blobs, emit, exit, hyp, manifest, select};
+use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
 use crate::manifest::diff;
 
 /// The `matching_field` every run scores first, and the one every later stage
@@ -478,6 +478,89 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         })?,
     );
 
+    // 7c. Assembly. Old, new, and the patch flow, from the blobs just stored.
+    //     A7-A12 are asserted here rather than left to M9, because a capture that
+    //     cannot rebuild its own files has nothing worth keeping and the operator
+    //     should find out at capture time.
+    let chunk_source = assemble::ChunkSource::from_index(&dir, &index);
+    let mut rows: Vec<(&'static str, bool, String)> = Vec::new();
+    let mut assembled_ids: Vec<String> = Vec::new();
+    let (mut reused_total, mut fetched_total, mut moved_total) = (0_u64, 0_u64, 0_u64);
+    if !plan.no_chunk_blobs {
+        for (a, pair) in selection.admitted.iter().zip(&pairs) {
+            let mut classes = vec![a.primary_class];
+            classes.extend(a.also_satisfies.iter().copied());
+            classes.sort();
+            classes.dedup();
+            let got = assemble::assemble(&assemble::AssemblyInput {
+                pair,
+                matching_field: a.matching_field.as_str(),
+                classes: &classes,
+                sources: store.sources(),
+                chunks: &chunk_source,
+            });
+            match got {
+                Ok(out) => {
+                    let p = out.patch.as_ref();
+                    tracing::info!(
+                        capture_id = %a.capture_id,
+                        path = %a.path,
+                        old_md5_ok = out.old.as_ref().is_none_or(|o| o.md5_matches()),
+                        new_md5_ok = out.new.as_ref().is_none_or(|n| n.md5_matches()),
+                        a9 = p.is_none_or(|p| p.equals_new),
+                        reuse = p.map(|p| p.reused).unwrap_or(0),
+                        fetch = p.map(|p| p.fetched).unwrap_or(0),
+                        moved = p.map(|p| p.moved).unwrap_or(0),
+                        download_bytes = out.map.totals.map(|t| t.download_bytes).unwrap_or(0),
+                        "assembled"
+                    );
+                    if let Some(p) = &out.patch {
+                        reused_total += p.reused as u64;
+                        fetched_total += p.fetched as u64;
+                        moved_total += p.moved as u64;
+                    }
+                    rows.extend(out.selfcheck_rows());
+                    assembled_ids.push(a.capture_id.clone());
+                    written.push(
+                        emit::write_patchmap(&dir, &a.capture_id, &out.map).map_err(|e| {
+                            apierr(
+                                &format!("write {}", dir.display()),
+                                &ApiError::shape("artifact writer", e),
+                            )
+                        })?,
+                    );
+                }
+                Err(e) => {
+                    return Err(assertion(
+                        &format!("assemble {}", a.path),
+                        &ApiError::shape("assemble", e),
+                    ));
+                }
+            }
+        }
+    } else {
+        tracing::warn!("--no-chunk-blobs: nothing to assemble, so A7-A12 are not asserted");
+    }
+    let assembly_failures = rows.iter().filter(|(_, ok, _)| !*ok).count();
+    for (assertion, _, detail) in rows.iter().filter(|(_, ok, _)| !*ok) {
+        tracing::error!(assertion, detail, "selfcheck row failed");
+    }
+    tracing::info!(
+        rows = rows.len(),
+        failures = assembly_failures,
+        patchmaps = assembled_ids.len(),
+        "assembly assertions complete"
+    );
+    if assembly_failures > 0 {
+        return Err(assertion(
+            "assemble the admitted captures",
+            &ApiError::shape(
+                "A7-A12",
+                format!("{assembly_failures} of {} selfcheck rows failed", rows.len()),
+            ),
+        ));
+    }
+
     emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
@@ -533,6 +616,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("chunk_fetches_failed", fetch_errors.len() as u64)
         .set("chunk_a6_failing", index.failing().len() as u64)
         .set("patch_fetch_chunks", index.sets["patch_fetch"].len() as u64)
+        .set("patchmaps_written", assembled_ids.len() as u64)
+        .set("assembly_selfcheck_rows", rows.len() as u64)
+        .set("assembly_selfcheck_failures", assembly_failures as u64)
+        .set("patch_reuse_chunks", reused_total)
+        .set("patch_fetch_chunks_actually", fetched_total)
+        .set("patch_moved_chunks", moved_total)
         .set("capture_bytes_admitted", selection.bytes_admitted)
         .set("budget_unlimited", selection.budget.limit().is_none())
         .set("budget_limit", selection.budget.limit().unwrap_or(0))

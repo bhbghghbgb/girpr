@@ -975,3 +975,206 @@ mod m6_chunk_store {
         assert_eq!(gircap::blobs::projected_download(&w), 1_187_453);
     }
 }
+
+/// M7: assembly over the same frozen pair.
+///
+/// The id *prefixes*, offsets and sizes below are the real ones the live
+/// 7.0.0 -> 7.1.0 capture produced; the content behind them is synthetic,
+/// because a chunk's digest has to match the bytes a test hands it or nothing
+/// downstream is exercised. What this pins is the identity structure the live
+/// pair has — one shared chunk with two builds declaring the same id, and two
+/// others at the same offset with different content — which is the part a
+/// synthetic fixture invented from scratch would get wrong.
+mod m7_assembly {
+    use super::*;
+
+    use gircap::assemble::{self, AssemblyInput, ChunkSource, Decision};
+    use gircap::blobs::chunks::{FilePair, NewFile, OldFile};
+    use gircap::blobs::Sources;
+    use gircap::hash;
+    use gircap::select::Class;
+
+    const HOYO: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
+
+    /// A measured chunk: the real id prefix, offset and sizes, with content this
+    /// test supplies so the digests agree with what is handed to assembly.
+    ///
+    /// The content is derived from the *prefix*, and so is [`body_of`] — two
+    /// helpers that each chose their own seed would disagree about what a chunk
+    /// holds, and A10 would correctly fail on a fixture that was merely
+    /// inconsistent.
+    fn measured(prefix: &str, offset: i64, len: usize, compressed: i64) -> SophonChunk {
+        let body = seeded(prefix, len);
+        SophonChunk {
+            id: format!("{prefix}_{}", hash::md5_hex(&body)),
+            uncompressed_md5: hash::md5_hex(&body),
+            offset,
+            compressed_size: compressed,
+            uncompressed_size: len as i64,
+            unknown_field6: 0,
+            compressed_md5: hash::md5_hex(&body),
+        }
+    }
+
+    /// The bytes a chunk with this id prefix holds. One definition, used by both
+    /// the declaration and the source.
+    fn seeded(prefix: &str, len: usize) -> Vec<u8> {
+        let seed = u8::from_str_radix(&prefix[..2], 16).unwrap_or(0);
+        (0..len).map(|i| seed.wrapping_mul(31).wrapping_add(i as u8)).collect()
+    }
+
+    fn body_of(c: &SophonChunk) -> Vec<u8> {
+        seeded(&c.id[..2], c.uncompressed_size as usize)
+    }
+
+    fn entry_of(path: &str, chunks: Vec<SophonChunk>) -> SophonChunkFile {
+        let size: i64 = chunks.iter().map(|c| c.uncompressed_size).sum();
+        let mut bytes = Vec::with_capacity(size as usize);
+        for c in &chunks {
+            bytes.extend_from_slice(&body_of(c));
+        }
+        SophonChunkFile {
+            file: path.into(),
+            chunks,
+            is_folder: false,
+            size,
+            md5: hash::md5_hex(&bytes),
+        }
+    }
+
+    /// `HoYoChannel.dll` with the measured layout: offset 0 is the same length
+    /// but different content in each build, offset 690 719 is byte-identical,
+    /// and the tail differs.
+    fn hoyo_pair() -> FilePair {
+        let old = entry_of(
+            HOYO,
+            vec![
+                measured("7d3f050443837e58", 0, 690_719, 259_794),
+                measured("f5dc3ca1f3a0ba3d", 690_719, 1_626_019, 638_614),
+                measured("a4314f3c1ba1d7d4", 2_316_738, 23_526, 14_619),
+            ],
+        );
+        let new = entry_of(
+            HOYO,
+            vec![
+                measured("ddb31a9fd85346c4", 0, 690_719, 259_795),
+                measured("f5dc3ca1f3a0ba3d", 690_719, 1_626_019, 638_614),
+                measured("340ca86ee8ac9be0", 2_316_738, 23_526, 14_631),
+            ],
+        );
+        FilePair {
+            capture_id: "partial_same_offset".into(),
+            path: HOYO.into(),
+            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
+            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+        }
+    }
+
+    fn assemble_measured(pair: &FilePair) -> assemble::Assembled {
+        let entries: Vec<&SophonChunkFile> = [
+            pair.old.as_ref().map(|o| &o.entry),
+            pair.new.as_ref().map(|n| &n.entry),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let mut mem = std::collections::BTreeMap::new();
+        for e in entries {
+            for c in &e.chunks {
+                mem.insert(c.id.clone(), body_of(c));
+            }
+        }
+        let chunks = ChunkSource::from_memory(mem);
+        let sources = Sources::from_pairs([
+            ("7.0.0".to_string(), "https://cdn/old".to_string()),
+            ("7.1.0".to_string(), "https://cdn/new".to_string()),
+        ]);
+        let classes = [Class::PartialSameOffset];
+        assemble::assemble(&AssemblyInput {
+            pair,
+            matching_field: "game",
+            classes: &classes,
+            sources: &sources,
+            chunks: &chunks,
+        })
+        .expect("the measured pair assembles")
+    }
+
+    /// A7, A8, A9, A10, A11, A12 — every row green on the measured layout.
+    #[test]
+    fn the_measured_pair_is_green_on_a7_through_a12() {
+        let a = assemble_measured(&hoyo_pair());
+        let rows = a.selfcheck_rows();
+        let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|(k, _, _)| *k).collect();
+        assert_eq!(
+            kinds,
+            ["A7", "A8", "A9", "A10", "A11", "A12"].into_iter().collect(),
+            "every assertion is represented: {rows:?}"
+        );
+        assert!(a.all_green(), "{:?}", rows.iter().filter(|(_, ok, _)| !*ok).collect::<Vec<_>>());
+        for (k, ok, detail) in &rows {
+            assert!(*ok, "{k}: {detail}");
+            assert!(!detail.is_empty(), "{k} carries no detail");
+        }
+    }
+
+    /// The measured outcome: one chunk reused from the old file, two fetched,
+    /// and a download cost that matches the schema doc's worked example.
+    #[test]
+    fn the_measured_patch_reuses_one_chunk_and_fetches_two() {
+        let a = assemble_measured(&hoyo_pair());
+        let p = a.patch.as_ref().unwrap();
+        assert_eq!(p.reused, 1);
+        assert_eq!(p.fetched, 2);
+        assert_eq!(p.moved, 0, "the shared chunk is at the same offset");
+        assert!(p.a10_holds(), "{:?}", p.reuse_failures);
+        assert!(p.rewrites.is_empty());
+        let t = a.map.totals.as_ref().unwrap();
+        assert_eq!(t.chunks, 3);
+        // 259 795 + 14 631 — the two FETCH entries' declared compressed sizes.
+        assert_eq!(t.download_bytes, 274_426, "the schema doc's figure");
+        assert_eq!(t.materialize_old_bytes, 2_340_264);
+        assert_eq!(t.materialize_new_bytes, 2_340_264);
+        assert_eq!(a.map.expectations.as_ref().unwrap().must_not_fetch.len(), 1);
+        assert_eq!(
+            a.map.expectations.as_ref().unwrap().must_not_fetch[0]
+                .split('_')
+                .next()
+                .unwrap(),
+            "f5dc3ca1f3a0ba3d",
+            "the chunk a correct patch must not download is the measured shared one"
+        );
+    }
+
+    /// The reuse decision is made on content, and the measured pair is the proof:
+    /// the chunk at offset 0 is the same *length* in both builds and is still a
+    /// FETCH.
+    #[test]
+    fn the_chunk_at_the_same_offset_with_new_bytes_is_fetched_not_reused() {
+        let pair = hoyo_pair();
+        let a = assemble_measured(&pair);
+        let plan = a.map.plan.as_ref().unwrap();
+        let e = &plan[0];
+        assert_eq!(e.decision, Decision::Fetch);
+        assert!(e.source_range.is_none());
+        assert_eq!(e.uncompressed_size, 690_719, "the same length in both builds");
+        let old0 = &pair.old.as_ref().unwrap().entry.chunks[0];
+        assert_eq!(old0.uncompressed_size, e.uncompressed_size);
+        assert_ne!(old0.uncompressed_md5, e.uncompressed_md5, "but not the same bytes");
+        assert!(e.url.as_deref().unwrap().starts_with("https://cdn/new/"));
+    }
+
+    /// A9 is the whole milestone: the patch flow and the direct assembly are
+    /// different code paths, so byte-equality is evidence.
+    #[test]
+    fn the_patch_flow_byte_equals_the_direct_new_assembly_on_the_measured_pair() {
+        let a = assemble_measured(&hoyo_pair());
+        let p = a.patch.as_ref().unwrap();
+        let n = a.new.as_ref().unwrap();
+        assert_eq!(p.bytes, n.bytes);
+        assert_eq!(p.bytes.len(), 2_340_264);
+        assert_eq!(p.md5, n.md5);
+        assert_eq!(n.md5, n.declared_md5, "A8: the new file hashes to its manifest md5");
+        assert_eq!(a.old.as_ref().unwrap().md5, a.old.as_ref().unwrap().declared_md5, "A7");
+    }
+}

@@ -76,6 +76,20 @@ pub fn write_diff(
     Ok(out)
 }
 
+/// Write `patchmaps/<capture_id>.json` and return the artifact-relative path.
+///
+/// Written for every admitted capture, including `removed` (which has a null
+/// `plan`) and `added` (which has a null `old`). A consumer that wants to know
+/// what a capture covers should be able to read one file and find out, rather
+/// than infer it from which files happen to exist.
+pub fn write_patchmap(
+    root: &Path,
+    capture_id: &str,
+    map: &crate::assemble::PatchMap,
+) -> std::io::Result<String> {
+    write_doc(root, &format!("patchmaps/{capture_id}.json"), map)
+}
+
 /// Write `chunks/index.json` and return the artifact-relative path written.
 ///
 /// Written even when nothing was stored — `--no-chunk-blobs` still produces the
