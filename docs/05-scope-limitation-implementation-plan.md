@@ -1,277 +1,262 @@
-# Scope-of-work limitations — implementation plan
+# Implementation plan — `girpr` scope-of-work limitations
 
-Spec: `docs/04-scope-limitation-options.md`. Pipeline spec:
-`docs/02-repair-chunk-spec.md`. Module map: `docs/03-rust-implementation-plan.md`.
-
-**Status:** plan, nothing built. Phases are ordered by dependency, not by
-interest. Each phase is one commit and ships green.
-
-**Two invariants for every phase.**
-
-1. **An unflagged run is byte-identical to today's.** No new flag changes a
-   default, reorders a log line, or alters a counter. Every phase is verifiable
-   by running the existing suite unchanged — if a phase cannot pass the existing
-   suite without editing it, the phase is wrong, not the suite.
-2. **The two crates stay independent.** Nothing in `tools/capture` or
-   `tools/sync` is imported, and no `girpr` contract leaks into either. A `Budget`
-   idea is lifted as a *shape* and retyped (`gircap/docs/00-spec.md` §2).
+Build order, module tree, acceptance checks and the risks worth knowing before
+milestone 0 starts. Companions:
+[`04-scope-limitation-options.md`](04-scope-limitation-options.md) (what and
+why). The repair-spec series (`01-`, `02-`, `03-`) is background, not a target
+— see §1.
 
 ---
 
-## Phase 0 — the plan restructure (prerequisite, no new flags)
+## 0. Decisions
 
-### 0.1 Why it is first, and why it is not optional
-
-`--print-plan` needs a plan. `--max-delete-bytes` needs to know how much the
-purge *would* delete. Neither is answerable today, because the pipeline decides
-what to purge **after** it has already repaired, inside the same call that deletes
-it:
-
-```
-repair::run (today)
-  7.  purge_before -> purge_extra(walk, classify, delete)      <-- decides and acts
-  8.  check_only  -> return
-  9.  repair_all                                               <-- mutates
-  11. post::run -> delete_deprecated -> audio move -> purge_extra(...) -> config.ini
-                                                                       ^ decides and acts
-```
-
-`purge_extra` walks and deletes in a single pass. There is no instant at which
-"how much would this purge delete" is known without having begun deleting, so
-B4's refusal has no question to ask and C1 has nothing to print. `girsync` solved
-this by splitting `planner/` from `apply`; `girpr` needs the same seam.
-
-### 0.2 Target shape
-
-```
-A. prepare game_dir (canonicalize; CREATE only at execution time — see 0.5)
-B. metadata::fetch                                        [unchanged]
-C. emit REPORT                                            [unchanged]
-D. fetch_latest manifests + local_reuse_map               [unchanged]
-E. plan::build_plan                          -> RepairPlan
-F. plan_purge (when purge_before | purge_after | print_plan) -> PurgePlan
-G. deprecated_files (moved up from the post-phase) -> Vec<String>
-H. ===== everything above this line is read-only =====
-I. execute: purge_before -> check_only | repair_all -> post
-```
-
-`F` and `G` complete the plan. Everything after `H` consumes a decided list.
-
-### 0.3 Step 1 — split `purge_extra`
-
-`src/repair/purge.rs` becomes `src/repair/plan/purge.rs` (the module layout in
-`docs/04` §5). Current one function becomes three:
-
-```rust
-pub struct PurgeCandidate { pub path: PathBuf, pub rel: String, pub size: u64 }
-pub struct PurgePlan {
-    pub files: Vec<PurgeCandidate>,  // sorted by path — same order as today
-    pub dirs:  Vec<PathBuf>,         // emptied by this purge, deepest-first, game_dir excluded
-    pub total_bytes: u64,
-}
-pub fn plan_purge(game_dir: &Path, plan: &RepairPlan, server_keep: &HashSet<String>) -> PurgePlan;
-pub fn apply_purge(p: &PurgePlan, dry_run: bool) -> u64;   // -> deleted bytes, 0 in dry-run
-```
-
-- `plan_purge` is the current `WalkDir` + `classify_purge_path` + sort, with the
-  delete loop removed. It gains a post-order pass to derive `dirs`: a directory is
-  swept iff it has **zero `Keep`-classified descendants**, computed during the same
-  walk with a per-directory kept-count map. Exclude `game_dir` itself.
-- `apply_purge` is the current delete loop, unchanged line for line, plus
-  `remove_dir` over `p.dirs` **still best-effort** (`let _ = …`). A directory can
-  gain a file between plan and apply — the game may be running — and the applier
-  must not be the thing that fails. Keep every `tracing` line in `apply_purge`, so
-  `--dry-run` output is identical to today's.
-- `remove_emptied_dirs`' re-walk disappears; it was only reachable to call
-  `remove_dir`, which is now driven by `p.dirs`.
-
-`classify_purge_path` and `keep_set` do not change in this step. Not even a
-parameter.
-
-### 0.4 Step 2 — hoist the deferred deprecated-file list
-
-`post::delete_deprecated` calls `hyp.deprecated_files()` lazily, in the post-phase.
-Move the *call* into the plan phase; keep the delete in the post-phase. It is
-best-effort today (warn + continue) and stays so — only the log position moves,
-earlier, into the plan.
-
-### 0.5 Step 3 — move `create_dir_all` to execution time
-
-`repair::run` creates `game_dir` before anything else, unless read-only. Under the
-new order that is wrong: a run that refuses on a ceiling must have created
-nothing. Move it to the first line of the execute half.
-
-Two consequences, both handled:
-
-- `canonicalize` at the top now tolerates a missing dir (it already falls back to
-  the raw path). `rel_path` strips `game_dir` from `game_dir`-joined paths, so
-  both sides use the same value and the fallback is consistent.
-- `plan_purge` on a missing dir: `WalkDir` yields an error entry, which the
-  existing `filter_map(|e| e.ok())` drops, giving an empty plan. Correct — a
-  fresh install has nothing to purge.
-
-This is the one Phase 0 step that changes behaviour with no flags (a failed run no
-longer leaves an empty directory behind). It is called out here so it is a
-decision rather than a surprise; the suite does not currently cover it.
-
-### 0.6 Step 4 — de-duplicate the dry-run purge pass
-
-Today `--purge-before --purge-after --dry-run` calls `purge_extra` **twice** and
-logs every candidate twice: once from the `purge_before` branch in `run`, once
-from the `else if ctx.dry_run && ctx.purge_after` branch in the post-phase. With
-a planned purge the apply happens once, at whichever position the flags select
-(`purge_before` position if set, otherwise the post-phase position).
-`--check-only` still never purges.
-
-Fixing this is not the point of Phase 0; it is a consequence of it, and it is
-listed so the diff is expected rather than surprising.
-
-### 0.7 Phase 0 acceptance
-
-- The existing suite passes **unmodified**. `tests/repair_offline.rs` covers both
-  purge timings, dry-run purge logging, check-only, repair, reuse and resume;
-  `tests/cli_contract.rs` covers the exit contract. None of them may be edited in
-  this phase.
-- `repair::run` has no branch that decides and acts in the same call.
-- No new flag, no changed default, no changed `SUMMARY`.
-- Commit: `girpr: build the whole plan (repair + purge) before mutating anything`
+| decision | value |
+|---|---|
+| trigger | `gircap`'s end-to-end check is blocked on `girpr` having no path scope (`tools/capture/docs/00-spec.md` §8.1) |
+| ceiling semantics | **refuse / hard-stop**, never admission — [`04` §1.5](04-scope-limitation-options.md) |
+| new exit code | **`5`** = a manually requested enforcement limit was exceeded. Not `1`: the API must be fetched first and whether a limit trips depends on the answer |
+| `--max-files 0` | a valid ceiling, **not** a usage error; trips or does not depending on the plan |
+| admission (take the first N) | **out of scope**; it wants `--first`/`--limit` and is not an enforcement |
+| `config.ini` under a scope | **not bumped** — a scoped run has deliberately not put the bytes in place |
+| the repair-spec docs | **not modified**; this plan's own file is the only doc that changes (§1) |
+| `tools/capture`, `tools/sync` | **not modified, not depended on.** The filter is ported from `girsync` and the budget *shape* from `gircap`; neither crate is imported |
+| commit discipline | **one commit per milestone. No milestone lands uncommitted.** |
 
 ---
 
-## Phase 1 — path scope
+## 1. What this plan does not touch
 
-Unblocks the named blocker: `gircap/docs/00-spec.md` §8.1.
+`docs/01-repair-findings-and-verdict.md`, `docs/02-repair-chunk-spec.md` and
+`docs/03-repair-rust-implementation-plan.md` are the **repair spec** series:
+findings → spec → Rust module plan for the whole-install patcher that ships
+today. They describe `girpr` as it is, and this work does not change that
+description enough to be worth amending them.
 
-### 1.1 Step 1 — the filter
+**No milestone in §3 edits any of the three.** The rules, so "we'll just add a
+line" does not happen by accident:
 
-New `src/repair/scope/filter.rs`, ported from `tools/sync/src/filter.rs`:
+- The three keep describing the shipped tool. `--include` is a new flag, not a
+  change to the repair algorithm, and the repair spec is not where a flag list
+  lives — the **README** flag table is (§7).
+- Anything this work learns about the *spec* (e.g. if M0 turns up that the purge
+  ordering is load-bearing in a way `docs/02` does not say) is recorded **here**,
+  in that milestone's **Landed** block, and left for a deliberate edit of
+  `docs/02` if one is ever warranted.
+- **This file is the only doc that grows.** `docs/04` is edited only to close
+  §7.2/§7.3 decisions once they are settled.
+
+`gircap`'s docs are edited by neither plan, except for the one line in M7 that
+marks the blocker resolved.
+
+---
+
+## 2. Shape of the change
+
+```
+src/repair/
+├── mod.rs              phase coordinator; gains: plan-then-assert-then-execute
+├── plan/               M0 — the plan becomes complete before anything mutates
+│   ├── mod.rs          RepairPlan, PlannedFile, est_download_bytes, build_plan
+│   └── purge.rs        PurgePlan, PurgeCandidate, plan_purge, apply_purge
+│                       (moved out of src/repair/purge.rs)
+└── scope/              M1+ — new directory
+    ├── mod.rs          the assertion: plans + scope + limits -> proceed | refuse(5)
+    ├── filter.rs       PathScope, is_visible, compile_patterns      (pure)
+    ├── limits.rs       Limits { files, download_bytes, write_bytes, delete_bytes }
+    ├── ledger.rs       the runtime atomics the write/download stops share
+    └── report.rs       PLAN line + --plan-out JSON
+```
+
+`girsync` made the same split (`planner/` → apply) for the same reason. `mod.rs`
+is a facade re-exporting its children; leaf files own one concern; inline
+`#[cfg(test)]` tests travel with the code they cover. Inherited, not invented.
+
+New dependency: **`glob`**. Already in `Cargo.lock` via `girsync`, so the edge
+resolves offline. A shared crate with `girsync` is rejected — the filter is 35
+lines and the two tools' independence outranks the deduplication.
+
+---
+
+## 3. Milestones
+
+Each ends with something runnable, a stated acceptance check, and **its own
+commit**. Nothing starts before the previous milestone's check passes, and no
+milestone is left uncommitted — if a milestone is abandoned, the work is reverted
+or the reason is in the commit message.
+
+Commit messages use `girpr: M<N> — <summary>` as the subject, so
+`git log --oneline` reads as the build order.
+
+**Standing invariant, every milestone:** an unflagged run is byte-identical to
+today's. No flag changes a default, reorders a log line, or alters a counter. A
+milestone that cannot pass the existing suite without editing it is wrong, not the
+suite — with the one exception M0 makes explicitly.
+
+### M0 — the plan restructure (prerequisite)
+
+`purge_extra` walks `game_dir` and deletes in a single pass, at the point in the
+pipeline where it runs. So there is no instant at which "how much would this purge
+delete" is answerable without having begun deleting, and no instant at which the
+tool knows what it will do. M4 (`--max-delete-bytes`) has no question to ask and
+M5 (`--print-plan`) has nothing to print.
+
+Four steps:
+
+1. **Split `purge_extra`** into `plan_purge` (the existing `WalkDir` +
+   `classify_purge_path` + sort, delete loop removed) and `apply_purge` (the
+   delete loop, unchanged line for line). `plan_purge` also derives
+   `PurgePlan.dirs` — directories with zero `Keep`-classified descendants, via a
+   per-directory kept-count map built during the same walk, deepest-first,
+   `game_dir` excluded. `remove_emptied_dirs`' re-walk disappears.
+2. **Hoist `deprecated_files`** out of `post::delete_deprecated` into the plan
+   phase. The call moves; the delete does not. It stays best-effort.
+3. **Move `create_dir_all`** to the execution half. A run that refuses must have
+   created nothing.
+4. **De-duplicate the dry-run purge pass.** Today `--purge-before
+   --purge-after --dry-run` calls `purge_extra` twice and logs every candidate
+   twice.
+
+`classify_purge_path` and `keep_set` do not change. Not even a parameter.
+
+**Accept:** the existing suite passes **unmodified** — `tests/repair_offline.rs`
+covers both purge timings, dry-run purge logging, check-only, repair, reuse and
+resume; `tests/cli_contract.rs` covers the exit contract. `repair::run` has no
+branch that decides and acts in the same call. No new flag, no changed default,
+no changed `SUMMARY`. `cargo clippy --all-targets` clean.
+
+**This milestone is the one exception to the standing invariant**, and only in
+step 3: a failing run no longer leaves an empty `game_dir` behind. Say so in the
+commit message and add the integration case that pins it.
+
+**Commit:** `girpr: M0 — build the whole plan (repair + purge) before mutating anything`
+
+### M1 — the path filter
+
+`scope/filter.rs`, ported from `tools/sync/src/filter.rs`:
 
 ```rust
 pub struct PathScope { includes: Vec<Pattern>, excludes: Vec<Pattern> }
-pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>>   // exit 1 on a bad glob
-pub fn is_visible(&self, rel: &str) -> bool                        // exclude beats include
+pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>>
+pub fn is_visible(&self, rel: &str) -> bool          // exclude beats include
 ```
 
 `MatchOptions { case_sensitive: false, require_literal_separator: false,
-require_literal_leading_dot: false }` — `girsync`'s defaults, hardcoded. Matched
-against the `/`-separated game-dir-rooted rel path, the same string
-`plan::build_plan` stores. `glob` is already in `Cargo.lock` via `girsync`, so the
-dependency edge resolves offline.
+require_literal_leading_dot: false }` — `girsync`'s defaults, hardcoded, because
+game paths are Windows and `girpr` has no business growing a second spelling of
+that decision. Matched against the `/`-separated game-dir-rooted rel path, the
+same string `build_plan` stores. `glob` added to `Cargo.toml`.
 
-`glob` becomes a `girpr` dependency. No shared crate with `girsync` — the filter is
-35 lines and the independence rule outranks the deduplication.
+Not wired into the pipeline yet: M1 lands the filter and its unit tests, M3
+threads it.
 
-### 1.2 Step 2 — thread the scope
+**Accept:** unit tests offline — include-only, exclude-only, exclude-beats-
+include, empty include admits everything, `*` crossing `/`, case-insensitivity,
+backslash normalization, a bad pattern → `Err` naming the glob. No behavioural
+change: the suite is untouched and green.
+
+**Commit:** `girpr: M1 — path filter (glob), ported from girsync's semantics`
+
+### M2 — thread the scope
+
+The filter is only worth having if a filtered path stops existing everywhere,
+not just in the repair loop. `plan.expected_paths()` is the **only**
+manifest-derived input to the purge keep-set, so narrowing the plan alone makes
+purge *destructive* — the fixture `gircap` hands us would be eaten.
 
 | site | change |
 |---|---|
 | `plan::build_plan` | takes `&PathScope`; drops non-visible `rel` **before** the plan exists, so `files_total` counts only what survives |
 | `purge::classify_purge_path` | gains a `&PathScope`; a hidden path returns `Keep` **before** the manifest check |
-| `purge::plan_purge` | same, via the classifier |
-| `purge::PurgePlan.dirs` | the kept-count pass already sees hidden paths as `Keep`, so swept dirs come out right for free |
+| `purge::plan_purge` | same, through the classifier |
+| `PurgePlan.dirs` | the kept-count pass sees hidden paths as `Keep`, so swept dirs come out right for free |
 | `post::delete_deprecated` | skips a hidden path |
 | `post::move_audio_cache` | skips a hidden source or target |
-| `post::write_config_ini` | **skipped entirely when a scope is active** (`docs/04` §2.2); `warn` + `SUMMARY config_bumped=0` |
-| `metadata` audio-scan write | refused at the CLI layer, see 1.3 |
+| `post::write_config_ini` | **skipped entirely when a scope is active**; `warn` + `SUMMARY config_bumped=0` |
 
-`classify_purge_path` stays a pure function with its exhaustive unit test; the
-scope is one more argument. The alternative — widening `server_keep` with every
-hidden path — is rejected in `docs/04` §2.1.
+Rejected alternative: widening `server_keep` with every hidden path. It grows a
+`HashSet<String>` to tens of thousands of entries, turns `classify_purge_path`
+from a pure classifier into one that needs an answer computed elsewhere, and gets
+the emptied-dir sweep wrong for free.
 
-### 1.3 Step 3 — the two guards
+Two guards, both exit `1`:
 
-- `--include` present and matching zero planned paths → exit `1`, globs named.
-- Explicit `--audio` under an active scope → exit `1`, **unless**
+- `--include` present and matching **zero** planned paths → globs named.
+- explicit `--audio` under an active scope → refused, **unless**
   `GameConfig.audio_pkg_scan_dir`'s rel path passes `is_visible`. The scan file is
-  one of the few paths a scoped run is allowed to write, so it has to be in scope
-  like anything else. The path comes from `getGameConfigs`; never hardcode it.
+  one of the few paths a scoped run may write, so it is in scope like anything
+  else. The path comes from `getGameConfigs`; never hardcode it.
 
-### 1.4 Step 4 — tests
+**Accept:** unit tests for `classify_purge_path` under a scope — a hidden manifest
+path, a hidden orphan, a hidden `*_tmp`, a hidden `audio_lang_14`, and the
+emptied-dir derivation for a directory whose only contents were hidden. Then,
+against the existing `MockServer`: an include over one fixture file repairs
+exactly that file (assert the exact chunk download set via `mock.chunk_hits()`);
+a purge under a scope leaves every other fixture file on disk; `config.ini` is
+not bumped; `--audio` + `--include` refuses. Binary-level, `tests/cli_contract.rs`
+gains: bad glob → `1`, `--include` matching nothing → `1`.
 
-Unit, in `filter.rs`: include-only, exclude-only, exclude-beats-include, empty
-include admits everything, `*` crossing `/`, case-insensitivity, backslash
-normalization, bad pattern → `Err`.
+**Commit:** `girpr: M2 — --include / --exclude path scope; excluded paths do not exist`
 
-Unit, in `purge.rs`: `classify_purge_path` with a scope — a hidden manifest path,
-a hidden orphan, a hidden `config.ini` sibling, a hidden `*_tmp`, and the
-emptied-dir derivation under a hidden-only directory.
+### M3 — `--max-files` and `--max-delete-bytes`
 
-Integration, in `tests/repair_offline.rs`, against the existing `MockServer`: an
-include over one fixture file repairs exactly that file (assert the exact chunk
-download set via `mock.chunk_hits()`); a purge under a scope leaves the fixture's
-other files on disk; `config.ini` is not bumped; `--audio` under a scope refuses.
+The two refusals that need nothing from the network.
 
-Binary-level, in `tests/cli_contract.rs`: bad glob → `1`; `--include` matching
-nothing → `1`; `--audio` + `--include` → `1`.
+- `--max-files <N>`: `plan.files.len()` **on the filtered plan**; `> N` →
+  `RunFailure::limit`, exit `5`, before `create_dir_all`. Checking after the
+  filter is what makes the flag usable at all — checking before it would refuse
+  on every real install.
+- `--max-delete-bytes <N>`: `PurgePlan.total_bytes`, computed **once over the
+  union of both purge passes**. Per pass would let a low ceiling refuse
+  `--purge-before` for work `--purge-after` would have done anyway. Over the limit
+  → exit `5`, nothing deleted.
 
-Commit: `girpr: --include / --exclude path scope (excluded paths do not exist)`
+Neither flag admits, selects, or orders anything ([`04` §1.5](04-scope-limitation-options.md)).
+Together they are what makes `--include` assertable: the glob selects, the
+ceiling verifies the selection.
 
----
+**Accept:** a refusal writes nothing — no `game_dir` created, no `_tmp`, no
+deleted file, no `config.ini` write. `--max-files N` with `plan.files.len() == N`
+does **not** refuse; the boundary is the point. `tests/cli_contract.rs` gains
+exit `5` as its own assertion, carved out of the existing "every argument error
+is `1`" rule.
 
-## Phase 2 — ceilings
+**Commit:** `girpr: M3 — --max-files and --max-delete-bytes as pre-flight refusals`
 
-Refusal, not admission (`docs/04` §1.5). Every one exits `5`.
+### M4 — `--max-download-bytes`
 
-### 2.1 `--max-files <N>`
+Two mechanisms, and the second is the one that actually enforces.
 
-`n = plan.files.len()` on the **filtered** plan. `n > N` → `RunFailure::limit`,
-exit `5`, before `create_dir_all`. Parsed as `Option<usize>`; `0` is a valid
-ceiling and is *not* a usage error — whether it trips depends on the server's
-answer, which is why this is `5` and not `1` (`docs/04` §4.4).
-
-### 2.2 `--max-download-bytes <N>`
-
-**Pre-flight.** Needs `est_download_bytes` per planned file, added to
-`plan::PlannedFile`:
+**Pre-flight.** `est_download_bytes` per planned file, computed in `build_plan`
+(pure, no I/O):
 
 ```
-Σ c.compressed_size for c in chunks where (c.uncompressed_md5, c.uncompressed_size) ∉ local_map[rel]
+Σ c.compressed_size for c in chunks where (c.uncompressed_md5, uncompressed_size) ∉ local_map[rel]
 ```
 
-`local_map` already exists at that point (`manifest::local_reuse_map`). Compute it
-in `build_plan` — pure, no I/O, and it is exactly the capture's `patch_fetch`
-formula, so the `PLAN` line and the eventual `SUMMARY download_bytes` agree by
-construction. `Σ > N` → exit `5`.
+`local_map` already exists at that point. This is character-for-character
+`gircap`'s `patch_fetch` formula, so the `PLAN` line and the eventual
+`SUMMARY download_bytes` agree by construction. `Σ > N` → exit `5`.
 
-**Runtime.** The estimate is a **lower bound** — `try_reuse_slice` falls back to a
-download when a local slice fails its MD5 — so refusing on it alone would bound
-nothing. One `AtomicU64` on `Summary`, checked before each `fetch_chunk_bytes`;
-crossing it drops the remaining files, leaves their `*_tmp` in place (S3
-resume-by-length makes an aborted run a smaller run, not a corrupt one), sets
-`stopped=bytes`, and exits `5`.
+**Runtime.** The estimate is a **lower bound, not a promise** —
+`try_reuse_slice` falls back to a download when a local slice fails its MD5, so
+refusing on the estimate alone would bound nothing. One `AtomicU64` on `Summary`,
+checked before each `fetch_chunk_bytes`; crossing it drops the remaining files,
+leaves their `*_tmp` in place (S3 resume-by-length makes an aborted run a smaller
+run, not a corrupt one), sets `stopped=bytes`, exits `5`.
 
-### 2.3 `--max-delete-bytes <N>`
+**Accept:** `Σ est == N` does not refuse. The `SUMMARY` keys
+`plan_files` / `plan_download_bytes` / `limited=1` appear **only** when the flag
+is active, so an unflagged `SUMMARY` is byte-identical to today's. A run whose
+reuse path is broken (slice MD5 fails) still trips the runtime stop — an
+integration case that corrupts a local slice proves the estimate is not trusted
+alone.
 
-`PurgePlan.total_bytes`, computed **once over the union of both purge passes** —
-not per pass, or a low ceiling would refuse `--purge-before` for work that
-`--purge-after` would have done anyway. Over the limit → exit `5`, nothing
-deleted. This is the flag that exists because Phase 0 does.
+**Commit:** `girpr: M4 — --max-download-bytes: pre-flight refusal plus a runtime hard stop`
 
-### 2.4 `--max-write-bytes <N>` — later, same shape
+### M5 — `--print-plan`
 
-The only ceiling that cannot be a refusal: reuse success is decided per chunk at
-runtime, against bytes that may not be there. One `AtomicU64`, incremented at the
-two `write_all` sites in `file.rs` (`try_reuse_slice`'s copy and
-`write_downloaded_chunk`'s decoded write). Defer to Phase 4 — it is P1.
-
-### 2.5 Step — tests
-
-- refusal writes nothing: no `game_dir` created, no `_tmp`, no deleted file, no
-  `config.ini` write;
-- `--max-files N` with `plan.files.len() == N` does **not** refuse (the boundary is
-  the point);
-- `--max-download-bytes N` where `Σ est == N` does not refuse;
-- `--max-delete-bytes` refuses and deletes nothing;
-- exit `5` appears in `tests/cli_contract.rs` as its own assertion, distinct from
-  the "every arg error is `1`" rule.
-
-Commit: `girpr: enforce byte/file ceilings as pre-flight refusals (exit 5)`
-
----
-
-## Phase 3 — `--print-plan`
-
-Run phases A–H, emit the `PLAN` line, stop. Nothing is executed.
+Run phases A–H (prepare, metadata, `REPORT`, manifests, repair plan, purge plan),
+emit the `PLAN` line, stop. Nothing is executed.
 
 ```
 PLAN files=8 est_download_bytes=2373385 purge_files=0 purge_bytes=0 \
@@ -279,84 +264,132 @@ PLAN files=8 est_download_bytes=2373385 purge_files=0 purge_bytes=0 \
 ```
 
 `--plan-out <FILE>` writes `{"repair":[{rel,size,chunks_total,est_download_bytes}],
-"purge":[{rel,size}]}`. The format is still open — see `docs/04` §7.3.
+"purge":[{rel,size}]}` — format still open ([`04` §7.3](04-scope-limitation-options.md)).
 
-The `purge` half depends on Phase 0's `plan_purge`; if Phase 0 slipped, C1 can ship
-repair-only and be finished after.
-
-**Not an offline mode, and the help says so.** Fetching the manifests is not part
-of what `--print-plan` does differently — every run does it, like the API call
-before it. It fetches, at the usual log level. The plan *is* the manifest; there is
-no plan without one.
+**Not an offline mode and it does not pretend to be.** Fetching the manifests is
+not part of what `--print-plan` does differently — every run does it, like the API
+call before it. It fetches, at the usual log level. The plan *is* the manifest.
+The help text says so, because "print the plan" invites the assumption that it is
+a local, free operation.
 
 Read-only by construction: it returns before `create_dir_all`. It does not imply
-`--check-only` — it answers "what would you do", not "what is wrong". It composes
-with both, and a ceiling trips it like any other mode (`docs/04` §4.5).
+`--check-only` — it answers "what would you do", not "what is wrong".
 
-Commit: `girpr: --print-plan (PLAN line + --plan-out JSON, read-only)`
+**Accept:** `--print-plan` on the fixture reports the plan and writes nothing
+(no `game_dir`, no `_tmp`, no deletes, no `config.ini` write). A ceiling trips it
+like any other mode. `--print-plan --dry-run` is coherent — the plan prints, then
+the loop's hashing happens, which is what `--dry-run` asked for.
 
----
+**Commit:** `girpr: M5 — --print-plan: PLAN line and --plan-out JSON, read-only`
 
-## Phase 4 — second milestone
+### M6 — `--max-write-bytes`, `--fail-fast`, `--purge-only`
 
-| option | why now |
+Three independent flags, independent commits; ship together only if that is
+easier to review.
+
+| flag | why |
 |---|---|
-| `--hyp-base` / `--sophon-base` | `RunCtx` already has the fields and `api_bases` already resolves explicit > env > production; `Args::into_ctx` just hardcodes `None`. Needed by the artifact-serving shim. Flag the caveat: this redirects `getBuild` **only** — manifest/chunk URLs come from `url_prefix` in the response bodies (`docs/04` §3 D1). |
-| `--fail-fast` | ~85 s of sleeping per unreachable chunk, times a real plan. A mock-server test pointed at a broken endpoint hangs for hours instead of failing. 15 lines. |
-| `--max-write-bytes <N>` | closes the last un-counted write path (§2.4). |
-| `--purge-only` | the `removed` matrix class is only reachable through the purge path, and `gircap`'s own procedure says not to pass a purge flag. Phase 0 makes this a one-line early return beside `--check-only`. |
-| `--fail-fast` + `--purge-only` + `--max-chunk-bytes` + `--no-skip-intact` | E3/E5 are P2 and can be cut if the surface needs trimming. |
+| `--max-write-bytes <N>` | `download_bytes` does **not** count most of the disk the run touches. Every reuse-copy and every downloaded-chunk write goes into `*_tmp` and none of it appears in `download_bytes`. The only ceiling that cannot be a refusal — reuse success is decided per chunk at runtime, against bytes that may not be there. One `AtomicU64` at the two `write_all` sites. |
+| `--fail-fast` | One unreachable chunk is ~85 s of sleeping (`MAX_ATTEMPTS = 5` × linear backoff × `fetch_chunk_bytes`'s own 5× retry), before any connection timeout — `HypClient::new_with_bases` sets none. A mock-server test pointed at a dead endpoint hangs for hours instead of failing. 15 lines. |
+| `--purge-only` | The `removed` matrix class is reachable **only** through the purge path, and `gircap`'s own procedure says not to pass a purge flag. With M0 done this is a one-line early return beside `--check-only`: phases 1–5 and 7, skipping 6. |
 
-Commit per option; they are independent.
+**Accept:** write-bytes stop leaves `_tmp` and exits `5`; `--fail-fast` reaches
+its `SUMMARY` in seconds against a mock that returns 500 for every chunk;
+`--purge-only` purges and does not repair.
+
+**Commit:** `girpr: M6 — --max-write-bytes, --fail-fast, --purge-only`
+
+### M7 — `--hyp-base` / `--sophon-base`, and closing the loop
+
+`RunCtx` already has `hyp_base_override` / `sophon_base_override`; `api_bases`
+already resolves explicit > env > production; `HypClient::new_with_bases` already
+takes them. `Args::into_ctx` hardcodes `None`. Two `Option<String>` fields and a
+precedence line.
+
+**The caveat, which belongs in the flag help:** this redirects **`getBuild`
+only**. Manifest and chunk URLs come from `url_prefix` inside the *response
+bodies*, not from the configured base. A mock server must return bodies that
+point at itself.
+
+Then, and only then, the one-line edit to `tools/capture/docs/00-spec.md` §8.1
+marking the blocker resolved and §8.1.1 rewritten from a manual procedure into
+the invocation `girpr` now supports. **This is the only file outside `docs/`
+`01-03` and this plan that any milestone touches**, and it is one line.
+
+**Accept:** both overrides reach `HypClient::new_with_bases`; env still works;
+explicit still beats env; a mock at `127.0.0.1` serves the whole pipeline.
+`cargo test` still green and still offline.
+
+**Commit:** `girpr: M7 — --hyp-base / --sophon-base flags over the existing env seam`
+
+**Not in this plan, but unblocked by it:** the **artifact-serving shim** — serve a
+`gircap` bundle on `127.0.0.1` with each body's `url_prefix` rewritten to the
+shim's own origin. That is what turns `gircap/docs/00-spec.md` §8.1.1 from a
+manual procedure into an automated assertion, and it is consumer-side work in
+`tools/capture`.
 
 ---
 
-## Test strategy
+## 4. Test strategy
 
-Three layers, unchanged in shape from `docs/03` §4.
+Three layers, unchanged in shape from [`03-repair-rust-implementation-plan.md` §4](03-repair-rust-implementation-plan.md).
 
 **Unit** (`#[cfg(test)] mod tests` next to the code): the filter, the ceiling
 predicates, `est_download_bytes`, `plan_purge`'s classification and emptied-dir
 derivation, `format_plan_line`, and the conditional `SUMMARY` keys. All pure, all
 filesystem-free.
 
-**Integration** (`tests/repair_offline.rs`): one `#[tokio::test]` per behaviour,
-each against the existing `MockServer`, asserting `(summary, exit code)` plus
-on-disk state. `MockOpts` gains nothing — the fixture is already two files and
-three chunks, which is enough to make a ceiling trip.
+**Integration** (`tests/repair_offline.rs`): one `#[tokio::test]` per behaviour
+against the existing `MockServer`, asserting `(summary, exit code)` plus on-disk
+state. `MockOpts` gains nothing — two files and three chunks is enough to make a
+ceiling trip.
 
 **Binary** (`tests/cli_contract.rs`): the new flag surface and the exit contract.
-The existing "every argument error is `1`" rule needs one carve-out — `5` is not
+The existing "every argument error is `1`" rule gains one carve-out — `5` is not
 an argument error — so it becomes an explicit assertion rather than a blanket.
 
-**Nothing new touches the network.** The existing `GIRPR_HYP_BASE` /
-`GIRPR_SOPHON_BASE` env seam is what every offline test already uses; `--hyp-base`
-only makes it reachable from a flag.
+Nothing new touches the network. The `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE` env
+seam is what every offline test already uses; `--hyp-base` only makes it
+reachable from a flag.
 
 ---
 
-## Risks
+## 5. Risks
 
 | risk | mitigation |
 |---|---|
-| Phase 0 changes behaviour with no flags (the `create_dir_all` move) | one documented diff; add an integration case that a failing run leaves no directory behind |
-| A ceiling estimated low lets a run exceed it | B2's runtime hard stop; the pre-flight estimate is documented as a lower bound, not a promise |
-| Phase 0 is big and lands reviewable | split into the four steps of §0.3–§0.6, each independently green; they are separable commits if the split helps |
-| Scope filtering silently deletes the fixture through purge | `classify_purge_path` returns `Keep` before the manifest check, with an exhaustive unit test on hidden paths |
+| M0 changes behaviour with no flags (the `create_dir_all` move) | one documented diff; an integration case pins that a failing run leaves no directory behind |
+| M0 is the largest milestone | its four steps are separable commits if review wants them smaller; each is independently green |
+| the `est_download_bytes` estimate is low, so a run exceeds the ceiling | M4's runtime hard stop; the estimate is documented as a lower bound, not a promise, and a test breaks the reuse path to prove it |
+| scope filtering silently deletes the fixture through purge | `classify_purge_path` returns `Keep` before the manifest check, with exhaustive unit tests on hidden paths |
 | `SUMMARY` grows and breaks a parser | every new key is emitted **only** when its flag is active — an unflagged run is byte-identical |
-| exit `5` surprises a caller | additive; README's contract table updated in the same commit as the flag that introduces it |
+| exit `5` surprises a caller | additive; the README contract table is updated in the same commit as the flag that introduces it |
+| the repair-spec docs drift from the tool | §1: this plan's file is the only doc that grows |
 
 ---
 
-## Definition of done
+## 6. Explicitly deferred
 
-Phase 0 + 1 + 2 + 3, plus:
+- **Admission** — `--first <N>` / `--limit <N>`, "take the cheapest N". It is a
+  selection, not an enforcement, and it wants its own name
+  ([`04` §1.5](04-scope-limitation-options.md)).
+- **`--max-chunk-bytes`**, **`--no-skip-intact`**, **`--manifest-field`** —
+  [`04` E3/E4/E5](04-scope-limitation-options.md). Real, but P2.
+- **A `--scope-profile` file.** The flags compose; a profile is a second surface.
+- **The artifact-serving shim** — consumer-side, belongs to `tools/capture`.
+- **Rate limiting.** Not a bandwidth cap: ceilings bound chunk downloads, writes
+  and deletes. Metadata and manifest traffic (~2–3 MB per run) happens before the
+  plan exists and is not bounded by anything here.
 
-- [ ] `docs/04` §7.3 open items closed and the spec's decisions updated to match
+---
+
+## 7. Definition of done
+
+M0 through M5 — the set that unblocks `gircap/docs/00-spec.md` §8.1 — plus:
+
+- [ ] every `SUMMARY` key verified **absent** when its flag is absent
 - [ ] README flag table, machine-contract table and exit-code table updated
-- [ ] `gircap/docs/00-spec.md` §8.1 blocker marked resolved, §8.1.1 rewritten
-      from a manual procedure to the invocation `girpr` now supports
-- [ ] the **artifact-serving shim** (serve a `gircap` bundle on `127.0.0.1` with
-      each body's `url_prefix` rewritten to the shim's own origin) — a consumer
-      side artifact, outside this plan, and the thing that finally makes the
-      end-to-end assertion automated
+- [ ] [`04` §7.2](04-scope-limitation-options.md) §7.2 decisions confirmed or
+      corrected, and §7.3 closed
+- [ ] the three repair-spec docs **unmodified** — `git diff --stat` says so
+- [ ] `cargo test` green and fully offline; `cargo clippy --all-targets` clean

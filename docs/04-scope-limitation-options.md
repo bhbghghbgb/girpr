@@ -13,8 +13,9 @@ is Group B; the open questions from revision 1 are closed in §7.
 
 **Prerequisite.** Everything here needs `girpr` to build its whole plan — repair
 work list *and* purge candidate list — before it mutates anything. It does not
-today. That refactor is Phase 0 of `docs/05-scope-limitation-implementation-plan.md`
-and it is a prerequisite for Groups B and C, not a nice-to-have.
+today. That refactor is milestone **M0** of
+`docs/05-scope-limitation-implementation-plan.md` and it is a prerequisite for
+Groups B and C, not a nice-to-have.
 
 **Scope:** `girpr` (the main crate) only. `gircap` is named here because it is
 the consumer that motivated the work, not because anything in this document
@@ -362,8 +363,8 @@ than no purge: it leaves a tree that is neither the old install nor the new one.
 Refusal is therefore the only acceptable shape, and it is cheap — but only once
 the plan is up front. Today `purge_extra` walks and deletes in one pass, so there
 is no point at which "how much would this delete" is answerable without already
-having started. This is the clearest single justification for the Phase 0
-refactor (`docs/05`, Phase 0).
+having started. This is the clearest single justification for the M0 refactor
+(`docs/05`, M0).
 
 Once planned: if `Σ candidate sizes > N`, delete nothing, exit `5`.
 `post::delete_deprecated` is a handful of files and needs no ceiling.
@@ -424,11 +425,11 @@ PLAN files=8 est_download_bytes=2373385 purge_files=0 purge_bytes=0 \
 — for the `--per-class`-sized cases where diffing eight lines beats eight
 `--include` flags.
 
-**The purge half needs the Phase 0 refactor.** To-be-purged files are enumerated
-by a `WalkDir` over `game_dir` that today happens *after* the repair loop and
-*only* when a purge flag is set. `--print-plan` needs that list up front and
-unconditionally. Phase 0 splits `purge_extra` into plan and apply
-(`docs/05`, Phase 0); until then `--print-plan` can report the repair plan only.
+**The purge half needs the M0 refactor.** To-be-purged files are enumerated by a
+`WalkDir` over `game_dir` that today happens *after* the repair loop and *only*
+when a purge flag is set. `--print-plan` needs that list up front and
+unconditionally. M0 splits `purge_extra` into plan and apply
+(`docs/05`, M0); until then `--print-plan` can report the repair plan only.
 
 **Interaction.** `--print-plan` + `--dry-run` is coherent (the plan is printed
 before the loop, so the loop's hashing still happens but is what `--dry-run`
@@ -571,7 +572,7 @@ Two consequences worth stating:
   make every ceiling unusable — they would always refuse on a real install.
 - **Assert before everything mutates.** The purge plan is built here too, so a
   `--max-delete-bytes` refusal happens before a single byte is deleted. This is
-  the whole reason for the Phase 0 refactor.
+  the whole reason for the M0 refactor.
 
 ### 4.2 Admission order is no longer a question
 
@@ -687,8 +688,10 @@ src/repair/plan/
 `purge_extra` currently walks and deletes in one pass; splitting it into
 `plan_purge` (walk + classify → `Vec<PurgeCandidate>` + the emptied-dir set) and
 `apply_purge` (delete a decided list) is what makes B4's refusal and C1's purge
-half possible at all. **No behaviour change with no flags** — the existing tests
-must pass through this refactor untouched.
+half possible at all. **No flag changes, no changed defaults** — the existing
+tests must pass through this refactor untouched. The one behavioural delta is
+spelled out in `docs/05` M0 step 3: `create_dir_all` moves to execution time, so
+a run that later fails leaves no directory behind.
 
 **The scope layer** is new. Four concerns — the filter, the ceilings, the
 assertion, the plan report — so it is a directory too. The layout mirrors
@@ -786,29 +789,19 @@ Each is cheap to reverse before anything is built.
 
 ## 8. Milestones
 
-Scoped to what unblocks `gircap/docs/00-spec.md` §8.1.1, nothing more. Detail in
-`docs/05-scope-limitation-implementation-plan.md`.
+Build order, acceptance checks and the commit per milestone live in
+`docs/05-scope-limitation-implementation-plan.md`. Summary only:
 
-**Phase 0 — the plan restructure. No new flags, no behaviour change.**
-Build the whole plan — repair work list *and* purge candidate list — before
-mutating anything. Groups B and C are both blocked on it: B4's refusal has no
-"how much would this delete" question to ask, and C1 has nothing to print, until
-the purge list exists up front. Ships green against the existing suite.
-
-**Phase 1 — the limits.** P0 set, in the order that keeps the suite green:
-
-| # | option | why in scope |
+| milestone | option | why in scope |
 |---|---|---|
-| 1 | **A1** `--include` / `--exclude` + purge/post gating + the two guards | the named blocker |
-| 2 | **B1** `--max-files N` | the assertion that A1 selected what you meant |
-| 3 | **B4** `--max-delete-bytes N` | the irreversible case, now answerable thanks to Phase 0 |
-| 4 | **C1** `--print-plan` | makes A1/B1 auditable before committing |
-| 5 | **B2** `--max-download-bytes N` | the assertion §8.1.1 step 3 is written against |
-
-`D1`, `B3`, `E1`, `E2` are the natural second milestone: D1 because the
-artifact-serving shim needs it, E1 because every mock-server test needs it, E2
-because the `removed` class needs it, B3 because it closes the last un-counted
-write path.
+| **M0** | the plan restructure — repair *and* purge plans built before mutating | no new flags; the prerequisite B4 and C1 are both blocked on |
+| **M1** | **A1** the filter, unwired | lands the semantics and their tests before anything depends on them |
+| **M2** | **A1** threaded through the pipeline + the two guards | the named blocker |
+| **M3** | **B1** `--max-files`, **B4** `--max-delete-bytes` | the assertion that the scope selected what you meant; B4 is answerable thanks to M0 |
+| **M4** | **B2** `--max-download-bytes` | the assertion §8.1.1 step 3 is written against |
+| **M5** | **C1** `--print-plan` | makes the scope and the ceilings auditable before committing |
+| **M6** | **B3** `--max-write-bytes`, **E1** `--fail-fast`, **E2** `--purge-only` | E1 because every mock-server test needs it, E2 because the `removed` class needs it, B3 because it closes the last un-counted write path |
+| **M7** | **D1** `--hyp-base` / `--sophon-base` | the artifact-serving shim needs it; this is also the milestone that closes the `gircap` blocker |
 
 Follow-on work that this unblocks but does not include: the **artifact-serving
 shim** (serve a `gircap` bundle on `127.0.0.1` with `url_prefix` bodies rewritten
