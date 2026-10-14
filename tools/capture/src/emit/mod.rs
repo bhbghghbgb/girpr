@@ -10,6 +10,10 @@
 //! run never leaves a half-written document that reads as a complete one.
 //! `verify/checksums.json` is what proves nothing is missing.
 
+pub mod gamedir;
+pub mod index;
+pub mod selfcheck;
+
 use std::path::{Path, PathBuf};
 
 use crate::config::rel_path_string;
@@ -74,6 +78,34 @@ pub fn write_diff(
     write_bytes(root, "diff/paths.tsv", tsv.as_bytes())?;
     out.push("diff/paths.tsv".to_string());
     Ok(out)
+}
+
+/// Write `MANIFEST.json` and return the artifact-relative path written.
+pub fn write_manifest(root: &Path, m: &index::Manifest) -> std::io::Result<String> {
+    write_doc(root, "MANIFEST.json", m)
+}
+
+/// Write `README.md`, rendered from `MANIFEST.json` and the selfcheck.
+pub fn write_readme(root: &Path, m: &index::Manifest, s: &selfcheck::Selfcheck) -> std::io::Result<String> {
+    write_bytes(root, "README.md", m.readme(s).as_bytes())?;
+    Ok("README.md".to_string())
+}
+
+/// Write `verify/selfcheck.json`.
+pub fn write_selfcheck(root: &Path, s: &selfcheck::Selfcheck) -> std::io::Result<String> {
+    write_doc(root, "verify/selfcheck.json", s)
+}
+
+/// Digest everything under `root` and write `verify/checksums.json`.
+///
+/// Written **last**, so the document covers every other file in the bundle
+/// including `MANIFEST.json` and `README.md`. It cannot cover itself — a
+/// document that hashes itself has no fixed point — which is the one gap, and
+/// `Checksums::scan` excludes exactly that one path.
+pub fn write_checksums(root: &Path) -> std::io::Result<(String, index::Checksums)> {
+    let c = index::Checksums::scan(root)?;
+    write_doc(root, "verify/checksums.json", &c)?;
+    Ok(("verify/checksums.json".to_string(), c))
 }
 
 /// Write `patchmaps/<capture_id>.json` and return the artifact-relative path.

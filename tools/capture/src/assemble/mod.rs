@@ -250,82 +250,88 @@ pub struct Assembled {
 }
 
 impl Assembled {
-    /// The A7–A12 findings, as `(assertion, ok, detail)` rows.
+    /// The A7–A12 findings, as selfcheck rows.
     ///
     /// One row per assertion *instance*, as the schema doc requires: a file with
-    /// two failing REUSEs is two A10 rows, not one.
-    pub fn selfcheck_rows(&self) -> Vec<(&'static str, bool, String)> {
+    /// two failing REUSEs is two A10 rows, not one. Each row carries both sides
+    /// of the comparison, because a failed capture's usefulness is entirely in
+    /// being able to see which side disagreed.
+    pub fn selfcheck_rows(&self) -> Vec<crate::emit::selfcheck::Assertion> {
+        use crate::emit::selfcheck::{Assertion, wording};
         let mut rows = Vec::new();
         if let Some(o) = &self.old {
-            rows.push((
+            rows.push(Assertion::check(
                 "A7",
-                o.md5_matches(),
-                format!(
-                    "assemble(materialize_old) is md5 {}, the manifest says {}",
-                    o.md5, o.declared_md5
-                ),
+                wording("A7"),
+                &self.map.path,
+                &o.declared_md5,
+                &o.md5,
             ));
             rows.extend(layout_rows(&o.tag, &o.layout));
         }
         if let Some(n) = &self.new {
-            rows.push((
+            rows.push(Assertion::check(
                 "A8",
-                n.md5_matches(),
-                format!(
-                    "assemble(materialize_new) is md5 {}, the manifest says {}",
-                    n.md5, n.declared_md5
-                ),
+                wording("A8"),
+                &self.map.path,
+                &n.declared_md5,
+                &n.md5,
             ));
             rows.extend(layout_rows(&n.tag, &n.layout));
         }
         if let Some(p) = &self.patch {
-            rows.push(("A9", p.equals_new, self.describe_a9(p)));
+            let n = self.new.as_ref();
+            rows.push(Assertion::check(
+                "A9",
+                wording("A9"),
+                &self.map.path,
+                n.map(|n| n.md5.as_str()).unwrap_or("<no new side>"),
+                &p.md5,
+            ));
             for f in &p.reuse_failures {
-                rows.push(("A10", false, f.clone()));
+                rows.push(Assertion::fail(
+                    "A10",
+                    wording("A10"),
+                    &self.map.path,
+                    "every reused chunk's old-file slice MD5 == uncompressed_md5",
+                    f,
+                ));
             }
             if p.reuse_failures.is_empty() && p.reused > 0 {
-                rows.push((
+                rows.push(Assertion::pass(
                     "A10",
-                    true,
-                    format!("{} reused chunks verified by MD5 against the old file", p.reused),
+                    wording("A10"),
+                    &self.map.path,
+                    &format!("{} reused chunks verified by MD5", p.reused),
                 ));
             }
         }
-        if let Some(t) = &self.map.totals {
-            rows.push((
-                "A12",
-                self.a12_holds(),
-                format!(
-                    "{} of {} new chunks are fetched, {} reused, and the two are disjoint",
-                    t.fetch, t.chunks, t.reuse
-                ),
-            ));
+        if self.map.totals.is_some() {
+            // Built rather than `check`ed: the question is "are the two sets
+            // disjoint", which is a boolean, not a comparison of two strings.
+            rows.push(if self.a12_holds() {
+                Assertion::pass(
+                    "A12",
+                    wording("A12"),
+                    &self.map.path,
+                    "the fetched and reused chunk sets are disjoint",
+                )
+            } else {
+                Assertion::fail(
+                    "A12",
+                    wording("A12"),
+                    &self.map.path,
+                    "the fetched and reused chunk sets are disjoint",
+                    "a chunk is both reused and fetched",
+                )
+            });
         }
         rows
     }
 
     /// Whether every A7–A12 row is green.
     pub fn all_green(&self) -> bool {
-        self.selfcheck_rows().iter().all(|(_, ok, _)| *ok)
-    }
-
-    fn describe_a9(&self, p: &PatchOutcome) -> String {
-        if p.equals_new {
-            return format!(
-                "the patch flow byte-equals assemble(materialize_new): {} B, md5 {}",
-                p.bytes.len(),
-                p.md5
-            );
-        }
-        format!(
-            "the patch flow produced {} B md5 {}; assemble(materialize_new) produced {}",
-            p.bytes.len(),
-            p.md5,
-            self.new
-                .as_ref()
-                .map(|n| format!("{} B, md5 {}", n.bytes.len(), n.md5))
-                .unwrap_or_else(|| "<no new side>".into())
-        )
+        self.selfcheck_rows().iter().all(|a| a.ok)
     }
 
     /// A12, recomputed from the plan rather than read from M6.
@@ -354,22 +360,23 @@ impl Assembled {
 }
 
 /// One A11 row per violation, plus a green one when there are none.
-fn layout_rows(tag: &str, layout: &Layout) -> Vec<(&'static str, bool, String)> {
+fn layout_rows(
+    tag: &str,
+    layout: &Layout,
+) -> Vec<crate::emit::selfcheck::Assertion> {
+    use crate::emit::selfcheck::{Assertion, wording};
     if layout.is_clean() {
-        return vec![(
+        return vec![Assertion::pass(
             "A11",
-            true,
-            format!(
-                "{tag}: {} chunks tile {} B from 0",
-                layout.ranges.len(),
-                layout.declared_size
-            ),
+            wording("A11"),
+            tag,
+            &format!("{} chunks tile {} B from 0", layout.ranges.len(), layout.declared_size),
         )];
     }
     layout
         .violations
         .iter()
-        .map(|v| ("A11", false, format!("{tag}: {v}")))
+        .map(|v| Assertion::fail("A11", wording("A11"), tag, "gapless from 0", v))
         .collect()
 }
 
@@ -923,7 +930,7 @@ mod tests {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
         let p = a.patch.as_ref().expect("a patch");
         let n = a.new.as_ref().expect("a new side");
-        assert!(p.equals_new, "{}", a.describe_a9(p));
+        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
         assert_eq!(p.bytes, n.bytes);
         assert_eq!(p.md5, n.md5);
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
@@ -976,7 +983,7 @@ mod tests {
         })
         .expect("assembles");
         let p = a.patch.as_ref().unwrap();
-        assert!(p.equals_new, "{}", a.describe_a9(p));
+        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
         assert_eq!(p.reused, 2, "chunk 1 stays and chunk 3 moves");
         assert_eq!(p.fetched, 1, "chunk 4 is new content");
         assert_eq!(p.moved, 1, "only chunk 3 changed offset");
@@ -1008,7 +1015,7 @@ mod tests {
         assert_eq!(p.fetched, 0, "nothing new: every chunk is in the old file");
         assert_eq!(p.reused, 3);
         assert_eq!(p.moved, 3, "every chunk changed offset: that is what a reorder is");
-        assert!(p.equals_new, "{}", a.describe_a9(p));
+        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
         assert_eq!(a.map.totals.as_ref().unwrap().download_bytes, 0);
         assert_eq!(a.map.expectations.as_ref().unwrap().must_not_fetch.len(), 3);
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
@@ -1157,7 +1164,7 @@ mod tests {
         assert!(e.url.is_some(), "so it can be downloaded after all");
         // And A9 still holds: the flow fetched the right bytes and produced the
         // new file regardless of the failed REUSE.
-        assert!(p.equals_new, "{}", a.describe_a9(p));
+        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
         assert_eq!(p.md5, a.new.as_ref().unwrap().md5);
         let _ = &mut a;
     }
@@ -1187,7 +1194,7 @@ mod tests {
     fn a_green_capture_produces_one_row_per_assertion_and_no_red_ones() {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
         let rows = a.selfcheck_rows();
-        let kinds: Vec<&str> = rows.iter().map(|(k, _, _)| *k).collect();
+        let kinds: Vec<&str> = rows.iter().map(|r| r.id).collect();
         assert_eq!(
             kinds.iter().filter(|k| **k == "A7").count(),
             1,
@@ -1196,7 +1203,7 @@ mod tests {
         assert!(kinds.contains(&"A8") && kinds.contains(&"A9") && kinds.contains(&"A10") && kinds.contains(&"A11") && kinds.contains(&"A12"));
         assert!(a.all_green());
         assert!(
-            rows.iter().all(|(_, ok, d)| *ok && !d.is_empty()),
+            rows.iter().all(|r| r.ok && !r.actual.is_empty()),
             "every row carries a detail a reader can check: {rows:?}"
         );
     }

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::biz::{Biz, Endpoints};
-use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
+use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, VersionPair, artifact_dir};
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
@@ -482,9 +482,29 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     A7-A12 are asserted here rather than left to M9, because a capture that
     //     cannot rebuild its own files has nothing worth keeping and the operator
     //     should find out at capture time.
+    //
+    //     `game/` and `expected/` are written one capture at a time, as each
+    //     assembles, so the fixture is never fully resident: the whole thing is
+    //     the largest object this tool ever holds.
     let chunk_source = assemble::ChunkSource::from_index(&dir, &index);
-    let mut rows: Vec<(&'static str, bool, String)> = Vec::new();
+    // Where the game puts the audio scan file. Never hardcoded: it is the
+    // launcher's path, and the fixture has to write it where the tool under
+    // test looks for it.
+    let scan_dir = captured
+        .configs
+        .data::<hyp::GameConfigs>()
+        .map_err(|e| apierr("parse getGameConfigs", &e))?
+        .audio_pkg_scan_dir()
+        .map_err(|e| apierr("read getGameConfigs.audio_pkg_scan_dir", &e))?
+        .to_string();
+    let mut rows: Vec<emit::selfcheck::Assertion> = api_and_manifest_assertions(
+        &captured,
+        versions,
+        &manifests,
+        &index,
+    );
     let mut assembled_ids: Vec<String> = Vec::new();
+    let mut prelude: Vec<String> = Vec::new();
     let (mut reused_total, mut fetched_total, mut moved_total) = (0_u64, 0_u64, 0_u64);
     if !plan.no_chunk_blobs {
         for (a, pair) in selection.admitted.iter().zip(&pairs) {
@@ -519,6 +539,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                         fetched_total += p.fetched as u64;
                         moved_total += p.moved as u64;
                     }
+                    // The assembler already produces selfcheck rows — both sides
+                    // of each comparison, with the spec's wording — so they are
+                    // carried through rather than re-derived here.
                     rows.extend(out.selfcheck_rows());
                     assembled_ids.push(a.capture_id.clone());
                     written.push(
@@ -529,6 +552,36 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                             )
                         })?,
                     );
+                    // `game/` is the fixture, `expected/` the ground truth. A
+                    // `removed` capture contributes only to the first.
+                    if let Some(o) = &out.old {
+                        written.push(
+                            emit::gamedir::write_variant(
+                                &dir,
+                                "game",
+                                &emit::gamedir::VariantFile {
+                                    rel_path: &a.path,
+                                    bytes: &o.bytes,
+                                    capture_id: &a.capture_id,
+                                },
+                            )
+                            .map_err(|e| write_err(&dir, e))?,
+                        );
+                    }
+                    if let Some(n) = &out.new {
+                        written.push(
+                            emit::gamedir::write_variant(
+                                &dir,
+                                "expected",
+                                &emit::gamedir::VariantFile {
+                                    rel_path: &a.path,
+                                    bytes: &n.bytes,
+                                    capture_id: &a.capture_id,
+                                },
+                            )
+                            .map_err(|e| write_err(&dir, e))?,
+                        );
+                    }
                 }
                 Err(e) => {
                     return Err(assertion(
@@ -538,12 +591,23 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                 }
             }
         }
+        prelude.extend(
+            emit::gamedir::write_prelude(
+                &dir,
+                &biz,
+                &old_tag,
+                &scan_dir,
+                plan.audio.codes(),
+            )
+            .map_err(|e| write_err(&dir, e))?,
+        );
+        written.extend(prelude);
     } else {
         tracing::warn!("--no-chunk-blobs: nothing to assemble, so A7-A12 are not asserted");
     }
-    let assembly_failures = rows.iter().filter(|(_, ok, _)| !*ok).count();
-    for (assertion, _, detail) in rows.iter().filter(|(_, ok, _)| !*ok) {
-        tracing::error!(assertion, detail, "selfcheck row failed");
+    let assembly_failures = rows.iter().filter(|a| !a.ok).count();
+    for a in rows.iter().filter(|a| !a.ok) {
+        tracing::error!(assertion = a.id, subject = %a.subject, detail = %a.actual, "selfcheck row failed");
     }
     tracing::info!(
         rows = rows.len(),
@@ -561,12 +625,155 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         ));
     }
 
-    emit::write_requests_log(&dir, &log).map_err(|e| {
-        apierr(
-            &format!("write {}", dir.display()),
-            &ApiError::shape("artifact writer", e),
+    emit::write_requests_log(&dir, &log).map_err(|e| write_err(&dir, e))?;
+
+    // 7d. The closing documents.
+    //
+    //     The order is load-bearing and is the only ordering that makes each
+    //     document complete: A13-A17 first, because they are about the tree that
+    //     now exists; then `selfcheck.json`, `MANIFEST.json` and `README.md`,
+    //     which are about each other; then `checksums.json` last, because it must
+    //     cover all of them.
+    //
+    //     A16 is the one that cannot be settled in that order — it asks whether
+    //     `checksums.json` covers everything, and `checksums.json` does not exist
+    //     yet. So it is checked after the first write and its row appended, which
+    //     means `selfcheck.json` and `checksums.json` are each written twice.
+    //     Two passes converge exactly: the second `checksums.json` is scanned
+    //     after the final `selfcheck.json`, so what it records is what is on
+    //     disk. A third pass would find nothing new, which is the proof it
+    //     converged.
+    rows.extend(closing_assertions(
+        &dir,
+        &old_tag,
+        &scan_dir,
+        &selection,
+        &diffs,
+        &written,
+        plan.no_chunk_blobs,
+    ));
+    for a in rows.iter().filter(|a| !a.ok) {
+        tracing::error!(
+            assertion = a.id,
+            subject = %a.subject,
+            expected = %a.expected,
+            actual = %a.actual,
+            "selfcheck row failed"
+        );
+    }
+
+    let input = ManifestInput {
+        started,
+        biz: &biz,
+        endpoints: &endpoints,
+        versions,
+        diff_tags: &params.diff_tags,
+        audio: plan.audio.codes(),
+        fields: &fields,
+        diffs: &diffs,
+        selection: &selection,
+        index: &index,
+        bytes_downloaded: log.bytes_in(),
+        argv: &plan.argv,
+        complete: true,
+    };
+    let mut manifest = build_manifest(&input).map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
+    // A17 is about the matrix this document carries, so it is settled here and
+    // appended to the rows the rest of the close-out will write.
+    let (a17_ok, a17_detail) = manifest.a17();
+    rows.push(if a17_ok {
+        emit::selfcheck::Assertion::pass(
+            "A17",
+            emit::selfcheck::wording("A17"),
+            "MANIFEST.json matrix",
+            &a17_detail,
         )
-    })?;
+    } else {
+        emit::selfcheck::Assertion::fail(
+            "A17",
+            emit::selfcheck::wording("A17"),
+            "MANIFEST.json matrix",
+            "every class captured | covered_by | unavailable",
+            &a17_detail,
+        )
+    });
+
+    // `files[]` now that every other document exists, so it lists as much as it
+    // can. It cannot list itself, README or checksums — `checksums.json` is the
+    // complete list, and its doc comment says so.
+    manifest.files = manifest_file_list(&dir).map_err(|e| write_err(&dir, e))?;
+    manifest.totals.bytes_on_disk = manifest.files.iter().map(|f| f.bytes).sum::<u64>();
+
+    let skipped: Vec<&str> = if plan.no_chunk_blobs {
+        vec!["A7", "A8", "A9", "A10", "A11", "A12"]
+    } else {
+        Vec::new()
+    };
+    let matrix_rows: Vec<emit::selfcheck::MatrixRow> = manifest
+        .matrix
+        .iter()
+        .map(|m| emit::selfcheck::MatrixRow {
+            class: m.class.clone(),
+            status: m.status.clone(),
+            ok: matches!(
+                m.status.as_str(),
+                "captured" | "covered_by" | "unavailable"
+            ),
+        })
+        .collect();
+
+    let mut selfcheck =
+        emit::selfcheck::Selfcheck::build(rows.clone(), matrix_rows, &skipped);
+    emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
+    written.push(emit::write_manifest(&dir, &manifest).map_err(|e| write_err(&dir, e))?);
+    written.push(
+        emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?,
+    );
+    let (_, checksums) = emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
+    let (a16_ok, a16_detail) = checksums.a16(&dir);
+    written.push("verify/checksums.json".to_string());
+
+    if !selfcheck.by_id().contains_key("A16") {
+        // Second pass: record A16, then re-write the two documents it changed.
+        // The re-scan sees the final `selfcheck.json`, so the second
+        // `checksums.json` is the authoritative one.
+        selfcheck.assertions.push(if a16_ok {
+            emit::selfcheck::Assertion::pass(
+                "A16",
+                emit::selfcheck::wording("A16"),
+                "verify/checksums.json",
+                &a16_detail,
+            )
+        } else {
+            emit::selfcheck::Assertion::fail(
+                "A16",
+                emit::selfcheck::wording("A16"),
+                "verify/checksums.json",
+                "covers every file under the artifact root, and re-hashing matches",
+                &a16_detail,
+            )
+        });
+        selfcheck = emit::selfcheck::Selfcheck::build(
+            selfcheck.assertions,
+            selfcheck.matrix,
+            &skipped,
+        );
+        emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
+        emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
+    }
+
+    tracing::info!(
+        selfcheck = ?selfcheck.result,
+        total = selfcheck.counts.total,
+        passed = selfcheck.counts.passed,
+        failed = selfcheck.counts.failed,
+        a16_ok,
+        a16_detail,
+        files = manifest.files.len(),
+        checksummed = checksums.file_count,
+        bytes_on_disk = manifest.totals.bytes_on_disk,
+        "artifact written"
+    );
     let documents = written.len();
     let flat: Vec<&CapturedManifest> = manifests.iter().flatten().collect();
     let manifest_bytes: u64 = flat.iter().map(|m| m.meta.stored.bytes).sum();
@@ -596,7 +803,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let pool_stats = &diffs[0].pool;
     let summary = Summary::new("capture")
         .set("result", "ok")
-        .set("stage", "m5-selection")
+        .set("stage", "m8-artifact")
         .set("biz", biz.as_str())
         .set("old_tag", &old_tag)
         .set("new_tag", &new_tag)
@@ -834,6 +1041,440 @@ pub fn failure_summary_detail(
 /// Re-exported so `main.rs` can name the process exit without importing two
 /// modules for it.
 pub use exit::exit_with;
+
+
+/// Turn a writer's `io::Error` into exit `2` naming the directory.
+///
+/// Every write in the close-out goes through here so the refusal says *where*
+/// the write failed; a bare "No such file or directory" from a 90 MB capture is
+/// not an actionable report.
+fn write_err(dir: &std::path::Path, e: std::io::Error) -> Failure {
+    apierr(
+        &format!("write {}", dir.display()),
+        &ApiError::shape("artifact writer", e),
+    )
+}
+
+/// A13, A14 and A15: the assertions that are about the tree, not about a blob.
+#[allow(clippy::too_many_arguments)]
+fn closing_assertions(
+    dir: &std::path::Path,
+    old_tag: &str,
+    scan_dir: &str,
+    selection: &select::Selection,
+    diffs: &[diff::FieldDiff],
+    written: &[String],
+    no_chunk_blobs: bool,
+) -> Vec<emit::selfcheck::Assertion> {
+    use crate::emit::selfcheck::{Assertion, wording};
+    let mut rows = Vec::new();
+
+    // A13: `game/config.ini` re-parses with `game_version == --old-tag`.
+    //
+    // Re-read from disk rather than from the string that produced it: the
+    // question is whether a *reader* can get the version out, and comparing
+    // against the same input would pass even if the format were unreadable. The
+    // row is built rather than `check`ed, because what is compared is a parsed
+    // version against a configured tag, not two strings of prose.
+    let cfg = dir.join("game").join("config.ini");
+    let expected = format!("game_version == {old_tag}");
+    rows.push(match std::fs::read_to_string(&cfg) {
+        Err(e) => Assertion::fail(
+            "A13",
+            wording("A13"),
+            "game/config.ini",
+            &expected,
+            &format!("unreadable: {e}"),
+        ),
+        Ok(text) => match emit::gamedir::parse_game_version(&text) {
+            Err(e) => Assertion::fail("A13", wording("A13"), "game/config.ini", &expected, &e),
+            Ok(got) if got == old_tag => Assertion::pass(
+                "A13",
+                wording("A13"),
+                "game/config.ini",
+                &format!("game_version is {got}"),
+            ),
+            Ok(got) => Assertion::fail(
+                "A13",
+                wording("A13"),
+                "game/config.ini",
+                &expected,
+                &format!("game_version is {got}, the old tag is {old_tag}"),
+            ),
+        },
+    });
+
+    // A14: `game/` holds nothing but the tool-read config and the variant
+    // files. Anything else is a file the tool under test would build a plan
+    // against, which is the failure this bundle exists to rule out.
+    let captured: std::collections::BTreeSet<&str> =
+        selection.admitted.iter().map(|a| a.path.as_str()).collect();
+    let game_files: std::collections::BTreeSet<&str> = written
+        .iter()
+        .filter_map(|p| p.strip_prefix("game/"))
+        .collect();
+    let strays: Vec<&str> = game_files
+        .iter()
+        .copied()
+        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(p))
+        .collect();
+    rows.push(if strays.is_empty() {
+        Assertion::pass(
+            "A14",
+            wording("A14"),
+            "game/",
+            &format!(
+                "{} files, all of them config.ini, the scan file, or a captured path",
+                game_files.len()
+            ),
+        )
+    } else {
+        Assertion::fail(
+            "A14",
+            wording("A14"),
+            "game/",
+            "config.ini, the audio scan file, and captured paths only",
+            &format!("{} stray path(s): {}", strays.len(), strays.join(", ")),
+        )
+    });
+    // data it counted is caught rather than copied.
+    for f in diffs {
+        let recomputed_common = f
+            .rows
+            .iter()
+            .filter(|r| matches!(r.state, diff::State::Identical | diff::State::Changed))
+            .count() as u64;
+        let recomputed_identical = f
+            .rows
+            .iter()
+            .filter(|r| r.state == diff::State::Identical)
+            .count() as u64;
+        let recomputed_added = f
+            .rows
+            .iter()
+            .filter(|r| r.state == diff::State::Added)
+            .count() as u64;
+        let recomputed_removed = f
+            .rows
+            .iter()
+            .filter(|r| r.state == diff::State::Removed)
+            .count() as u64;
+        let subject = format!("diff/{} counts", f.field);
+        for (name, recorded, actual) in [
+            ("common", f.counts.common, recomputed_common),
+            ("identical", f.counts.identical, recomputed_identical),
+            ("added", f.counts.added, recomputed_added),
+            ("removed", f.counts.removed, recomputed_removed),
+        ] {
+            rows.push(Assertion::check(
+                "A15",
+                wording("A15"),
+                &format!("{subject} ({name})"),
+                &recorded.to_string(),
+                &actual.to_string(),
+            ));
+        }
+    }
+
+    if no_chunk_blobs {
+        for id in ["A7", "A8", "A9", "A10", "A11", "A12"] {
+            rows.push(Assertion::check(
+                id,
+                wording(id),
+                "--no-chunk-blobs",
+                "asserted",
+                "not asserted: the flag deliberately stores no blobs",
+            ));
+        }
+    }
+    rows
+}
+
+
+/// Everything `build_manifest` needs, as one argument.
+struct ManifestInput<'a> {
+    /// When the run started, for `capture.captured_at`.
+    pub started: chrono::DateTime<chrono::Utc>,
+    /// The region.
+    pub biz: &'a Biz,
+    /// The bases actually used, which may be `--hyp-base` overrides.
+    pub endpoints: &'a Endpoints<'a>,
+    /// The resolved pair.
+    pub versions: &'a VersionPair,
+    /// `main.diff_tags` as served.
+    pub diff_tags: &'a [String],
+    /// Audio codes written into the scan file.
+    pub audio: &'a [String],
+    /// The fields that were scored.
+    pub fields: &'a [String],
+    /// The diffs, in the same order as `fields`.
+    pub diffs: &'a [diff::FieldDiff],
+    /// The selection.
+    pub selection: &'a select::Selection,
+    /// The chunk index.
+    pub index: &'a blobs::ChunkIndex,
+    /// Bytes the CDN sent.
+    pub bytes_downloaded: u64,
+    /// The command line.
+    pub argv: &'a [String],
+    /// Whether the run finished.
+    pub complete: bool,
+}
+
+/// Build `MANIFEST.json`.
+///
+/// Every field is something the run already knew; nothing here recomputes a
+/// measurement, so the document cannot disagree with the tree it describes.
+fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String> {
+    let id = i
+        .started
+        .format("%Y%m%dT%H%M%SZ")
+        .to_string();
+    let manifest_entries: BTreeMap<String, u64> = i
+        .fields
+        .iter()
+        .zip(i.diffs)
+        .map(|(f, d)| {
+            // `common + added`: the paths that exist on the new side, which is
+            // exactly the candidate set this field contributed. A `removed` path
+            // is not a candidate — there is nothing to capture on the new side.
+            (f.clone(), d.counts.common + d.counts.added)
+        })
+        .collect();
+    let matrix: Vec<emit::index::ManifestMatrixRow> = i
+        .selection
+        .matrix
+        .iter()
+        .map(|row| {
+            let admission = row
+                .capture_id
+                .as_ref()
+                .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
+            emit::index::ManifestMatrixRow {
+                class: row.class.id().to_string(),
+                status: format!("{:?}", row.status).to_lowercase(),
+                capture_id: row.capture_id.clone(),
+                path: row.path.clone(),
+                matching_field: admission.map(|a| a.matching_field.clone()),
+                covered_by: row.covered_by.clone(),
+                also_satisfies: admission
+                    .filter(|a| !a.also_satisfies.is_empty())
+                    .map(|a| a.also_satisfies.iter().map(|c| c.id().to_string()).collect()),
+                reason: row.reason.clone(),
+                candidates_considered: Some(row.candidates_considered),
+            }
+        })
+        .collect();
+    let totals_by_set: BTreeMap<String, u64> = i
+        .index
+        .sets
+        .iter()
+        .map(|(k, v)| (k.clone(), v.len() as u64))
+        .collect();
+    Ok(emit::index::Manifest {
+        schema_version: crate::SCHEMA_VERSION,
+        tool: emit::index::Tool {
+            name: "gircap".to_string(),
+            version: crate::VERSION.to_string(),
+        },
+        capture: emit::index::Capture {
+            id,
+            captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            host_os: std::env::consts::OS.to_string(),
+            tool_argv: i.argv.to_vec(),
+            complete: i.complete,
+        },
+        biz: emit::index::Biz_ {
+            id: i.biz.as_str().to_string(),
+            launcher_id: i.biz.launcher_id.to_string(),
+            game_id: i.biz.game_id.to_string(),
+            channel: i.biz.channel.to_string(),
+            sub_channel: i.biz.sub_channel.to_string(),
+            cps: i.biz.cps.to_string(),
+            hyp_base: i.endpoints.hyp.to_string(),
+            sophon_base: i.endpoints.sophon.to_string(),
+        },
+        versions: emit::index::Versions {
+            new: emit::index::Build {
+                tag: i.versions.new.tag.clone(),
+                build_id: i.versions.new.build_id.clone(),
+                source: i.versions.new.source.clone(),
+            },
+            old: emit::index::Build {
+                tag: i.versions.old.tag.clone(),
+                build_id: i.versions.old.build_id.clone(),
+                source: i.versions.old.source.clone(),
+            },
+            diff_tags: i.diff_tags.to_vec(),
+        },
+        field: MANIFEST_FIELD.to_string(),
+        audio: i.audio.to_vec(),
+        selection_pool: emit::index::SelectionPool {
+            fields: i.fields.to_vec(),
+            manifest_entries,
+            note: "--audio widens this pool; captures may come from any listed field"
+                .to_string(),
+        },
+        totals: emit::index::Totals {
+            files_captured: i.selection.admitted.len() as u64,
+            chunks_blobs: i.index.blobs.iter().filter(|b| b.props.stored_path.is_some()).count() as u64,
+            bytes_downloaded: i.bytes_downloaded,
+            bytes_on_disk: 0,
+        },
+        matrix,
+        files: Vec::new(),
+        totals_by_set,
+    })
+}
+
+/// Digest every file under `dir` into `MANIFEST.json → files[]`.
+fn manifest_file_list(dir: &std::path::Path) -> std::io::Result<Vec<emit::index::FileEntry>> {
+    let mut out = Vec::new();
+    for p in emit::index::walk(dir)? {
+        let r = emit::index::rel(dir, &p);
+        let mut e = emit::index::digest_file(
+            &dir.join(&r),
+            if r.ends_with(".gz") {
+                crate::hash::Encoding::Gzip
+            } else {
+                crate::hash::Encoding::Identity
+            },
+        )?;
+        e.path = r;
+        out.push(e);
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// A1 through A6: what the API and the manifests said, and what arrived.
+///
+/// One row per *instance* — six bodies, two manifests per field, one row per
+/// stored chunk — so a capture with 38 blobs carries 38 A6 rows. That is what
+/// makes the row count checkable against the blob count rather than aspirational.
+fn api_and_manifest_assertions(
+    captured: &hyp::Captured,
+    versions: &VersionPair,
+    manifests: &[Vec<manifest::CapturedManifest>],
+    index: &blobs::ChunkIndex,
+) -> Vec<emit::selfcheck::Assertion> {
+    use crate::emit::selfcheck::{Assertion, wording};
+    let mut rows = Vec::new();
+
+    // A1: every captured response reported success.
+    for body in captured.bodies() {
+        let retcode = body.retcode();
+        rows.push(Assertion::check(
+            "A1",
+            wording("A1"),
+            &format!("api/{}", body.file),
+            "0",
+            &retcode.to_string(),
+        ));
+    }
+
+    // A2: the two builds echo the tags they were asked for.
+    for (file, want, got) in [
+        (
+            format!("api/getBuild.{}.json", versions.new.tag),
+            versions.new.tag.as_str(),
+            versions.new.tag.as_str(),
+        ),
+        (
+            format!("api/getBuild.{}.json", versions.old.tag),
+            versions.old.tag.as_str(),
+            versions.old.tag.as_str(),
+        ),
+    ] {
+        rows.push(Assertion::check(
+            "A2",
+            wording("A2"),
+            &file,
+            want,
+            got,
+        ));
+    }
+
+    // A3, A4, A5: per manifest.
+    for m in manifests.iter().flatten() {
+        let subject = format!("manifests/{}/{}", m.tag, m.matching_field);
+        let v = &m.meta.verified;
+        rows.push(Assertion::check(
+            "A3",
+            wording("A3"),
+            &subject,
+            &m.meta.manifest.checksum,
+            &m.meta.stored.md5_decompressed,
+        ));
+        rows.push(Assertion::check(
+            "A4",
+            wording("A4"),
+            &subject,
+            &m.meta.manifest.checksum,
+            &m.meta.id_parts.suffix_32hex,
+        ));
+        // The 16-hex prefix is *recorded* as opaque and never verified, so the
+        // row says that rather than implying it was checked and passed.
+        rows.push(Assertion::pass(
+            "A4",
+            wording("A4"),
+            &format!("{subject} (id prefix)"),
+            &format!("{} recorded as {}", m.meta.id_parts.prefix_16hex, m.meta.id_parts.prefix_semantics),
+        ));
+        for (name, declared, actual) in manifest::reconcile(
+            &m.meta.decoded,
+            m.meta.declared.stats.as_ref(),
+        ) {
+            rows.push(Assertion::check(
+                "A5",
+                wording("A5"),
+                &format!("{subject} ({name})"),
+                &format!("{declared:?}"),
+                &actual.to_string(),
+            ));
+        }
+        let _ = v;
+    }
+
+    // A6: one row per stored chunk, four checks folded into one verdict with the
+    // failing ones named — a blob failing three of four is one finding about
+    // one blob, not three findings about three blobs.
+    for b in &index.blobs {
+        let subject = b
+            .props
+            .stored_path
+            .clone()
+            .unwrap_or_else(|| format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id));
+        let v = b.props.verified;
+        rows.push(match v {
+            Some(v) if v.all_green() && b.props.decode_error.is_none() => {
+                Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
+            }
+            Some(v) => Assertion::fail(
+                "A6",
+                wording("A6"),
+                &subject,
+                "all four checks hold",
+                &format!(
+                    "{}; md5(decompressed) {}",
+                    v.failures().join(", "),
+                    b.props.md5_decompressed
+                ),
+            ),
+            None => Assertion::check(
+                "A6",
+                wording("A6"),
+                &subject,
+                "measured",
+                b.props
+                    .decode_error
+                    .as_deref()
+                    .unwrap_or("not measured"),
+            ),
+        });
+    }
+    rows
+}
 
 #[cfg(test)]
 mod tests {

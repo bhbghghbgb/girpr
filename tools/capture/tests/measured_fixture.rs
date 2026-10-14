@@ -1105,16 +1105,17 @@ mod m7_assembly {
     fn the_measured_pair_is_green_on_a7_through_a12() {
         let a = assemble_measured(&hoyo_pair());
         let rows = a.selfcheck_rows();
-        let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|(k, _, _)| *k).collect();
+        let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.id).collect();
         assert_eq!(
             kinds,
             ["A7", "A8", "A9", "A10", "A11", "A12"].into_iter().collect(),
             "every assertion is represented: {rows:?}"
         );
-        assert!(a.all_green(), "{:?}", rows.iter().filter(|(_, ok, _)| !*ok).collect::<Vec<_>>());
-        for (k, ok, detail) in &rows {
-            assert!(*ok, "{k}: {detail}");
-            assert!(!detail.is_empty(), "{k} carries no detail");
+        assert!(a.all_green(), "{:?}", rows.iter().filter(|r| !r.ok).collect::<Vec<_>>());
+        for r in &rows {
+            assert!(r.ok, "{}: {}", r.id, r.actual);
+            assert!(!r.actual.is_empty(), "{} carries no detail", r.id);
+            assert!(!r.assertion.is_empty(), "{} carries no wording", r.id);
         }
     }
 

@@ -277,6 +277,36 @@ check; `game/` contains nothing but `config.ini`, the audio scan file, and the
 variant files; A13–A17 green.
 **Commit:** `gircap: M8 — artifact writer: game fixture, expected ground truth, index and selfcheck`
 
+**Landed.** Live, pool `game` + `en-us`: **114 selfcheck rows, 0 failures**, 95
+files checksummed at 135 095 941 B, A16 green on the second pass.
+`game/` holds exactly `config.ini`, the scan file at the launcher's own
+`audio_pkg_scan_dir`, and 7 variant files; `expected/` holds the 7 new-side
+files. `diff -r game/ expected/` shows the removed file and the added file plus
+6 that need patching.
+
+Row counts, which is what makes "one row per assertion *instance*" checkable:
+A1 6 (six bodies), A2 2, A3 4 and A4 8 (four manifests, two checks each plus
+the opaque prefix), A5 8, **A6 38 (one per stored blob)**, A7 7 and A8 7 (no old
+side for `added`, no new side for `removed`), A9 6, A10 4, A11 14 (one per
+assembled file side), A12 6, A13–A17 one each.
+
+Three decisions:
+
+1. **`game/` and `expected/` are written one capture at a time**, as each
+   assembles, rather than after the loop. The fixture is ~31 MB and keeping
+   every assembly until the end would hold all of it plus the 28 MB of chunks at
+   once; writing as we go keeps peak residency at one file.
+2. **A16 needs two passes.** `checksums.json` must cover `selfcheck.json`, and
+   `selfcheck.json` must carry A16 — so the row is checked after the first write
+   and both documents are rewritten. Two passes converge exactly: the second
+   `checksums.json` is scanned after the final `selfcheck.json`. A third would
+   find nothing new, which is the proof.
+3. **`MANIFEST.json → files[]` is not the complete list; `checksums.json` is.**
+   `MANIFEST.json` cannot list itself and cannot know the digest of a
+   `README.md` that has not been written, so `files[]` covers everything before
+   it and `checksums.json` covers everything except itself. Both documents say
+   so. A document that hashes itself has no fixed point.
+
 ### M9 — offline re-verification
 `verify/{mod,materialize}.rs`.
 **Accept:** `gircap verify` on a good artifact exits 0; after corrupting one byte

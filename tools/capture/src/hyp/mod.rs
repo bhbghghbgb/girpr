@@ -68,6 +68,24 @@ impl CapturedBody {
     pub fn data<T: serde::de::DeserializeOwned>(&self) -> Result<T, ApiError> {
         self.parse::<Wrapper<T>>().map(|w| w.data)
     }
+
+    /// The top-level `retcode`, as the API sent it.
+    ///
+    /// Read from the raw bytes rather than through a typed view, because A1 is
+    /// the assertion that the response was *well-formed enough to answer* — a
+    /// view that failed to deserialise is exactly the case where the retcode
+    /// still has to be reported.
+    pub fn retcode(&self) -> i64 {
+        serde_json::from_slice::<EnvelopeOnly>(&self.bytes)
+            .map(|e| e.retcode)
+            .unwrap_or(i64::MIN)
+    }
+}
+
+/// Just the envelope, for [`CapturedBody::retcode`].
+#[derive(serde::Deserialize)]
+struct EnvelopeOnly {
+    retcode: i64,
 }
 
 /// All six bodies of a capture, plus the derived pair.
@@ -116,11 +134,11 @@ impl Captured {
         BranchParams::from_branches(&self.branches.bytes)
     }
 
+
     /// The new build.
     pub fn new_build(&self) -> Result<GetBuild, ApiError> {
         self.build_new.data()
     }
-
     /// The old build.
     pub fn old_build(&self) -> Result<GetBuild, ApiError> {
         self.build_old.data()
