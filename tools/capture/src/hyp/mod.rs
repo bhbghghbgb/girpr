@@ -27,8 +27,10 @@ use crate::report::OutputFormat;
 pub mod types;
 
 pub use types::{
-    DOWNLOAD_MODE_CHUNK, DeprecatedFile, DeprecatedFiles, GameBranch, GameBranches, GameConfigs,
-    GamePackages, GetBuild, IntOrStr, LaunchConfig, Stats, Wrapper,
+    BuildManifest, Category, DOWNLOAD_MODE_CHUNK, DeprecatedFile, DeprecatedFiles, Download,
+    GameBranch, GameBranches, GameConfigs, GamePackage, GamePackages, GetBuild, IntOrStr,
+    LaunchConfig, LegacyAudio, LegacyArchive, LegacyMain, LegacyRelease, ManifestRef, Stats,
+    Wrapper,
 };
 
 /// The language every HoYoPlay endpoint is asked in.

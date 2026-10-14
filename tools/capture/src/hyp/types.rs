@@ -81,6 +81,26 @@ impl From<u64> for IntOrStr {
     }
 }
 
+impl From<i64> for IntOrStr {
+    fn from(v: i64) -> Self {
+        IntOrStr::Int(v)
+    }
+}
+
+/// The API sends these as strings, and so does a caller writing a fixture — the
+/// string form is the *faithful* one and gets no coercion on the way in.
+impl From<&str> for IntOrStr {
+    fn from(v: &str) -> Self {
+        IntOrStr::Str(v.to_string())
+    }
+}
+
+impl From<String> for IntOrStr {
+    fn from(v: String) -> Self {
+        IntOrStr::Str(v)
+    }
+}
+
 /// `{"retcode":…,"message":…,"data":{…}}`, the wrapper every endpoint returns.
 ///
 /// `retcode` is checked by [`crate::http::Fetcher::get_json`] before any of this

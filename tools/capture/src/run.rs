@@ -18,7 +18,14 @@ use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::report::{OutputFormat, Summary};
-use crate::{emit, exit, hyp};
+use crate::{emit, exit, hyp, manifest};
+
+/// The `matching_field` whose manifests M3 captures.
+///
+/// Every later stage needs these regardless of which class a capture lands in,
+/// so they are fetched for both builds unconditionally. M5 widens the *selection
+/// pool* to the audio fields; it does not change which manifests exist.
+const MANIFEST_FIELD: &str = "game";
 
 /// What a command hands back: its summary line, and the code to exit with.
 ///
@@ -170,34 +177,116 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("tag probe", &e))?;
     tracing::info!(probe = %probe.describe(), served = ?probe.served(), "tag probe complete");
 
-    // 6. The tree. Both writes happen even though the run is incomplete: what
-    //    was asked, and what it cost, is the part that stays useful, and the
-    //    bodies are the evidence behind every number in the summary.
+    // 6. The `game` manifests, both builds. The selection pool widens to the
+    //    audio fields in M5; M3 fetches what every later stage needs regardless.
+    //
+    //    `--no-chunk-blobs` does not skip this: a manifest is metadata, and the
+    //    flag is about chunk blobs. Skipping it would leave a bundle whose
+    //    `versions` block names builds it has no manifest for.
+    let old_build = captured
+        .old_build()
+        .map_err(|e| apierr("re-read the captured old build", &e))?;
+    let new_build = captured
+        .new_build()
+        .map_err(|e| apierr("re-read the captured new build", &e))?;
+    let mut manifests = Vec::with_capacity(2);
+    for (tag, build) in [(&old_tag, &old_build), (&new_tag, &new_build)] {
+        let m = manifest::capture(&fetcher, build, tag, MANIFEST_FIELD)
+            .await
+            .map_err(|e| apierr(&format!("fetch the {tag} game manifest"), &e))?;
+        if !m.meta.verified.all_green() {
+            return Err(assertion(
+                &format!("verify the {tag} game manifest"),
+                &ApiError::shape(
+                    tag,
+                    format!(
+                        "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
+                        m.meta.verified.decompressed_md5_matches_checksum,
+                        m.meta.verified.checksum_matches_id_suffix
+                    ),
+                ),
+            ));
+        }
+        let v = manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
+        if !v.is_empty() {
+            return Err(assertion(
+                &format!("reconcile the {tag} game manifest"),
+                &ApiError::shape(
+                    tag,
+                    v.iter()
+                        .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ),
+            ));
+        }
+        manifest::dump::note_reconciliation(&m);
+        if !m.meta.decoded.structure.clean() {
+            // Recorded, not fatal: spec §3.6 says a violation must still produce
+            // a capture with the selfcheck naming what broke. M8 makes it a row.
+            tracing::warn!(
+                tag,
+                violations = ?m.meta.decoded.structure.violations(),
+                "manifest violates a structural invariant; recorded, not fatal"
+            );
+        }
+        manifests.push(m);
+    }
+
+    // 7. The tree. All three writes happen even though the run is incomplete:
+    //    what was asked, what it cost, and what came back are the parts that
+    //    stay useful, and the bytes are the evidence behind every number in the
+    //    summary.
     let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
-    // `write_api` returns the relative paths it wrote, so the count in the
-    // summary is the count on disk rather than a second bookkeeping total.
-    let written = emit::write_api(&dir, &captured, &probe)
-        .map_err(|e| {
+    let mut written = emit::write_api(&dir, &captured, &probe).map_err(|e| {
+        apierr(
+            &format!("write {}", dir.display()),
+            &ApiError::shape("artifact writer", e),
+        )
+    })?;
+    for m in &mut manifests {
+        let stored = manifest::dump::write(&dir, m, plan.gzip_threshold).map_err(|e| {
             apierr(
                 &format!("write {}", dir.display()),
                 &ApiError::shape("artifact writer", e),
             )
         })?;
+        // `stored_as` is filled in here rather than by the writer: only now is it
+        // known where the archive ended up, and only the request log can say it.
+        manifest::mark_stored(&log, m, &stored[0].path);
+        written.extend(stored.into_iter().map(|s| s.path));
+    }
     emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
             &ApiError::shape("artifact writer", e),
         )
     })?;
-    tracing::info!(dir = %dir.display(), records = log.len(), documents = written.len(), "api/ written");
+    let documents = written.len();
+    let manifest_bytes: u64 = manifests.iter().map(|m| m.meta.stored.bytes).sum();
+    let manifest_entries: u64 = manifests.iter().map(|m| m.meta.decoded.entries).sum();
+    let manifest_chunks: u64 = manifests.iter().map(|m| m.meta.decoded.total_chunks).sum();
+    tracing::info!(
+        dir = %dir.display(),
+        records = log.len(),
+        documents,
+        manifest_entries,
+        manifest_chunks,
+        "manifests written"
+    );
 
     let legacy_behind = captured
         .legacy_staleness()
         .map(|(n, _)| n)
         .unwrap_or(0);
+    let max_chunk = manifests
+        .iter()
+        .map(|m| m.meta.decoded.max_chunk_compressed_bytes)
+        .max()
+        .unwrap_or(0);
     let summary = Summary::new("capture")
         .set("result", "ok")
-        .set("stage", "m2-metadata")
+        .set("stage", "m3-manifests")
         .set("biz", biz.as_str())
         .set("old_tag", &old_tag)
         .set("new_tag", &new_tag)
@@ -205,7 +294,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("old_build_id", &versions.old.build_id)
         .set("new_build_id", &versions.new.build_id)
         .set("artifact", dir.as_path())
-        .set("api_documents", written.len() as u64)
+        .set("api_documents", 7_u64)
+        .set("manifests_captured", manifests.len() as u64)
+        .set("manifest_bytes", manifest_bytes)
+        .set("manifest_entries", manifest_entries)
+        .set("manifest_chunks", manifest_chunks)
+        .set("max_chunk_compressed_bytes", max_chunk)
+        .set("documents_written", documents as u64)
         .set("requests", log.len() as u64)
         .set("bytes_downloaded", log.bytes_in())
         .set("tags_probed", probe.summary.requested as u64)

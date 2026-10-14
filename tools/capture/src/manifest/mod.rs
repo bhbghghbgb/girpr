@@ -9,8 +9,780 @@
 //! evidence that it decodes to the *right* something: the decompressed MD5 is
 //! checked against `checksum`, and `checksum` against the manifest id's 32-hex
 //! suffix. The id's 16-hex prefix is recorded as `opaque` and never checked —
-//! it is not a hash of anything observable.
+//! it is not a hash of anything observable (spec §3.7), and the field saying so
+//! exists so a later reader does not repeat the mistake.
+//!
+//! ## Structure violations are recorded, not fatal
+//!
+//! Spec §3.6 lists six structural properties that hold for the live manifests
+//! today. A future version violating one must still produce a capture, with
+//! `selfcheck.json` naming what broke — so nothing here *rejects* a non-gapless
+//! or out-of-order chunk list. The counters are measured and stored, and M8
+//! decides what they mean.
+
+use serde::Serialize;
+
+use crate::hash;
+use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
+use crate::hash::Encoding;
+use crate::hyp::GetBuild;
 
 pub mod diff;
 pub mod dump;
 pub mod proto;
+
+pub use dump::StoredAs;
+pub use proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+
+/// What the manifest id's two halves mean.
+///
+/// Split out because they mean *different* things, and conflating them is the
+/// mistake spec §3.7 exists to prevent.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdParts {
+    /// The leading half, e.g. `manifest_671e1a92a6cf53ff`.
+    pub prefix_16hex: String,
+    /// Always `"opaque"`.
+    ///
+    /// *Measured* 2026-10-14: the 16-hex prefix is not xxh64 of the compressed
+    /// blob, the decompressed blob, the checksum, the id, the URL, or
+    /// `build_id + id`. Collapse's cache validator assumes it is an xxh64, so
+    /// for Genshin that validation can never pass. It is recorded, never checked.
+    pub prefix_semantics: &'static str,
+    /// The trailing 32 hex, which *is* the archive's MD5.
+    pub suffix_32hex: String,
+    /// Whether the suffix equals `manifest.checksum` (assertion A4).
+    pub suffix_equals_checksum: bool,
+}
+
+/// Where the archive was stored and what it hashed to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Stored {
+    /// Artifact-relative path.
+    pub path: String,
+    /// Bytes on disk.
+    pub bytes: u64,
+    /// `"zstd"` — what the bytes are, not what they were compressed from.
+    pub container: &'static str,
+    /// MD5 of the blob as served, which is the CDN's `ETag` and `Content-MD5`.
+    pub md5_compressed: String,
+    /// SHA-256 of the blob as served.
+    pub sha256_compressed: String,
+    /// MD5 of the decompressed archive, which is `manifest.checksum`.
+    pub md5_decompressed: String,
+    /// Decompressed length.
+    pub bytes_decompressed: u64,
+    /// How the archive itself is stored. Always `identity` — the bytes are kept
+    /// exactly as served so a reader can hash them and compare with the CDN.
+    pub encoding: Encoding,
+}
+
+/// The three checks this milestone asserts.
+#[derive(Debug, Clone, Serialize)]
+pub struct Verified {
+    /// **A3**: `md5(decompressed) == manifest.checksum`.
+    pub decompressed_md5_matches_checksum: bool,
+    /// **A4**: `manifest.checksum == id 32-hex suffix`.
+    pub checksum_matches_id_suffix: bool,
+    /// Always `false`, and expected to be. Present so the artifact *states* the
+    /// finding rather than implying the prefix went unchecked.
+    pub id_prefix_verified: bool,
+}
+
+impl Verified {
+    /// Whether every check this milestone asserts held.
+    pub fn all_green(&self) -> bool {
+        self.decompressed_md5_matches_checksum && self.checksum_matches_id_suffix
+    }
+}
+
+/// Counts of the six structural properties in spec §3.6.
+///
+/// All zero on the live manifests as measured. Non-zero is not fatal here; M8
+/// turns a non-zero into a failed selfcheck row, which is the right place for
+/// the judgement because by then the whole bundle exists.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Structure {
+    /// Paths appearing more than once.
+    pub duplicate_paths: u64,
+    /// Entries with an empty path.
+    pub empty_paths: u64,
+    /// Paths containing a backslash.
+    pub backslash_paths: u64,
+    /// Paths containing a non-ASCII byte.
+    pub non_ascii_paths: u64,
+    /// Files whose chunk offsets are not strictly ascending.
+    pub unsorted_chunk_offsets: u64,
+    /// Files whose chunks do not cover `0..size` without a gap or overlap.
+    pub non_gapless_files: u64,
+    /// Files where `Σ chunk.uncompressed_size != size`.
+    pub size_mismatch_files: u64,
+}
+
+impl Structure {
+    /// Whether every property holds.
+    pub fn clean(&self) -> bool {
+        self.duplicate_paths == 0
+            && self.empty_paths == 0
+            && self.backslash_paths == 0
+            && self.non_ascii_paths == 0
+            && self.unsorted_chunk_offsets == 0
+            && self.non_gapless_files == 0
+            && self.size_mismatch_files == 0
+    }
+
+    /// The names of the properties that do not hold, for a one-line message.
+    pub fn violations(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.duplicate_paths > 0 {
+            v.push("duplicate_paths");
+        }
+        if self.empty_paths > 0 {
+            v.push("empty_paths");
+        }
+        if self.backslash_paths > 0 {
+            v.push("backslash_paths");
+        }
+        if self.non_ascii_paths > 0 {
+            v.push("non_ascii_paths");
+        }
+        if self.unsorted_chunk_offsets > 0 {
+            v.push("unsorted_chunk_offsets");
+        }
+        if self.non_gapless_files > 0 {
+            v.push("non_gapless_files");
+        }
+        if self.size_mismatch_files > 0 {
+            v.push("size_mismatch_files");
+        }
+        v
+    }
+}
+
+/// Totals of the decoded manifest.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Decoded {
+    /// Entries of any kind.
+    pub entries: u64,
+    /// Entries that are files.
+    pub files: u64,
+    /// Entries that are folders.
+    pub folders: u64,
+    /// Chunks across all entries.
+    pub total_chunks: u64,
+    /// The largest single chunk's compressed size.
+    ///
+    /// This is what bounds the main tool's whole-chunk buffering, so it is
+    /// recorded rather than derived later: a reader can see the ceiling without
+    /// re-decoding 16 MB of protobuf.
+    pub max_chunk_compressed_bytes: u64,
+    /// `Σ size` over file entries.
+    pub total_file_bytes: u64,
+    /// The six structural counters.
+    pub structure: Structure,
+}
+
+/// `manifests/<tag>/<field>.manifest.meta.json` — everything known about one blob.
+#[derive(Debug, Clone, Serialize)]
+pub struct ManifestMeta {
+    /// The bundle schema version.
+    pub schema_version: u32,
+    /// The version this manifest belongs to.
+    pub tag: String,
+    /// The build it was published under.
+    pub build_id: String,
+    /// `game`, or an audio code.
+    pub matching_field: String,
+    /// `10016` for `game`.
+    pub category_id: String,
+    /// The launcher's own name for the category, non-ASCII and preserved.
+    pub category_name: String,
+    /// Identity and declared sizes, as the API sent them.
+    pub manifest: DeclaredManifest,
+    /// What the API declared, including the fields a minimal client drops.
+    pub declared: Declared,
+    /// The id's two halves.
+    pub id_parts: IdParts,
+    /// Where the bytes went and what they hashed to.
+    pub stored: Stored,
+    /// The three checks.
+    pub verified: Verified,
+    /// Totals of the decode.
+    pub decoded: Decoded,
+}
+
+/// The `manifest` sub-object of the API's entry, carried verbatim.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeclaredManifest {
+    /// The archive id.
+    pub id: String,
+    /// The archive's decompressed MD5.
+    pub checksum: String,
+    /// Declared compressed size. A JSON *string* upstream.
+    pub compressed_size: String,
+    /// Declared uncompressed size. A JSON *string* upstream.
+    pub uncompressed_size: String,
+}
+
+/// The `stats` / download declarations, carried so a reader can reconcile.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Declared {
+    /// `stats`, as strings.
+    pub stats: Option<crate::hyp::Stats>,
+    /// `deduplicated_stats`, as strings.
+    pub deduplicated_stats: Option<crate::hyp::Stats>,
+    /// The chunk download declaration.
+    pub chunk_download: crate::hyp::types::Download,
+    /// The manifest download declaration.
+    pub manifest_download: crate::hyp::types::Download,
+}
+
+/// One captured manifest: the bytes, the decode, and the verification.
+#[derive(Debug, Clone)]
+pub struct CapturedManifest {
+    /// The tag it belongs to.
+    pub tag: String,
+    /// The build it was published under.
+    pub build_id: String,
+    /// `game`, or an audio code.
+    pub matching_field: String,
+    /// The request's sequence number.
+    pub seq: u64,
+    /// The archive exactly as served.
+    pub raw: Vec<u8>,
+    /// The decoded entries.
+    pub entries: Vec<SophonChunkFile>,
+    /// The verification and structure report.
+    pub meta: ManifestMeta,
+}
+
+impl CapturedManifest {
+    /// The decoded entries.
+    pub fn entries(&self) -> &[SophonChunkFile] {
+        &self.entries
+    }
+
+    /// The archive URL it came from.
+    pub fn url(&self) -> String {
+        self.meta
+            .declared
+            .manifest_download
+            .url_prefix
+            .to_owned()
+            + "/"
+            + &self.meta.manifest.id
+            + &self.meta.declared.manifest_download.url_suffix
+    }
+}
+
+/// Fetch one manifest, verify it, and decode it.
+///
+/// The order is load-bearing: the archive is hashed **as served** before it is
+/// decompressed, because a blob that is not the one the CDN claims would
+/// otherwise be decompressed and diffed before anyone noticed, and a manifest
+/// that decodes cleanly is exactly the shape of thing that can be subtly wrong.
+pub async fn capture(
+    fetcher: &Fetcher,
+    build: &GetBuild,
+    tag: &str,
+    matching_field: &str,
+) -> Result<CapturedManifest, ApiError> {
+    let declared = build.manifest_for(matching_field)?;
+    // Storage is asserted before a byte is fetched, not after: `zstd::decode` on
+    // an unencrypted raw blob does not reliably fail, it returns garbage.
+    declared
+        .manifest_download
+        .require_zstd_plaintext(&format!("{tag} {matching_field} manifest_download"))?;
+
+    let url = declared.archive_url();
+    let fetched = fetch_archive(fetcher, &url).await?;
+
+    if !hash::is_zstd(&fetched.body) {
+        return Err(ApiError::shape(
+            &url,
+            format!(
+                "{} bytes do not begin with the zstd magic {:?}, though the API declared \
+                 compression=1",
+                fetched.body.len(),
+                &fetched.body[..fetched.body.len().min(4)],
+            ),
+        ));
+    }
+    let decompressed = hash::zstd_decompress(&fetched.body, &url).map_err(|e| ApiError::shape(&url, e))?;
+
+    // The declared sizes, as strings, beside what was actually fetched.
+    let declared_compressed = size_of(declared.manifest.compressed_size.as_ref());
+    let declared_uncompressed = size_of(declared.manifest.uncompressed_size.as_ref());
+    if let Some(want) = declared_compressed
+        && want != fetched.body.len() as u64
+    {
+        // Not fatal on its own: the CDN could have re-compressed. It is recorded
+        // and asserted because a mismatch means one of the two numbers in the
+        // bundle is wrong, and a reader cannot tell which.
+        return Err(ApiError::shape(
+            &url,
+            format!(
+                "declared compressed_size is {want} but {n} bytes arrived",
+                n = fetched.body.len()
+            ),
+        ));
+    }
+    if let Some(want) = declared_uncompressed
+        && want != decompressed.len() as u64
+    {
+        return Err(ApiError::shape(
+            &url,
+            format!(
+                "declared uncompressed_size is {want} but the archive decompresses to {n} bytes",
+                n = decompressed.len()
+            ),
+        ));
+    }
+
+    let md5_decompressed = hash::md5_hex(&decompressed);
+    let checksum = &declared.manifest.checksum;
+    let suffix = declared.manifest.id_suffix().unwrap_or("").to_string();
+    let verified = Verified {
+        decompressed_md5_matches_checksum: md5_decompressed == *checksum,
+        checksum_matches_id_suffix: !suffix.is_empty() && suffix == *checksum,
+        id_prefix_verified: false,
+    };
+
+    let entries = {
+        use prost::Message as _;
+        proto::SophonChunkManifest::decode(decompressed.as_slice())
+            .map_err(|e| ApiError::shape(&url, format!("protobuf decode: {e}")))?
+            .chuncks
+    };
+    let decoded = decode_counts(&entries);
+
+    let meta = ManifestMeta {
+        schema_version: crate::SCHEMA_VERSION,
+        tag: tag.to_string(),
+        build_id: build.build_id.clone(),
+        matching_field: matching_field.to_string(),
+        category_id: declared.category_id.clone(),
+        category_name: declared.category_name.clone(),
+        manifest: DeclaredManifest {
+            id: declared.manifest.id.clone(),
+            checksum: checksum.clone(),
+            compressed_size: render_size(declared.manifest.compressed_size.as_ref()),
+            uncompressed_size: render_size(declared.manifest.uncompressed_size.as_ref()),
+        },
+        declared: Declared {
+            stats: declared.stats.clone(),
+            deduplicated_stats: declared.deduplicated_stats.clone(),
+            chunk_download: declared.chunk_download.clone(),
+            manifest_download: declared.manifest_download.clone(),
+        },
+        id_parts: IdParts {
+            prefix_16hex: declared.manifest.id_prefix().unwrap_or("").to_string(),
+            prefix_semantics: "opaque",
+            suffix_32hex: suffix,
+            suffix_equals_checksum: verified.checksum_matches_id_suffix,
+        },
+        stored: Stored {
+            path: String::new(),
+            bytes: fetched.body.len() as u64,
+            container: "zstd",
+            md5_compressed: hash::md5_hex(&fetched.body),
+            sha256_compressed: hash::sha256_hex(&fetched.body),
+            md5_decompressed: md5_decompressed.clone(),
+            bytes_decompressed: decompressed.len() as u64,
+            encoding: Encoding::Identity,
+        },
+        verified: verified.clone(),
+        decoded,
+    };
+
+    tracing::info!(
+        tag,
+        matching_field,
+        entries = meta.decoded.entries,
+        chunks = meta.decoded.total_chunks,
+        compressed_bytes = meta.stored.bytes,
+        decompressed_bytes = meta.stored.bytes_decompressed,
+        max_chunk = meta.decoded.max_chunk_compressed_bytes,
+        "manifest decoded"
+    );
+
+    Ok(CapturedManifest {
+        tag: tag.to_string(),
+        build_id: build.build_id.clone(),
+        matching_field: matching_field.to_string(),
+        seq: fetched.seq(),
+        raw: fetched.body,
+        entries,
+        meta,
+    })
+}
+
+async fn fetch_archive(fetcher: &Fetcher, url: &str) -> Result<Fetched, ApiError> {
+    fetcher.get(url, Kind::Manifest, None).await
+}
+
+/// The declared size of an archive, read from the API's string-or-int form.
+fn size_of(v: Option<&crate::hyp::IntOrStr>) -> Option<u64> {
+    v.and_then(|n| n.as_u64())
+}
+
+/// The declared size, rendered as it arrived.
+///
+/// Carried as a string because that is what the API sent, and a bundle that
+/// quietly normalised `"9007187"` to `9007187` would no longer match the body it
+/// was captured from.
+fn render_size(v: Option<&crate::hyp::IntOrStr>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_default()
+}
+
+/// Count the decode: totals, the largest chunk, and the six structural counters.
+pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
+    let mut s = Structure::default();
+    let mut seen: Vec<&str> = Vec::with_capacity(entries.len());
+    let mut max_chunk = 0_u64;
+
+    for e in entries {
+        if e.file.is_empty() {
+            s.empty_paths += 1;
+        }
+        if e.file.contains('\\') {
+            s.backslash_paths += 1;
+        }
+        if !e.file.is_ascii() {
+            s.non_ascii_paths += 1;
+        }
+        if seen.contains(&e.file.as_str()) {
+            s.duplicate_paths += 1;
+        } else {
+            seen.push(&e.file);
+        }
+
+        let mut ascending = true;
+        let mut gapless = true;
+        let mut cursor = 0_i64;
+        for (i, c) in e.chunks.iter().enumerate() {
+            if c.compressed_size as u64 > max_chunk {
+                max_chunk = c.compressed_size as u64;
+            }
+            if i > 0 && c.offset <= e.chunks[i - 1].offset {
+                ascending = false;
+            }
+            if c.offset != cursor {
+                gapless = false;
+            }
+            cursor = c.offset + c.uncompressed_size;
+        }
+        // A folder carries no bytes, so none of the byte-level properties apply
+        // to it; counting one would report a violation on every folder entry and
+        // mean nothing.
+        //
+        // `gapless` deliberately asks only whether the chunks *tile* — each one
+        // starting where the last ended. Whether they then reach `size` is
+        // `size_mismatch_files`, and folding it in here would double-count every
+        // disagreement and blur two properties into one counter. It is in fact
+        // redundant: with no gap, the cursor equals `Σ uncompressed_size`, so
+        // the extra clause could only ever fire when the length already did.
+        if e.is_folder || e.chunks.is_empty() {
+            continue;
+        }
+        if !ascending {
+            s.unsorted_chunk_offsets += 1;
+        }
+        if !gapless {
+            s.non_gapless_files += 1;
+        }
+        if e.chunk_bytes() != e.size {
+            s.size_mismatch_files += 1;
+        }
+    }
+
+    Decoded {
+        entries: entries.len() as u64,
+        files: entries.iter().filter(|e| !e.is_folder).count() as u64,
+        folders: entries.iter().filter(|e| e.is_folder).count() as u64,
+        total_chunks: entries.iter().map(|e| e.chunks.len() as u64).sum(),
+        max_chunk_compressed_bytes: max_chunk,
+        total_file_bytes: entries.iter().filter(|e| !e.is_folder).map(|e| e.size as u64).sum(),
+        structure: s,
+    }
+}
+
+/// Reconcile the decode against `getBuild.stats` (assertion A5).
+///
+/// Returns `(field, declared, decoded)` for each of the three that disagree.
+/// A violation is reported, not raised: the decode is still true, the declared
+/// number is still true, and M8 decides which one is the interesting fact.
+pub fn reconcile(
+    decoded: &Decoded,
+    stats: Option<&crate::hyp::Stats>,
+) -> Vec<(&'static str, Option<u64>, u64)> {
+    let mut out = Vec::new();
+    let mut check = |name, declared: Option<u64>, actual: u64| {
+        if let Some(d) = declared
+            && d != actual
+        {
+            out.push((name, Some(d), actual));
+        }
+    };
+    check("file_count", stats.and_then(|s| s.files()), decoded.files);
+    check("chunk_count", stats.and_then(|s| s.chunks()), decoded.total_chunks);
+    check(
+        "uncompressed_size",
+        stats.and_then(|s| s.uncompressed_bytes()),
+        decoded.total_file_bytes,
+    );
+    out
+}
+
+/// Mark the bodies in a set as stored, by request sequence number.
+pub fn mark_stored(log: &RequestLog, m: &mut CapturedManifest, path: &str) {
+    let rel = path.to_string();
+    m.meta.stored.path = rel.clone();
+    log.set_stored_as(m.seq, rel);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(offset: i64, usize_: i64) -> SophonChunk {
+        SophonChunk {
+            id: format!("id{offset}"),
+            uncompressed_md5: format!("{offset:032}"),
+            offset,
+            compressed_size: 100,
+            uncompressed_size: usize_,
+            unknown_field6: 7,
+            compressed_md5: "c".into(),
+        }
+    }
+
+    fn file(path: &str, chunks: Vec<SophonChunk>, size: i64) -> SophonChunkFile {
+        SophonChunkFile {
+            file: path.into(),
+            chunks,
+            is_folder: false,
+            size,
+            md5: "m".into(),
+        }
+    }
+
+    #[test]
+    fn a_clean_manifest_reports_every_structure_counter_zero() {
+        let entries = vec![
+            file(
+                "a",
+                vec![chunk(0, 100), chunk(100, 50)],
+                150,
+            ),
+            file("b/c", vec![], 0),
+        ];
+        let d = decode_counts(&entries);
+        assert_eq!((d.entries, d.files, d.folders, d.total_chunks), (2, 2, 0, 2));
+        assert_eq!(d.total_file_bytes, 150);
+        assert_eq!(d.max_chunk_compressed_bytes, 100);
+        assert!(d.structure.clean(), "{:?}", d.structure);
+        assert!(d.structure.violations().is_empty());
+    }
+
+    /// Spec §3.6: a violation must be *counted*, not fatal — the capture still
+    /// works and the selfcheck says which property broke.
+    /// Each input breaks the property it is named for.
+///
+/// Asserting *containment* rather than equality is deliberate, and is the honest
+/// form: the six properties are not independent. Walking a chunk list in the
+/// order it is stored, any out-of-order offsets are *also* non-gapless — there
+/// is no way to present them out of order and still cover `0..size` in one pass.
+/// A test demanding that one broken property be the only broken one would be
+/// demanding the counters be wrong.
+#[test]
+    fn each_input_breaks_the_property_it_is_named_for() {
+        let cases: Vec<(&str, SophonChunkFile, &str)> = vec![
+            ("empty_paths", file("", vec![], 0), "empty_paths"),
+            ("backslash_paths", file("a\\b", vec![], 0), "backslash_paths"),
+            ("non_ascii_paths", file("a/\u{4e2d}\u{6587}", vec![], 0), "non_ascii_paths"),
+            (
+                "unsorted_chunk_offsets",
+                file("x", vec![chunk(100, 50), chunk(0, 100)], 150),
+                "unsorted_chunk_offsets",
+            ),
+            (
+                "non_gapless_files",
+                file("x", vec![chunk(0, 50), chunk(100, 50)], 150),
+                "non_gapless_files",
+            ),
+            (
+                "size_mismatch_files",
+                file("x", vec![chunk(0, 50), chunk(50, 50)], 200),
+                "size_mismatch_files",
+            ),
+        ];
+        for (name, entry, prop) in cases {
+            let d = decode_counts(&[entry]);
+            assert!(!d.structure.clean(), "{name} should not be clean");
+            assert!(
+                d.structure.violations().contains(&prop),
+                "{name}: expected {prop} among {:?}",
+                d.structure.violations()
+            );
+        }
+    }
+
+    /// The properties that *can* be isolated: ascending-but-gapped, and
+    /// gapless-but-wrong-length, are each a single violation.
+    #[test]
+    fn a_gap_and_a_length_disagreement_are_each_reported_alone() {
+        // Offsets 0 and 60 with lengths 50 and 90 tile 0..150 in total but leave
+        // a hole at 50..60, so `Σ == size` holds and only the gap is reported.
+        let gap = decode_counts(&[file("x", vec![chunk(0, 50), chunk(60, 90)], 140)]);
+        assert_eq!(gap.structure.violations(), vec!["non_gapless_files"]);
+        assert_eq!(gap.structure.unsorted_chunk_offsets, 0, "offsets are still ascending");
+        assert_eq!(gap.structure.size_mismatch_files, 0);
+
+        // Chunks covering 0..100 exactly, against a declared size of 200: the
+        // coverage is fine and only the length disagrees.
+        let len = decode_counts(&[file("x", vec![chunk(0, 50), chunk(50, 50)], 200)]);
+        assert_eq!(len.structure.violations(), vec!["size_mismatch_files"]);
+        assert_eq!(len.structure.non_gapless_files, 0);
+    }
+
+    /// An overlap is a gap in the wrong direction, and is counted as one.
+    #[test]
+    fn an_overlapping_chunk_is_non_gapless_too() {
+        // 0..100 then 50..150: total 150 matches the declared size, offsets
+        // ascend, and the two ranges overlap.
+        let d = decode_counts(&[file("x", vec![chunk(0, 100), chunk(50, 50)], 150)]);
+        assert_eq!(d.structure.violations(), vec!["non_gapless_files"]);
+    }
+
+    #[test]
+    fn a_duplicate_path_is_counted_per_extra_occurrence() {
+        let d = decode_counts(&[file("a", vec![], 0), file("a", vec![], 0), file("a", vec![], 0)]);
+        assert_eq!(d.structure.duplicate_paths, 2);
+        assert_eq!(d.structure.violations(), vec!["duplicate_paths"]);
+    }
+
+    /// A folder carries no bytes, so reporting it as a gap would make a single
+    /// folder entry look like six violations.
+    #[test]
+    fn a_folder_entry_is_not_counted_as_a_byte_level_violation() {
+        let folder = SophonChunkFile {
+            file: "GenshinImpact_Data/StreamingAssets".into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: String::new(),
+        };
+        let d = decode_counts(&[folder]);
+        assert_eq!((d.files, d.folders), (0, 1));
+        assert!(d.structure.clean(), "{:?}", d.structure);
+    }
+
+    #[test]
+    fn the_largest_chunk_is_recorded_across_every_entry() {
+        let mut big = chunk(0, 10);
+        big.compressed_size = 3_689_476;
+        let d = decode_counts(&[file("a", vec![big, chunk(10, 10)], 20)]);
+        // The measured ceiling for 7.0.0 and 7.1.0, spec §3.6.
+        assert_eq!(d.max_chunk_compressed_bytes, 3_689_476);
+    }
+
+    // ------------------------------------------------------------ A5
+
+    #[test]
+    fn a_reconciling_manifest_reports_nothing() {
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let stats = crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("150".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("1".into()),
+        };
+        assert!(reconcile(&d, Some(&stats)).is_empty());
+        // No declared stats is not a violation; it is simply nothing to check.
+        assert!(reconcile(&d, None).is_empty());
+    }
+
+    #[test]
+    fn each_disagreeing_stat_is_named_with_both_numbers() {
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let stats = crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("999".into()),
+            file_count: Some("7".into()),
+            chunk_count: Some("1".into()),
+        };
+        let bad = reconcile(&d, Some(&stats));
+        let names: Vec<&str> = bad.iter().map(|(n, _, _)| *n).collect();
+        assert_eq!(names, vec!["file_count", "uncompressed_size"]);
+        assert_eq!(bad[0], ("file_count", Some(7), 1));
+        assert_eq!(bad[1], ("uncompressed_size", Some(999), 150));
+    }
+
+    #[test]
+    fn an_unparsable_declared_size_is_skipped_rather_than_called_a_violation() {
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let stats = crate::hyp::Stats {
+            compressed_size: None,
+            uncompressed_size: Some("not a number".into()),
+            file_count: Some("1".into()),
+            chunk_count: None,
+        };
+        assert!(reconcile(&d, Some(&stats)).is_empty());
+    }
+
+    // ------------------------------------------------------------ A4
+
+    #[test]
+    fn the_id_parts_are_split_and_the_prefix_is_labelled_opaque() {
+        let m = crate::hyp::ManifestRef {
+            id: "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d".into(),
+            checksum: "8d4dfb34d2ee2cf64aae45a9b1ecf58d".into(),
+            compressed_size: Some("9007187".into()),
+            uncompressed_size: Some("16827424".into()),
+        };
+        assert_eq!(
+            m.id_prefix(),
+            Some("manifest_671e1a92a6cf53ff")
+        );
+        assert_eq!(m.id_suffix(), Some(m.checksum.as_str()));
+        let parts = IdParts {
+            prefix_16hex: m.id_prefix().unwrap().to_string(),
+            prefix_semantics: "opaque",
+            suffix_32hex: m.id_suffix().unwrap().to_string(),
+            suffix_equals_checksum: true,
+        };
+        // The field exists so the artifact *states* the finding rather than
+        // implying the prefix went unchecked.
+        assert_eq!(parts.prefix_semantics, "opaque");
+        assert!(parts.suffix_equals_checksum);
+        assert_eq!(parts.suffix_32hex.len(), 32);
+    }
+
+    #[test]
+    fn a_verified_report_is_green_only_when_both_checks_hold() {
+        let ok = Verified {
+            decompressed_md5_matches_checksum: true,
+            checksum_matches_id_suffix: true,
+            id_prefix_verified: false,
+        };
+        assert!(ok.all_green());
+        for bad in [
+            Verified { decompressed_md5_matches_checksum: false, ..ok.clone() },
+            Verified { checksum_matches_id_suffix: false, ..ok.clone() },
+        ] {
+            assert!(!bad.all_green());
+        }
+        // The prefix is never verified and that is not a failure.
+        assert!(ok.all_green() && !ok.id_prefix_verified);
+    }
+
+    #[test]
+    fn a_declared_size_is_carried_as_the_api_sent_it() {
+        assert_eq!(render_size(Some(&"9007187".into())), "9007187");
+        assert_eq!(render_size(Some(&crate::hyp::IntOrStr::Int(42))), "42");
+        assert_eq!(render_size(None), "");
+        assert_eq!(size_of(Some(&"9007187".into())), Some(9_007_187));
+        assert_eq!(size_of(None), None);
+    }
+}

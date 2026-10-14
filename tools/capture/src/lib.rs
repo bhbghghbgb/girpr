@@ -12,6 +12,7 @@
 //! |---|---|---|
 //! | [`cli`] | M0 | the clap surface, verbatim |
 //! | [`exit`] | M0 | [`ExitCode`] and the exit-code table |
+//! | [`hash`] | M3 | digests and the gzip rule, shared by M3/M6/M7/M8 |
 //! | [`report`] | M0 | the stdout data plane; the only `println!` in the crate |
 //! | [`logging`] | M0 | stderr narration via `tracing`, plus `--log-file` |
 //! | [`config`] | M0 | the resolved run plan every command works from |
@@ -47,6 +48,7 @@ pub mod cli;
 pub mod config;
 pub mod emit;
 pub mod exit;
+pub mod hash;
 pub mod http;
 pub mod hyp;
 pub mod logging;
