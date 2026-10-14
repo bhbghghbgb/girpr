@@ -46,7 +46,7 @@ mod manifest;
 mod metadata;
 mod plan;
 mod post;
-mod scope;
+pub mod scope;
 
 pub use metadata::Meta;
 pub use plan::purge::PurgeVerdict;
@@ -117,12 +117,35 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
+    let scope = &ctx.path_scope;
     let plan = Arc::new(plan::build_plan(
         per_manifest,
         &meta.blacklist,
         &meta.latest,
+        scope,
     ));
-    tracing::info!("work list: {} files", plan.files.len());
+    tracing::info!(
+        "work list: {} files{}",
+        plan.files.len(),
+        if scope.is_active() {
+            " (filtered by --include/--exclude)"
+        } else {
+            ""
+        }
+    );
+
+    // 4.1 A `--include` that selected nothing is a typo, and a typo that costs
+    // 130 GB to discover is the failure mode this whole feature exists to
+    // remove. Exit 1 (a property of the request), not 5 (the answer was too
+    // big) — see docs/04 §7.2.1.
+    if scope.has_includes() && plan.files.is_empty() {
+        return Err(RunFailure::usage(anyhow::anyhow!(
+            "--include '{}' matched no file in the live manifest (plan_files=0); \
+             check the glob spelling (`*` also crosses `/`) or the installed version",
+            scope.describe_includes(),
+        )));
+    }
+    summary.flags.scoped = scope.is_active();
 
     // 4.5 the server's deprecated-file list, fetched here rather than lazily in
     // the post-phase: it is part of what the run will act on, so it belongs with
@@ -148,7 +171,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // delete). In `--dry-run` it runs in log-only mode.
     let mut purge_logged = false;
     if ctx.purge_before && !ctx.check_only {
-        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set());
+        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope);
         let bytes =
             plan::purge::apply_purge(&purge_plan, ctx.dry_run).map_err(RunFailure::write)?;
         summary
@@ -190,7 +213,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // nothing; the byte count stays 0 by design). Skipped when the
         // purge-before pass above already listed the same candidates, so
         // `--purge-before --purge-after --dry-run` does not log each file twice.
-        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set());
+        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope);
         plan::purge::apply_purge(&purge_plan, true).map_err(RunFailure::write)?;
     }
 

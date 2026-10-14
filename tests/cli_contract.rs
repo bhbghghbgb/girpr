@@ -6,9 +6,14 @@
 //! slot (docs/02 §1).
 //!
 //! Every case here fails *during* argument handling, so no game directory is
-//! ever touched. The post-parse cases (`--io-threads 0`, bad `--audio`) do reach
-//! `logging::init_tracing`, so they leave a `logs/girpr_<ts>.log` beside the
-//! built binary — inside the gitignored `target/` tree.
+//! ever touched. The post-parse cases (`--io-threads 0`, bad `--audio`, a bad
+//! `--include` glob) do reach `logging::init_tracing`, so they leave a
+//! `logs/girpr_<ts>.log` beside the built binary — inside the gitignored
+//! `target/` tree.
+//!
+//! NOTE: `--include` matching zero *planned* files is also exit `1`, but that
+//! can only be observed after the API is fetched, so it lives in
+//! `tests/repair_offline.rs` rather than here — this file never has a server.
 
 use std::process::Command;
 
@@ -74,6 +79,23 @@ fn argument_errors_exit_one_not_two() {
             "--audio",
             "none",
         ],
+        // A malformed glob is a usage error like any other bad argument.
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--include",
+            "game/[",
+        ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--exclude",
+            "game/[",
+        ],
     ];
     for args in cases {
         let (code, _, stderr) = run(&args);
@@ -95,6 +117,8 @@ fn help_text_lists_every_documented_flag() {
         "--io-threads",
         "--purge-after",
         "--purge-before",
+        "--include",
+        "--exclude",
         "--check-only",
         "--dry-run",
         "--json-summary",

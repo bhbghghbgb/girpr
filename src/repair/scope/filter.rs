@@ -83,6 +83,25 @@ impl PathScope {
         }
         !self.excludes.iter().any(|p| p.matches_with(rel, opts))
     }
+
+    /// The `--include` globs as written, for the "matched nothing" usage error
+    /// (docs/04 A1 guard 1) — an error that names its own typo is the point.
+    pub fn describe_includes(&self) -> String {
+        join_patterns(&self.includes)
+    }
+
+    /// The `--exclude` globs as written, for log/diagnostic lines.
+    pub fn describe_excludes(&self) -> String {
+        join_patterns(&self.excludes)
+    }
+}
+
+fn join_patterns(patterns: &[Pattern]) -> String {
+    patterns
+        .iter()
+        .map(|p| p.as_str().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Compile glob strings, reporting the offending pattern on failure (exit 1).

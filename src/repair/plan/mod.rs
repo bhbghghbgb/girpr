@@ -18,6 +18,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::sophon::{SophonChunk, SophonChunkFile};
 
+use super::scope::PathScope;
+
 pub use purge::{PurgeCandidate, PurgePlan};
 
 /// One target file, plus the chunk URL prefix its chunks live under.
@@ -43,12 +45,18 @@ impl RepairPlan {
     }
 }
 
-/// Build sorted, deduped, blacklist-filtered plan. `per_manifest`:
-/// (chunk_url_prefix, files).
+/// Build sorted, deduped, blacklist-filtered, scope-filtered plan.
+/// `per_manifest`: (chunk_url_prefix, files).
+///
+/// A path outside `scope` is dropped **here**, before the plan exists, so
+/// `files_total`, the repair loop and `expected_paths()` all see the same
+/// narrowed world. Dropping it later instead would leave the purge with a
+/// *narrower* keep-set than an unfiltered run (docs/04 §2).
 pub fn build_plan(
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     blacklist: &HashSet<String>,
     latest_tag: &str,
+    scope: &PathScope,
 ) -> RepairPlan {
     let mut files: Vec<PlannedFile> = Vec::new();
     let mut prefix: HashMap<String, String> = HashMap::new();
@@ -60,7 +68,7 @@ pub fn build_plan(
                 continue;
             }
             let rel = f.file.replace('\\', "/");
-            if blacklist.contains(&rel) || !seen.insert(rel.clone()) {
+            if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(rel.clone()) {
                 continue;
             }
             prefix.insert(rel.clone(), url_prefix.clone());
@@ -112,7 +120,7 @@ mod tests {
         ];
         let per = vec![("http://x".to_string(), files)];
         let bl: HashSet<String> = ["drop.dat".to_string()].into_iter().collect();
-        let plan = build_plan(per, &bl, "5.0");
+        let plan = build_plan(per, &bl, "5.0", &PathScope::default());
         assert_eq!(
             plan.files
                 .iter()
@@ -145,11 +153,50 @@ mod tests {
             ("http://x".to_string(), vec![dup.clone()]),
             ("http://y".to_string(), vec![dup, folder]),
         ];
-        let plan = build_plan(per, &HashSet::new(), "5.0");
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
         assert_eq!(plan.url_prefix_by_file.get("a/b.dat").unwrap(), "http://x");
         assert_eq!(plan.expected_paths().len(), 1);
+    }
+
+    /// The scope is applied *before* the plan exists, so `expected_paths()` —
+    /// the only manifest-derived input to the files-cleanup's keep set — is
+    /// narrowed too. Applying it anywhere downstream instead would leave the
+    /// cleanup with a narrower keep set than an unfiltered run.
+    #[test]
+    fn out_of_scope_paths_never_reach_the_plan() {
+        let files = vec![
+            SophonChunkFile {
+                file: "game/foo.dat".into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: "m1".into(),
+            },
+            SophonChunkFile {
+                file: "game/bar.dat".into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: "m2".into(),
+            },
+        ];
+        let per = vec![("http://x".to_string(), files)];
+        let inc = vec!["game/foo.dat".to_string()];
+        let plan = build_plan(
+            per,
+            &HashSet::new(),
+            "5.0",
+            &PathScope::new(&inc, &[]).unwrap(),
+        );
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].rel, "game/foo.dat");
+        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
+        assert!(
+            !plan.url_prefix_by_file.contains_key("game/bar.dat"),
+            "a dropped path must not keep a prefix entry either"
+        );
     }
 }

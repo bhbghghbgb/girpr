@@ -26,6 +26,7 @@ use crate::util;
 
 use super::metadata::Meta;
 use super::plan::{RepairPlan, purge};
+use super::scope::PathScope;
 
 /// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
 /// the bytes are already repaired, so a half-finished bookkeeping write would
@@ -41,14 +42,26 @@ pub async fn run(
     summary: &Summary,
     deprecated: &[String],
 ) -> Result<(), RunFailure> {
-    delete_deprecated(game_dir, deprecated, summary);
-    move_audio_cache(game_dir, &meta.config);
+    delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope);
+    move_audio_cache(game_dir, &meta.config, &ctx.path_scope);
     if ctx.purge_after {
-        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set());
+        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set(), &ctx.path_scope);
         let bytes = purge::apply_purge(&purge_plan, false).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
+    }
+    // docs/04 §2.2: `config.ini` is bumped last so the on-disk version only
+    // advances once the bytes are in place. Under an active path scope that
+    // premise is false by construction — the bytes were deliberately *not*
+    // put in place — so bumping would be exactly the launcher desync the
+    // ordering exists to prevent. Skip it, say so, and let `SUMMARY` carry
+    // `config_bumped=0` so a test can assert it instead of reading the file.
+    if ctx.path_scope.is_active() {
+        tracing::warn!(
+            "path scope active: not bumping config.ini, so its game_version still describes the un-scoped parts of the install"
+        );
+        return Ok(());
     }
     let (ch, sub, cps) = ctx.biz.channel_tuple();
     util::write_config_ini(
@@ -65,9 +78,14 @@ pub async fn run(
 
 /// Delete every path the server still lists as deprecated. The list was
 /// fetched during the plan phase and is advisory: an empty list (failed call)
-/// simply means there is nothing to do.
-fn delete_deprecated(game_dir: &Path, list: &[String], summary: &Summary) {
+/// simply means there is nothing to do. A path outside the active scope does
+/// not exist, so it is not deleted either.
+fn delete_deprecated(game_dir: &Path, list: &[String], summary: &Summary, scope: &PathScope) {
     for n in list {
+        if !scope.is_visible(n) {
+            tracing::debug!("deprecated path out of scope, kept: {n}");
+            continue;
+        }
         let p = game_dir.join(util::normalize_rel(n));
         if p.is_file() {
             let sz = util::file_len(&p).unwrap_or(0);
@@ -85,9 +103,20 @@ fn delete_deprecated(game_dir: &Path, list: &[String], summary: &Summary) {
 /// Both dirs must be configured and distinct. Leftover empty cache dirs are
 /// cleaned by the files-cleanup's emptied-dir sweep, whenever a purge is
 /// enabled.
-fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
+///
+/// A scoped run does not relocate audio: a file whose source or destination is
+/// outside the scope is left alone, since moving it is a mutation of a path the
+/// scope may not have admitted (docs/04 §2).
+fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig, scope: &PathScope) {
     let (cache_dir, res_dir) = (&config.audio_pkg_cache_dir, &config.audio_pkg_res_dir);
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
+        return;
+    }
+    // Rel paths are `/`-separated everywhere except at the filesystem boundary.
+    let cache_rel = cache_dir.replace('\\', "/");
+    let res_rel = res_dir.replace('\\', "/");
+    if !scope.is_visible(&cache_rel) || !scope.is_visible(&res_rel) {
+        tracing::debug!("audio cache->res out of scope, skipped");
         return;
     }
     let cache = game_dir.join(util::normalize_rel(cache_dir));
@@ -105,6 +134,9 @@ fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
         let Ok(rel) = src.strip_prefix(&cache) else {
             continue;
         };
+        if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+            continue;
+        }
         let target = res.join(rel);
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
@@ -116,4 +148,14 @@ fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
         }
     }
     tracing::info!("moved audio cache -> res");
+}
+
+/// Join two rel path fragments into the `/`-separated form the scope matches on.
+fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
+    let name = name.to_string_lossy().replace('\\', "/");
+    if dir_rel.is_empty() {
+        name
+    } else {
+        format!("{dir_rel}/{name}")
+    }
 }

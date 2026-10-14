@@ -78,6 +78,44 @@ say — §1 of this file is the only place that is allowed to record that.
   and `x` agree — `require_literal_separator: false` already makes `*` do
   that. Pinned by a test so nobody "fixes" the help text's advice later.
 
+### M2 — thread the scope
+
+The named blocker. `--include` / `--exclude` on `Args`, compiled once in
+`Args::into_ctx` (a bad glob is exit `1` there, naming the pattern) and carried
+on `RunCtx.path_scope`.
+
+Sites touched, all one insertion at an existing branch:
+
+| site | change |
+|---|---|
+| `plan::build_plan` | takes `&PathScope`; drops non-visible `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
+| `purge::classify_purge_path` | gains `&PathScope` as **rule 0**: a hidden path returns `Keep` before the manifest check |
+| `purge::plan_purge` | passes the scope through; also records `PurgePlan.hidden`, which drives the A1 guard-3 warn |
+| `post::delete_deprecated` | skips a hidden path |
+| `post::move_audio_cache` | skips the whole move when either the cache or the res dir is out of scope, and skips an individual hidden source file |
+| `post::write_config_ini` | **skipped entirely** when a scope is active; `warn` + `SUMMARY config_bumped=0` |
+| `metadata::fetch` | A1 guard 2: explicit `--audio` under a scope whose scan file is hidden → exit `1` |
+
+`RunCtx.readonly()` still covers `--dry-run` / `--check-only`; the scope gates
+are independent of it, so a scoped dry-run is read-only *and* narrow.
+
+`Summary` gained `flags: SummaryFlags`, carrying the **conditional** keys
+(`scoped`, `config_bumped`, `plan_files`, and the not-yet-used `limited`,
+`plan_download_bytes`, `write_bytes`, `stopped`). Rendering them in a fixed
+order, with an `Extra` enum so the `key=value` and `--json-summary` planes stay
+in agreement without a second list of quoting rules, means adding a key is one
+match arm. **An unflagged run's `SUMMARY` is byte-identical to today's** —
+pinned by `an_unscoped_purge_still_deletes_orphans`.
+
+Deviation from the milestone's acceptance list: the "`--include` matching
+nothing → 1" case is in `tests/repair_offline.rs`, not `tests/cli_contract.rs`.
+It can only be observed after the API is fetched, and the binary contract test
+has no server by design.
+
+The A1 guard-3 warn fires once per `plan_purge` call, so a run with both
+`--purge-before` and `--purge-after` says it twice — one line per purge
+decision, which is what actually happened.
+
 ---
 
 ## 1. What this plan does not touch

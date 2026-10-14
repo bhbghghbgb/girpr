@@ -21,9 +21,17 @@
 mod common;
 
 use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
+use girpr::repair::scope::PathScope;
 use girpr::{Biz, RunCtx, repair};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
+
+/// Compile a path scope for a test, the way `Args::into_ctx` does.
+fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
+    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
+    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+    PathScope::new(&inc, &exc).expect("test globs must compile")
+}
 
 fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
     ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
@@ -35,6 +43,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         biz,
         audio: HashSet::new(),
         audio_explicit: false,
+        path_scope: PathScope::default(),
         jobs,
         check_only: false,
         dry_run: false,
@@ -440,6 +449,272 @@ async fn a_run_that_stops_before_acting_creates_no_game_dir() {
 
     mock.stop();
     std::fs::remove_dir_all(&parent).ok();
+}
+
+// ---------------------------------------------------------------------------
+// path scope (docs/04 A1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn include_repairs_exactly_the_selected_file() {
+    // The `gircap` use case (docs/04 A1): one run per fixture path, with the
+    // exact chunk download set as the assertion.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_include");
+    let fx2 = build_fixture();
+    let foo = &fx2.files[0];
+    let bar = &fx2.files[1];
+    // bar is corrupt and must NOT be repaired; foo is missing and must be.
+    write_game_file(&dir, &bar.rel, b"not the game data");
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    let (summary, code) = repair::run(ctx).await.expect("scoped run");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_total, 1, "only the selected file is planned");
+    assert!(summary.flags.scoped, "scoped run reports scoped=1");
+
+    assert_eq!(
+        read_game_file(&dir, &foo.rel).unwrap(),
+        foo.data,
+        "selected file repaired"
+    );
+    assert_eq!(
+        read_game_file(&dir, &bar.rel).unwrap(),
+        b"not the game data",
+        "an out-of-scope file is not even verified"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        "only the selected file's chunks are fetched"
+    );
+    // §2.2: a scoped run must not advance config.ini.
+    assert!(
+        !dir.join("config.ini").exists(),
+        "a scoped run does not bump config.ini"
+    );
+    // ...and says so in the machine contract, so a test can assert the fact
+    // instead of reading the file.
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("scoped=1"), "{line}");
+    assert!(line.contains("config_bumped=0"), "{line}");
+    assert!(line.contains("plan_files=1"), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
+    // The case the whole thing exists for: narrowing the plan must NOT narrow
+    // the cleanup's keep set, or `--purge-*` eats the fixture.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_purge");
+    let fx2 = build_fixture();
+    // Everything intact, plus neighbours that are not in the manifest and would
+    // normally be eaten by a full-install purge.
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "log/output.txt", &[0x5Au8; 100]);
+    write_game_file(&dir, "ScreenShot/shot.png", &[0x5Bu8; 100]);
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    ctx.purge_after = true;
+    let (summary, code) = repair::run(ctx).await.expect("scoped purge run");
+    assert_eq!(code, 0);
+
+    // Everything survives: the fixture files, and the orphans that were out of
+    // scope even though they are not in the manifest.
+    for f in &fx2.files {
+        assert_eq!(
+            read_game_file(&dir, &f.rel).unwrap(),
+            f.data,
+            "{} must survive",
+            f.rel
+        );
+    }
+    for rel in ["log/output.txt", "ScreenShot/shot.png", "old/legacy.dll"] {
+        assert!(read_game_file(&dir, rel).is_some(), "{rel} must survive");
+    }
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "a purge under a scope has nothing to delete here"
+    );
+    assert!(dir.join("log").is_dir(), "emptied dirs must not be swept");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn an_unscoped_purge_still_deletes_orphans() {
+    // The control: without a scope, the cleanup is unchanged by M2.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_unscoped_purge");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "log/output.txt", &[0x5Au8; 100]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.purge_after = true;
+    let (summary, code) = repair::run(ctx).await.expect("plain purge run");
+    assert_eq!(code, 0);
+    assert!(
+        read_game_file(&dir, "log/output.txt").is_none(),
+        "orphan deleted"
+    );
+    assert!(!summary.flags.scoped);
+    assert!(!summary.flags.limited);
+    // And the conditional keys are absent, so an unflagged SUMMARY is
+    // byte-identical to today's.
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    for k in ["scoped", "config_bumped", "plan_files", "limited"] {
+        assert!(
+            !line.contains(k),
+            "{k} must be absent when unflagged: {line}"
+        );
+    }
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn an_include_matching_nothing_is_a_usage_error() {
+    // Guard 1 (docs/04 A1): a scope that selected nothing is a typo, and exit
+    // 1 — not exit 5, which means "well-formed but the answer was too big".
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_empty");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.path_scope = scope(&["game/nope.dat"], &[]);
+    let err = repair::run(ctx)
+        .await
+        .expect_err("an empty scope must fail");
+    assert_eq!(err.exit_code, 1);
+    let msg = format!("{:#}", err.source);
+    assert!(msg.contains("game/nope.dat"), "must name the glob: {msg}");
+    assert!(msg.contains("plan_files=0"), "{msg}");
+
+    // `--exclude` matching nothing is unremarkable and must still succeed.
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.path_scope = scope(&[], &["no/such/thing"]);
+    let (_, code) = repair::run(ctx)
+        .await
+        .expect("a non-matching exclude is fine");
+    assert_eq!(code, 0);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scope() {
+    // Guard 2 (docs/04 §7.1 Q2): two flags asking for opposite scopes is a
+    // contradiction, not a merge. The scan file's rel path comes from
+    // getGameConfigs and is never hardcoded.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let fx2 = build_fixture();
+
+    let dir = temp_dir("audio_scope_refuse");
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    ctx.audio = HashSet::from(["ja-jp".to_string()]);
+    ctx.audio_explicit = true;
+    let err = repair::run(ctx).await.expect_err("--audio under a scope");
+    assert_eq!(err.exit_code, 1);
+    let msg = format!("{:#}", err.source);
+    assert!(
+        msg.contains("Audio/scan.txt"),
+        "must name the scan file: {msg}"
+    );
+    assert!(
+        !dir.join("Audio").exists(),
+        "the refused run must not write the scan file"
+    );
+
+    // The escape hatch: include the scan file's own rel path.
+    let dir2 = temp_dir("audio_scope_allowed");
+    for f in &fx2.files {
+        write_game_file(&dir2, &f.rel, &f.data);
+    }
+    let mut ctx2 = ctx_for(dir2.clone(), &mock, 1);
+    ctx2.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
+    ctx2.audio = HashSet::from(["ja-jp".to_string()]);
+    ctx2.audio_explicit = true;
+    let (_, code) = repair::run(ctx2)
+        .await
+        .expect("scan file in scope is allowed");
+    assert_eq!(code, 0);
+    let scan = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
+    assert!(scan.contains("Japanese"), "{scan}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dir2).ok();
+}
+
+#[tokio::test]
+async fn deprecated_files_outside_the_scope_are_not_deleted() {
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            deprecated_files: vec!["old/legacy.dll".to_string(), "other/stale.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("scope_deprecated");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    write_game_file(&dir, "other/stale.dll", &[0x7Fu8; 70]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.path_scope = scope(&["old/*", "game/foo.dat", "game/bar.dat"], &[]);
+    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
+    assert_eq!(code, 0);
+    assert!(
+        read_game_file(&dir, "old/legacy.dll").is_none(),
+        "in-scope deprecated file deleted"
+    );
+    assert_eq!(
+        read_game_file(&dir, "other/stale.dll").unwrap(),
+        &[0x7Fu8; 70],
+        "out-of-scope deprecated file kept"
+    );
+    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 50);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]

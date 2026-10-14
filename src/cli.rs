@@ -14,6 +14,7 @@ use clap::Parser;
 
 use crate::Biz;
 use crate::config::RunCtx;
+use crate::repair::scope::PathScope;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -48,6 +49,19 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub purge_before: bool,
 
+    /// Only act on paths matching this glob (repeatable). Matched against the
+    /// `/`-separated path relative to `--game-path`, case-insensitively.
+    /// NOTE: `*` also crosses `/`, so `*.blk` matches at any depth. Paths that
+    /// do not match are treated as nonexistent: not repaired, not deleted, and
+    /// `config.ini` is not bumped. With no `--include`, every path is admitted.
+    #[arg(long = "include", value_name = "GLOB")]
+    pub include: Vec<String>,
+
+    /// Treat paths matching this glob as nonexistent (repeatable). Beats
+    /// `--include`. e.g. `--exclude "*_tmp"` protects in-flight temp files.
+    #[arg(long = "exclude", value_name = "GLOB")]
+    pub exclude: Vec<String>,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -73,6 +87,8 @@ impl Args {
             bail!("io-threads must be >= 1");
         }
         let (audio, _saw_none) = parse_audio_selection(&self.audio)?;
+        // A bad glob is a usage error (exit 1) and says which one it was.
+        let path_scope = PathScope::new(&self.include, &self.exclude)?;
         Ok(RunCtx {
             game_dir: self.game_path,
             biz: self.biz,
@@ -81,6 +97,7 @@ impl Args {
             // `--audio none` alone -> explicit game-only (empty set, overwrites
             // scan file).
             audio_explicit: !self.audio.is_empty(),
+            path_scope,
             jobs: self.io_threads,
             check_only: self.check_only,
             dry_run: self.dry_run,

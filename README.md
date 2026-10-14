@@ -33,7 +33,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + always-`TRACE` file layer | `init_tracing`, `log_file_path` |
-| `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `Summary::snapshot`, `emit`, `format_report_line`, `format_progress`, `emit_progress`, `format_summary_line`, `spawn_progress_reporter` |
+| `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `format_report_line`, `format_progress`, `emit_progress`, `format_summary_line`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `fetch_chunk_bytes`, `build_local_chunk_map`, `join_url` |
@@ -46,7 +46,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope` |
-| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `compile_patterns` |
+| `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
@@ -63,7 +63,7 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["plan::build_plan: sort, dedup, blacklist-filter<br/>+ deprecated list"]
+    D --> E["plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ deprecated list"]
     E --> F{"purge-before?"}
     F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
     F -->|no| H{"check-only?"}
@@ -87,13 +87,23 @@ flowchart TD
 - stdout: `REPORT …` once after metadata; `PROGRESS …` every 10 s;
   `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
   `--json-summary` emits `REPORT`/`SUMMARY` as JSON objects instead.
+  A **scoped or limited** run appends conditional keys to that line
+  (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
+  emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
+  byte-identical to one that never passes them.
 - stderr: structured `tracing` logs (`--log-level` / `RUST_LOG`); always mirrored at
   `TRACE` to `<exe-dir>/logs/girpr_<timestamp>.log`.
+- path scope: a path outside `--include`/`--exclude` **does not exist** — it is
+  dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
+  eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
+  not in place); `SUMMARY config_bumped=0` says so. `--include` matching zero
+  planned files and `--audio` under a scope are both exit `1`.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage. Every argument-level failure (unknown flag, bad
-  enum value, `--io-threads 0`, bad `--audio`) is `1` — clap's default `2` is
-  remapped so it cannot collide with "metadata/network". `--help` is `0`.
+  enum value, `--io-threads 0`, bad `--audio`, bad `--include` glob) is `1` —
+  clap's default `2` is remapped so it cannot collide with "metadata/network".
+  `--help` is `0`.
 - `getGameConfigs.default_download_mode` must be `DOWNLOAD_MODE_CHUNK`; anything
   else (including `DOWNLOAD_MODE_FILE` / `DOWNLOAD_MODE_LDIFF`, which need the
   7z/hdiff paths v1 lacks) exits `1` instead of failing later at `getBuild`.
@@ -140,6 +150,8 @@ cargo build --release
 | `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr` (case-insensitive, `_` accepted for `-`; display names `chinese`/`english`/`english(us)`/`japanese`/`korean` also work); `none` = game-only (overwrites scan file) |
 | `--io-threads <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2 |
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
+| `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
+| `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |
