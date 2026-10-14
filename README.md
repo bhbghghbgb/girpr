@@ -40,14 +40,15 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile` |
+| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `RepairPlan::est_download_bytes_with`, `est_file_download_bytes`, `PlannedFile` |
 | `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
-| `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `LimitHit::describe` |
+| `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
+| `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `adjust_download_bytes`, `stop_downloads` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
@@ -80,6 +81,7 @@ flowchart TD
     end
     J --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
+    J -->|"download-bytes ceiling hit"| X5["SUMMARY stopped=bytes<br/>exit 5, *_tmp left for the next run"]
     K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
     M --> N["SUMMARY to stdout+log<br/>exit 0"]
@@ -106,11 +108,19 @@ flowchart TD
   no directory created, no `_tmp` opened, no file deleted. They never trim the
   work list; under `--include` they are a *check on* the selection, which is why
   the two flags are not redundant. `--max-files N` with exactly N planned files
-  passes (`> N`, not `>= N`).
+  passes (`> N`, not `>= N`). One exception to "nothing is written": the
+  **runtime** hard stop (`--max-download-bytes`, and from M6
+  `--max-write-bytes`), which fires mid-flight by definition. It leaves `*_tmp`
+  files behind — safe, because resume-by-length makes the next run resume rather
+  than restart — and says so: `SUMMARY stopped=<files|bytes|delete>` is what
+  distinguishes "nothing was written because the plan was too big" from
+  "something was written and then we ran out".
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
-  exceeded (nothing was written; `SUMMARY` is still emitted with `limited=1`).
+  exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
+  part of the work and leaves `*_tmp` behind (`SUMMARY stopped=…`). Either way
+  `SUMMARY` is still emitted, with `limited=1`.
   `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
@@ -167,6 +177,7 @@ cargo build --release
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
 | `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Counted once, over both purge passes; out-of-scope paths are never candidates |
+| `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. Does **not** bound metadata or manifest traffic |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |

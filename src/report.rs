@@ -6,7 +6,7 @@
 //! (`key=value` vs JSON) can be unit-tested without a subscriber installed.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 
@@ -15,7 +15,11 @@ pub const PROGRESS_INTERVAL_SECS: u64 = 10;
 
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
-#[derive(Default, Debug)]
+///
+/// `Default` is written by hand rather than derived for exactly one reason: the
+/// ceiling sentinel is `u64::MAX`, and a derived `Default` would start every run
+/// at a ceiling of **zero** — i.e. refusing the first byte.
+#[derive(Debug)]
 pub struct Summary {
     pub files_total: u64,
     pub files_skipped: AtomicU64,
@@ -29,9 +33,40 @@ pub struct Summary {
     /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
     /// start; plain values, so no atomics are needed.
     pub flags: SummaryFlags,
+    /// `--max-download-bytes`, stored as a raw ceiling (`u64::MAX` = none) so
+    /// the per-chunk reservation is a compare-and-swap with no `Option` check
+    /// on the hot path. Owned by
+    /// [`crate::repair::scope::ledger`](crate::repair::scope) — see
+    /// [`Summary::set_download_limit`].
+    pub download_limit: AtomicU64,
+    /// Set when the runtime download hard stop fired. An aborted run leaves
+    /// `*_tmp` files behind by design: S3 resume-by-length makes the next run a
+    /// smaller run, not a corrupt one.
+    pub download_stopped: AtomicBool,
+}
+
+impl Default for Summary {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Summary {
+    /// A run with no counters moved and no ceiling requested.
+    pub fn new() -> Self {
+        Self {
+            files_total: 0,
+            files_skipped: AtomicU64::new(0),
+            files_repaired: AtomicU64::new(0),
+            files_failed: AtomicU64::new(0),
+            download_bytes: AtomicU64::new(0),
+            deleted_extra_bytes: AtomicU64::new(0),
+            flags: SummaryFlags::default(),
+            download_limit: AtomicU64::new(u64::MAX),
+            download_stopped: AtomicBool::new(false),
+        }
+    }
+
     /// Plain-value copy, for handing a shared `Summary` back to the caller.
     pub fn snapshot(&self) -> Self {
         Self {
@@ -42,6 +77,11 @@ impl Summary {
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,
+            // A snapshot must not lose the ceiling or the stop flag: the caller
+            // reads both *after* the tasks have been joined, which is the only
+            // moment either can be meaningful.
+            download_limit: AtomicU64::new(self.download_limit.load(Ordering::Relaxed)),
+            download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
         }
     }
 }
@@ -296,6 +336,7 @@ mod tests {
             download_bytes: AtomicU64::new(10),
             deleted_extra_bytes: AtomicU64::new(20),
             flags: SummaryFlags::default(),
+            ..Summary::default()
         };
         assert_eq!(
             format_summary_line(&s, 3, false),

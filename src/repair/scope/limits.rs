@@ -24,6 +24,24 @@
 
 use crate::repair::plan::{PurgePlan, RepairPlan};
 
+/// What the pre-flight predicates are allowed to look at.
+///
+/// A struct rather than a three-argument call, because the inputs grow with
+/// every ceiling and the caller should not have to remember which is which.
+pub struct Preflight<'a> {
+    /// The (already scope-filtered) repair plan.
+    pub plan: &'a RepairPlan,
+    /// Download estimate for `plan`, already computed against the local reuse
+    /// map — see [`RepairPlan::est_download_bytes_with`]. Passed in rather than
+    /// recomputed so the number the ceiling is checked against is the same
+    /// number the `PLAN` line and `SUMMARY plan_download_bytes` report.
+    pub est_download_bytes: u64,
+    /// The purge plan, when a purge flag is set and this is not `--check-only`.
+    /// `None` means "nothing is a delete candidate", which any delete ceiling
+    /// trivially satisfies.
+    pub purge: Option<&'a PurgePlan>,
+}
+
 /// The manually requested ceilings. `None` = not requested, which is what keeps
 /// an unflagged run byte-identical to an un-limited one.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +70,10 @@ impl Limits {
     /// Checked against the **filtered** plan, never the raw one: `--max-files N`
     /// must mean "the files the scope selected", so filtering first is what
     /// makes the flag usable at all instead of refusing on every real install.
-    pub fn check_preflight(&self, plan: &RepairPlan, purge: Option<&PurgePlan>) -> Vec<LimitHit> {
+    pub fn check_preflight(&self, pf: Preflight<'_>) -> Vec<LimitHit> {
         let mut hits = Vec::new();
         if let Some(limit) = self.files {
-            let actual = plan.files.len() as u64;
+            let actual = pf.plan.files.len() as u64;
             if actual > limit {
                 hits.push(LimitHit {
                     what: "--max-files",
@@ -66,7 +84,7 @@ impl Limits {
             }
         }
         if let Some(limit) = self.download_bytes {
-            let actual = plan.est_download_bytes();
+            let actual = pf.est_download_bytes;
             if actual > limit {
                 hits.push(LimitHit {
                     what: "--max-download-bytes",
@@ -77,7 +95,7 @@ impl Limits {
             }
         }
         if let Some(limit) = self.delete_bytes {
-            let actual = purge.map_or(0, |p| p.total_bytes);
+            let actual = pf.purge.map_or(0, |p| p.total_bytes);
             if actual > limit {
                 hits.push(LimitHit {
                     what: "--max-delete-bytes",
@@ -155,14 +173,31 @@ mod tests {
         }
     }
 
+    /// The pre-flight context a test most often wants: a plan, a zero download
+    /// estimate, and no purge.
+    fn pf<'a>(plan: &'a RepairPlan) -> Preflight<'a> {
+        Preflight {
+            plan,
+            est_download_bytes: 0,
+            purge: None,
+        }
+    }
+
+    fn pf_full<'a>(plan: &'a RepairPlan, est: u64, purge: &'a PurgePlan) -> Preflight<'a> {
+        Preflight {
+            plan,
+            est_download_bytes: est,
+            purge: Some(purge),
+        }
+    }
+
     #[test]
     fn no_limits_means_nothing_is_active_and_nothing_trips() {
         let l = Limits::default();
+        let p = plan(3_000);
+        let purge = purge(10_000);
         assert!(!l.is_active());
-        assert!(
-            l.check_preflight(&plan(3_000), Some(&purge(10_000)))
-                .is_empty()
-        );
+        assert!(l.check_preflight(pf_full(&p, 1 << 30, &purge)).is_empty());
     }
 
     #[test]
@@ -172,8 +207,10 @@ mod tests {
             files: Some(8),
             ..Default::default()
         };
-        assert!(l.check_preflight(&plan(8), None).is_empty());
-        assert_eq!(l.check_preflight(&plan(9), None).len(), 1);
+        let p8 = plan(8);
+        let p9 = plan(9);
+        assert!(l.check_preflight(pf(&p8)).is_empty());
+        assert_eq!(l.check_preflight(pf(&p9)).len(), 1);
     }
 
     #[test]
@@ -182,8 +219,10 @@ mod tests {
             files: Some(0),
             ..Default::default()
         };
-        assert_eq!(l.check_preflight(&plan(0), None).len(), 0);
-        let hits = l.check_preflight(&plan(1), None);
+        let p0 = plan(0);
+        let p1 = plan(1);
+        assert_eq!(l.check_preflight(pf(&p0)).len(), 0);
+        let hits = l.check_preflight(pf(&p1));
         assert_eq!(hits[0].what, "--max-files");
         assert_eq!((hits[0].actual, hits[0].limit), (1, 0));
     }
@@ -195,9 +234,25 @@ mod tests {
             delete_bytes: Some(10),
             ..Default::default()
         };
-        assert!(l.check_preflight(&plan(1), None).is_empty());
-        assert_eq!(l.check_preflight(&plan(1), Some(&purge(11))).len(), 1);
-        assert!(l.check_preflight(&plan(1), Some(&purge(10))).is_empty());
+        let p = plan(1);
+        assert!(l.check_preflight(pf(&p)).is_empty());
+        assert_eq!(l.check_preflight(pf_full(&p, 0, &purge(11))).len(), 1);
+        assert!(l.check_preflight(pf_full(&p, 0, &purge(10))).is_empty());
+    }
+
+    #[test]
+    fn download_bytes_uses_the_estimate_it_was_given() {
+        // The estimate arrives pre-computed from the local reuse map, so the
+        // ceiling, the PLAN line and SUMMARY all quote one number.
+        let l = Limits {
+            download_bytes: Some(100),
+            ..Default::default()
+        };
+        let p = plan(3);
+        assert!(l.check_preflight(pf_full(&p, 100, &purge(0))).is_empty());
+        let hits = l.check_preflight(pf_full(&p, 101, &purge(0)));
+        assert_eq!(hits[0].key, "plan_download_bytes");
+        assert_eq!((hits[0].actual, hits[0].limit), (101, 100));
     }
 
     #[test]
@@ -208,18 +263,8 @@ mod tests {
             delete_bytes: Some(1),
             write_bytes: None,
         };
-        let mut p = plan(5);
-        // Give one file a chunk so the estimate is non-zero.
-        p.files[0].chunks.push(crate::sophon::SophonChunk {
-            id: "c".into(),
-            uncompressed_md5: "m".into(),
-            offset: 0,
-            compressed_size: 7,
-            uncompressed_size: 7,
-            unknown: 0,
-            compressed_md5: String::new(),
-        });
-        let hits = l.check_preflight(&p, Some(&purge(9)));
+        let p = plan(5);
+        let hits = l.check_preflight(pf_full(&p, 7, &purge(9)));
         let names: Vec<&str> = hits.iter().map(|h| h.what).collect();
         assert_eq!(
             names,

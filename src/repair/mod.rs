@@ -170,11 +170,26 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // Filter → assert → work, in that order (docs/04 §4.1). Checking the
     // ceilings *after* the scope filter is what makes them usable at all:
     // before filtering, `--max-files 8` would refuse on every real install.
+    //
+    // The download estimate is `Σ compressed_size` over the chunks the local
+    // reuse map cannot supply. It is exactly `gircap`'s `patch_fetch` formula,
+    // and because capture invariant A6 says `len(blob) == compressed_size` it is
+    // the same quantity the runner counts — but it is a **lower bound, not a
+    // promise**: `try_reuse_slice` falls back to a download whenever a local
+    // slice fails its MD5, so a file estimated at 0 bytes can still download its
+    // whole body. That is why the runtime hard stop exists alongside this.
+    let est_download_bytes = plan.est_download_bytes_with(&local_map);
+    if ctx.limits.download_bytes.is_some() {
+        tracing::info!("estimated download: {est_download_bytes} bytes");
+        summary.flags.plan_download_bytes = Some(est_download_bytes);
+    }
     summary.files_total = plan.files.len() as u64;
     summary.flags.limited = ctx.limits.is_active();
-    let hits = ctx
-        .limits
-        .check_preflight(&plan, purge_plan.as_ref().filter(|_| !ctx.check_only));
+    let hits = ctx.limits.check_preflight(scope::Preflight {
+        plan: &plan,
+        est_download_bytes,
+        purge: purge_plan.as_ref().filter(|_| !ctx.check_only),
+    });
     if !hits.is_empty() {
         for hit in &hits {
             tracing::error!("limit exceeded: {hit}");
@@ -224,6 +239,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     }
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
+    summary.set_download_limit(ctx.limits.download_bytes);
     summary = file::repair_all(
         http,
         game_dir.clone(),
@@ -234,6 +250,19 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.dry_run,
     )
     .await;
+    // A runtime hard stop is the one place the run writes *some* of what it was
+    // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3
+    // resume-by-length makes the next run resume rather than restart — but it is
+    // state, so `SUMMARY` says so rather than leaving it to be discovered.
+    if summary.download_stopped() {
+        tracing::error!(
+            "stopped after {} downloaded bytes: --max-download-bytes is a hard stop; \
+             *_tmp files left in place are resumed by the next run",
+            summary.download_bytes.load(Ordering::Relaxed)
+        );
+        summary.flags.stopped = Some("bytes");
+        return Ok((summary, 5));
+    }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
         return Ok((summary, 3));
     }

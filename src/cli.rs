@@ -74,6 +74,14 @@ pub struct Args {
     #[arg(long, value_name = "N")]
     pub max_delete_bytes: Option<u64>,
 
+    /// Refuse the run (exit 5) if the plan's estimated chunk downloads exceed N
+    /// bytes, and hard-stop mid-flight if reuse falls back to more than the
+    /// estimate predicted. The estimate counts only what the local chunk map
+    /// cannot supply, so a ceiling set to the estimate still stops a run whose
+    /// reuse path breaks. Does not bound metadata or manifest traffic.
+    #[arg(long, value_name = "N")]
+    pub max_download_bytes: Option<u64>,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -113,6 +121,7 @@ impl Args {
             limits: Limits {
                 files: self.max_files,
                 delete_bytes: self.max_delete_bytes,
+                download_bytes: self.max_download_bytes,
                 ..Default::default()
             },
             jobs: self.io_threads,

@@ -160,6 +160,55 @@ unreachable server spends ~10 s per call in pure sleep before it reports
 `exit 2`. Measured: a `GIRPR_HYP_BASE` pointed at a dead port takes ~25 s to
 return. `docs/02` does not mention this retry loop.
 
+### M4 — `--max-download-bytes`
+
+Two mechanisms, because only one of them enforces.
+
+**Pre-flight.** `RepairPlan::est_download_bytes_with(&local_map)` —
+`Σ compressed_size` over the chunks the local reuse map cannot supply — is
+computed once in `repair::run` and handed to the ceiling predicate, so the
+number the limit is checked against, the number `PLAN` reports (M5) and the
+number `SUMMARY plan_download_bytes` reports are the same figure by
+construction. `Preflight` (a small struct, not three positional args) carries it.
+
+**Runtime.** `scope/ledger.rs` adds `Summary::reserve_download_bytes(n)`: a
+compare-and-swap that adds `n` to the live `download_bytes` **only** if the
+result stays under the ceiling. `write_downloaded_chunk` reserves the manifest's
+`compressed_size` *before* the fetch.
+
+Two refinements over the milestone's sketch, both to make the stop exact rather
+than approximate:
+
+- **Reserve before fetch, via CAS.** A check-then-add under `--io-threads N`
+  overshoots by up to N-1 chunks; `--max-download-bytes` is a ceiling, not a
+  guideline. Reserving first means the total never exceeds the limit at all. An
+  8-thread × 800-reservation race against a 1000-byte ceiling is a unit test.
+- **Fold the real length back in.** The reservation is `compressed_size`; the
+  counter is incremented with `blob.len()`. Capture invariant A6 says they are
+  equal, but `adjust_download_bytes(actual - reserved)` makes
+  `SUMMARY download_bytes` exact *by construction* rather than by assumption —
+  which is what `gircap`'s `download_bytes == patchmaps/<id>.json →
+  totals.download_bytes` assertion is written against. Consequence:
+  `download_bytes` moved from a per-file `fetch_add` (after the loop) to a
+  per-chunk one (inside it), because the hard stop has to read it mid-flight.
+  The final total is unchanged.
+
+`Repaired::Stopped` is the new outcome: **not** a failure (not counted in
+`files_failed`, not retried) and **not** a repair. `repair::run` turns it into
+`SUMMARY stopped=bytes` + exit `5`.
+
+`Summary`'s `Default` is hand-written for the first time, because the ceiling
+sentinel is `u64::MAX` and a derived `Default` would start every run at a
+ceiling of **zero** — refusing the first byte. Caught by the ledger unit tests.
+
+The acceptance case that proves the estimate is not trusted alone is
+`a_broken_reuse_path_still_trips_the_runtime_stop`: `config.ini` at the latest
+tag → local build loads → the reuse map covers both of foo's chunks → the
+estimate is **0** → the run is let through with `--max-download-bytes 1`; then
+foo's bytes are corrupted in *both* halves, every local slice fails its MD5, and
+the first download reservation trips the ceiling. `SUMMARY plan_download_bytes=0`
+and `stopped=bytes` on the same line is the whole argument in one output.
+
 ---
 
 ## 1. What this plan does not touch

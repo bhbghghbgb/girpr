@@ -46,6 +46,11 @@ pub enum Repaired {
     Repaired(ChunkStats),
     /// `--dry-run`: the file would be repaired, nothing was written.
     DryRun,
+    /// A runtime hard stop fired (docs/04 §4.3). The file was **not** failed and
+    /// **not** repaired: its `*_tmp` is left in place and the next run resumes
+    /// from it (S3), which is what makes an aborted run a smaller run rather
+    /// than a broken one. Not counted in any counter.
+    Stopped,
 }
 
 /// Per-file chunk accounting (logged on success, aggregated into the run).
@@ -110,13 +115,13 @@ pub async fn repair_all(
                     Ok(Repaired::Skipped) => {
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(Repaired::Repaired(stats)) => {
+                    Ok(Repaired::Repaired(_stats)) => {
+                        // `download_bytes` is already live: it is incremented
+                        // per chunk inside `write_downloaded_chunk`, because the
+                        // runtime hard stop has to read it mid-flight.
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
-                        ctx.summary
-                            .download_bytes
-                            .fetch_add(stats.download_bytes, Ordering::Relaxed);
                     }
-                    Ok(Repaired::DryRun) => {}
+                    Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
                         ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
                         tracing::error!("repair failed: {e:#}");
@@ -150,6 +155,11 @@ struct FileCtx {
 
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
+    // A runtime hard stop already fired: drop out without touching the file.
+    // Its `*_tmp` (if any) stays, and the next run resumes from it.
+    if ctx.summary.download_stopped() {
+        return Ok(Repaired::Stopped);
+    }
     let file = &ctx.plan.files[idx];
     let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
     if let Some(parent) = final_path.parent()
@@ -194,6 +204,12 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     for attempt in 1..=MAX_ATTEMPTS {
         match repair_attempt(ctx, file, &prefix, &tmp_path).await {
             Ok(stats) => return Ok(Repaired::Repaired(stats)),
+            // The ceiling, not the file: this must not be counted as a failure
+            // and must not be retried (docs/04 §3 B2).
+            Err(_e) if ctx.summary.download_stopped() => {
+                tracing::warn!(file = %file.rel, "download-bytes ceiling reached -> stopped");
+                return Ok(Repaired::Stopped);
+            }
             Err(e) => {
                 tracing::warn!(attempt, "attempt failed: {e:#}");
                 if attempt == MAX_ATTEMPTS {
@@ -345,10 +361,29 @@ async fn write_downloaded_chunk(
     out: &mut File,
     stats: &mut ChunkStats,
 ) -> Result<()> {
+    // Reserve before fetching, not after: the pre-flight estimate is a *lower
+    // bound* (a reuse slice whose MD5 fails falls back to a download), so this
+    // compare-and-swap is what actually bounds the run. Reserving the manifest's
+    // `compressed_size` keeps the stop exact under `--io-threads N` instead of
+    // overshooting by up to N-1 chunks, and the real `blob.len()` is folded back
+    // in below so `SUMMARY download_bytes` stays the true figure.
+    let reserved = c.compressed_size.max(0) as u64;
+    if !ctx.summary.reserve_download_bytes(reserved) {
+        ctx.summary.stop_downloads();
+        tracing::warn!(
+            limit = ?ctx.summary.max_download_bytes(),
+            have = ctx.summary.download_bytes.load(Ordering::Relaxed),
+            "download-bytes ceiling reached -> stopping the run"
+        );
+        anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
+    }
     let blob = sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id)
         .await
         .with_context(|| format!("chunk {}", c.id))?;
-    stats.download_bytes += blob.len() as u64;
+    let actual = blob.len() as u64;
+    ctx.summary
+        .adjust_download_bytes(actual as i64 - reserved as i64);
+    stats.download_bytes += actual;
     let decoded = zstd::stream::decode_all(std::io::Cursor::new(&blob))
         .with_context(|| format!("zstd chunk {}", c.id))?;
     tracing::trace!(chunk = %c.id, compressed_bytes = blob.len(), decompressed_bytes = decoded.len(), "chunk decoded");

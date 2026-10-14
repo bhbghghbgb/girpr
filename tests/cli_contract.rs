@@ -118,6 +118,14 @@ fn argument_errors_exit_one_not_two() {
             "--max-delete-bytes",
             "1.5",
         ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--max-download-bytes",
+            "abc",
+        ],
     ];
     for args in cases {
         let (code, _, stderr) = run(&args);
@@ -147,6 +155,7 @@ fn help_text_lists_every_documented_flag() {
         "--exclude",
         "--max-files",
         "--max-delete-bytes",
+        "--max-download-bytes",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
     }
@@ -173,9 +182,12 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
         "0",
         "--max-delete-bytes",
         "0",
+        "--max-download-bytes",
+        "0",
     ]);
     let ctx = args.into_ctx().expect("0 is a ceiling, not a usage error");
     assert_eq!(ctx.limits.files, Some(0));
     assert_eq!(ctx.limits.delete_bytes, Some(0));
+    assert_eq!(ctx.limits.download_bytes, Some(0));
     assert!(ctx.limits.is_active());
 }

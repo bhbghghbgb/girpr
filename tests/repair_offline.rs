@@ -975,6 +975,152 @@ async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
 }
 
 #[tokio::test]
+async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary() {
+    // With no local build the reuse map is empty, so the estimate is every
+    // chunk's compressed size — the same quantity the runner would download.
+    let fx = build_fixture();
+    let est = fx.chunk_store.values().map(|b| b.len() as u64).sum::<u64>();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_dl_refuse");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    // One byte under the estimate → refuse before fetching anything.
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.limits.download_bytes = Some(est - 1);
+    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    assert_eq!(code, 5);
+    assert_eq!(
+        summary.flags.plan_download_bytes,
+        Some(est),
+        "SUMMARY reports the estimate it refused on"
+    );
+    assert!(mock.chunk_hits().is_empty(), "nothing may be fetched");
+    assert!(!dir.join("game").join("foo.dat_tmp").exists(), "no _tmp");
+
+    // Exactly the estimate → the boundary passes and the whole thing runs.
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.limits.download_bytes = Some(est);
+    let (summary, code) = repair::run(ctx).await.expect("the boundary passes");
+    assert_eq!(code, 0);
+    assert_eq!(summary.download_bytes.load(Ordering::Relaxed), est);
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(
+        line.contains(&format!("plan_download_bytes={est}")),
+        "{line}"
+    );
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
+    // The case that justifies B2 having *two* mechanisms. `config.ini` already
+    // at the latest tag → the local build loads → the reuse map covers both of
+    // foo's chunks → the pre-flight estimate is 0 and the run is allowed
+    // through. Then foo's bytes are corrupted in *both* halves, so every local
+    // slice fails its MD5 and every chunk falls back to a download. The
+    // estimate was wrong; the runtime reservation is what stops the run.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_dl_runtime");
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=9.9.9-test\n",
+    )
+    .unwrap();
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data); // bar intact
+    let mut all_bad = fx2.files[0].data.clone();
+    for b in all_bad.iter_mut() {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &all_bad);
+
+    let limit = 1u64; // any positive value: the estimate is 0, so it passes
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.limits.download_bytes = Some(limit);
+    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    assert_eq!(code, 5, "the runtime hard stop is also exit 5");
+    assert_eq!(
+        summary.flags.stopped,
+        Some("bytes"),
+        "the stop must be distinguishable from a refusal"
+    );
+    assert_eq!(
+        summary.flags.plan_download_bytes,
+        Some(0),
+        "the estimate really was zero — that is the point"
+    );
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "not a failure"
+    );
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        summary.files_skipped.load(Ordering::Relaxed),
+        1,
+        "bar was intact"
+    );
+    assert!(
+        summary.download_bytes.load(Ordering::Relaxed) <= limit,
+        "the ceiling must not be overshot"
+    );
+    // The stopped file keeps its `_tmp`; S3 means the next run resumes it.
+    assert_ne!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "a stopped file is not promoted"
+    );
+
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("stopped=bytes"), "{line}");
+    assert!(line.contains("limited=1"), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
+    // docs/04 §7: every new key is emitted only when its flag is active, so an
+    // unflagged run stays byte-identical to today's.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("summary_absent");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let (summary, code) = repair::run(ctx_for(dir.clone(), &mock, 2))
+        .await
+        .expect("plain run");
+    assert_eq!(code, 0);
+    for plane in [false, true] {
+        let line = girpr::report::format_summary_line(&summary, code, plane);
+        for k in [
+            "limited",
+            "scoped",
+            "config_bumped",
+            "plan_files",
+            "plan_download_bytes",
+            "write_bytes",
+            "stopped",
+        ] {
+            assert!(
+                !line.contains(k),
+                "{k} must be absent when unflagged: {line}"
+            );
+        }
+    }
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn deprecated_files_call_carries_the_per_launcher_channel() {
     // `getGameDeprecatedFileConfigs` is the one call that needs
     // channel/sub_channel, and the values are per launcher: bilibili is 14/0,
