@@ -18,9 +18,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::sophon::{SophonChunk, SophonChunkFile};
 
-use super::scope::PathScope;
-
 pub use purge::{PurgeCandidate, PurgePlan};
+
+use super::manifest::LocalChunkMap;
+use super::scope::PathScope;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 pub struct PlannedFile {
@@ -43,6 +44,55 @@ impl RepairPlan {
     pub fn expected_paths(&self) -> HashSet<String> {
         self.files.iter().map(|f| f.rel.clone()).collect()
     }
+
+    /// `Σ compressed_size` over every chunk of every planned file whose
+    /// `(uncompressed_md5, uncompressed_size)` is **not** available locally.
+    ///
+    /// This is a **lower bound, not a promise**: `try_reuse_slice` falls back
+    /// to a download whenever a local slice fails its MD5, so a file estimated
+    /// at 0 bytes can still download its whole body. It is what
+    /// `--max-download-bytes` refuses on, and the runtime hard stop is what
+    /// actually enforces — see docs/04 §3 B2.
+    ///
+    /// Called with no local map (the plan does not carry one) it degenerates to
+    /// "every chunk downloads", which is the honest worst case and is what
+    /// `--print-plan` reports for a run with no reusable local build.
+    pub fn est_download_bytes(&self) -> u64 {
+        self.files
+            .iter()
+            .map(|f| {
+                f.chunks
+                    .iter()
+                    .map(|c| c.compressed_size.max(0) as u64)
+                    .sum::<u64>()
+            })
+            .sum()
+    }
+
+    /// Per-file half of [`Self::est_download_bytes`], against a local reuse map.
+    ///
+    /// `est_download_bytes(rel) = Σ c.compressed_size for c in plan[rel].chunks
+    /// where (c.uncompressed_md5, c.uncompressed_size) ∉ local_map[rel]`.
+    pub fn est_download_bytes_with(&self, local_map: &LocalChunkMap) -> u64 {
+        self.files
+            .iter()
+            .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
+            .sum()
+    }
+}
+
+/// Per-file download estimate against the local reuse map (`super::manifest::LocalChunkMap`).
+pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i64, i64)>>) -> u64 {
+    file.chunks
+        .iter()
+        .filter(|c| match reuse {
+            Some(entries) => !entries.iter().any(|(md5, sz, _)| {
+                md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
+            }),
+            None => true,
+        })
+        .map(|c| c.compressed_size.max(0) as u64)
+        .sum()
 }
 
 /// Build sorted, deduped, blacklist-filtered, scope-filtered plan.

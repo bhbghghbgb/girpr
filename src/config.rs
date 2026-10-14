@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Biz;
-use crate::repair::scope::PathScope;
+use crate::repair::scope::{Limits, PathScope};
 
 /// Typed failure carrying the process exit code.
 /// `1` usage/config, `2` metadata/network, `3` write/verify.
@@ -70,6 +70,10 @@ pub struct RunCtx {
     /// *open* scope admits every path, which makes every `is_active()` gate
     /// downstream a no-op, so an unflagged run is unaffected.
     pub path_scope: PathScope,
+    /// Manually requested resource ceilings (docs/04 Group B). All `None` in an
+    /// unflagged run, which is what makes every refusal a no-op and keeps
+    /// `SUMMARY limited=1` absent.
+    pub limits: Limits,
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,

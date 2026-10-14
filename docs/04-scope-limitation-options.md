@@ -772,18 +772,23 @@ Each is cheap to reverse before anything is built.
    estimate is a lower bound because reuse can fall back to a download, so
    refusing on it alone would not actually bound anything.
 
-### 7.3 Still open
+### 7.3 Closed
 
-1. **Should a refusal still emit `SUMMARY`?** Recommendation: yes, plus the
-   `PLAN`-derived keys, so a parser gets one uniform tail for every exit path. But
-   `3`-style fatal errors today emit `FATAL` and no `SUMMARY`, and a refusal is
-   arguably closer to those than to a completed run. Either is defensible; this
-   one changes the published stdout contract, so it should be chosen rather than
-   defaulted.
-2. **`--plan-out` file format.** JSON is proposed. It could equally be the
-   `key=value` shape the rest of the data plane uses, which would keep one
-   vocabulary instead of two. The `girsync --output json` precedent argues for
-   JSON; `girpr`'s single-vocabulary argument argues the other way.
+**1. A refusal does emit `SUMMARY`** (decided in M3). `repair::run` *returns*
+`(summary, 5)` rather than raising `RunFailure`, so a refusal lands on exactly
+the same tail as `0`, `3` and `4` — one uniform ending for every exit path, and
+the `limited=1` / `plan_files=…` / `purge_bytes` keys a parser needs to see why.
+The diagnosis itself goes to stderr and the log file (`ERROR limit exceeded:
+--max-files exceeded: plan_files=3000 limit=8 …`), not to stdout: `SUMMARY`
+carries counters and flags, not prose. The one thing a refusal has and a normal
+run does not is that every value in it is `0` except the plan-derived ones,
+which is itself the proof that nothing was written.
+
+**2. `--plan-out` is JSON.** `girsync --output json` and the whole artifact
+side of this repo (`gircap`'s bundle, `patchmaps/<id>.json`) are JSON, and a
+parser that has to read `SUMMARY` *and* the plan wants one `serde_json` reader,
+not two vocabularies. The `key=value` plane stays single-purpose: one line per
+fact, greppable, no nesting.
 
 ---
 

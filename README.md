@@ -40,13 +40,14 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `PlannedFile` |
+| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile` |
 | `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
-| `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope` |
+| `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
+| `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `LimitHit::describe` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
@@ -57,14 +58,16 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 
 ```mermaid
 flowchart TD
-    A["parse Args<br/>cli.rs: validate io_threads, audio → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
+    A["parse Args<br/>cli.rs: validate io_threads, audio, globs, ceilings → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
     B -->|FILE mode| X1["exit 1 (usage)"]
     B -->|retcode/http fail| X2["exit 2 (metadata)"]
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
     D --> E["plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ deprecated list"]
-    E --> F{"purge-before?"}
+    E --> E2{"any ceiling requested?"}
+    E2 --> F{"purge-before?"}
+    E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
     F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
     F -->|no| H{"check-only?"}
     G --> H
@@ -98,12 +101,22 @@ flowchart TD
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
   not in place); `SUMMARY config_bumped=0` says so. `--include` matching zero
   planned files and `--audio` under a scope are both exit `1`.
+- resource ceilings are **enforcement bounds, not selectors**: a run that would
+  exceed one refuses (exit `5`) *before doing any work* — nothing is written,
+  no directory created, no `_tmp` opened, no file deleted. They never trim the
+  work list; under `--include` they are a *check on* the selection, which is why
+  the two flags are not redundant. `--max-files N` with exactly N planned files
+  passes (`> N`, not `>= N`).
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
-  `4` check-only found damage. Every argument-level failure (unknown flag, bad
-  enum value, `--io-threads 0`, bad `--audio`, bad `--include` glob) is `1` —
-  clap's default `2` is remapped so it cannot collide with "metadata/network".
-  `--help` is `0`.
+  `4` check-only found damage · `5` a manually requested enforcement limit was
+  exceeded (nothing was written; `SUMMARY` is still emitted with `limited=1`).
+  `5` is deliberately not `1`: the API has to be fetched first, so whether a
+  limit trips depends on the server's answer — `--max-files 0` is not an error
+  against an empty plan and is on a 3000-file one. Every argument-level failure
+  (unknown flag, bad enum value, `--io-threads 0`, bad `--audio`, bad
+  `--include` glob, non-numeric `--max-files`) is `1` — clap's default `2` is
+  remapped so it cannot collide with "metadata/network". `--help` is `0`.
 - `getGameConfigs.default_download_mode` must be `DOWNLOAD_MODE_CHUNK`; anything
   else (including `DOWNLOAD_MODE_FILE` / `DOWNLOAD_MODE_LDIFF`, which need the
   7z/hdiff paths v1 lacks) exits `1` instead of failing later at `getBuild`.
@@ -152,6 +165,8 @@ cargo build --release
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
+| `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
+| `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Counted once, over both purge passes; out-of-scope paths are never candidates |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |

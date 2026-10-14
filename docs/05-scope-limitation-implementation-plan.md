@@ -116,6 +116,50 @@ The A1 guard-3 warn fires once per `plan_purge` call, so a run with both
 `--purge-before` and `--purge-after` says it twice — one line per purge
 decision, which is what actually happened.
 
+### M3 — `--max-files` and `--max-delete-bytes`
+
+- `scope/limits.rs`: `Limits { files, download_bytes, write_bytes, delete_bytes }`
+  (all `Option`), `Limits::check_preflight(plan, purge) -> Vec<LimitHit>`, and
+  `LimitHit::describe()`. All three tripped ceilings are reported at once, not
+  just the first — a user who set both file and byte limits should not have to
+  re-run to discover the second one.
+- The purge plan is now built in the **plan** phase (4.6), unconditionally
+  whenever a purge flag is set, and reused by `--purge-before`. That is what
+  makes `--max-delete-bytes` answerable at all, and it removes the duplicated
+  walk. `--purge-after` still re-plans after the repair, because it must see the
+  `*_tmp` files the repair creates.
+- Placement: `assert` sits between the plan and the execution phase, after the
+  scope filter. Nothing is written when it fires — no `game_dir`, no `_tmp`, no
+  delete, no `config.ini`.
+
+**Decisions taken here that the plan had left open:**
+
+- **A refusal returns `Ok((summary, 5))`, it does not raise `RunFailure`.**
+  `RunFailure` means "the run died before it could report"; a refusal is a
+  *reported* outcome and needs the same uniform `SUMMARY` tail as `0`/`3`/`4`.
+  This closes docs/04 §7.3 Q1 (see the edit there). Consequently no
+  `RunFailure::limit` exists — exit `5` has exactly one path through the code.
+- **`--max-delete-bytes` counts the up-front plan.** That is the union of both
+  purge passes for everything that exists when the run starts. A `*_tmp` the
+  repair creates mid-run is *not* counted: it did not exist at plan time, and
+  `--max-write-bytes` (M6) is the flag that bounds it.
+- **`check_preflight` takes `purge: Option<&PurgePlan>` and treats `None` as
+  zero.** In `--check-only` no purge runs, so no purge plan is consulted and any
+  delete ceiling trivially holds; in `repair::run` the caller passes
+  `purge_plan.as_ref().filter(|_| !ctx.check_only)` to say so explicitly.
+
+Deviation: the "exit `5` as its own assertion" case lives in
+`tests/repair_offline.rs`, not `tests/cli_contract.rs`, because reaching a
+refusal needs the API. `cli_contract.rs` instead pins that `--max-files 0`
+parses into `RunCtx.limits` (`exit_five_is_a_refusal_not_an_argument_error`)
+and that a non-numeric value is still exit `1`.
+
+Incidental finding, for M6's `--fail-fast`: the 5-attempt linear-backoff retry
+in `hyp::get_node` sleeps 1+2+3+4 s per API call, so **any** run against an
+unreachable server spends ~10 s per call in pure sleep before it reports
+`exit 2`. Measured: a `GIRPR_HYP_BASE` pointed at a dead port takes ~25 s to
+return. `docs/02` does not mention this retry loop.
+
 ---
 
 ## 1. What this plan does not touch

@@ -152,6 +152,41 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // the rest of the plan. Still best-effort (the list is advisory).
     let deprecated = fetch_deprecated(&meta.hyp).await;
 
+    // 4.6 the purge candidates, planned up front and unconditionally whenever a
+    // purge flag is set — for the same reason: "how much would this delete?" is
+    // only answerable before the first delete. `game_dir` may not exist yet;
+    // planning a missing directory yields an empty plan, which is what planning
+    // the freshly-created empty directory would have yielded too.
+    //
+    // This is the union both purge passes would act on as of now. A `*_tmp` the
+    // repair creates mid-run is deliberately not counted: it did not exist at
+    // plan time, it is purged after the repair by a re-plan, and the write
+    // ceiling is the flag that bounds it.
+    let purge_plan = (ctx.purge_before || ctx.purge_after)
+        .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
+
+    // === assert: the ceilings, before anything is mutated ===
+    //
+    // Filter → assert → work, in that order (docs/04 §4.1). Checking the
+    // ceilings *after* the scope filter is what makes them usable at all:
+    // before filtering, `--max-files 8` would refuse on every real install.
+    summary.files_total = plan.files.len() as u64;
+    summary.flags.limited = ctx.limits.is_active();
+    let hits = ctx
+        .limits
+        .check_preflight(&plan, purge_plan.as_ref().filter(|_| !ctx.check_only));
+    if !hits.is_empty() {
+        for hit in &hits {
+            tracing::error!("limit exceeded: {hit}");
+        }
+        // Exit `5`, returned rather than raised: it is "the run failed", not
+        // "the run was misconfigured", and routing it through the normal return
+        // gives every exit path one uniform SUMMARY tail (docs/04 §7.3.1).
+        // Nothing has been written at this point — no directory created, no
+        // `_tmp` opened, no file deleted, no `config.ini` touched.
+        return Ok((summary, 5));
+    }
+
     // === execution phase: everything below may touch the disk ===
 
     // 5. prepare `game_dir` (create when missing, unless read-only). Deferred
@@ -165,15 +200,16 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
 
-    // 5.2 files-cleanup before: same Collapse-style cleanup as purge-after,
-    // planned then executed here to free space for the repair itself. Skipped
-    // entirely in `--check-only` (verification reports damage; it must not
-    // delete). In `--dry-run` it runs in log-only mode.
+    // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
+    // space for the repair itself. Skipped entirely in `--check-only`
+    // (verification reports damage; it must not delete). In `--dry-run` it runs
+    // in log-only mode.
     let mut purge_logged = false;
-    if ctx.purge_before && !ctx.check_only {
-        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope);
-        let bytes =
-            plan::purge::apply_purge(&purge_plan, ctx.dry_run).map_err(RunFailure::write)?;
+    if ctx.purge_before
+        && !ctx.check_only
+        && let Some(pp) = purge_plan.as_ref()
+    {
+        let bytes = plan::purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
@@ -181,7 +217,6 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     }
 
     // 5.5 check-only: verify only, then return. Nothing is written.
-    summary.files_total = plan.files.len() as u64;
     if ctx.check_only {
         let bad = check::verify_plan(&game_dir, &plan, &summary);
         summary.files_failed.store(bad, Ordering::Relaxed);
@@ -208,13 +243,16 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // invariant obvious).
     if !readonly {
         post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
-    } else if ctx.dry_run && ctx.purge_after && !purge_logged {
+    } else if ctx.dry_run
+        && ctx.purge_after
+        && !purge_logged
+        && let Some(pp) = purge_plan.as_ref()
+    {
         // Dry-run logging only: list what the files-cleanup would delete (writes
         // nothing; the byte count stays 0 by design). Skipped when the
         // purge-before pass above already listed the same candidates, so
         // `--purge-before --purge-after --dry-run` does not log each file twice.
-        let purge_plan = plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope);
-        plan::purge::apply_purge(&purge_plan, true).map_err(RunFailure::write)?;
+        plan::purge::apply_purge(pp, true).map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))

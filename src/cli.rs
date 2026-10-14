@@ -14,7 +14,7 @@ use clap::Parser;
 
 use crate::Biz;
 use crate::config::RunCtx;
-use crate::repair::scope::PathScope;
+use crate::repair::scope::{Limits, PathScope};
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -62,6 +62,18 @@ pub struct Args {
     #[arg(long = "exclude", value_name = "GLOB")]
     pub exclude: Vec<String>,
 
+    /// Refuse the run (exit 5) if the plan touches more than N files. `0` is a
+    /// valid ceiling, not a usage error. Checked *after* `--include`, so it
+    /// means "the files the scope selected".
+    #[arg(long, value_name = "N")]
+    pub max_files: Option<u64>,
+
+    /// Refuse the run (exit 5) if the files-cleanup would delete more than N
+    /// bytes. Counted once over both purge passes; out-of-scope paths are not
+    /// candidates and so never count.
+    #[arg(long, value_name = "N")]
+    pub max_delete_bytes: Option<u64>,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -98,6 +110,11 @@ impl Args {
             // scan file).
             audio_explicit: !self.audio.is_empty(),
             path_scope,
+            limits: Limits {
+                files: self.max_files,
+                delete_bytes: self.max_delete_bytes,
+                ..Default::default()
+            },
             jobs: self.io_threads,
             check_only: self.check_only,
             dry_run: self.dry_run,

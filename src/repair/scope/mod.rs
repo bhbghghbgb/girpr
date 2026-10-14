@@ -17,9 +17,11 @@
 //! leave the purge with a *narrower* keep-set than an unfiltered run, which is
 //! the worst possible outcome.
 //!
-//! M1 lands [`filter`] and its semantics. Wiring, the ceilings and the report
-//! arrive in the milestones after it.
+//! M1 lands [`filter`] and its semantics. M2 wires it through the pipeline;
+//! the ceilings and the report land with M3+.
 
 pub mod filter;
+pub mod limits;
 
 pub use filter::PathScope;
+pub use limits::{LimitHit, Limits};

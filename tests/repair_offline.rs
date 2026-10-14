@@ -21,7 +21,7 @@
 mod common;
 
 use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
-use girpr::repair::scope::PathScope;
+use girpr::repair::scope::{Limits, PathScope};
 use girpr::{Biz, RunCtx, repair};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -44,6 +44,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         audio: HashSet::new(),
         audio_explicit: false,
         path_scope: PathScope::default(),
+        limits: Limits::default(),
         jobs,
         check_only: false,
         dry_run: false,
@@ -712,6 +713,262 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
         "out-of-scope deprecated file kept"
     );
     assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 50);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ---------------------------------------------------------------------------
+// resource ceilings (docs/04 Group B)
+// ---------------------------------------------------------------------------
+
+/// A game dir that does not exist yet, pointed at by `parent/missing`.
+fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
+    parent.join("not-created-yet")
+}
+
+#[tokio::test]
+async fn max_files_refuses_before_touching_anything() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let parent = temp_dir("max_files");
+    let dir = parent.join("game");
+    let fx2 = build_fixture();
+    // bar corrupt (would be repaired), foo missing (would be downloaded).
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.limits.files = Some(1); // the plan is 2 files
+    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    assert_eq!(code, 5, "a tripped ceiling is exit 5");
+    assert!(summary.flags.limited);
+    assert_eq!(summary.files_total, 2, "plan_files is still reported");
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        0,
+        "nothing was repaired"
+    );
+    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
+    assert!(
+        mock.chunk_hits().is_empty(),
+        "not one chunk may be fetched on a refusal"
+    );
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
+        b"not the game data",
+        "the damaged file is untouched"
+    );
+    assert!(read_game_file(&dir, &fx2.files[0].rel).is_none());
+
+    // The same refusal against a game dir that does not exist yet: not even
+    // the directory may be created (M0 step 3 + M3's assert placement).
+    let missing = absent_game_dir(&parent);
+    let mut ctx = ctx_for(missing.clone(), &mock, 1);
+    ctx.limits.files = Some(1);
+    let (_, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    assert_eq!(code, 5);
+    assert!(
+        !missing.exists(),
+        "a refusal must not even create game_dir (M0 step 3 + M3)"
+    );
+
+    mock.stop();
+    std::fs::remove_dir_all(&parent).ok();
+}
+
+#[tokio::test]
+async fn max_files_at_the_boundary_does_not_refuse() {
+    // "> N", not ">= N": a run that exactly fits must be allowed through.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_files_edge");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.limits.files = Some(2); // == plan.files.len()
+    let (summary, code) = repair::run(ctx).await.expect("the boundary must pass");
+    assert_eq!(code, 0);
+    assert!(
+        summary.flags.limited,
+        "the flag was passed, so it is reported"
+    );
+    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn max_files_zero_is_a_ceiling_not_a_usage_error() {
+    // docs/04 §4.4: `0` is a perfectly meaningful ceiling. Only an unparseable
+    // value is exit 1, and that is clap's job.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_files_zero");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.limits.files = Some(0);
+    let (_, code) = repair::run(ctx).await.expect("0 is a ceiling");
+    assert_eq!(code, 5, "0 files allowed, 2 planned -> refuse");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn max_files_is_checked_after_the_scope_filter() {
+    // The pairing that gives the flag its purpose: `--include` selects,
+    // `--max-files` verifies the selection.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_files_scoped");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    ctx.limits.files = Some(1); // the *filtered* plan is 1 file
+    let (summary, code) = repair::run(ctx).await.expect("scoped boundary passes");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_total, 1);
+    assert!(summary.flags.scoped && summary.flags.limited);
+
+    // Same scope, ceiling of 0: now it refuses.
+    let dir2 = temp_dir("max_files_scoped_refuse");
+    let mut ctx2 = ctx_for(dir2.clone(), &mock, 1);
+    ctx2.path_scope = scope(&["game/foo.dat"], &[]);
+    ctx2.limits.files = Some(0);
+    let (_, code2) = repair::run(ctx2).await.expect("refusal is not an error");
+    assert_eq!(code2, 5);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&dir2).ok();
+}
+
+#[tokio::test]
+async fn max_delete_bytes_refuses_and_deletes_nothing() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_delete");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    // Two orphans totalling 170 bytes, which no purge flag would touch yet.
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
+    write_game_file(&dir, "other/stale.dat", &[0x5Bu8; 70]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.purge_after = true;
+    ctx.limits.delete_bytes = Some(100);
+    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
+    assert_eq!(code, 5, "170 > 100");
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "a refused purge deletes nothing"
+    );
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_some(), "kept");
+    assert!(read_game_file(&dir, "other/stale.dat").is_some(), "kept");
+
+    // Exactly at the ceiling: the purge runs.
+    let mut ctx2 = ctx_for(dir.clone(), &mock, 2);
+    ctx2.purge_after = true;
+    ctx2.limits.delete_bytes = Some(170);
+    let (summary2, code2) = repair::run(ctx2).await.expect("the boundary passes");
+    assert_eq!(code2, 0);
+    assert_eq!(summary2.deleted_extra_bytes.load(Ordering::Relaxed), 170);
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn an_out_of_scope_path_never_counts_toward_the_delete_ceiling() {
+    // The scope and the ceiling are complementary, not redundant: the glob
+    // narrows what is *counted*, the ceiling bounds what is *done*.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_delete_scoped");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    // A 1 GB orphan that is deliberately out of scope.
+    write_game_file(&dir, "huge/orphan.dat", &[0x5Au8; 4096]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.path_scope = scope(&["game/foo.dat", "game/bar.dat"], &[]);
+    ctx.purge_after = true;
+    ctx.limits.delete_bytes = Some(1); // would be blown by the orphan
+    let (_, code) = repair::run(ctx).await.expect("scoped run");
+    assert_eq!(code, 0, "the out-of-scope orphan is not a candidate at all");
+    assert!(read_game_file(&dir, "huge/orphan.dat").is_some(), "kept");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_tripped_ceiling_still_emits_a_summary_tail() {
+    // docs/04 §7.3.1 (decided here): a refusal is returned, not raised, so
+    // every exit path ends with one uniform SUMMARY.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_files_summary");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.limits.files = Some(1);
+    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert_eq!(
+        line,
+        "SUMMARY total=2 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
+         exit=5 limited=1 plan_files=2"
+    );
+    assert!(!line.contains("scoped"), "no scope was passed: {line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
+    // A ceiling narrows *what is verified*; `4` (damage found) must not be
+    // masked by narrowing — but a ceiling is a different fact entirely.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("max_files_check");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, b"damaged");
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.check_only = true;
+    ctx.limits.files = Some(1);
+    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
+    assert_eq!(code, 5, "the ceiling is asked before the verification");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "nothing verified"
+    );
+
+    // Without the ceiling, the same run reports damage.
+    let mut ctx2 = ctx_for(dir.clone(), &mock, 2);
+    ctx2.check_only = true;
+    let (_, code2) = repair::run(ctx2).await.expect("check runs");
+    assert_eq!(code2, 4);
 
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();
