@@ -180,6 +180,31 @@ produces the expected winner per class; `--per-class 2` admits two and tags the
 second `over_budget` under a tight ceiling. Pure unit tests, no network.
 **Commit:** `gircap: M5 — scoring, variant classes and smallest-first budget admission`
 
+**Landed.** Three places the implementation departed from the text above, all
+recorded here because each one is a decision a later milestone inherits.
+
+1. **"score only, fetch nothing" is the whole test suite, not a flag.** There is
+   no `/dev/null` and no need for one: `tests/measured_fixture.rs` builds the
+   two decoded manifests in memory and `select` is pure arithmetic over them, so
+   the acceptance is an ordinary offline test. `capture` has no dry-run mode.
+2. **`--require-class` requires nothing by default.** §Risk already said it
+   should ("a class has no candidate → `unavailable` + reason, run still exits
+   `0`; `--require-class` turns it into exit `4`"), and the live pair proves
+   why: 7.0.0 → 7.1.0 has no `full_reuse_reordered` file, so requiring all nine
+   by default would make *every* run of it exit `4`. `unavailable` is a fact
+   about the manifests; `over_budget` is a fact about this run's flags; only a
+   class the caller named is fatal.
+3. **The frozen M4 fixture was corrected.** It could not have satisfied this
+   acceptance: `data_revision` reused its own chunk (making it
+   `full_reuse_reordered`, not `zero_reuse_single`), `09801749.blk` reused all
+   three (same class again), `zero_reuse_multi` had no candidate at all, and
+   `zero_reuse_single` was therefore never exercised. Re-modelled against the
+   §4.1 table, which also fixed its `pair()` helper returning the same diff
+   twice.
+
+The selection pool is `game` ∪ `--audio`'s codes, so a `capture` now fetches
+and diffs the audio manifests too — about 1.2 MB compressed per tag per code.
+
 ### M6 — the chunk store
 `blobs/{mod,props,chunks}.rs`. Content-addressed by chunk id; one fetch per id;
 `materialize_old` / `materialize_new` / `patch_fetch` set construction; A6 rows.

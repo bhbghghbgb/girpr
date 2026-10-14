@@ -17,15 +17,17 @@ use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
+use crate::manifest::CapturedManifest;
 use crate::report::{OutputFormat, Summary};
-use crate::{emit, exit, hyp, manifest};
+use crate::{emit, exit, hyp, manifest, select};
 use crate::manifest::diff;
 
-/// The `matching_field` whose manifests M3 captures.
+/// The `matching_field` every run scores first, and the one every later stage
+/// needs whatever class a capture lands in.
 ///
-/// Every later stage needs these regardless of which class a capture lands in,
-/// so they are fetched for both builds unconditionally. M5 widens the *selection
-/// pool* to the audio fields; it does not change which manifests exist.
+/// M5 widened the *selection pool* past this to `--audio`'s codes; it did not
+/// change which field is mandatory. Keeping it named here rather than inlined
+/// at the call site means the rule "game is never optional" has one address.
 const MANIFEST_FIELD: &str = "game";
 
 /// What a command hands back: its summary line, and the code to exit with.
@@ -178,8 +180,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("tag probe", &e))?;
     tracing::info!(probe = %probe.describe(), served = ?probe.served(), "tag probe complete");
 
-    // 6. The `game` manifests, both builds. The selection pool widens to the
-    //    audio fields in M5; M3 fetches what every later stage needs regardless.
+    // 6. The manifests, both builds, for every selected `matching_field`.
+    //    `game` first because it is the field every later stage needs regardless
+    //    of which class a capture lands in; the audio codes follow because they
+    //    exist only to widen the *selection pool*, and a voice pack must never
+    //    outrank a game file on a cost tie (see [`select`]).
     //
     //    `--no-chunk-blobs` does not skip this: a manifest is metadata, and the
     //    flag is about chunk blobs. Skipping it would leave a bundle whose
@@ -190,70 +195,137 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let new_build = captured
         .new_build()
         .map_err(|e| apierr("re-read the captured new build", &e))?;
-    let mut manifests = Vec::with_capacity(2);
-    for (tag, build) in [(&old_tag, &old_build), (&new_tag, &new_build)] {
-        let m = manifest::capture(&fetcher, build, tag, MANIFEST_FIELD)
-            .await
-            .map_err(|e| apierr(&format!("fetch the {tag} game manifest"), &e))?;
-        if !m.meta.verified.all_green() {
-            return Err(assertion(
-                &format!("verify the {tag} game manifest"),
-                &ApiError::shape(
-                    tag,
-                    format!(
-                        "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
-                        m.meta.verified.decompressed_md5_matches_checksum,
-                        m.meta.verified.checksum_matches_id_suffix
-                    ),
-                ),
-            ));
+    let fields = selection_fields(&plan);
+    // Indexed [field][0=old, 1=new], so `manifests[f][t]` is the manifest a
+    // field contributes to the diff and nothing downstream has to remember the
+    // interleaving the fetch loop used.
+    let mut manifests: Vec<Vec<CapturedManifest>> = Vec::with_capacity(fields.len());
+    for field in &fields {
+        let mut pair = Vec::with_capacity(2);
+        for (tag, build) in [(&old_tag, &old_build), (&new_tag, &new_build)] {
+            let m = manifest::capture(&fetcher, build, tag, field)
+                .await
+                .map_err(|e| apierr(&format!("fetch the {tag} {field} manifest"), &e))?;
+            verify_manifest(&m, tag, field)?;
+            pair.push(m);
         }
-        let v = manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
-        if !v.is_empty() {
-            return Err(assertion(
-                &format!("reconcile the {tag} game manifest"),
-                &ApiError::shape(
-                    tag,
-                    v.iter()
-                        .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                ),
-            ));
-        }
-        manifest::dump::note_reconciliation(&m);
-        if !m.meta.decoded.structure.clean() {
-            // Recorded, not fatal: spec §3.6 says a violation must still produce
-            // a capture with the selfcheck naming what broke. M8 makes it a row.
-            tracing::warn!(
-                tag,
-                violations = ?m.meta.decoded.structure.violations(),
-                "manifest violates a structural invariant; recorded, not fatal"
-            );
-        }
-        manifests.push(m);
+        manifests.push(pair);
     }
 
-    // 6b. The diff and the reuse pool, computed from the two decoded manifests.
-    //     `manifests` is built oldest-first, so index 0 is the old tag and
-    //     index 1 the new one — the same order the loop above fetched them in.
-    let mut diffs = Vec::new();
-    let field_diff = diff::diff_field(&manifests[0], &manifests[1])
-        .map_err(|m| assertion("diff the manifests", &ApiError::shape("diff", m)))?;
-    tracing::info!(
-        field = %field_diff.field,
-        common = field_diff.counts.common,
-        identical = field_diff.counts.identical,
-        changed = field_diff.counts.changed(),
-        added = field_diff.counts.added,
-        removed = field_diff.counts.removed,
-        pool_chunks = field_diff.pool.new_chunks_total,
-        pool_md5_hits = field_diff.pool.new_chunks_md5_present_in_old_manifest,
-        cross_file_only = field_diff.pool.cross_file_only_chunks,
-        cross_file_bytes = field_diff.pool.cross_file_only_bytes_forgone,
-        "diff computed"
+    // 6b. A diff per field, then the pool built across all of them.
+    let mut diffs = Vec::with_capacity(fields.len());
+    for (field, pair) in fields.iter().zip(&manifests) {
+        let fd = diff::diff_field(&pair[0], &pair[1])
+            .map_err(|m| assertion("diff the manifests", &ApiError::shape(field, m)))?;
+        tracing::info!(
+            field = %fd.field,
+            common = fd.counts.common,
+            identical = fd.counts.identical,
+            changed = fd.counts.changed(),
+            added = fd.counts.added,
+            removed = fd.counts.removed,
+            pool_chunks = fd.pool.new_chunks_total,
+            pool_md5_hits = fd.pool.new_chunks_md5_present_in_old_manifest,
+            cross_file_only = fd.pool.cross_file_only_chunks,
+            cross_file_bytes = fd.pool.cross_file_only_bytes_forgone,
+            "diff computed"
+        );
+        diffs.push(fd);
+    }
+
+    // 6c. Score, classify, admit. Pure arithmetic over `diffs` — the only work
+    //     this adds to the run is the audio manifests fetched above.
+    let pool = select::candidates(&diffs);
+    let budget = match plan.max_download_bytes {
+        Some(n) => select::Budget::capped(n),
+        None => select::Budget::unlimited(),
+    };
+    let selection = select::select(
+        &pool,
+        plan.per_class.max(1) as usize,
+        budget,
+        &plan.files,
     );
-    diffs.push(field_diff);
+    for a in &selection.admitted {
+        tracing::info!(
+            capture_id = %a.capture_id,
+            class = %a.primary_class,
+            matching_field = %a.matching_field,
+            cost = a.budget_cost,
+            path = %a.path,
+            "admitted"
+        );
+    }
+    for row in &selection.matrix {
+        if row.is_satisfied() {
+            continue;
+        }
+        tracing::warn!(
+            class = %row.class,
+            considered = row.candidates_considered,
+            reason = row.reason.as_deref().unwrap_or(""),
+            "class not satisfied"
+        );
+    }
+    for r in &selection.rejected {
+        tracing::info!(
+            capture_id = %r.capture_id,
+            class = %r.primary_class,
+            cost = r.budget_cost,
+            reason = %r.reason,
+            path = %r.path,
+            "wanted but not funded"
+        );
+    }
+    tracing::info!(
+        pool = pool.len(),
+        admitted = selection.admitted.len(),
+        rejected = selection.rejected.len(),
+        bytes = selection.bytes_admitted,
+        budget = %selection.budget.describe(),
+        "selection decided"
+    );
+
+    // 6d. `--require-class` is the only thing that turns an absent class into a
+    //     failed run. Without it an over-budget class is recorded and the run
+    //     still exits 0 — the caller asked for a best effort and got one.
+    let required = required_classes(&plan)?;
+    let missing: Vec<select::Class> = required
+        .into_iter()
+        .filter(|c| {
+            selection
+                .matrix
+                .iter()
+                .find(|r| r.class == *c)
+                .is_some_and(|r| !r.is_satisfied())
+        })
+        .collect();
+    if !missing.is_empty() {
+        let detail = missing
+            .iter()
+            .map(|c| {
+                let row = selection
+                    .matrix
+                    .iter()
+                    .find(|r| r.class == *c)
+                    .expect("every required class has a matrix row");
+                format!(
+                    "{c}: {:?}{}",
+                    row.status,
+                    row.reason
+                        .as_deref()
+                        .map(|r| format!(" ({r})"))
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        tracing::error!(classes = ?missing, "--require-class was not met");
+        return Err(Failure {
+            code: ExitCode::RequirementUnmet,
+            detail: format!("--require-class not met: {detail}"),
+        });
+    }
 
     // 7. The tree. All three writes happen even though the run is incomplete:
     //    what was asked, what it cost, and what came back are the parts that
@@ -266,18 +338,20 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             &ApiError::shape("artifact writer", e),
         )
     })?;
-    for m in &mut manifests {
-        let stored =
-            manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail).map_err(|e| {
-                apierr(
-                    &format!("write {}", dir.display()),
-                    &ApiError::shape("artifact writer", e),
-                )
-            })?;
-        // `stored_as` is filled in here rather than by the writer: only now is it
-        // known where the archive ended up, and only the request log can say it.
-        manifest::mark_stored(&log, m, &stored[0].path);
-        written.extend(stored.into_iter().map(|s| s.path));
+    for pair in &mut manifests {
+        for m in pair {
+            let stored = manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail)
+                .map_err(|e| {
+                    apierr(
+                        &format!("write {}", dir.display()),
+                        &ApiError::shape("artifact writer", e),
+                    )
+                })?;
+            // `stored_as` is filled in here rather than by the writer: only now is it
+            // known where the archive ended up, and only the request log can say it.
+            manifest::mark_stored(&log, m, &stored[0].path);
+            written.extend(stored.into_iter().map(|s| s.path));
+        }
     }
     written.extend(
         emit::write_diff(
@@ -293,6 +367,20 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             )
         })?,
     );
+    written.extend(
+        emit::write_selection(
+            &dir,
+            &select::candidates_document(&diffs, &pool),
+            &selection,
+            plan.per_class.max(1) as usize,
+        )
+        .map_err(|e| {
+            apierr(
+                &format!("write {}", dir.display()),
+                &ApiError::shape("artifact writer", e),
+            )
+        })?,
+    );
     emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
@@ -300,9 +388,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         )
     })?;
     let documents = written.len();
-    let manifest_bytes: u64 = manifests.iter().map(|m| m.meta.stored.bytes).sum();
-    let manifest_entries: u64 = manifests.iter().map(|m| m.meta.decoded.entries).sum();
-    let manifest_chunks: u64 = manifests.iter().map(|m| m.meta.decoded.total_chunks).sum();
+    let flat: Vec<&CapturedManifest> = manifests.iter().flatten().collect();
+    let manifest_bytes: u64 = flat.iter().map(|m| m.meta.stored.bytes).sum();
+    let manifest_entries: u64 = flat.iter().map(|m| m.meta.decoded.entries).sum();
+    let manifest_chunks: u64 = flat.iter().map(|m| m.meta.decoded.total_chunks).sum();
     tracing::info!(
         dir = %dir.display(),
         records = log.len(),
@@ -316,7 +405,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .legacy_staleness()
         .map(|(n, _)| n)
         .unwrap_or(0);
-    let max_chunk = manifests
+    let max_chunk = flat
         .iter()
         .map(|m| m.meta.decoded.max_chunk_compressed_bytes)
         .max()
@@ -324,10 +413,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // The diff's numbers are the run's headline result, so they go on the data
     // plane and not only into the stderr narration: this is what a caller reads.
     let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
-    let pool = &diffs[0].pool;
+    let pool_stats = &diffs[0].pool;
     let summary = Summary::new("capture")
         .set("result", "ok")
-        .set("stage", "m4-diff")
+        .set("stage", "m5-selection")
         .set("biz", biz.as_str())
         .set("old_tag", &old_tag)
         .set("new_tag", &new_tag)
@@ -336,7 +425,16 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("new_build_id", &versions.new.build_id)
         .set("artifact", dir.as_path())
         .set("api_documents", 7_u64)
-        .set("manifests_captured", manifests.len() as u64)
+        .set("selection_pool", fields.join(","))
+        .set("candidates_scored", pool.len() as u64)
+        .set("captures_admitted", selection.admitted.len() as u64)
+        .set("captures_over_budget", selection.rejected.len() as u64)
+        .set("capture_bytes_admitted", selection.bytes_admitted)
+        .set("budget_unlimited", selection.budget.limit().is_none())
+        .set("budget_limit", selection.budget.limit().unwrap_or(0))
+        .set("classes_satisfied", satisfied(&selection))
+        .set("classes_unmet", selection.unmet().len() as u64)
+        .set("manifests_captured", flat.len() as u64)
         .set("manifest_bytes", manifest_bytes)
         .set("manifest_entries", manifest_entries)
         .set("manifest_chunks", manifest_chunks)
@@ -347,19 +445,120 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("diff_added", agg.counts.added)
         .set("diff_removed", agg.counts.removed)
         .set("diff_patch_bytes", agg.byte_counts.patch)
-        .set("reuse_md5_present_in_old", pool.new_chunks_md5_present_in_old_manifest)
-        .set("reuse_cross_file_only_chunks", pool.cross_file_only_chunks)
-        .set("reuse_cross_file_bytes_forgone", pool.cross_file_only_bytes_forgone)
+        .set(
+            "reuse_md5_present_in_old",
+            pool_stats.new_chunks_md5_present_in_old_manifest,
+        )
+        .set("reuse_cross_file_only_chunks", pool_stats.cross_file_only_chunks)
+        .set(
+            "reuse_cross_file_bytes_forgone",
+            pool_stats.cross_file_only_bytes_forgone,
+        )
         .set("documents_written", documents as u64)
         .set("requests", log.len() as u64)
         .set("bytes_downloaded", log.bytes_in())
         .set("tags_probed", probe.summary.requested as u64)
         .set("tags_served", probe.summary.served as u64)
-        .set("tags_served_outside_diff_tags", probe.summary.not_in_diff_tags_but_served as u64)
+        .set(
+            "tags_served_outside_diff_tags",
+            probe.summary.not_in_diff_tags_but_served as u64,
+        )
         .set("legacy_endpoint_majors_behind", legacy_behind)
         .set("exit_code", ExitCode::Ok.code());
 
     Ok((summary, ExitCode::Ok))
+}
+
+/// The `matching_field`s whose manifests are fetched, `game` first.
+///
+/// `game` is not optional: every later stage needs it whatever the class, and a
+/// pool that could omit it would let a cheap voice pack answer a class that a
+/// game file covers for less. The audio codes are appended in the order the
+/// caller named them so two runs with the same flags score in the same order.
+fn selection_fields(plan: &CapturePlan) -> Vec<String> {
+    let mut fields = vec![MANIFEST_FIELD.to_string()];
+    fields.extend(plan.audio.codes().iter().cloned());
+    fields
+}
+
+/// The classes whose absence must fail the run.
+///
+/// **Empty by default, and that is the correct default rather than a missing
+/// one.** `--require-class` is opt-in, so a class is only fatal when the caller
+/// named it. Requiring all nine by default would make *every* run of a pair
+/// like 7.0.0 → 7.1.0 exit `4`, because that pair genuinely has no
+/// `full_reuse_reordered` file — a fact about the world, recorded as
+/// `status: unavailable`, not a failure of the tool.
+///
+/// The distinction the exit code turns on:
+///
+/// - **unavailable** — no path in the pool satisfies the class. A statement
+///   about the manifests. Recorded, exit `0`.
+/// - **over budget** — a candidate existed and `--max-download-bytes` would not
+///   pay for it. A statement about *this run's* configuration. Recorded,
+///   exit `0` unless the caller named the class.
+fn required_classes(plan: &CapturePlan) -> Result<Vec<select::Class>, Failure> {
+    plan.require_class
+        .iter()
+        .map(|c| select::Class::parse(c).map_err(|e| usage("--require-class", &e)))
+        .collect()
+}
+
+/// How many classes the matrix answers, captured or covered.
+fn satisfied(selection: &select::Selection) -> u64 {
+    selection
+        .matrix
+        .iter()
+        .filter(|r| r.is_satisfied())
+        .count() as u64
+}
+
+/// The two things a decoded manifest must satisfy before any byte of it is
+/// trusted: its decompressed MD5 matches the declared checksum, and the decoded
+/// counts reconcile against the declared stats.
+///
+/// Both are exit `3`. The bytes arrived intact or they did not, and either way
+/// nothing here is the network's fault — a checksum that fails is a fact about
+/// what was published, and the capture cannot be built on top of it.
+fn verify_manifest(m: &CapturedManifest, tag: &str, field: &str) -> Result<(), Failure> {
+    if !m.meta.verified.all_green() {
+        return Err(assertion(
+            &format!("verify the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                format!(
+                    "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
+                    m.meta.verified.decompressed_md5_matches_checksum,
+                    m.meta.verified.checksum_matches_id_suffix
+                ),
+            ),
+        ));
+    }
+    let v = manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
+    if !v.is_empty() {
+        return Err(assertion(
+            &format!("reconcile the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                v.iter()
+                    .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        ));
+    }
+    manifest::dump::note_reconciliation(m);
+    if !m.meta.decoded.structure.clean() {
+        // Recorded, not fatal: spec §3.6 says a violation must still produce
+        // a capture with the selfcheck naming what broke. M8 makes it a row.
+        tracing::warn!(
+            tag,
+            field,
+            violations = ?m.meta.decoded.structure.violations(),
+            "manifest violates a structural invariant; recorded, not fatal"
+        );
+    }
+    Ok(())
 }
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.

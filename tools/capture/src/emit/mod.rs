@@ -76,6 +76,40 @@ pub fn write_diff(
     Ok(out)
 }
 
+/// Write `diff/candidates.json` and `diff/matrix.json` — the scoring table and
+/// the answer M5 produced from it.
+///
+/// Both are written even when nothing was admitted, because "nothing was
+/// admitted, and here is everything that was considered and why each class came
+/// out empty" is the more useful artifact of a run that found no candidates.
+/// A matrix that only exists on success cannot answer the question that made
+/// someone go looking for it.
+pub fn write_selection(
+    root: &Path,
+    candidates: &serde_json::Value,
+    selection: &crate::select::Selection,
+    per_class: usize,
+) -> std::io::Result<Vec<String>> {
+    let mut out = Vec::with_capacity(2);
+    out.push(write_doc(root, "diff/candidates.json", candidates)?);
+    let matrix = serde_json::json!({
+        "schema_version": crate::SCHEMA_VERSION,
+        "per_class": per_class,
+        "budget": {
+            "limit": selection.budget.limit(),
+            "spent": selection.bytes_admitted,
+            "unlimited": selection.budget.limit().is_none(),
+        },
+        "required_order": crate::select::Class::REQUIRED_ORDER.map(|c| c.id()),
+        "matrix": selection.matrix,
+        "admitted": selection.admitted,
+        "rejected": selection.rejected,
+        "unmet": selection.unmet().iter().map(|c| c.id()).collect::<Vec<_>>(),
+    });
+    out.push(write_doc(root, "diff/matrix.json", &matrix)?);
+    Ok(out)
+}
+
 /// Write one artifact-relative document, pretty-printed, newline-terminated.
 fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::Result<String> {
     let body = serde_json::to_string_pretty(value)
