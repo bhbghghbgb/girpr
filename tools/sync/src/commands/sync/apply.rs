@@ -30,11 +30,9 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::filter::is_excluded;
 use crate::hash::hash_file;
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
-use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
 /// Everything the apply phases share: both roots, the dst cache, the two
@@ -86,7 +84,7 @@ impl Applier<'_> {
             copied: self.copy_files(plan)?,
             removed_dirs: self.remove_unknown_dirs(plan)?,
         };
-        self.prune_dst_cache()?;
+        self.prune_dst_cache(plan)?;
         Ok(applied)
     }
 
@@ -349,22 +347,73 @@ impl Applier<'_> {
     }
 
     /// Drop dst cache rows for paths that no longer exist on disk.
-    fn prune_dst_cache(&self) -> Result<()> {
-        let live = walk_live(self.dst, self.common.max_depth)?;
-        let mut present: HashSet<String> = HashSet::new();
-        for e in live {
-            if !is_excluded(
-                &e.rel,
-                &self.common.includes,
-                &self.common.excludes,
-                self.common.case_sensitive,
-            ) {
-                present.insert(e.rel);
-            }
+    ///
+    /// The present set is derived rather than walked. `dm` is the post-rename dst
+    /// map — the same filtered, depth-capped set of paths a live walk would report,
+    /// which is why `Plan::rmdir` reads it instead of deriving a second one — so the
+    /// only thing it cannot know is what *this run* has done to the disk since.
+    ///
+    /// That is both directions, and getting only one right is the bug this comment
+    /// exists to prevent.
+    ///
+    /// **Added** — what the apply phases create. `mkdir` for new directories, `copy`
+    /// for copied files, `fix_dirs` for the directories that replaced a file. All
+    /// three put a cache row as they go, so all three count as present; leaving one
+    /// out deletes a row for a path that is on disk, and the damage does not show up
+    /// here — it surfaces later as a `compare-self` reporting drift for a file that
+    /// never moved.
+    ///
+    /// **Subtracted** — what a copy destroys. `delete_files` and `rmdir` drop their
+    /// own rows, so those need nothing. The one that does is `copy_one` clearing a
+    /// blocking dst directory *recursively*, which takes a whole subtree with it.
+    /// `Plan::rmdir` deliberately excludes that subtree from its own list — the
+    /// directory is gone by the time the removal pass runs, so listing it would
+    /// promise an `rmdir` the run cannot reach — which leaves this the only place
+    /// that can tell "dst held this before the run" from "dst holds it now".
+    ///
+    /// The subtraction is by path prefix, so it covers the subtree at any depth
+    /// rather than only the entries the plan happened to enumerate.
+    ///
+    /// **One case this cannot reach**, deliberately: `--case-sensitive` on a
+    /// case-insensitive filesystem, where a directory this run `mkdir`s can be the
+    /// same directory a later `rmdir` removes. Deriving cannot see that without
+    /// case-folding the prune against the plan, in the one mode that deliberately
+    /// does not case-fold. Such rows survive until the next run's phase A prunes
+    /// them, and `compare-self` builds a cold cache so it cannot be misled.
+    /// `main`'s walk dropped them as a side effect of asking the filesystem, not
+    /// by deciding to.
+    ///
+    /// Cost: one pass over the map and three in-memory lists, against a full
+    /// traversal of dst with a `stat` per entry. On a large tree that walk is a real
+    /// fraction of the run, and it was the last full walk of dst in a real `sync`.
+    fn prune_dst_cache(&self, plan: &Plan) -> Result<()> {
+        // dst paths this run's copies destroy, as `dir/` prefixes. Computed from
+        // `dm` rather than the plan's own lists, so it names exactly the subtrees
+        // `copy_one` will clear: a copy whose dst is a directory.
+        let wiped: Vec<String> = plan
+            .copy
+            .iter()
+            .filter(|item| self.dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
+            .map(|item| format!("{}/", item.rel))
+            .collect();
+        let mut present: HashSet<&str> = self.dm.keys().map(String::as_str).collect();
+        for r in &plan.mkdir {
+            present.insert(r);
+        }
+        for r in &plan.fix_dirs {
+            present.insert(r);
+        }
+        for item in &plan.copy {
+            present.insert(&item.rel);
         }
         let mut w = self.dst_db.begin_write()?;
         for rel in w.load_all()?.keys() {
-            if !present.contains(rel) {
+            // Strictly longer than the prefix, so the copied path itself keeps its
+            // row: only what is *under* a wiped directory is gone.
+            let wiped_subtree = wiped
+                .iter()
+                .any(|p| rel.len() > p.len() && rel.starts_with(p.as_str()));
+            if !present.contains(rel.as_str()) || wiped_subtree {
                 w.remove(rel)?;
             }
         }

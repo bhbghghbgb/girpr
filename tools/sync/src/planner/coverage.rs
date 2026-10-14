@@ -159,9 +159,9 @@ const EXAMPLE_PATHS: usize = 5;
 
 #[cfg(test)]
 mod tests {
+    use crate::planner::HashMode;
     use crate::planner::fixtures::{Shape, cached_entry, dir, file, map};
     use crate::planner::stat_trust::StatTrust;
-    use crate::planner::HashMode;
 
     // -- coverage -----------------------------------------------------------
     //

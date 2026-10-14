@@ -49,7 +49,7 @@ use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};
 use girsync::report::verdict;
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
@@ -121,7 +121,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -148,7 +148,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             &dm.map,
             &plans.required,
             plans.stat,
-            common.case_sensitive,
+            CasePairing::from(common.case_sensitive),
             false,
         ),
         hashed: sm.stats.hashed + dm.stats.hashed,
@@ -187,4 +187,3 @@ fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncO
         common,
     }
 }
-

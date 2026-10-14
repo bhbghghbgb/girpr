@@ -5,7 +5,6 @@
 
 use super::*;
 
-
 /// **`sync` reports the same actions under every rw setting, through the binary.**
 ///
 /// The resolver-level test above pins equal effective maps; this one pins the

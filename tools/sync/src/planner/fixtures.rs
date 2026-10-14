@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::effective::{SideCapability, SideEntry};
 
 use super::HashMode;
-use super::pairs::{PairPlan, SideRequest, plan_pairs};
+use super::pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
 use super::stat_trust::StatTrust;
 
 /// A file entry with an empty cache row.
@@ -144,7 +144,7 @@ impl Shape {
                 cap: cap(self.hashable.1),
                 label: "dst",
             },
-            sensitive,
+            CasePairing::from(sensitive),
             self.mode,
             stat,
         )

@@ -54,7 +54,9 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{
+    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
+};
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
@@ -123,7 +125,7 @@ fn plan(
             cap: dc,
             label: "dst",
         },
-        true,
+        CasePairing::Exact,
         mode,
         stat,
     )
@@ -207,7 +209,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             cap: do_.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -249,7 +251,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -270,7 +272,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
         &disk.map,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         false,
     );
     (disk.stats.hashed, if diff.is_empty() { 0 } else { 4 })

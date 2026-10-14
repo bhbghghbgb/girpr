@@ -58,7 +58,7 @@ use crate::diff::diff_maps;
 use crate::effective::{
     SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
 };
-use crate::planner::{SideRequest, plan_pairs};
+use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
@@ -194,6 +194,9 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // cannot supply a requested digest must fail rather than let the pair fall
     // back to size+mtime, which for an audit means reporting "in step" about
     // content nobody compared.
+    // One pairing for both calls: `compare-self` never renames, so the plan and the
+    // diff pair the same paths. See the note in `compare`.
+    let pairing = CasePairing::from(common.case_sensitive);
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,
@@ -212,7 +215,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        pairing,
         common.hash_mode,
         common.stat,
     )?;
@@ -258,7 +261,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         &disk,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        pairing,
         common.show_identical,
     );
     let code = report_diff(&diff, &log.report(), common.why, common.show_identical);

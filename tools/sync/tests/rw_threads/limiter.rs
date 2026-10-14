@@ -6,6 +6,14 @@
 
 use super::*;
 
+/// Remove both caches so the next resolution is a cold run over the *same* bytes.
+///
+/// The alternative — build a fresh pair per setting — would make the whole test
+/// vacuous: `wfile` stamps each file at write time, so two "identical" fixtures
+/// have different mtimes, and `EffRec` carries `mtime_ns`. The maps would then
+/// differ for a reason that has nothing to do with the limiter, and a loose
+/// assertion would wave it through. One pair, re-resolved cold, is the only shape
+/// in which map equality means what it says.
 fn drop_caches(src: &Path, dst: &Path) {
     for dir in [src, dst] {
         std::fs::remove_file(dir.join(CACHE_PREFIX)).ok();
@@ -39,7 +47,7 @@ fn plan_both<'a>(
             cap: do_.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -323,4 +331,3 @@ fn a_copy_is_bounded_by_its_tighter_side() {
     );
     assert!(rw.limiter().try_acquire(RwSide::Dst).is_some());
 }
-

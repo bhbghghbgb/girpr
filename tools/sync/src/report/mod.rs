@@ -39,7 +39,9 @@ mod record;
 
 pub use record::Record;
 
+use tracing::Level;
 use tracing::debug;
+use tracing::level_filters::STATIC_MAX_LEVEL;
 
 use crate::diff::Diff;
 
@@ -95,8 +97,39 @@ impl Report {
     /// record whose payload has no natural fields of its own still lands in the
     /// log file. It is `debug`: the data plane is the answer, the log is the
     /// narration around it.
+    ///
+    /// ## Why the payload is built conditionally
+    ///
+    /// `event()` lowercases a string and `fields_json()` builds and serialises a
+    /// whole JSON object, and `tracing` evaluates both *before* deciding whether
+    /// the event is enabled. At the default `--log-level info` that is a JSON
+    /// serialisation per record, built and thrown away — on a `--show-identical`
+    /// run over 200k files, 200k of them.
+    ///
+    /// `enabled!` consults the installed subscriber, so the check is against what
+    /// *this run* actually logs — which is not the same as the console level. With
+    /// `--log-file` the console layer may discard a debug event while the always-
+    /// `trace` file layer still wants it, and a check against `--log-level` would
+    /// drop those records from the log file. A compile-time constant cannot express
+    /// that either.
+    ///
+    /// `STATIC_MAX_LEVEL` is checked first so the branch folds away entirely in a
+    /// build that has debug compiled out. **Today it never does**: `tracing` is
+    /// depended on without a `release_max_level_*` feature, so the ceiling is
+    /// `TRACE` in every profile and this term is currently just a cheaper test
+    /// ahead of the call. It is kept because it is the term that starts doing the
+    /// work the day someone adds such a feature, and because `enabled!` must not
+    /// be the only thing standing between a release build and a file log.
+    ///
+    /// The gate is on *construction*, not on *emission*: whenever debug is enabled
+    /// the log event is emitted exactly as before, carrying the same event name and
+    /// the same fields. `tests/output.rs` pins that at both ends — the console at
+    /// `debug`, and the file layer at the default level — so this cannot later be
+    /// read as "logging was dropped".
     pub fn emit(&self, rec: Record) {
-        debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
+        if Level::DEBUG <= STATIC_MAX_LEVEL && tracing::enabled!(Level::DEBUG) {
+            debug!(event = %rec.event(), fields = %rec.fields_json(), "report");
+        }
         println!("{}", self.render(&rec));
     }
 
