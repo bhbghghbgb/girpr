@@ -8,7 +8,9 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 `{path}_tmp` streaming repair, verified local-chunk reuse, atomic promote)
 **+ Collapse's extra-file purge** as a pre/post phase.
 Background: `docs/01-findings-and-verdict.md`, spec: `docs/02-repair-chunk-spec.md`,
-module plan: `docs/03-rust-implementation-plan.md`.
+module plan: `docs/03-rust-implementation-plan.md`. Proposal (not implemented):
+scope-of-work limitations — `--include`/`--exclude`, byte/file ceilings, plan
+printing, endpoint override — in `docs/04-scope-limitation-options.md`.
 
 ## For developers / AI agents — read this first
 
