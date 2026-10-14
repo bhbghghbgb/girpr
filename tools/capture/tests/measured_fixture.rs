@@ -761,3 +761,217 @@ mod m5_matrix {
         assert_eq!(tight.rejected.len(), 8, "every wanted candidate is accounted for");
     }
 }
+/// M6: the chunk store, over the same frozen pair.
+///
+/// The chunk ids below are the **real** ones the live 7.0.0 -> 7.1.0 capture
+/// produced, because the shared-chunk case is the whole point and a synthetic id
+/// would not reproduce it: the two builds publish different ids for different
+/// content at the same offset (`7d3f0504...` vs `ddb31a9f...` at offset 0) and
+/// the *same* id only where the bytes really agree (`f5dc3ca1...` at 690719).
+mod m6_chunk_store {
+    use super::*;
+
+    use gircap::blobs::chunks::{self, FilePair, NewFile, OldFile, Set};
+    use gircap::blobs::props::BlobProps;
+    use gircap::blobs::{ChunkIndex, Store};
+
+    const HOYO: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
+
+    /// One of the measured chunks, by its real id prefix and declared sizes.
+    fn measured(
+        prefix: &str,
+        md5: &str,
+        offset: i64,
+        compressed: i64,
+        uncompressed: i64,
+    ) -> SophonChunk {
+        SophonChunk {
+            id: format!("{prefix}_{md5}"),
+            uncompressed_md5: md5.into(),
+            offset,
+            compressed_size: compressed,
+            uncompressed_size: uncompressed,
+            unknown_field6: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    fn entry_of(path: &str, chunks: Vec<SophonChunk>) -> SophonChunkFile {
+        let size = chunks.iter().map(|c| c.uncompressed_size).sum();
+        SophonChunkFile {
+            file: path.into(),
+            chunks,
+            is_folder: false,
+            size,
+            md5: "ff".repeat(16),
+        }
+    }
+
+    /// `HoYoChannel.dll` as the live capture found it: three chunks a side, one
+    /// of them the same bytes in both.
+    fn hoyo_pair() -> FilePair {
+        let old = vec![
+            measured("7d3f050443837e58", "bbce8a315a3d7a834c089e8061dbe26f", 0, 259_794, 690_719),
+            measured(
+                "f5dc3ca1f3a0ba3d",
+                "291a7719a4a23664d37825a41fad3c5b",
+                690_719,
+                638_614,
+                1_626_019,
+            ),
+            measured(
+                "a4314f3c1ba1d7d4",
+                "ef318603471abb0922dbc53cfba90829",
+                2_316_738,
+                14_619,
+                23_526,
+            ),
+        ];
+        let new = vec![
+            measured("ddb31a9fd85346c4", "de1cfe6927dacbc58d2d55a0b45ea0f3", 0, 259_795, 690_719),
+            measured(
+                "f5dc3ca1f3a0ba3d",
+                "291a7719a4a23664d37825a41fad3c5b",
+                690_719,
+                638_614,
+                1_626_019,
+            ),
+            measured(
+                "340ca86ee8ac9be0",
+                "87434f1bc3431f2c443dc5311d543308",
+                2_316_738,
+                14_631,
+                23_526,
+            ),
+        ];
+        FilePair {
+            capture_id: "partial_same_offset".into(),
+            path: HOYO.into(),
+            old: Some(OldFile { tag: "7.0.0".into(), entry: entry_of(HOYO, old) }),
+            new: Some(NewFile { tag: "7.1.0".into(), entry: entry_of(HOYO, new) }),
+        }
+    }
+
+    /// The M6 acceptance, as a test: three old ids plus two new-only ids is
+    /// **five** distinct chunk ids, and the shared one is fetched once.
+    #[test]
+    fn the_measured_pair_needs_five_distinct_chunks() {
+        let r = chunks::retention(&hoyo_pair());
+        assert_eq!(r.ids(Set::MaterializeOld).len(), 3);
+        assert_eq!(r.ids(Set::MaterializeNew).len(), 3);
+        assert_eq!(r.ids(Set::PatchFetch).len(), 2, "3 old + 2 new = 5");
+        assert!(r.a12_holds(), "{:?}", r.a12_failure());
+
+        let w = chunks::wants(&[hoyo_pair()]);
+        assert_eq!(w.len(), 5, "one blob per distinct id");
+
+        // The measured chunk ids, so a change in how ids are built is visible.
+        let mut ids: Vec<String> = w.iter().map(|x| x.chunk.id.clone()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                // 7.1.0 only; different bytes at the same offset as an old chunk.
+                "340ca86ee8ac9be0_87434f1bc3431f2c443dc5311d543308",
+                // 7.0.0 only.
+                "7d3f050443837e58_bbce8a315a3d7a834c089e8061dbe26f",
+                "a4314f3c1ba1d7d4_ef318603471abb0922dbc53cfba90829",
+                // 7.1.0 only.
+                "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3",
+                // Both builds, one fetch.
+                "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b",
+            ]
+        );
+
+        // And the index lists all five, with the role lists derived from them.
+        let idx = ChunkIndex::build(Store::plan_only(&w));
+        assert_eq!(idx.blobs.len(), 5);
+        assert_eq!(idx.sets["materialize_old"].len(), 3);
+        assert_eq!(idx.sets["materialize_new"].len(), 3);
+        assert_eq!(idx.sets["patch_fetch"].len(), 2);
+    }
+
+    /// The shared chunk is one blob with two sources and both roles -- and it is
+    /// *not* in `patch_fetch`, which is the whole point of the reuse subtraction.
+    #[test]
+    fn the_shared_chunk_is_retained_for_both_sides_and_fetched_for_neither() {
+        let w = chunks::wants(&[hoyo_pair()]);
+        let shared = w
+            .iter()
+            .find(|x| x.chunk.id.starts_with("f5dc3ca1"))
+            .expect("the shared chunk");
+        assert_eq!(
+            shared.sources.iter().map(|s| s.tag.as_str()).collect::<Vec<_>>(),
+            vec!["7.1.0", "7.0.0"],
+            "newest first: the old CDN is the one that may stop serving"
+        );
+        assert_eq!(shared.sets, vec![Set::MaterializeOld, Set::MaterializeNew]);
+        assert_eq!(shared.references.len(), 2, "one per build");
+        assert!(shared.conflicts.is_empty(), "both builds declare it identically");
+        assert_eq!(shared.chunk.uncompressed_size, 1_626_019);
+    }
+
+    /// Offset-0 content changed while the offset did not. This is the case that
+    /// separates a content-keyed reuse test from an offset-keyed one, and the
+    /// measured pair really contains it.
+    #[test]
+    fn the_same_offset_with_new_bytes_is_not_a_reuse() {
+        let p = hoyo_pair();
+        let r = chunks::retention(&p);
+        let old0 = &p.old.as_ref().unwrap().entry.chunks[0];
+        let new0 = &p.new.as_ref().unwrap().entry.chunks[0];
+        assert_eq!(old0.offset, new0.offset, "offset 0 in both");
+        assert_eq!(old0.uncompressed_size, new0.uncompressed_size, "and the same length");
+        assert_ne!(old0.uncompressed_md5, new0.uncompressed_md5, "different bytes");
+        assert_ne!(old0.id, new0.id);
+        assert!(
+            !r.reuse.contains(&new0.id),
+            "so it is fetched, even though nothing about its position moved"
+        );
+        assert!(r.ids(Set::PatchFetch).contains(&new0.id));
+    }
+
+    /// A metadata-only run records the same plan with nothing measured, and
+    /// `verified: null` rather than four `false`: "not measured" and "measured
+    /// wrong" are different findings and need different responses.
+    #[test]
+    fn no_chunk_blobs_records_the_plan_and_measures_nothing() {
+        let w = chunks::wants(&[hoyo_pair()]);
+        let idx = ChunkIndex::build(Store::plan_only(&w));
+        assert_eq!(idx.blobs.len(), 5, "the plan is still complete");
+        for b in &idx.blobs {
+            assert!(b.props.stored_path.is_none());
+            assert!(b.props.verified.is_none(), "{}", b.props.chunk_id);
+            assert!(!b.props.is_usable());
+            assert!(b.props.failures().is_empty(), "no failures, but no evidence");
+            assert!(b.props.why_unusable().unwrap().contains("never measured"));
+        }
+        assert_eq!(idx.sets["patch_fetch"].len(), 2);
+        // The declared size survives even though the bytes did not, so a reader
+        // knows exactly how big the gap is.
+        assert!(
+            idx.blobs.iter().any(|b| b.props.uncompressed_size == 1_626_019),
+            "the declared size is still there"
+        );
+    }
+
+    /// The five stored paths are exactly `chunks/blobs/<id>.zst`, which is what
+    /// M7 and M9 will read back.
+    #[test]
+    fn every_blob_has_the_path_m7_and_m9_will_read() {
+        for w in chunks::wants(&[hoyo_pair()]) {
+            assert_eq!(
+                BlobProps::stored_path_for(&w.chunk.id),
+                format!("chunks/blobs/{}.zst", w.chunk.id)
+            );
+        }
+    }
+
+    /// Projected transfer cost for the pair, against the measured one.
+    #[test]
+    fn the_projected_download_matches_the_measured_chunk_bytes() {
+        let w = chunks::wants(&[hoyo_pair()]);
+        // 259 794 + 638 614 + 14 619 + 259 795 + 14 631
+        assert_eq!(gircap::blobs::projected_download(&w), 1_187_453);
+    }
+}

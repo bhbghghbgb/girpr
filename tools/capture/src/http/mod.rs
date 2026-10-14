@@ -450,7 +450,14 @@ impl Fetched {
 }
 
 /// Issues requests, records them, and retries the ones worth retrying.
-#[derive(Debug)]
+///
+/// Cloneable, and for one reason: M6 fetches chunk blobs concurrently. A clone
+/// shares the pool and the log — `reqwest::Client` is an `Arc` internally and
+/// [`RequestLog`] is already one — so N clones are N handles on one fetcher
+/// rather than N fetches with N logs. The log assigns each record its `seq` at
+/// issue time from shared state, so concurrency does not make the numbering a
+/// function of which download happened to finish first.
+#[derive(Debug, Clone)]
 pub struct Fetcher {
     client: reqwest::Client,
     policy: RetryPolicy,

@@ -76,6 +76,15 @@ pub fn write_diff(
     Ok(out)
 }
 
+/// Write `chunks/index.json` and return the artifact-relative path written.
+///
+/// Written even when nothing was stored — `--no-chunk-blobs` still produces the
+/// role lists, because knowing which chunks *would* have been needed is the part
+/// of the document that survives a metadata-only run.
+pub fn write_chunk_index(root: &Path, index: &crate::blobs::ChunkIndex) -> std::io::Result<String> {
+    write_doc(root, "chunks/index.json", index)
+}
+
 /// Write `diff/candidates.json` and `diff/matrix.json` — the scoring table and
 /// the answer M5 produced from it.
 ///

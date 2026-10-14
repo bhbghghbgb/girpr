@@ -213,6 +213,31 @@ chunk ids (3 old + 2 new), stores 5 blobs, and produces the
 `chunks/index.json` shape in the schema doc byte-for-byte in field names.
 **Commit:** `gircap: M6 — content-addressed chunk store with the three retention sets`
 
+**Landed.** Live, on the `partial_same_offset` candidate: 5 distinct chunk ids,
+5 blobs, 0 A6 failures. Across all eight admitted captures: 38 blobs, 27 612 723
+B, no `tmp/` leftovers. Two design decisions the docs did not settle, both of
+which the measured pair forced:
+
+1. **Reuse identity is `(uncompressed_md5, uncompressed_size)`, not
+   `chunk.id`.** The id is `<16 opaque hex>_<uncompressed_md5>` and the prefix
+   is not a function of anything observable. The measured `HoYoChannel.dll`
+   proves the point: offset 0 is `bbce8a31…` in 7.0.0 and `de1cfe69…` in 7.1.0 —
+   same offset, same length, different bytes — while offset 690719 has the *same*
+   id in both because its content really is the same. An id-keyed test would be
+   right only by accident.
+2. **The store is keyed by `chunk_id` alone, with a source list per blob.** The
+   alternative — `(tag, chunk_id)` — produces *six* wants for the acceptance's
+   five, because the shared chunk would be fetched once per build. A `Want` now
+   carries every build that declares the id, ordered newest-first, so the old
+   CDN is only asked if the new one has gone. Two builds declaring one id with
+   *different* content is recorded as a conflict rather than resolved, since
+   resolving it silently would hide the contradiction from the selfcheck.
+
+The store never fails a run on a bad blob: a truncated or mismatched chunk is
+measured, recorded with `verified: false` and a named `decode_error`, and left in
+the index. Only a blob with no zstd frame at all is an error, because the build
+declared `compression: 1` and there is then nothing to measure.
+
 ### M7 — assembly
 `assemble/{mod,ranges}.rs`. Build old from `materialize_old`, new from
 `materialize_new`, and the patch flow (REUSE slice verified by MD5, else FETCH)

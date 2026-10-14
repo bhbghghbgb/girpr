@@ -343,6 +343,24 @@ impl CapturedManifest {
             + &self.meta.manifest.id
             + &self.meta.declared.manifest_download.url_suffix
     }
+
+    /// The base its **chunk** blobs are served from.
+    ///
+    /// Separate from [`CapturedManifest::url`] because the two point at
+    /// different CDN trees — `.../manifests/<build_id>` and
+    /// `.../chunks/<build_id>` — and a capture that built chunk URLs from the
+    /// archive URL would 404 on every one of them.
+    pub fn chunk_url_prefix(&self) -> &str {
+        &self.meta.declared.chunk_download.url_prefix
+    }
+
+    /// The URL of one of its chunks.
+    pub fn chunk_url(&self, chunk_id: &str) -> String {
+        self.meta.declared.chunk_download.url_prefix.clone()
+            + "/"
+            + chunk_id
+            + &self.meta.declared.chunk_download.url_suffix
+    }
 }
 
 /// Fetch one manifest, verify it, and decode it.

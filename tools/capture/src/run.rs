@@ -11,6 +11,7 @@
 //! prove the transport, and the version pair has to be resolved to name the
 //! bundle's directory at all.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::biz::{Biz, Endpoints};
@@ -19,7 +20,7 @@ use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
 use crate::report::{OutputFormat, Summary};
-use crate::{emit, exit, hyp, manifest, select};
+use crate::{blobs, emit, exit, hyp, manifest, select};
 use crate::manifest::diff;
 
 /// The `matching_field` every run scores first, and the one every later stage
@@ -327,6 +328,68 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         });
     }
 
+    // 6e. The chunk store. Planned *before* any blob is fetched, so the cost the
+    //     log announces is a real figure rather than an estimate, and A12 is
+    //     checked on the plan instead of after the bytes have been paid for.
+    let mut by_tag: BTreeMap<String, &manifest::CapturedManifest> = BTreeMap::new();
+    for (field, pair) in fields.iter().zip(&manifests) {
+        if *field != MANIFEST_FIELD {
+            // Only the `game` manifests are loaded into memory; the audio ones
+            // exist to widen the *pool*, and a selected path is always scored
+            // against game first (M5's tie-break). If a path ever comes only
+            // from an audio field, that is a bug there, and here it surfaces as
+            // a one-sided pair rather than a wrong download.
+            continue;
+        }
+        for m in pair {
+            by_tag.insert(m.tag.clone(), m);
+        }
+    }
+    let pairs = blobs::file_pairs(&selection, &by_tag, &old_tag, &new_tag);
+    let wants = blobs::chunks::wants(&pairs);
+    for (a, p) in selection.admitted.iter().zip(&pairs) {
+        let r = blobs::chunks::retention(p);
+        if !r.a12_holds() {
+            return Err(assertion(
+                &format!("plan the chunk sets for {}", a.path),
+                &ApiError::shape("A12", r.a12_failure().unwrap_or("unknown")),
+            ));
+        }
+        tracing::info!(
+            capture_id = %a.capture_id,
+            path = %a.path,
+            old_chunks = r.ids(blobs::chunks::Set::MaterializeOld).len(),
+            new_chunks = r.ids(blobs::chunks::Set::MaterializeNew).len(),
+            patch_fetch = r.ids(blobs::chunks::Set::PatchFetch).len(),
+            reuse = r.reuse.len(),
+            "retention planned"
+        );
+    }
+    let projected = blobs::projected_download(&wants);
+    tracing::info!(
+        chunks = wants.len(),
+        projected_bytes = projected,
+        max_download_bytes = plan.max_download_bytes.unwrap_or(0),
+        distinct_files = selection.admitted.len(),
+        "chunk store planned"
+    );
+    if let Some(cap) = plan.max_download_bytes {
+        // The budget is charged against `total_cost` in M5; this is a *second*,
+        // independent ceiling over the bytes actually on the wire. Both hold.
+        if projected > cap {
+            return Err(assertion(
+                "fetch the chunk blobs",
+                &ApiError::shape(
+                    "max-download-bytes",
+                    format!(
+                        "the admitted captures need {projected} B of chunk blobs and the \
+                         ceiling is {cap} B; lower --per-class or raise the ceiling"
+                    ),
+                ),
+            ));
+        }
+    }
+
     // 7. The tree. All three writes happen even though the run is incomplete:
     //    what was asked, what it cost, and what came back are the parts that
     //    stay useful, and the bytes are the evidence behind every number in the
@@ -381,6 +444,40 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             )
         })?,
     );
+    // 7b. The chunk blobs themselves, then `chunks/index.json`.
+    //
+    //     The index is written either way. `--no-chunk-blobs` produces one with
+    //     every role list filled and no blobs, which is how a reader tells "this
+    //     capture did not fetch" from "this capture had nothing to fetch".
+    let store = blobs::Store::new(
+        &dir,
+        blobs::Sources::from_manifests(manifests.iter().flatten()),
+    );
+    let (entries, fetch_errors) = if plan.no_chunk_blobs {
+        tracing::info!(
+            chunks = wants.len(),
+            projected_bytes = projected,
+            "--no-chunk-blobs: the index records the plan and stores nothing"
+        );
+        (blobs::Store::plan_only(&wants), Vec::new())
+    } else {
+        let (e, errs) = store.fill(&fetcher, &wants, plan.jobs).await;
+        for e in &errs {
+            tracing::error!(error = %e, "chunk fetch failed");
+        }
+        (e, errs)
+    };
+    let index = blobs::ChunkIndex::build(entries);
+    tracing::info!(detail = %blobs::describe(&wants, &index), "chunk store done");
+    written.push(
+        emit::write_chunk_index(&dir, &index).map_err(|e| {
+            apierr(
+                &format!("write {}", dir.display()),
+                &ApiError::shape("artifact writer", e),
+            )
+        })?,
+    );
+
     emit::write_requests_log(&dir, &log).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
@@ -429,6 +526,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("candidates_scored", pool.len() as u64)
         .set("captures_admitted", selection.admitted.len() as u64)
         .set("captures_over_budget", selection.rejected.len() as u64)
+        .set("chunk_blobs_wanted", wants.len() as u64)
+        .set("chunk_blobs_stored", index.blobs.iter().filter(|b| b.props.stored_path.is_some()).count() as u64)
+        .set("chunk_bytes_projected", projected)
+        .set("chunk_bytes_fetched", index.blobs.iter().map(|b| b.props.bytes).sum::<u64>())
+        .set("chunk_fetches_failed", fetch_errors.len() as u64)
+        .set("chunk_a6_failing", index.failing().len() as u64)
+        .set("patch_fetch_chunks", index.sets["patch_fetch"].len() as u64)
         .set("capture_bytes_admitted", selection.bytes_admitted)
         .set("budget_unlimited", selection.budget.limit().is_none())
         .set("budget_limit", selection.budget.limit().unwrap_or(0))
