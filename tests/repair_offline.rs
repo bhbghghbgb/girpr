@@ -75,6 +75,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         purge_after: false,
         purge_before: false,
         json_summary: false,
+        log_file: None,
         hyp_base_override: Some(mock.hyp_base.clone()),
         sophon_base_override: Some(mock.sophon_base.clone()),
     }

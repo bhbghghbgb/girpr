@@ -93,6 +93,12 @@ pub struct RunCtx {
     pub purge_after: bool,
     pub purge_before: bool,
     pub json_summary: bool,
+    /// `--log-file <FILE>`: the requested destination of the always-`TRACE`
+    /// trace log. `None` means the timestamped default under `<exe-dir>/logs/`
+    /// ([`crate::logging::log_file_path`]). Carried on the context rather than
+    /// applied here because the file layer is installed before any validation
+    /// runs — a usage error is meant to be diagnosable from the log too.
+    pub log_file: Option<PathBuf>,
     /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
     /// APIs are fetched from these bases instead of the production CDNs
     /// (e.g. a local mock server in `tests/`). `None` = production, unless

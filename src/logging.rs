@@ -4,7 +4,9 @@
 //! - Console (stderr) is filtered by `--log-level`, optionally widened by
 //!   `RUST_LOG`.
 //! - File always captures `TRACE` and above regardless of `--log-level`, so a
-//!   post-mortem never loses chunk-level detail.
+//!   post-mortem never loses chunk-level detail. `--log-file <FILE>` chooses
+//!   where it goes; without the flag it is [`log_file_path`]'s timestamped
+//!   default, which only the binary that wrote it can name.
 //! - Data-plane output (`REPORT` / `PROGRESS` / `SUMMARY`) stays on stdout via
 //!   [`crate::report::emit`]; the file layer is plain text, not JSON, because
 //!   it is meant to be read with `grep 'path=<file>'`.
@@ -18,8 +20,12 @@ use std::sync::Mutex;
 
 use tracing_subscriber::prelude::*;
 
-/// Where the log file lives: `<exe-dir>/logs/girpr_<timestamp>.log`, falling
-/// back to the current directory when the exe path is unavailable.
+/// Where the log file lives when `--log-file` was not given:
+/// `<exe-dir>/logs/girpr_<timestamp>.log`, falling back to the current
+/// directory when the exe path is unavailable.
+///
+/// The timestamp keeps concurrent runs from interleaving but also makes the
+/// name unguessable to the caller, which is why `--log-file` exists.
 pub fn log_file_path() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -38,7 +44,12 @@ pub fn log_file_path() -> PathBuf {
 ///
 /// Scopes the console filter to the `girpr` target so third-party crates stay
 /// quiet; the file layer is `TRACE` for the same target.
-pub fn init_tracing(level: &str) -> PathBuf {
+///
+/// `log_file` is the `--log-file` value, or `None` for the timestamped default.
+/// The returned path is what was *asked for*, not what was opened: a file that
+/// could not be opened is a stderr warning, and this stays infallible so a
+/// unwritable log never costs a run its exit code.
+pub fn init_tracing(level: &str, log_file: Option<&Path>) -> PathBuf {
     let rust_log = std::env::var("RUST_LOG").unwrap_or_default();
     let rust_log = rust_log.trim();
     let filter = if rust_log.is_empty() {
@@ -54,7 +65,7 @@ pub fn init_tracing(level: &str) -> PathBuf {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         );
 
-    let log_path = log_file_path();
+    let log_path = log_file.map_or_else(log_file_path, Path::to_path_buf);
     let file_writer: Mutex<Box<dyn Write + Send + Sync>> = match open_log_file(&log_path) {
         Ok(f) => Mutex::new(Box::new(f)),
         Err(e) => {

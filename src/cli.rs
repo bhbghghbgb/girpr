@@ -137,6 +137,14 @@ pub struct Args {
     #[arg(long, default_value = "info")]
     pub log_level: String,
 
+    /// Write the trace log to this file instead of `logs/girpr_<timestamp>.log`
+    /// under the executable's directory. Missing parent directories are created.
+    /// The file layer captures `TRACE` and above **regardless of `--log-level`**,
+    /// so `--log-level trace` is only needed to also see it on stderr. A file
+    /// that cannot be opened is a stderr warning, not a failure.
+    #[arg(long, value_name = "FILE")]
+    pub log_file: Option<PathBuf>,
+
     /// Point the HoYoPlay API at this base URL instead of the production CDN.
     /// Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects
     /// `getGameConfigs`/`getGameBranches`/`getBuild`/`getGameDeprecatedFileConfigs`
@@ -187,6 +195,10 @@ impl Args {
             purge_after: self.purge_after,
             purge_before: self.purge_before,
             json_summary: self.json_summary,
+            // Where the trace log goes. `None` keeps the timestamped default
+            // beside the executable, which nothing outside the process can name
+            // reliably — the flag is what makes the file findable.
+            log_file: self.log_file,
             // Endpoint overrides: explicit flag > GIRPR_*_BASE env > production, resolved
             // by `RunCtx::api_bases`. Omitted flags stay `None`, so the env seam
             // every offline test already uses is untouched.
