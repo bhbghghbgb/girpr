@@ -847,8 +847,16 @@ mod m6_chunk_store {
         FilePair {
             capture_id: "partial_same_offset".into(),
             path: HOYO.into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: entry_of(HOYO, old) }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: entry_of(HOYO, new) }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry_of(HOYO, old),
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry_of(HOYO, new),
+            }),
         }
     }
 
@@ -1065,8 +1073,8 @@ mod m7_assembly {
         FilePair {
             capture_id: "partial_same_offset".into(),
             path: HOYO.into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
         }
     }
 

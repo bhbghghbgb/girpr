@@ -372,20 +372,23 @@ pub fn file_pairs(
         .admitted
         .iter()
         .map(|a| {
-            let find = |tag: &str| -> Option<&crate::manifest::proto::SophonChunkFile> {
-                manifests
-                    .get(tag)
-                    .and_then(|m| m.entries.iter().find(|e| e.file == a.path))
-            };
+            let find =
+                |tag: &str| -> Option<(&crate::manifest::proto::SophonChunkFile, &str)> {
+                    let m = manifests.get(tag)?;
+                    let entry = m.entries.iter().find(|e| e.file == a.path)?;
+                    Some((entry, m.build_id.as_str()))
+                };
             FilePair {
                 capture_id: a.capture_id.clone(),
                 path: a.path.clone(),
-                old: find(old_tag).map(|e| chunks::OldFile {
+                old: find(old_tag).map(|(e, build_id)| chunks::OldFile {
                     tag: old_tag.to_string(),
+                    build_id: build_id.to_string(),
                     entry: e.clone(),
                 }),
-                new: find(new_tag).map(|e| chunks::NewFile {
+                new: find(new_tag).map(|(e, build_id)| chunks::NewFile {
                     tag: new_tag.to_string(),
+                    build_id: build_id.to_string(),
                     entry: e.clone(),
                 }),
             }
@@ -466,6 +469,7 @@ mod tests {
             path: "dll".into(),
             old: Some(chunks::OldFile {
                 tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
                 entry: entry(
                     "dll",
                     vec![
@@ -477,6 +481,7 @@ mod tests {
             }),
             new: Some(chunks::NewFile {
                 tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
                 entry: entry(
                     "dll",
                     vec![

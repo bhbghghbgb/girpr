@@ -998,8 +998,8 @@ mod tests {
         FilePair {
             capture_id: "partial_same_offset".into(),
             path: "dll".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
         }
     }
 
@@ -1074,8 +1074,8 @@ mod tests {
         let a = assemble_pair(&FilePair {
             capture_id: "partial_moved_offset".into(),
             path: "blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
         })
         .expect("assembles");
         let p = a.patch.as_ref().unwrap();
@@ -1103,8 +1103,8 @@ mod tests {
         let a = assemble_pair(&FilePair {
             capture_id: "full_reuse_reordered".into(),
             path: "blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
         })
         .expect("assembles");
         let p = a.patch.as_ref().unwrap();
@@ -1126,7 +1126,7 @@ mod tests {
             capture_id: "added".into(),
             path: "new.dll".into(),
             old: None,
-            new: Some(NewFile { tag: "7.1.0".into(), entry: new }),
+            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
         })
         .expect("assembles");
         assert!(a.old.is_none());
@@ -1166,7 +1166,7 @@ mod tests {
         let a = assemble_pair(&FilePair {
             capture_id: "removed".into(),
             path: "gone.blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
             new: None,
         })
         .expect("assembles");
@@ -1233,7 +1233,7 @@ mod tests {
         let e = assemble_pair(&FilePair {
             capture_id: "x".into(),
             path: "bad.blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: old }),
+            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
             new: None,
         })
         .unwrap_err();

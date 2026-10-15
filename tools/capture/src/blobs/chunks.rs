@@ -97,6 +97,22 @@ impl Identity {
 pub struct Reference {
     /// The build this use belongs to.
     pub tag: String,
+    /// The build id the chunk is addressed under — the `<build_id>` path segment
+    /// in `…/chunks/<series>/<build_id>/<16hex>_<32hex>`.
+    ///
+    /// Part of the chunk's **address**, not a label: the same chunk id under the
+    /// other build's prefix is a 404, confirmed against the live
+    /// `autopatchhk.yuanshen.com` (`Server: AliyunOSS`, `application/xml`
+    /// `NoSuchKey`). The tag alone does not determine it — two tags can map to
+    /// different build ids over time — so a consumer that has to build a URL or
+    /// decide whether a request was namespaced correctly needs this and cannot
+    /// derive it from `tag`.
+    ///
+    /// `None` on a bundle captured before this field existed. Such a document
+    /// still reads; the fallback is `MANIFEST.json` → `versions.{old,new}.build_id`
+    /// matched on `tag`, which is where the value came from in the first place.
+    #[serde(default)]
+    pub build_id: Option<String>,
     /// The capture that wanted the file.
     pub capture_id: String,
     /// The manifest-relative path.
@@ -196,6 +212,10 @@ pub struct FilePair {
 pub struct OldFile {
     /// The tag.
     pub tag: String,
+    /// The build id the entry was published under. Carried with the tag rather
+    /// than looked up later, because it is the tag's address at capture time and
+    /// a later `getBuild` for the same tag may disagree.
+    pub build_id: String,
     /// The entry.
     pub entry: SophonChunkFile,
 }
@@ -207,6 +227,8 @@ pub struct OldFile {
 pub struct NewFile {
     /// The tag.
     pub tag: String,
+    /// The build id the entry was published under.
+    pub build_id: String,
     /// The entry.
     pub entry: SophonChunkFile,
 }
@@ -314,7 +336,7 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
         // meant the first non-reusable new chunk pushed `patch_fetch` onto
         // *every* new chunk, reusable ones included — which silently broke A12
         // and made the store fetch the chunk it had just proved it need not.
-        let mut push = |tag: &str, c: &SophonChunk, role: Set| {
+        let mut push = |tag: &str, build_id: &str, c: &SophonChunk, role: Set| {
             let w = by_id.entry(c.id.clone()).or_insert_with(|| Want {
                 chunk: c.clone(),
                 sources: vec![Source { tag: tag.to_string() }],
@@ -341,6 +363,7 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
             if !already {
                 w.references.push(Reference {
                     tag: tag.to_string(),
+                    build_id: Some(build_id.to_string()),
                     capture_id: pair.capture_id.clone(),
                     path: pair.path.clone(),
                     role,
@@ -354,15 +377,15 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
 
         if let Some(o) = &pair.old {
             for c in &o.entry.chunks {
-                push(&o.tag, c, Set::MaterializeOld);
+                push(&o.tag, &o.build_id, c, Set::MaterializeOld);
             }
         }
         if let Some(n) = &pair.new {
             let r = retention(pair);
             for c in &n.entry.chunks {
-                push(&n.tag, c, Set::MaterializeNew);
+                push(&n.tag, &n.build_id, c, Set::MaterializeNew);
                 if !r.reuse.contains(&c.id) {
-                    push(&n.tag, c, Set::PatchFetch);
+                    push(&n.tag, &n.build_id, c, Set::PatchFetch);
                 }
             }
         }
@@ -414,6 +437,7 @@ mod tests {
             path: "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
                 entry: entry(
                     "dll",
                     vec![
@@ -425,6 +449,7 @@ mod tests {
             }),
             new: Some(NewFile {
                 tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
                 entry: entry(
                     "dll",
                     vec![
@@ -503,9 +528,14 @@ mod tests {
         let p = FilePair {
             capture_id: "c".into(),
             path: "f".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: entry("f", vec![a]) }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry("f", vec![a]),
+            }),
             new: Some(NewFile {
                 tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
                 entry: entry("f", vec![b.clone()]),
             }),
         };
@@ -525,6 +555,7 @@ mod tests {
             old: None,
             new: Some(NewFile {
                 tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
                 entry: entry("new.dll", vec![chunk(b"fresh", 0, 1), chunk(b"also", 5, 2)]),
             }),
         };
@@ -539,6 +570,7 @@ mod tests {
             path: "gone.blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
                 entry: entry("gone.blk", vec![chunk(b"bye", 0, 1)]),
             }),
             new: None,
@@ -558,10 +590,12 @@ mod tests {
             path: "unity default resources".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
                 entry: entry("f", vec![chunk(b"o1", 0, 1), chunk(b"o2", 1, 2)]),
             }),
             new: Some(NewFile {
                 tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
                 entry: entry("f", vec![chunk(b"n1", 0, 3), chunk(b"n2", 1, 4)]),
             }),
         };
@@ -605,6 +639,51 @@ mod tests {
             shared.references.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(),
             vec!["7.0.0", "7.1.0"]
         );
+        // Each reference carries the build its chunk is addressed under, and the
+        // two differ: the shared chunk has one id and two addresses, which is why
+        // `tag` alone cannot stand in for it.
+        assert_eq!(
+            shared
+                .references
+                .iter()
+                .map(|r| r.build_id.as_deref().unwrap_or("?"))
+                .collect::<Vec<_>>(),
+            vec!["3XnPviMfoILi", "sMXGW2ll3Fuu"],
+            "the shared chunk is addressed under two different build ids"
+        );
+    }
+
+    /// A document written before `build_id` existed still reads, as `None`.
+    ///
+    /// This is the back-compat the field is additive for: bundles captured
+    /// earlier are already on disk, and `verify` reads whatever is there. A
+    /// consumer that needs the build id falls back to `MANIFEST.json` →
+    /// `versions.{old,new}.build_id` matched on `tag`.
+    #[test]
+    fn a_reference_written_before_build_id_existed_still_reads() {
+        let old_document = r#"{
+            "tag": "7.0.0",
+            "capture_id": "partial_same_offset",
+            "path": "dll",
+            "role": "materialize_old",
+            "offset": 0
+        }"#;
+        let r: Reference = serde_json::from_str(old_document).expect("an old document still reads");
+        assert_eq!(r.tag, "7.0.0");
+        assert_eq!(r.build_id, None, "absent, not an empty string");
+
+        // And a current one round-trips through the same type.
+        let now = Reference {
+            tag: "7.0.0".into(),
+            build_id: Some("3XnPviMfoILi".into()),
+            capture_id: "partial_same_offset".into(),
+            path: "dll".into(),
+            role: Set::MaterializeOld,
+            offset: 0,
+        };
+        let v: serde_json::Value = serde_json::to_value(&now).unwrap();
+        assert_eq!(v["build_id"], "3XnPviMfoILi");
+        assert_eq!(serde_json::from_value::<Reference>(v).unwrap(), now);
     }
 
     /// The whole point of the shared-chunk case: a chunk in both builds is one
@@ -652,8 +731,16 @@ mod tests {
         let p = FilePair {
             capture_id: "c".into(),
             path: "f".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: entry("f", vec![old_c]) }),
-            new: Some(NewFile { tag: "7.1.0".into(), entry: entry("f", vec![new_c.clone()]) }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry("f", vec![old_c]),
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry("f", vec![new_c.clone()]),
+            }),
         };
         let w = wants(&[p]);
         assert_eq!(w.len(), 1, "one id, so one blob — and one of them is wrong");
@@ -675,7 +762,11 @@ mod tests {
         let mk = |path: &str| FilePair {
             capture_id: path.into(),
             path: path.into(),
-            old: Some(OldFile { tag: "7.0.0".into(), entry: entry(path, vec![shared.clone()]) }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry(path, vec![shared.clone()]),
+            }),
             new: None,
         };
         let w = wants(&[mk("a.bin"), mk("b.bin")]);
@@ -712,6 +803,7 @@ mod tests {
             path: "gone.blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
                 entry: entry("gone.blk", vec![chunk(b"only-in-old", 0, 0xdead)]),
             }),
             new: None,

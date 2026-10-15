@@ -343,9 +343,11 @@ when several files or both builds reference it.
       "verified": { "md5_compressed_matches": true, "md5_decompressed_matches": true,
                     "size_matches": true },
       "referenced_by": [
-        { "tag": "7.0.0", "capture_id": "partial_same_offset",
+        { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
+          "capture_id": "partial_same_offset",
           "path": "…/HoYoChannel.dll", "role": "materialize_old", "offset": 690719 },
-        { "tag": "7.1.0", "capture_id": "partial_same_offset",
+        { "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
+          "capture_id": "partial_same_offset",
           "path": "…/HoYoChannel.dll", "role": "materialize_new", "offset": 690719 }
       ],
       "sets": ["materialize_old", "materialize_new"] }
@@ -358,6 +360,23 @@ when several files or both builds reference it.
 
 `role` ∈ `materialize_old` | `materialize_new` | `patch_fetch`. `patch_fetch` is
 always a subset of `materialize_new` for the same file (assertion A12).
+
+### `build_id` — part of the chunk's address
+
+A chunk's URL is `…/chunks/<series>/<build_id>/<16hex>_<32hex>`, so the build id
+is **where the bytes live**, not a label on them. The same chunk id under the
+other build's prefix answers `404` with an `application/xml` `NoSuchKey` body
+(measured against `autopatchhk.yuanshen.com`, `Server: AliyunOSS`) — see
+[`00-spec.md` §3.7](00-spec.md). `tag` does not determine `build_id`: two tags can
+map to different build ids over time, so a consumer that has to build a chunk URL,
+or decide whether an observed request was namespaced correctly, cannot derive it
+from the tag.
+
+`build_id` is **additive and optional**. A reference in a bundle captured before
+this field existed has no `build_id`, and that document still reads; the fallback
+is `MANIFEST.json` → `versions.{old,new}.build_id` matched on `tag`, which is
+where the value came from in the first place. A consumer that wants the build id
+must handle both.
 
 `referenced_by` is also the **only** thing `gircap materialize` consults: the
 chunk list of a side is rebuilt from `referenced_by`'s `offset`s and each

@@ -60,6 +60,11 @@ struct Blob {
 fn reference(tag: &str, path: &str, role: Set, offset: i64) -> Reference {
     Reference {
         tag: tag.into(),
+        build_id: Some(match tag {
+            "7.0.0" => "3XnPviMfoILi",
+            _ => "sMXGW2ll3Fuu",
+        }
+        .into()),
         capture_id: CAPTURE.into(),
         path: path.into(),
         role,

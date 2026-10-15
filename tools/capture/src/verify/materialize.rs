@@ -280,6 +280,11 @@ mod tests {
     fn reference(tag: &str, capture: &str, path: &str, role: Set, offset: i64) -> Reference {
         Reference {
             tag: tag.into(),
+            build_id: Some(match tag {
+                "7.0.0" => "3XnPviMfoILi",
+                _ => "sMXGW2ll3Fuu",
+            }
+            .into()),
             capture_id: capture.into(),
             path: path.into(),
             role,

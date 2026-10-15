@@ -228,7 +228,8 @@ fn the_chunk_index_key_set_is_the_documented_one() {
     );
     assert_eq!(
         keys(&blob["referenced_by"][0]),
-        vec!["capture_id", "offset", "path", "role", "tag"]
+        vec!["build_id", "capture_id", "offset", "path", "role", "tag"],
+        "`build_id` is part of a chunk's address, so a reference records it"
     );
     assert_eq!(
         keys(&blob["verified"]),
