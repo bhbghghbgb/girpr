@@ -11,6 +11,8 @@
 //!    bytes are in place.
 //!
 //! The whole phase is skipped in read-only modes and whenever any file failed.
+//! The deprecated list itself is **not** fetched here — it arrives as an
+//! argument, having been read during the plan phase (docs/05 M0).
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -23,27 +25,74 @@ use crate::report::Summary;
 use crate::util;
 
 use super::metadata::Meta;
-use super::plan::RepairPlan;
-use super::purge;
+use super::plan::{RepairPlan, purge};
+use super::scope::PathScope;
 
 /// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
 /// the bytes are already repaired, so a half-finished bookkeeping write would
 /// desync the launcher from the game.
+///
+/// `deprecated` is the server's deprecated-file list, already fetched (and
+/// already possibly empty, if the call failed) during the plan phase.
+///
+/// **This phase owns its own `--dry-run` discipline.** It used to rely on
+/// `repair::run` reaching it only through `if !readonly`, and `--purge-only`
+/// added a second call site that is not behind that gate — so
+/// `--purge-only --dry-run` deleted files, renamed the audio cache and swept
+/// the cleanup for real. A gate that every caller has to remember is not a
+/// gate; each destructive step below therefore consults `ctx.dry_run` itself.
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
     plan: &RepairPlan,
     meta: &Meta,
     summary: &Summary,
-) -> Result<(), RunFailure> {
-    delete_deprecated(game_dir, meta, summary).await;
-    move_audio_cache(game_dir, &meta.config);
-    if ctx.purge_after {
-        let bytes = purge::purge_extra(game_dir, plan, &purge::keep_set(), false)
-            .map_err(RunFailure::write)?;
+    deprecated: &[String],
+) -> Result<PostOutcome, RunFailure> {
+    let dry = ctx.dry_run;
+    delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
+    move_audio_cache(game_dir, &meta.config, &ctx.path_scope, dry);
+    if ctx.purge_after || ctx.purge_only {
+        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set(), &ctx.path_scope);
+        // The post-repair re-plan is the only purge pass whose candidates were
+        // not computed at assert time, so `--max-delete-bytes` is checked
+        // against it again here. Today it can only be *smaller* than the
+        // up-front plan — a successful repair promotes every `*_tmp` it
+        // creates, and a run that leaves one behind has already failed (`3`) or
+        // stopped (`5`), both of which skip this phase. That is a property of
+        // the pipeline, not a property of the ceiling, so the check is here
+        // rather than assumed: deletion is the one irreversible act in the tool.
+        if let Some(hit) = ctx.limits.check_delete(&purge_plan) {
+            tracing::error!("limit exceeded: {hit}");
+            if dry {
+                return Ok(PostOutcome::DeletedNothing);
+            }
+            return Ok(PostOutcome::DeleteCeiling);
+        }
+        let bytes = purge::apply_purge(&purge_plan, dry).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
+    }
+    // docs/04 §2.2: `config.ini` is bumped last so the on-disk version only
+    // advances once the bytes are in place. Two situations make that premise
+    // false by construction — the bytes were deliberately *not* put in place:
+    //
+    // - an active path scope (M2): the run only repaired a subset of the tree,
+    // - `--purge-only` (M6): a cleanup put no bytes in place at all.
+    //
+    // Bumping would be exactly the launcher desync the ordering exists to
+    // prevent. Skip it, say so, and let `SUMMARY` carry `config_bumped=0` so a
+    // test can assert it instead of reading the file.
+    if ctx.path_scope.is_active() {
+        tracing::warn!(
+            "path scope active: not bumping config.ini, so its game_version still describes the un-scoped parts of the install"
+        );
+        return Ok(PostOutcome::Ok);
+    }
+    if ctx.purge_only {
+        tracing::warn!("--purge-only: not bumping config.ini; no bytes were repaired");
+        return Ok(PostOutcome::Ok);
     }
     let (ch, sub, cps) = ctx.biz.channel_tuple();
     util::write_config_ini(
@@ -55,27 +104,52 @@ pub async fn run(
     )
     .context("write config.ini")
     .map_err(RunFailure::write)?;
-    Ok(())
+    Ok(PostOutcome::Ok)
 }
 
-/// Delete every path the server still lists as deprecated. Best-effort: the
-/// list is advisory, so a failed call only warns and the run continues.
-async fn delete_deprecated(game_dir: &Path, meta: &Meta, summary: &Summary) {
-    let list = match meta.hyp.deprecated_files().await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!("deprecated list unavailable: {e:#}");
-            return;
-        }
-    };
+/// How the post-phase ended. The post-phase mutates the disk, so a caller that
+/// reached it through a path the `readonly` gate does not cover still needs the
+/// outcome spelled out rather than assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostOutcome {
+    /// Finished, everything it was asked to do is done.
+    Ok,
+    /// `--max-delete-bytes` blocked the post-repair cleanup pass. Nothing in
+    /// that pass was deleted; earlier passes were already applied.
+    DeleteCeiling,
+    /// `--dry-run`: the pass was listed and applied nothing. Distinguishable
+    /// from `DeleteCeiling` so a dry run does not report a limit it never hit.
+    DeletedNothing,
+}
+
+/// Delete every path the server still lists as deprecated. The list was
+/// fetched during the plan phase and is advisory: an empty list (failed call)
+/// simply means there is nothing to do. A path outside the active scope does
+/// not exist, so it is not deleted either.
+///
+/// `dry_run` lists instead of deleting, and adds nothing to the byte counter.
+fn delete_deprecated(
+    game_dir: &Path,
+    list: &[String],
+    summary: &Summary,
+    scope: &PathScope,
+    dry_run: bool,
+) {
     for n in list {
-        let p = game_dir.join(util::normalize_rel(&n));
-        if p.is_file() {
-            let sz = util::file_len(&p).unwrap_or(0);
-            if std::fs::remove_file(&p).is_ok() {
-                summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
-                tracing::info!("deleted deprecated {n}");
-            }
+        if !scope.is_visible(n) {
+            tracing::debug!("deprecated path out of scope, kept: {n}");
+            continue;
+        }
+        let p = game_dir.join(util::normalize_rel(n));
+        if !p.is_file() {
+            continue;
+        }
+        let sz = util::file_len(&p).unwrap_or(0);
+        if dry_run {
+            tracing::info!("would delete deprecated {n} ({sz} bytes)");
+        } else if std::fs::remove_file(&p).is_ok() {
+            summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+            tracing::info!("deleted deprecated {n}");
         }
     }
 }
@@ -86,9 +160,27 @@ async fn delete_deprecated(game_dir: &Path, meta: &Meta, summary: &Summary) {
 /// Both dirs must be configured and distinct. Leftover empty cache dirs are
 /// cleaned by the files-cleanup's emptied-dir sweep, whenever a purge is
 /// enabled.
-fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
+///
+/// A scoped run does not relocate audio: a file whose source or destination is
+/// outside the scope is left alone, since moving it is a mutation of a path the
+/// scope may not have admitted (docs/04 §2).
+///
+/// `dry_run` logs the move and does none of it.
+fn move_audio_cache(
+    game_dir: &Path,
+    config: &crate::hyp::GameConfig,
+    scope: &PathScope,
+    dry_run: bool,
+) {
     let (cache_dir, res_dir) = (&config.audio_pkg_cache_dir, &config.audio_pkg_res_dir);
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
+        return;
+    }
+    // Rel paths are `/`-separated everywhere except at the filesystem boundary.
+    let cache_rel = cache_dir.replace('\\', "/");
+    let res_rel = res_dir.replace('\\', "/");
+    if !scope.is_visible(&cache_rel) || !scope.is_visible(&res_rel) {
+        tracing::debug!("audio cache->res out of scope, skipped");
         return;
     }
     let cache = game_dir.join(util::normalize_rel(cache_dir));
@@ -102,10 +194,25 @@ fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
         .collect();
+    if dry_run {
+        for src in &files {
+            let Ok(rel) = src.strip_prefix(&cache) else {
+                continue;
+            };
+            if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+                continue;
+            }
+            tracing::info!("would move audio cache {} -> res", rel.display());
+        }
+        return;
+    }
     for src in files {
         let Ok(rel) = src.strip_prefix(&cache) else {
             continue;
         };
+        if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+            continue;
+        }
         let target = res.join(rel);
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
@@ -117,4 +224,14 @@ fn move_audio_cache(game_dir: &Path, config: &crate::hyp::GameConfig) {
         }
     }
     tracing::info!("moved audio cache -> res");
+}
+
+/// Join two rel path fragments into the `/`-separated form the scope matches on.
+fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
+    let name = name.to_string_lossy().replace('\\', "/");
+    if dir_rel.is_empty() {
+        name
+    } else {
+        format!("{dir_rel}/{name}")
+    }
 }

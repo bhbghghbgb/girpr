@@ -50,6 +50,10 @@ pub struct GameFixture {
     pub files: Vec<FixtureFile>,
     /// chunk id -> zstd(compressed payload) bytes served by the mock
     pub chunk_store: HashMap<String, Vec<u8>>,
+    /// chunk id -> zstd(payload with one byte flipped). Well-formed: same
+    /// uncompressed length, different MD5, so the chunk decodes and then fails
+    /// verification. That is what makes a file *retry* rather than just fail.
+    pub corrupt_chunk_store: HashMap<String, Vec<u8>>,
 }
 
 fn md5hex(data: &[u8]) -> String {
@@ -116,12 +120,18 @@ pub fn build_fixture() -> GameFixture {
 
     // Protobuf manifest + zstd + checksum (decompressed-bytes MD5, like prod).
     let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
     let mut pb_files: Vec<SophonChunkFile> = Vec::new();
     for f in &files {
         let mut pb_chunks: Vec<SophonChunk> = Vec::new();
         for c in &f.chunks {
             let compressed = zstd_bytes(&c.data);
             chunk_store.insert(c.id.clone(), compressed.clone());
+            // Same length, one byte different: decodes, fails its MD5.
+            let mut bad = c.data.clone();
+            let last = bad.len() - 1;
+            bad[last] ^= 0xFF;
+            corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
             pb_chunks.push(SophonChunk {
                 id: c.id.clone(),
                 uncompressed_md5: md5hex(&c.data),
@@ -153,6 +163,7 @@ pub fn build_fixture() -> GameFixture {
         manifest_checksum,
         files,
         chunk_store,
+        corrupt_chunk_store,
     }
 }
 
@@ -199,6 +210,16 @@ pub struct MockOpts {
     /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
     /// `Some("")` to model the API omitting the field.
     pub download_mode: Option<String>,
+    /// Serve every chunk request as `500`. Models a reachable-but-broken origin,
+    /// which is what exercises the retry/backoff paths (`--fail-fast`) without
+    /// a dead host and its connection timeouts.
+    pub fail_chunks: bool,
+    /// Serve the first N chunk responses with valid-but-**wrong** bytes: the
+    /// same uncompressed length and a well-formed body, so the chunk decodes
+    /// fine and fails on its MD5. Models a corrupt or half-propagated origin,
+    /// which is what makes a file retry — and therefore what distinguishes
+    /// "bytes of promoted files" from "bytes that crossed the wire".
+    pub corrupt_first_chunks: u32,
 }
 
 pub struct MockServer {
@@ -291,6 +312,11 @@ struct Responses {
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     latest_tag: String,
+    fail_chunks: bool,
+    corrupt_first_chunks: u32,
+    /// Chunk responses served so far, so the corrupt-N counter is per-server
+    /// and not per-connection.
+    served: AtomicU64,
 }
 
 fn build_responses(
@@ -382,6 +408,9 @@ fn build_responses(
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         latest_tag: fx.latest_tag.clone(),
+        fail_chunks: opts.fail_chunks,
+        corrupt_first_chunks: opts.corrupt_first_chunks,
+        served: AtomicU64::new(0),
     }
 }
 
@@ -466,12 +495,34 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        match fx.chunk_store.get(id) {
-            Some(bytes) => {
-                log.lock().unwrap().push(id.to_string());
-                ("200 OK", "application/octet-stream", bytes.clone())
+        if r.fail_chunks {
+            // Still logged: "was this chunk even asked for" is the assertion a
+            // `--fail-fast` test needs, and a 500 is still a request.
+            log.lock().unwrap().push(id.to_string());
+            (
+                "500 Internal Server Error",
+                "text/plain",
+                b"chunk store is down".to_vec(),
+            )
+        } else {
+            match fx.chunk_store.get(id) {
+                Some(bytes) => {
+                    log.lock().unwrap().push(id.to_string());
+                    let n = r.served.fetch_add(1, Ordering::Relaxed);
+                    if n < r.corrupt_first_chunks as u64 {
+                        // Well-formed, same uncompressed length, wrong MD5.
+                        let bad = fx
+                            .corrupt_chunk_store
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| bytes.clone());
+                        ("200 OK", "application/octet-stream", bad)
+                    } else {
+                        ("200 OK", "application/octet-stream", bytes.clone())
+                    }
+                }
+                None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
             }
-            None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
         }
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())

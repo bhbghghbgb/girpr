@@ -469,15 +469,26 @@ crate is the summary emitter.
 
 ## 8. Consuming the bundle — and one external blocker
 
-The bundle is built to be handed to the main tool. Two of the three consumption
-paths work today; the third is blocked on a `girpr` feature that does not exist
-yet.
+The bundle is built to be handed to the main tool.
 
 | what you want to do | needs | status |
 |---|---|---|
 | inspect / assert from the metadata alone | nothing — `MANIFEST.json`, `patchmaps/`, `verify/` | ✅ works |
 | rebuild old/new files offline | `gircap materialize` | ✅ works |
-| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ❌ **blocked** |
+| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **shipped** — `girpr --include <GLOB>` |
+
+> **Update (from `girpr`): the blocker is resolved.** The path include/exclude
+> asked for below shipped as `girpr --include` / `--exclude`, alongside
+> `--max-files` / `--max-download-bytes` / `--max-write-bytes` /
+> `--max-delete-bytes` (exit `5` on a ceiling, never trimming the work list),
+> `--print-plan`, `--purge-only`, `--fail-fast` and `--hyp-base` /
+> `--sophon-base`. **This section and §8.1.1 are otherwise unchanged**: the
+> procedure below is `gircap`'s to revise, and the only edit made here is the
+> status line. `girpr`'s README is the authority on what the flags now guarantee
+> — in particular that a filtered-out path is invisible to the files-cleanup as
+> well as to the repair, and that a scoped run does not bump `config.ini`. One
+> consequence is worth flagging for whoever updates §8.1.1: the artifact-serving
+> shim is still missing, so the check cannot be automated yet.
 
 ### 8.1 The blocker
 

@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::Biz;
+use crate::repair::scope::{Limits, PathScope};
 
 /// Typed failure carrying the process exit code.
 /// `1` usage/config, `2` metadata/network, `3` write/verify.
@@ -63,10 +64,32 @@ pub struct RunCtx {
     /// game-only empty set). `false` (flag omitted) means autodetect: keep the
     /// scan file, else default `en-us` for automation.
     pub audio_explicit: bool,
+    /// Compiled `--include` / `--exclude` globs (docs/04 A1). The patterns are
+    /// compiled once, in [`crate::cli::Args::into_ctx`], so a `RunCtx` that
+    /// exists at all has a valid scope — a bad glob was already exit `1`. An
+    /// *open* scope admits every path, which makes every `is_active()` gate
+    /// downstream a no-op, so an unflagged run is unaffected.
+    pub path_scope: PathScope,
+    /// Manually requested resource ceilings (docs/04 Group B). All `None` in an
+    /// unflagged run, which is what makes every refusal a no-op and keeps
+    /// `SUMMARY limited=1` absent.
+    pub limits: Limits,
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,
+    /// `--purge-only`: `check_only` inverted. Runs the files-cleanup and the
+    /// post-phase, skips the repair loop.
+    pub purge_only: bool,
+    /// `--fail-fast`: stop the run once one file exhausts its retries.
+    pub fail_fast: bool,
     pub dry_run: bool,
+    /// `--print-plan`: report the plan and stop. Read-only by construction —
+    /// the pipeline returns before `create_dir_all` — and **not** the same thing
+    /// as `check_only`, which answers "what is wrong" rather than "what would
+    /// you do".
+    pub print_plan: bool,
+    /// `--plan-out <FILE>`: where to write the per-file plan JSON.
+    pub plan_out: Option<PathBuf>,
     pub purge_after: bool,
     pub purge_before: bool,
     pub json_summary: bool,

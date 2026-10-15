@@ -6,7 +6,7 @@
 //! (`key=value` vs JSON) can be unit-tested without a subscriber installed.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 
@@ -15,7 +15,11 @@ pub const PROGRESS_INTERVAL_SECS: u64 = 10;
 
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
-#[derive(Default, Debug)]
+///
+/// `Default` is written by hand rather than derived for exactly one reason: the
+/// ceiling sentinel is `u64::MAX`, and a derived `Default` would start every run
+/// at a ceiling of **zero** — i.e. refusing the first byte.
+#[derive(Debug)]
 pub struct Summary {
     pub files_total: u64,
     pub files_skipped: AtomicU64,
@@ -26,9 +30,61 @@ pub struct Summary {
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
     /// deprecated files) lands here. No split accounting.
     pub deleted_extra_bytes: AtomicU64,
+    /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
+    /// start; plain values, so no atomics are needed.
+    pub flags: SummaryFlags,
+    /// `--max-download-bytes`, stored as a raw ceiling (`u64::MAX` = none) so
+    /// the per-chunk reservation is a compare-and-swap with no `Option` check
+    /// on the hot path. Owned by
+    /// [`crate::repair::scope::ledger`](crate::repair::scope) — see
+    /// [`Summary::set_download_limit`].
+    pub download_limit: AtomicU64,
+    /// Set when the runtime download hard stop fired. An aborted run leaves
+    /// `*_tmp` files behind by design: S3 resume-by-length makes the next run a
+    /// smaller run, not a corrupt one.
+    pub download_stopped: AtomicBool,
+    /// `--max-write-bytes`, same `u64::MAX` sentinel as `download_limit`.
+    pub write_limit: AtomicU64,
+    /// Bytes written into `*_tmp`. Reported as `write_bytes` **only** when
+    /// `--max-write-bytes` is active — this is the cumulative counterpart of
+    /// peak disk (`io_threads × largest file`), and it is invisible to
+    /// `download_bytes`, which counts the network, not the disk.
+    pub write_bytes: AtomicU64,
+    /// Set when the runtime **write** hard stop fired (see `write_bytes`).
+    pub write_stopped: AtomicBool,
+    /// `--fail-fast` armed.
+    pub fail_fast: AtomicBool,
+    /// `--fail-fast` has tripped: stop starting files, stop retrying.
+    pub aborted: AtomicBool,
+}
+
+impl Default for Summary {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Summary {
+    /// A run with no counters moved and no ceiling requested.
+    pub fn new() -> Self {
+        Self {
+            files_total: 0,
+            files_skipped: AtomicU64::new(0),
+            files_repaired: AtomicU64::new(0),
+            files_failed: AtomicU64::new(0),
+            download_bytes: AtomicU64::new(0),
+            deleted_extra_bytes: AtomicU64::new(0),
+            flags: SummaryFlags::default(),
+            download_limit: AtomicU64::new(u64::MAX),
+            download_stopped: AtomicBool::new(false),
+            write_limit: AtomicU64::new(u64::MAX),
+            write_bytes: AtomicU64::new(0),
+            write_stopped: AtomicBool::new(false),
+            fail_fast: AtomicBool::new(false),
+            aborted: AtomicBool::new(false),
+        }
+    }
+
     /// Plain-value copy, for handing a shared `Summary` back to the caller.
     pub fn snapshot(&self) -> Self {
         Self {
@@ -38,8 +94,109 @@ impl Summary {
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
+            flags: self.flags,
+            // A snapshot must not lose the ceiling or the stop flag: the caller
+            // reads both *after* the tasks have been joined, which is the only
+            // moment either can be meaningful.
+            download_limit: AtomicU64::new(self.download_limit.load(Ordering::Relaxed)),
+            download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
+            write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
+            write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
+            write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
+            fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
+            aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
         }
     }
+}
+
+/// The **conditional** `SUMMARY` keys (docs/04 §4.6).
+///
+/// Every one is emitted *only* when its flag is active — the same discipline
+/// `girsync` used for `identical=N`: an unflagged run's output is byte-identical
+/// to a run that never passes the flags at all. That is what keeps the machine
+/// contract non-breaking when this surface grows.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SummaryFlags {
+    /// Any resource ceiling active (`--max-files`, `--max-download-bytes`, …).
+    pub limited: bool,
+    /// Any path scope active (`--include` / `--exclude`).
+    pub scoped: bool,
+    /// `--max-download-bytes`'s estimate for the (filtered) plan.
+    pub plan_download_bytes: Option<u64>,
+    /// Bytes written into `*_tmp`, when `--max-write-bytes` is active.
+    pub write_bytes: Option<u64>,
+    /// What a **runtime** hard stop cut short (`bytes` / `write`), vs a
+    /// pre-flight refusal which wrote nothing at all.
+    pub stopped: Option<&'static str>,
+    /// `config.ini` was deliberately not bumped, because a scoped (or
+    /// `--purge-only`) run has deliberately not put the bytes in place.
+    pub config_bumped_zero: bool,
+}
+
+/// One conditional `SUMMARY` entry. Rendered as `key=value` on the `key=value`
+/// plane and as a typed JSON member on the `--json-summary` plane, so the two
+/// stay in agreement without a hand-maintained list of quoting rules.
+#[derive(Debug, Clone, Copy)]
+enum Extra {
+    Num(&'static str, u64),
+    Word(&'static str, &'static str),
+}
+
+impl Extra {
+    /// Only the rendering paths are used in production; `key` exists so a test
+    /// can assert the fixed order of the conditional tail.
+    #[cfg(test)]
+    fn key(&self) -> &'static str {
+        match self {
+            Extra::Num(k, _) | Extra::Word(k, _) => k,
+        }
+    }
+
+    fn kv(&self) -> String {
+        match self {
+            Extra::Num(k, v) => format!("{k}={v}"),
+            Extra::Word(k, v) => format!("{k}={v}"),
+        }
+    }
+
+    fn json(&self) -> String {
+        match self {
+            Extra::Num(k, v) => format!("\"{k}\":{v}"),
+            Extra::Word(k, v) => format!("\"{k}\":\"{v}\""),
+        }
+    }
+}
+
+/// The conditional tail of a `SUMMARY`, in a fixed order so two runs' lines
+/// diff cleanly. Empty (and therefore invisible) on an unflagged run.
+fn conditional_extras(sum: &Summary) -> Vec<Extra> {
+    let f = &sum.flags;
+    let mut out = Vec::new();
+    if f.limited {
+        out.push(Extra::Num("limited", 1));
+    }
+    if f.scoped {
+        out.push(Extra::Num("scoped", 1));
+    }
+    if f.scoped || f.config_bumped_zero {
+        // A scoped (or `--purge-only`) run deliberately did not put the bytes
+        // in place, so it does not advance config.ini (docs/04 §2.2). Emitted
+        // as a key rather than left to be discovered by reading the file.
+        out.push(Extra::Num("config_bumped", 0));
+    }
+    if f.limited || f.scoped {
+        out.push(Extra::Num("plan_files", sum.files_total));
+    }
+    if let Some(n) = f.plan_download_bytes {
+        out.push(Extra::Num("plan_download_bytes", n));
+    }
+    if let Some(n) = f.write_bytes {
+        out.push(Extra::Num("write_bytes", n));
+    }
+    if let Some(s) = f.stopped {
+        out.push(Extra::Word("stopped", s));
+    }
+    out
 }
 
 /// Emit one data-plane line to **both** stdout and the log so unattended runs
@@ -138,22 +295,42 @@ pub fn format_report_line(
 
 /// The final `SUMMARY` line, or the same fields as a JSON object with
 /// `--json-summary`.
+///
+/// Trailing conditional keys (docs/04 §4.6: `limited`, `scoped`,
+/// `config_bumped`, `plan_files`, …) are appended only when their flag is
+/// active, so an unflagged run's line is byte-identical to today's.
 pub fn format_summary_line(sum: &Summary, exit: i32, json: bool) -> String {
     let skipped = sum.files_skipped.load(Ordering::Relaxed);
     let repaired = sum.files_repaired.load(Ordering::Relaxed);
     let failed = sum.files_failed.load(Ordering::Relaxed);
     let dl = sum.download_bytes.load(Ordering::Relaxed);
     let del = sum.deleted_extra_bytes.load(Ordering::Relaxed);
+    let extra = conditional_extras(sum);
     if json {
-        format!(
+        let mut s = format!(
             "{{\"total\":{},\"skipped\":{},\"repaired\":{},\"failed\":{},\"download_bytes\":{},\"deleted_extra_bytes\":{},\"exit\":{}}}",
             sum.files_total, skipped, repaired, failed, dl, del, exit
-        )
+        );
+        if !extra.is_empty() {
+            s.pop(); // the closing brace
+            s.push(',');
+            s.push_str(&extra.iter().map(Extra::json).collect::<Vec<_>>().join(","));
+            s.push('}');
+        }
+        s
     } else {
-        format!(
-            "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} exit={exit}",
-            sum.files_total, skipped, repaired, failed, dl, del
-        )
+        let tail: String = extra.iter().map(Extra::kv).collect::<Vec<_>>().join(" ");
+        if tail.is_empty() {
+            format!(
+                "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} exit={exit}",
+                sum.files_total, skipped, repaired, failed, dl, del
+            )
+        } else {
+            format!(
+                "SUMMARY total={} skipped={} repaired={} failed={} download_bytes={} deleted_extra_bytes={} exit={exit} {tail}",
+                sum.files_total, skipped, repaired, failed, dl, del
+            )
+        }
     }
 }
 
@@ -186,6 +363,8 @@ mod tests {
             files_failed: AtomicU64::new(1),
             download_bytes: AtomicU64::new(10),
             deleted_extra_bytes: AtomicU64::new(20),
+            flags: SummaryFlags::default(),
+            ..Summary::default()
         };
         assert_eq!(
             format_summary_line(&s, 3, false),
@@ -200,6 +379,77 @@ mod tests {
         assert_eq!(v["download_bytes"], 10);
         assert_eq!(v["deleted_extra_bytes"], 20);
         assert_eq!(v["exit"], 3);
+        // An unflagged run gains no members at all — that is the whole
+        // contract of the conditional keys.
+        assert_eq!(v.as_object().unwrap().len(), 7, "{json}");
+    }
+
+    #[test]
+    fn conditional_keys_appear_only_when_their_flag_is_active() {
+        let mut s = Summary {
+            files_total: 8,
+            ..Summary::default()
+        };
+        s.flags.scoped = true;
+        let line = format_summary_line(&s, 0, false);
+        for k in ["scoped=1", "config_bumped=0", "plan_files=8"] {
+            assert!(line.contains(k), "{k} missing from {line}");
+        }
+        assert!(!line.contains("limited"), "{line}");
+        assert!(!line.contains("plan_download_bytes"), "{line}");
+        assert!(!line.contains("write_bytes"), "{line}");
+        assert!(!line.contains("stopped"), "{line}");
+        // Fixed fields are untouched; only a tail is appended.
+        assert!(line.starts_with("SUMMARY total=8 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 exit=0 "));
+
+        // The same run as JSON: same keys, right types.
+        let v: serde_json::Value = serde_json::from_str(&format_summary_line(&s, 0, true)).unwrap();
+        assert_eq!(v["scoped"], 1);
+        assert_eq!(v["config_bumped"], 0);
+        assert_eq!(v["plan_files"], 8);
+        assert_eq!(v.as_object().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn every_conditional_key_has_a_known_name_and_typed_rendering() {
+        let mut s = Summary {
+            files_total: 3,
+            ..Summary::default()
+        };
+        s.flags = SummaryFlags {
+            limited: true,
+            scoped: true,
+            plan_download_bytes: Some(4242),
+            write_bytes: Some(77),
+            stopped: Some("bytes"),
+            config_bumped_zero: false,
+        };
+        let line = format_summary_line(&s, 5, false);
+        assert_eq!(
+            line,
+            "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
+             exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
+             write_bytes=77 stopped=bytes"
+        );
+        // `stopped` is a word, not a number: the JSON plane must say so.
+        let v: serde_json::Value = serde_json::from_str(&format_summary_line(&s, 5, true)).unwrap();
+        assert_eq!(v["stopped"], "bytes");
+        assert_eq!(v["write_bytes"], 77);
+        assert_eq!(v["plan_download_bytes"], 4242);
+        // Key order is fixed, so two runs' lines diff cleanly.
+        let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "limited",
+                "scoped",
+                "config_bumped",
+                "plan_files",
+                "plan_download_bytes",
+                "write_bytes",
+                "stopped"
+            ]
+        );
     }
 
     #[test]
@@ -214,6 +464,7 @@ mod tests {
         assert_eq!(snap.files_total, 7);
         assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
         assert_eq!(snap.download_bytes.load(Ordering::Relaxed), 9);
+        assert_eq!(snap.flags, SummaryFlags::default());
         // Mutating the source afterwards must not touch the snapshot.
         s.files_skipped.store(5, Ordering::Relaxed);
         assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);

@@ -1,4 +1,4 @@
-# Finding & Verdict — Low-disk Genshin repair/patch (Starward vs Collapse)
+# Repair findings & verdict - Low-disk Genshin repair/patch (Starward vs Collapse)
 
 Scope: Genshin Impact only (`hk4e_cn` / `hk4e_global` / `hk4e_bilibili`), Rust tool, automation-friendly
 (no UI), minimize disk usage before / during / after patching. Repair-capable: local files may be

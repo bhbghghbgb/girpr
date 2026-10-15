@@ -1,4 +1,4 @@
-# Repair-by-Chunk Spec (language agnostic) — Genshin low-disk patcher
+# Repair spec - Repair-by-Chunk (language agnostic) - Genshin low-disk patcher
 
 Goal: bring a possibly-corrupt, possibly-any-older-version Genshin install to the current live
 version with minimal extra disk usage, unattended (args + exit code + logs).
