@@ -463,7 +463,11 @@ struct Table {
     hyp: BTreeMap<&'static str, Vec<u8>>,
     builds: BTreeMap<String, Vec<u8>>,
     archives: BTreeMap<(String, String), Archive>,
-    chunks: BTreeMap<String, Blob>,
+    chunks: BTreeMap<(String, String), Blob>,
+    /// The `game_ids[]` this mock answers for; anything else is the bad-id case.
+    game_id: String,
+    /// The `package_id` this mock answers for; anything else is `-201`.
+    package_id: String,
 }
 
 /// Every `matching_field` any build publishes, in a stable order.
@@ -603,7 +607,6 @@ fn game_ref() -> J {
 }
 
 /// The body as text, validated on the way out.
-///
 /// A malformed literal then fails here, with the mock's own panic naming it,
 /// rather than three layers downstream as a confusing parse error from the tool.
 fn compact(text: String) -> Vec<u8> {
@@ -723,14 +726,19 @@ fn build_table(world: &World, base: &str) -> Table {
     );
 let mut builds = BTreeMap::new();
     let mut archives = BTreeMap::new();
-    let mut chunks: BTreeMap<String, Blob> = BTreeMap::new();
+    let mut chunks: BTreeMap<(String, String), Blob> = BTreeMap::new();
     for build in [&world.new, &world.old] {
         let mut manifests = Vec::new();
         for (field, files) in &build.fields {
             let archive = world.archive(build, field).expect("the world is self-consistent");
             for f in files {
                 for c in &f.chunks {
-                    chunks.entry(c.id.clone()).or_insert_with(|| c.clone());
+                    // Keyed by build as well as id: the same content under two
+                    // builds is one fetch but **two addresses**, and only the
+                    // second half of that is what the CDN enforces.
+                    chunks
+                        .entry((build.build_id.clone(), c.id.clone()))
+                        .or_insert_with(|| c.clone());
                 }
             }
             archives.insert((build.build_id.clone(), archive.id.clone()), archive.clone());
@@ -802,7 +810,54 @@ let mut builds = BTreeMap::new();
         );
     }
 
-    Table { hyp, builds, archives, chunks }
+    // The ids the mock answers for, **read back out of the bodies it just built**
+    // rather than restated here. `published_fields` above exists because a mock
+    // carrying its own idea of the world eventually disagrees with itself; the
+    // `game_ids[]` / `package_id` checks are exactly that shape, and hardcoding
+    // them would make a typo look like a measured behaviour.
+    let package_id = serde_json::from_slice::<serde_json::Value>(&hyp["getGameBranches"])
+        .ok()
+        .and_then(|v| {
+            v.pointer("/data/game_branches/0/main/package_id")
+                .and_then(|p| p.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    assert!(
+        !package_id.is_empty(),
+        "the branches body must carry a package_id, or every getBuild would 400"
+    );
+    Table {
+        hyp,
+        builds,
+        archives,
+        chunks,
+        game_id: GAME.to_string(),
+        package_id,
+    }
+}
+
+/// A JSON API envelope carrying an error: `{"retcode":n,"message":…,"data":null}`.
+///
+/// `null` data on an error is the measured spelling and is what a consumer
+/// distinguishing "no build" from "no tag" has to go on.
+fn envelope_error(retcode: i64, message: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "data": serde_json::Value::Null,
+        "message": message,
+        "retcode": retcode,
+    }))
+    .expect("render json")
+}
+
+/// A JSON API envelope carrying `data` at an explicit retcode.
+fn envelope_with_data(retcode: i64, message: &str, data: serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "data": data,
+        "message": message,
+        "retcode": retcode,
+    }))
+    .expect("render json")
 }
 
 /// Answer one request.
@@ -829,7 +884,15 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
     let tag = query_param(&query, "tag");
     log.lock().expect("log").push(Recorded { path: path.clone(), query: query.clone(), tag: tag.clone() });
 
-    let Some(bytes) = respond(table, &path, tag.as_deref()) else {
+    let Some(bytes) = respond(table, &path, &query, tag.as_deref()) else {
+        // A blob route's miss is the measured shape, not a generic one: the real
+        // CDN (`Server: AliyunOSS`) answers `404` with `application/xml` and a
+        // `NoSuchKey` envelope, and that is what `api/error_shapes.json` records
+        // and a replayer will replay. A `text/plain` stand-in would let the
+        // mock agree with itself about a detail the mock cannot know.
+        if is_blob_route(&path) {
+            return write_response(&mut stream, 404, "application/xml", &no_such_key(&path));
+        }
         return write_response(
             &mut stream,
             404,
@@ -840,6 +903,22 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
     write_response(&mut stream, 200, content_type(&path), &bytes)
 }
 
+/// Whether `path` belongs to the CDN's two blob namespaces rather than the JSON
+/// APIs. `api/` and the `get*` endpoints are the JSON side.
+fn is_blob_route(path: &str) -> bool {
+    !path.contains("getBuild") && !path.contains("getGame")
+}
+
+/// The AliyunOSS `NoSuchKey` envelope, with the fields that are volatile per
+/// request filled in: `Key` echoes the path asked for, which is why the real
+/// body's length varies and why `error_shapes.json` marks it un-replayable.
+fn no_such_key(path: &str) -> Vec<u8> {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>{path}</Key><RequestId>5C0BD9A0C3E0E0A2</RequestId><HostId>cdn-mock</HostId></Error>"#
+    )
+    .into_bytes()
+}
+
 fn content_type(path: &str) -> &'static str {
     if path.ends_with(".json") || path.contains("getBuild") || path.contains("getGame") {
         "application/json"
@@ -848,29 +927,60 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
-fn respond(table: &Table, path: &str, tag: Option<&str>) -> Option<Vec<u8>> {
+fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<Vec<u8>> {
+    // Whether this request asked for the game the mock knows. Hoisted because
+    // both `hyp` endpoints need it and the guard is long enough to read better
+    // as a name.
+    let known_game =
+        query_param(query, "game_ids[]").as_deref() == Some(table.game_id.as_str());
+    let known_package =
+        query_param(query, "package_id").as_deref() == Some(table.package_id.as_str());
     let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     match segs.as_slice() {
-        ["hyp", endpoint] => table.hyp.get(*endpoint).cloned(),
+        ["hyp", endpoint] => match *endpoint {
+            // A `game_ids[]` the mock does not know is measured to answer 200
+            // with `retcode -1001` from getGameConfigs, and 200 with
+            // `retcode 0` and an **empty** `game_branches` from
+            // getGameBranches. The second is not a failure and is recorded as
+            // such in `api/error_shapes.json`; the mock has to be able to say
+            // both, or the document is the mock's opinion rather than a
+            // measurement.
+            "getGameConfigs" if !known_game => Some(envelope_error(-1001, "invalid params")),
+            "getGameBranches" if !known_game => Some(envelope_with_data(
+                0,
+                "OK",
+                serde_json::json!({ "game_branches": [] }),
+            )),
+            other => table.hyp.get(other).cloned(),
+        },
         ["sophon", "getBuild"] => {
+            // A `package_id` the mock does not know: 200 with `retcode -201`,
+            // checked before the tag because a request with both wrong answers
+            // with the parameter the API validates first.
+            if !known_package {
+                return Some(envelope_error(-201, "invalid params"));
+            }
             let tag = tag?;
             match table.builds.get(tag) {
                 Some(b) => Some(b.clone()),
                 // The measured way of saying "no such tag": HTTP 200, retcode -202.
-                None => Some(
-                    serde_json::to_vec(&serde_json::json!({
-                        "retcode": -202,
-                        "message": "build not found",
-                        "data": serde_json::Value::Null
-                    }))
-                    .expect("render json"),
-                ),
+                None => Some(envelope_error(-202, "not found")),
             }
         }
-        ["cdn", _build, "manifest", id] => {
-            table.archives.values().find(|a| a.id == *id).map(|a| a.raw.clone())
-        }
-        ["cdn", _build, "chunk", id] => table.chunks.get(*id).map(|c| c.raw.clone()),
+        // **Scoped by build id, deliberately.** The measured CDN 404s a valid chunk id
+        // under the *other* build's prefix — that is what makes the build id part
+        // of a chunk's address, and it is what `api/error_shapes.json`'s
+        // `blob_wrong_build` row records. A mock that served any known id under
+        // any prefix would make that row say `200`, and the row would be a lie
+        // about the only thing it exists to state.
+        ["cdn", build, "manifest", id] => table
+            .archives
+            .get(&(build.to_string(), (*id).to_string()))
+            .map(|a| a.raw.clone()),
+        ["cdn", build, "chunk", id] => table
+            .chunks
+            .get(&(build.to_string(), (*id).to_string()))
+            .map(|c| c.raw.clone()),
         _ => None,
     }
 }

@@ -213,6 +213,217 @@ fn every_request_the_capture_made_went_to_the_mock() {
     assert!(branches < builds, "the branch that carries package_id is fetched before getBuild");
 }
 
+/// `api/error_shapes.json` records what the API does with requests it will not
+/// serve. This is the acceptance that needs no network: against the mock, which
+/// answers the measured way, the document must carry the measured statuses —
+/// `404` from the blob routes and `200` from the JSON ones — and the one case
+/// that is **not** a failure must say so.
+#[test]
+fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
+    let (_m, _s, _r, bundle) = capture_ok("shapes");
+    let bytes = std::fs::read(bundle.join("api/error_shapes.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    let rows = doc["shapes"].as_array().unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+
+    let find = |id: &str| -> serde_json::Value {
+        rows.iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("no row for {id}: {raw}"))
+            .clone()
+    };
+
+    // The blob routes: 404, never a 200 carrying a code.
+    for (id, ctype) in [
+        ("blob_missing", "application/xml"),
+        ("chunk_missing", "application/xml"),
+        ("blob_wrong_build", "application/xml"),
+    ] {
+        let r = find(id);
+        assert_eq!(r["family"], "blob", "{id}");
+        assert_eq!(r["status"], 404, "{id}: {r}");
+        assert_eq!(r["content_type"], ctype, "{id}: {r}");
+        assert_eq!(r["retcode"], serde_json::Value::Null, "{id}: a blob has no retcode");
+        assert_eq!(r["error"], true, "{id}");
+        // The volatile fields are named, because the body cannot be replayed
+        // byte-for-byte and a replayer has to know that.
+        let volatile: Vec<&str> = r["volatile_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for want in ["RequestId", "HostId", "Key"] {
+            assert!(volatile.contains(&want), "{id} must mark {want}: {volatile:?}");
+        }
+    }
+
+    // The JSON routes: always 200, failure in retcode.
+    for (id, retcode) in [
+        ("getbuild_unknown_tag", -202),
+        ("getbuild_bad_package", -201),
+        ("getgameconfigs_bad_game_id", -1001),
+    ] {
+        let r = find(id);
+        assert_eq!(r["family"], "json", "{id}: {r}");
+        assert_eq!(r["status"], 200, "{id}: {r}");
+        assert_eq!(r["retcode"], retcode, "{id}: {r}");
+        assert_eq!(r["error"], true, "{id}");
+        assert_eq!(
+            r["volatile_fields"].as_array().unwrap().len(),
+            0,
+            "{id}: the JSON envelope has no per-request ids, so it replays exactly"
+        );
+    }
+
+    // The case that is NOT a failure. Recording it is the whole point: without
+    // it a reader infers "bad game id == error" from the two rows above.
+    let branches = find("getgamebranches_bad_game_id");
+    assert_eq!(branches["status"], 200);
+    assert_eq!(branches["retcode"], 0, "{branches}");
+    assert_eq!(
+        branches["error"], false,
+        "an empty game_branches at retcode 0 is a success, not a failure: {branches}"
+    );
+    assert!(
+        branches["body"].as_str().unwrap().contains("game_branches"),
+        "the empty node is recorded, so the claim is checkable: {branches}"
+    );
+
+    // The retry policy is stated in the artifact, not only in the fetcher.
+    for r in rows {
+        assert_eq!(r["retryable"], false, "{} is not retryable: {r}", r["id"]);
+    }
+}
+
+/// The `blob_wrong_build` probe asks for a **real** chunk id under the other
+/// build's prefix. If it asked for a bogus id the row would prove nothing — a
+/// prefix that 404s everything would satisfy it.
+#[test]
+fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
+    let (_m, _s, _r, bundle) = capture_ok("wrongbuild");
+    let raw = std::fs::read(bundle.join("api/error_shapes.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let rows = doc["shapes"].as_array().unwrap();
+    let wrong = rows
+        .iter()
+        .find(|r| r["id"] == "blob_wrong_build")
+        .expect("a blob_wrong_build row");
+
+    let url = wrong["url"].as_str().unwrap();
+    let missing = rows
+        .iter()
+        .find(|r| r["id"] == "chunk_missing")
+        .expect("a chunk_missing row");
+    assert_ne!(
+        url,
+        missing["url"].as_str().unwrap(),
+        "the two probes must not ask for the same thing"
+    );
+    assert!(
+        !url.ends_with("0000000000000000_00000000000000000000000000000000"),
+        "the wrong-build probe asks for a real id, not the bogus one: {url}"
+    );
+    // And the id it asks for really is one the new build declares *and the old one
+    // does not*. A shared chunk is one id under two addresses and the old prefix
+    // does serve it, so a probe that picked one would record a `200` and claim
+    // the opposite of what it is there to show.
+    let real_id = url.rsplit('/').next().unwrap();
+    let new_declares = manifest_chunk_ids(&bundle, "7.1.0");
+    let old_declares = manifest_chunk_ids(&bundle, "7.0.0");
+    assert!(
+        new_declares.iter().any(|c| c == real_id),
+        "{real_id} is not a chunk id the new build declares, so the probe proves nothing"
+    );
+    assert!(
+        !old_declares.iter().any(|c| c == real_id),
+        "{real_id} is shared with the old build, which does serve it under its own \
+         prefix -- the probe would record a 200 and prove the opposite: {old_declares:?}"
+    );
+}
+
+/// A bundle without `api/error_shapes.json` is still a valid bundle: the file
+/// is additive, and `verify` must not have started requiring it.
+#[test]
+fn a_bundle_without_the_error_shapes_document_still_verifies() {
+    let (_m, _s, r, bundle) = capture_ok("noshapes");
+    assert_eq!(r.code, 0);
+    let file = bundle.join("api/error_shapes.json");
+    assert!(file.is_file(), "the capture wrote it");
+    std::fs::remove_file(&file).unwrap();
+
+    // The index still lists it, which is what a real pre-change bundle's does not.
+    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
+    assert_ne!(
+        v.code, 2,
+        "verify must not demand the document: it is not in the required set\n{}{}",
+        v.stdout, v.stderr
+    );
+}
+
+/// Every chunk id the negative probes asked for, read from the document that
+/// records them.
+fn probe_chunk_ids(bundle: &std::path::Path) -> Vec<String> {
+    let bytes = std::fs::read(bundle.join("api/error_shapes.json")).unwrap();
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    doc["shapes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["family"] == "blob" && s["url"].as_str().unwrap().contains("/chunk/"))
+        .map(|s| s["url"].as_str().unwrap().rsplit('/').next().unwrap().to_string())
+        .collect()
+}
+
+/// How many chunk blobs the bundle stored.
+fn count_blobs(bundle: &std::path::Path) -> usize {
+    std::fs::read_dir(bundle.join("chunks/blobs"))
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+/// Inflate a `.gz` document the bundle wrote.
+fn gunzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_end(&mut out)
+        .expect("a .gz document inflates");
+    out
+}
+
+/// Every chunk id one build's `game` manifest declares, read from the full
+/// decode the bundle wrote beside it.
+///
+/// Both encodings: `files[].encoding` decides whether the decode on disk is
+/// `game.manifest.json` or `game.manifest.json.gz`, and which one it is depends
+/// on the gzip threshold and the decode's size, not on anything this test sets.
+fn manifest_chunk_ids(bundle: &std::path::Path, tag: &str) -> Vec<String> {
+    let plain_path = bundle.join(format!("manifests/{tag}/game.manifest.json"));
+    let gz_path = bundle.join(format!("manifests/{tag}/game.manifest.json.gz"));
+    let plain = if plain_path.is_file() {
+        std::fs::read(&plain_path).expect("read the decode")
+    } else {
+        assert!(
+            gz_path.is_file(),
+            "no full decode for {tag}: looked at {} and {}",
+            plain_path.display(),
+            gz_path.display()
+        );
+        gunzip(&std::fs::read(&gz_path).unwrap())
+    };
+    let doc: serde_json::Value = serde_json::from_slice(&plain).expect("the decode is JSON");
+    let files = doc["entries"].as_array().expect("the decode's entries");
+    let mut ids = Vec::new();
+    for f in files {
+        for c in f["chunks"].as_array().expect("a file's chunks") {
+            ids.push(c["id"].as_str().expect("a chunk id").to_string());
+        }
+    }
+    assert!(!ids.is_empty(), "{tag} declares no chunks");
+    ids
+}
+
 /// The artifact has the shape the schema doc promises.
 #[test]
 fn the_bundle_has_the_shape_the_schema_documents() {
@@ -228,6 +439,7 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "api/getBuild.7.1.0.json",
         "api/requests.ndjson",
         "api/tag_probe.json",
+        "api/error_shapes.json",
         "chunks/index.json",
         "diff/paths.diff.json",
         "diff/candidates.json",
@@ -269,8 +481,11 @@ fn the_captured_api_bodies_are_the_bytes_the_server_sent() {
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
     let bundle = bundle_in(&scratch.out());
 
-    // Ask the mock again for the same endpoint and compare.
-    let url = format!("{}/getGameConfigs", mock.hyp_base());
+    // Ask the mock again for the same endpoint and compare. The query has to be
+    // the one the tool sends: `game_ids[]` is not optional, and the mock answers
+    // a request without it the measured way (`retcode -1001`) rather than the
+    // real body.
+    let url = format!("{}/getGameConfigs?game_ids[]=gopR6Cufr3", mock.hyp_base());
     let again = ureq_get(&url);
     let stored = std::fs::read(bundle.join("api/getGameConfigs.json")).unwrap();
     assert_eq!(
@@ -566,7 +781,31 @@ fn no_chunk_blobs_is_incomplete_not_pass() {
     );
     assert_eq!(doc["result"], "incomplete");
     assert_eq!(doc["counts"]["failed"], 0, "a skip is not a failure");
-    assert_eq!(mock.chunk_requests().len(), 0, "no chunk was requested");
+    // The flag governs what is *stored*, not what is asked for: the negative
+    // probes in `api/error_shapes.json` need to see the origin's answer for a
+    // bogus chunk id and for a real one under the wrong build's prefix, and that
+    // is a property of the API rather than of this run's storage mode. So two
+    // chunk requests happen and both are 404s; nothing else touches a chunk.
+    let chunk_reqs = mock.chunk_requests();
+    assert_eq!(
+        chunk_reqs.len(),
+        2,
+        "only the two negative chunk probes may request a chunk: {chunk_reqs:?}"
+    );
+    let bogus = chunk_reqs
+        .iter()
+        .filter(|r| r.starts_with("0000000000000000_"))
+        .count();
+    assert_eq!(bogus, 1, "the chunk_missing probe asks for the bogus id: {chunk_reqs:?}");
+    assert_eq!(
+        chunk_reqs.len() - bogus,
+        1,
+        "and the wrong-build probe asks for one real id: {chunk_reqs:?}"
+    );
+    assert!(
+        count_blobs(&bundle) == 0,
+        "and still nothing was stored"
+    );
     // And such a bundle cannot be materialized, which is what `verify` says.
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
     assert_eq!(v.code, 3, "{}\n{}", v.stdout, v.stderr);
@@ -634,8 +873,17 @@ fn the_probe_records_an_unservable_tag_rather_than_pretending() {
 /// A shared chunk is fetched once, not once per build.
 #[test]
 fn a_chunk_shared_by_both_builds_is_fetched_once() {
-    let (mock, _s, r, _b) = capture_ok("reuse");
-    let ids = mock.chunk_requests();
+    let (mock, _s, r, bundle) = capture_ok("reuse");
+    // The negative probes ask for two chunk ids on purpose — a bogus one and a
+    // new-build-only one under the old prefix — and those are the store's
+    // business in no sense. Take them off by name from the document that records
+    // them, rather than by a heuristic.
+    let probed = probe_chunk_ids(&bundle);
+    let ids: Vec<String> = mock
+        .chunk_requests()
+        .into_iter()
+        .filter(|id| !probed.iter().any(|p| p == id))
+        .collect();
     let mut unique = ids.clone();
     unique.sort();
     unique.dedup();

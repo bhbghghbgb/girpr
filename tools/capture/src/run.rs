@@ -214,6 +214,71 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         manifests.push(pair);
     }
 
+    // 6a. What the API does with a request it will not serve. Placed here rather
+    //     than beside the tag probe because it needs the pair's blob prefixes, and
+    //     a `404` measured against an invented prefix would prove nothing: the
+    //     point is that the *real* prefix answers `404` for an id the real build
+    //     does not have, and `404` for a real id under the other build's.
+    //
+    //     Costs seven small requests and downloads no blob. It must not be able to
+    //     fail the capture: a negative response is the measurement.
+    let game_pair = fields
+        .iter()
+        .zip(&manifests)
+        .find(|(field, _)| field.as_str() == MANIFEST_FIELD)
+        .map(|(_, pair)| pair)
+        .ok_or_else(|| {
+            apierr(
+                "the negative probes",
+                &ApiError::shape(
+                    "the game manifest pair",
+                    "no `game` manifest to take blob prefixes from",
+                ),
+            )
+        })?;
+    let (old_game, new_game) = (&game_pair[0], &game_pair[1]);
+    // A chunk the new build has and the old one does not — see `ErrorProbes`.
+    // A shared chunk would make the wrong-build probe record a `200` and claim the
+    // opposite of what it is there to show.
+    let old_chunk_ids: std::collections::HashSet<&str> = old_game
+        .entries
+        .iter()
+        .flat_map(|f: &crate::manifest::proto::SophonChunkFile| f.chunks.iter())
+        .map(|c| c.id.as_str())
+        .collect();
+    let new_only_chunk_id = new_game
+        .entries
+        .iter()
+        .flat_map(|f: &crate::manifest::proto::SophonChunkFile| f.chunks.iter())
+        .find(|c| !old_chunk_ids.contains(c.id.as_str()))
+        .map(|c| c.id.clone())
+        .ok_or_else(|| {
+            apierr(
+                "the negative probes",
+                &ApiError::shape(
+                    "the two `game` manifests",
+                    "every chunk of the new build is also in the old one, so there is \
+                     no id to ask for under the wrong prefix",
+                ),
+            )
+        })?;
+    let error_shapes = probe::probe_error_shapes(
+        &fetcher,
+        &endpoints,
+        &biz,
+        &params,
+        &probe::ErrorProbes {
+            manifest_prefix: &new_game.meta.declared.manifest_download.url_prefix,
+            chunk_prefix: new_game.chunk_url_prefix(),
+            other_manifest_prefix: &old_game.meta.declared.manifest_download.url_prefix,
+            other_chunk_prefix: old_game.chunk_url_prefix(),
+            new_only_chunk_id: &new_only_chunk_id,
+        },
+    )
+    .await
+    .map_err(|e| apierr("negative probes", &e))?;
+    tracing::info!(shapes = %error_shapes.describe(), "error shapes recorded");
+
     // 6b. A diff per field, then the pool built across all of them.
     let mut diffs = Vec::with_capacity(fields.len());
     for (field, pair) in fields.iter().zip(&manifests) {
@@ -404,12 +469,17 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //    stay useful, and the bytes are the evidence behind every number in the
     //    summary.
     let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
-    let mut written = emit::write_api(&dir, &captured, &probe).map_err(|e| {
+    let mut written = emit::write_api(&dir, &captured, &probe, &error_shapes).map_err(|e| {
         apierr(
             &format!("write {}", dir.display()),
             &ApiError::shape("artifact writer", e),
         )
     })?;
+    // Counted from what the writer returned, not restated. It was a hardcoded
+    // `7` — the six bodies plus `tag_probe.json` — and adding `error_shapes.json`
+    // made it wrong in exactly the way a restated number always does: nothing
+    // failed, the number was just no longer true.
+    let api_documents = written.len() as u64;
     for pair in &mut manifests {
         for m in pair {
             let stored = manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail)
@@ -851,7 +921,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("old_build_id", &versions.old.build_id)
         .set("new_build_id", &versions.new.build_id)
         .set("artifact", dir.as_path())
-        .set("api_documents", 7_u64)
+        .set("api_documents", api_documents)
         .set("selection_pool", fields.join(","))
         .set("candidates_scored", pool.len() as u64)
         .set("captures_admitted", selection.admitted.len() as u64)

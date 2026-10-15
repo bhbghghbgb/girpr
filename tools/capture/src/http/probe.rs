@@ -1,4 +1,5 @@
-//! `getBuild?tag=` probing: which version tags the API will actually serve.
+//! `getBuild?tag=` probing: which version tags the API will actually serve, and
+//! what the API does with a request it will not serve.
 //!
 //! **M1.** `diff_tags` is a patch-support list, not a retention list. Measured
 //! 2026-10-14: `6.6.0` and `5.5.0` are absent from `diff_tags` and both served.
@@ -12,6 +13,17 @@
 //! **A `retcode -202` here is an answer, not a failure.** It means "this API does
 //! not serve that tag", which is the question. Treating it as an error would make
 //! the probe unable to report its own most interesting result.
+//!
+//! ## The two route families disagree about failure
+//!
+//! [`ErrorShapes`] records that disagreement as bundle content rather than leaving
+//! it in a review. The blob routes answer `404` with an AliyunOSS `NoSuchKey`
+//! body; the JSON routes answer `200` and put the failure in `retcode`. A tool
+//! that replays a bundle has to answer both correctly, and without a document
+//! recording them it has to invent them — and then its claim that "the API 404s
+//! things" is unfounded. One of those answers is **not** a failure at all
+//! (`getGameBranches` with an unknown game id answers `retcode 0` with an empty
+//! node), which is the specific mistake this document exists to prevent.
 
 use serde::Serialize;
 
@@ -210,6 +222,266 @@ pub fn compose_tags(pair: &[String], diff_tags: &[String], extra: &[String]) -> 
         }
     }
     out
+}
+
+/// Which family of route a shape came from.
+///
+/// The two families are the reason this document exists, so the family is a field
+/// rather than something a reader infers from the status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Family {
+    /// `autopatchhk.yuanshen.com` and friends: a missing object is a `404` with an
+    /// `application/xml` body. Never a `200` carrying a code.
+    Blob,
+    /// `sg-hyp-api` / `sg-downloader-api`: the status is always `200` and the
+    /// answer is in `retcode`.
+    Json,
+}
+
+/// The negative-response report: `api/error_shapes.json`.
+///
+/// Every entry is a request this tool made and the answer the origin gave, both
+/// recorded verbatim. Nothing here is synthesized: a replayer reading this
+/// document can reproduce the status, the content-type and the body without
+/// having to guess any of the three.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorShapes {
+    /// The bundle schema version.
+    pub schema_version: u32,
+    /// One entry per probe, in a fixed order so two captures diff cleanly.
+    pub shapes: Vec<ErrorShape>,
+}
+
+/// One measured negative response.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorShape {
+    /// Stable identifier, e.g. `blob_missing`. A consumer asserts on this, never
+    /// on the URL, which carries a build id and changes every capture.
+    pub id: String,
+    /// Which route family answered.
+    pub family: Family,
+    /// What was asked for, in words.
+    pub request: String,
+    /// The URL that was actually requested.
+    pub url: String,
+    /// The status, as received.
+    pub status: u16,
+    /// `Content-Type`, as received. `null` when the origin sent none.
+    pub content_type: Option<String>,
+    /// The body's `retcode`, when it is a JSON envelope. `null` for blobs.
+    pub retcode: Option<i64>,
+    /// Whether the origin is treating this as a failure.
+    ///
+    /// **This is `false` for `getgamebranches_bad_game_id`**, which answers
+    /// `retcode 0` with an empty `game_branches`: a success with nothing in it.
+    /// The field is here so a reader scanning for "what does a bad request look
+    /// like" finds that case and sees it is not one, instead of inferring a
+    /// failure from the shape.
+    pub error: bool,
+    /// The body, byte-exact as received.
+    pub body: String,
+    /// Names in the body that change on every request, and so cannot be replayed
+    /// byte-for-byte.
+    ///
+    /// The AliyunOSS error envelope carries `RequestId`, `HostId` and `Key`;
+    /// `Key` echoes the requested path, so the **body length** varies with it too.
+    /// The JSON envelopes carry none — `retcode` and `message` are stable — so
+    /// their list is empty and a replayer can be byte-exact.
+    pub volatile_fields: Vec<String>,
+    /// Always `false`.
+    ///
+    /// This is the retry policy stated in the artifact, so the fact
+    /// [`crate::RetryPolicy::should_retry_status`] encodes is readable by whoever
+    /// consumes the bundle rather than only by whoever wrote the fetcher. It is a
+    /// field and not a constant because a future origin that started answering
+    /// `429` here would make it true, and the document should say so.
+    pub retryable: bool,
+}
+
+impl ErrorShapes {
+    /// A one-line human summary for the run's stderr narration.
+    pub fn describe(&self) -> String {
+        let blob = self.shapes.iter().filter(|s| s.family == Family::Blob).count();
+        let json = self.shapes.len() - blob;
+        format!(
+            "{} shapes recorded: {blob} blob (404), {json} json (200+retcode)",
+            self.shapes.len()
+        )
+    }
+}
+
+/// What the negative probes need to build their URLs.
+///
+/// The blob probes are "the real prefix, plus an id that does not exist" and "a
+/// real id, under the other build's prefix". Both halves are needed, so they are
+/// named fields rather than positional arguments — a probe that silently swapped
+/// the real id for the bogus one would still report a `404` and prove nothing.
+#[derive(Debug, Clone, Copy)]
+pub struct ErrorProbes<'a> {
+    /// `…/manifests/<series>/<build_id>` for the new build.
+    pub manifest_prefix: &'a str,
+    /// `…/chunks/<series>/<build_id>` for the new build.
+    pub chunk_prefix: &'a str,
+    /// The old build's manifest prefix.
+    pub other_manifest_prefix: &'a str,
+    /// The old build's chunk prefix.
+    pub other_chunk_prefix: &'a str,
+    /// A chunk id the **new build declares and the old one does not**.
+    ///
+    /// New-build-exclusive, not merely real, and the distinction is the whole
+    /// probe. A shared chunk is one id under two addresses and the old prefix
+    /// *does* serve it, so asking for it there returns `200` — which would record
+    /// "a valid id under the other build's prefix is not a 404", the exact
+    /// opposite of the claim, from a probe that looks like it worked.
+    pub new_only_chunk_id: &'a str,
+}
+
+/// An id that cannot exist. Fixed rather than random so a captured bundle's URLs
+/// are stable across runs and two captures diff cleanly.
+const BOGUS_ID: &str = "0000000000000000_00000000000000000000000000000000";
+
+/// Ask the API what it does with requests it will not serve, and record it.
+///
+/// **Never fails the capture.** A negative response is a successful observation,
+/// and the only thing that can go wrong is the network — in which case there is
+/// nothing to record and the error propagates. Nothing here asserts that the
+/// origin answered the way it answered last time: if a future origin changes its
+/// shape, the document changes with it, and that is the document being honest
+/// rather than a capture failing over a difference nobody asked about.
+pub async fn probe_error_shapes(
+    fetcher: &Fetcher,
+    endpoints: &crate::biz::Endpoints<'_>,
+    biz: &crate::biz::Biz,
+    params: &BranchParams,
+    probes: &ErrorProbes<'_>,
+) -> Result<ErrorShapes, ApiError> {
+    // Same shape, three ways: the request this tool would have made, with
+    // exactly one thing wrong. Built from the good URL rather than assembled by
+    // hand, so a probe cannot drift into a spelling the tool never sends.
+    let good_build = endpoints.get_build_url(params, None);
+    let bad_package = with_param(&good_build, "package_id", "gircap-probe-no-such-package");
+    let unknown_tag = endpoints.get_build_url(params, Some("0.0.0-gircap-probe"));
+    let good_configs = endpoints.hyp_url(biz, crate::biz::HypEndpoint::GameConfigs, "en-us");
+    let good_branches = endpoints.hyp_url(biz, crate::biz::HypEndpoint::GameBranches, "en-us");
+    let bad_game = "gircap-probe-no-such-game";
+
+    let wanted: Vec<(&str, Family, String, String, bool)> = vec![
+        (
+            "blob_missing",
+            Family::Blob,
+            "a manifest id under the new build's prefix that the build does not have".into(),
+            format!("{}/{}", probes.manifest_prefix.trim_end_matches('/'), BOGUS_ID),
+            true,
+        ),
+        (
+            "chunk_missing",
+            Family::Blob,
+            "a chunk id under the new build's prefix that the build does not have".into(),
+            format!("{}/{}", probes.chunk_prefix.trim_end_matches('/'), BOGUS_ID),
+            true,
+        ),
+        (
+            "blob_wrong_build",
+            Family::Blob,
+            "a chunk id that exists, requested under the *other* build's prefix".into(),
+            format!(
+                "{}/{}",
+                probes.other_chunk_prefix.trim_end_matches('/'),
+                probes.new_only_chunk_id
+            ),
+            true,
+        ),
+        (
+            "getbuild_unknown_tag",
+            Family::Json,
+            "getBuild for a tag the API does not serve".into(),
+            unknown_tag,
+            true,
+        ),
+        (
+            "getbuild_bad_package",
+            Family::Json,
+            "getBuild with a package_id the API does not know".into(),
+            bad_package,
+            true,
+        ),
+        (
+            "getgameconfigs_bad_game_id",
+            Family::Json,
+            "getGameConfigs with a game_ids[] the API does not know".into(),
+            with_param(&good_configs, "game_ids[]", bad_game),
+            true,
+        ),
+        (
+            "getgamebranches_bad_game_id",
+            Family::Json,
+            "getGameBranches with a game_ids[] the API does not know — measured to \
+             answer retcode 0 with an empty game_branches, which is a success"
+                .into(),
+            with_param(&good_branches, "game_ids[]", bad_game),
+            // The whole point of recording it: this is not an error.
+            false,
+        ),
+    ];
+
+    let mut shapes = Vec::with_capacity(wanted.len());
+    for (id, family, request, url, error) in wanted {
+        let o = fetcher.observe(&url, Kind::Probe).await?;
+        let retcode = o.retcode();
+        shapes.push(ErrorShape {
+            id: id.to_string(),
+            family,
+            request,
+            url,
+            status: o.status,
+            content_type: o.content_type.clone(),
+            retcode,
+            error,
+            body: o.text(),
+            volatile_fields: if family == Family::Blob {
+                vec![
+                    "RequestId".to_string(),
+                    "HostId".to_string(),
+                    "Key".to_string(),
+                    // `Key` echoes the requested path, so the body's length is a
+                    // function of the URL rather than of the shape.
+                    "body length (follows Key)".to_string(),
+                ]
+            } else {
+                Vec::new()
+            },
+            retryable: false,
+        });
+    }
+
+    Ok(ErrorShapes {
+        schema_version: crate::SCHEMA_VERSION,
+        shapes,
+    })
+}
+
+/// `url` with one query parameter's value replaced.
+///
+/// `key` is matched literally, brackets included: the measured spelling of
+/// `game_ids[]` keeps them, and matching on a decoded form would silently not
+/// find the parameter.
+fn with_param(url: &str, key: &str, value: &str) -> String {
+    let Some((base, query)) = url.split_once('?') else {
+        return url.to_string();
+    };
+    let prefix = format!("{key}=");
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|p| {
+            if p.starts_with(&prefix) {
+                format!("{prefix}{value}")
+            } else {
+                p.to_string()
+            }
+        })
+        .collect();
+    format!("{base}?{}", parts.join("&"))
 }
 
 #[cfg(test)]

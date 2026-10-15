@@ -53,7 +53,10 @@ pub enum Kind {
     Manifest,
     /// A chunk blob.
     Chunk,
-    /// A `getBuild?tag=` probe. Costs no blob bytes, only JSON.
+    /// A request made to *measure* the API rather than to consume data: a
+    /// `getBuild?tag=` tag probe, or a negative probe for `api/error_shapes.json`.
+    /// Costs no blob bytes, only JSON — or, for the negative blob probes, only a
+    /// `404`.
     Probe,
 }
 
@@ -461,6 +464,40 @@ impl Fetched {
     }
 }
 
+/// One response as observed, whatever its status.
+///
+/// A [`Fetched`] is only ever a success; this is the other half — the shape a
+/// response has when the origin is saying *no*, kept as data rather than as an
+/// [`ApiError`] because for a negative probe it **is** the data.
+#[derive(Debug)]
+pub struct Observation {
+    /// The status as received. Not filtered, not normalised.
+    pub status: u16,
+    /// `Content-Type` as received, absent when the server sent none.
+    pub content_type: Option<String>,
+    /// The body, byte-exact.
+    pub body: Vec<u8>,
+    /// The provenance row.
+    pub record: RequestRecord,
+}
+
+impl Observation {
+    /// The body as UTF-8. Lossy is deliberate and is the only lossy step here:
+    /// these bodies are XML or JSON error envelopes, and replacing an
+    /// undecodable byte would be a worse record than an explicit U+FFFD.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    /// The body's `retcode`, when it is a JSON API envelope.
+    pub fn retcode(&self) -> Option<i64> {
+        serde_json::from_slice::<serde_json::Value>(&self.body)
+            .ok()?
+            .get("retcode")
+            .and_then(|r| r.as_i64())
+    }
+}
+
 /// Issues requests, records them, and retries the ones worth retrying.
 ///
 /// Cloneable, and for one reason: M6 fetches chunk blobs concurrently. A clone
@@ -514,6 +551,56 @@ impl Fetcher {
     /// The retry policy in force.
     pub fn policy(&self) -> &RetryPolicy {
         &self.policy
+    }
+
+    /// Fetch one URL **once** and report whatever came back, status and body
+    /// included.
+    ///
+    /// **Never retries and never turns a non-2xx into an error.** The caller is
+    /// asking what the origin *does* with a bad request, so a `404` here is the
+    /// measurement, not a failure — and a second identical request would only buy
+    /// another `404` while making the probe indistinguishable from a fetch that
+    /// went wrong. This is the same reason [`probe_tags`](crate::http::probe)
+    /// treats a `retcode -202` as an answer.
+    ///
+    /// Only a transport failure is an error: there is nothing to record, and a gap
+    /// in the document would read as "this shape was never observed".
+    ///
+    /// Recorded in the request log like any other request, so the probe's cost is
+    /// visible in the same place every other request's is.
+    pub async fn observe(&self, url: &str, kind: Kind) -> Result<Observation, ApiError> {
+        let started = Instant::now();
+        let seq = self.log.reserve();
+        let resp = self.client.get(url).send().await.map_err(|e| ApiError::Transport {
+            url: url.to_string(),
+            attempts: 1,
+            detail: e.to_string(),
+        })?;
+        let status = resp.status().as_u16();
+        let final_url = resp.url().to_string();
+        let redirected = !final_url.eq_ignore_ascii_case(url);
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let resp_headers = header_map(resp.headers());
+        // A body that will not read is an empty body, not a failure: the status
+        // and the content-type are the parts a consumer can rely on, and they
+        // have already been captured by this point.
+        let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+        let bytes_in = body.len() as u64;
+        let record = self.record(
+            seq, kind, url, None, status, resp_headers, &final_url, redirected, bytes_in, 1,
+            started,
+        );
+        self.log.push(record.clone());
+        Ok(Observation {
+            status,
+            content_type,
+            body,
+            record,
+        })
     }
 
     /// Fetch one URL into memory.

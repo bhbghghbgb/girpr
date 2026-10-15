@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::rel_path_string;
 use crate::http::RequestLog;
-use crate::http::probe::TagProbe;
+use crate::http::probe::{ErrorShapes, TagProbe};
 use crate::hyp::{self, Captured};
 use crate::manifest;
 
@@ -36,15 +36,24 @@ pub fn write_requests_log(root: &Path, log: &RequestLog) -> std::io::Result<usiz
 ///
 /// Returns relative, `/`-separated paths in bundle order, which is also what
 /// goes into `MANIFEST.json → files[]`. Computing the list here means the index
-/// and the tree cannot disagree about what exists.
+/// and the tree cannot disagree about what exists — which is the only reason
+/// `error_shapes.json` needs to be pushed here at all: returning it is what gets
+/// it into `files[]` and therefore into `verify/checksums.json`, with no further
+/// wiring.
 ///
 /// The six response bodies are written **exactly as served** — not re-serialized
 /// from a typed view — because a re-serialization would silently drop or restyle
 /// a field, and the whole point of capturing the body is that a reader can `diff`
-/// it against a fresh request. `tag_probe.json` is the one generated document:
-/// it is this tool's own measurement, not the API's words.
-pub fn write_api(root: &Path, captured: &Captured, probe: &TagProbe) -> std::io::Result<Vec<String>> {
-    let mut written = Vec::with_capacity(7);
+/// it against a fresh request. `tag_probe.json` and `error_shapes.json` are the
+/// two generated documents: they are this tool's own measurements, not the API's
+/// words.
+pub fn write_api(
+    root: &Path,
+    captured: &Captured,
+    probe: &TagProbe,
+    shapes: &ErrorShapes,
+) -> std::io::Result<Vec<String>> {
+    let mut written = Vec::with_capacity(8);
     for body in captured.bodies() {
         write_bytes(root, &format!("api/{}", body.file), &body.bytes)?;
         written.push(format!("api/{}", body.file));
@@ -56,6 +65,13 @@ pub fn write_api(root: &Path, captured: &Captured, probe: &TagProbe) -> std::io:
         format!("{probe_json}\n").as_bytes(),
     )?;
     written.push("api/tag_probe.json".to_string());
+    let shapes_json = hyp::render_json(shapes).map_err(std::io::Error::other)?;
+    write_bytes(
+        root,
+        "api/error_shapes.json",
+        format!("{shapes_json}\n").as_bytes(),
+    )?;
+    written.push("api/error_shapes.json".to_string());
     Ok(written)
 }
 
@@ -250,11 +266,30 @@ mod tests {
         })
     }
 
+    fn shapes() -> ErrorShapes {
+        ErrorShapes {
+            schema_version: 1,
+            shapes: vec![crate::http::probe::ErrorShape {
+                id: "chunk_missing".into(),
+                family: crate::http::probe::Family::Blob,
+                request: "a chunk id the build does not have".into(),
+                url: "https://cdn/chunks/s/b/c".into(),
+                status: 404,
+                content_type: Some("application/xml".into()),
+                retcode: None,
+                error: true,
+                body: "<Error><Code>NoSuchKey</Code></Error>".into(),
+                volatile_fields: vec!["RequestId".into()],
+                retryable: false,
+            }],
+        }
+    }
+
     #[test]
-    fn the_seven_api_documents_are_written_byte_exact() {
+    fn the_eight_api_documents_are_written_byte_exact() {
         let dir = std::env::temp_dir().join(format!("gircap-api-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let written = write_api(&dir, &captured(), &probe()).unwrap();
+        let written = write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
 
         assert_eq!(
             written,
@@ -266,6 +301,7 @@ mod tests {
                 "api/getBuild.7.1.0.json",
                 "api/getBuild.7.0.0.json",
                 "api/tag_probe.json",
+                "api/error_shapes.json",
             ]
         );
         for rel in &written {
@@ -279,17 +315,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The negative document has to reach `files[]`, because that list is what
+    /// `MANIFEST.json` and `verify/checksums.json` are built from. Returning it
+    /// from here is the whole mechanism, so it is pinned rather than assumed.
+    #[test]
+    fn the_error_shapes_document_is_returned_so_it_reaches_files_and_checksums() {
+        let dir = std::env::temp_dir().join(format!("gircap-api-shapes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let written = write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        assert!(
+            written.contains(&"api/error_shapes.json".to_string()),
+            "not in the returned list, so it would not be checksummed: {written:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_generated_probe_is_pretty_printed_and_valid_json() {
         let dir = std::env::temp_dir().join(format!("gircap-api-probe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        write_api(&dir, &captured(), &probe()).unwrap();
+        write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/tag_probe.json")).unwrap();
         assert!(text.contains('\n'), "a document is not one long line");
         assert!(text.ends_with('\n'), "a document ends with a newline");
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["schema_version"], 1);
         assert_eq!(v["results"][0]["already_fetched"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The negative document carries a body that is *not* JSON — it is an XML
+    /// error envelope — and the whole document still has to be valid JSON, or
+    /// every consumer of a bundle breaks on it.
+    #[test]
+    fn the_error_shapes_document_is_valid_json_despite_its_xml_body() {
+        let dir = std::env::temp_dir().join(format!("gircap-api-shapes-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        let text = std::fs::read_to_string(dir.join("api/error_shapes.json")).unwrap();
+        assert!(text.ends_with('\n'), "a document ends with a newline");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["shapes"][0]["id"], "chunk_missing");
+        assert_eq!(v["shapes"][0]["status"], 404);
+        assert_eq!(v["shapes"][0]["family"], "blob");
+        // The XML body is carried as a string, escaped, not dropped.
+        assert_eq!(v["shapes"][0]["body"], "<Error><Code>NoSuchKey</Code></Error>");
+        assert_eq!(v["shapes"][0]["retryable"], false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

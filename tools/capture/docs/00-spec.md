@@ -208,6 +208,42 @@ Every captured file is tagged with **all** classes it satisfies, so
 `candidates.json` + `MANIFEST.json` always answer "which variant does this file
 cover, and why".
 
+### 4.1a What `api/` carries, including the failures
+
+`api/` holds the six response bodies **byte-exact**, the request log, and two
+generated documents that are this tool's own measurements rather than the API's
+words:
+
+| document | what it is |
+|---|---|
+| `tag_probe.json` | which tags the API will actually serve |
+| `error_shapes.json` | what the API does with a request it will not serve |
+
+The second exists because **a bundle otherwise contains no not-found evidence
+at all** — every request a capture makes succeeds, so a recorded bundle says
+nothing about what a missing object looks like. A tool that replays a bundle
+would have to invent that, and its "the API 404s things" would be unfounded.
+
+The two route families disagree about failure, and the document records both
+(measured 2026-10-16, `hk4e_global`):
+
+| family | missing object | measured answer |
+|---|---|---|
+| blob (`autopatchhk.yuanshen.com`, `Server: AliyunOSS`) | manifest, chunk, unknown `build_id`, **a valid id under the other build's prefix** | `404` + `application/xml` `NoSuchKey` — never a `200` with a code |
+| JSON (`sg-hyp-api`, `sg-downloader-api`) | bad `package_id` / `game_ids[]`, unknown tag | `200`, failure in `retcode`: `-201`, `-1001`, `-202` |
+
+And one answer in that table is **not a failure**: `getGameBranches` with an
+unknown `game_ids[]` returns `{"retcode":0,…,"data":{"game_branches":[]}}`. It is
+recorded with `error: false` so a later reader cannot infer a failure from the
+shape of the rows around it.
+
+**A consumer must not synthesize its own failure shapes.** Replay `status`,
+`content-type` and `body` from `api/error_shapes.json`, substituting only the
+fields that entry marks volatile (`RequestId`, `HostId`, `Key` and the body
+length that follows from `Key`; the JSON envelopes have none). A bundle
+predating the file has no such document — skip those assertions and say so
+rather than inventing the behaviour.
+
 ### 4.2 Chunk retention — three named sets
 
 For a captured path `P` and version pair `(O, N)`:

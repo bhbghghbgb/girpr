@@ -30,6 +30,7 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── getBuild.<new_tag>.json
 │   ├── getBuild.<old_tag>.json
 │   ├── tag_probe.json
+│   ├── error_shapes.json
 │   └── requests.ndjson
 ├── manifests/<tag>/
 │   ├── <field>.manifest.zst                  # raw blob, byte-exact
@@ -133,6 +134,9 @@ Byte-exact response bodies, unmodified — not re-serialized. A reader must be
 able to `diff` a captured file against a fresh request. `api/requests.ndjson`
 records how they were obtained.
 
+The two exceptions are generated, and both are this tool's own measurements
+rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5a).
+
 ## 4. `api/requests.ndjson`
 
 One object per HTTP request, in issue order.
@@ -175,6 +179,71 @@ Which tags the API actually serves, with no blob downloads.
 
 `served` is the load-bearing fact: `diff_tags` is a patch-support list, not a
 retention list (spec §3.4).
+
+---
+
+## 5a. `api/error_shapes.json`
+
+What the API does with a request it will **not** serve, with no blob downloads.
+
+The two route families disagree about what failure looks like, and a consumer
+that replays a bundle has to reproduce both. Without this document it would have
+to invent them, and its claim that "the API 404s things" would be unfounded —
+a bundle recorded only successes contains no not-found evidence at all.
+
+```jsonc
+{ "schema_version": 1,
+  "shapes": [
+    { "id": "chunk_missing", "family": "blob",
+      "request": "a chunk id under the new build's prefix that the build does not have",
+      "url": "https://autopatchhk.yuanshen.com/…/chunks/cxhpq4g4rgg0/sMXGW2ll3Fuu/000…",
+      "status": 404, "content_type": "application/xml", "retcode": null,
+      "error": true,
+      "body": "<?xml version=\"1.0\" …><Error><Code>NoSuchKey</Code>…</Error>",
+      "volatile_fields": ["RequestId", "HostId", "Key", "body length (follows Key)"],
+      "retryable": false },
+    { "id": "getgameconfigs_bad_game_id", "family": "json",
+      "request": "getGameConfigs with a game_ids[] the API does not know",
+      "url": "https://sg-hyp-api.hoyoverse.com/…/getGameConfigs?…",
+      "status": 200, "content_type": "application/json", "retcode": -1001,
+      "error": true,
+      "body": "{\"data\":null,\"message\":\"invalid params\",\"retcode\":-1001}",
+      "volatile_fields": [], "retryable": false },
+    { "id": "getgamebranches_bad_game_id", "family": "json",
+      "request": "getGameBranches with a game_ids[] the API does not know …",
+      "status": 200, "content_type": "application/json", "retcode": 0,
+      "error": false,
+      "body": "{\"data\":{\"game_branches\":[]},\"message\":\"OK\",\"retcode\":0}",
+      "volatile_fields": [], "retryable": false }
+  ] }
+```
+
+| field | meaning |
+|---|---|
+| `id` | stable; **assert on this**, never on `url`, which carries a build id and changes every capture |
+| `family` | `blob` (404) or `json` (200 + `retcode`) |
+| `status` / `content_type` / `retcode` | exactly as received; `retcode` is `null` for a blob |
+| `error` | whether the origin treats this as a failure — see below |
+| `body` | byte-exact |
+| `volatile_fields` | names that change per request, so the body **cannot** be replayed byte-for-byte |
+| `retryable` | always `false`: the retry policy, stated in the artifact |
+
+**`error: false` is not a bug.** `getGameBranches` answers an unknown game id
+with `retcode 0` and an empty `game_branches`. That is a **success with nothing
+in it**, not a failure, and it is recorded here precisely so a reader cannot
+infer a failure from the shape of the other two rows.
+
+**Replaying.** `girpr` calls `.error_for_status()` and never reads the body, so
+**`status` and `content_type` are the contract**; the body is fidelity, for a
+human reading a replay server's log. For the blob rows the `volatile_fields`
+mean a replayer must synthesize `RequestId`, `HostId` and `Key` — and therefore
+the body length — and nothing else. The JSON rows have no volatile fields, so
+they replay exactly.
+
+**Back-compat.** The document is additive: a bundle captured before it existed
+has no `api/error_shapes.json`, and that is still a valid bundle. A consumer
+that wants the not-found behaviour and finds no such file must skip those
+assertions and say so.
 
 ---
 
