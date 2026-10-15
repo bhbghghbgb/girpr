@@ -31,12 +31,18 @@ main tool, and never imports its code.
 
 ## 2. Independence (non-negotiable)
 
-| Rule | Enforcement |
+| Rule | How it shows up |
 |---|---|
-| No dependency on the `girpr` crate | `Cargo.toml` has no `girpr` path/registry dep; a CI check rejects the string |
+| No dependency on the `girpr` crate | `Cargo.toml` declares no `girpr` path or registry dep |
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
 | No shared contracts | own flag set, own exit codes, own report format. The README is the only shared vocabulary (version strings) |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
+
+The intent is **do not couple**. Two tools that must stay independent should not
+end up depending on each other in order to prove one of them works, and the
+artifact is the whole interface between them: a bundle on disk, read by whoever
+wants it. None of the above is mechanically enforced — nothing here checks it —
+so it is a rule the tree has to keep, not a guarantee a build makes.
 
 This mirrors `tools/sync`: *"Separate from the `girpr` binary; shares no flags,
 no exit-code contract, no code."*
@@ -77,6 +83,31 @@ hardcoded.
 manifest: {manifest_download.url_prefix}/{manifest.id}
 chunk:    {chunk_download.url_prefix}/{chunk.id}
 ```
+
+### 3.3a The two route families disagree about failure *(measured, 2026-10-16)*
+
+This is recorded rather than assumed because both projects' retry policies are
+written against it, and because a capture that never sees a failure cannot
+record one.
+
+| family | a request it will not serve | the answer |
+|---|---|---|
+| blob (`autopatchhk.yuanshen.com`, `Server: AliyunOSS`) | bogus / short id, unknown `build_id`, a valid id under the other build's prefix, a completely unknown path | **`404`** + `application/xml` `<Error><Code>NoSuchKey</Code>…`. **Never** a `200` carrying a code |
+| JSON (`sg-hyp-api`, `sg-downloader-api`) | `getBuild?tag=<unknown>` | `200` + `{"data":null,"message":"not found","retcode":-202}` |
+| | `getBuild` with a bad `package_id` | `200` + `retcode -201` (`invalid params`) |
+| | `getGameConfigs` with a bad `game_ids[]` | `200` + `retcode -1001` (`invalid params`) |
+| | `getGameBranches` with a bad `game_ids[]` | `200` + **`retcode 0`** and an empty `game_branches` — **not an error** |
+
+That last row is the one that gets mistaken. It is a *success with nothing in
+it*: the launcher answered correctly, there are no branches for that game. Any
+consumer that treats "empty node" as "retry me" turns a real answer into a retry
+loop.
+
+`gircap` records all seven shapes in **`api/error_shapes.json`** on every capture,
+with the volatile fields named (`RequestId`, `HostId`, `Key`, and the body length
+that follows from `Key`) and `retryable: false` on each — so the policy is
+readable from the artifact and not only from the fetcher. See
+[`01-artifact-schema.md` §5a](01-artifact-schema.md).
 
 ### 3.4 Version pair *(measured, 2026-10-14)*
 
@@ -144,7 +175,7 @@ assumptions — if a future version violates one, the capture still works and
 | `md5(decompressed manifest)` == `manifest.checksum` | verified |
 | `manifest.checksum` == the **32-hex suffix** of `manifest.id` | verified |
 | the **16-hex prefix** of `manifest.id` is **opaque** | *not* xxh64 of the blob — see below |
-| chunk URLs are namespaced per `build_id` | same chunk id under the other build's prefix → **404** |
+| chunk URLs are namespaced per `build_id` | the same chunk id under the other build's prefix is a **`404`** — see §3.3a, and `api/error_shapes.json → blob_wrong_build` |
 | `Range:` is honoured | `Range: bytes=10-99` → `206` + `Content-Range: 10-99/259795` |
 | CDN | `Server: AliyunOSS`, `Via: …cloudfront.net`, `x-cache: Hit from cloudfront`, `accept-ranges: bytes`, `etag`, `last-modified`, `content-md5` |
 
@@ -608,10 +639,25 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    `est_download_bytes` is **`totals.download_bytes`** — 274 426 is exactly the
    `partial_same_offset` figure in this bundle's patchmap. `files=1` proves the
    glob selected the intended path and nothing else, and `purge_files=0` is the
-   scope holding over the cleanup. `--check-only` is the other free check, and it
-   names both digests: `expect_md5=d992a789… actual_md5=1e210ff1…`, which are
-   this capture's `new.md5` and `old.md5`. A mismatch here means the fixture and
-   the tool disagree about the file before a single byte moves.
+   scope holding over the cleanup.
+
+   `--check-only` is the other free check, and it **is expected to report
+   damage**: under `--include <a capture path>` the run verifies only that one
+   path against the *new* manifest while the copy still holds the *old* bytes,
+   so the seven repairable captures come back damaged and exit **`4`**. Only
+   `identical` is clean and exits `0`, because its bytes already match. A `0`
+   here would mean the check looked at nothing.
+
+   What it names is what makes it useful:
+
+   ```
+   CHECK fail: md5 expect_md5=d992a789… actual_md5=1e210ff1…
+   ```
+
+   this capture's `new.md5` and `old.md5`. Those two come from `tracing::warn!`
+   in `src/repair/check.rs`, so they reach **stderr and the log file only, never
+   stdout** — on the data plane the only signal is `exit 4`. A mismatch means
+   the fixture and the tool disagree about the file before a single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
    path, plus `--max-files 1`, `--io-threads 1` and `--fail-fast`. `--max-files 1`
@@ -628,19 +674,25 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    |---|---|---|
    | 1 | `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes` | `SUMMARY` |
    | 2 | the patched file's MD5 equals `expectations.result_md5` | the file on disk |
-   | 3 | no id in `expectations.must_not_fetch` appears in a **`chunk downloaded`** record | the `trace` log |
+   | 3 | no id in `expectations.must_not_fetch` was requested | **the replay server's own request log** — see below |
    | 4 | exit `0`, `config_bumped=0`, `local_manifest=ok`, every path outside the scope untouched | `SUMMARY` + a before/after tree diff |
    | 5 | for `removed`: the path is gone, and `deleted_extra_bytes` equals `old.size` | `SUMMARY` + the tree diff |
 
-   Assertion 3 is the one that earns the exercise and the one the data plane
-   cannot supply — `SUMMARY` is byte-level, so it is read from
-   `<exe-dir>/logs/girpr_<ts>.log` at `--log-level trace`. **The match has to be
-   on the download record, not on the bare id.** A *reused* chunk is logged too,
-   as `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the
+   **The normative source for assertion 3 is the server's.** The bridge runs a
+   shim that records what it was asked for, and that record is the primary
+   answer: it is the only one that sees every request, including any that no
+   client-side log line describes.
+
+   The procedure below reads assertion 3 out of `<exe-dir>/logs/girpr_<ts>.log`
+   at `--log-level trace` instead, and that is its **predecessor** — it is what
+   was done when this fixture was first patched, and it stays here because it is
+   what a reader with no shim has to fall back on. Its own caveat is the reason
+   the server log is better: **a reused chunk is logged too**, as
+   `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the
    id reports a violation on a perfectly correct reuse — which is how the first
-   attempt at this check failed on 19 chunks that were never downloaded. Look for
-   `chunk downloaded chunk=<id>` and `no local reuse candidate -> download
-   chunk=<id>`.
+   attempt at this check failed, on 19 chunks that were never downloaded. Match
+   on the *download* record, never on the bare id: `chunk downloaded chunk=<id>`
+   and `no local reuse candidate -> download chunk=<id>`.
 
    `local_manifest=ok` is assertion 4's teeth. Without it a run whose local
    manifest failed to load still exits `0` with a plausible byte count, having

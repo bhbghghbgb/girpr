@@ -238,7 +238,7 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 34 unit + 15 integration, all offline
+cargo test            # 82 unit + 59 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
 ```
@@ -249,9 +249,19 @@ cargo clippy --all-targets
   `HypClient::new_with_bases` in `src/hyp.rs`).
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
-  resolved in `RunCtx::api_bases`). `tests/repair_offline.rs` drives the real
-  binary through the flags against the mock, which is the only way to prove a flag
-  actually reaches `HypClient` — the library tests inject `RunCtx` directly.
+  resolved in `RunCtx::api_bases`).
+- **What the tests actually drive.** `tests/repair_offline.rs` is 53 cases, and
+  most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
+  — that exercises the library, not the flag surface. Seven of them (the M7
+  endpoint-override cases) spawn the real binary through
+  `CARGO_BIN_EXE_girpr`, which is how the `--hyp-base` / `--sophon-base`
+  precedence is pinned; they still run against the mock, not against real bytes.
+  `tests/cli_contract.rs` is the other file that spawns the binary, and it never
+  reaches the API at all — it is argument handling and exit codes only.
+- **Nothing yet proves a flag reaches the HTTP client against real bytes.**
+  `tests/artifact_bridge.rs` is the test that will: it replays a `gircap` bundle
+  over loopback and runs the real binary against it. It does not exist yet —
+  `docs/06-artifact-bridge-spec.md` is its specification.
 - Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.

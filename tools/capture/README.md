@@ -85,19 +85,43 @@ selfcheck does not pass, is not a fixture: re-capture it.
 
 ## Status
 
-Built to milestone **M4** (diff and the reuse pool). A live `capture` writes the
-seven `api/` documents byte-exact, fetches and verifies the `game` manifest for
-both builds, then diffs them: `diff/paths.diff.json`, the greppable
-`diff/paths.tsv`, and `diff/reuse_pool.json` measuring what same-file-only reuse
-forgoes. Chunk blobs, the `game/` fixture and the ground truth land in M6, M7 and
-M8; `verify` / `materialize` / `list` are M9. The build order lives in
-`docs/02-plan.md` §3 and each module's own header says which milestone it lands
-in.
+Built through milestone **M12**. A live `capture` writes the `api/` documents
+byte-exact — including `api/tag_probe.json` and `api/error_shapes.json`, the two
+generated measurements — fetches and verifies the `game` manifest for both
+builds, diffs them, and assembles a **complete artifact**:
+
+| | shipped |
+|---|---|
+| `api/` | six response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `requests.ndjson` |
+| `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json` |
+| `chunks/` | the three retention sets, every blob, `index.json` with `build_id` on each reference |
+| `game/` / `expected/` | the fixture and the ground truth, per capture |
+| `patchmaps/` | one per capture: where every chunk's bytes come from |
+| `verify/` | `checksums.json` (A16) and `selfcheck.json` |
+| commands | `capture`, `verify`, `materialize`, `list` |
+| extras | gzip above the threshold, and assertions A18/A19/A20 |
+
+Both reference bundles — `hk4e_global` 7.0.0 → 7.1.0 — **verify 90/90, exit
+`0`**. And the end-to-end check has been **run by hand**: the bundle was handed to
+the real `girpr` binary against a scratch copy of `game/`, all eight captures,
+every one exit `0` and every `download_bytes` matching its patchmap to the byte
+(§8.1.1).
+
+What has *not* been built is the **automated** version of that run — a replay
+server plus a test that drives the binary through it. That is specified in
+`girpr`'s `docs/06-artifact-bridge-spec.md` and does not exist yet.
+
+The build order lives in `docs/02-plan.md` §3 and each module's own header
+says which milestone it lands in.
 
 ```powershell
-# artifacts/hk4e_global/<old>__<new>/<id>/{api,manifests,diff}/
+# artifacts/hk4e_global/<old>__<new>/<id>/{api,manifests,diff,chunks,game,expected,patchmaps,verify}/
 .\target\release\gircap.exe capture --out artifacts
 
-# Metadata-only, against a local server (the testing seam M10 needs)
+# Metadata-only, against a local server (the testing seam)
 .\target\release\gircap.exe capture --hyp-base http://127.0.0.1:8080 --sophon-base http://127.0.0.1:8080
+
+# What is on disk. One `bundle` record per bundle, then one `summary`.
+.\target\release\gircap.exe list --root artifacts
+.\target\release\gircap.exe list --root artifacts --output json
 ```
