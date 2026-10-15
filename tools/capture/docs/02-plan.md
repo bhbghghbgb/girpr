@@ -30,19 +30,29 @@ smallest-first naturally avoids them unless a class has no cheaper candidate.
 
 ---
 
-## 1. External blocker (does not gate the build)
+## 1. External blocker — RESOLVED (was: `girpr` had no path include/exclude)
 
 `girpr` has **no path include/exclude**. Run against `game/`, it builds the plan
 from the whole live manifest and would fetch the entire game instead of the one
 captured file. The fix is a `girpr` feature; `gircap` neither depends on it nor
 works around it.
 
-Consequence for this plan: **M11 step 4 is blocked and is recorded as blocked**,
-not skipped. Everything up to and including M10 is unblocked, and `gircap verify`
-/ `gircap materialize` give the offline half of the acceptance check regardless.
-Re-confirmed at M12 against `girpr --help` and `purge::keep_set`: still no path
-filter.
-Full detail and the intended invocation: [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle--and-one-external-blocker).
+> **Resolved.** `girpr` now ships `--include` / `--exclude`, plus `--max-files`,
+> `--max-download-bytes`, `--print-plan` and `--purge-only`. A path outside the
+> scope is treated as nonexistent — invisible to the repair *and* to the
+> files-cleanup — and a scoped run does not bump `config.ini`.
+>
+> Consequence for this plan: **M11 step 4 moved from blocked to runnable**, and
+> the free half of it has been run and agrees with the artifact. The repairing
+> runs and the `removed` capture are still outstanding, so M11 remains open —
+> recorded as *not run*, not as passed. See
+> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr)
+> and `gircap` plan M11.
+
+Independence is unaffected and load-bearing: `gircap` still does not invoke
+`girpr`, read its flags or share its exit codes, and the grep over
+`tools/capture/src/` still returns doc comments only.
+Full detail and the intended invocation: [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr).
 
 ---
 
@@ -472,16 +482,20 @@ nine classes.
 2. `gircap materialize` on it, offline, and the rebuilt files match `game/` and
    `expected/` byte-for-byte;
 3. `diff -r game/ expected/` lists exactly the non-`identical` variant files;
-4. **BLOCKED** — hand `game/` to `girpr` and confirm it reaches `7.1.0` with
+4. **NOT RUN** — hand `game/` to `girpr` and confirm it reaches `7.1.0` with
    `SUMMARY download_bytes` equal to each capture's
-   `patchmaps/<id>.json → totals.download_bytes`. This cannot run until `girpr`
-   has path include/exclude (see §1); without it the run would fetch the whole
-   game. It is **not** skipped — it is left open, and M11 is not "done" until it
-   runs. Run by hand once when unblocked, never automated, because `gircap` must
-   not depend on `girpr`.
+   `patchmaps/<id>.json → totals.download_bytes`. *(Written when this was
+   BLOCKED on `girpr` having no path include/exclude; see §1. It has since
+   shipped, so the step is runnable — the free pre-flights have been run and
+   agree with the artifact byte-for-byte, but the repairing runs have not, and
+   `removed` is still refused. It is **not** skipped: it is left open, and M11 is
+   not "done" until it runs. Run by hand, never automated, because `gircap` must
+   not depend on `girpr`.)*
 **Commit:** `gircap: M11 - first live capture (end-to-end check blocked on girpr path filters)`
 
-**Landed for steps 1-3. Step 4 remains BLOCKED and M11 is not complete.**
+**Landed for steps 1-3. Step 4 is still NOT RUN and M11 is still not complete —
+but the reason has changed, and it is no longer "the flag does not exist".** See
+the step-4 addendum at the end of this milestone.
 
 > *Superseded by M12's re-capture at
 > `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z/`, which carries the
@@ -527,6 +541,37 @@ and not a gap.
    [`00-spec.md` &sect;8.1.1](00-spec.md) (the six patchable captures sum to
    **2 373 385 B**), so the check is a comparison to run rather than a procedure
    to reconstruct. It stays manual: `gircap` must not depend on `girpr`.
+
+#### Step-4 addendum, after `girpr` shipped path scoping
+
+This sub-step's original blocker is gone, and this paragraph is what replaced it.
+The reading above was correct **when it was written** and is wrong now; it is kept
+as the record of that run rather than edited into agreement with a tool that had
+not shipped yet.
+
+`girpr` now has `--include` / `--exclude`, so the run is possible. The parts of it
+that cost nothing were run by hand against the M12 bundle, on a **copy** of
+`game/`:
+
+| run | result | what it proves |
+|---|---|---|
+| `--include <HoYoChannel.dll> --max-files 1 --print-plan` | `PLAN files=1 est_download_bytes=274426 purge_files=0 scoped=1` | the glob selects one file, the scope holds over the cleanup, and **the estimate equals the patchmap's `totals.download_bytes` to the byte** |
+| `--include <HoYoChannel.dll> --check-only` | `expect_md5=d992a789… actual_md5=1e210ff1…` | the tool and the artifact agree on both digests — the patchmap's `new.md5` and `old.md5` |
+| `--include <removed path> --purge-only` | **exit 1**, `--include … matched no file in the live manifest (plan_files=0)` | the `removed` cleanup is refused; see §8.1.2. A `girpr` defect, filed there |
+| `--include <HoYoChannel.dll> --audio en-us` | **exit 1**, names `…/audio_lang_14` as outside the scope | §8.1.3's rule is real and the escape hatch (include the scan file) works |
+
+So the two figures M11 set out to compare — the plan's estimate and the tool's
+view of the file's identity — already agree exactly, before any repair. The
+bundle still passed `gircap verify` 90/90 afterwards, which is the whole reason
+step 1 of the procedure copies `game/`.
+
+**What is still not done is the part that costs bytes:** the repairing runs
+themselves, all eight, with the `SUMMARY download_bytes` comparison and the
+`must_not_fetch` request-log check. They stay manual and stay unrun here —
+`gircap` must not depend on `girpr`, and a recorded pass is not something to write
+down from a pre-flight. `removed` cannot be run at all until the refusal above is
+fixed on their side. M11 step 4 is therefore **still open**, and the blocker is
+now a `girpr` defect plus an unrun procedure rather than a missing flag.
 
 **One assertion was added because M11 ran the thing.** Comparing `game/` against
 `expected/` by hand - step 3 - turned out to be checking something nothing
@@ -612,25 +657,36 @@ through `MANIFEST.json`'s own digest record. M11's four acceptance steps all sti
 pass: `verify` exit 0, `materialize` exit 0 with 14 of 14 files byte-for-byte,
 and the variant set still exactly the non-`identical` captures.
 
-**Two claims in the review were checked and not adopted.** It reported that the
-manual step's reason for avoiding `--purge-after` was stale, and that
-`--audio` is refused under a path scope. Both describe behaviour of a `--include`
-flag that does not exist: `girpr --help` still offers `--game-path`, `--biz`,
-`--audio`, `--io-threads`, `--purge-after`, `--purge-before`, `--check-only`,
-`--dry-run`, `--json-summary`, `--log-level` and nothing else, `purge::keep_set`
-is config-only with no glob, and `00-spec.md` §8.1 says *"The blocker is
-unchanged"* rather than claiming it resolved. It also reported that M11 step 4
-should be recorded as run. It was not run and is still blocked. Writing down a
-pass for a check that has not happened - and rewriting a correct reason into one
-that matches code nobody has written - is the exact failure mode M10 had to fix
-twice.
+**Two claims in the review were checked and not adopted *at the time*.** It
+reported that the manual step''s reason for avoiding `--purge-after` was stale,
+and that `--audio` is refused under a path scope. Both describe behaviour of a
+`--include` flag that did not exist: `girpr --help` then offered `--game-path`,
+`--biz`, `--audio`, `--io-threads`, `--purge-after`, `--purge-before`,
+`--check-only`, `--dry-run`, `--json-summary`, `--log-level` and nothing else,
+`purge::keep_set` was config-only with no glob, and `00-spec.md` §8.1 said
+*"The blocker is unchanged"*. It also reported that M11 step 4 should be recorded
+as run. It was not run and was still blocked. Writing down a pass for a check
+that has not happened - and rewriting a correct reason into one that matches code
+nobody has written - is the exact failure mode M10 had to fix twice.
 
-What *was* taken from the fourth point is real and survives the false premise: a
-`removed` path is absent from the new manifest by construction, therefore absent
-from any repair plan, so the only lever that can act on it is a cleanup - and an
-unscoped cleanup destroys the rest of the fixture. That tension is now §8.1.2 of
-the spec rather than something to be discovered. Step 4's reason was left as
-written, because for today's `girpr` it is correct.
+> **Superseded by the merge.** `girpr` has since shipped `--include` /
+> `--exclude`, and **both claims turned out to be right**. The refusal is real
+> (`--audio` under a scope exits 1, naming the scan file), and the cleanup reason
+> was indeed stale: `plan::purge::classify_purge_path` tests the scope first and
+> keeps anything not visible, so a scoped cleanup cannot reach the rest of the
+> fixture. Verified by hand - see the step-4 addendum under M11 and §8.1.3.
+>
+> The lesson survives the reversal, and it is the opposite of what the note
+> wanted: the check that mattered was reading the tool, not the handover. A
+> reviewer reading the flag list would have been right; a reviewer trusting the
+> note would have been right too, but for the wrong reason and six weeks early.
+
+What *was* taken from that point, and survives the merge too, is the real kernel:
+a `removed` path is absent from the new manifest by construction, therefore absent
+from any repair plan, so the only lever that can act on it is a cleanup. That is
+now §8.1.2 of the spec rather than something to be discovered - and it turned out
+to be precisely why `removed` is the one capture `girpr` still cannot be run
+against.
 ---
 
 ## 4. Test strategy
@@ -663,7 +719,7 @@ drift is legible rather than mysterious.
 | gzip hurts agent readability | an agent tries to `cat` a `.gz` | the threshold is a flag, every gzipped doc ships a plain `.tsv` sidecar, and `MANIFEST.json → files[].encoding` is authoritative |
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` covers the *decompressed* digest for gzipped files (`container:"gzip"`, `md5` of the plain body) so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | M7/M9 assemble purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
-| **The end-to-end check cannot run** because `girpr` has no path include/exclude | the artifact is never validated against the real tool | recorded as an external blocker (plan §1, spec §8). Mitigated by `verify`/`materialize` giving the offline half now; the online half is left visibly open, not dropped |
+| **The end-to-end check cannot run** | the artifact is never validated against the real tool | **Largely retired**: `girpr` ships `--include`, and the pre-flights that matter have been run by hand and agree with the artifact byte-for-byte (`est_download_bytes=274426` = the `partial_same_offset` total; `expect_md5`/`actual_md5` = its `new.md5`/`old.md5`). What remains is the repairing run itself and `removed`, whose cleanup-only run `girpr` refuses — a defect on their side, recorded as *not run* rather than passed (spec §8.1.2). `verify`/`materialize` cover the offline half |
 | An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
 
 ---

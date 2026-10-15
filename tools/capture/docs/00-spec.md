@@ -467,7 +467,7 @@ crate is the summary emitter.
 
 ---
 
-## 8. Consuming the bundle — and one external blocker
+## 8. Consuming the bundle with `girpr`
 
 The bundle is built to be handed to the main tool.
 
@@ -475,107 +475,176 @@ The bundle is built to be handed to the main tool.
 |---|---|---|
 | inspect / assert from the metadata alone | nothing — `MANIFEST.json`, `patchmaps/`, `verify/` | ✅ works |
 | rebuild old/new files offline | `gircap materialize` | ✅ works |
-| **run `girpr --game-dir <artifact>/game` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **shipped** — `girpr --include <GLOB>` |
+| **run `girpr --game-path <copy-of-game>` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **shipped** — `girpr --include <GLOB>` |
 
-> **Update (from `girpr`): the blocker is resolved.** The path include/exclude
-> asked for below shipped as `girpr --include` / `--exclude`, alongside
-> `--max-files` / `--max-download-bytes` / `--max-write-bytes` /
-> `--max-delete-bytes` (exit `5` on a ceiling, never trimming the work list),
-> `--print-plan`, `--purge-only`, `--fail-fast` and `--hyp-base` /
-> `--sophon-base`. **This section and §8.1.1 are otherwise unchanged**: the
-> procedure below is `gircap`'s to revise, and the only edit made here is the
-> status line. `girpr`'s README is the authority on what the flags now guarantee
-> — in particular that a filtered-out path is invisible to the files-cleanup as
-> well as to the repair, and that a scoped run does not bump `config.ini`. One
-> consequence is worth flagging for whoever updates §8.1.1: the artifact-serving
-> shim is still missing, so the check cannot be automated yet.
+> **Update: the blocker is resolved.** The path include/exclude asked for below
+> shipped as `girpr --include` / `--exclude`, alongside `--max-files` /
+> `--max-download-bytes` / `--max-write-bytes` / `--max-delete-bytes` (exit `5` on
+> a ceiling, never trimming the work list), `--print-plan`, `--plan-out`,
+> `--purge-only` and `--fail-fast`. `girpr`'s README is the authority on what the
+> flags guarantee — in particular that a filtered-out path is treated as
+> nonexistent and so is invisible to the files-cleanup as well as to the repair,
+> and that a scoped run does not bump `config.ini`.
+>
+> §8.1's body and §8.1.1 were **revised by the capture side** once the flag
+> existed, because the procedure was `gircap`'s to own and the reason it gave for
+> avoiding `--purge-after` had become false. §8.1.2 records the one case that is
+> still not reachable, and why — that is a `girpr` defect, not a gap in the
+> artifact.
 
-### 8.1 The blocker
+### 8.1 Why the scope was needed, and what it changed
 
-`game/` holds a handful of files. Run the main tool against it as-is and the
+`game/` holds a handful of files. Run the main tool against it unscoped and the
 main tool does what it is specified to do: build the plan from the **whole live
 manifest** and fetch every file in it. A run meant to repair one 2.3 MB DLL would
 pull ~130 GB, and a `--purge-after` run would also delete every file in the
 bundle that the live manifest happens not to contain.
 
-That is correct behaviour for the main tool and is not something `gircap` should
-work around. The fix belongs in `girpr`: a repeatable path include/exclude
-(glob, rooted at the game dir) that narrows both the repair work list and the
-files-cleanup keep-set. With it, the intended invocation is roughly:
+That is correct behaviour for the main tool and was never something `gircap`
+should work around — which is why the fix was asked for in `girpr` rather than
+shimmed here. The intended invocation is now a real one:
 
 ```
-girpr --game-path <artifact>/game --biz hk4e_global
+girpr --game-path <copy-of-game> --biz hk4e_global
       --include "GenshinImpact_Data/Plugins/HoYoChannel.dll"
-      --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"
       …
 ```
 
-and `SUMMARY download_bytes` can then be compared against each capture's
+and `SUMMARY download_bytes` can be compared against each capture's
 `patchmaps/<id>.json → totals.download_bytes`.
 
-**Until that flag exists, the end-to-end check is a manual step and is recorded
-as such.** `gircap` does not depend on `girpr`, does not invoke it, and does not
-shim the missing flag; `docs/02-plan.md` M11 runs the check by hand and marks it
-blocked rather than quietly skipping it.
+**`gircap` still does not depend on `girpr`.** It does not invoke it, does not
+read its flags, and does not shim them; §2's independence rule is unchanged and
+the grep over `tools/capture/src/` still returns doc comments only. The
+end-to-end check remains a manual step, run by hand against a scratch copy, for
+the reason §8.1.2 gives.
 
-**Re-confirmed at M11**, against the tool as it stands: `girpr --help` offers
-`--game-path`, `--biz`, `--audio`, `--io-threads`, `--purge-after`,
-`--purge-before`, `--check-only`, `--dry-run`, `--json-summary` and
-`--log-level`. Nothing narrows a path. The blocker is unchanged.
-
-### 8.1.1 The manual procedure, and the numbers it must produce
+### 8.1.1 The procedure, and the numbers it must produce
 
 Recorded so that whoever runs it does not have to reconstruct it, and so that a
 result can be checked rather than believed. Against
-`artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`:
+`artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
 
-1. Copy the bundle's `game/` somewhere writable. `girpr` writes into the game
-   directory, and the bundle must stay byte-identical for `gircap verify` to
-   still pass afterwards.
-2. Run the repair once per capture, with an `--include` set of exactly one
-   path — the capture's own `patchmaps/<id>.json → path`. One run per capture is
-   what makes `SUMMARY download_bytes` attributable; a single run over all eight
-   sums to the same total but cannot be compared per capture.
-3. Check three things per capture: `SUMMARY download_bytes` equals
-   `patchmaps/<id>.json → totals.download_bytes` (equivalently
-   `expectations.download_bytes`, which A20 proves is the same figure); the
-   patched file's MD5 equals `expectations.result_md5`; and **no chunk in
-   `expectations.must_not_fetch` was requested** — that last one is what catches a
-   broken reuse path, and it is invisible in a byte count.
-4. Do **not** pass `--purge-after` or `--purge-before`. Today they have no path
-   filter to narrow them, so they delete every file the live manifest does not
-   contain, which for a 9-file fixture is most of it. **This makes the `removed`
-   capture untestable until scoping exists** — see below.
+**Both steps below were run against this bundle with the current `girpr`, and
+they are transcribed from that run rather than from the docs.**
 
-### 8.1.2 The `removed` capture needs a cleanup, and a cleanup destroys the fixture
+1. **Copy `game/` to scratch.** `girpr` writes into the game directory, so point
+   `--game-path` at the copy and never at the bundle: that is what keeps a
+   cleanup flag from turning into a way to destroy the evidence. Afterwards
+   `gircap verify --artifact <bundle>` must still exit `0` — it did, 90/90.
 
-These two facts are both true and they do not fit together, which is worth stating
-plainly rather than leaving to be discovered:
+2. **Pre-flight for free, before spending anything.** `--print-plan` does not
+   repair, purge or bump, and it is not an offline mode — it still fetches the
+   API — but it costs no payload:
 
-- A `removed` path is absent from the new manifest by construction, therefore
-  absent from any repair plan. **The only lever that can act on it is a cleanup.**
-- With no path filter, a cleanup also deletes every *other* fixture file the live
-  manifest happens not to contain.
+   ```
+   PLAN files=1 est_download_bytes=274426 purge_files=0 purge_bytes=0 scoped=1
+   ```
 
-So the six two-sided captures plus `added` (seven of eight) are actionable once
-`--include` exists, while `removed` is not actionable at all until a cleanup can
-be scoped to one path. Recording a run that skipped `removed` is honest; recording
-one that ran `--purge-after` unscoped and destroyed the rest is not a pass.
+   `est_download_bytes` is **`totals.download_bytes`** — 274 426 is exactly the
+   `partial_same_offset` figure in this bundle's patchmap. `files=1` proves the
+   glob selected the intended path and nothing else, and `purge_files=0` is the
+   scope holding over the cleanup. `--check-only` is the other free check, and it
+   names both digests: `expect_md5=d992a789… actual_md5=1e210ff1…`, which are
+   this capture's `new.md5` and `old.md5`. A mismatch here means the fixture and
+   the tool disagree about the file before a single byte moves.
 
-This is also why `removed`'s `expectations` say `absent_after: true` with
-`download_bytes: 0` rather than carrying nothing: the assertion a consumer can make
-is "the file is gone and nothing was downloaded", and that is checkable even
-though the act of deleting it is not yet reachable.
+3. **Repair, once per capture**, with `--include` naming exactly that capture's
+   path, plus `--max-files 1` and `--fail-fast`. `--max-files 1` is the cheap
+   answer to `*` crossing `/` — and this fixture contains
+   `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
+   it, so the glob is worth quoting and bounding. One run per capture is what
+   makes `download_bytes` attributable; a single run over all eight sums to the
+   same total but cannot be compared per capture.
 
-### 8.1.3 Do not pass `--audio`
+4. **Assert four things**, per capture:
+
+   | # | assertion | read from |
+   |---|---|---|
+   | 1 | `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes` | `SUMMARY` |
+   | 2 | the patched file's MD5 equals `expectations.result_md5` | `expected/` |
+   | 3 | no id in `expectations.must_not_fetch` was requested | a **request log**, not the binary |
+   | 4 | exit `0`, `config_bumped=0`, and every path outside the scope is untouched on disk | `SUMMARY` + a before/after tree diff |
+
+   Assertion 3 is the one that earns the exercise and the one the binary cannot
+   supply: `SUMMARY` is byte-level, and per-chunk requests appear only as `trace`
+   lines in `<exe-dir>/logs/girpr_<ts>.log`. Read them at `--log-level trace` or
+   accept that assertion 3 was not made — recording it as passed would be a
+   fabrication. Assertion 4's tree diff is the only thing that proves the scope
+   held across the whole filesystem rather than just the repair plan.
+
+5. **Cleanup flags are safe under a scope, and that is a change.** Do **not** pass
+   `--purge-after` / `--purge-before` for a repair run anyway — there is nothing
+   to delete, and a run that deletes something is a run whose evidence you now
+   have to reason about. But the *reason* the old runbook gave for avoiding them
+   no longer holds: `plan::purge::classify_purge_path` tests the scope first and
+   returns `Keep` for anything not visible, so a scoped cleanup cannot reach the
+   rest of the fixture. `purge_files=0` in the `PLAN` line above is the direct
+   evidence.
+
+### 8.1.2 `removed` is still not reachable — a `girpr` defect, not an artifact gap
+
+A `removed` path is absent from the new manifest by construction, therefore
+absent from every repair plan. The only work that can touch it is the
+files-cleanup, so it gets a cleanup-only run scoped to that one path, asserting
+that the path is **gone afterwards** and that nothing was downloaded — not a byte
+total, because there is no patch to cost.
+
+**That run is refused today, and the reason is on `girpr`'s side.** Run by hand
+against this bundle:
+
+```
+girpr --game-path <copy-of-game> --biz hk4e_global
+      --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"
+      --purge-only
+→ exit 1: --include '…/00664172.blk' matched no file in the live manifest
+  (plan_files=0); check the glob spelling (`*` also crosses `/`) …
+```
+
+The glob is correct and the path is on disk; the guard it trips tests
+`plan.files.is_empty()` and runs **before** the purge plan is built, so a
+legitimate request — empty repair plan, non-empty purge candidates — is refused.
+That guard is `girpr`'s to fix, and it is already filed there. `gircap`'s part of
+the contract is already in place: `removed`'s `expectations` say
+`absent_after: true` with `download_bytes: 0`, so the assertion exists and is
+ready the moment the run is accepted. Until then, seven of eight captures are
+exercisable and `removed` is recorded as **not run** — which is honest, and is
+not the same as recording a pass.
+
+### 8.1.3 Do not pass `--audio` under a scope
 
 A consumer reaching for `--audio en-us` — the natural reflex, and the flag this
-capture was itself made with — changes the audio scan file, and the scan file is
-one of the paths a scoped run cannot reach. Omitting the flag is correct: the run
-autodetects, reads `GenshinImpact_Data/Persistent/audio_lang_14` (which holds
-`English(US)`), and resolves to `en-us`, which is exactly the state the bundle was
-captured in. Passing it would rewrite a fixture file to its own current contents,
-which is a needless way to invalidate A16.
+capture was itself made with — is **refused**, not silently honoured. Verified by
+hand against this bundle:
+
+```
+girpr --game-path <copy-of-game> --biz hk4e_global
+      --include "GenshinImpact_Data/Plugins/HoYoChannel.dll" --audio en-us
+→ exit 1: --audio writes the scan file at 'GenshinImpact_Data/Persistent/audio_lang_14',
+  which is outside the active path scope; include it or drop one of the two flags
+```
+
+That path is this bundle's own audio scan file, which holds `English(US)`. The
+refusal is right: an explicit `--audio` mutates a path the scope has declared
+nonexistent, and the scan file is the one file a consumer is most likely to
+invalidate by accident. Omitting the flag is also what makes the run a no-op here —
+the run autodetects from the scan file and resolves to `en-us`, which is exactly
+the state the bundle was captured in.
+
+Three details worth knowing rather than rediscovering:
+
+- **The escape hatch is to include the scan file.** Adding
+  `--include "GenshinImpact_Data/Persistent/audio_lang_14"` makes the same run
+  exit `0`. It is never hardcoded in `girpr`; the path comes from
+  `getGameConfigs`. Including it does not add it to the repair plan — `files=1`
+  either way — so this is a legitimate alternative if a run really does need to
+  set audio.
+- **The refusal is skipped on a read-only run.** `ctx.readonly()` is
+  `dry_run || check_only`, and the guard is behind it, so `--check-only` or
+  `--dry-run` can carry `--audio` under a scope without complaint. That is not
+  inconsistency: neither writes the scan file, so there is no conflict to refuse.
+- **The path is `/`-separated and case-insensitive**, like every other glob, and
+  `*` also crosses `/` — which is why step 3 passes `--max-files 1`.
 
 Expected per-capture `download_bytes` for that bundle:
 
@@ -588,7 +657,7 @@ Expected per-capture `download_bytes` for that bundle:
 | `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
 | `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
-| `removed` | `removed` | **0** | *(no plan)* | 0 |
+| `removed` | `removed` | **0** *(not run — §8.1.2)* | *(no plan)* | 0 |
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -600,12 +669,13 @@ the rest, so read them with §13.1 of the schema:
 - **`removed` has no `plan` and no `totals`** — there is no new side to patch to,
   so the reuse / fetch / moved cells above are empty rather than `0 / 0 / 0`.
   Its `download_bytes` is `0`, and that is a true value: a removal downloads
-  nothing.
+  nothing. The figure is what a consumer should see; §8.1.2 is why no run has
+  yet produced it.
 
 The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
 **2 487 742 B**.
 
-### 8.2 What the artifact provides so that check is cheap when it unblocks
+### 8.2 What the artifact provides so that the check is cheap to run
 
 - `expected/` gives the exact bytes a correct run must produce, so the
   comparison is `md5`, not eyeballing.

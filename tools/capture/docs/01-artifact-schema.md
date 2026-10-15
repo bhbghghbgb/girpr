@@ -490,11 +490,13 @@ Both trees are covered by `MANIFEST.json → files[]` and
 `verify/checksums.json`. A consumer can `diff -r` `game/` against `expected/`
 and every differing file is exactly one that needs patching.
 
-> **Consuming `game/` with the main tool is blocked** on `girpr` gaining path
-> inclusion/exclusion. Run against this directory as-is, the main tool builds its
-> plan from the whole live manifest and would fetch the entire game. See
-> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle--and-one-external-blocker)
-> for the intended invocation and why the fix belongs in `girpr`, not here.
+> **Consuming `game/` with the main tool needs `girpr --include`.** Run against
+> this directory unscoped, the main tool builds its plan from the whole live
+> manifest and would fetch the entire game. `girpr` now ships path scoping, so
+> point it at a **copy** of `game/` and name one capture per run with
+> `--include`. See [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr)
+> for the procedure, the per-capture figures, and the one capture (`removed`)
+> whose run `girpr` currently refuses.
 
 ## 15. `verify/checksums.json`
 
