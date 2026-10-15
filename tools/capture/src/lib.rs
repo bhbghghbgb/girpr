@@ -29,8 +29,9 @@
 //!
 //! ## Two channels
 //!
-//! **stdout** is the answer — exactly one `SUMMARY` per run, or one JSON object
-//! under `--output json` — and [`report`] owns it. **stderr** is the narration
+//! **stdout** is the answer — a stream of [`report::Record`]s, one per line,
+//! ending in exactly one `SUMMARY`, or the same records as NDJSON objects under
+//! `--output json` — and [`report`] owns it. **stderr** is the narration
 //! and [`logging`] owns that. Neither writes to the other's channel, which is
 //! what lets `--output json` hand a caller a clean stream with no log chatter
 //! mixed in.

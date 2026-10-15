@@ -424,6 +424,68 @@ fn manifest_chunk_ids(bundle: &std::path::Path, tag: &str) -> Vec<String> {
     ids
 }
 
+/// `list` reports each bundle on stdout, not only on stderr at INFO. Every
+/// per-bundle fact a caller needs to decide *which* bundle to verify is on the
+/// record — `selfcheck` and `complete` in particular, neither of which the
+/// summary carries per-bundle.
+#[test]
+fn list_emits_one_bundle_record_per_bundle_and_a_summary_last() {
+    let (mock, scratch, r, bundle) = capture_ok("listrec");
+    let root = scratch.out();
+    let v = run(&["list", "--root", &root.to_string_lossy(), "--output", "json"]);
+    assert_eq!(v.code, 0, "{}\n{}", v.stdout, v.stderr);
+
+    let lines: Vec<&str> = v.stdout.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one BUNDLE for the one bundle, then one SUMMARY: {lines:?}"
+    );
+
+    let b: serde_json::Value = serde_json::from_str(lines[0]).expect("NDJSON");
+    assert_eq!(b["event"], "bundle", "{lines:?}");
+    assert_eq!(b["tool"], "gircap");
+    assert_eq!(
+        b["id"].as_str().unwrap(),
+        bundle.file_name().unwrap().to_string_lossy(),
+        "the record names the bundle directory it found"
+    );
+    assert!(
+        b["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(bundle.file_name().unwrap().to_string_lossy().as_ref()),
+        "and the path ends with it: {b}"
+    );
+    assert_eq!(b["tags"], "7.0.0 -> 7.1.0");
+    assert!(b["patchmaps"].as_u64().unwrap() > 0, "{b}");
+    assert!(b["blobs"].as_u64().unwrap() > 0, "{b}");
+    assert_eq!(b["selfcheck"], "pass");
+    assert_eq!(b["complete"], true);
+
+    // The terminal record is last, and it is the one the summary is. Its totals
+    // must equal the one bundle's record — two views of the same walk.
+    let s: serde_json::Value = serde_json::from_str(lines[1]).expect("NDJSON");
+    assert_eq!(s["event"], "list");
+    assert_eq!(s["bundles"], 1);
+    assert_eq!(s["patchmaps"], b["patchmaps"], "the summary totals the records");
+    assert_eq!(s["blobs"], b["blobs"], "the summary totals the records");
+    assert_eq!(s["exit_code"], 0);
+
+    // The text plane says the same thing.
+    let t = run(&["list", "--root", &root.to_string_lossy()]);
+    assert_eq!(t.code, 0, "{}", t.stderr);
+    let tlines: Vec<&str> = t.stdout.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(tlines.len(), 2, "{tlines:?}");
+    assert!(tlines[0].starts_with("BUNDLE "), "{tlines:?}");
+    assert!(tlines[1].starts_with("SUMMARY "), "{tlines:?}");
+    assert!(tlines[0].contains("selfcheck=pass"), "{tlines:?}");
+    assert!(tlines[0].contains("complete=true"), "{tlines:?}");
+
+    drop(mock);
+    drop(r);
+}
+
 /// The artifact has the shape the schema doc promises.
 #[test]
 fn the_bundle_has_the_shape_the_schema_documents() {

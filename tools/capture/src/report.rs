@@ -1,9 +1,19 @@
-//! The stdout data plane.
+//! The stdout data plane: one or more [`Record`]s per run, one line each.
 //!
-//! `gircap` writes exactly one line per run: a `SUMMARY`. Under `--output json`
-//! that line is a single JSON object; under `--output text` it is the same record
-//! rendered as `k=v` pairs. **The two are renderings of one value, not two
-//! implementations**, so they cannot drift.
+//! A record is a label plus ordered fields, **held once and rendered twice** —
+//! `--output text` prints `SUMMARY event=capture tool=gircap …` and
+//! `--output json` prints `{"event":"capture","tool":"gircap",…}` from the same
+//! field list. **The two are renderings of one value, not two implementations**,
+//! so they cannot drift.
+//!
+//! Every run ends with exactly one `SUMMARY`: the terminal record, carrying the
+//! result and the exit code. A run may emit records *before* it — `list` writes
+//! one `BUNDLE` per bundle it found, then the `SUMMARY` — so a consumer can read
+//! a stream until the summary rather than expecting one line and parsing it.
+//!
+//! `--output json` is newline-delimited: one object per line, no enclosing
+//! array, so it can be streamed and still recovered in order. Within one object
+//! the keys are *names*; read them by name, never by position.
 //!
 //! This module owns the only `println!` in the crate. Diagnostics go to stderr
 //! through [`crate::logging`]; nothing here writes to stderr and nothing there
@@ -14,13 +24,13 @@ use std::sync::Mutex;
 
 use crate::VERSION;
 
-/// How the summary is rendered on stdout.
+/// How a record is rendered on stdout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     /// `SUMMARY k=v k=v`, human-readable.
     #[default]
     Text,
-    /// `{"event":"summary", …}`, one object, machine-readable.
+    /// `{"event":"summary", …}`, one object per line, machine-readable.
     Json,
 }
 
@@ -202,25 +212,29 @@ impl From<bool> for Val {
     }
 }
 
-/// The summary: the whole data plane of a run.
+/// One record on the stdout data plane: a label plus ordered fields.
 ///
-/// Fields keep the order they were pushed in, so a line reads in the order a
-/// reader wants it (what was asked for → what came back → what it cost) rather
-/// than in hash order.
+/// Field order is report order, so a line reads in the order a reader wants it
+/// (what was asked for → what came back → what it cost) rather than in hash
+/// order, and two runs of the same command diff cleanly.
 #[derive(Debug, Clone)]
-pub struct Summary {
+pub struct Record {
+    /// The text label: `SUMMARY` for the terminal record, `BUNDLE` for one
+    /// bundle found by `list`.
+    label: &'static str,
     /// Which command produced it: `capture`, `verify`, `materialize`, `list`.
     pub event: &'static str,
     fields: Vec<(&'static str, Val)>,
 }
 
-impl Summary {
-    /// Start a summary for `event`.
+impl Record {
+    /// The terminal record every run ends with: label `SUMMARY`, for `event`.
     ///
     /// `tool` and `version` are pushed first and unconditionally: a summary that
     /// does not say which tool wrote it is not an answer to anything.
-    pub fn new(event: &'static str) -> Self {
-        Summary {
+    pub fn summary(event: &'static str) -> Self {
+        Self {
+            label: "SUMMARY",
             event,
             fields: vec![
                 ("event", Val::Str(event.to_string())),
@@ -228,6 +242,28 @@ impl Summary {
                 ("version", Val::Str(VERSION.to_string())),
             ],
         }
+    }
+
+    /// A non-terminal record: label `label`, carrying the same `tool`/`version`
+    /// head so a line read in isolation still says what produced it.
+    ///
+    /// Not carrying `event` is deliberate: `list` emits `BUNDLE` records for one
+    /// command, so an `event` per record would say `list` several times and say
+    /// nothing the record's own label does not.
+    pub fn labeled(label: &'static str) -> Self {
+        Self {
+            label,
+            event: "",
+            fields: vec![
+                ("tool", Val::Str("gircap".to_string())),
+                ("version", Val::Str(VERSION.to_string())),
+            ],
+        }
+    }
+
+    /// The text label, e.g. `SUMMARY` or `BUNDLE`.
+    pub fn label(&self) -> &'static str {
+        self.label
     }
 
     /// Append one field. Duplicate names are kept, not merged: two numbers with
@@ -246,7 +282,7 @@ impl Summary {
 
     /// The rendered text line: `SUMMARY event=capture tool=gircap …`.
     pub fn to_text_line(&self) -> String {
-        let mut s = String::from("SUMMARY");
+        let mut s = String::from(self.label);
         for (k, v) in &self.fields {
             s.push(' ');
             s.push_str(k);
@@ -265,22 +301,37 @@ impl Summary {
     /// another tool in this repository emits. The fields are few and all
     /// primitives, so the encoding cost is a `to_string` per key and per value.
     ///
-    /// `event` is not duplicated in: it is already the first field, so a consumer
-    /// that only ever sees the JSON form has the discriminator a
-    /// newline-delimited stream would otherwise have to infer.
+    /// **`event` always comes first**, so a consumer can dispatch on it while
+    /// still streaming rather than after the line is parsed. Its value is the
+    /// record's own `event` field when it has one — which for the terminal record
+    /// is the command, `capture`/`verify`/`list`/`materialize` — and otherwise the
+    /// label lowercased, so a non-terminal record (`BUNDLE` → `bundle`) is still
+    /// self-identifying. The field is not written twice.
     pub fn to_json_line(&self) -> String {
+        let event = self
+            .fields
+            .iter()
+            .find(|(k, _)| *k == "event")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| Val::Str(self.json_event()));
         let mut s = String::with_capacity(64 + 24 * self.fields.len());
         s.push('{');
-        for (i, (k, v)) in self.fields.iter().enumerate() {
-            if i > 0 {
-                s.push(',');
-            }
+        s.push_str(&json_string("event"));
+        s.push(':');
+        s.push_str(&json_value(&event));
+        for (k, v) in self.fields.iter().filter(|(k, _)| *k != "event") {
+            s.push(',');
             s.push_str(&json_string(k));
             s.push(':');
             s.push_str(&json_value(v));
         }
         s.push('}');
         s
+    }
+
+    /// The label lowercased: the `event` a record without one of its own carries.
+    fn json_event(&self) -> String {
+        self.label.to_ascii_lowercase()
     }
 
     /// Render and write the line to stdout, and log the same record.
@@ -327,7 +378,7 @@ static STDOUT_LOCK: Mutex<()> = Mutex::new(());
 
 /// The one place in the crate that writes to stdout.
 ///
-/// Everything else on the data plane goes through [`Summary::emit`], so there is
+/// Everything else on the data plane goes through [`Record::emit`], so there is
 /// no second writer for a record to escape from.
 pub fn emit(line: &str) {
     let _guard = STDOUT_LOCK.lock();
@@ -344,8 +395,8 @@ mod tests {
     use super::*;
     use serde_json::Value as Json;
 
-    fn sample() -> Summary {
-        Summary::new("capture")
+    fn sample() -> Record {
+        Record::summary("capture")
             .set("biz", "hk4e_global")
             .set("files_captured", 8_u64)
             .set("bytes_downloaded", 96_041_377_i64)
@@ -465,7 +516,7 @@ mod tests {
     /// and a hand-rolled emitter is exactly where that path gets forgotten.
     #[test]
     fn a_quote_or_backslash_in_a_value_survives_the_json_encoding() {
-        let s = Summary::new("verify")
+        let s = Record::summary("verify")
             .set("note", r#"a "quoted", back\slashed path"#)
             .set("out", r"C:\tmp\x");
         let line = s.to_json_line();
@@ -481,7 +532,7 @@ mod tests {
     /// just a character that happens to look meaningful to a JSON reader.
     #[test]
     fn the_text_form_encodes_whitespace_but_not_quotes() {
-        let s = Summary::new("x").set("note", r#"a "quoted" value"#);
+        let s = Record::summary("x").set("note", r#"a "quoted" value"#);
         assert!(s.to_text_line().ends_with(r#"note=a%20"quoted"%20value"#));
     }
 
@@ -495,7 +546,7 @@ mod tests {
     /// A value containing `=` or a space must not shift the text parsing.
     #[test]
     fn a_path_field_survives_the_text_rendering_intact() {
-        let s = Summary::new("verify").set("artifact", r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
+        let s = Record::summary("verify").set("artifact", r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
         let line = s.to_text_line();
         let tail = line.rsplit_once("artifact=").unwrap().1;
         assert_eq!(percent_decode(tail), r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
@@ -507,7 +558,7 @@ mod tests {
     /// found.
     #[test]
     fn every_text_token_is_a_key_value_pair() {
-        let line = Summary::new("capture")
+        let line = Record::summary("capture")
             .set("exit_code_meaning", "an assertion failed")
             .set("artifact", r"E:\a b\artifacts")
             .set("pct", "100%")
@@ -532,6 +583,63 @@ mod tests {
                 ("tab".into(), "a\tb".to_string()),
             ]
         );
+    }
+
+    /// A non-terminal record carries no `event` field, and still names itself in
+    /// JSON — by its label, lowercased. That is what makes `{"event":"bundle"}`
+    /// dispatchable without the record having to be told which command is
+    /// running once per line.
+    #[test]
+    fn a_non_terminal_record_names_itself_by_its_label() {
+        let rec = Record::labeled("BUNDLE")
+            .set("path", "hk4e_global/7.0.0__7.1.0/20261015T111345Z")
+            .set("blobs", 38_u64)
+            .set("complete", true);
+        assert_eq!(rec.label(), "BUNDLE");
+        assert_eq!(
+            rec.to_text_line(),
+            "BUNDLE tool=gircap version=0.1.0 \
+             path=hk4e_global/7.0.0__7.1.0/20261015T111345Z blobs=38 complete=true"
+        );
+        let line = rec.to_json_line();
+        assert_eq!(
+            line,
+            r#"{"event":"bundle","tool":"gircap","version":"0.1.0","path":"hk4e_global/7.0.0__7.1.0/20261015T111345Z","blobs":38,"complete":true}"#,
+            "`event` leads, and is the label lowercased"
+        );
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["event"], "bundle");
+        assert_eq!(v["blobs"], 38);
+        assert_eq!(v["complete"], true);
+    }
+
+    /// `event` is the discriminator on both planes, and it must be spelled the
+    /// same way in both — and **first**, so a consumer can dispatch without
+    /// having parsed the rest of the line. The terminal record's `event` is the
+    /// command, not the label; `list` emits `BUNDLE` records and one `list`
+    /// summary, and a reader that saw `event: "list"` seven times would learn
+    /// nothing the label does not already say.
+    #[test]
+    fn event_leads_on_both_planes_and_is_never_written_twice() {
+        let summary = Record::summary("list").set("bundles", 2_u64);
+        assert!(summary.to_text_line().starts_with("SUMMARY event=list "));
+        assert_eq!(
+            summary.to_json_line(),
+            r#"{"event":"list","tool":"gircap","version":"0.1.0","bundles":2}"#
+        );
+        let bundle = Record::labeled("BUNDLE").set("path", "x");
+        assert_eq!(
+            bundle.to_json_line(),
+            r#"{"event":"bundle","tool":"gircap","version":"0.1.0","path":"x"}"#
+        );
+        // No record may emit the key twice, whichever plane produced it.
+        for line in [summary.to_json_line(), bundle.to_json_line()] {
+            assert_eq!(
+                line.matches("\"event\":").count(),
+                1,
+                "`event` appears more than once: {line}"
+            );
+        }
     }
 
     #[test]
@@ -571,13 +679,13 @@ mod tests {
     /// encoded; keys are `&'static str`s this crate chose.
     #[test]
     fn names_with_spaces_are_the_documented_limitation() {
-        let line = Summary::new("x").set("some key", 1_i32).to_text_line();
+        let line = Record::summary("x").set("some key", 1_i32).to_text_line();
         assert!(line.ends_with("some key=1"), "{line}");
     }
 
     #[test]
     fn duplicate_names_are_kept_not_merged() {
-        let s = Summary::new("x").set("n", 1_i32).set("n", 2_i32);
+        let s = Record::summary("x").set("n", 1_i32).set("n", 2_i32);
         assert_eq!(s.get("n"), Some(&Val::Int(1)));
         assert!(s.to_text_line().ends_with("n=1 n=2"));
     }

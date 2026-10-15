@@ -496,10 +496,37 @@ gircap list        --root <DIR>               # index every capture under a root
 
 ### Output
 
-stdout is a pure data plane: one `SUMMARY` line, or with `--output json` a
-single JSON object `{event:"summary", …}`. All narration goes to stderr via
+stdout is a pure data plane: **records, one per line, summary last.** With
+`--output text` a record is `LABEL k=v k=v …`; with `--output json` it is one
+object per line, NDJSON, no enclosing array. All narration goes to stderr via
 `tracing` and, with `--log-file`, to a JSON-lines log. The only `println!` in the
-crate is the summary emitter.
+crate is the record emitter.
+
+Every run ends with exactly one `SUMMARY` — the terminal record, carrying the
+result and the exit code. A command may emit records before it: `list` writes
+one `BUNDLE` per bundle it found and then the `SUMMARY`, so a machine can read
+every per-bundle fact (path, tags, capture id, patchmap count, blob count,
+`selfcheck`, `complete`) from stdout instead of parsing stderr narration, and
+can read the stream until the summary rather than expecting one line and
+parsing it.
+
+```
+$ gircap list --root artifacts --output json
+{"event":"bundle","tool":"gircap","version":"0.1.0","path":"…/20261015T092615Z","id":"20261015T092615Z","tags":"7.0.0 -> 7.1.0","patchmaps":8,"blobs":38,"selfcheck":"pass","complete":true}
+{"event":"bundle", … ,"id":"20261015T111345Z", …}
+{"event":"list","tool":"gircap","version":"0.1.0","result":"ok","root":"artifacts","bundles":2, …,"exit_code":0}
+```
+
+`event` is the discriminator and **always leads**, so a consumer can dispatch
+mid-stream. Its value is the record's command for the terminal record
+(`capture` / `verify` / `list` / `materialize`) and the label lowercased
+otherwise (`BUNDLE` → `bundle`) — a `BUNDLE` record saying `event: "list"` would
+tell a reader nothing the label does not. Within one object the keys are
+**names**: read them by name, never by position.
+
+A directory under the root that does not open as a bundle is **not** a record.
+It stays stderr-only, as it always was: there is no bundle to describe, so a
+record would have to carry the failure instead of the facts.
 
 ---
 

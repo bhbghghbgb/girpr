@@ -20,7 +20,7 @@ use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
 use crate::emit::selfcheck::Selfcheck;
-use crate::report::{OutputFormat, Summary};
+use crate::report::{OutputFormat, Record};
 use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
 use crate::manifest::diff;
 
@@ -36,7 +36,7 @@ const MANIFEST_FIELD: &str = "game";
 ///
 /// The code travels with the summary rather than being returned separately so a
 /// command cannot print a summary that disagrees with the status it exits with.
-pub type Outcome = (Summary, ExitCode);
+pub type Outcome = (Record, ExitCode);
 
 /// Why a command failed, in a form the summary can carry.
 ///
@@ -71,7 +71,7 @@ impl Failure {
     }
 
     /// The summary a caller sees for this failure.
-    pub fn summary(&self, event: &'static str) -> Summary {
+    pub fn summary(&self, event: &'static str) -> Record {
         failure_summary_detail(event, self.code, Some(&self.detail))
     }
 }
@@ -911,7 +911,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // plane and not only into the stderr narration: this is what a caller reads.
     let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
     let pool_stats = &diffs[0].pool;
-    let summary = Summary::new("capture")
+    let summary = Record::summary("capture")
         .set("result", "ok")
         .set("stage", "m8-artifact")
         .set("biz", biz.as_str())
@@ -1110,7 +1110,7 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
         );
     }
     let ok = failed == 0 && report.agrees;
-    let summary = Summary::new("verify")
+    let summary = Record::summary("verify")
         .set("result", if ok { "pass" } else { "fail" })
         .set("artifact", plan.artifact.as_path())
         .set("bundle", report.bundle.manifest.capture.id.clone())
@@ -1210,7 +1210,7 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
     );
     let (total, passed, failed) = report.counts();
     let ok = failed == 0 && report.agrees;
-    let summary = Summary::new("materialize")
+    let summary = Record::summary("materialize")
         .set("result", if ok { "pass" } else { "fail" })
         .set("artifact", plan.artifact.as_path())
         .set("out", out.as_path())
@@ -1239,6 +1239,17 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// job is to find bundles. A directory that looks like one and does not open is
 /// listed as a skip rather than aborting the walk: `list` exists to be run over a
 /// tree that may contain a half-finished capture.
+///
+/// One `BUNDLE` record per **valid** bundle on stdout, then one `SUMMARY`. The
+/// per-bundle facts used to live only on stderr at INFO, so a machine could
+/// consume this command only by parsing narration; `complete` and
+/// `selfcheck` in particular are the two a caller needs to decide which bundle to
+/// verify, and neither is on the summary.
+///
+/// A directory that does not open stays stderr-only, as before: there is no
+/// bundle to describe, so a `BUNDLE` record would have to carry the failure
+/// instead of the facts, and a caller asking "which bundles are here" would get
+/// an entry that is not one.
 pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
     let found = crate::verify::list(&root)
         .map_err(|e| Failure::usage(e.to_string()))?;
@@ -1255,8 +1266,17 @@ pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failur
             complete = f.complete,
             "capture"
         );
+        Record::labeled("BUNDLE")
+            .set("path", f.path.as_str())
+            .set("id", f.capture_id.as_str())
+            .set("tags", f.tags.as_str())
+            .set("patchmaps", f.patchmaps as u64)
+            .set("blobs", f.blobs as u64)
+            .set("selfcheck", f.selfcheck.as_str())
+            .set("complete", f.complete)
+            .emit(output);
     }
-    let summary = Summary::new("list")
+    let summary = Record::summary("list")
         .set("result", "ok")
         .set("root", root.as_path())
         .set("bundles", found.len() as u64)
@@ -1267,7 +1287,6 @@ pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failur
         .set("first", found.first().map(|f| f.path.clone()).unwrap_or_default())
         .set("last", found.last().map(|f| f.path.clone()).unwrap_or_default())
         .set("exit_code", ExitCode::Ok.code());
-    let _ = output;
     Ok((summary, ExitCode::Ok))
 }
 
@@ -1326,7 +1345,7 @@ fn assertion(what: &str, e: &ApiError) -> Failure {
 /// succeeded quietly". The fields are the ones that are true of *any* failure:
 /// which command, which code, what it meant, and — for the ones that leave a
 /// tree behind — whether that tree can be believed.
-pub fn failure_summary(event: &'static str, code: ExitCode) -> Summary {
+pub fn failure_summary(event: &'static str, code: ExitCode) -> Record {
     failure_summary_detail(event, code, None)
 }
 
@@ -1338,8 +1357,8 @@ pub fn failure_summary_detail(
     event: &'static str,
     code: ExitCode,
     detail: Option<&str>,
-) -> Summary {
-    let s = Summary::new(event)
+) -> Record {
+    let s = Record::summary(event)
         .set("result", "error")
         .set("exit_code", code.code())
         .set("exit_code_slug", code.slug())

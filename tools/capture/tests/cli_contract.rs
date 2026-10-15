@@ -199,6 +199,83 @@ fn a_plaintext_override_to_a_remote_host_is_refused_and_says_why() {
     );
 }
 
+/// `list` emits one `BUNDLE` record per bundle and then one `SUMMARY`, so a
+/// machine can read it without parsing narration. This is the shape a consumer
+/// depends on, so it is pinned line by line rather than by a substring.
+///
+/// No capture is needed: the point is the *record shape*, and an empty root
+/// exercises the degenerate case (no `BUNDLE`, one `SUMMARY`) which is the one a
+/// consumer is most likely to get wrong.
+#[test]
+fn list_emits_one_record_per_bundle_then_a_summary() {
+    let scratch = std::env::temp_dir().join(format!("gircap-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("empty root");
+
+    let r = run(&["list", "--root", &scratch.to_string_lossy(), "--output", "json"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "an empty root is still one terminal record: {lines:?}"
+    );
+    let v: serde_json::Value = serde_json::from_str(lines[0]).expect("one JSON object");
+    assert_eq!(v["event"], "list");
+    assert_eq!(v["bundles"], 0);
+    assert_eq!(v["exit_code"], 0);
+
+    // Now a root holding something that is not a bundle: it must not become a
+    // `BUNDLE` record. A directory that does not open is stderr-only, because
+    // there is no bundle to describe.
+    let junk = scratch.join("not-a-bundle");
+    std::fs::create_dir_all(&junk).expect("junk dir");
+    std::fs::write(junk.join("MANIFEST.json"), b"{ not json").expect("junk manifest");
+    let r = run(&["list", "--root", &scratch.to_string_lossy(), "--output", "json"]);
+    assert_eq!(r.code, 0, "a junk directory does not fail the walk: {}", r.stderr);
+    let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 1, "still no bundle, so still one line: {lines:?}");
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["bundles"], 0);
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// stdout under `--output json` is **pure NDJSON**: one object per line, nothing
+/// else, with `event` first so a consumer can dispatch mid-stream without having
+/// parsed the whole line.
+///
+/// This runs against an empty root, so there is no `BUNDLE` record to inspect —
+/// the per-bundle fields are asserted in `capture_layout.rs`, where a real
+/// capture exists. What is pinned here is the part that holds whatever the root
+/// contains.
+#[test]
+fn every_record_puts_event_first_and_the_stream_is_pure_ndjson() {
+    let scratch = std::env::temp_dir().join(format!("gircap-ndjson-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("root");
+
+    for argv in [
+        vec!["list", "--root", &scratch.to_string_lossy(), "--output", "json"],
+        vec!["verify", "--artifact", &scratch.to_string_lossy(), "--output", "json"],
+        vec!["materialize", "--artifact", &scratch.to_string_lossy(), "--output", "json"],
+    ] {
+        let r = run_owned(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
+        assert!(!lines.is_empty(), "{argv:?} printed nothing to stdout");
+        for line in lines {
+            assert!(
+                line.starts_with("{\"event\":"),
+                "{argv:?}: `event` must lead every record: {line}"
+            );
+            serde_json::from_str::<serde_json::Value>(line).unwrap_or_else(|e| {
+                panic!("{argv:?}: not one JSON object per line: {e:?}\n{line}")
+            });
+        }
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 #[test]
 fn the_text_summary_is_key_value_pairs() {
     let r = run_owned(&offline_capture(&[]));
