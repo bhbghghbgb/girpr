@@ -316,6 +316,54 @@ and it is consumer-side work in `tools/capture` by design.
 
 That is the last milestone. See §0.2 for what the plan does *not* cover.
 
+### Defects found and fixed
+
+Re-reading M0–M7 against this plan turned up nine items: six in code this work
+introduced, three in the documentation around it. All are fixed, in two commits
+(one for the code, one for the docs). What each one was, and what it taught:
+
+- **`--purge-only --dry-run` deleted files and moved the audio cache for real.**
+  The post-phase's read-only gate lived in its *caller*, and `--purge-only` added
+  a second call site that was not behind it. The general lesson: a gate every
+  caller has to remember is not a gate. `post::run` now consults `ctx.dry_run` at
+  each destructive step itself.
+- **`SUMMARY download_bytes` drifted from base with no flag set**, which is the
+  one thing this plan's standing invariant forbids. Two causes: a reservation the
+  `?` on a failed fetch never gave back, and — subtler — the bytes of attempts
+  that failed and were retried, because M4 moved the counter from a per-file
+  aggregate to a live per-chunk ledger. The second is the interesting one: a
+  counter that has to be readable mid-flight is not the same counter as one that
+  has to be right at the end. The fix keeps both — live while running, *handed
+  back per abandoned attempt* so a finished run reports what it always reported.
+  M4's "the final total is unchanged" is now true rather than aspirational.
+- **`--max-delete-bytes` was checked only against the up-front plan**, leaving the
+  post-repair re-plan unbounded. It is now re-checked at that pass's own plan.
+  Worth recording *why* that branch has no integration test: the re-plan can only
+  shrink today, because a successful repair promotes every `*_tmp` it creates and
+  a run that leaves one behind has already exited `3` or `5`, both of which skip
+  the post-phase. So the check is defence-in-depth against a *pipeline* property
+  rather than a hole, and the predicate is pinned as a unit test. Writing that
+  down is more useful than a test that cannot fire.
+- **`--purge-only` on its own cleaned up nothing** — the flag's own help text said
+  it ran the files-cleanup. The two tests passed only because they also set
+  `--purge-after`, so the case nobody exercised was the case the flag is named
+  after.
+- **The deprecated-file list was fetched in every read-only mode and discarded**,
+  because M0 hoisted it out of `post::run` into a call site no gate covered.
+  Restored to zero calls in read-only modes.
+- **Documentation inconsistencies.** The README's contract table contradicted
+  itself on `stopped=` and stated a `--print-plan --dry-run` behaviour this file
+  had already recorded as wrong; the `gircap` spec edit was +51/−15 against an
+  agreed "one line" boundary; and two claims about the repair-spec trilogy were
+  scoped to the branch when they should have been scoped to the milestones. The
+  `gircap` edit is now a status line and a notification — the §8.1 body and §8.1.1
+  are byte-identical to what that crate shipped.
+
+**Three of the code defects are the same mistake**: each is a new call site or
+flag that was added *around* an existing gate rather than *through* it. Three
+times is a pattern, and it is the thing to watch for in the next feature that
+touches this pipeline — add a path, and ask what it bypasses.
+
 ---
 
 ## 1. What this plan does not touch
@@ -339,8 +387,19 @@ line" does not happen by accident:
 - **This file is the only doc that grows.** `docs/04` is edited only to close
   §7.2/§7.3 decisions once they are settled.
 
-`gircap`'s docs are edited by neither plan, except for the one line in M7 that
-marks the blocker resolved.
+**Scope the claim to the milestones, not to the branch.** The branch *does*
+touch the three: the pre-implementation commit `82164ab` ("docs: rename and
+retitle the repair-spec trilogy") renames two of the paths and retitles all
+three H1s. That is H1/H2 titles and a cross-reference paragraph — no repair
+rule, no step of the repair algorithm, and no input/output expectation anywhere;
+`docs/02`'s diff against the branch base is its H1 alone. The §7 checklist item
+that said "unmodified — `git diff --stat` says so" was wrong in exactly this
+way, and is corrected below.
+
+`gircap`'s docs are edited by neither plan, except for the status line in M7
+that marks the blocker resolved. A status line plus a short notification block:
+the *procedure* in that crate's §8 / §8.1.1 is its own to revise, and M7 does
+not rewrite it, strike through its caveats, or add steps to its runbook.
 
 ---
 
@@ -668,6 +727,10 @@ useful part.
 | M6 "three independent flags, independent commits" | shipped as one commit; the three share `Summary`'s new fields and a `SummaryFlags` key |
 | §4 test strategy: "`MockOpts` gains nothing" | gained `fail_chunks` — a 500 origin is the only way to exercise the retry path without a dead host's connection timeouts |
 | §5 risks: "M0 is the largest milestone" | correct; M2 and M4 were the ones that grew beyond their sketches |
+| §3 M5 "`--print-plan --dry-run` … the loop's hashing still happens" | **wrong** (M5, recorded in §4.1) — and so was the README's copy of it, now corrected |
+| §1: "`gircap`'s docs are edited … the one line in M7" | **wrong** — M7 shipped +51/−15 there, rewriting a consumer's runbook. Reduced to a status line plus a notification; its §8.1/§8.1.1 are untouched |
+| §1: "**No milestone** in §3 edits any of the three [repair-spec docs]" | true, but the §7 checklist restated it as "unmodified — `git diff --stat` says so", which is false against the branch base because `82164ab` renames and retitles them |
+| §3 M0: "No new flag, no changed default, no changed `SUMMARY`" | held for M0, but M0's *fetch* hoist put a network call into read-only modes, which is a changed default for `--dry-run`/`--check-only`. Found and reverted |
 
 ---
 
@@ -711,7 +774,9 @@ M0 through M7 — the set that unblocks `gircap/docs/00-spec.md` §8.1 — plus:
 - [x] [`04` §7.2](04-scope-limitation-options.md) §7.2 decisions confirmed or
       corrected, and §7.3 closed (Q1 in M3, Q2 in M5; the `stopped=` vocabulary
       corrected in M6)
-- [x] the three repair-spec docs **unmodified** — `git diff --stat` says so
+- [x] the three repair-spec docs **not edited by any milestone** — the branch
+      renames/retitles them in `82164ab`, before M0, which is titles and a
+      cross-reference only (§1 scopes this precisely)
 - [x] `cargo test` green and fully offline; `cargo clippy --all-targets` clean
 
 ### §7.2 decisions, as they landed

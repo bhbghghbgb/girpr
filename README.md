@@ -66,7 +66,7 @@ flowchart TD
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
     C --> D["manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ deprecated list"]
+    D --> E["plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
@@ -75,16 +75,19 @@ flowchart TD
     F -->|no| H{"check-only?"}
     G --> H
     H -->|yes| I["check::verify_plan<br/>exit 0 clean / 4 damaged<br/>writes nothing"]
-    H -->|no| J["file::repair_all: ≤jobs files in parallel<br/>chunks sequential per file"]
+    H -->|no| J{"--purge-only?"}
+    J -->|yes| M0["post::run, no repair loop<br/>cleanup + post-phase<br/>exit 0, config.ini not bumped"]
+    J -->|no| J2["file::repair_all: ≤jobs files in parallel<br/>chunks sequential per file"]
     subgraph perfile ["per file"]
-        J1["skip if size+MD5 match"] --> J2["reuse verified local slice (S2)<br/>else resume _tmp prefix by length (S3)<br/>else download chunk → zstd → MD5 → write at offset"]
-        J2 --> J3["final whole-file MD5 gates<br/>rename _tmp → final (atomic)"]
+        J1["skip if size+MD5 match"] --> J2a["reuse verified local slice (S2)<br/>else resume _tmp prefix by length (S3)<br/>else download chunk → zstd → MD5 → write at offset"]
+        J2a --> J3["final whole-file MD5 gates<br/>rename _tmp → final (atomic)"]
         J3 -->|mismatch after 5 tries| J4["count failed, continue"]
     end
-    J --> K{"any failed?"}
+    J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
-    J -->|"download-bytes ceiling hit"| X5["SUMMARY stopped=bytes<br/>exit 5, *_tmp left for the next run"]
+    J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=bytes\|write<br/>exit 5, *_tmp left for the next run"]
     K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
+    M -->|"delete ceiling hit"| X6["SUMMARY stopped=delete<br/>exit 5, that pass deleted nothing"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
     M --> N["SUMMARY to stdout+log<br/>exit 0"]
 ```
@@ -110,22 +113,25 @@ flowchart TD
   no directory created, no `_tmp` opened, no file deleted. They never trim the
   work list; under `--include` they are a *check on* the selection, which is why
   the two flags are not redundant. `--max-files N` with exactly N planned files
-  passes (`> N`, not `>= N`). One exception to "nothing is written": the
-  **runtime** hard stop (`--max-download-bytes`, and from M6
-  `--max-write-bytes`), which fires mid-flight by definition. It leaves `*_tmp`
+  passes (`> N`, not `>= N`). One exception to "nothing is written": a
+  **runtime** hard stop, which fires mid-flight by definition. It leaves `*_tmp`
   files behind — safe, because resume-by-length makes the next run resume rather
-  than restart — and says so: `SUMMARY stopped=<files|bytes|delete>` is what
-  distinguishes "nothing was written because the plan was too big" from
-  "something was written and then we ran out". `stopped=bytes` is the download
-  ceiling, `stopped=write` the write ceiling — the key is *which* ceiling bound,
-  so it cannot be a single value.
+  than restart — and `SUMMARY stopped=` says which ceiling bound and that it
+  happened at all: `stopped=bytes` (`--max-download-bytes`), `stopped=write`
+  (`--max-write-bytes`), `stopped=delete` (a cleanup pass refused). That key is
+  what distinguishes "nothing was written because the plan was too big" from
+  "something was written and then we ran out".
+- `SUMMARY download_bytes` means **the bytes of files that were actually
+  promoted**, as it always has. An attempt that fails and is retried hands its
+  bytes back, so a run that had to retry does not report what the network cost
+  the retries. The counter is nevertheless live during the repair, which is what
+  `--max-download-bytes` needs to stop mid-flight.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
   exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
   part of the work and leaves `*_tmp` behind (`SUMMARY stopped=…`). Either way
-  `SUMMARY` is still emitted, with `limited=1`.
-  `5` is deliberately not `1`: the API has to be fetched first, so whether a
+  `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
   (unknown flag, bad enum value, `--io-threads 0`, bad `--audio`, bad
@@ -146,9 +152,9 @@ flowchart TD
   anyway. `SUMMARY config_bumped=0` says so.
   `--print-plan` is read-only by construction too (it returns before
   `create_dir_all`) but is **not** the same thing as `--check-only`: it answers
-  "what would you do", not "what is wrong". `--print-plan --dry-run` is
-  coherent — the plan prints, then the loop's hashing happens, which is what
-  `--dry-run` asked for. A ceiling still trips a `--print-plan` run.
+  "what would you do", not "what is wrong". It also short-circuits `--dry-run` —
+  the run returns at the plan either way, so the combination is just
+  `--print-plan`. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `plan::purge::plan_purge` decides, `plan::purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + `audio_lang_*`/`Audio_*_pkg_version`
@@ -190,11 +196,11 @@ cargo build --release
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
-| `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Counted once, over both purge passes; out-of-scope paths are never candidates |
+| `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=delete`); out-of-scope paths are never candidates |
 | `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. Does **not** bound metadata or manifest traffic |
 | `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into `*_tmp`. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees |
 | `--check-only` | off | Verify size+MD5; writes nothing |
-| `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop**. The inverse of `--check-only`. Does not bump `config.ini` |
+| `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Without it one bad file costs ~125 s of pure retry sleeping |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
