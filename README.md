@@ -96,7 +96,8 @@ flowchart TD
 
 - stdout: `REPORT …` once after metadata; `PROGRESS …` every 10 s;
   `PLAN …` with `--print-plan`; `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
-  `--json-summary` emits `REPORT`/`SUMMARY` as JSON objects instead.
+  `--output json` emits every one of those lines as an NDJSON object instead —
+  same records, same order, each carrying an `event` name.
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
@@ -224,7 +225,7 @@ cargo build --release
 | `--dry-run` | off | Log actions; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
-| `--json-summary` | off | `REPORT`/`SUMMARY` as JSON |
+| `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | `error`/`warn`/`info`/`debug`/`trace` (`RUST_LOG` also honored) |
 | `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable | Write the trace log here instead. Missing parents are created. The file layer captures `TRACE` and above **regardless of `--log-level`**, so `--log-level trace` is only needed to also see it on stderr. An unopenable file is a stderr warning, never a failure |
 | `--hyp-base <URL>` | production | Point the HoYoPlay API at another base (overrides `GIRPR_HYP_BASE`) |

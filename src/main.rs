@@ -24,7 +24,7 @@ async fn main() {
         eprintln!("log file: {}", log_path.display());
     }
 
-    let json_summary = args.json_summary;
+    let output = args.output;
     let ctx = match args.into_ctx() {
         Ok(c) => c,
         Err(e) => {
@@ -35,21 +35,26 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // `output` is logged with the rest of the run's shape because every data-plane
+    // line in the file after this one is rendered in it. A log file with no
+    // record of the plane is a log file whose `SUMMARY` line cannot be parsed
+    // by the same reader that parses stdout.
     tracing::info!(
-        "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={}",
+        "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={} output={}",
         ctx.game_dir.display(),
         ctx.biz.as_str(),
         ctx.jobs,
         ctx.purge_after,
         ctx.purge_before,
         ctx.check_only,
-        ctx.dry_run
+        ctx.dry_run,
+        output
     );
 
     match repair::run(ctx).await {
         Ok((summary, code)) => {
             // stdout for parsing + log so a stderr-only capture still keeps it.
-            report::emit(&report::format_summary_line(&summary, code, json_summary));
+            report::emit(&report::summary_record(&summary, code), output);
             std::process::exit(code);
         }
         Err(f) => {

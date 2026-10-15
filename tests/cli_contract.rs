@@ -47,6 +47,14 @@ fn argument_errors_exit_one_not_two() {
     let cases: Vec<Vec<&str>> = vec![
         vec!["--biz", "hk4e_global"],               // missing --game-path
         vec!["--game-path", ".", "--biz", "bogus"], // unknown enum value
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--output",
+            "xml",
+        ], // unknown --output variant
         vec!["--game-path", ".", "--biz", "hk4e_global", "-x"], // unknown flag
         vec!["--game-path", ".", "--biz"],          // missing enum value
         vec![
@@ -162,7 +170,7 @@ fn help_text_lists_every_documented_flag() {
         "--fail-fast",
         "--print-plan",
         "--plan-out",
-        "--json-summary",
+        "--output",
         "--log-level",
         "--log-file",
         "--include",

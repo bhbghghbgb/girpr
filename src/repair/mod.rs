@@ -95,17 +95,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 2.5 begin report to stdout (mirrored to log): versions + API-sourced
     // metadata, so a stdout parser sees what is on disk and what it will
     // become before any repair starts.
-    let report_line = report::format_report_line(
-        &meta.local_version,
-        &meta.latest,
-        ctx.biz.as_str(),
-        &meta.config,
-        &meta.branch,
-        &meta.latest_build,
-        &meta.audio,
-        ctx.json_summary,
+    report::emit(
+        &report::report_record(
+            &meta.local_version,
+            &meta.latest,
+            ctx.biz.as_str(),
+            &meta.config,
+            &meta.branch,
+            &meta.latest_build,
+            &meta.audio,
+        ),
+        ctx.output,
     );
-    report::emit(&report_line);
 
     // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
     let http = meta.hyp.http();
@@ -276,20 +277,11 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             est_download_bytes,
             scope.is_active(),
         );
-        let line = scope::report::format_plan_line(&totals);
-        report::emit(&line);
-        if ctx.json_summary {
-            let v = serde_json::json!({
-                "plan": totals.files,
-                "est_download_bytes": totals.est_download_bytes,
-                "purge_files": totals.purge_files,
-                "purge_bytes": totals.purge_bytes,
-                "max_chunk_bytes": totals.max_chunk_bytes,
-                "scoped": totals.scoped,
-                "exit": 0,
-            });
-            report::emit(&v.to_string());
-        }
+        // One `PLAN` record, rendered once. The old shape printed the text line
+        // and then, under `--json-summary`, a *second* line carrying the same
+        // numbers — so the JSON stream was not JSON, and a consumer reading it
+        // got an object per plan that was not an object per event.
+        report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
                 scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
@@ -330,7 +322,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = check::verify_plan(&game_dir, &plan, &summary);
+        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output);
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
@@ -362,6 +354,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary,
         ctx.jobs,
         ctx.dry_run,
+        ctx.output,
     )
     .await;
     if ctx.limits.write_bytes.is_some() {

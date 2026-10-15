@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use crate::Biz;
 use crate::repair::scope::{Limits, PathScope};
+use crate::report::OutputFormat;
 
 /// Typed failure carrying the process exit code.
 /// `1` usage/config, `2` metadata/network, `3` write/verify.
@@ -92,7 +93,9 @@ pub struct RunCtx {
     pub plan_out: Option<PathBuf>,
     pub purge_after: bool,
     pub purge_before: bool,
-    pub json_summary: bool,
+    /// How the data plane is rendered: `key=value` lines (the default) or NDJSON.
+    /// One [`crate::report::Record`] per line either way — see [`crate::report`].
+    pub output: OutputFormat,
     /// `--log-file <FILE>`: the requested destination of the always-`TRACE`
     /// trace log. `None` means the timestamped default under `<exe-dir>/logs/`
     /// ([`crate::logging::log_file_path`]). Carried on the context rather than

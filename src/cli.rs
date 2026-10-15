@@ -15,6 +15,7 @@ use clap::Parser;
 use crate::Biz;
 use crate::config::RunCtx;
 use crate::repair::scope::{Limits, PathScope};
+use crate::report::OutputFormat;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -129,9 +130,12 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub plan_out: Option<PathBuf>,
 
-    /// Emit the begin REPORT and final SUMMARY stdout lines as JSON
-    #[arg(long, default_value_t = false)]
-    pub json_summary: bool,
+    /// How stdout is written: one human `key=value` line per record, or one JSON
+    /// object per line (NDJSON) carrying the same records in the same order. Only
+    /// stdout is affected — diagnostics stay on stderr as `tracing` events either
+    /// way — and `--log-file`, if given, carries the same rendered lines.
+    #[arg(long, value_enum, default_value_t, global = true)]
+    pub output: OutputFormat,
 
     /// Log level
     #[arg(long, default_value = "info")]
@@ -194,7 +198,7 @@ impl Args {
             plan_out: self.plan_out,
             purge_after: self.purge_after,
             purge_before: self.purge_before,
-            json_summary: self.json_summary,
+            output: self.output,
             // Where the trace log goes. `None` keeps the timestamped default
             // beside the executable, which nothing outside the process can name
             // reliably — the flag is what makes the file findable.

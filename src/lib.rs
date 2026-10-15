@@ -22,7 +22,8 @@
 //! - [`sophon`] — chunk-manifest protobuf, fetch/verify/parse, manifest filter,
 //!   local chunk-reuse map
 //! - [`biz`] — biz → launcher id / game id / channel tuple
-//! - [`report`] — run counters and every stdout line of the automation contract
+//! - [`report`] — run counters, the [`report::Record`] data plane and every
+//!   stdout line of the automation contract
 //! - [`util`] — MD5, `config.ini`, ignore/blacklist files, rel-path normalization
 //!
 //! The binary ([`main`], a thin shim) is: parse → install tracing → build the
@@ -42,4 +43,4 @@ pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang};
 pub use config::{RunCtx, RunFailure};
 pub use repair::run;
-pub use report::Summary;
+pub use report::{OutputFormat, Summary};

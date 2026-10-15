@@ -25,6 +25,7 @@ use anyhow::Context;
 use serde::Serialize;
 
 use crate::repair::plan::{PurgePlan, RepairPlan};
+use crate::report::Record;
 
 /// The aggregated numbers behind the `PLAN` line, and behind `PLAN` in JSON
 /// mode. Computed from the two finished plans; no I/O.
@@ -66,18 +67,23 @@ impl PlanTotals {
     }
 }
 
-/// The one-line `PLAN …` summary. Key order is fixed so two runs diff cleanly.
-pub fn format_plan_line(t: &PlanTotals) -> String {
-    format!(
-        "PLAN files={} est_download_bytes={} purge_files={} purge_bytes={} \
-         max_chunk_bytes={} scoped={}",
-        t.files,
-        t.est_download_bytes,
-        t.purge_files,
-        t.purge_bytes,
-        t.max_chunk_bytes,
-        u8::from(t.scoped),
-    )
+/// The one-line `PLAN` summary. Key order is fixed so two runs diff cleanly.
+///
+/// A [`Record`], like every other stdout line, so `--print-plan --output json`
+/// emits a `{"event":"plan",…}` object instead of a text line with a JSON twin
+/// bolted on beside it — which is what used to happen, and is why the JSON
+/// stream could not be parsed as JSON.
+///
+/// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
+/// key name carries one type across the whole stream.
+pub fn plan_record(t: &PlanTotals) -> Record {
+    Record::keyed("PLAN")
+        .put("files", t.files)
+        .put("est_download_bytes", t.est_download_bytes)
+        .put("purge_files", t.purge_files)
+        .put("purge_bytes", t.purge_bytes)
+        .put("max_chunk_bytes", t.max_chunk_bytes)
+        .put("scoped", u64::from(t.scoped))
 }
 
 /// The `--plan-out` document.
@@ -180,7 +186,7 @@ impl<'a> PlanDocument<'a> {
 mod tests {
     use super::*;
     use crate::repair::plan::{PlannedFile, PurgeCandidate};
-    use crate::report::{Summary, format_summary_line};
+    use crate::report::{Summary, summary_record};
     use std::collections::HashMap;
 
     fn chunk(id: &str, size: i64) -> crate::sophon::SophonChunk {
@@ -238,18 +244,52 @@ mod tests {
     #[test]
     fn the_plan_line_has_a_fixed_key_order() {
         let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
+        let rec = plan_record(&t);
         assert_eq!(
-            format_plan_line(&t),
+            rec.text(),
             "PLAN files=3 est_download_bytes=60 purge_files=1 purge_bytes=4096 \
              max_chunk_bytes=30 scoped=1"
         );
         // No purge flag: the purge fields are zero, not absent.
         let t = PlanTotals::new(&plan(), None, 60, false);
         assert_eq!(
-            format_plan_line(&t),
+            plan_record(&t).text(),
             "PLAN files=3 est_download_bytes=60 purge_files=0 purge_bytes=0 \
              max_chunk_bytes=30 scoped=0"
         );
+    }
+
+    /// `PLAN` used to be a text line on every plane with a JSON object bolted on
+    /// beside it under `--json-summary`, so the JSON stream was not JSON. One
+    /// record fixes that — and it is why the JSON keys are the same names the
+    /// text line uses, including `files` rather than the old `plan`.
+    #[test]
+    fn the_plan_is_one_record_on_either_plane() {
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
+        let rec = plan_record(&t);
+        let json = rec.json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["event"], "plan");
+        assert_eq!(v["files"], 3);
+        assert_eq!(v["est_download_bytes"], 60);
+        assert_eq!(v["purge_files"], 1);
+        assert_eq!(v["purge_bytes"], 4096);
+        assert_eq!(v["max_chunk_bytes"], 30);
+        assert_eq!(v.as_object().unwrap().len(), 7, "{json}");
+        // `scoped` is an integer here and on `SUMMARY`. It used to be a JSON
+        // boolean on this object and a `1` on the summary: one key name, two
+        // types, one stream. `SUMMARY` is the documented shape, so this is the
+        // one that changed.
+        assert_eq!(v["scoped"], 1);
+        assert!(v["scoped"].is_i64(), "{json}");
+    }
+
+    #[test]
+    fn a_plan_that_is_not_scoped_reports_zero_not_a_boolean() {
+        let t = PlanTotals::new(&plan(), None, 60, false);
+        let v: serde_json::Value = serde_json::from_str(&plan_record(&t).json()).unwrap();
+        assert_eq!(v["scoped"], 0);
+        assert!(!v["scoped"].is_boolean(), "{v}");
     }
 
     #[test]
@@ -332,7 +372,7 @@ mod tests {
         let mut s = Summary::default();
         s.flags.scoped = true;
         s.files_total = 3;
-        let line = format_summary_line(&s, 0, false);
+        let line = summary_record(&s, 0).text();
         assert!(line.contains("skipped=0 repaired=0 failed=0"), "{line}");
         assert!(line.contains("scoped=1"), "{line}");
     }

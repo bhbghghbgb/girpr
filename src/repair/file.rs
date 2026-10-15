@@ -67,6 +67,11 @@ pub struct ChunkStats {
 ///
 /// Per-file failures are counted, never fatal; the caller decides that a
 /// non-zero `files_failed` skips the post-phase.
+///
+/// `output` rides along rather than being read from a global: the progress
+/// ticker this spawns emits records, and a record's plane has to come from the
+/// same place the rest of the run's does.
+#[allow(clippy::too_many_arguments)] // one parameter per input the repair loop needs
 pub async fn repair_all(
     http: reqwest::Client,
     game_dir: PathBuf,
@@ -75,6 +80,7 @@ pub async fn repair_all(
     summary: Summary,
     jobs: usize,
     dry_run: bool,
+    output: crate::report::OutputFormat,
 ) -> Summary {
     let summary = Arc::new(summary);
     let total_files = plan.files.len();
@@ -90,7 +96,7 @@ pub async fn repair_all(
         summary: summary.clone(),
         dry_run,
     });
-    let progress = crate::report::spawn_progress_reporter(summary.clone());
+    let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
     let mut handles = Vec::with_capacity(total_files);
     for idx in 0..total_files {

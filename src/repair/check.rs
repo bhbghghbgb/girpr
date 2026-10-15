@@ -18,7 +18,12 @@ use crate::util;
 use super::plan::RepairPlan;
 
 /// Verify the whole plan; returns the number of damaged files.
-pub fn verify_plan(game_dir: &Path, plan: &RepairPlan, summary: &Summary) -> u64 {
+pub fn verify_plan(
+    game_dir: &Path,
+    plan: &RepairPlan,
+    summary: &Summary,
+    output: report::OutputFormat,
+) -> u64 {
     let mut bad = 0u64;
     let mut last_emit = std::time::Instant::now();
     for (i, f) in plan.files.iter().enumerate() {
@@ -46,7 +51,7 @@ pub fn verify_plan(game_dir: &Path, plan: &RepairPlan, summary: &Summary) -> u64
             .store((i as u64 + 1) - bad.min(i as u64 + 1), Ordering::Relaxed);
         summary.files_failed.store(bad, Ordering::Relaxed);
         if last_emit.elapsed().as_secs() >= report::PROGRESS_INTERVAL_SECS {
-            report::emit_progress(summary);
+            report::emit_progress(summary, output);
             last_emit = std::time::Instant::now();
         }
     }

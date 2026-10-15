@@ -50,7 +50,7 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--io-threads <N, default 4>]            (concurrent FILES; chunks sequential/file)
       [--purge-after] [--purge-before]          (same files-cleanup after / before; timing only)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
-      [--log-level error|warn|info|debug|trace] [--json-summary]
+      [--log-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>]
 ```
 
 Exit codes: 0 ok (incl. check-only clean), 1 usage/config (bad args — clap-level
@@ -62,7 +62,7 @@ is the only other 0. Fatal
 errors carry their class via `config::RunFailure` at the raise site; per-file verify
 failures continue and skip the post-phase instead. Automation: `tracing` diagnostics
 on stderr; the begin `REPORT` line (versions + API fields), `PROGRESS` lines, and
-the final `SUMMARY key=value` (or JSON with `--json-summary`) go to stdout and are mirrored to the log.
+the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are mirrored to the log.
 
 ## 3. Key flows → code mapping
 

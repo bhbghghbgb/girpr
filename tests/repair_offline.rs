@@ -42,7 +42,7 @@ use common::{
     LATEST_TAG, MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
-use girpr::{Biz, RunCtx, repair};
+use girpr::{Biz, OutputFormat, RunCtx, repair};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
@@ -74,7 +74,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         plan_out: None,
         purge_after: false,
         purge_before: false,
-        json_summary: false,
+        output: OutputFormat::Text,
         log_file: None,
         hyp_base_override: Some(mock.hyp_base.clone()),
         sophon_base_override: Some(mock.sophon_base.clone()),
@@ -523,7 +523,7 @@ async fn include_repairs_exactly_the_selected_file() {
     );
     // ...and says so in the machine contract, so a test can assert the fact
     // instead of reading the file.
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("scoped=1"), "{line}");
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("plan_files=1"), "{line}");
@@ -603,7 +603,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
     assert!(!summary.flags.limited);
     // And the conditional keys are absent, so an unflagged SUMMARY is
     // byte-identical to today's.
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     for k in ["scoped", "config_bumped", "plan_files", "limited"] {
         assert!(
             !line.contains(k),
@@ -955,7 +955,7 @@ async fn a_tripped_ceiling_still_emits_a_summary_tail() {
     let mut ctx = ctx_for(dir.clone(), &mock, 2);
     ctx.limits.files = Some(1);
     let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert_eq!(
         line,
         "SUMMARY total=2 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
@@ -1030,7 +1030,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     let (summary, code) = repair::run(ctx).await.expect("the boundary passes");
     assert_eq!(code, 0);
     assert_eq!(summary.download_bytes.load(Ordering::Relaxed), est);
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(
         line.contains(&format!("plan_download_bytes={est}")),
         "{line}"
@@ -1101,7 +1101,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
         "a stopped file is not promoted"
     );
 
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("stopped=bytes"), "{line}");
     assert!(line.contains("limited=1"), "{line}");
 
@@ -1124,8 +1124,8 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
         .await
         .expect("plain run");
     assert_eq!(code, 0);
-    for plane in [false, true] {
-        let line = girpr::report::format_summary_line(&summary, code, plane);
+    for format in [OutputFormat::Text, OutputFormat::Json] {
+        let line = girpr::report::summary_record(&summary, code).render(format);
         for k in [
             "limited",
             "scoped",
@@ -1342,7 +1342,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_tmp() {
         "the ceiling must not be overshot"
     );
 
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("stopped=write"), "{line}");
     assert!(line.contains("write_bytes="), "{line}");
 
@@ -1377,7 +1377,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
         summary.write_bytes.load(Ordering::Relaxed) > 0,
         "it was counted"
     );
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(!line.contains("write_bytes"), "{line}");
     // `download_bytes` is the network; `write_bytes` is the disk. They are not the
     // same quantity and never were — that is the whole reason `--max-write-bytes`
@@ -1399,7 +1399,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let (summary, code) = repair::run(ctx).await.expect("run");
     assert_eq!(code, 0);
     assert!(summary.flags.stopped.is_none());
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("write_bytes="), "{line}");
     assert!(!line.contains("stopped="), "{line}");
 
@@ -1529,7 +1529,7 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     assert_eq!(summary.files_total, 0, "the repair plan really was empty");
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
     assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 512);
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("scoped=1"), "{line}");
 
@@ -1614,7 +1614,7 @@ async fn purge_only_cleans_up_without_repairing() {
         !dir.join("config.ini").exists(),
         "purge-only must not bump config.ini"
     );
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("config_bumped=0"), "{line}");
 
     mock.stop();
@@ -1853,7 +1853,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("local_manifest=ok"), "{line}");
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
     assert!(
@@ -1887,7 +1887,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         .await
         .expect("a degraded run still succeeds");
     assert_eq!(code, 0, "the fallback is not an error");
-    let line = girpr::report::format_summary_line(&summary, code, false);
+    let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
         mock.chunk_hits(),
@@ -2033,6 +2033,87 @@ async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
     assert!(stdout.contains("total=0"), "{stdout}");
     assert!(stdout.contains("scoped=1"), "{stdout}");
     assert!(stdout.contains("config_bumped=0"), "{stdout}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
+    // The property downstream tooling depends on: under `--output json` *every*
+    // stdout line is a JSON object, so the stream can be parsed line by line
+    // without a fallback. This needs a server, which is why it lives here rather
+    // than in `cli_contract.rs` — that file has never had one, and the bridge
+    // test will keep it that way.
+    //
+    // `--print-plan` is here deliberately: under `--json-summary` that flag
+    // emitted a text `PLAN …` line *and then* a JSON twin, so the stream was not
+    // JSON at all. One record per line is what removed that possibility.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("output_json");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    let base: Vec<&str> = vec![
+        "--game-path",
+        &game,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+
+    let mut json_args = base.clone();
+    json_args.extend_from_slice(&["--print-plan", "--output", "json"]);
+    let (code, stdout, stderr) = run_binary(&json_args, &[]).await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let events: Vec<String> = stdout
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value =
+                serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {e:?}\n{l}"));
+            assert!(v.get("event").is_some(), "every record names itself: {l}");
+            v["event"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec!["report", "plan", "summary"],
+        "one record per event, in order, and nothing else on stdout:\n{stdout}"
+    );
+    // No `KEY=value` text anywhere: that substring is what a text-plane leak
+    // would look like, and `total=0` is a substring of nothing in JSON.
+    assert!(
+        !stdout.contains("total=") && !stdout.contains("REPORT ") && !stdout.contains("PLAN "),
+        "text plane leaked into the JSON stream:\n{stdout}"
+    );
+    // And the counts are still there, by name, as numbers.
+    let last: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(last["total"], fx2.files.len() as u64);
+    assert_eq!(last["exit"], 0);
+    let plan: serde_json::Value = serde_json::from_str(stdout.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(plan["files"], fx2.files.len() as u64);
+    assert_eq!(plan["scoped"], 0);
+
+    // The default is the text plane, and it is unchanged by any of this.
+    let mut text_args = base.clone();
+    text_args.push("--print-plan");
+    let (code, stdout, stderr) = run_binary(&text_args, &[]).await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.starts_with("REPORT local_version=")
+            && stdout.contains(&format!("PLAN files={}", fx2.files.len())),
+        "{stdout}"
+    );
+    assert!(stdout.trim_end().ends_with("exit=0"), "{stdout}");
 
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();

@@ -102,7 +102,7 @@ are independent of it, so a scoped dry-run is read-only *and* narrow.
 `Summary` gained `flags: SummaryFlags`, carrying the **conditional** keys
 (`scoped`, `config_bumped`, `plan_files`, and the not-yet-used `limited`,
 `plan_download_bytes`, `write_bytes`, `stopped`). Rendering them in a fixed
-order, with an `Extra` enum so the `key=value` and `--json-summary` planes stay
+order, with an `Extra` enum so the `key=value` and JSON planes stay
 in agreement without a second list of quoting rules, means adding a key is one
 match arm. **An unflagged run's `SUMMARY` is byte-identical to today's** —
 pinned by `an_unscoped_purge_still_deletes_orphans`.
