@@ -1483,6 +1483,121 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
 }
 
 #[tokio::test]
+async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
+    // The two halves of the retry policy, from the origin's side of the wire.
+    //
+    // A 404 cannot be fixed by asking again: the chunk id came out of this
+    // build's own `getBuild` body, and the live blob routes answer a missing
+    // object with 404 + `application/xml`, never 200-with-a-code. A 500 is a
+    // server that may come back, so it is retried on the linear backoff.
+    //
+    // Measured against a real bundle before this policy existed: one 404'd chunk
+    // cost 88.5 s and 25 requests, and still exited `3` — the same exit code it
+    // reaches now without waiting at all, having asked once.
+    //
+    // `fail_fast` gives a file one attempt, so the two branches are directly
+    // comparable: the 500 spends the chunk fetch's 5 retries on that one attempt,
+    // and the 404 spends none of them.
+    for (name, opts, want_hits, max_elapsed) in [
+        (
+            "404",
+            MockOpts {
+                not_found_chunks: true,
+                ..Default::default()
+            },
+            1usize,
+            std::time::Duration::from_secs(5),
+        ),
+        (
+            "500",
+            MockOpts {
+                fail_chunks: true,
+                ..Default::default()
+            },
+            ATTEMPTS,
+            std::time::Duration::from_secs(30),
+        ),
+    ] {
+        let fx = build_fixture();
+        let mock = MockServer::start(fx, opts).await;
+        let dir = temp_dir(&format!("retry_{name}"));
+        let fx2 = build_fixture();
+        write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+        // `--include` so exactly one file is in scope, and `fail_fast` so a
+        // single file's retry budget is the whole number being measured rather
+        // than being multiplied by the rest of the plan.
+        let mut ctx = ctx_for(dir.clone(), &mock, 1);
+        ctx.fail_fast = true;
+        ctx.path_scope = scope(&[&fx2.files[0].rel], &[]);
+        let started = std::time::Instant::now();
+        let (summary, code) = repair::run(ctx).await.expect("not an Err");
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            code, 3,
+            "{name}: a file failed, so the post-phase is skipped"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1, "{name}");
+        let hits = mock.chunk_hits();
+        assert_eq!(
+            hits.len(),
+            want_hits,
+            "{name}: the origin was asked {want_hits} time(s): {hits:?}"
+        );
+        assert!(hits.iter().all(|id| id == "chunk_foo0"), "{name}: {hits:?}");
+        assert!(
+            elapsed < max_elapsed,
+            "{name} must not spend the budget in sleep, took {elapsed:?}"
+        );
+        mock.stop();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// How many times `fetch_chunk_bytes` asks a *retryable* origin — the linear
+/// 1+2+3+4 s backoff, five attempts. Kept next to the test that depends on it so
+/// the two cannot drift.
+const ATTEMPTS: usize = 5;
+
+#[tokio::test]
+async fn a_404_manifest_fails_the_run_without_waiting_for_it() {
+    // The manifest half. Without a terminal status this costs ~15 s of backoff
+    // to learn that the build's manifests are gone, and then exits `2` anyway —
+    // metadata, not a repaired file, so the exit code is unchanged.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            not_found_manifests: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("manifest_404");
+    let started = std::time::Instant::now();
+    let err = repair::run(ctx_for(dir.clone(), &mock, 1))
+        .await
+        .expect_err("no manifests means the run cannot plan");
+    let elapsed = started.elapsed();
+    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a 404 must not be retried at all, took {elapsed:?}"
+    );
+    // Asked once. The manifest route has no per-chunk log, so this reads the
+    // server's own request log.
+    let manifests = mock
+        .request_targets()
+        .into_iter()
+        .filter(|t| t.contains("/manifests/"))
+        .count();
+    assert_eq!(manifests, 1, "the manifest was asked once");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest() {
     // The `removed` capture class: a path on disk that the new manifest no
     // longer contains. It is in no repair plan by construction, so the only

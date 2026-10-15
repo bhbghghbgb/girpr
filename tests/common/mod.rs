@@ -220,6 +220,18 @@ pub struct MockOpts {
     /// which is what exercises the retry/backoff paths (`--fail-fast`) without
     /// a dead host and its connection timeouts.
     pub fail_chunks: bool,
+    /// Serve every chunk request as `404`. Models the blob routes' real answer
+    /// to an id they do not have: the live CDN (`autopatchhk.yuanshen.com`,
+    /// `Server: AliyunOSS`) answers `404` with an `application/xml` `NoSuchKey`
+    /// body and never a `200`-with-a-code, and an id under the wrong build's
+    /// prefix is a `404` too. The distinction from `fail_chunks` is the whole
+    /// point: a 5xx is worth retrying and a 404 is not, so only one of the two
+    /// can be told apart by how many times it was asked for.
+    pub not_found_chunks: bool,
+    /// Serve every manifest request as `404`, for the same reason. The id is
+    /// published atomically with the build that serves it, so this models a
+    /// build whose manifests are gone rather than a not-yet-propagated one.
+    pub not_found_manifests: bool,
     /// Serve the first N chunk responses with valid-but-**wrong** bytes: the
     /// same uncompressed length and a well-formed body, so the chunk decodes
     /// fine and fails on its MD5. Models a corrupt or half-propagated origin,
@@ -319,6 +331,8 @@ struct Responses {
     build_not_found: Vec<u8>,
     latest_tag: String,
     fail_chunks: bool,
+    not_found_chunks: bool,
+    not_found_manifests: bool,
     corrupt_first_chunks: u32,
     /// Chunk responses served so far, so the corrupt-N counter is per-server
     /// and not per-connection.
@@ -415,6 +429,8 @@ fn build_responses(
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
+        not_found_chunks: opts.not_found_chunks,
+        not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
         served: AtomicU64::new(0),
     }
@@ -484,7 +500,9 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        if id == fx.manifest_id {
+        if r.not_found_manifests {
+            ("404 Not Found", "text/plain", b"no such manifest".to_vec())
+        } else if id == fx.manifest_id {
             (
                 "200 OK",
                 "application/octet-stream",
@@ -501,15 +519,26 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        if r.fail_chunks {
-            // Still logged: "was this chunk even asked for" is the assertion a
-            // `--fail-fast` test needs, and a 500 is still a request.
+        if r.not_found_chunks || r.fail_chunks {
+            // Still logged, on both branches: "was this chunk even asked for,
+            // and how many times" is the assertion that tells a 404 (asked once)
+            // from a 5xx (asked five), so a 404 has to reach this log too.
             log.lock().unwrap().push(id.to_string());
-            (
-                "500 Internal Server Error",
-                "text/plain",
-                b"chunk store is down".to_vec(),
-            )
+            if r.not_found_chunks {
+                // The shape the live CDN uses, so a test cannot accidentally
+                // depend on a content-type the origin never sends.
+                (
+                    "404 Not Found",
+                    "application/xml",
+                    b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                )
+            } else {
+                (
+                    "500 Internal Server Error",
+                    "text/plain",
+                    b"chunk store is down".to_vec(),
+                )
+            }
         } else {
             match fx.chunk_store.get(id) {
                 Some(bytes) => {
@@ -527,7 +556,16 @@ async fn serve_one(
                         ("200 OK", "application/octet-stream", bytes.clone())
                     }
                 }
-                None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
+                None => {
+                    // An id the store has never heard of is the same event as
+                    // `not_found_chunks`, and it is logged for the same reason.
+                    log.lock().unwrap().push(id.to_string());
+                    (
+                        "404 Not Found",
+                        "application/xml",
+                        b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                    )
+                }
             }
         }
     } else {
