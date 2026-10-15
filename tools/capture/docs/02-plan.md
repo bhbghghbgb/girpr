@@ -37,17 +37,18 @@ from the whole live manifest and would fetch the entire game instead of the one
 captured file. The fix is a `girpr` feature; `gircap` neither depends on it nor
 works around it.
 
-> **Resolved.** `girpr` now ships `--include` / `--exclude`, plus `--max-files`,
-> `--max-download-bytes`, `--print-plan` and `--purge-only`. A path outside the
-> scope is treated as nonexistent — invisible to the repair *and* to the
-> files-cleanup — and a scoped run does not bump `config.ini`.
+> **Resolved, and the check has been run.** `girpr` now ships `--include` /
+> `--exclude`, plus `--max-files`, `--max-download-bytes`, `--print-plan` and
+> `--purge-only`. A path outside the scope is treated as nonexistent — invisible
+> to the repair *and* to the files-cleanup — and a scoped run does not bump
+> `config.ini`.
 >
-> Consequence for this plan: **M11 step 4 moved from blocked to runnable**, and
-> the free half of it has been run and agrees with the artifact. The repairing
-> runs and the `removed` capture are still outstanding, so M11 remains open —
-> recorded as *not run*, not as passed. See
-> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr)
-> and `gircap` plan M11.
+> Consequence for this plan: **M11 step 4 is done.** All eight captures were
+> repaired against a scratch copy of `game/`, every `download_bytes` matched its
+> patchmap to the byte, and the 19 reused chunks that four captures declare were
+> reused rather than downloaded. See
+> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr) and the step-4
+> addendum under M11.
 
 Independence is unaffected and load-bearing: `gircap` still does not invoke
 `girpr`, read its flags or share its exit codes, and the grep over
@@ -482,20 +483,17 @@ nine classes.
 2. `gircap materialize` on it, offline, and the rebuilt files match `game/` and
    `expected/` byte-for-byte;
 3. `diff -r game/ expected/` lists exactly the non-`identical` variant files;
-4. **NOT RUN** — hand `game/` to `girpr` and confirm it reaches `7.1.0` with
+4. **DONE** — hand `game/` to `girpr` and confirm it reaches `7.1.0` with
    `SUMMARY download_bytes` equal to each capture's
-   `patchmaps/<id>.json → totals.download_bytes`. *(Written when this was
-   BLOCKED on `girpr` having no path include/exclude; see §1. It has since
-   shipped, so the step is runnable — the free pre-flights have been run and
-   agree with the artifact byte-for-byte, but the repairing runs have not, and
-   `removed` is still refused. It is **not** skipped: it is left open, and M11 is
-   not "done" until it runs. Run by hand, never automated, because `gircap` must
-   not depend on `girpr`.)*
+   `patchmaps/<id>.json → totals.download_bytes`. *(Written when this was BLOCKED
+   on `girpr` having no path include/exclude; see §1 and the addendum below. It
+   shipped, the run was done by hand against a scratch copy, and M11 is complete.
+   Never automated, because `gircap` must not depend on `girpr`.)*
 **Commit:** `gircap: M11 - first live capture (end-to-end check blocked on girpr path filters)`
 
-**Landed for steps 1-3. Step 4 is still NOT RUN and M11 is still not complete —
-but the reason has changed, and it is no longer "the flag does not exist".** See
-the step-4 addendum at the end of this milestone.
+**M11 is complete.** Steps 1–3 landed here; step 4 landed later, once `girpr` shipped
+path scoping — see the step-4 addendum at the end of this milestone, which records
+the run and the figures.
 
 > *Superseded by M12's re-capture at
 > `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z/`, which carries the
@@ -544,34 +542,49 @@ and not a gap.
 
 #### Step-4 addendum, after `girpr` shipped path scoping
 
-This sub-step's original blocker is gone, and this paragraph is what replaced it.
-The reading above was correct **when it was written** and is wrong now; it is kept
-as the record of that run rather than edited into agreement with a tool that had
-not shipped yet.
+This sub-step was BLOCKED when it was written, and the reading above was correct
+*then* and wrong now. It is kept as the record of that run rather than edited into
+agreement with a tool that had not shipped yet.
 
-`girpr` now has `--include` / `--exclude`, so the run is possible. The parts of it
-that cost nothing were run by hand against the M12 bundle, on a **copy** of
-`game/`:
+`girpr` has `--include` / `--exclude`, so the run became possible. **It was done,
+by hand, against a copy of `game/` from `20261015T092615Z`.** All eight captures,
+every one exit `0`:
 
-| run | result | what it proves |
-|---|---|---|
-| `--include <HoYoChannel.dll> --max-files 1 --print-plan` | `PLAN files=1 est_download_bytes=274426 purge_files=0 scoped=1` | the glob selects one file, the scope holds over the cleanup, and **the estimate equals the patchmap's `totals.download_bytes` to the byte** |
-| `--include <HoYoChannel.dll> --check-only` | `expect_md5=d992a789… actual_md5=1e210ff1…` | the tool and the artifact agree on both digests — the patchmap's `new.md5` and `old.md5` |
-| `--include <removed path> --purge-only` | **exit 1**, `--include … matched no file in the live manifest (plan_files=0)` | the `removed` cleanup is refused; see §8.1.2. A `girpr` defect, filed there |
-| `--include <HoYoChannel.dll> --audio en-us` | **exit 1**, names `…/audio_lang_14` as outside the scope | §8.1.3's rule is real and the escape hatch (include the scan file) works |
+| capture | `download_bytes` | patchmap says | md5 | reused, not downloaded |
+|---|---|---|---|---|
+| `identical` | 0 | 0 | ok | 1 chunk |
+| `zero_reuse_single` | 21 | 21 | ok | - |
+| `zero_reuse_multi` | 336 852 | 336 852 | ok | - |
+| `partial_same_offset` | 274 426 | 274 426 | ok | 1 chunk |
+| `partial_moved_offset` | 1 564 894 | 1 564 894 | ok | 8 chunks |
+| `partial_size_changed` | 197 192 | 197 192 | ok | 9 chunks |
+| `added` | 114 357 | 114 357 | ok | - |
+| `removed` | 0 | 0 | *gone* | - |
 
-So the two figures M11 set out to compare — the plan's estimate and the tool's
-view of the file's identity — already agree exactly, before any repair. The
-bundle still passed `gircap verify` 90/90 afterwards, which is the whole reason
-step 1 of the procedure copies `game/`.
+**2 487 742 B spent**, which is the sum of the patchmaps' figures to the byte -
+and the first time that sum has been *earned* rather than asserted, since M12's
+correction to `added` is what made 114 357 a real number rather than a defaulted
+zero. `removed` reported `deleted_extra_bytes=1731133`, exactly its `old.size`.
+Across all eight runs only the captures' own paths changed: the `added` file
+appeared, the `removed` file disappeared, the other seven were modified in place,
+and nothing else moved - so the scope held over every run. `config_bumped=0`
+throughout and `local_manifest=ok` on every one, the latter being what rules out
+the degraded-but-green shape where a run that reused nothing still exits `0`. The
+bundle itself was never a working tree and still verifies 90/90.
 
-**What is still not done is the part that costs bytes:** the repairing runs
-themselves, all eight, with the `SUMMARY download_bytes` comparison and the
-`must_not_fetch` request-log check. They stay manual and stay unrun here —
-`gircap` must not depend on `girpr`, and a recorded pass is not something to write
-down from a pre-flight. `removed` cannot be run at all until the refusal above is
-fixed on their side. M11 step 4 is therefore **still open**, and the blocker is
-now a `girpr` defect plus an unrun procedure rather than a missing flag.
+Assertion 3 needed one correction that is worth keeping: the first attempt
+searched the trace log for the chunk ids in `must_not_fetch` and reported 19
+violations. All 19 were *reused*, not downloaded - a reused chunk is logged as
+`reuse slice md5 ok -> copy chunk=<id>`, so the match has to be on
+`chunk downloaded chunk=<id>`. A check that reports violations on correct
+behaviour is worse than no check, because it trains you to ignore it.
+
+Two things this needed and that were not written down anywhere before:
+`removed` takes `--purge-only` rather than `--max-files 1`, and it is the one
+capture whose assertion is a byte count the artifact does *not* carry -
+`deleted_extra_bytes` against `old.size`.
+
+**M11 is complete.** The end-to-end check ran, by hand, and passed.
 
 **One assertion was added because M11 ran the thing.** Comparing `game/` against
 `expected/` by hand - step 3 - turned out to be checking something nothing
@@ -679,14 +692,15 @@ nobody has written - is the exact failure mode M10 had to fix twice.
 > The lesson survives the reversal, and it is the opposite of what the note
 > wanted: the check that mattered was reading the tool, not the handover. A
 > reviewer reading the flag list would have been right; a reviewer trusting the
-> note would have been right too, but for the wrong reason and six weeks early.
+> note would also have been right - but for the wrong reason, and only once the
+> flag existed. Both routes to "no, it does not exist yet" were the right answer
+> on the day, and only one of them had evidence behind it.
 
 What *was* taken from that point, and survives the merge too, is the real kernel:
 a `removed` path is absent from the new manifest by construction, therefore absent
 from any repair plan, so the only lever that can act on it is a cleanup. That is
-now §8.1.2 of the spec rather than something to be discovered - and it turned out
-to be precisely why `removed` is the one capture `girpr` still cannot be run
-against.
+§8.1.2 of the spec rather than something to be discovered, and it is why `removed`
+is the one capture whose run is a `--purge-only` cleanup rather than a repair.
 ---
 
 ## 4. Test strategy
@@ -719,7 +733,7 @@ drift is legible rather than mysterious.
 | gzip hurts agent readability | an agent tries to `cat` a `.gz` | the threshold is a flag, every gzipped doc ships a plain `.tsv` sidecar, and `MANIFEST.json → files[].encoding` is authoritative |
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` covers the *decompressed* digest for gzipped files (`container:"gzip"`, `md5` of the plain body) so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | M7/M9 assemble purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
-| **The end-to-end check cannot run** | the artifact is never validated against the real tool | **Largely retired**: `girpr` ships `--include`, and the pre-flights that matter have been run by hand and agree with the artifact byte-for-byte (`est_download_bytes=274426` = the `partial_same_offset` total; `expect_md5`/`actual_md5` = its `new.md5`/`old.md5`). What remains is the repairing run itself and `removed`, whose cleanup-only run `girpr` refuses — a defect on their side, recorded as *not run* rather than passed (spec §8.1.2). `verify`/`materialize` cover the offline half |
+| **The end-to-end check cannot run** | the artifact is never validated against the real tool | **Retired.** `girpr` ships `--include`, and the check has been run by hand against a scratch copy of `game/`: all eight captures exit `0`, every `download_bytes` matches its patchmap to the byte (2 487 742 B total, exactly the sum), 19 reused chunks were reused rather than downloaded, and only the captures' own paths moved on the copy. The bundle still verifies 90/90 (spec §8.1.1). `verify`/`materialize` continue to cover the offline half |
 | An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
 
 ---

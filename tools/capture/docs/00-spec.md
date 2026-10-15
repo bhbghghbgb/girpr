@@ -477,20 +477,21 @@ The bundle is built to be handed to the main tool.
 | rebuild old/new files offline | `gircap materialize` | ✅ works |
 | **run `girpr --game-path <copy-of-game>` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **shipped** — `girpr --include <GLOB>` |
 
-> **Update: the blocker is resolved.** The path include/exclude asked for below
-> shipped as `girpr --include` / `--exclude`, alongside `--max-files` /
-> `--max-download-bytes` / `--max-write-bytes` / `--max-delete-bytes` (exit `5` on
-> a ceiling, never trimming the work list), `--print-plan`, `--plan-out`,
-> `--purge-only` and `--fail-fast`. `girpr`'s README is the authority on what the
-> flags guarantee — in particular that a filtered-out path is treated as
-> nonexistent and so is invisible to the files-cleanup as well as to the repair,
-> and that a scoped run does not bump `config.ini`.
+> **Update: the blocker is resolved, and the check has been run.** The path
+> include/exclude asked for below shipped as `girpr --include` / `--exclude`,
+> alongside `--max-files` / `--max-download-bytes` / `--max-write-bytes` /
+> `--max-delete-bytes` (exit `5` on a ceiling, never trimming the work list),
+> `--print-plan`, `--plan-out`, `--purge-only` and `--fail-fast`. `girpr`'s
+> README is the authority on what the flags guarantee — in particular that a
+> filtered-out path is treated as nonexistent and so is invisible to the
+> files-cleanup as well as to the repair, and that a scoped run does not bump
+> `config.ini`.
 >
-> §8.1's body and §8.1.1 were **revised by the capture side** once the flag
-> existed, because the procedure was `gircap`'s to own and the reason it gave for
-> avoiding `--purge-after` had become false. §8.1.2 records the one case that is
-> still not reachable, and why — that is a `girpr` defect, not a gap in the
-> artifact.
+> §8.1's body, §8.1.1 and §8.1.2 were **revised by the capture side** once the
+> flag existed, because the procedure was `gircap`'s to own and the reason it gave
+> for avoiding `--purge-after` had become false. All three were then run: every
+> capture repaired against a scratch copy, every figure matching the patchmap to
+> the byte, and the results are in §8.1.1.
 
 ### 8.1 Why the scope was needed, and what it changed
 
@@ -522,16 +523,16 @@ the reason §8.1.2 gives.
 ### 8.1.1 The procedure, and the numbers it must produce
 
 Recorded so that whoever runs it does not have to reconstruct it, and so that a
-result can be checked rather than believed. Against
-`artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
-
-**Both steps below were run against this bundle with the current `girpr`, and
-they are transcribed from that run rather than from the docs.**
+result can be checked rather than believed. **This is the procedure that was run
+against this bundle, and the results below are transcribed from that run, not from
+the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
 
 1. **Copy `game/` to scratch.** `girpr` writes into the game directory, so point
    `--game-path` at the copy and never at the bundle: that is what keeps a
-   cleanup flag from turning into a way to destroy the evidence. Afterwards
-   `gircap verify --artifact <bundle>` must still exit `0` — it did, 90/90.
+   cleanup flag from turning into a way to destroy the evidence. Run every capture
+   against the same copy — each touches exactly one path, so the runs accumulate
+   and the reuse map stays anchored to the old version. Afterwards
+   `gircap verify --artifact <bundle>` must still exit `0`; it did, 90/90.
 
 2. **Pre-flight for free, before spending anything.** `--print-plan` does not
    repair, purge or bump, and it is not an offline mode — it still fetches the
@@ -550,28 +551,40 @@ they are transcribed from that run rather than from the docs.**
    the tool disagree about the file before a single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1` and `--fail-fast`. `--max-files 1` is the cheap
-   answer to `*` crossing `/` — and this fixture contains
+   path, plus `--max-files 1`, `--io-threads 1` and `--fail-fast`. `--max-files 1`
+   is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
    makes `download_bytes` attributable; a single run over all eight sums to the
-   same total but cannot be compared per capture.
+   same total but cannot be compared per capture. `removed` is the exception and
+   takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
-4. **Assert four things**, per capture:
+4. **Assert five things**, per capture:
 
    | # | assertion | read from |
    |---|---|---|
    | 1 | `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes` | `SUMMARY` |
-   | 2 | the patched file's MD5 equals `expectations.result_md5` | `expected/` |
-   | 3 | no id in `expectations.must_not_fetch` was requested | a **request log**, not the binary |
-   | 4 | exit `0`, `config_bumped=0`, and every path outside the scope is untouched on disk | `SUMMARY` + a before/after tree diff |
+   | 2 | the patched file's MD5 equals `expectations.result_md5` | the file on disk |
+   | 3 | no id in `expectations.must_not_fetch` appears in a **`chunk downloaded`** record | the `trace` log |
+   | 4 | exit `0`, `config_bumped=0`, `local_manifest=ok`, every path outside the scope untouched | `SUMMARY` + a before/after tree diff |
+   | 5 | for `removed`: the path is gone, and `deleted_extra_bytes` equals `old.size` | `SUMMARY` + the tree diff |
 
-   Assertion 3 is the one that earns the exercise and the one the binary cannot
-   supply: `SUMMARY` is byte-level, and per-chunk requests appear only as `trace`
-   lines in `<exe-dir>/logs/girpr_<ts>.log`. Read them at `--log-level trace` or
-   accept that assertion 3 was not made — recording it as passed would be a
-   fabrication. Assertion 4's tree diff is the only thing that proves the scope
-   held across the whole filesystem rather than just the repair plan.
+   Assertion 3 is the one that earns the exercise and the one the data plane
+   cannot supply — `SUMMARY` is byte-level, so it is read from
+   `<exe-dir>/logs/girpr_<ts>.log` at `--log-level trace`. **The match has to be
+   on the download record, not on the bare id.** A *reused* chunk is logged too,
+   as `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the
+   id reports a violation on a perfectly correct reuse — which is how the first
+   attempt at this check failed on 19 chunks that were never downloaded. Look for
+   `chunk downloaded chunk=<id>` and `no local reuse candidate -> download
+   chunk=<id>`.
+
+   `local_manifest=ok` is assertion 4's teeth. Without it a run whose local
+   manifest failed to load still exits `0` with a plausible byte count, having
+   reused nothing; the key is emitted only when a local version was known and the
+   lookup was attempted, so it separates a real reuse from a full re-fetch.
+   Assertion 4's tree diff is the only thing that proves the scope held across
+   the whole filesystem rather than just the repair plan.
 
 5. **Cleanup flags are safe under a scope, and that is a change.** Do **not** pass
    `--purge-after` / `--purge-before` for a repair run anyway — there is nothing
@@ -582,34 +595,49 @@ they are transcribed from that run rather than from the docs.**
    rest of the fixture. `purge_files=0` in the `PLAN` line above is the direct
    evidence.
 
-### 8.1.2 `removed` is still not reachable — a `girpr` defect, not an artifact gap
+**Result, all eight, exit `0`:**
+
+| capture | `download_bytes` | expected | md5 | `must_not_fetch` |
+|---|---|---|---|---|
+| `identical` | 0 | 0 | ok | 1 chunk reused, 0 downloaded |
+| `zero_reuse_single` | 21 | 21 | ok | — |
+| `zero_reuse_multi` | 336 852 | 336 852 | ok | — |
+| `partial_same_offset` | 274 426 | 274 426 | ok | 1 chunk reused, 0 downloaded |
+| `partial_moved_offset` | 1 564 894 | 1 564 894 | ok | 8 chunks reused, 0 downloaded |
+| `partial_size_changed` | 197 192 | 197 192 | ok | 9 chunks reused, 0 downloaded |
+| `added` | 114 357 | 114 357 | ok | — |
+| `removed` | 0 | 0 | *(gone)* | — |
+
+**2 487 742 B spent in total**, which is the sum of the patchmaps' figures to the
+byte. 19 reused chunks across the four captures that declare them, none of them
+downloaded. Only the eight captures' own paths changed on the scratch copy — the
+`added` file appeared, the `removed` file disappeared, and the other seven were
+modified in place — so the scope held across all eight runs. The bundle itself
+was never a working tree and still verifies 90/90.
+
+### 8.1.2 `removed` needs a different run, and a different assertion
 
 A `removed` path is absent from the new manifest by construction, therefore
 absent from every repair plan. The only work that can touch it is the
-files-cleanup, so it gets a cleanup-only run scoped to that one path, asserting
-that the path is **gone afterwards** and that nothing was downloaded — not a byte
-total, because there is no patch to cost.
-
-**That run is refused today, and the reason is on `girpr`'s side.** Run by hand
-against this bundle:
+files-cleanup, so it gets a **cleanup-only run** scoped to that one path — add
+`--purge-only` — and its assertion is that the path is **gone afterwards** and
+that nothing was downloaded. Not a byte total, because there is no patch to cost.
 
 ```
-girpr --game-path <copy-of-game> --biz hk4e_global
+girpr --game-path <copy-of-game> --biz hk4e_global --purge-only
       --include "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"
-      --purge-only
-→ exit 1: --include '…/00664172.blk' matched no file in the live manifest
-  (plan_files=0); check the glob spelling (`*` also crosses `/`) …
+→ SUMMARY total=0 … download_bytes=0 deleted_extra_bytes=1731133 exit=0
+      scoped=1 config_bumped=0 plan_files=0 local_manifest=ok
 ```
 
-The glob is correct and the path is on disk; the guard it trips tests
-`plan.files.is_empty()` and runs **before** the purge plan is built, so a
-legitimate request — empty repair plan, non-empty purge candidates — is refused.
-That guard is `girpr`'s to fix, and it is already filed there. `gircap`'s part of
-the contract is already in place: `removed`'s `expectations` say
-`absent_after: true` with `download_bytes: 0`, so the assertion exists and is
-ready the moment the run is accepted. Until then, seven of eight captures are
-exercisable and `removed` is recorded as **not run** — which is honest, and is
-not the same as recording a pass.
+`plan_files=0` is correct and is not a failure: there is nothing to repair. The
+two figures worth checking are `deleted_extra_bytes=1731133`, which is the
+patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
+says exactly this, so the artifact's contract and the run's output agree.
+
+Only the `--include` glob is shared with the other seven; `--purge-only` is the
+one flag that makes this capture different, and leaving it off would make the run
+exit non-zero for the same reason a repair run would.
 
 ### 8.1.3 Do not pass `--audio` under a scope
 
@@ -657,7 +685,7 @@ Expected per-capture `download_bytes` for that bundle:
 | `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
 | `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
-| `removed` | `removed` | **0** *(not run — §8.1.2)* | *(no plan)* | 0 |
+| `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -669,11 +697,11 @@ the rest, so read them with §13.1 of the schema:
 - **`removed` has no `plan` and no `totals`** — there is no new side to patch to,
   so the reuse / fetch / moved cells above are empty rather than `0 / 0 / 0`.
   Its `download_bytes` is `0`, and that is a true value: a removal downloads
-  nothing. The figure is what a consumer should see; §8.1.2 is why no run has
-  yet produced it.
+  nothing. The run that produces it is a cleanup run, and the size it reports is
+  `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
 The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
-**2 487 742 B**.
+**2 487 742 B**, which is exactly what the eight runs spent.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 
