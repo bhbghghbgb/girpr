@@ -1050,7 +1050,7 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
         .set("blobs_checked", report.bundle.index.blobs.len() as u64)
         .set("captures_rebuilt", report.rebuilt.len() as u64)
         .set("bytes_rebuilt", report.rebuilt_bytes())
-        .set("checks_derived", crate::verify::REDERIVED.join(","))
+        .set("checks_derived", crate::verify::derived_ids().join(","))
         .set("checks_covered_by_recording", covered_ids(&report.bundle.recorded))
         .set("checks_total", total)
         .set("checks_passed", passed)

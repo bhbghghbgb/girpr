@@ -372,16 +372,44 @@ step 3 does exactly that comparison and nothing in the suite asserted it. It
 skips one-sided captures (`added`, `removed`) — their file is absent from one
 tree *by construction*, which is the point of the class.
 
-So there are **nineteen** ids: seventeen from this spec, A18 from `verify` only,
-A19 from a capture.
+### A20, added by M12 — a patchmap must add up to itself
 
-`gircap verify` re-derives **seven** of the seventeen — A6, A7, A8, A11, A13, A16
-and A17 — plus A18. It does not re-derive A1-A5, A9, A10, A12, A14 or A15: those
+| A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
+
+`verify`-only, like A18: it is a statement about the bundle, so no capture records
+it. It re-sums `compressed_size` over the plan's `FETCH` entries, recounts
+`reuse`/`fetch`/`moved`, and checks that `expectations.download_bytes` is that same
+figure.
+
+A20 exists because the bundle that motivated it carried `"plan": null`,
+`"totals": null` and `"expectations": { … "download_bytes": 0 }` for its `added`
+capture, and `verify` passed it with 83 green rows — because nothing looked. The
+one-chunk file in that bundle costs 114 357 B to repair and the artifact said
+zero. §1 of the artifact schema records the rule that now prevents it; A20 is what
+stops the rule being quietly dropped.
+
+It is re-derivable offline like the other seven because it reads only
+`patchmaps/*.json`, which is why it belongs in the derived set rather than the
+covered-by-recording one.
+
+So there are **twenty** ids: seventeen from this spec, A18 and A20 from `verify`
+only, A19 from a capture.
+
+`gircap verify` re-derives **nine** of them — A6, A7, A8, A11, A13, A16, A17,
+A18 and A20. It does not re-derive A1-A5, A9, A10, A12, A14 or A15: those
 are statements about the API bodies, the manifests and the diff, and re-running
 them inside the bundle would be re-running the capture's own algorithm against
-the capture's own output, which can only ever agree. Both sets are named on
-stdout as `checks_derived=` and `checks_covered_by_recording=`, because "verified"
-is a claim about how much was actually checked.
+the capture's own output, which can only ever agree.
+
+The nine are split in two, and `SUMMARY` names both as `checks_derived=`:
+
+| set | ids | what it means |
+|---|---|---|
+| `REDERIVED` | A6, A7, A8, A11, A13, A16, A17 | re-derived **and** written down by the capture, so `verify` can cross-check them against the recording (`agrees_with_recording=`) |
+| `DERIVED_UNRECORDED` | A18, A20 | re-derived from the bundle's own documents, but no capture records them — there is nothing to agree with |
+
+Keeping them apart is what stops the summary claiming a cross-check that cannot
+happen. `checks_covered_by_recording=` names the complement.
 
 One asymmetry worth stating: **A6 is re-derived against `chunks/index.json`, not
 against the manifests.** The four manifest-declared checks are already recorded in
@@ -415,7 +443,7 @@ gircap capture
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file P]
   [--output text|json]
 
-gircap verify      --artifact <DIR>            # re-derive A6,A7,A8,A11,A13,A16,A17 + A18, no network
+gircap verify      --artifact <DIR>            # re-derive A6,A7,A8,A11,A13,A16,A17,A18,A20, no network
 gircap materialize --artifact <DIR> [--out DIR] # rebuild old/new files from chunks/, no network
 gircap list        --root <DIR>               # index every capture under a root
 ```
@@ -488,7 +516,7 @@ blocked rather than quietly skipping it.
 
 Recorded so that whoever runs it does not have to reconstruct it, and so that a
 result can be checked rather than believed. Against
-`artifacts/hk4e_global/7.0.0__7.1.0/20261014T055348Z`:
+`artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`:
 
 1. Copy the bundle's `game/` somewhere writable. `girpr` writes into the game
    directory, and the bundle must stay byte-identical for `gircap verify` to
@@ -498,13 +526,45 @@ result can be checked rather than believed. Against
    what makes `SUMMARY download_bytes` attributable; a single run over all eight
    sums to the same total but cannot be compared per capture.
 3. Check three things per capture: `SUMMARY download_bytes` equals
-   `patchmaps/<id>.json → totals.download_bytes`; the patched file's MD5 equals
-   `expectations.result_md5`; and **no chunk in `expectations.must_not_fetch` was
-   requested** — that last one is what catches a broken reuse path, and it is
-   invisible in a byte count.
-4. Do **not** pass `--purge-after` or `--purge-before`. Without path filters they
-   delete every file the live manifest does not contain, which for a 9-file
-   fixture is most of it.
+   `patchmaps/<id>.json → totals.download_bytes` (equivalently
+   `expectations.download_bytes`, which A20 proves is the same figure); the
+   patched file's MD5 equals `expectations.result_md5`; and **no chunk in
+   `expectations.must_not_fetch` was requested** — that last one is what catches a
+   broken reuse path, and it is invisible in a byte count.
+4. Do **not** pass `--purge-after` or `--purge-before`. Today they have no path
+   filter to narrow them, so they delete every file the live manifest does not
+   contain, which for a 9-file fixture is most of it. **This makes the `removed`
+   capture untestable until scoping exists** — see below.
+
+### 8.1.2 The `removed` capture needs a cleanup, and a cleanup destroys the fixture
+
+These two facts are both true and they do not fit together, which is worth stating
+plainly rather than leaving to be discovered:
+
+- A `removed` path is absent from the new manifest by construction, therefore
+  absent from any repair plan. **The only lever that can act on it is a cleanup.**
+- With no path filter, a cleanup also deletes every *other* fixture file the live
+  manifest happens not to contain.
+
+So the six two-sided captures plus `added` (seven of eight) are actionable once
+`--include` exists, while `removed` is not actionable at all until a cleanup can
+be scoped to one path. Recording a run that skipped `removed` is honest; recording
+one that ran `--purge-after` unscoped and destroyed the rest is not a pass.
+
+This is also why `removed`'s `expectations` say `absent_after: true` with
+`download_bytes: 0` rather than carrying nothing: the assertion a consumer can make
+is "the file is gone and nothing was downloaded", and that is checkable even
+though the act of deleting it is not yet reachable.
+
+### 8.1.3 Do not pass `--audio`
+
+A consumer reaching for `--audio en-us` — the natural reflex, and the flag this
+capture was itself made with — changes the audio scan file, and the scan file is
+one of the paths a scoped run cannot reach. Omitting the flag is correct: the run
+autodetects, reads `GenshinImpact_Data/Persistent/audio_lang_14` (which holds
+`English(US)`), and resolves to `en-us`, which is exactly the state the bundle was
+captured in. Passing it would rewrite a fixture file to its own current contents,
+which is a needless way to invalidate A16.
 
 Expected per-capture `download_bytes` for that bundle:
 
@@ -516,15 +576,23 @@ Expected per-capture `download_bytes` for that bundle:
 | `partial_same_offset` | `partial_same_offset` | 274 426 | 1 / 2 / 0 | 1 |
 | `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
 | `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
-| `added` | `added` | *(no `totals`)* | 0 / 1 / 0 | 0 |
-| `removed` | `removed` | *(no `totals`)* | 2 / 0 / 0 | 0 |
+| `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
+| `removed` | `removed` | **0** | *(no plan)* | 0 |
 
-The two `null` totals are not missing data: `added` has no old side to patch
-*from* and `removed` has no new side to patch *to*, so neither has a patch to
-cost. A consumer asked to reproduce those two is being asked to create or delete
-a file, not to patch one.
+`added` and `removed` are the two one-sided captures and they are not shaped like
+the rest, so read them with §13.1 of the schema:
 
-The six that do carry `totals` sum to **2 373 385 B**.
+- **`added` has a `plan` and `totals` after all.** Every entry is `FETCH`, and
+  `download_bytes` is **114 357** — the one chunk's compressed size. An earlier
+  build emitted `plan: null`, `totals: null` and `download_bytes: 0` here, which
+  was not "unrecorded" but *false*; see §13.2 of the schema.
+- **`removed` has no `plan` and no `totals`** — there is no new side to patch to,
+  so the reuse / fetch / moved cells above are empty rather than `0 / 0 / 0`.
+  Its `download_bytes` is `0`, and that is a true value: a removal downloads
+  nothing.
+
+The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
+**2 487 742 B**.
 
 ### 8.2 What the artifact provides so that check is cheap when it unblocks
 

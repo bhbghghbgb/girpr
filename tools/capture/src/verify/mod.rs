@@ -67,6 +67,22 @@ pub const A18: &str =
 /// the run - so it is deliberately absent.
 pub const REDERIVED: [&str; 7] = ["A16", "A6", "A11", "A7", "A8", "A13", "A17"];
 
+/// Re-derived here, and never recorded by any capture.
+///
+/// Kept apart from [`REDERIVED`] because that set means "re-derived *and*
+/// written down", which is what makes `check_agreement` possible: there is
+/// nothing to agree with for these. Putting them in `REDERIVED` would have the
+/// summary claim a cross-check that cannot exist, and would drag them into a
+/// comparison against a row that was never emitted.
+pub const DERIVED_UNRECORDED: [&str; 2] = ["A18", "A20"];
+
+/// Everything `verify` looks at, in the order the summary prints it.
+pub fn derived_ids() -> Vec<&'static str> {
+    let mut v = REDERIVED.to_vec();
+    v.extend(DERIVED_UNRECORDED);
+    v
+}
+
 /// A bundle loaded from disk.
 ///
 /// Every document is read back through the same type it was written with, so a
@@ -544,6 +560,126 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
             )),
         }
     }
+    rows.extend(check_patchmap_arithmetic(map));
+    rows
+}
+
+/// A20, re-derived: a patchmap's `totals` and `expectations` are the arithmetic
+/// of its own `plan`, and `verify` does that arithmetic again rather than
+/// trusting the number.
+///
+/// Not belt-and-braces. The bundle that motivated it carried
+/// `"plan": null`, `"totals": null` and `"expectations": { … "download_bytes": 0 }`
+/// for its `added` capture, and `verify` passed it with 83 green rows - because
+/// nothing looked. The one-chunk file in the M11 bundle costs 114 357 B to repair
+/// and the artifact said zero. A figure a consumer compares against has to be the
+/// sum over the plan's FETCH entries, so it is re-summed here.
+///
+/// Re-derivable offline, unlike A1-A5: it reads only the patchmap, which is why it
+/// belongs in the derived set rather than the covered-by-recording one.
+const A20_ID: &str = "A20";
+const A20: &str = "a patchmap's totals and expectations are the arithmetic of its own plan";
+
+fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
+    let mut rows = Vec::new();
+    let subject = format!("patchmaps/{}.json", map.capture_id);
+    let Some(totals) = &map.totals else {
+        // No totals is only correct when there is no target: a capture with a new
+        // side must cost something to produce. Saying so here is what stops the
+        // defect coming back quietly.
+        if map.new.is_some() {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &subject,
+                "a capture with a new side carries totals",
+                "no totals, and no plan to derive them from",
+            ));
+        }
+        return rows;
+    };
+    let Some(plan) = &map.plan else {
+        rows.push(Assertion::fail(
+            A20_ID,
+            A20,
+            &subject,
+            "totals imply a plan",
+            "no plan to derive them from",
+        ));
+        return rows;
+    };
+
+    let fetch: Vec<_> = plan
+        .iter()
+        .filter(|e| e.decision == crate::assemble::Decision::Fetch)
+        .collect();
+    let reuse: Vec<_> = plan
+        .iter()
+        .filter(|e| e.decision == crate::assemble::Decision::Reuse)
+        .collect();
+    let bytes: i64 = fetch.iter().map(|e| e.compressed_size).sum();
+    let moved = plan
+        .iter()
+        .filter(|e| {
+            e.source_range
+                .as_ref()
+                .is_some_and(|s| s.start != e.target_range.start)
+        })
+        .count();
+
+    for (label, got, want) in [
+        ("chunks", totals.chunks as i64, plan.len() as i64),
+        ("reuse", totals.reuse as i64, reuse.len() as i64),
+        ("fetch", totals.fetch as i64, fetch.len() as i64),
+        ("moved", totals.moved as i64, moved as i64),
+        ("download_bytes", totals.download_bytes, bytes),
+    ] {
+        if got != want {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{subject} ({label})"),
+                &want.to_string(),
+                &got.to_string(),
+            ));
+        }
+    }
+
+    // The expectation a consumer actually reads must be that same figure.
+    if map.expectations.download_bytes != bytes {
+        rows.push(Assertion::fail(
+            A20_ID,
+            A20,
+            &format!("{subject} (expectations.download_bytes)"),
+            &format!("{bytes}, the sum over the FETCH entries"),
+            &map.expectations.download_bytes.to_string(),
+        ));
+    }
+    // And it must not contradict the outcome the patchmap claims.
+    if map.new.is_some() && map.expectations.absent_after {
+        rows.push(Assertion::fail(
+            A20_ID,
+            A20,
+            &format!("{subject} (absent_after)"),
+            "false: the capture has a new side",
+            "true",
+        ));
+    }
+
+    if rows.is_empty() {
+        rows.push(Assertion::pass(
+            A20_ID,
+            A20,
+            &subject,
+            &format!(
+                "{} chunk(s): {} reused, {} fetched, {} B - totals and expectations re-derived",
+                plan.len(),
+                reuse.len(),
+                fetch.len(),
+                bytes
+            ),
+        ));
+    }
     rows
 }
 
@@ -740,6 +876,34 @@ mod tests {
             );
         }
         assert!(REDERIVED.contains(&"A7") && REDERIVED.contains(&"A8"));
+        // The two sets must not overlap. `check_agreement` compares REDERIVED
+        // rows against what the capture recorded; a row that is never recorded
+        // has nothing to agree with, and listing it in both would have the
+        // summary claim a cross-check that cannot happen.
+        for id in DERIVED_UNRECORDED {
+            assert!(
+                !REDERIVED.contains(&id),
+                "A{id} is in both sets, so it would be checked against a row no capture writes"
+            );
+        }
+        // And they are disjoint from the ids a capture does record, which is
+        // what keeps `check_agreement` honest.
+        for id in DERIVED_UNRECORDED {
+            assert!(
+                !crate::emit::selfcheck::WORDING.iter().any(|(w, _)| *w == id),
+                "A{id} is claimed as never recorded, but a capture records it"
+            );
+        }
+        assert_eq!(derived_ids().len(), REDERIVED.len() + DERIVED_UNRECORDED.len());
+    }
+
+    /// A20 re-derives a patchmap's arithmetic from the patchmap, so it needs no
+    /// API body - which is the whole reason it can live here.
+    #[test]
+    fn a20_is_derived_from_bundle_documents_alone() {
+        assert!(DERIVED_UNRECORDED.contains(&A20_ID));
+        assert_eq!(A20_ID, "A20");
+        assert!(!A20.is_empty());
     }
 
     /// The set is deliberately smaller than the seventeen.

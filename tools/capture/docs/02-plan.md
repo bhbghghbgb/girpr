@@ -37,9 +37,11 @@ from the whole live manifest and would fetch the entire game instead of the one
 captured file. The fix is a `girpr` feature; `gircap` neither depends on it nor
 works around it.
 
-Consequence for this plan: **M11 step 2 is blocked and is recorded as blocked**,
+Consequence for this plan: **M11 step 4 is blocked and is recorded as blocked**,
 not skipped. Everything up to and including M10 is unblocked, and `gircap verify`
 / `gircap materialize` give the offline half of the acceptance check regardless.
+Re-confirmed at M12 against `girpr --help` and `purge::keep_set`: still no path
+filter.
 Full detail and the intended invocation: [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle--and-one-external-blocker).
 
 ---
@@ -331,6 +333,8 @@ departures from the text above, each of which a later milestone inherits:
    `checks_covered_by_recording=` on stdout, and `REDERIVED` is the `&'static`
    list of the overlap. "Verified" is a claim about how much was checked, and a
    reader who cannot see the split will read seventeen when seven were looked at.
+   *(M12: the count is now nine — A18 was re-derived all along and simply never
+   named. `REDERIVED` and `DERIVED_UNRECORDED` are separate lists; see M12.)*
 2. **There is an eighteenth id, `A18`, for the closure check.** None of the
    seventeen asks whether `game/` is what the retained blobs say it is, which is
    the bundle's central claim and the reason `materialize` exists. It gets its own
@@ -479,6 +483,12 @@ nine classes.
 
 **Landed for steps 1-3. Step 4 remains BLOCKED and M11 is not complete.**
 
+> *Superseded by M12's re-capture at
+> `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z/`, which carries the
+> corrected one-sided patchmaps. The figures below are M11's and are kept as the
+> record of that run; re-run the steps below against the newer bundle, whose
+> `verify` reports 90 checks rather than 83.*
+
 Run: `gircap capture --out artifacts --audio en-us --old-tag 7.0.0 --new-tag
 7.1.0`, 27 s, exit `0`, bundle at
 `artifacts/hk4e_global/7.0.0__7.1.0/20261014T055348Z/`. 8 captures admitted, 8
@@ -540,6 +550,87 @@ documents. And the matrix spells `covered_by`; no row came out `coveredby`. The
 eleven bundles written before those fixes are archived under
 `artifacts/_pre-m10/` and now fail A16 by design, which is the honest reading of
 a digest list that recorded compressed bytes while promising decompressed ones.
+
+---
+
+### M12 - the one-sided patchmaps
+
+Not a planned milestone: a review of the M11 bundle. It found that
+`patchmaps/added.json` emitted `"plan": null`, `"totals": null` and
+`"expectations": { … "download_bytes": 0 }`, and `patchmaps/removed.json` emitted
+no `expectations` at all - while three documents described a different shape and
+not one test looked.
+
+**The defect was not the shape. It was that the `0` was false.** The `added`
+file's single chunk is 114 357 compressed bytes and `chunks/index.json` lists it
+in the `patch_fetch` set, so a consumer repairing that path must download 114 357
+bytes. An assertion written as "`SUMMARY download_bytes` equals
+`expectations.download_bytes`" would have compared 114 357 against 0 and called a
+perfectly correct run a failure. A defaulted `0` standing in for unknown data is
+worse than a `null`, because a `null` reads as unrecorded and a `0` reads as a
+claim.
+
+1. **`added` gets the plan the schema promised.** Every entry `FETCH` with
+   `source_range: null`, a `note` saying why, and `url`/`chunk_id`/
+   `compressed_size` populated - so `totals` reads `fetch: 1, reuse: 0, moved: 0,
+   download_bytes: 114357`. The writer now *refuses* to emit a capture that has a
+   new side but no plan, so the defect cannot return quietly.
+2. **`removed` gets an `expectations` of its own shape**: `absent_after: true`,
+   `result_path`/`result_md5` null, `download_bytes: 0`, `must_not_fetch: []`.
+   That `0` is a *true* value - deleting a file downloads nothing - and it is
+   written down rather than left null precisely because a consumer should be able
+   to compare against it. `expectations` is now required on every capture.
+3. **A20**, a new `verify`-only assertion, re-sums `compressed_size` over each
+   plan's `FETCH` entries and recounts `reuse`/`fetch`/`moved`, then checks that
+   `expectations.download_bytes` is that figure. A20 immediately turned red on
+   M9's own hand-built bundle fixture, whose `partial_same_offset` capture also
+   carried `plan: null` - so the fixture was made realistic rather than the check
+   loosened.
+4. **The two verified-but-unrecorded ids are now named.** `SUMMARY` said
+   `checks_derived=A16,A6,A11,A7,A8,A13,A17` while `verify` had been re-deriving
+   A18 all along. `REDERIVED` (cross-checkable against the recording) and
+   `DERIVED_UNRECORDED` (A18, A20 - statements about the bundle that no capture
+   writes) are now separate lists, and `checks_derived=` names all nine. A reader
+   who cannot tell what was checked from what was merely recorded will read that
+   list at face value.
+
+Three tests were added, and one was proved to fail on the old shape rather than
+assumed to: reverting the `added` arm and the writer's guard reproduces
+`"plan": null` and the new test reports *"`added` has a plan: every chunk is
+fetched whole"*.
+
+**Proved against the real bundle too.** Re-captured live at
+`artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z/` (17 s, exit `0`, 116
+selfcheck rows all green, A16 re-hashed 95 files / 208 289 563 B). `added.json`
+now carries a one-entry `FETCH` plan with `compressed_size: 114357` and
+`totals.download_bytes: 114357`; `removed.json` carries
+`absent_after: true`. `verify` reports **90** checks, all green, nine derived ids
+named. With the defect reintroduced into that bundle by hand, A20 reported *A20
+`patchmaps/added.json (download_bytes)` expected=114357 actual=0* and the
+expectations figure alongside it — and A16 caught the same edit independently
+through `MANIFEST.json`'s own digest record. M11's four acceptance steps all still
+pass: `verify` exit 0, `materialize` exit 0 with 14 of 14 files byte-for-byte,
+and the variant set still exactly the non-`identical` captures.
+
+**Two claims in the review were checked and not adopted.** It reported that the
+manual step's reason for avoiding `--purge-after` was stale, and that
+`--audio` is refused under a path scope. Both describe behaviour of a `--include`
+flag that does not exist: `girpr --help` still offers `--game-path`, `--biz`,
+`--audio`, `--io-threads`, `--purge-after`, `--purge-before`, `--check-only`,
+`--dry-run`, `--json-summary`, `--log-level` and nothing else, `purge::keep_set`
+is config-only with no glob, and `00-spec.md` §8.1 says *"The blocker is
+unchanged"* rather than claiming it resolved. It also reported that M11 step 4
+should be recorded as run. It was not run and is still blocked. Writing down a
+pass for a check that has not happened - and rewriting a correct reason into one
+that matches code nobody has written - is the exact failure mode M10 had to fix
+twice.
+
+What *was* taken from the fourth point is real and survives the false premise: a
+`removed` path is absent from the new manifest by construction, therefore absent
+from any repair plan, so the only lever that can act on it is a cleanup - and an
+unscoped cleanup destroys the rest of the fixture. That tension is now §8.1.2 of
+the spec rather than something to be discovered. Step 4's reason was left as
+written, because for today's `girpr` it is correct.
 ---
 
 ## 4. Test strategy

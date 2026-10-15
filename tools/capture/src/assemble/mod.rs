@@ -135,8 +135,10 @@ pub struct PatchMap {
     pub plan: Option<Vec<PlanEntry>>,
     /// The arithmetic, so a reader need not add it up.
     pub totals: Option<Totals>,
-    /// The ground truth a consumer asserts against.
-    pub expectations: Option<Expectations>,
+    /// The ground truth a consumer asserts against. Always present: every
+    /// capture has at least one side, and a capture nothing can be asserted
+    /// about is the defect rather than a shape.
+    pub expectations: Expectations,
 }
 
 /// One side of the pair.
@@ -172,13 +174,31 @@ pub struct Totals {
 }
 
 /// What a consumer can assert against.
+///
+/// Required rather than optional, and that is the point: a patchmap a consumer
+/// cannot assert anything about is the defect, not a legitimate shape. Both
+/// one-sided classes therefore have their own. `removed` asserts the shape
+/// `"the file is gone and nothing was downloaded"`, which is a real outcome a
+/// consumer can check - it is how the `removed` capture becomes testable at all.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expectations {
-    /// Where the rebuilt file belongs.
-    pub result_path: String,
-    /// The whole-file MD5 it must have.
-    pub result_md5: String,
-    /// Bytes a correct patch must not download.
+    /// Where the rebuilt file belongs. `null` when the correct outcome is for
+    /// it not to exist.
+    pub result_path: Option<String>,
+    /// The whole-file MD5 it must have. `null` when `absent_after` is true.
+    pub result_md5: Option<String>,
+    /// True when the correct outcome is that the file be **absent** afterwards -
+    /// the `removed` class, and the only class with no result path.
+    ///
+    /// Present on every capture so a consumer never has to infer the outcome
+    /// from a null, and so `false` is stated rather than defaulted.
+    pub absent_after: bool,
+    /// Bytes a correct patch must download.
+    ///
+    /// `0` for `removed` is a *true* value, not a default: deleting a file
+    /// downloads nothing. It is recorded rather than left `null` precisely
+    /// because the number is known and a consumer should be able to compare
+    /// against it.
     pub download_bytes: i64,
     /// Chunks a correct patch must not request.
     pub must_not_fetch: Vec<String>,
@@ -564,11 +584,19 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
             let (plan, outcome) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
             (Some(plan), Some(outcome))
         }
-        // `added`: no old side, so there is nothing to patch from.
-        (Some(_), None) | (None, _) => (None, None),
+        // `added`: no old side, so there is nothing to *patch from* - but there
+        // is still a plan, and every entry in it is FETCH. A consumer handed
+        // this path has to download every new-side chunk, and `plan: null` /
+        // `totals: null` told it nothing about that. Leaving them null made
+        // `expectations.download_bytes` fall back to a defaulted `0`, which is
+        // not "unrecorded" but *false*: the one-chunk file in the M11 bundle
+        // costs 114 357 B to repair and the artifact claimed zero.
+        (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None),
+        // `removed`: no new side, so there is no plan and no target.
+        (None, _) => (None, None),
     };
 
-    let map = build_map(input, old.as_ref(), new.as_ref(), plan.as_deref());
+    let map = build_map(input, old.as_ref(), new.as_ref(), plan.as_deref())?;
     let mut out = Assembled {
         map,
         old,
@@ -738,12 +766,45 @@ fn patch_flow(
 }
 
 /// Assemble the patchmap document from what the run produced.
+/// The plan for a capture with no old side: every new-side chunk is FETCH.
+///
+/// Same shape as [`patch_flow`]'s, because it is the same question - what must a
+/// consumer download to produce the new file? The answer for `added` is all of
+/// it, so the decision is made here rather than re-derived by the reader. The
+/// `note` says why, so a reader who expected a `source_range` is not left
+/// guessing whether the field was forgotten.
+fn fetch_all_plan(
+    input: &AssemblyInput<'_>,
+    new_entry: &SophonChunkFile,
+    new_tag: &str,
+) -> Result<Vec<PlanEntry>, String> {
+    Ok(new_entry
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| PlanEntry {
+            i,
+            decision: Decision::Fetch,
+            target_range: Range::at(c.offset, c.uncompressed_size),
+            source_range: None,
+            chunk_id: c.id.clone(),
+            url: input.sources.url(new_tag, &c.id).ok(),
+            compressed_size: c.compressed_size,
+            uncompressed_size: c.uncompressed_size,
+            uncompressed_md5: c.uncompressed_md5.clone(),
+            note: Some(
+                "no old side: this file is new, so every chunk is downloaded whole".into(),
+            ),
+        })
+        .collect())
+}
+
 fn build_map(
     input: &AssemblyInput<'_>,
     old: Option<&FileResult>,
     new: Option<&FileResult>,
     plan: Option<&[PlanEntry]>,
-) -> PatchMap {
+) -> Result<PatchMap, String> {
     let side = |r: &FileResult| Side {
         tag: r.tag.clone(),
         size: r.bytes.len() as i64,
@@ -766,20 +827,55 @@ fn build_map(
         materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
         materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
     });
-    let expectations = new.map(|n| Expectations {
-        result_path: format!("expected/{}", input.pair.path),
-        result_md5: n.declared_md5.clone(),
-        download_bytes: totals.map(|t| t.download_bytes).unwrap_or(0),
-        must_not_fetch: plan
-            .map(|p| {
-                p.iter()
-                    .filter(|e| e.decision == Decision::Reuse)
-                    .map(|e| e.chunk_id.clone())
-                    .collect()
-            })
-            .unwrap_or_default(),
-    });
-    PatchMap {
+    // `plan` is `Some` for every capture that has a new side, so `totals` is too.
+// Checked rather than defaulted: a `download_bytes` of `0` on a capture that
+// does have a plan would be a false claim, and one with no plan would be
+// unrecordable. Either way a silent `0` is the wrong answer.
+if new.is_some() && totals.is_none() {
+        return Err(format!(
+            "{}: a capture with a new side must carry a plan, or its cost is unrecordable",
+            input.pair.path
+        ));
+    }
+    // Every capture has expectations - `added` asserts the file appears, `removed`
+    // asserts it is gone, and a two-sided capture asserts the new MD5.
+    //
+    // A capture with **no** side at all is reachable and is not an error: a
+    // path selected out of the audio pool has no entry in the `game` manifests,
+    // which `run` says outright ("that is a bug there, and here it surfaces as a
+    // one-sided pair rather than a wrong download"). It used to emit
+    // `expectations: null`, i.e. a patchmap a consumer could assert nothing
+    // about, so it is folded in with `removed`: there is no result file and
+    // nothing is downloaded. That is a weaker capture than the other classes,
+    // and saying so is better than claiming a result that does not exist.
+    let expectations = match new {
+        Some(n) => Expectations {
+            result_path: Some(format!("expected/{}", input.pair.path)),
+            result_md5: Some(n.declared_md5.clone()),
+            absent_after: false,
+            download_bytes: totals.map_or(0, |t| t.download_bytes),
+            must_not_fetch: plan
+                .map(|p| {
+                    p.iter()
+                        .filter(|e| e.decision == Decision::Reuse)
+                        .map(|e| e.chunk_id.clone())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
+        None => Expectations {
+            result_path: None,
+            result_md5: None,
+            absent_after: true,
+            // Known, and worth stating: removing a file, or having none to
+            // begin with, downloads nothing. `Vec::new()` on `must_not_fetch`
+            // is likewise a statement - there is nothing to fetch, so nothing is
+            // forbidden.
+            download_bytes: 0,
+            must_not_fetch: Vec::new(),
+        },
+    };
+    Ok(PatchMap {
         schema_version: crate::SCHEMA_VERSION,
         capture_id: input.pair.capture_id.clone(),
         path: input.pair.path.clone(),
@@ -790,7 +886,7 @@ fn build_map(
         plan: plan.map(<[PlanEntry]>::to_vec),
         totals,
         expectations,
-    }
+    })
 }
 
 /// The roles a pair's chunks are retained for, for the run log.
@@ -1017,7 +1113,7 @@ mod tests {
         assert_eq!(p.moved, 3, "every chunk changed offset: that is what a reorder is");
         assert!(p.equals_new, "the patch flow and the direct assembly disagree");
         assert_eq!(a.map.totals.as_ref().unwrap().download_bytes, 0);
-        assert_eq!(a.map.expectations.as_ref().unwrap().must_not_fetch.len(), 3);
+        assert_eq!(a.map.expectations.must_not_fetch.len(), 3);
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
     }
 
@@ -1037,8 +1133,30 @@ mod tests {
         assert!(a.patch.is_none(), "there is nothing to patch from");
         assert!(a.new.as_ref().unwrap().md5_matches());
         assert!(a.map.old.is_none());
-        assert!(a.map.plan.is_none(), "no patch, so no plan");
-        assert!(a.map.expectations.is_some(), "but the new side is still ground truth");
+        // There is no patch, but there *is* a plan: every new-side chunk must be
+        // downloaded whole. Emitting `plan: null` here is what made
+        // `expectations.download_bytes` a defaulted `0` - a number a consumer
+        // would compare against and lose to, for a file that is not free.
+        let plan = a.map.plan.as_ref().expect("a plan: every chunk is fetched");
+        assert_eq!(plan.len(), a.new.as_ref().unwrap().nchunks);
+        for e in plan {
+            assert_eq!(e.decision, Decision::Fetch);
+            assert!(e.source_range.is_none(), "no old side to slice from");
+            assert!(e.note.is_some(), "so a reader is told why, not left guessing");
+        }
+        let t = a.map.totals.as_ref().expect("the cost of the plan");
+        assert_eq!(t.reuse, 0);
+        assert_eq!(t.fetch, plan.len());
+        assert_eq!(t.moved, 0);
+        assert_eq!(
+            t.download_bytes,
+            plan.iter().map(|e| e.compressed_size).sum::<i64>(),
+            "the whole file is downloaded, so the patch costs what it weighs"
+        );
+        assert!(t.download_bytes > 0, "not free");
+        assert_eq!(a.map.expectations.download_bytes, t.download_bytes);
+        assert!(!a.map.expectations.absent_after);
+        assert!(a.map.expectations.must_not_fetch.is_empty());
         assert!(a.a12_holds(), "vacuously");
     }
 
@@ -1055,9 +1173,17 @@ mod tests {
         assert!(a.new.is_none());
         assert!(a.patch.is_none());
         assert!(a.old.as_ref().unwrap().md5_matches());
-        assert!(a.map.plan.is_none());
-        assert!(a.map.totals.is_none());
-        assert!(a.map.expectations.is_none(), "nothing to expect a result for");
+        assert!(a.map.plan.is_none(), "no new side, so no target");
+        assert!(a.map.totals.is_none(), "and so nothing to cost");
+        // Expectations are **not** absent. A consumer needs something to assert,
+        // and for a removal the assertion is that the file is gone and that
+        // nothing was downloaded to achieve it.
+        let e = &a.map.expectations;
+        assert!(e.absent_after, "the outcome is deletion");
+        assert_eq!(e.result_path, None, "there is nothing to rebuild");
+        assert_eq!(e.result_md5, None);
+        assert_eq!(e.download_bytes, 0, "a true zero: deleting costs nothing");
+        assert!(e.must_not_fetch.is_empty());
     }
 
     // ------------------------------------------------------------ the totals
@@ -1083,10 +1209,14 @@ mod tests {
             .sum();
         assert_eq!(t.download_bytes, expect);
         assert!(t.download_bytes < t.materialize_new_bytes);
-        let e = a.map.expectations.as_ref().unwrap();
+        let e = &a.map.expectations;
         assert_eq!(e.download_bytes, t.download_bytes);
-        assert_eq!(e.result_path, "expected/dll");
-        assert_eq!(e.result_md5, a.new.as_ref().unwrap().declared_md5);
+        assert_eq!(e.result_path.as_deref(), Some("expected/dll"));
+        assert_eq!(
+            e.result_md5.as_deref(),
+            Some(a.new.as_ref().unwrap().declared_md5.as_str())
+        );
+        assert!(!e.absent_after, "a two-sided capture leaves a file behind");
         assert_eq!(e.must_not_fetch.len(), 1, "the one reused chunk");
     }
 

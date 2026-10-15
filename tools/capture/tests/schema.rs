@@ -532,3 +532,142 @@ fn the_request_log_is_one_json_object_per_line_in_sequence_order() {
         "no request records where its bytes ended up"
     );
 }
+/// The one-sided captures carry a plan, totals and expectations - the shapes
+/// `01-artifact-schema.md` §13 promises.
+///
+/// This exists because three documents stated the shape and the writer emitted a
+/// different one for two whole milestones without a single test failing. Before
+/// the fix, `added.json` was `"plan": null`, `"totals": null` and
+/// `"expectations": null`, and `removed.json` had no `expectations` at all. Worse,
+/// `added` carried `"download_bytes": 0` where the real cost was non-zero - not
+/// "unrecorded" but *false*, and a consumer comparing against it would lose to a
+/// run behaving perfectly.
+///
+/// Asserted on the emitted JSON rather than on the struct: the struct cannot
+/// represent the old shape any more, so a struct-level assertion would pass
+/// whatever the writer wrote.
+#[test]
+fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
+    let b = bundle();
+    let added = json(&b.join("patchmaps/added.json"));
+
+    // §13: "for `added` there is no `old`, and every `plan` entry is `FETCH`
+    // with `source_range: null`".
+    assert!(added["old"].is_null(), "`added` has no old side");
+    let plan = added["plan"]
+        .as_array()
+        .expect("`added` has a plan: every chunk is fetched whole");
+    assert!(!plan.is_empty(), "a plan with no entries is not a plan");
+    let nchunks = added["new"]["nchunks"].as_u64().expect("declared chunk count");
+    assert_eq!(
+        plan.len() as u64,
+        nchunks,
+        "one plan entry per new-side chunk, or the totals are not the plan's"
+    );
+    let mut fetched = 0_u64;
+    let mut bytes = 0_i64;
+    for e in plan {
+        assert_eq!(e["decision"], "FETCH", "an `added` chunk cannot be reused");
+        assert!(e["source_range"].is_null(), "there is no old side to slice from");
+        assert!(!e["chunk_id"].as_str().unwrap_or_default().is_empty());
+        assert!(
+            e["note"].is_string(),
+            "a reader seeing no `source_range` should be told why, not left guessing"
+        );
+        fetched += 1;
+        bytes += e["compressed_size"].as_i64().expect("declared compressed size");
+    }
+
+    // The arithmetic, re-done by this test from the plan rather than trusted.
+    let t = added["totals"].as_object().expect("`added` has totals");
+    assert_eq!(t["fetch"].as_u64(), Some(fetched));
+    assert_eq!(t["reuse"].as_u64(), Some(0));
+    assert_eq!(t["moved"].as_u64(), Some(0));
+    assert_eq!(t["chunks"].as_u64(), Some(fetched));
+    assert_eq!(t["download_bytes"].as_i64(), Some(bytes));
+    assert!(
+        bytes > 0,
+        "a file that must be downloaded whole is not free; a zero here is the defect"
+    );
+
+    // And the expectation points at that same real number, not a default.
+    assert_eq!(
+        added["expectations"]["download_bytes"].as_i64(),
+        Some(bytes)
+    );
+    assert_eq!(added["expectations"]["absent_after"], false);
+    assert!(added["expectations"]["result_path"].is_string());
+}
+
+#[test]
+fn a_removed_capture_carries_an_expectation_a_consumer_can_assert() {
+    let b = bundle();
+    let removed = json(&b.join("patchmaps/removed.json"));
+
+    assert!(removed["new"].is_null(), "`removed` has no new side");
+    assert!(removed["plan"].is_null(), "and so no target to plan for");
+    assert!(removed["totals"].is_null(), "and so nothing to cost");
+
+    // §13 used to say `removed` has "no `expectations`". That left a consumer
+    // with nothing to assert and nothing to check, for the one capture whose
+    // whole point is a deletion.
+    let e = removed["expectations"].as_object().expect("`removed` has expectations");
+    assert_eq!(e["absent_after"], true, "the outcome is deletion");
+    assert!(e["result_path"].is_null(), "there is nothing to rebuild");
+    assert!(e["result_md5"].is_null());
+    assert_eq!(
+        e["download_bytes"].as_i64(),
+        Some(0),
+        "a true zero: a removal costs nothing to perform"
+    );
+    assert_eq!(
+        e["must_not_fetch"].as_array().map(Vec::len),
+        Some(0),
+        "nothing to fetch, so nothing is forbidden"
+    );
+}
+
+#[test]
+fn every_capture_carries_expectations_so_none_is_assert_against_nothing() {
+    let b = bundle();
+    let mut checked = 0;
+    for entry in std::fs::read_dir(b.join("patchmaps")).expect("patchmaps/") {
+        let p = entry.expect("entry").path();
+        let m = json(&p);
+        assert!(
+            m["expectations"].is_object(),
+            "{}: a patchmap a consumer cannot assert anything about is the defect",
+            p.display()
+        );
+        // `download_bytes` is always a number, never null and never missing.
+        // An absent figure has to be absent; `0` is a value a consumer will
+        // compare against.
+        assert!(
+            m["expectations"]["download_bytes"].is_i64(),
+            "{}: `download_bytes` must be stated, not left implicit",
+            p.display()
+        );
+        // Whichever way the outcome goes, it is stated rather than inferred.
+        let e = &m["expectations"];
+        assert!(
+            e["absent_after"].is_boolean(),
+            "{}: the outcome is not stated",
+            p.display()
+        );
+        if e["absent_after"] == serde_json::Value::Bool(false) {
+            assert!(
+                e["result_path"].is_string(),
+                "{}: a file that survives the run needs a result path",
+                p.display()
+            );
+        } else {
+            assert!(
+                e["result_path"].is_null(),
+                "{}: a file that does not survive has no result path",
+                p.display()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 5, "expected the mock's five classes, saw {checked}");
+}

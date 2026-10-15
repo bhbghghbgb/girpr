@@ -162,6 +162,51 @@ impl Bundle {
         );
 
         // `patchmaps/` - the plan and the ground truth.
+        //
+        // The plan is spelled out rather than left null, and it used to be left
+        // null. A `partial_same_offset` capture whose patchmap carried no plan
+        // passed M9's whole suite, and A20 - added when the same defect was found
+        // in `added.json` - turned it red: a capture with a new side must say
+        // what producing it costs. Three new-side chunks: the first is new
+        // content (FETCH), the other two are in the old file at the same offsets
+        // (REUSE, neither moved).
+        use gircap::assemble::ranges::Range as PRange;
+        use gircap::assemble::{Decision, PlanEntry, SourceRange, Totals};
+        let entry = |i: usize, c: &SophonChunk, offset: i64, reuse_from: Option<i64>| PlanEntry {
+            i,
+            decision: if reuse_from.is_some() { Decision::Reuse } else { Decision::Fetch },
+            target_range: PRange::at(offset, c.uncompressed_size),
+            source_range: reuse_from.map(|s| SourceRange {
+                start: s,
+                end: s + c.uncompressed_size,
+                file_tag: OLD_TAG.into(),
+            }),
+            chunk_id: c.id.clone(),
+            url: None,
+            compressed_size: c.compressed_size,
+            uncompressed_size: c.uncompressed_size,
+            uncompressed_md5: c.uncompressed_md5.clone(),
+            note: None,
+        };
+        let plan = vec![
+            entry(0, &d, 0, None),
+            entry(1, &b, 64, Some(64)),
+            entry(2, &c, 192, Some(192)),
+        ];
+        let fetch_bytes: i64 = plan
+            .iter()
+            .filter(|e| e.decision == Decision::Fetch)
+            .map(|e| e.compressed_size)
+            .sum();
+        let totals = Totals {
+            chunks: plan.len(),
+            reuse: 2,
+            fetch: 1,
+            moved: 0,
+            download_bytes: fetch_bytes,
+            materialize_old_bytes: old_bytes.len() as i64,
+            materialize_new_bytes: new_bytes.len() as i64,
+        };
         let mut maps = BTreeMap::new();
         maps.insert(
             CAPTURE.to_string(),
@@ -172,10 +217,16 @@ impl Bundle {
                 matching_field: "game".into(),
                 classes: vec![gircap::select::Class::PartialSameOffset],
                 old: Some(Side { tag: OLD_TAG.into(), size: old_bytes.len() as i64, md5: old_md5, nchunks: 3 }),
-                new: Some(Side { tag: NEW_TAG.into(), size: new_bytes.len() as i64, md5: new_md5, nchunks: 3 }),
-                plan: None,
-                totals: None,
-                expectations: None,
+                new: Some(Side { tag: NEW_TAG.into(), size: new_bytes.len() as i64, md5: new_md5.clone(), nchunks: 3 }),
+                plan: Some(plan),
+                totals: Some(totals),
+                expectations: gircap::assemble::Expectations {
+                    result_path: Some(format!("expected/{DLL}")),
+                    result_md5: Some(new_md5.clone()),
+                    absent_after: false,
+                    download_bytes: fetch_bytes,
+                    must_not_fetch: vec![b.id.clone(), c.id.clone()],
+                },
             },
         );
         std::fs::create_dir_all(root.join("patchmaps")).expect("patchmaps dir");

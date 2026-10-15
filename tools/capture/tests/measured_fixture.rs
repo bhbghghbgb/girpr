@@ -1136,9 +1136,9 @@ mod m7_assembly {
         assert_eq!(t.download_bytes, 274_426, "the schema doc's figure");
         assert_eq!(t.materialize_old_bytes, 2_340_264);
         assert_eq!(t.materialize_new_bytes, 2_340_264);
-        assert_eq!(a.map.expectations.as_ref().unwrap().must_not_fetch.len(), 1);
+        assert_eq!(a.map.expectations.must_not_fetch.len(), 1);
         assert_eq!(
-            a.map.expectations.as_ref().unwrap().must_not_fetch[0]
+            a.map.expectations.must_not_fetch[0]
                 .split('_')
                 .next()
                 .unwrap(),

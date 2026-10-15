@@ -370,11 +370,24 @@ fn the_captured_bundle_verifies_offline() {
     let s = r.summary();
     assert_eq!(s["result"], "pass");
     assert_eq!(s["checks_failed"], "0");
-    assert!(s["captures_rebuilt"].parse::<u64>().unwrap() >= 4);
+    assert!(
+        s["captures_rebuilt"].parse::<u64>().unwrap() >= 4,
+        "a bundle whose captures cannot be rebuilt from its own chunks proves nothing"
+    );
+    // Nine ids, not seven. A18 and A20 were always re-derived - A18 was simply
+    // never named, which made the summary understate what `verify` had looked
+    // at. A reader who cannot tell what was checked from what was merely
+    // recorded would take this list at face value.
     assert_eq!(
-        s["checks_derived"], "A16,A6,A11,A7,A8,A13,A17",
+        s["checks_derived"],
+        "A16,A6,A11,A7,A8,A13,A17,A18,A20",
         "verify names exactly what it re-derived"
     );
+    // And the two sets stay apart: the summary names nine, but only seven can be
+    // cross-checked against a recording, because A18 and A20 are statements
+    // about the bundle that no capture writes down.
+    assert!(!gircap::verify::REDERIVED.contains(&"A20"));
+    assert!(gircap::verify::DERIVED_UNRECORDED.contains(&"A20"));
 }
 
 #[test]

@@ -425,9 +425,57 @@ that chunk has a broken reuse path, and it is nameable from the artifact alone.
 before copying. `moved` in `totals` counts entries where `source_range.start !=
 target_range.start`.
 
-For `removed` captures there is no `new`, no `plan`, and no `expectations`; for
-`added` there is no `old`, and every `plan` entry is `FETCH` with
-`source_range: null`.
+### 13.1 The one-sided classes
+
+`old` and `new` are the two sides; `plan`, `totals` and `expectations` describe
+producing the **new** one. That makes the one-sided cases asymmetric, and both are
+spelled out here because getting them wrong makes the artifact lie.
+
+**`added`** - no `old`, but `plan`, `totals` and `expectations` are all present.
+Every `plan` entry is `FETCH` with `source_range: null` and a `note` saying why,
+because there is nothing to slice from. `totals` reads `reuse: 0`,
+`fetch: nchunks`, `moved: 0`, and `download_bytes` is the whole file's compressed
+size - the file has to be fetched in full.
+
+**`removed`** - no `new`, and therefore no `plan` and no `totals`: there is no
+target to plan for and nothing to cost. `expectations` **is** present, in its own
+shape:
+
+```jsonc
+{ "capture_id": "removed",
+  "old": { "tag": "7.0.0", "size": 1731133, "md5": "6c220a33.", "nchunks": 2 },
+  "new": null, "plan": null, "totals": null,
+  "expectations": {
+    "result_path": null,
+    "result_md5":   null,
+    "absent_after": true,
+    "download_bytes": 0,
+    "must_not_fetch": []
+  } }
+```
+
+`download_bytes: 0` here is a **true** value, not a default: a removal downloads
+nothing. It is written down rather than left `null` precisely because the number
+is known and a consumer should be able to compare against it.
+
+### 13.2 `download_bytes` is always a number
+
+`expectations.download_bytes` is the sum of `compressed_size` over the plan's
+`FETCH` entries - what a correct patch costs. It is **never** null and never
+defaulted. This is stated as a rule because getting it wrong is not a cosmetic
+bug: an earlier build emitted `plan: null`, `totals: null` and
+`download_bytes: 0` for an `added` capture whose file actually cost 114 357 B to
+download. A consumer that asserted `SUMMARY download_bytes == expectations.download_bytes`
+would have compared 114 357 against 0 and called a perfectly correct run a
+failure.
+
+Absent data has to be absent. Where a figure genuinely does not exist, the field
+that would hold it is `null` - which is why `result_path` and `result_md5` can be
+null while `download_bytes` cannot.
+
+`expectations` is required on every capture. A patchmap a consumer cannot assert
+anything about is the defect, not a legitimate shape; that is what makes `removed`
+testable rather than merely recorded.
 
 ---
 
