@@ -56,6 +56,12 @@ pub struct GameFixture {
     pub corrupt_chunk_store: HashMap<String, Vec<u8>>,
 }
 
+/// The fixture's latest tag. The mock serves the chunk manifest for
+/// `getBuild?tag=<LATEST_TAG>` and returns `retcode -202` for any other tag, so
+/// writing this into `config.ini` is how a test says "the local build's
+/// manifests are available" (i.e. chunk reuse is available).
+pub const LATEST_TAG: &str = "9.9.9-test";
+
 fn md5hex(data: &[u8]) -> String {
     format!("{:x}", md5::compute(data))
 }
@@ -65,7 +71,7 @@ fn zstd_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 pub fn build_fixture() -> GameFixture {
-    let latest_tag = "9.9.9-test".to_string();
+    let latest_tag = LATEST_TAG.to_string();
     let manifest_id = "manifest_test_game_001".to_string();
 
     // Fixed payloads (distinct bytes per chunk so corruption is detectable).

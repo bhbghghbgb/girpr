@@ -38,7 +38,9 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
+use common::{
+    LATEST_TAG, MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file,
+};
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::{Biz, RunCtx, repair};
 use std::collections::HashSet;
@@ -1131,6 +1133,9 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
             "plan_download_bytes",
             "write_bytes",
             "stopped",
+            // A fresh install has no `config.ini`, so no local version is known
+            // and the lookup is never attempted — the key must not appear.
+            "local_manifest",
         ] {
             assert!(
                 !line.contains(k),
@@ -1477,6 +1482,95 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
 }
 
 #[tokio::test]
+async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest() {
+    // The `removed` capture class: a path on disk that the new manifest no
+    // longer contains. It is in no repair plan by construction, so the only
+    // work that can touch it is the cleanup — which is exactly what
+    // `--purge-only --include <that path>` asks for.
+    //
+    // The guard that says "an `--include` matching nothing is a typo" used to
+    // test `plan.files.is_empty()` and run *before* the purge plan existed, so
+    // it refused this as a typo. Empty repair plan + non-empty purge candidates
+    // is a legitimate request, not a typo.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("purge_only_removed");
+    let fx2 = build_fixture();
+    // Intact manifest files, so the only candidate is the removed one.
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.purge_only = true;
+    ctx.path_scope = scope(&["game/removed.dat"], &[]);
+    let (summary, code) = repair::run(ctx)
+        .await
+        .expect("a cleanup run must not be refused");
+    assert_eq!(
+        code, 0,
+        "an empty repair plan is not a typo when there is cleanup to do"
+    );
+    assert!(
+        read_game_file(&dir, "game/removed.dat").is_none(),
+        "the removed path is what --purge-only exists to delete"
+    );
+    for f in &fx2.files {
+        assert_eq!(
+            read_game_file(&dir, &f.rel).unwrap(),
+            f.data,
+            "{} is out of scope and must survive",
+            f.rel
+        );
+    }
+    assert!(mock.chunk_hits().is_empty(), "nothing may be downloaded");
+    assert_eq!(summary.files_total, 0, "the repair plan really was empty");
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
+    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 512);
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("config_bumped=0"), "{line}");
+    assert!(line.contains("scoped=1"), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn an_include_that_selects_nothing_at_all_is_still_a_typo() {
+    // The guard survives the relaxation: a scope that matches neither a manifest
+    // path nor a purge candidate really is a typo, and a typo that costs 130 GB
+    // to discover is what the guard is for.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_nothing_typed");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let mut ctx = ctx_for(dir.clone(), &mock, 1);
+    ctx.purge_only = true; // asks for the cleanup…
+    ctx.path_scope = scope(&["game/never-existed.dat"], &[]); // …of nothing
+    let err = repair::run(ctx)
+        .await
+        .expect_err("a scope that selects nothing is still a typo");
+    assert_eq!(err.exit_code, 1);
+    let msg = format!("{:#}", err.source);
+    assert!(
+        msg.contains("game/never-existed.dat"),
+        "must name the glob: {msg}"
+    );
+
+    // The message names both plans when a cleanup was asked for, so the error
+    // says which of the two came back empty.
+    assert!(msg.contains("plan_files=0"), "{msg}");
+    assert!(msg.contains("cleanup"), "{msg}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn purge_only_cleans_up_without_repairing() {
     // The `removed` matrix class is reachable only through the purge path, and
     // `gircap`'s own procedure said not to pass a purge flag — so it needed
@@ -1717,6 +1811,93 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[tokio::test]
+async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() {
+    // A run that reused everything and a run that could not reuse anything are
+    // otherwise identical on the data plane: both exit `0`, and the second's
+    // `download_bytes` is simply larger. That matters most to
+    // `--max-download-bytes`, whose pre-flight estimate is computed against the
+    // same empty map — so a degraded run silently moves the ceiling and the
+    // refusal a caller expected never fires.
+    //
+    // The mock answers `getBuild?tag=<local>` with the manifest only when the
+    // tag is the latest one, which is exactly the "the local manifest loaded" /
+    // "the server no longer serves that tag" pair.
+    let est: u64 = build_fixture()
+        .chunk_store
+        .values()
+        .map(|b| b.len() as u64)
+        .sum();
+
+    // (a) local version at the latest tag → the manifest loads → reuse works.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("local_manifest_ok");
+    std::fs::write(
+        dir.join("config.ini"),
+        format!("[General]\ngame_version={}\n", LATEST_TAG),
+    )
+    .unwrap();
+    let fx2 = build_fixture();
+    // bar intact (skipped) and foo half-intact, so its first chunk is copied
+    // from a verified local slice and only the second is fetched. That is a real
+    // reuse, not an absent one.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    let (summary, code) = repair::run(ctx_for(dir.clone(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("local_manifest=ok"), "{line}");
+    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+    assert!(
+        summary.download_bytes.load(Ordering::Relaxed) < est,
+        "a run with a loaded local manifest reuses something: {} vs {est}",
+        summary.download_bytes.load(Ordering::Relaxed)
+    );
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+
+    // (b) a local version the server does not serve → lookup attempted and
+    //     failed → the fallback is full-fetch, and the run says so.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("local_manifest_gone");
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=1.0.0-long-gone\n",
+    )
+    .unwrap();
+    let fx2 = build_fixture();
+    // The same tree as (a), so the only difference between the two runs is
+    // whether the local manifest loaded.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    let (summary, code) = repair::run(ctx_for(dir.clone(), &mock, 1))
+        .await
+        .expect("a degraded run still succeeds");
+    assert_eq!(code, 0, "the fallback is not an error");
+    let line = girpr::report::format_summary_line(&summary, code, false);
+    assert!(line.contains("local_manifest=unavailable"), "{line}");
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        "with no local manifest there is nothing to reuse from, so even the \
+         half-intact file downloads both of its chunks"
+    );
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ---------------------------------------------------------------------------
 // docs/04 D1/M7: endpoint overrides, through the real binary
 // ---------------------------------------------------------------------------
@@ -1791,6 +1972,66 @@ async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
     // The flags reached `HypClient::new_with_bases`: a miss would have been a
     // connection failure against production, i.e. exit 2.
     assert!(mock.first_target_with("getBuild").is_some());
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
+    // The same case as the library-level case, through the real binary and its
+    // flags — because the guard this exercises is a *usage* guard, so exit 1 is
+    // what a caller sees, and only the process boundary shows that.
+    //
+    // This is `gircap`'s `removed` capture class verbatim: one `--include` for a
+    // path that is on disk and absent from the new manifest, `--purge-only`, and
+    // an assertion that the path is gone and nothing was downloaded.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("binary_removed");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
+    let game = dir.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--include",
+            "game/removed.dat",
+            "--purge-only",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "must not be refused as a typo: {stderr}");
+    assert!(
+        read_game_file(&dir, "game/removed.dat").is_none(),
+        "the removed path is gone"
+    );
+    for f in &fx2.files {
+        assert_eq!(
+            read_game_file(&dir, &f.rel).unwrap(),
+            f.data,
+            "{} must survive",
+            f.rel
+        );
+    }
+    assert!(mock.chunk_hits().is_empty(), "nothing was downloaded");
+    // The machine contract for this shape, from the process's own stdout.
+    assert!(stdout.contains("SUMMARY "), "{stdout}");
+    assert!(stdout.contains("total=0"), "{stdout}");
+    assert!(stdout.contains("scoped=1"), "{stdout}");
+    assert!(stdout.contains("config_bumped=0"), "{stdout}");
 
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();

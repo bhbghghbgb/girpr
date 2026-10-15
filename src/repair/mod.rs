@@ -114,6 +114,22 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     let local_map =
         manifest::local_reuse_map(&http, meta.local_build.as_ref(), &meta.audio, &meta.ignore)
             .await;
+    // The local manifest loading is the one degradation that changes the
+    // reported numbers while leaving the exit code at `0`: with no local build
+    // the reuse map is empty, so every chunk downloads and both
+    // `download_bytes` and `est_download_bytes` rise. The fallback is correct
+    // (`docs/02`: more downloads, never a wrong result) — this only makes the
+    // degradation visible on the data plane, so a consumer can tell "reused 8,
+    // fetched 2" from "fetched all 10". Emitted only when a local version was
+    // known and the lookup was therefore actually attempted, so a fresh install
+    // and an unflagged run's line are unaffected.
+    if meta.local_version.is_some() {
+        summary.flags.local_manifest = Some(if meta.local_build.is_some() {
+            "ok"
+        } else {
+            "unavailable"
+        });
+    }
 
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
@@ -134,39 +150,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         }
     );
 
-    // 4.1 A `--include` that selected nothing is a typo, and a typo that costs
-    // 130 GB to discover is the failure mode this whole feature exists to
-    // remove. Exit 1 (a property of the request), not 5 (the answer was too
-    // big) — see docs/04 §7.2.1.
-    if scope.has_includes() && plan.files.is_empty() {
-        return Err(RunFailure::usage(anyhow::anyhow!(
-            "--include '{}' matched no file in the live manifest (plan_files=0); \
-             check the glob spelling (`*` also crosses `/`) or the installed version",
-            scope.describe_includes(),
-        )));
-    }
     summary.flags.scoped = scope.is_active();
 
-    // 4.5 the server's deprecated-file list, fetched here rather than lazily in
-    // the post-phase: it is part of what the run will act on, so it belongs with
-    // the rest of the plan. Still best-effort (the list is advisory).
-    //
-    // Read-only modes skip it: the post-phase is the only consumer, and before
-    // M0 the call lived inside it — so `--dry-run`, `--check-only` and
-    // `--print-plan` issued **zero** `getGameDeprecatedFileConfigs` requests.
-    // Fetching it unconditionally would add a network round-trip to every
-    // read-only run and then throw the answer away. (`--print-plan` is not
-    // covered by `readonly()` — it leaves by an early return — hence the
-    // explicit disjunct.)
-    let wants_deprecated = !readonly && !ctx.print_plan;
-    let deprecated = if wants_deprecated {
-        fetch_deprecated(&meta.hyp).await
-    } else {
-        tracing::debug!("read-only mode: not fetching the deprecated-file list");
-        Vec::new()
-    };
-
-    // 4.6 the purge candidates, planned up front and unconditionally whenever a
+    // 4.1 the purge candidates, planned up front and unconditionally whenever a
     // purge is going to happen — a purge flag, `--print-plan` asking for the
     // numbers, or `--purge-only` (which implies the cleanup) — for the same
     // reason: "how much would this delete?" is only answerable before the first
@@ -181,6 +167,63 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // promotes every `*_tmp` it creates.
     let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
         .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
+
+    // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
+    // that costs 130 GB to discover is the failure mode this whole feature
+    // exists to remove. Exit 1 (a property of the request), not 5 (the answer
+    // was too big) — see docs/04 §7.2.1.
+    //
+    // "Nothing at all" spans both plans, which is why this sits after 4.1. An
+    // empty *repair* plan on its own is not a typo: a path that is on disk but
+    // absent from the new manifest — the ordinary "removed upstream" case, and
+    // `gircap`'s `removed` capture — is in no repair plan by construction, and
+    // `--purge-only --include <that path>` is precisely the request that deletes
+    // it. Refusing on the repair plan alone made the one thing `--purge-only`
+    // exists for unreachable. (This also means a new `--include` on a
+    // `--print-plan` run reports `files=0 purge_files=1` instead of erroring,
+    // which is what "print the plan" should do.)
+    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
+    if scope.has_includes() && plan.files.is_empty() && purge_candidates == 0 {
+        // Say which of the two plans came back empty: the diagnosis differs, and
+        // so does the fix the user needs.
+        let message = if purge_plan.is_some() {
+            format!(
+                "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
+                 candidates either; check the glob spelling (`*` also crosses `/`) or the \
+                 installed version",
+                scope.describe_includes(),
+            )
+        } else {
+            format!(
+                "--include '{}' matched no file in the live manifest (plan_files=0); \
+                 check the glob spelling (`*` also crosses `/`) or the installed version",
+                scope.describe_includes(),
+            )
+        };
+        return Err(RunFailure::usage(anyhow::anyhow!("{message}")));
+    }
+
+    // 4.3 the server's deprecated-file list, fetched here rather than lazily in
+    // the post-phase: it is part of what the run will act on, so it belongs with
+    // the rest of the plan. Still best-effort (the list is advisory).
+    //
+    // Read-only modes skip it: the post-phase is the only consumer, and before
+    // M0 the call lived inside it — so `--dry-run`, `--check-only` and
+    // `--print-plan` issued **zero** `getGameDeprecatedFileConfigs` requests.
+    // Fetching it unconditionally would add a network round-trip to every
+    // read-only run and then throw the answer away. (`--print-plan` is not
+    // covered by `readonly()` — it leaves by an early return — hence the
+    // explicit disjunct.)
+    //
+    // It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
+    // extra network call.
+    let wants_deprecated = !readonly && !ctx.print_plan;
+    let deprecated = if wants_deprecated {
+        fetch_deprecated(&meta.hyp).await
+    } else {
+        tracing::debug!("read-only mode: not fetching the deprecated-file list");
+        Vec::new()
+    };
 
     // === assert: the ceilings, before anything is mutated ===
     //

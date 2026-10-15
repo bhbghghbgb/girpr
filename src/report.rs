@@ -125,8 +125,22 @@ pub struct SummaryFlags {
     pub plan_download_bytes: Option<u64>,
     /// Bytes written into `*_tmp`, when `--max-write-bytes` is active.
     pub write_bytes: Option<u64>,
-    /// What a **runtime** hard stop cut short (`bytes` / `write`), vs a
-    /// pre-flight refusal which wrote nothing at all.
+    /// Whether the **local** build's manifests loaded (`getBuild(local)`).
+    /// `None` when no local version was known, so the key is absent on a fresh
+    /// install and on a run that never had a version to look up.
+    ///
+    /// This is the one degradation that is otherwise invisible and yet changes
+    /// the numbers: with no local manifest the reuse map is empty, so every
+    /// chunk downloads, `download_bytes` rises, and `est_download_bytes` rises
+    /// with it — while the run still exits `0`. A run that reused 8 chunks and
+    /// fetched 2 would otherwise look exactly like one that fetched all 10. The
+    /// fallback itself is correct (a tag the server no longer serves must cost
+    /// more bytes, never give a wrong result); this key just makes the
+    /// degradation assertable by a machine consumer instead of discoverable only
+    /// by reading a `warn` line.
+    pub local_manifest: Option<&'static str>,
+    /// What a **runtime** hard stop cut short (`bytes` / `write` / `delete`), vs
+    /// a pre-flight refusal which wrote nothing at all.
     pub stopped: Option<&'static str>,
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
@@ -195,6 +209,11 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
+    }
+    // Last: this is a fact about the run, not a verdict about it, and it is the
+    // key a reader needs in order to trust the two byte counts above it.
+    if let Some(s) = f.local_manifest {
+        out.push(Extra::Word("local_manifest", s));
     }
     out
 }
@@ -423,19 +442,22 @@ mod tests {
             write_bytes: Some(77),
             stopped: Some("bytes"),
             config_bumped_zero: false,
+            local_manifest: Some("unavailable"),
         };
         let line = format_summary_line(&s, 5, false);
         assert_eq!(
             line,
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 stopped=bytes"
+             write_bytes=77 stopped=bytes local_manifest=unavailable"
         );
-        // `stopped` is a word, not a number: the JSON plane must say so.
+        // `stopped` and `local_manifest` are words, not numbers: the JSON plane
+        // must say so.
         let v: serde_json::Value = serde_json::from_str(&format_summary_line(&s, 5, true)).unwrap();
         assert_eq!(v["stopped"], "bytes");
         assert_eq!(v["write_bytes"], 77);
         assert_eq!(v["plan_download_bytes"], 4242);
+        assert_eq!(v["local_manifest"], "unavailable");
         // Key order is fixed, so two runs' lines diff cleanly.
         let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
         assert_eq!(
@@ -447,9 +469,39 @@ mod tests {
                 "plan_files",
                 "plan_download_bytes",
                 "write_bytes",
-                "stopped"
+                "stopped",
+                "local_manifest"
             ]
         );
+    }
+
+    /// `local_manifest` is about the run, not a verdict on it, so it must not
+    /// appear when no local version was ever known — and must not drag
+    /// `limited`/`scoped`/`plan_files` along with it.
+    #[test]
+    fn local_manifest_stands_alone() {
+        for value in ["ok", "unavailable"] {
+            let mut s = Summary {
+                files_total: 2,
+                ..Summary::default()
+            };
+            s.flags.local_manifest = Some(value);
+            let line = format_summary_line(&s, 0, false);
+            assert!(line.contains(&format!("local_manifest={value}")), "{line}");
+            assert!(!line.contains("limited"), "{line}");
+            assert!(!line.contains("scoped"), "{line}");
+            assert!(!line.contains("plan_files"), "{line}");
+            assert!(!line.contains("config_bumped"), "{line}");
+        }
+        // Absent when there was no local version to look up.
+        let s = Summary {
+            files_total: 2,
+            ..Summary::default()
+        };
+        for plane in [false, true] {
+            let line = format_summary_line(&s, 0, plane);
+            assert!(!line.contains("local_manifest"), "{line}");
+        }
     }
 
     #[test]
