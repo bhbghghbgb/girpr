@@ -101,13 +101,25 @@ flowchart TD
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
   byte-identical to one that never passes them.
+  `local_manifest=ok|unavailable` is the one exception to "flag-driven": it is
+  emitted when a local `config.ini` version was known and `getBuild(local)` was
+  attempted, because that lookup is the one thing that moves both byte counts
+  while still exiting `0` — see below. Absent on a fresh install.
+- **The binary cannot report which chunks were requested.** `SUMMARY` is
+  byte-level by design. Per-chunk request detail exists only as `trace` lines in
+  `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never
+  fetched" needs a request log (`--log-level trace`), not the data plane.
 - stderr: structured `tracing` logs (`--log-level` / `RUST_LOG`); always mirrored at
   `TRACE` to `<exe-dir>/logs/girpr_<timestamp>.log`.
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
-  not in place); `SUMMARY config_bumped=0` says so. `--include` matching zero
-  planned files and `--audio` under a scope are both exit `1`.
+  not in place); `SUMMARY config_bumped=0` says so. `--audio` under a scope is
+  exit `1`. So is an `--include` that selected **nothing at all** — but an empty
+  *repair* plan on its own is not a typo: a path on disk that the new manifest
+  dropped is in no repair plan by construction, so `--purge-only --include
+  <that path>` deletes it rather than erroring, which is what `--purge-only`
+  exists for.
 - resource ceilings are **enforcement bounds, not selectors**: a run that would
   exceed one refuses (exit `5`) *before doing any work* — nothing is written,
   no directory created, no `_tmp` opened, no file deleted. They never trim the
@@ -126,6 +138,13 @@ flowchart TD
   bytes back, so a run that had to retry does not report what the network cost
   the retries. The counter is nevertheless live during the repair, which is what
   `--max-download-bytes` needs to stop mid-flight.
+- chunk reuse is **best-effort and the degradation is reported**:
+  `SUMMARY local_manifest=unavailable` means `getBuild(local)` could not be
+  served, so the reuse map was empty and *every* chunk downloaded. The run is
+  still correct (more bytes, never a wrong result) and still exits `0` — but
+  `download_bytes` will be far above what a run with reuse available costs, and
+  a `--max-download-bytes` ceiling is measured against the same empty map, so it
+  moves. Check this key before comparing byte totals.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was

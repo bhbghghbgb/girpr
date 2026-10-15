@@ -78,6 +78,21 @@ has three assertions per capture, not one:
    that is invisible in a byte count and is the one that actually catches a
    broken S2 reuse path.
 
+**Assertion 3 is the one the binary cannot supply, and a consumer needs to know
+that before writing the harness.** `SUMMARY` is byte-level — deliberately, since
+that is what makes assertions 1 and 2 cheap and diffable — and per-chunk request
+detail exists only as `trace` lines in `<exe-dir>/logs/girpr_<ts>.log`. So
+assertion 3 needs a **request log**: run at `--log-level trace` and grep it for
+the ids, or make the requests observable another way. Recording it as passed
+without having looked would be a fabrication, which is worse than recording it
+as not made.
+
+The key-adjacent fact that *is* on the data plane is `local_manifest`
+(§4.6): `unavailable` means `getBuild(local)` could not be served, so the reuse
+map was empty and **no chunk could have been reused at all** — which makes
+assertion 3 vacuously true and explains a `download_bytes` far above the
+capture's `totals`. It is a summary, not a substitute: it cannot name an id.
+
 Plus the structural constraint from §8.1.1 step 4: **do not pass a purge flag**,
 because without path filters the purge eats the fixture. A `--include` that also
 narrows the purge keep-set removes that caveat, which is worth having on its own
@@ -664,10 +679,17 @@ non-breaking:
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
 | `write_bytes=<N>` | `--max-write-bytes` active |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran (§2.2) |
-| `stopped=<bytes>\|write` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`; the key says *which* ceiling bound, so the two cannot share a value |
+| `stopped=<bytes>\|write\|delete` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`, `delete` = a cleanup pass refused by `--max-delete-bytes`; the key says *which* ceiling bound, so the three cannot share a value |
+| `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |
 
 `stopped=` is what distinguishes "nothing was written because the plan was too
 big" from "something was written and then we ran out" (§4.3).
+
+`local_manifest` is not a limit and not a verdict; it is the key a reader needs
+in order to *trust* the two byte counts, so it comes last. It is absent on a
+fresh install (no local version, so nothing was looked up) and is not a
+substitute for a request log when a consumer needs to assert that a specific
+chunk id was never fetched (§1.3).
 ---
 
 ## 5. Suggested module layout

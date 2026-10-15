@@ -306,13 +306,18 @@ Two further cases: the env vars pointed at a dead port while the flags point at
 the mock (proves explicit beats env — env winning would be exit `2`), and the
 env vars alone (proves M7 did not break the seam every offline e2e already used).
 
-`tools/capture/docs/00-spec.md` §8.1 is marked resolved, with §8.1.1 step 4
-struck through as obsolete (a scoped purge is now safe, because a hidden path is
-invisible to the cleanup too) and two steps added. The shim caveat is recorded
-in the flag help, in the README, and at the end of §8.1.1: `--sophon-base`
-redirects `getBuild` only; manifest and chunk URLs come from `url_prefix` in the
-response bodies. That is why the **artifact-serving shim** is still outstanding,
-and it is consumer-side work in `tools/capture` by design.
+`tools/capture/docs/00-spec.md` §8.1 was marked resolved with a status line
+and a short notification — **nothing in §8.1.1**. An earlier draft of this
+milestone did rewrite that procedure (struck step 4 through, added two steps),
+and it was reverted: §8.1.1 is `gircap`'s runbook to revise, and a branch that
+rewrites a consumer's procedure to suit itself is not notifying it. The
+"Defects found and fixed" section below records what changed and why, and
+`gircap` has since taken the runbook over on its own side.
+
+The shim caveat is recorded in the flag help, in the README and here:
+`--sophon-base` redirects `getBuild` only; manifest and chunk URLs come from
+`url_prefix` in the response bodies. That is why the **artifact-serving shim**
+is still outstanding, and it is consumer-side work in `tools/capture` by design.
 
 That is the last milestone. See §0.2 for what the plan does *not* cover.
 
@@ -364,6 +369,43 @@ flag that was added *around* an existing gate rather than *through* it. Three
 times is a pattern, and it is the thing to watch for in the next feature that
 touches this pipeline — add a path, and ask what it bypasses.
 
+### Follow-up: the `--include`-matched-nothing guard, and reuse visibility
+
+A second pass, after `gircap` took over its own runbook, found two more things.
+
+**The typo guard was refusing the one request `--purge-only` exists for.** M2's
+guard tested `plan.files.is_empty()` and ran before the purge plan existed, so
+`--purge-only --include <path>` for a file that is on disk but absent from the
+new manifest was refused as a typo — the ordinary "removed upstream" case, and
+`gircap`'s `removed` capture. The guard now asks whether the run selected
+**nothing at all** (no repair work *and* no cleanup work), sits after the purge
+plan is built, and names which plan came back empty. An empty repair plan
+alongside non-empty purge candidates is a request, not a typo.
+
+The lesson is specific and worth keeping: **a guard has to be evaluated against
+every plan the run will act on.** This one was written when there was only a
+repair plan, and a later milestone gave the run a second kind of work without
+revisiting the guard. Same shape as the three above, one level up — the gate was
+correct when written and wrong once its subject grew.
+
+**A degraded reuse map was invisible.** When `getBuild(local)` cannot be served
+the reuse map is empty, so every chunk downloads and both `download_bytes` and
+`est_download_bytes` rise — while the run still exits `0`. Nothing on the data
+plane distinguished "reused 8 chunks, fetched 2" from "fetched all 10", and
+`--max-download-bytes` was worst affected because its pre-flight estimate is
+computed against the same empty map: the ceiling silently moves and the refusal
+a caller expected never fires. `SUMMARY local_manifest=ok|unavailable` now says
+so, emitted only when a local version was known and the lookup was actually
+attempted, so a fresh install is unaffected. The fallback itself is unchanged
+and correct — this makes the degradation assertable, not different.
+
+While there: the note pointed out that §8.1.1's assertion 3 (`must_not_fetch`)
+**cannot be made from the data plane at all** — `SUMMARY` is byte-level by
+design, and per-chunk detail exists only as `trace` lines in the log file. That
+is fine, but it has to be stated where a consumer will read it, so `docs/04` §1.3
+and the README now say that assertion 3 needs a *request log*, and that
+`local_manifest` is a summary of the situation rather than a substitute for one.
+
 ---
 
 ## 1. What this plan does not touch
@@ -400,6 +442,20 @@ way, and is corrected below.
 that marks the blocker resolved. A status line plus a short notification block:
 the *procedure* in that crate's §8 / §8.1.1 is its own to revise, and M7 does
 not rewrite it, strike through its caveats, or add steps to its runbook.
+
+**Settled, not left implicit:** §8.1.1's step 4 ("do not pass `--purge-after`
+/ `--purge-before`, because without path filters they delete every file the live
+manifest does not contain") became false the moment M2 landed — a hidden path is
+invisible to the cleanup too, so a scoped cleanup cannot reach the rest of a
+fixture. It was **not** corrected on this side. `gircap` took it over in its own
+M12 follow-up, which rewrote §8.1 / §8.1.1 wholesale, turned the stale reason
+into a deliberate "do not pass them anyway — there is nothing to delete, and a
+run that deletes something is a run whose evidence you now have to reason
+about", and added the four assertions the scoped run needs. So the fate is
+decided on both sides: this side notified, that side revised. A notification was
+the right division of labour because the reasoning behind step 4 — what a run
+that deletes something does to the *evidence* — is `gircap`'s to weigh, not
+`girpr`'s.
 
 ---
 
