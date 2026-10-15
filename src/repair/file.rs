@@ -265,6 +265,30 @@ async fn repair_attempt(
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
+    let outcome = repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await;
+    if outcome.is_err() {
+        // This attempt is being abandoned, so the bytes it fetched are given
+        // back. That is what keeps `SUMMARY download_bytes` meaning what it
+        // meant before M4 — **the bytes of files that were actually promoted** —
+        // rather than "bytes that crossed the wire at some point, including on
+        // the four attempts that failed". The ceiling still saw them while they
+        // were in flight, which is the whole reason the counter is live; this
+        // only decides what a *finished* run reports.
+        ctx.summary
+            .adjust_download_bytes(-(stats.download_bytes as i64));
+    }
+    outcome
+}
+
+/// One full pass over a file's chunks, then verify + promote. The caller
+/// ([`repair_attempt`]) owns the accounting of a failed attempt.
+async fn repair_attempt_inner(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    tmp_path: &std::path::Path,
+    stats: &mut ChunkStats,
+) -> Result<ChunkStats> {
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -288,13 +312,13 @@ async fn repair_attempt(
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
-                write_downloaded_chunk(ctx, prefix, c, &mut f, &mut stats).await?;
+                write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await?;
             }
         }
     }
     f.flush()?;
     drop(f);
-    promote_tmp(ctx, file, tmp_path, &stats)
+    promote_tmp(ctx, file, tmp_path, stats)
 }
 
 /// What one chunk needed. `Resumed` (already complete) and `Reused` (copied
@@ -412,9 +436,17 @@ async fn write_downloaded_chunk(
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
-    let blob = sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id)
-        .await
-        .with_context(|| format!("chunk {}", c.id))?;
+    // A failed fetch delivers nothing, so the reservation goes straight back.
+    // Without this the `?` below would leak `compressed_size` per attempt, for
+    // bytes that never arrived — and with no ceiling set the sentinel is
+    // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
+    let blob = match sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id).await {
+        Ok(b) => b,
+        Err(e) => {
+            ctx.summary.adjust_download_bytes(-(reserved as i64));
+            return Err(e).with_context(|| format!("chunk {}", c.id));
+        }
+    };
     let actual = blob.len() as u64;
     ctx.summary
         .adjust_download_bytes(actual as i64 - reserved as i64);

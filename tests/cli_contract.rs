@@ -170,6 +170,7 @@ fn help_text_lists_every_documented_flag() {
         "--max-files",
         "--max-delete-bytes",
         "--max-download-bytes",
+        "--max-write-bytes",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
     }

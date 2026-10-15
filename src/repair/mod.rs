@@ -150,21 +150,36 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4.5 the server's deprecated-file list, fetched here rather than lazily in
     // the post-phase: it is part of what the run will act on, so it belongs with
     // the rest of the plan. Still best-effort (the list is advisory).
-    let deprecated = fetch_deprecated(&meta.hyp).await;
+    //
+    // Read-only modes skip it: the post-phase is the only consumer, and before
+    // M0 the call lived inside it — so `--dry-run`, `--check-only` and
+    // `--print-plan` issued **zero** `getGameDeprecatedFileConfigs` requests.
+    // Fetching it unconditionally would add a network round-trip to every
+    // read-only run and then throw the answer away. (`--print-plan` is not
+    // covered by `readonly()` — it leaves by an early return — hence the
+    // explicit disjunct.)
+    let wants_deprecated = !readonly && !ctx.print_plan;
+    let deprecated = if wants_deprecated {
+        fetch_deprecated(&meta.hyp).await
+    } else {
+        tracing::debug!("read-only mode: not fetching the deprecated-file list");
+        Vec::new()
+    };
 
     // 4.6 the purge candidates, planned up front and unconditionally whenever a
-    // purge flag is set **or** `--print-plan` is asking for them — for the same
+    // purge is going to happen — a purge flag, `--print-plan` asking for the
+    // numbers, or `--purge-only` (which implies the cleanup) — for the same
     // reason: "how much would this delete?" is only answerable before the first
-    // delete, and `--print-plan` has to report it whether or not a purge was
-    // requested. `game_dir` may not exist yet; planning a missing directory
-    // yields an empty plan, which is what planning the freshly-created empty
-    // directory would have yielded too.
+    // delete. `game_dir` may not exist yet; planning a missing directory yields
+    // an empty plan, which is what planning the freshly-created empty directory
+    // would have yielded too.
     //
-    // This is the union both purge passes would act on as of now. A `*_tmp` the
-    // repair creates mid-run is deliberately not counted: it did not exist at
-    // plan time, it is purged after the repair by a re-plan, and the write
-    // ceiling is the flag that bounds it.
-    let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.print_plan)
+    // This is the union both purge passes act on as far as can be known up
+    // front. `post::run` re-checks the ceiling against its own post-repair
+    // re-plan, whose candidates could in principle differ — so the bound does
+    // not rest on the pipeline's current promise that a successful repair
+    // promotes every `*_tmp` it creates.
+    let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
         .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
 
     // === assert: the ceilings, before anything is mutated ===
@@ -180,7 +195,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // promise**: `try_reuse_slice` falls back to a download whenever a local
     // slice fails its MD5, so a file estimated at 0 bytes can still download its
     // whole body. That is why the runtime hard stop exists alongside this.
-    let est_download_bytes = plan.est_download_bytes_with(&local_map);
+    let est_download_bytes = plan.est_download_bytes(&local_map);
     if ctx.limits.download_bytes.is_some() {
         tracing::info!("estimated download: {est_download_bytes} bytes");
         summary.flags.plan_download_bytes = Some(est_download_bytes);
@@ -278,15 +293,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     }
 
     // 5.6 purge-only: `check_only` inverted — phases 1–5 and 7, skipping 6.
-    // One early return, beside the `--check-only` one. `config.ini` is **not**
-    // bumped: a cleanup does not put the bytes in place, so claiming the newer
-    // version would be the same launcher desync docs/04 §2.2 describes, and on
-    // an already-current install it is a no-op anyway.
+    // One early return, beside the `--check-only` one. It **implies** the
+    // cleanup (a flag that cleaned up nothing would be a lie), and
+    // `config.ini` is **not** bumped: a cleanup does not put the bytes in
+    // place, so claiming the newer version would be the same launcher desync
+    // docs/04 §2.2 describes, and on an already-current install it is a no-op
+    // anyway.
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
-        return Ok((summary, 0));
+        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let code = finish(outcome, &mut summary);
+        return Ok((summary, code));
     }
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
@@ -338,7 +356,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // (check-only already returned, but gating on `readonly` keeps the
     // invariant obvious).
     if !readonly {
-        post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let code = finish(outcome, &mut summary);
+        return Ok((summary, code));
     } else if ctx.dry_run
         && ctx.purge_after
         && !purge_logged
@@ -352,6 +372,25 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     }
 
     Ok((summary, 0))
+}
+
+/// Turn a post-phase outcome into the run's exit code, and say which ceiling
+/// bound.
+///
+/// A runtime hard stop in the cleanup is exit `5` like every other limit, and
+/// `stopped=delete` says which one — deletion is the one irreversible act in
+/// the tool, so a bounded delete that got refused has to be visible.
+fn finish(outcome: post::PostOutcome, summary: &mut Summary) -> i32 {
+    match outcome {
+        post::PostOutcome::Ok | post::PostOutcome::DeletedNothing => 0,
+        post::PostOutcome::DeleteCeiling => {
+            tracing::error!(
+                "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
+            );
+            summary.flags.stopped = Some("delete");
+            5
+        }
+    }
 }
 
 /// The server's deprecated-file list, fetched with the rest of the plan.

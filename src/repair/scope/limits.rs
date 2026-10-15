@@ -97,15 +97,34 @@ impl Limits {
         if let Some(limit) = self.delete_bytes {
             let actual = pf.purge.map_or(0, |p| p.total_bytes);
             if actual > limit {
-                hits.push(LimitHit {
-                    what: "--max-delete-bytes",
-                    key: "purge_bytes",
-                    actual,
-                    limit,
-                });
+                hits.push(delete_hit(limit, actual));
             }
         }
         hits
+    }
+
+    /// The delete ceiling against **one** purge plan.
+    ///
+    /// Used twice, and the distinction matters. The pre-flight
+    /// [`Self::check_preflight`] call sees the up-front plan, which is the union
+    /// of both passes for everything that exists when the run starts. This one
+    /// is for the post-repair re-plan, whose candidates include `*_tmp` files
+    /// the repair created and which therefore did not exist at assert time —
+    /// they are only countable once the repair is done. Deletion is the one
+    /// irreversible act in the tool, so both passes are checked rather than
+    /// assumed.
+    pub fn check_delete(&self, purge: &PurgePlan) -> Option<LimitHit> {
+        let limit = self.delete_bytes?;
+        (purge.total_bytes > limit).then(|| delete_hit(limit, purge.total_bytes))
+    }
+}
+
+fn delete_hit(limit: u64, actual: u64) -> LimitHit {
+    LimitHit {
+        what: "--max-delete-bytes",
+        key: "purge_bytes",
+        actual,
+        limit,
     }
 }
 
@@ -270,6 +289,29 @@ mod tests {
             names,
             vec!["--max-files", "--max-download-bytes", "--max-delete-bytes"]
         );
+    }
+
+    #[test]
+    fn check_delete_is_the_same_predicate_the_preflight_uses() {
+        // The post-repair pass re-checks the ceiling against its own re-plan.
+        // That re-plan can only shrink today (a successful repair promotes every
+        // `_tmp` it creates), so there is no integration case that can drive
+        // this branch — the predicate itself is pinned here instead, and
+        // `post::run` carries the reasoning in a comment.
+        let l = Limits {
+            delete_bytes: Some(10),
+            ..Default::default()
+        };
+        assert!(l.check_delete(&purge(10)).is_none(), "the boundary passes");
+        let hit = l.check_delete(&purge(11)).expect("11 > 10");
+        assert_eq!(hit.what, "--max-delete-bytes");
+        assert_eq!(hit.key, "purge_bytes");
+        assert_eq!((hit.actual, hit.limit), (11, 10));
+        // Same verdict as the pre-flight form, on the same plan.
+        let p = plan(1);
+        assert_eq!(l.check_preflight(pf_full(&p, 0, &purge(11))).len(), 1);
+        // No flag → no check at all.
+        assert!(Limits::default().check_delete(&purge(1 << 30)).is_none());
     }
 
     #[test]

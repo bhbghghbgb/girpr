@@ -3,9 +3,11 @@
 //! Everything runs against a local mock HoYoPlay + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
 //! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
-//! mock, so a sandbox without internet still passes.
+//! mock, so a sandbox without internet still passes. The three M7 cases run the
+//! real binary instead, over those same overrides.
 //!
-//! Coverage (full `repair::run` pipeline per test):
+//! The first ten cases are the original repair pipeline (each a full
+//! `repair::run`):
 //! 1. repair of missing + corrupt files (exit 0, bytes verified, tmp swept)
 //! 2. `--check-only` clean (exit 0) and dirty (exit 4, writes nothing)
 //! 3. `--dry-run` writes nothing
@@ -16,6 +18,22 @@
 //! 8. explicit audio selection overwrites the scan file
 //! 9. a non-chunk `default_download_mode` is refused with exit 1
 //! 10. the deprecated-files call carries the per-launcher channel
+//!
+//! The rest are grouped by the work they cover (docs/04, docs/05):
+//! - **path scope** — include-only repairs exactly one file, a purge under a
+//!   scope leaves the fixture alone, deprecated files out of scope survive, an
+//!   `--include` matching nothing and `--audio` under a scope are exit `1`
+//! - **resource ceilings** — `--max-files`, `--max-delete-bytes` and
+//!   `--max-download-bytes` refuse (exit `5`) or pass on the boundary, a broken
+//!   reuse path trips the runtime stop, a refused run leaves no `game_dir`
+//! - **`--print-plan`** — reports the plan, writes nothing, `--plan-out` JSON
+//!   agrees with the plan total, a ceiling still trips it
+//! - **M6** — `--max-write-bytes`, `--fail-fast` against a 500 origin,
+//!   `--purge-only` (alone, and with `--dry-run`)
+//! - **read-only discipline** — no deprecated-list call, `download_bytes`
+//!   counts only promoted files even after a retry
+//! - **M7** — the real binary over `--hyp-base` / `--sophon-base`, and the
+//!   explicit-beats-env precedence
 
 #[path = "common/mod.rs"]
 mod common;
@@ -1425,6 +1443,15 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     );
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
     assert!(!dir.join("config.ini").exists());
+    // Every chunk request 500s, so nothing was ever delivered. A reservation
+    // that the failed fetch never gave back would still be sitting in the
+    // total — and with no ceiling set the sentinel is u64::MAX, so the leak is
+    // not gated on `--max-download-bytes`.
+    assert_eq!(
+        summary.download_bytes.load(Ordering::Relaxed),
+        0,
+        "a fetch that delivered nothing must count nothing"
+    );
     // The second file was never even asked for. The plan is sorted, so with
     // `jobs=1` `bar.dat` runs first, exhausts its retries and trips the abort;
     // `foo.dat` then drops out at its task entry without opening a connection.
@@ -1452,8 +1479,11 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
 #[tokio::test]
 async fn purge_only_cleans_up_without_repairing() {
     // The `removed` matrix class is reachable only through the purge path, and
-    // `gircap`'s own procedure says not to pass a purge flag — so it needed
+    // `gircap`'s own procedure said not to pass a purge flag — so it needed
     // this. `check_only` inverted: "is it intact?" vs "make it match".
+    //
+    // Note the absence of `purge_after`: `--purge-only` **implies** the
+    // cleanup, and a flag that cleaned up nothing would be a lie.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("purge_only");
@@ -1464,7 +1494,6 @@ async fn purge_only_cleans_up_without_repairing() {
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
 
     let mut ctx = ctx_for(dir.clone(), &mock, 2);
-    ctx.purge_after = true;
     ctx.purge_only = true;
     let (summary, code) = repair::run(ctx).await.expect("purge-only runs");
     assert_eq!(code, 0);
@@ -1477,7 +1506,7 @@ async fn purge_only_cleans_up_without_repairing() {
     assert_eq!(
         summary.deleted_extra_bytes.load(Ordering::Relaxed),
         777,
-        "the orphan was deleted"
+        "the orphan was deleted with no purge flag at all"
     );
     assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
     // The damaged file was left exactly as it was.
@@ -1492,6 +1521,163 @@ async fn purge_only_cleans_up_without_repairing() {
     );
     let line = girpr::report::format_summary_line(&summary, code, false);
     assert!(line.contains("config_bumped=0"), "{line}");
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
+    // `--dry-run` is documented as writing nothing, and `post::run` used to
+    // rely on `repair::run` reaching it only through `if !readonly`. The
+    // `--purge-only` early return is a second call site that is not behind that
+    // gate, so the three destructive steps of the post-phase — deprecated
+    // deletes, the audio cache move, the cleanup pass — all ran for real.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            res_dir: "Audio/res".to_string(),
+            cache_dir: "Audio/cache".to_string(),
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("purge_only_dry");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
+    write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
+
+    let mut ctx = ctx_for(dir.clone(), &mock, 2);
+    ctx.purge_only = true;
+    ctx.dry_run = true;
+    let (summary, code) = repair::run(ctx).await.expect("purge-only --dry-run runs");
+    assert_eq!(code, 0);
+
+    // Nothing moved, nothing deleted, nothing promoted.
+    assert_eq!(
+        read_game_file(&dir, "old/legacy.dll").unwrap(),
+        &[0x7Eu8; 50],
+        "dry-run must not delete deprecated files"
+    );
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_some(),
+        "dry-run must not delete orphans"
+    );
+    assert_eq!(
+        read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
+        &[0x3Bu8; 128],
+        "dry-run must not move the audio cache"
+    );
+    assert!(
+        read_game_file(&dir, "Audio/res/track_1.pcm").is_none(),
+        "nothing may appear in the res dir"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "byte counters stay 0 in dry-run by design"
+    );
+    assert!(!dir.join("config.ini").exists());
+
+    mock.stop();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn a_read_only_run_issues_no_deprecated_file_call() {
+    // Before M0 the deprecated list was fetched inside `post::run`, which only
+    // ran when `!readonly` — so `--dry-run`, `--check-only` and
+    // `--print-plan` issued zero `getGameDeprecatedFileConfigs` requests.
+    for mode in ["dry", "check", "plan"] {
+        let fx = build_fixture();
+        let mock = MockServer::start(
+            fx,
+            MockOpts {
+                deprecated_files: vec!["old/legacy.dll".to_string()],
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir("readonly_deprecated");
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, &f.data);
+        }
+        write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+
+        let mut ctx = ctx_for(dir.clone(), &mock, 2);
+        match mode {
+            "dry" => ctx.dry_run = true,
+            "check" => ctx.check_only = true,
+            _ => ctx.print_plan = true,
+        }
+        repair::run(ctx).await.expect("run");
+        assert!(
+            mock.first_target_with("getGameDeprecatedFileConfigs")
+                .is_none(),
+            "--{mode} must not fetch the deprecated list it would discard"
+        );
+        assert!(read_game_file(&dir, "old/legacy.dll").is_some());
+        mock.stop();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[tokio::test]
+async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
+    // The pre-M4 contract: `download_bytes` is the bytes of files that were
+    // actually promoted. M4 moved the counter from a per-file aggregate to a
+    // live per-chunk ledger so the runtime hard stop can read it mid-flight,
+    // which put two ways of inflating it in reach of an unflagged run:
+    //
+    //  - a reservation the `?` on a failed fetch never gave back, and
+    //  - the bytes an *abandoned* attempt had already downloaded.
+    //
+    // The mock serves one corrupt-but-well-formed chunk, so the first attempt
+    // really does transfer bytes and then fail its MD5.
+    let fx = build_fixture();
+    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            corrupt_first_chunks: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("download_retry");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
+
+    let (summary, code) = repair::run(ctx_for(dir.clone(), &mock, 1))
+        .await
+        .expect("the retry must recover");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
+        fx2.files[1].data
+    );
+    // bar.dat sorts first and its single chunk is the corrupt one, so attempt 1
+    // really transfers a byte and then fails the chunk MD5. The total is still
+    // every chunk in the plan and nothing more: the abandoned attempt's byte is
+    // given back.
+    assert_eq!(
+        summary.download_bytes.load(Ordering::Relaxed),
+        est,
+        "a failed attempt's bytes must not survive into the total"
+    );
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        2,
+        "both files were repaired, the first one on its second attempt"
+    );
 
     mock.stop();
     std::fs::remove_dir_all(&dir).ok();
@@ -1518,7 +1704,6 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
 
     // purge-only: the orphan is gone, the damage is untouched.
     let mut ctx = ctx_for(dir.clone(), &mock, 2);
-    ctx.purge_after = true;
     ctx.purge_only = true;
     let (_, code) = repair::run(ctx).await.expect("purge-only runs");
     assert_eq!(code, 0);

@@ -17,8 +17,12 @@
 //! leave the purge with a *narrower* keep-set than an unfiltered run, which is
 //! the worst possible outcome.
 //!
-//! M1 lands [`filter`] and its semantics. M2 wires it through the pipeline;
-//! the ceilings and the report land with M3+.
+//! | module | concern |
+//! |---|---|
+//! | [`filter`] | which paths exist (`--include` / `--exclude`) |
+//! | [`limits`] | how much work is allowed (the pre-flight ceilings) |
+//! | [`ledger`] | how much work has been done (the runtime reservations) |
+//! | [`report`] | what the plan was, as a `PLAN` line and a JSON document |
 
 pub mod filter;
 pub mod ledger;
