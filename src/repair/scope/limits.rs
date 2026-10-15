@@ -32,7 +32,7 @@ pub struct Preflight<'a> {
     /// The (already scope-filtered) repair plan.
     pub plan: &'a RepairPlan,
     /// Download estimate for `plan`, already computed against the local reuse
-    /// map — see [`RepairPlan::est_download_bytes_with`]. Passed in rather than
+    /// map — see [`RepairPlan::est_download_bytes`]. Passed in rather than
     /// recomputed so the number the ceiling is checked against is the same
     /// number the `PLAN` line and `SUMMARY plan_download_bytes` report.
     pub est_download_bytes: u64,

@@ -164,7 +164,7 @@ return. `docs/02` does not mention this retry loop.
 
 Two mechanisms, because only one of them enforces.
 
-**Pre-flight.** `RepairPlan::est_download_bytes_with(&local_map)` —
+**Pre-flight.** `RepairPlan::est_download_bytes(&local_map)` —
 `Σ compressed_size` over the chunks the local reuse map cannot supply — is
 computed once in `repair::run` and handed to the ceiling predicate, so the
 number the limit is checked against, the number `PLAN` reports (M5) and the
