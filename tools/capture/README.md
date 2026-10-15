@@ -32,6 +32,57 @@ the chunks the artifact says it must fetch.
 
 Start with the spec.
 
+## Artifact bundles
+
+`capture` is the only command here that touches the network. Everything else —
+`verify`, `materialize`, `list` — runs entirely from stored bytes, which is what
+makes a bundle a **cache of the live world** rather than a build output.
+
+**Where they live.** `--out` defaults to `./artifacts`, laid out as
+`artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
+bundles are large (≈129 MiB for `hk4e_global` 7.0.0 → 7.1.0, of which
+`manifests/` is ≈43 MB and `chunks/` ≈28 MB) and regenerable, so they belong on
+disk, not in history. **This is the project location**: anything a test or
+another tool is expected to rely on lives here.
+
+**When to re-capture.** A bundle is out of date when the world moved or when
+this tool moved:
+
+- you need a version pair the existing bundles do not cover;
+- `gircap`'s own output changed — a new document, a changed field, a bumped
+  `schema_version` — and an existing bundle no longer represents what the tool
+  writes today;
+- a test wants a pair that only exists upstream now.
+
+Do **not** re-capture merely to refresh a bundle you are not otherwise changing.
+A capture downloads tens of megabytes of blobs; doing that on a whim is the
+difference between a five-second loop and a two-minute one.
+
+**Being efficient about it.**
+
+- **Scratch first.** `--out <some temp dir>` writes exactly the same tree
+  somewhere disposable. Iterate there: the repo stays clean and there is nothing
+  to clean up afterwards. Use `--hyp-base` / `--sophon-base` against a local
+  server when you only need to exercise the writer.
+- **Promote when it settles.** Capture into `artifacts/` only once the bundle is
+  good and you expect to re-use it — in practice, while `gircap` itself is not
+  changing shape. A bundle in `artifacts/` is meant to be a stable fixture that
+  other work depends on, not a scratch directory with a permanent name.
+- **Check before you promote.** `gircap verify --artifact <dir>` must exit `0`.
+  It is the cheapest possible answer to "is this usable", and it is what stops a
+  later commit from discovering the problem.
+- **Keep the pair in mind.** `--new-tag` defaults to `main.tag` and `--old-tag`
+  to `diff_tags[0]`, so an unpinned capture follows whatever upstream has moved
+  to. Pin both when you want a specific pair, especially when the result is going
+  to be kept.
+
+**Compatibility.** Every document carries `"schema_version": 1`, and a reader
+should reject an unknown one rather than guess. Additive changes leave bundles
+readable — `verify` reports what it cannot re-derive instead of refusing the
+bundle — so a bundle you already paid for does not become unreadable because the
+tool gained a document. A bundle whose `schema_version` has moved on, or whose
+selfcheck does not pass, is not a fixture: re-capture it.
+
 ## Status
 
 Built to milestone **M4** (diff and the reuse pool). A live `capture` writes the
