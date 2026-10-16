@@ -612,7 +612,11 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
         (None, _) => (None, None),
     };
 
-    let map = build_map(input, old.as_ref(), new.as_ref(), plan.as_deref())?;
+    // The plan is **moved**, not borrowed. It was `plan.as_deref()` plus a
+    // `to_vec()` inside `build_map` — a deep copy of every entry's ids, URLs,
+    // notes and sizes, ~300 allocations per capture — for a function that only
+    // ever read it.
+    let map = build_map(input, old.as_ref(), new.as_ref(), plan)?;
     let mut out = Assembled {
         map,
         old,
@@ -819,7 +823,7 @@ fn build_map(
     input: &AssemblyInput<'_>,
     old: Option<&FileResult>,
     new: Option<&FileResult>,
-    plan: Option<&[PlanEntry]>,
+    plan: Option<Vec<PlanEntry>>,
 ) -> Result<PatchMap, String> {
     let side = |r: &FileResult| Side {
         tag: r.tag.clone(),
@@ -829,7 +833,7 @@ fn build_map(
     };
     let totals = // One pass for all four numbers. It was five, each re-walking the plan and
         // each calling `is_moved()` or comparing `decision` again.
-        plan.map(|p| {
+        plan.as_ref().map(|p| {
             let mut reuse = 0_usize;
             let mut fetch = 0_usize;
             let mut moved = 0_usize;
@@ -886,6 +890,7 @@ fn build_map(
             absent_after: false,
             download_bytes: totals.map_or(0, |t| t.download_bytes),
             must_not_fetch: plan
+                .as_ref()
                 .map(|p| {
                     p.iter()
                         .filter(|e| e.decision == Decision::Reuse)
@@ -914,7 +919,7 @@ fn build_map(
         classes: input.classes.to_vec(),
         old: old.map(side),
         new: new.map(side),
-        plan: plan.map(<[PlanEntry]>::to_vec),
+        plan,
         totals,
         expectations,
     })

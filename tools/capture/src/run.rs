@@ -296,6 +296,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         diffs.push(fd);
     }
 
+    // The aggregate is computed **once**, here, and used twice: it is both the
+    // `diff/paths.diff.json` body and the headline numbers on the summary. It
+    // used to be built again at the summary, from the same inputs — one O(rows)
+    // walk and two sorted `Vec<String>` per call.
+    let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
+
     // 6c. Score, classify, admit. Pure arithmetic over `diffs` — the only work
     //     this adds to the run is the audio manifests fetched above.
     let pool = select::candidates(&diffs);
@@ -488,7 +494,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     written.extend(
         emit::write_diff(
             &dir,
-            &diff::aggregate(&old_tag, &new_tag, &diffs),
+            &agg,
             &diffs[0].pool,
             &diffs,
         )
@@ -801,7 +807,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         })
         .collect();
 
-    let mut selfcheck = emit::selfcheck::Selfcheck::build(rows.clone(), matrix_rows, &skipped);
+    // Counted here because the vector is **moved** below. It used to be
+    // `rows.clone()`, so that one integer on the summary could read `rows.len()`
+    // afterwards — a deep copy of every assertion id, subject, expected and
+    // actual string, for one `usize`.
+    let assembly_rows = rows.len() as u64;
+    let mut selfcheck = emit::selfcheck::Selfcheck::build(rows, matrix_rows, &skipped);
     emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
     written.push(emit::write_manifest(&dir, &manifest).map_err(|e| write_err(&dir, e))?);
     written.push(emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?);
@@ -850,9 +861,17 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     );
     let documents = written.len();
     let flat: Vec<&CapturedManifest> = manifests.iter().flatten().collect();
-    let manifest_bytes: u64 = flat.iter().map(|m| m.meta.stored.bytes).sum();
-    let manifest_entries: u64 = flat.iter().map(|m| m.meta.decoded.entries).sum();
-    let manifest_chunks: u64 = flat.iter().map(|m| m.meta.decoded.total_chunks).sum();
+    // Four sums and a max, in one walk. It was five walks of the same slice.
+    let mut manifest_bytes = 0_u64;
+    let mut manifest_entries = 0_u64;
+    let mut manifest_chunks = 0_u64;
+    let mut max_chunk = 0_u64;
+    for m in &flat {
+        manifest_bytes += m.meta.stored.bytes;
+        manifest_entries += m.meta.decoded.entries;
+        manifest_chunks += m.meta.decoded.total_chunks;
+        max_chunk = max_chunk.max(m.meta.decoded.max_chunk_compressed_bytes);
+    }
     tracing::info!(
         dir = %dir.display(),
         records = log.len(),
@@ -863,14 +882,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     );
 
     let legacy_behind = captured.legacy_staleness().map(|(n, _)| n).unwrap_or(0);
-    let max_chunk = flat
-        .iter()
-        .map(|m| m.meta.decoded.max_chunk_compressed_bytes)
-        .max()
-        .unwrap_or(0);
     // The diff's numbers are the run's headline result, so they go on the data
     // plane and not only into the stderr narration: this is what a caller reads.
-    let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
     let pool_stats = &diffs[0].pool;
     let summary = Record::summary("capture")
         .set("result", "ok")
@@ -910,7 +923,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("chunk_a6_failing", index.failing().len() as u64)
         .set("patch_fetch_chunks", index.sets["patch_fetch"].len() as u64)
         .set("patchmaps_written", assembled_ids.len() as u64)
-        .set("assembly_selfcheck_rows", rows.len() as u64)
+        .set("assembly_selfcheck_rows", assembly_rows)
         .set("assembly_selfcheck_failures", assembly_failures as u64)
         .set("patch_reuse_chunks", reused_total)
         .set("patch_fetch_chunks_actually", fetched_total)

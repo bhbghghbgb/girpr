@@ -413,26 +413,47 @@ pub fn file_pairs(
     old_tag: &str,
     new_tag: &str,
 ) -> Vec<FilePair> {
+    // One index per manifest, built once.
+    //
+    // This used to `entries.iter().find(|e| e.file == a.path)` **per admitted
+    // path, per side**: O(admitted × paths), twice. Over the measured pair that
+    // is a few thousand 2 744-element string scans to build eight pairs — the
+    // single largest waste in the selection→store hand-off. `diff` builds the
+    // same map and throws it away, so the shape was already known; here it is
+    // built where it is used, which costs one walk rather than A×n.
+    let index = |tag: &str| -> Option<BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>> {
+        let m = manifests.get(tag)?;
+        Some(m.entries.iter().map(|e| (e.file.as_str(), e)).collect())
+    };
+    let old_by_path = index(old_tag);
+    let new_by_path = index(new_tag);
+    let build_id = |tag: &str| -> &str {
+        manifests.get(tag).map(|m| m.build_id.as_str()).unwrap_or_default()
+    };
+    let old_build_id = build_id(old_tag);
+    let new_build_id = build_id(new_tag);
+
     selection
         .admitted
         .iter()
         .map(|a| {
-            let find = |tag: &str| -> Option<(&crate::manifest::proto::SophonChunkFile, &str)> {
-                let m = manifests.get(tag)?;
-                let entry = m.entries.iter().find(|e| e.file == a.path)?;
-                Some((entry, m.build_id.as_str()))
-            };
+            let old_entry = old_by_path
+                .as_ref()
+                .and_then(|m| m.get(a.path.as_str()).copied());
+            let new_entry = new_by_path
+                .as_ref()
+                .and_then(|m| m.get(a.path.as_str()).copied());
             FilePair {
                 capture_id: a.capture_id.clone(),
                 path: a.path.clone(),
-                old: find(old_tag).map(|(e, build_id)| chunks::OldFile {
+                old: old_entry.map(|e| chunks::OldFile {
                     tag: old_tag.to_string(),
-                    build_id: build_id.to_string(),
+                    build_id: old_build_id.to_string(),
                     entry: e.clone(),
                 }),
-                new: find(new_tag).map(|(e, build_id)| chunks::NewFile {
+                new: new_entry.map(|e| chunks::NewFile {
                     tag: new_tag.to_string(),
-                    build_id: build_id.to_string(),
+                    build_id: new_build_id.to_string(),
                     entry: e.clone(),
                 }),
             }
