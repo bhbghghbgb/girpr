@@ -211,7 +211,6 @@ fn rows() -> Vec<Row> {
     ]
 }
 
-
 /// **The whole table.** One classification and one tag per pair state, with the
 /// verdict and the tag asserted separately — a tag can be right for a wrong verdict
 /// and the other way round, and `--why` ships both.
@@ -329,4 +328,3 @@ fn a_tag_names_the_algorithms_that_disagreed_in_the_order_they_were_asked_for() 
     );
     assert_eq!(got.why_tag(), "digest-differs:md5+sha256");
 }
-

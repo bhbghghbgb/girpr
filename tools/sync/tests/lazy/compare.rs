@@ -437,4 +437,3 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
 }
-

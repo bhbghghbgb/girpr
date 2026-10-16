@@ -504,4 +504,3 @@ fn summary_line(text: &str) -> String {
         .unwrap_or_else(|| panic!("no summary in:\n{text}"))
         .to_string()
 }
-

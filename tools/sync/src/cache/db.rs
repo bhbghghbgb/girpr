@@ -9,8 +9,8 @@ use redb::{Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend}
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::codec::{decode_meta, decode_rec};
 use super::codec::encode_meta;
+use super::codec::{decode_meta, decode_rec};
 use super::open::{is_table_missing, open_read_only, read_meta, require_current_version};
 use super::schema::{CACHE_VERSION, FileRec, Meta};
 use super::write::{CacheWrite, CommitLimits};
@@ -267,7 +267,7 @@ impl CacheDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::open::{open_db, CacheOpen};
+    use crate::cache::open::{CacheOpen, open_db};
     use crate::cache::schema::CACHE_PREFIX;
     use std::path::PathBuf;
 

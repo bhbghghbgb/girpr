@@ -187,4 +187,3 @@ fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncO
         common,
     }
 }
-

@@ -331,4 +331,3 @@ fn a_copy_is_bounded_by_its_tighter_side() {
     );
     assert!(rw.limiter().try_acquire(RwSide::Dst).is_some());
 }
-

@@ -284,15 +284,7 @@ pub fn resolve_side(
     match &opened.side {
         Side::Folder(root) => {
             let root = root.clone();
-            resolve_folder(
-                &root,
-                opened.cache(),
-                mode,
-                &opened.phase_a,
-                plan,
-                side,
-                rw,
-            )
+            resolve_folder(&root, opened.cache(), mode, &opened.phase_a, plan, side, rw)
         }
         Side::Record(_) => Ok(resolve_record(&opened.phase_a)),
     }
