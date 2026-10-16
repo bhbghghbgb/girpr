@@ -33,7 +33,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + always-`TRACE` file layer | `init_tracing`, `log_file_path` |
-| `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `format_report_line`, `format_progress`, `emit_progress`, `format_summary_line`, `spawn_progress_reporter` |
+| `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `fetch_chunk_bytes`, `build_local_chunk_map`, `join_url` |
@@ -48,7 +48,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
-| `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `format_plan_line`, `PlanDocument` |
+| `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `reserve_write_bytes`, `adjust_download_bytes`, `stop_downloads`, `stop_writes`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
@@ -187,8 +187,8 @@ flowchart TD
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
 S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chunk reuse
 (`repair/file.rs`, `sophon::build_local_chunk_map`) · S3 resume-by-length + final-MD5 gate
-(`repair/file.rs`). Purge keep-set is `config.ini`-only (`purge::keep_set`). Version parse is
-last-match-wins (`util::read_game_version`, Starward parity).
+(`repair/file.rs`). Purge keep-set is `config.ini`-only (`plan::purge::keep_set`).
+Version parse is last-match-wins (`util::read_game_version`, Starward parity).
 
 ## Requirements / build / usage
 
@@ -252,8 +252,9 @@ cargo clippy --all-targets
   resolved in `RunCtx::api_bases`).
 - **What the tests actually drive.** `tests/repair_offline.rs` is 53 cases, and
   most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
-  — that exercises the library, not the flag surface. Seven of them (the M7
-  endpoint-override cases) spawn the real binary through
+  — that exercises the library, not the flag surface. Five of them (the M7
+  endpoint-override cases, plus the `--output` format case added later) spawn the
+  real binary through
   `CARGO_BIN_EXE_girpr`, which is how the `--hyp-base` / `--sophon-base`
   precedence is pinned; they still run against the mock, not against real bytes.
   `tests/cli_contract.rs` is the other file that spawns the binary, and it never
