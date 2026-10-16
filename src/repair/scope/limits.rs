@@ -20,7 +20,7 @@
 //!
 //! Both produce exit `5`. Both are implemented here as pure predicates over a
 //! finished plan; the impure side (the ledger the runtime stops read) lives in
-//! [`ledger`] from M4/M6.
+//! [`ledger`](super::ledger) from M4/M6.
 
 use crate::repair::plan::{PurgePlan, RepairPlan};
 

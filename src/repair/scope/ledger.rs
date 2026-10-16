@@ -8,7 +8,7 @@
 //!
 //! [`crate::report::Summary`] owns the counters; this module owns the *rules*
 //! for reserving against a ceiling, so the arithmetic is one tested place
-//! rather than two `fetch_add` sites in [`crate::repair::file`].
+//! rather than two `fetch_add` sites in `repair::file`.
 
 use std::sync::atomic::Ordering;
 

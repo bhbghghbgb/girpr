@@ -60,7 +60,7 @@ pub const A18: &str =
 /// The ids [`reverify`] re-derives **and** the capture also recorded.
 ///
 /// The overlap, and the reason it is a `&'static` list rather than a computed
-/// one: these are the rows [`check_agreement`] is entitled to compare, so putting
+/// one: these are the rows `check_agreement` is entitled to compare, so putting
 /// an id here silently promotes it from "re-derived" to "re-derived *and* checked
 /// against the recording". A18 is re-derived but never recorded - the capture
 /// cannot write it, because it is a statement about the bundle rather than about

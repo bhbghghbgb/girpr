@@ -8,7 +8,7 @@
 //! independent by design (`tools/sync` is a sibling tool, not a dependency).
 //!
 //! Matched against the `/`-separated, game-dir-rooted rel path — the same
-//! string [`super::build_plan`] stores and `util::normalize_rel` converts at
+//! string `plan::build_plan` stores and `util::normalize_rel` converts at
 //! the filesystem boundary.
 //!
 //! Three semantics are inherited deliberately and must not be "fixed" here:

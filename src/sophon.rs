@@ -8,7 +8,7 @@ use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 /// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
 /// kept verbatim so diffs against the reference stay obvious. Do not "fix" the
 /// spelling.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30>
 /// message SophonChunkManifest { repeated SophonChunkFile chuncks = 1; }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SophonChunkManifest {
@@ -62,7 +62,7 @@ pub struct WantedManifest {
 /// set are both verbatim ports of `GetAvailableGameSophonChunkManifests` — the
 /// heuristic is fragile upstream, but diverging here would break parity.
 /// Do not "fix" without checking upstream first.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769>
 /// Audio fields look like `zh-cn` (len 5 with '-') or `mini-zh-cn` (len 10 with '-').
 pub fn select_manifests<'a>(
     build: &'a ChunkBuild,
@@ -91,7 +91,7 @@ pub fn select_manifests<'a>(
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
 /// verified case-insensitively before parsing, like `EnsureSophonManifestFileAsync`.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864>
 /// V1-SIMPLIFICATION (S1, see README): the whole blob is buffered in memory
 /// (`decode_all`) and manifests are never cached inside `game_dir`, instead of
 /// Starward's file cache + streaming decompression. Simpler + lower disk use at

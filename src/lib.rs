@@ -26,7 +26,7 @@
 //!   stdout line of the automation contract
 //! - [`util`] — MD5, `config.ini`, ignore/blacklist files, rel-path normalization
 //!
-//! The binary ([`main`], a thin shim) is: parse → install tracing → build the
+//! The binary (`main`, a thin shim) is: parse → install tracing → build the
 //! run config → [`repair::run`] → print `SUMMARY` → exit with the returned code.
 
 pub mod biz;

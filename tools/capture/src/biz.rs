@@ -334,8 +334,8 @@ fn push_pair(url: &mut String, key: &str, value: &str) {
 
 /// Percent-encode a query **value**.
 ///
-/// Keys are appended literally (see [`Biz::hyp_url`]); values are encoded, so a
-/// `password` with a `/` or a space cannot change the request's shape.
+/// Keys are appended literally (see [`Endpoints::hyp_url`]); values are encoded,
+/// so a `password` with a `/` or a space cannot change the request's shape.
 pub fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {

@@ -1,8 +1,8 @@
 //! Command dispatch: the four entry points a caller can invoke, and the one
 //! failure summary they share.
 //!
-//! Each returns a [`report::Summary`] plus the [`exit::ExitCode`] it earned, so
-//! the shim in `main.rs` holds no logic: it dispatches, prints, exits. Commands
+//! Each returns a [`Record`] plus the [`exit::ExitCode`] it earned, so the shim
+//! in `main.rs` holds no logic: it dispatches, prints, exits. Commands
 //! land here as their milestone arrives — `capture` in M8, the offline trio in
 //! M9 — and until then each reports the honest fact that it has nothing to do
 //! yet rather than pretending to have done it.

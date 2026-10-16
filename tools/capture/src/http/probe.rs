@@ -292,9 +292,9 @@ pub struct ErrorShape {
     /// Always `false`.
     ///
     /// This is the retry policy stated in the artifact, so the fact
-    /// [`crate::RetryPolicy::should_retry_status`] encodes is readable by whoever
-    /// consumes the bundle rather than only by whoever wrote the fetcher. It is a
-    /// field and not a constant because a future origin that started answering
+    /// [`crate::http::RetryPolicy::should_retry_status`] encodes is readable by
+    /// whoever consumes the bundle rather than only by whoever wrote the fetcher. It
+    /// is a field and not a constant because a future origin that started answering
     /// `429` here would make it true, and the document should say so.
     pub retryable: bool,
 }

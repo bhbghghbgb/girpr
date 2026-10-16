@@ -120,7 +120,7 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// The inverse of [`percent_encode`]. Exposed so a consumer — and a test — can
+/// The inverse of `percent_encode`. Exposed so a consumer — and a test — can
 /// read a value back without re-implementing the rule.
 pub fn percent_decode(s: &str) -> String {
     if !s.contains('%') {

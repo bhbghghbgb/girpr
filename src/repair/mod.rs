@@ -5,20 +5,19 @@
 //!
 //! | Phase | Module | docs/02 |
 //! |---|---|---|
-//! | local state + server metadata | [`metadata`] | steps 1–2 |
+//! | local state + server metadata | `metadata` | steps 1–2 |
 //! | begin `REPORT` | [`crate::report`] | step 2.5 |
-//! | manifests + local chunk map | [`manifest`] | step 3 |
-//! | work list + purge candidates | [`plan`] | steps 4, 5, 7 |
-//! | `--check-only` verify | [`check`] | step 6.5 |
-//! | per-file repair | [`file`] | step 6 |
-//! | post-phase | [`post`] | step 7 |
+//! | manifests + local chunk map | `manifest` | step 3 |
+//! | work list + purge candidates | `plan` | steps 4, 5, 7 |
+//! | `--check-only` verify | `check` | step 6.5 |
+//! | per-file repair | `file` | step 6 |
+//! | post-phase | `post` | step 7 |
 //!
-//! [`audio`] owns the audio scan-file format used by [`metadata`] and
-//! [`post`].
+//! `audio` owns the audio scan-file format used by `metadata` and `post`.
 //!
 //! Since docs/05 M0 the run has two halves:
 //!
-//! **Plan** — metadata → `REPORT` → manifests → [`plan::build_plan`] → the
+//! **Plan** — metadata → `REPORT` → manifests → `plan::build_plan` → the
 //! server's deprecated list. Nothing on disk has been touched at the end of
 //! this half, so every decision the run will act on is already made and
 //! inspectable.

@@ -26,7 +26,7 @@ use crate::repair::scope::PathScope;
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeCandidate {
-    /// `/`-separated rel path, i.e. exactly what [`classify_purge_path`] saw.
+    /// `/`-separated rel path, i.e. exactly what `classify_purge_path` saw.
     pub rel: String,
     /// Absolute-or-game-relative path to remove.
     pub path: PathBuf,
@@ -35,7 +35,7 @@ pub struct PurgeCandidate {
 
 /// The complete, unexecuted files-cleanup decision (docs/05 M0).
 ///
-/// Built by [`plan_purge`], consumed by [`apply_purge`]. Everything the run will
+/// Built by `plan_purge`, consumed by `apply_purge`. Everything the run will
 /// delete is here before the first byte is deleted.
 #[derive(Debug, Clone, Default)]
 pub struct PurgePlan {
