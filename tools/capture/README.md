@@ -29,6 +29,7 @@ the chunks the artifact says it must fetch.
 | [`docs/00-spec.md`](docs/00-spec.md) | what it captures, from where, and the invariants it asserts |
 | [`docs/01-artifact-schema.md`](docs/01-artifact-schema.md) | the bundle's byte layout and every field of every document |
 | [`docs/02-plan.md`](docs/02-plan.md) | module tree, build order, tests, risks |
+| [`docs/03-refactor-plan.md`](docs/03-refactor-plan.md) | making it cheaper and smaller, ranked by risk |
 
 Start with the spec.
 
