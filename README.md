@@ -264,13 +264,21 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   precedence is pinned; they still run against the mock, not against real bytes.
   `tests/cli_contract.rs` is the other file that spawns the binary, and it never
   reaches the API at all — it is argument handling and exit codes only.
-- **Real bytes, real flags.** `tests/artifact_bridge.rs` runs the built binary
-  against a `gircap` artifact bundle replayed over loopback, which is what
-  proves `--include` and `--hyp-base` / `--sophon-base` reach `HypClient`
-  through the real flag-parsing path. It is `#[ignore]`d (it compiles under
-  `cargo test`, it never runs) and it **skips, never fails**, when no bundle is
-  present: `GIRPR_ARTIFACT_BUNDLE`, else a bundle under `artifacts/`, else a
-  printed reason and the command that would produce one.
+- **Real bytes, real flags — and expensive.** `tests/artifact_bridge.rs` runs
+  the built binary against a `gircap` artifact bundle replayed over loopback,
+  which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
+  `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
+  it costs ~2 minutes** of real binary runs over ~20 MB of bundle bytes per run,
+  and it is meant to be started **by hand, only when a repair-spec change is
+  suspected**:
+  ```powershell
+  cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+  ```
+  It still *compiles* under `cargo test`, so a broken bridge fails to build
+  rather than failing silently. And because it only ever runs deliberately, a
+  **missing prerequisite is an error**: no bundle under `artifacts/` and no
+  `GIRPR_ARTIFACT_BUNDLE` fails the run with the command that would produce
+  one, rather than passing quietly having checked nothing.
   - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md);
     the build order and what landed are in
     [`docs/07-artifact-bridge-implementation-plan.md`](docs/07-artifact-bridge-implementation-plan.md).

@@ -150,6 +150,28 @@ impl Capture {
     }
 }
 
+/// One row of `MANIFEST.json`'s capture matrix.
+#[derive(Clone, Debug)]
+pub struct MatrixClass {
+    pub class: String,
+    /// `true` when the capture recorded a path and a `patchmaps/<id>.json`.
+    pub captured: bool,
+    /// Why a class no path satisfied. Never empty when `captured` is false —
+    /// the bundle records *why* it has no instance rather than silently
+    /// omitting it.
+    pub reason: String,
+}
+
+impl MatrixClass {
+    /// A class that is absent **by the bundle's own record**, as opposed to one
+    /// that is simply missing. The distinction decides whether a driver case
+    /// may stand down: `full_reuse_reordered` has no path for 7.0.0 -> 7.1.0
+    /// and says so, which is a fact, not a broken prerequisite.
+    pub fn absent_by_record(&self) -> bool {
+        !self.captured && !self.reason.is_empty()
+    }
+}
+
 /// A `gircap` artifact bundle, opened read-only.
 ///
 /// Nothing in this struct is a cache of a live server: every path points into
@@ -165,7 +187,10 @@ pub struct Bundle {
     pub new_tag: String,
     pub old_build: String,
     pub new_build: String,
-    /// The capture matrix, ordered by capture id so runs are comparable.
+    /// The capture matrix, ordered by class name.
+    pub matrix: Vec<MatrixClass>,
+    /// The capture matrix on disk, ordered by capture id so runs are
+    /// comparable.
     pub captures: Vec<Capture>,
     /// `MANIFEST.json → capture.id`.
     pub capture_id: String,
@@ -185,6 +210,18 @@ impl Bundle {
         let new_build = str_field(&versions["new"]["build_id"], &manifest_path);
         let biz = str_field(&manifest["biz"]["id"], &manifest_path);
         let capture_id = str_field(&manifest["capture"]["id"], &manifest_path);
+
+        let mut matrix: Vec<MatrixClass> = manifest["matrix"]
+            .as_array()
+            .unwrap_or_else(|| panic!("MANIFEST.json declares no matrix[]"))
+            .iter()
+            .map(|m| MatrixClass {
+                class: str_field(&m["class"], &manifest_path),
+                captured: m["status"].as_str() == Some("captured"),
+                reason: m["reason"].as_str().unwrap_or_default().to_string(),
+            })
+            .collect();
+        matrix.sort_by(|a, b| a.class.cmp(&b.class));
 
         let mut captures: Vec<Capture> = std::fs::read_dir(root.join("patchmaps"))
             .unwrap_or_else(|e| panic!("read patchmaps/ in {}: {e}", root.display()))
@@ -207,9 +244,15 @@ impl Bundle {
             new_tag,
             old_build,
             new_build,
+            matrix,
             captures,
             capture_id,
         }
+    }
+
+    /// The matrix's row for a class, if the bundle records one.
+    pub fn matrix_class(&self, class: &str) -> Option<&MatrixClass> {
+        self.matrix.iter().find(|m| m.class == class)
     }
 
     /// The four `api/*.json` bodies served verbatim by the hyp listener.

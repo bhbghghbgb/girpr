@@ -17,8 +17,8 @@ input's origin and is **not modified, not depended on, not imported**.
 |---|---|---|
 | placement | `#[ignore]`d `tests/artifact_bridge.rs` + `tests/artifact_bridge/server.rs` | spec §2; `CARGO_BIN_EXE_girpr` is only set for a target in the package that owns the binary |
 | module path | `#[path = "artifact_bridge/server.rs"] mod server;` | required, not decorative: `mod server;` from a crate root at `tests/artifact_bridge.rs` resolves to `tests/server.rs` (`E0583`) |
-| gate 1 | **every** bridge test is `#[ignore]`d, including the pure-logic ones | spec §3 gate 1; "still compiles" is the anti-rot property |
-| gate 2 | `GIRPR_ARTIFACT_BUNDLE` → `gircap list --root artifacts` → filesystem scan → print reason + `gircap capture` command, exit success | spec §3 |
+| gate 1 | **every** bridge test is `#[ignore]`d, including the pure-logic ones | **the suite is expensive** — ~18 cases, ~2 min of real binary runs over ~20 MB of bundle bytes each. Kept out of every default run; started by hand only when a repair-spec change is suspected. It still compiles under `cargo test`, so a broken bridge fails to build |
+| gate 2 | `GIRPR_ARTIFACT_BUNDLE` → `gircap list --root artifacts` → directory scan → **fail**, naming `cargo run -p gircap -- capture --out <root>` | Gate 1 is what makes this right: only a human starts this suite, so an absent bundle is missing input for a check someone asked for, never a habitual `cargo test -- --ignored`. "Checked nothing" must not render as green. *(Corrected — see §0.1 M6.)* |
 | network | loopback only, four listeners, ephemeral ports | spec §4 |
 | bundle writes | **none.** Rewrites are in-memory; `game/` is copied to a scratch dir | spec §4.1, §6.4 |
 | one run per capture | kept even though the eight could share a process | a `download_bytes` total is only attributable to one capture (spec §5) |
@@ -510,3 +510,51 @@ milestones landed in.
 Eighteen cases, and the same four numbers as M4: `cargo test` 82 + 6 + 53 with
 the 18 bridge cases ignored; `gircap verify` 90/90 exit `0`; clippy and fmt
 clean; no scratch directories left behind.
+
+### M6 — the gates, reframed: cost, and errors rather than skips
+
+**M0–M5 got Gate 1's reason wrong, and Gate 2 exactly backwards.** M0 recorded
+the `#[ignore]` as a tidiness property — "never runs under `cargo test`" — and
+M2 built Gate 2 out of the spec's literal words: skip, never fail, print the
+reason, return success. Both are now corrected, and the correction is recorded
+here because `docs/06` §3 is the document a later reader will check.
+
+**What the `#[ignore]` is actually for: cost.** One capture is a `--print-plan`
+pre-pass plus a real run, and each run fetches four manifests — ~20 MB of real
+bundle bytes — before it can plan a single file. Eighteen cases, ~2 minutes.
+That is worth paying when something has gone wrong and not worth paying on
+every `cargo test`. So the suite runs **by hand, deliberately, only when the
+repair spec is suspected to have regressed**, and the `#[ignore]` reason on
+every case now says exactly that rather than naming a missing bundle.
+
+**Why that makes Gate 2 an error, not a skip.** The skip rule was reasoned as
+"people type `cargo test -- --ignored` by habit and a red run there would put
+them off". That reasoning belongs to a suite wired into a default run. This one
+is priced so that only a human ever starts it — which *reverses* the argument.
+Nobody reaches this suite by accident, so the habit does not exist; while the
+opposite failure does: someone asks for the check, the bundle was never
+captured, and a skip renders "I checked and it is fine" for a check that never
+ran. An absent bundle — or a missing capture — now **fails**, with the exact
+command that produces one.
+
+The one distinction kept: a class the bundle's own matrix records as *not
+captured, with a reason* is a **fact**, not a missing prerequisite.
+`full_reuse_reordered` has no path for 7.0.0 -> 7.1.0 and `MANIFEST.json` says
+so, so a case for it stands down out loud. A capture that is missing with no
+such record fails. That is `Bundle::matrix` — read once at `Bundle::open`
+rather than re-parsed by the driver — and `MatrixClass::absent_by_record` is
+where the distinction lives.
+
+Also: `the_matrix_and_the_patchmaps_agree_in_both_directions` now reads the
+parsed matrix instead of re-reading `MANIFEST.json` with a second JSON reader in
+the test file, and asserts the captured count equals the patchmap count — the
+same fact stated twice, so the two can be compared.
+
+Measured both ways: with the bundle **18 passed, 0 failed** in ~134 s; with an
+empty `GIRPR_ARTIFACT_ROOT` **18 failed, 0 passed**, every one naming
+`cargo run -p gircap -- capture --out <root>`.
+
+Docs corrected to match: `docs/06` §3 (both gates, with the superseded rule
+kept as a visible correction rather than deleted), `docs/06` §7's
+"a bridge that fails when the bundle is absent" bullet, which named the opposite
+of the current behaviour, and the `README.md` / `tools/capture/README.md` rows.

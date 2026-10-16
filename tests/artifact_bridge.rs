@@ -11,26 +11,52 @@
 //! binary against the bundle's bytes, over loopback, and check it patches to
 //! the new version.
 //!
-//! **Gate 1 — every test here is `#[ignore]`d.** Never runs under a bare
-//! `cargo test`; still *compiles*, which is what keeps it from rotting against
-//! `RunCtx`, `PathScope` and the `SUMMARY` contract. Invoke as:
+//! # Why every test here is `#[ignore]`d: cost
+//!
+//! Not "it would be rude under `cargo test`". These cases are **expensive**.
+//! One capture is a `--print-plan` pre-pass plus a real run, and each run
+//! fetches four manifests — ~20 MB of real bundle bytes — before it can plan a
+//! single file. The whole suite is ~18 cases and **~2 minutes**, which is a
+//! price worth paying *when something has gone wrong* and not worth paying on
+//! every `cargo test`.
+//!
+//! So it is run **by hand, deliberately**, and only when the repair spec is
+//! suspected to have regressed:
 //!
 //! ```text
 //! cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 //! ```
 //!
-//! **Gate 2 — no bundle means skip, never fail.** `cargo test -- --ignored` is
-//! a thing people type, and it must not turn red because nobody has captured
-//! anything. Resolution order is `GIRPR_ARTIFACT_BUNDLE`, then a bundle
-//! discovered under `artifacts/`, then a printed reason plus the command that
-//! would produce one. The skip message is part of the contract: a bridge that
-//! fails on a missing input teaches people to run it with `--ignored` forever
-//! and stop reading.
+//! Nothing else runs it. `cargo test` still *compiles* this file, which is what
+//! keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
+//! contract — a broken bridge would fail to build rather than fail silently.
 //!
-//! **What this file is allowed to touch.** The bundle, read-only. The working
-//! tree is a scratch *copy* of the bundle's `game/` — pointing `--game-path`
-//! at the bundle in place is what turns a cleanup flag into a way to destroy
-//! the evidence, and the bundle has to still pass `gircap verify` afterwards.
+//! # Why a missing bundle is an error, not a skip
+//!
+//! Because this file is only ever run intentionally. A skip on a missing
+//! prerequisite would turn "I ran the check and it found nothing to check" into
+//! a green line — and that is the one reading this harness must never permit.
+//! Nobody types `cargo test -- --ignored` here by accident, so the old hazard
+//! ("people run it with `--ignored` forever and stop reading") does not apply;
+//! its opposite does. If the bundle is missing, the run **fails**, and says
+//! exactly what to run to produce one:
+//!
+//! ```text
+//! cargo run -p gircap -- capture --out artifacts
+//! # or, for a bundle elsewhere:
+//! set GIRPR_ARTIFACT_BUNDLE=<dir>
+//! ```
+//!
+//! Resolution order is unchanged: `GIRPR_ARTIFACT_BUNDLE` always wins, then
+//! `gircap list --root artifacts`, then a directory scan. Only the *consequence*
+//! of finding nothing changed.
+//!
+//! # What this file is allowed to touch
+//!
+//! The bundle, read-only. The working tree is a scratch *copy* of the bundle's
+//! `game/` — pointing `--game-path` at the bundle in place is what turns a
+//! cleanup flag into a way to destroy the evidence, and the bundle has to still
+//! pass `gircap verify` afterwards.
 
 // The server's surface is wider than M1's half of it exercises — the request
 // log, the per-capture lookups and the `--purge-only` predicate are read by the
@@ -122,9 +148,14 @@ fn gircap_list(root: &Path) -> Option<Vec<PathBuf>> {
     Some(found)
 }
 
-/// Resolve the bundle under test, or `None` with the reason and the exact
-/// command that would produce one.
-fn locate_bundle() -> Option<PathBuf> {
+/// Resolve the bundle under test.
+///
+/// **A missing bundle is an error, not a skip.** This suite only ever runs
+/// deliberately, so "nothing to check" must never render as a green line —
+/// that is the one reading it must not permit. The message names the exact
+/// command that produces a bundle, because a failure here is almost always
+/// someone who has not captured one yet, not a broken bundle.
+fn locate_bundle() -> PathBuf {
     if let Some(explicit) = std::env::var_os("GIRPR_ARTIFACT_BUNDLE") {
         let p = PathBuf::from(explicit);
         assert!(
@@ -132,7 +163,7 @@ fn locate_bundle() -> Option<PathBuf> {
             "GIRPR_ARTIFACT_BUNDLE={} is not a bundle (no MANIFEST.json)",
             p.display()
         );
-        return Some(p);
+        return p;
     }
     let root = artifacts_root();
     let (found, how) = match gircap_list(&root) {
@@ -140,33 +171,31 @@ fn locate_bundle() -> Option<PathBuf> {
         None => (scan_for_bundles(&root), "a directory scan"),
     };
     match found.len() {
-        0 => {
-            println!(
-                "SKIP artifact_bridge: no bundle under {} (via {how})\n\
-                 \x20     produce one with:  cargo run -p gircap -- capture --out {}\n\
-                 \x20     or point at an existing one:  set GIRPR_ARTIFACT_BUNDLE=<dir>",
-                root.display(),
-                root.display()
-            );
-            None
-        }
-        1 => Some(found.into_iter().next().expect("len 1")),
-        n => {
-            let list: Vec<String> = found.iter().map(|p| format!("  {}", p.display())).collect();
-            println!(
-                "SKIP artifact_bridge: {n} bundles under {} (via {how}); name one with \
-                 GIRPR_ARTIFACT_BUNDLE\n{}",
-                root.display(),
-                list.join("\n")
-            );
-            None
-        }
+        1 => found.into_iter().next().expect("len 1"),
+        0 => panic!(
+            "no gircap bundle under {} (via {how}).\n\
+             \x20 This suite is #[ignore]d because it is expensive and is meant to be run by \
+             hand, so a missing input is a failure rather than a silent pass.\n\
+             \x20   produce one with:  cargo run -p gircap -- capture --out {}\n\
+             \x20   or point at an existing one:  set GIRPR_ARTIFACT_BUNDLE=<dir>",
+            root.display(),
+            root.display(),
+        ),
+        n => panic!(
+            "{n} bundles under {} (via {how}); this suite needs exactly one.\n{}\
+             \x20   name one with:  set GIRPR_ARTIFACT_BUNDLE=<dir>",
+            root.display(),
+            found
+                .iter()
+                .map(|p| format!("\x20     {}\n", p.display()))
+                .collect::<String>(),
+        ),
     }
 }
 
-/// The bundle under test, or a skip. Gate 2.
-fn bundle_or_skip() -> Option<Bundle> {
-    locate_bundle().map(Bundle::open)
+/// The bundle under test.
+fn bundle() -> Bundle {
+    Bundle::open(locate_bundle())
 }
 
 /// `gircap verify --artifact <dir>`, exit `0`. **The precondition** of every
@@ -229,11 +258,11 @@ fn gircap_exe() -> Option<PathBuf> {
     None
 }
 
-/// Start the four listeners over `bundle`.
-async fn bridge_or_skip() -> Option<Bridge> {
-    let bundle = bundle_or_skip()?;
+/// Start the four listeners over the bundle under test.
+async fn bridge() -> Bridge {
+    let bundle = bundle();
     assert_bundle_verifies(&bundle).await;
-    Some(Bridge::start(bundle).await)
+    Bridge::start(bundle).await
 }
 
 /// A one-shot HTTP GET against the bridge, returning `(status, content-type,
@@ -263,20 +292,15 @@ async fn get(url: &str) -> (u16, String, Vec<u8>) {
 /// one and missed by the other, and which one ran would depend on whether a
 /// sibling workspace member happened to be compiled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn discovery_agrees_whether_it_asks_gircap_or_scans() {
     let root = artifacts_root();
     let scanned = scan_for_bundles(&root);
-    if scanned.is_empty() {
-        // Gate 2 is not "fail when the input is absent", it is "skip and say
-        // why" — and this case is the whole reason Gate 2 exists.
-        println!(
-            "SKIP artifact_bridge: no bundle under {}, so there is nothing for the \
-             two discovery paths to agree or disagree about",
-            root.display()
-        );
-        return;
-    }
+    assert!(
+        !scanned.is_empty(),
+        "locate_bundle() must have resolved a bundle under {} for this case to exist",
+        root.display()
+    );
     let Some(listed) = gircap_list(&root) else {
         println!(
             "note: gircap is not built, so discovery fell back to the directory scan \
@@ -289,11 +313,13 @@ async fn discovery_agrees_whether_it_asks_gircap_or_scans() {
         listed, scanned,
         "gircap list and the directory scan must name the same bundles, in the same order"
     );
-    assert_eq!(
-        locate_bundle(),
-        scanned.first().cloned(),
-        "with exactly one bundle under the root, Gate 2 must resolve to it"
-    );
+    if scanned.len() == 1 {
+        assert_eq!(
+            locate_bundle(),
+            scanned[0].clone(),
+            "with exactly one bundle under the root, resolution must land on it"
+        );
+    }
     println!(
         "discovery: gircap list and the scan agree on {} bundle(s): {}",
         listed.len(),
@@ -310,11 +336,9 @@ async fn discovery_agrees_whether_it_asks_gircap_or_scans() {
 /// moved kills the run at metadata with exit `2` — a failure that looks like a
 /// product bug and is not one. `manifest.id` is the URL path segment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn the_rewrite_changes_only_the_two_url_prefixes() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle();
 
     for tag in [&bundle.old_tag, &bundle.new_tag] {
@@ -384,11 +408,9 @@ async fn the_rewrite_changes_only_the_two_url_prefixes() {
 /// so a blob route can be "take the last two segments and ignore the rest" —
 /// which is what makes the route indistinguishable from production's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn each_namespace_keeps_its_path_and_gets_its_own_origin() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle();
     let o = bridge.origins().clone();
     assert_ne!(
@@ -445,11 +467,9 @@ fn recorded_path(prefix: &str) -> &str {
 /// an id resolves only if **this** build declared it and the bundle carries
 /// that field's archive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle().clone();
 
     let mut resolvable = 0;
@@ -520,11 +540,9 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
 /// other build's prefix is a 404 — which is what makes a shim with the two blob
 /// prefixes crossed impossible to mistake for a working bridge.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn a_blob_under_the_other_builds_prefix_is_refused() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle().clone();
     let o = bridge.origins().clone();
 
@@ -582,11 +600,9 @@ async fn a_blob_under_the_other_builds_prefix_is_refused() {
 /// chunk-reuse map, so getting it wrong degrades to an empty reuse map, every
 /// chunk downloading, and a run that still exits `0` (`docs/06` §4.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn an_unserved_getbuild_tag_replays_the_recorded_not_found() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle().clone();
 
     // Both served tags are real bodies, not error shapes.
@@ -654,11 +670,9 @@ async fn an_unserved_getbuild_tag_replays_the_recorded_not_found() {
 /// `download_bytes=0` against a non-zero expectation, which is a baffling
 /// failure to diagnose from the number that is wrong.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn the_capture_matrix_loads_with_distinct_paths() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let b = bridge.bundle();
 
     assert!(
@@ -1380,11 +1394,9 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
 /// three-chunk file where two chunks must come from the local reuse map and one
 /// pair must come off the network — so assertions 1, 2 and 3 all bite at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn one_capture_patches_to_the_new_version() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let capture = bridge
         .capture("partial_same_offset")
         .unwrap_or_else(|| {
@@ -1417,23 +1429,38 @@ async fn one_capture_patches_to_the_new_version() {
 // One run per capture is kept regardless, because it is what makes
 // `download_bytes` attributable to a single capture.
 
-/// Drive one named capture, skipping cleanly when the bundle does not carry it.
+/// Drive one named capture.
 ///
-/// A bundle may legitimately lack a class — `MANIFEST.json`'s matrix records
-/// `status: unavailable` with a reason for those. Skipping with the reason is
-/// right; failing is not, for the same reason Gate 2 is not.
+/// A class the bundle's own matrix records as **not captured, with a reason** is
+/// a fact rather than a missing prerequisite — `full_reuse_reordered` has no
+/// path for 7.0.0 -> 7.1.0 and `MANIFEST.json` says so — so it stands down out
+/// loud. A capture that is missing with no such record is a **missing
+/// prerequisite** and fails: this suite only runs deliberately, so it must never
+/// report "checked nothing" as a pass.
 async fn drive_named(bridge: &Bridge, id: &str) {
+    let bundle = bridge.bundle();
     let Some(capture) = bridge.capture(id).cloned() else {
-        println!(
-            "SKIP {id}: this bundle's matrix does not carry that class (it has: {:?})",
-            bridge
-                .bundle()
-                .captures
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>()
-        );
-        return;
+        match bundle.matrix_class(id) {
+            Some(m) if m.absent_by_record() => {
+                println!("{id}: not captured by this bundle — {}", m.reason);
+                return;
+            }
+            Some(m) => panic!(
+                "{id}: the matrix records it as not captured but gives no reason ({:?}), \
+                 so a case for it cannot be reasoned about",
+                m.reason
+            ),
+            None => panic!(
+                "{id}: not in this bundle and not in its matrix (it has: {:?}). \
+                 This suite is #[ignore]d because it is expensive and run by hand, so a \
+                 missing capture is a failure, not a pass.",
+                bundle
+                    .captures
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>()
+            ),
+        }
     };
     drive_capture(bridge, &capture).await;
 }
@@ -1442,11 +1469,9 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+        #[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
         async fn $name() {
-            let Some(bridge) = bridge_or_skip().await else {
-                return;
-            };
+            let bridge = bridge().await;
             drive_named(&bridge, $id).await;
         }
     };
@@ -1499,73 +1524,57 @@ capture_test!(
      where `files=0` and `purge_files=1 purge_bytes=1731133` are the assertion."
 );
 
-/// `full_reuse_reordered` is the ninth matrix class, and `MANIFEST.json`
-/// records it as **unavailable** for 7.0.0 -> 7.1.0 — no path in any selected
-/// field satisfies it. A class that never materialised must be skipped with its
-/// reason, never invented, and the two records must agree in both directions.
+/// The matrix and the patchmaps must agree in **both** directions.
+///
+/// `MANIFEST.json` records one row per class: `captured`, or not captured with
+/// a reason. The patchmap set is the same fact on disk. A disagreement in
+/// either direction means the bundle's own records do not describe each other,
+/// and every capture case below is standing on sand.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
-    let bundle = bridge.bundle();
-    let matrix = read_json(&bundle.root.join("MANIFEST.json"));
-    let entries = matrix["matrix"].as_array().expect("MANIFEST.json matrix[]");
-
-    for entry in entries {
-        let status = entry["status"].as_str().unwrap_or_default();
-        // `class` is on every entry; `capture_id` is only on the captured ones —
-        // an entry that never materialised has no capture id to give.
-        let id = entry["class"].as_str().expect("matrix[].class");
-        let present = bridge.capture(id).is_some();
-        if status == "captured" {
+    let bundle = bundle();
+    for m in &bundle.matrix {
+        let present = bundle.captures.iter().any(|c| c.id == m.class);
+        if m.captured {
             assert!(
                 present,
-                "{id}: recorded captured, but there is no patchmaps/{id}.json"
-            );
-            assert_eq!(
-                entry["capture_id"].as_str(),
-                Some(id),
-                "{id}: a captured entry's capture_id is the patchmap stem, i.e. its class"
+                "{}: recorded captured, but there is no patchmaps/{}.json",
+                m.class, m.class
             );
         } else {
             assert!(
-                entry["reason"].as_str().is_some_and(|r| !r.is_empty()),
-                "{id}: an unavailable class must carry its reason"
+                !m.reason.is_empty(),
+                "{}: recorded not captured but gives no reason",
+                m.class
             );
             assert!(
                 !present,
-                "{id}: recorded unavailable, yet the bundle carries a patchmap for it"
+                "{}: recorded not captured, yet the bundle carries a patchmap for it",
+                m.class
             );
         }
     }
     // ...and nothing on disk that the matrix does not mention.
     for c in &bundle.captures {
         assert!(
-            entries
-                .iter()
-                .any(|e| e["class"].as_str() == Some(c.id.as_str())),
+            bundle.matrix_class(&c.id).is_some(),
             "{}: a patchmap with no matrix entry",
             c.id
         );
     }
+    let captured = bundle.matrix.iter().filter(|m| m.captured).count();
     println!(
-        "matrix: {} entr(ies), {} capture(s) on disk, {} recorded captured",
-        entries.len(),
-        bundle.captures.len(),
-        entries
-            .iter()
-            .filter(|e| e["status"].as_str() == Some("captured"))
-            .count()
+        "matrix: {} class(es), {} captured, {} patchmap(s) on disk",
+        bundle.matrix.len(),
+        captured,
+        bundle.captures.len()
     );
-}
-
-/// Read a JSON file from the bundle. Kept local so the driver never grows a
-/// second bundle reader beside the server's.
-fn read_json(path: &Path) -> serde_json::Value {
-    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    assert_eq!(
+        captured,
+        bundle.captures.len(),
+        "the two counts are the same fact stated twice"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1649,11 +1658,9 @@ async fn assert_replays(bridge: &Bridge, shape_id: &str, url: &str) {
 /// | blob (`AliyunOSS`) | bogus id, unknown build, a valid id under the other build | `404` + `application/xml` `NoSuchKey` |
 /// | JSON (`sg-downloader-api`) | `getBuild?tag=<unknown>` | `200` + `retcode -202` |
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn not_found_is_replayed_from_the_recorded_shapes() {
-    let Some(bridge) = bridge_or_skip().await else {
-        return;
-    };
+    let bridge = bridge().await;
     let bundle = bridge.bundle().clone();
     let o = bridge.origins().clone();
     assert!(
@@ -1723,15 +1730,18 @@ async fn not_found_is_replayed_from_the_recorded_shapes() {
 
 /// A bundle that **predates** `api/error_shapes.json` has no evidence to
 /// replay. The shim then answers with the measured live shape — `404` +
-/// `application/xml` — and **says so**, rather than passing the not-found
-/// assertions silently. Inventing the statuses would make `docs/06`'s claim
-/// about the API unfounded.
+/// `application/xml` — and **says so**, rather than letting a not-found
+/// assertion pass on an invented status. `docs/06` §4.4 makes this the honest
+/// branch: inventing the statuses would make the document's claim about the API
+/// unfounded.
+///
+/// The real bundle is not allowed this escape — `not_found_is_replayed_from_the_recorded_shapes`
+/// fails if it has no shapes to replay. This case builds a shadow bundle on
+/// purpose so the branch itself is exercised.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn a_bundle_without_recorded_shapes_says_so_instead_of_inventing() {
-    let Some(bundle) = bundle_or_skip() else {
-        return;
-    };
+    let bundle = bundle();
     let shadow = ShadowBundle::new(&bundle);
     assert!(
         !shadow.dir().join("api").join("error_shapes.json").exists(),
@@ -1775,10 +1785,9 @@ async fn a_bundle_without_recorded_shapes_says_so_instead_of_inventing() {
         )));
     }
     println!(
-        "SKIP the replayed-shape assertions for {}: the bundle carries no \
-         api/error_shapes.json, so the 404 shape was synthesized from the measured \
-         live behaviour rather than replayed from evidence",
-        b.root.display()
+        "no api/error_shapes.json: the 404 shape was synthesized from the measured live \
+         behaviour rather than replayed from evidence, so the replayed-shape assertions do \
+         not apply to this shadow bundle (the real bundle is required to have them)"
     );
 }
 

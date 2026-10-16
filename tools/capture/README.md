@@ -108,7 +108,8 @@ by `girpr`'s `tests/artifact_bridge.rs`. All eight captures exit `0` and every
 `download_bytes` matches its patchmap to the byte (§8.1.1).
 
 ```powershell
-# in the girpr package; needs a bundle, skips cleanly without one
+# in the girpr package. Expensive (~2 min) and run by hand only when a
+# repair-spec change is suspected; needs a bundle and FAILS without one.
 cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 ```
 

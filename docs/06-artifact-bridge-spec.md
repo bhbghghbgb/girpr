@@ -99,27 +99,51 @@ it is small. This one is not small and neither test wants it.
 
 ## 3. Two independent gates, both required
 
-**Gate 1 — `#[ignore]` on every bridge test.** Never runs under `cargo test`.
-Still compiles, which is what keeps it from rotting against `RunCtx`,
-`PathScope`, and the `SUMMARY` contract. Invoked as:
+**Gate 1 — `#[ignore]` on every bridge test, because the suite is expensive.**
+One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
+four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
+The suite is ~18 cases and ~2 minutes. That is worth paying when something has
+gone wrong and not worth paying on every `cargo test`.
+
+So it runs **by hand, deliberately, and only when the repair spec is suspected
+to have regressed**:
 
 ```
 cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 ```
 
-**Gate 2 — skip, never fail, when there is no bundle.** `cargo test -- --ignored`
-is a thing people type, and it must not turn red because nobody has captured
-anything. Resolution order:
+Nothing else runs it. `cargo test` still *compiles* the file, which is what
+keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`
+contract: a broken bridge fails to build rather than failing silently.
+
+**Gate 2 — a missing prerequisite is an error, not a skip.** This follows
+directly from Gate 1. Because the suite only ever runs intentionally, nobody
+types `--ignored` here by accident, so the hazard a skip would guard against
+does not exist — while its opposite does. "I ran the check and it found nothing
+to check" must never render as a green line. A run without a bundle **fails**,
+and the failure names the exact command that produces one.
+
+> **Correction.** An earlier draft of this section specified the opposite —
+> "skip, never fail, when there is no bundle" — on the reasoning that
+> `cargo test -- --ignored` is a thing people type by habit and a red run there
+> would put them off. That reasoning applies to a suite wired into a default
+> run. This one is deliberately kept out of every default run and priced so that
+> only a human starts it, which reverses the argument: **an absent bundle is
+> missing input for a check someone asked for**, and it must say so loudly.
+
+Resolution order, unchanged:
 
 1. `GIRPR_ARTIFACT_BUNDLE` — an explicit path wins, always;
 2. otherwise discover under `artifacts/` — the primitive for this already exists
    (`gircap list --root artifacts`, which now reports one `bundle` record per
    bundle on stdout rather than only on stderr);
-3. otherwise print the reason and the exact command that would produce one, and
-   return success.
+3. otherwise **fail**, naming the reason and the exact command:
+   `cargo run -p gircap -- capture --out artifacts`.
 
-The skip message is part of the contract. A bridge that fails on a missing input
-teaches people to run it with `--ignored` forever and stop reading.
+The same rule applies one level down: a capture the suite names must exist in
+the bundle. A class the bundle's own matrix records as *not captured, with a
+reason* is a fact rather than a missing prerequisite — the case stands down out
+loud — but a capture that is simply missing fails.
 
 **Precondition.** Before any run, the bundle's own integrity is established —
 `gircap verify --artifact <dir>`, exit `0`. `00-spec.md` §8.2 says why: it makes
@@ -472,7 +496,10 @@ at it in place is what turns a cleanup flag into a way to destroy the evidence.
 - **Parallel runs sharing a tree.** §6.3.
 - **A fixture mutated in place.** The bundle must still pass `verify`
   afterwards. That is the precondition of §3 and the point of §6.4.
-- **A bridge that fails when the bundle is absent.** Gate 2 exists for this.
+- **A bridge that reports success when it checked nothing.** Gate 2 exists for
+  this: the suite runs only when a human asks for it, so a missing bundle — or a
+  missing capture — is missing input, and it fails with the command that
+  produces it.
 
 ## 8. Non-goals
 
