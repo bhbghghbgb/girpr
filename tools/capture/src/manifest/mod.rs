@@ -496,7 +496,7 @@ pub async fn capture(
         tag: tag.to_string(),
         build_id: build.build_id.clone(),
         matching_field: matching_field.to_string(),
-        seq: fetched.seq(),
+        seq: fetched.seq,
         raw: fetched.body,
         entries,
         meta,

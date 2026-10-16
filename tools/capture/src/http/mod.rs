@@ -303,6 +303,11 @@ pub struct RequestRecord {
 
 impl RequestRecord {
     /// Headers we always send, lowercased, for the record.
+    ///
+    /// Built once per `Fetcher` and cloned per record; see
+    /// [`Fetcher::base_req_headers`]. The `accept` and `accept-encoding` entries
+    /// here are **claims the bundle makes about the request**, and §6.2 is where
+    /// the tool stops claiming to send headers the client is not configured with.
     fn default_req_headers(user_agent: &str, range: Option<&str>) -> BTreeMap<String, String> {
         let mut h = BTreeMap::new();
         h.insert("accept".to_string(), "*/*".to_string());
@@ -312,6 +317,24 @@ impl RequestRecord {
             h.insert("range".to_string(), r.to_string());
         }
         h
+    }
+
+    /// The fetcher's shared headers, plus this request's `Range` when it sent one.
+    ///
+    /// The only per-request part of [`RequestRecord::default_req_headers`] is
+    /// `Range`, so that is the only copy made.
+    fn req_headers(
+        base: &BTreeMap<String, String>,
+        range: Option<&str>,
+    ) -> BTreeMap<String, String> {
+        match range {
+            None => base.clone(),
+            Some(r) => {
+                let mut h = base.clone();
+                h.insert("range".to_string(), r.to_string());
+                h
+            }
+        }
     }
 }
 
@@ -324,7 +347,23 @@ pub struct RequestLog(Arc<Mutex<LogState>>);
 #[derive(Debug, Default)]
 struct LogState {
     next_seq: u64,
+    /// In **completion** order, which under `--jobs > 1` is not issue order.
     records: Vec<RequestRecord>,
+    /// `seq -> index into records`.
+    ///
+    /// The index is what makes [`RequestLog::set_stored_as`] O(log n) instead of
+    /// O(n). It used to hold the lock and then walk `records` looking for a
+    /// matching `seq` — once per chunk, over a vector that reaches 113 610
+    /// entries. That is a ~23 MB memory walk *while holding the one
+    /// process-wide lock every other request needs*, which is why `--jobs 8`
+    /// did not scale: the eight workers serialised on exactly this line and
+    /// gave back the concurrency the chunk fetcher had bought.
+    ///
+    /// A `BTreeMap` rather than a `Vec<Option<usize>>`: `reserve()` hands out
+    /// dense `1..N` ids, so a vector would do — but `push` is told the `seq` and
+    /// `reserve` is a separate call, and a map stays correct if that ever
+    /// changes, whereas a vector would silently misplace a record.
+    by_seq: BTreeMap<u64, usize>,
 }
 
 impl RequestLog {
@@ -347,11 +386,11 @@ impl RequestLog {
 
     /// Append a record. Its `seq` is already assigned.
     pub fn push(&self, record: RequestRecord) {
-        self.0
-            .lock()
-            .expect("request log is not poisoned")
-            .records
-            .push(record);
+        let mut s = self.0.lock().expect("request log is not poisoned");
+        let at = s.records.len();
+        let seq = record.seq;
+        s.records.push(record);
+        s.by_seq.insert(seq, at);
     }
 
     /// Every record, in `seq` order.
@@ -370,6 +409,14 @@ impl RequestLog {
         // provenance. Sorted on read rather than on push because `push` is
         // called once per chunk - a 113 610-chunk capture would spend O(n²)
         // keeping a vector ordered - and `records()` is read a handful of times.
+        //
+        // **Deliberately not read through `by_seq`.** That index would make the
+        // ordering structural and drop the sort, but a `seq` pushed twice would
+        // then silently *lose* a row from the file this tool exists to produce,
+        // and an audit log that quietly drops entries is worse than one that
+        // spends n log n to put them in order. `reserve()` is the only allocator
+        // and `attempt()` calls it once per record, so the duplicate cannot
+        // happen today; the sort is what keeps that from being load-bearing.
         //
         // `reserve()` makes `seq` unique, so this is a total order.
         v.sort_by_key(|r| r.seq);
@@ -405,10 +452,14 @@ impl RequestLog {
     ///
     /// By `seq` rather than by URL, because a chunk id can legitimately be
     /// requested twice and the two requests are not the same request.
+    ///
+    /// **O(log n), holding the lock only long enough to look up an index.** This
+    /// used to walk `records` under the lock; see [`LogState::by_seq`] for what
+    /// that cost.
     pub fn set_stored_as(&self, seq: u64, path: impl Into<String>) {
         let mut s = self.0.lock().expect("request log is not poisoned");
-        if let Some(r) = s.records.iter_mut().find(|r| r.seq == seq) {
-            r.stored_as = Some(path.into());
+        if let Some(&i) = s.by_seq.get(&seq) {
+            s.records[i].stored_as = Some(path.into());
         }
     }
 
@@ -452,15 +503,18 @@ impl RequestLog {
 pub struct Fetched {
     /// The body, byte-exact.
     pub body: Vec<u8>,
-    /// The provenance row.
-    pub record: RequestRecord,
-}
-
-impl Fetched {
-    /// The sequence number of this request, for `set_stored_as`.
-    pub fn seq(&self) -> u64 {
-        self.record.seq
-    }
+    /// This request's sequence number, for `set_stored_as`.
+    ///
+    /// A `u64` and not a [`RequestRecord`]. The log already owns the record;
+    /// handing a second copy to every caller meant deep-cloning two
+    /// `BTreeMap`s, a `String` URL and up to ~2 KB of response headers for each
+    /// of 113 610 chunks, and then dropping all of it after reading one integer.
+    pub seq: u64,
+    /// The status as received.
+    ///
+    /// `Copy`, because `probe` genuinely needs it to fill a document field and
+    /// reading it back out of the log would be a round trip for one `u16`.
+    pub status: u16,
 }
 
 /// One response as observed, whatever its status.
@@ -476,8 +530,9 @@ pub struct Observation {
     pub content_type: Option<String>,
     /// The body, byte-exact.
     pub body: Vec<u8>,
-    /// The provenance row.
-    pub record: RequestRecord,
+    // No `record` field. An observation's provenance row is in the log, which
+    // owns it; `observe` used to clone the whole thing in order to return a
+    // copy nobody read a field of.
 }
 
 impl Observation {
@@ -511,7 +566,14 @@ pub struct Fetcher {
     policy: RetryPolicy,
     sleeper: Arc<dyn Sleep>,
     log: RequestLog,
-    user_agent: String,
+    /// The headers every request carries, minus any `Range`.
+    ///
+    /// **Built once.** `req_headers` is otherwise rebuilt for every record —
+    /// three `String`s and a `BTreeMap` each, three times over for 113 610
+    /// chunks, all of it identical except when a `Range` is present. `Range` is
+    /// the exception because it is per-request; that is the only thing
+    /// [`RequestRecord::req_headers`] adds.
+    base_req_headers: BTreeMap<String, String>,
 }
 
 impl Fetcher {
@@ -538,7 +600,7 @@ impl Fetcher {
             policy: RetryPolicy::new(transport.retries),
             sleeper,
             log,
-            user_agent: ua,
+            base_req_headers: RequestRecord::default_req_headers(&ua, None),
         })
     }
 
@@ -607,12 +669,11 @@ impl Fetcher {
             1,
             started,
         );
-        self.log.push(record.clone());
+        self.log.push(record);
         Ok(Observation {
             status,
             content_type,
             body,
-            record,
         })
     }
 
@@ -642,8 +703,16 @@ impl Fetcher {
 
             match self.attempt(url, kind, range, attempts, started).await {
                 Ok((body, record)) => {
-                    self.log.push(record.clone());
-                    return Ok(Fetched { body, record });
+                    // Only the sequence number is read off `record` once it is
+                    // logged -- by `blobs` and `manifest`, to call
+                    // `set_stored_as` -- so the log is the owner and this
+                    // returns a borrow-free view instead of a second deep copy
+                    // of a record carrying two `BTreeMap`s, a `String` URL and
+                    // up to ~2 KB of response headers. Once per chunk.
+                    let seq = record.seq;
+                    let status = record.status;
+                    self.log.push(record);
+                    return Ok(Fetched { body, seq, status });
                 }
                 Err((err, record)) => {
                     // The failed attempt is logged too: a run that hit a CDN
@@ -859,7 +928,7 @@ impl Fetcher {
             final_url: final_url.to_string(),
             redirected,
             elapsed_ms: started.elapsed().as_millis() as u64,
-            req_headers: RequestRecord::default_req_headers(&self.user_agent, range),
+            req_headers: RequestRecord::req_headers(&self.base_req_headers, range),
             resp_headers,
             bytes_in,
             stored_as: None,
@@ -873,11 +942,17 @@ impl Fetcher {
 /// Sorted, because a `BTreeMap` makes two captures of the same request diff
 /// cleanly — and an `ETag` is *not* a string this tool parses, so nothing is
 /// lost to the normalisation.
+///
+/// **The keys are already lowercase.** `http::HeaderName` validates and normalises
+/// to lowercase on construction and guarantees `as_str()` returns that form, so
+/// the `to_ascii_lowercase()` this used to call allocated a `String` per header
+/// name and then discarded the distinction it was protecting. The output is
+/// unchanged; only the copy is gone.
 fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
     h.iter()
         .map(|(k, v)| {
             (
-                k.as_str().to_ascii_lowercase(),
+                k.as_str().to_string(),
                 v.to_str()
                     .map(str::to_string)
                     // A header with non-UTF-8 bytes is recorded as its hex, not
@@ -1045,6 +1120,57 @@ mod tests {
         assert_eq!(log.len(), 1);
     }
 
+    /// `set_stored_as` reaches the right row **whatever order the rows landed
+    /// in** — which is the property the `by_seq` index buys, and the one a
+    /// `--jobs 8` capture actually depends on.
+    ///
+    /// A linear scan that returned the *first* match rather than the one with
+    /// the matching `seq` would pass the single-row test above and fail this.
+    #[test]
+    fn stored_as_finds_its_row_among_rows_that_landed_out_of_order() {
+        let log = RequestLog::new();
+        let mk = |seq: u64, url: &str| RequestRecord {
+            seq,
+            ts: now_rfc3339(),
+            kind: Kind::Chunk,
+            method: "GET",
+            url: url.to_string(),
+            range: None,
+            status: 200,
+            final_url: url.to_string(),
+            redirected: false,
+            elapsed_ms: 1,
+            req_headers: BTreeMap::new(),
+            resp_headers: BTreeMap::new(),
+            bytes_in: 7,
+            stored_as: None,
+            attempts: 1,
+        };
+        let seqs: Vec<u64> = (0..64).map(|_| log.reserve()).collect();
+        // Land them backwards, as a saturated chunk fetcher would.
+        for &s in seqs.iter().rev() {
+            log.push(mk(s, &format!("/chunk/{s}")));
+        }
+        assert_eq!(log.len(), 64);
+
+        for &s in seqs.iter() {
+            log.set_stored_as(s, format!("chunks/blobs/{s}.zst"));
+        }
+
+        for &s in seqs.iter() {
+            let row = log
+                .records()
+                .into_iter()
+                .find(|r| r.seq == s)
+                .expect("the row is there");
+            assert_eq!(
+                row.stored_as.as_deref(),
+                Some(format!("chunks/blobs/{s}.zst").as_str()),
+                "seq {s} got someone else's path"
+            );
+        }
+    }
+
     #[test]
     fn the_log_renders_as_ndjson_with_every_field_present() {
         let log = RequestLog::new();
@@ -1206,6 +1332,22 @@ mod tests {
         .expect("client builds")
     }
 
+    /// The provenance row a fetch logged, for asserting what was **recorded**.
+    ///
+    /// `Fetched` used to carry a second deep copy of its own record so tests
+    /// could read `recorded(&f).status` and the rest. That copy is gone — it cost
+    /// ~25 heap allocations per chunk in production to satisfy a test — so the
+    /// assertions read the log instead, which is the thing that actually
+    /// reaches the bundle.
+    ///
+    /// Returns the **last** row, because a retried request logs every attempt:
+    /// the row carrying the final `attempts` count is the last one.
+    fn recorded(f: &Fetcher) -> RequestRecord {
+        let v = f.log().records();
+        assert!(!v.is_empty(), "nothing was recorded");
+        v.into_iter().next_back().expect("at least one row")
+    }
+
     #[tokio::test]
     async fn a_first_attempt_success_records_attempts_one_and_no_waiting() {
         let mock = spawn(vec![(200, b"hello")], "");
@@ -1217,14 +1359,14 @@ mod tests {
             .expect("200");
 
         assert_eq!(got.body, b"hello");
-        assert_eq!(got.record.attempts, 1);
-        assert_eq!(got.record.status, 200);
-        assert_eq!(got.record.bytes_in, 5);
-        assert_eq!(got.record.method, "GET");
-        assert_eq!(got.record.kind, Kind::Chunk);
-        assert!(!got.record.redirected);
+        assert_eq!(recorded(&f).attempts, 1);
+        assert_eq!(recorded(&f).status, 200);
+        assert_eq!(recorded(&f).bytes_in, 5);
+        assert_eq!(recorded(&f).method, "GET");
+        assert_eq!(recorded(&f).kind, Kind::Chunk);
+        assert!(!recorded(&f).redirected);
         assert_eq!(
-            got.record.req_headers["user-agent"],
+            recorded(&f).req_headers["user-agent"],
             crate::logging::user_agent()
         );
         assert_eq!(
@@ -1250,7 +1392,7 @@ mod tests {
 
         assert_eq!(got.body, b"recovered");
         assert_eq!(
-            got.record.attempts, 3,
+            recorded(&f).attempts, 3,
             "the provenance row must show the retries"
         );
         assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
@@ -1371,11 +1513,11 @@ mod tests {
             .expect("206");
 
         assert_eq!(got.body, b"0123456789");
-        assert_eq!(got.record.status, 206, "a partial response is a success");
-        assert_eq!(got.record.range.as_deref(), Some("bytes=0-9"));
-        assert_eq!(got.record.req_headers["range"], "bytes=0-9");
-        assert_eq!(got.record.resp_headers["content-range"], "bytes 0-9/100");
-        assert_eq!(got.record.bytes_in, 10);
+        assert_eq!(recorded(&f).status, 206, "a partial response is a success");
+        assert_eq!(recorded(&f).range.as_deref(), Some("bytes=0-9"));
+        assert_eq!(recorded(&f).req_headers["range"], "bytes=0-9");
+        assert_eq!(recorded(&f).resp_headers["content-range"], "bytes 0-9/100");
+        assert_eq!(recorded(&f).bytes_in, 10);
 
         let seen = mock.requests.lock().unwrap().clone();
         assert!(
@@ -1388,12 +1530,12 @@ mod tests {
     async fn a_response_without_a_range_sends_no_range_header() {
         let mock = spawn(vec![(200, b"whole")], "");
         let f = fetcher(1, Arc::new(RecordingSleep::default()));
-        let got = f
-            .get(&url(&mock, "/m"), Kind::Manifest, None)
+        f.get(&url(&mock, "/m"), Kind::Manifest, None)
             .await
             .unwrap();
-        assert_eq!(got.record.range, None);
-        assert!(!got.record.req_headers.contains_key("range"));
+        let got = recorded(&f);
+        assert_eq!(got.range, None);
+        assert!(!got.req_headers.contains_key("range"));
         assert!(
             !mock.requests.lock().unwrap()[0]
                 .to_ascii_lowercase()
@@ -1406,15 +1548,16 @@ mod tests {
     async fn response_headers_are_lowercased_and_kept_verbatim() {
         let mock = spawn(vec![(200, b"x")], "");
         let f = fetcher(1, Arc::new(RecordingSleep::default()));
-        let got = f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
-        let keys: Vec<&String> = got.record.resp_headers.keys().collect();
+        f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
+        let got = recorded(&f);
         assert!(
-            keys.iter()
+            got.resp_headers
+                .keys()
                 .all(|k| k.chars().all(|c| !c.is_ascii_uppercase()))
         );
-        assert_eq!(got.record.resp_headers["server"], "MockOSS");
+        assert_eq!(got.resp_headers["server"], "MockOSS");
         assert_eq!(
-            got.record.resp_headers["etag"], "\"abc\"",
+            got.resp_headers["etag"], "\"abc\"",
             "quotes are kept"
         );
     }

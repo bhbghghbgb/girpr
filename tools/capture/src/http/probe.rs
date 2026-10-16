@@ -164,7 +164,7 @@ pub async fn probe_tags(
                         .and_then(|t| t.as_str())
                         .map(str::to_string);
                     let served = rc == 0 && bid.is_some();
-                    (f.record.status, rc, bid, echo, served)
+                    (f.status, rc, bid, echo, served)
                 }
                 // A transport failure is a failure of the probe, not of the
                 // tag: a tag that does not exist arrives as a `200` carrying

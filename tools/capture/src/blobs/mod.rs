@@ -322,7 +322,7 @@ impl Store {
                         .map_err(|e| format!("{}: write: {e}", want.chunk.id))?;
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
-                    fetcher.log().set_stored_as(fetched.seq(), rel.clone());
+                    fetcher.log().set_stored_as(fetched.seq, rel.clone());
                     if !want.conflicts.is_empty() {
                         tracing::warn!(
                             chunk = %want.chunk.id,
