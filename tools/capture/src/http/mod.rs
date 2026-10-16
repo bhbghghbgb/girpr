@@ -1022,14 +1022,10 @@ mod tests {
         };
         log.push(mk(b, "/second"));
         log.push(mk(a, "/first"));
-        // Pushed out of order, read back in **seq** order.
-        //
-        // This assertion used to be `vec![2, 1]` - "records keep the order they
-        // were pushed" - which is what `records()` used to do and which is why
-        // `requests.ndjson` came out in completion order while its `seq` column
-        // claimed otherwise. A `--jobs 8` capture lands its chunk fetches
-        // whenever the network finishes, so the two were different in exactly
-        // the run that had the most of them.
+        // Pushed out of order, read back in **seq** order: a `--jobs 8` capture
+        // lands its chunk fetches whenever the network finishes, so completion
+        // order and `seq` order differ in exactly the run that has the most of
+        // them.
         let records = log.records();
         let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
         assert_eq!(seqs, vec![a, b], "records come back in seq order");

@@ -195,10 +195,9 @@ fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::
 
 /// Write one artifact-relative file, creating its parents.
 ///
-/// Nothing here is atomic: M8 introduces the `tmp/`-and-move rule when the
-/// artifact starts holding files worth more than a few kilobytes. A half-written
-/// metadata document is a small, reproducible failure; it is not worth the
-/// machinery yet.
+/// The small metadata documents written here are not written atomically: a
+/// half-written one is a small, reproducible failure. The large artifacts (blobs,
+/// game files) go through `tmp/`-and-move in `write_atomic`.
 fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     let path = root.join(rel);
     if let Some(dir) = path.parent() {

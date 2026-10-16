@@ -102,7 +102,7 @@ builds, diffs them, and assembles a **complete artifact**:
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
 Both reference bundles — `hk4e_global` 7.0.0 → 7.1.0 — **verify 90/90, exit
-`0`**. And the end-to-end check is now **automated**: the bundle is replayed
+`0`**. The end-to-end check is **automated**: the bundle is replayed
 over loopback and the real `girpr` binary is run against it, once per capture,
 by `girpr`'s `tests/artifact_bridge.rs`. All eight captures exit `0` and every
 `download_bytes` matches its patchmap to the byte (§8.1.1).

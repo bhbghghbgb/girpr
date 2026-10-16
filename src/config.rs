@@ -114,9 +114,8 @@ pub struct RunCtx {
 impl RunCtx {
     /// Read-only modes must not write anything: `--dry-run` logs actions only,
     /// `--check-only` verifies only. Every delete/write in the pipeline is
-    /// gated on this (previously `--check-only` still swept temps and
-    /// `--purge-before` still deleted — both fixed by gating on `readonly`, not
-    /// just `dry_run`).
+    /// gated on this, which covers `--purge-before` as well as the phases
+    /// `--check-only` never reaches.
     pub fn readonly(&self) -> bool {
         self.dry_run || self.check_only
     }

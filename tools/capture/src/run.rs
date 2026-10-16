@@ -2,14 +2,7 @@
 //! failure summary they share.
 //!
 //! Each returns a [`Record`] plus the [`exit::ExitCode`] it earned, so the shim
-//! in `main.rs` holds no logic: it dispatches, prints, exits. Commands
-//! land here as their milestone arrives — `capture` in M8, the offline trio in
-//! M9 — and until then each reports the honest fact that it has nothing to do
-//! yet rather than pretending to have done it.
-//!
-//! `capture` is the exception that arrived early: M1 needs it end to end to
-//! prove the transport, and the version pair has to be resolved to name the
-//! bundle's directory at all.
+//! in `main.rs` holds no logic: it dispatches, prints, exits.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -27,9 +20,9 @@ use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
 /// The `matching_field` every run scores first, and the one every later stage
 /// needs whatever class a capture lands in.
 ///
-/// M5 widened the *selection pool* past this to `--audio`'s codes; it did not
-/// change which field is mandatory. Keeping it named here rather than inlined
-/// at the call site means the rule "game is never optional" has one address.
+/// `game` is the one mandatory field: `--audio` widens the *selection pool* but
+/// never makes the game field optional. Naming it here rather than inlining it
+/// at the call site gives the rule "game is never optional" one address.
 const MANIFEST_FIELD: &str = "game";
 
 /// What a command hands back: its summary line, and the code to exit with.
@@ -474,10 +467,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             &ApiError::shape("artifact writer", e),
         )
     })?;
-    // Counted from what the writer returned, not restated. It was a hardcoded
-    // `7` — the six bodies plus `tag_probe.json` — and adding `error_shapes.json`
-    // made it wrong in exactly the way a restated number always does: nothing
-    // failed, the number was just no longer true.
+    // Counted from what the writer returned, never restated: a hand-written
+    // count goes stale silently the moment a document is added, and nothing
+    // fails when it does.
     let api_documents = written.len() as u64;
     for pair in &mut manifests {
         for m in pair {
@@ -1603,15 +1595,12 @@ fn closing_assertions(
         }
     }
 
-    // `--no-chunk-blobs` contributes **no** A7-A12 rows.
-    //
-    // This used to emit one red row per id, reading
-    // `expected: asserted` / `actual: not asserted`. That is the second half of the
-    // same bug the A6 rows had: a declared gap rendered as a failure. The gap is
-    // declared the way the design already declares it - by listing the ids in
-    // `skipped`, which is what makes `Selfcheck::build` answer `incomplete` rather
-    // than `fail`. A row that says "not asserted" and is marked `ok: false` tells a
-    // reader the bundle is broken when it is honestly incomplete.
+    // `--no-chunk-blobs` contributes **no** A7-A12 rows. A declared gap is not a
+    // failure: it is declared the way the design declares everything else — by
+    // listing the ids in `skipped`, which is what makes `Selfcheck::build` answer
+    // `incomplete` rather than `fail`. A row that says "not asserted" and is marked
+    // `ok: false` tells a reader the bundle is broken when it is honestly
+    // incomplete.
     if no_chunk_blobs {
         tracing::debug!("--no-chunk-blobs: A7-A12 are declared skipped, not asserted");
     }
@@ -1870,18 +1859,12 @@ fn api_and_manifest_assertions(
     // A6: one row per stored chunk, four checks folded into one verdict with the
     // failing ones named — a blob failing three of four is one finding about
     // one blob, not three findings about three blobs.
-    // A6: one row per **stored** chunk, four checks folded into one verdict with
-    // the failing ones named — a blob failing three of four is one finding about
-    // one blob, not three findings about three blobs.
     //
-    // `--no-chunk-blobs` emits **no** A6 rows at all, and `A6` joins the skipped
-    // list. This was a real bug and the shape of it is worth stating: an
-    // unmeasured blob used to produce a *red* row (`expected "measured"`,
-    // `actual "not measured"`), so a metadata-only run could never be green and
-    // `--no-chunk-blobs` was effectively an assertion that always failed. The
-    // distinction `BlobProps` already draws — `verified: null` means "not
-    // measured", which is a different kind of fact from four `false` — has to
-    // reach the selfcheck too, or a declared gap reads as a broken artifact.
+    // `--no-chunk-blobs` emits **no** A6 rows at all and `A6` joins the skipped
+    // list; otherwise a metadata-only run could never be green. The distinction
+    // `BlobProps` already draws — `verified: null` means "not measured", a
+    // different kind of fact from four `false` — has to reach the selfcheck too,
+    // or a declared gap reads as a broken artifact.
     if !no_chunk_blobs {
         for b in &index.blobs {
             let subject =

@@ -5,8 +5,8 @@ Implements `docs/02-repair-chunk-spec.md`. Findings:
 
 The `repair-` prefix on all three documents is load-bearing: this file, the spec
 and the findings are one series describing the whole-install repair patcher.
-Later series in `docs/` (`04-`, `05-`) are separate feature work and do not
-amend any of the three.
+[`docs/04-scope-limitation-spec.md`](04-scope-limitation-spec.md) is a separate
+tier and does not amend any of the three.
 
 ## 1. Crate layout (single binary, std + tokio)
 

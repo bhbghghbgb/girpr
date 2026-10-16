@@ -127,9 +127,8 @@ getGameBranches → main.tag       = "7.1.0"
 | `5.5.0` (**not** in `diff_tags`) | ✅ `wUcNY2SeSiQE` |
 
 `diff_tags` is a **patch-support** list, not a retention list. A full old-version
-file is therefore reconstructible **today** without the legacy zip path — the
-concern raised at scoping is resolved and the legacy API is irrelevant to the
-capture. `getGamePackages` is captured anyway, purely as dated evidence:
+file is therefore reconstructible **today** without the legacy zip path, so the
+legacy API is irrelevant to the capture. `getGamePackages` is captured anyway, purely as dated evidence:
 
 ```
 main.major.version = "5.5.0"   main.major.game_pkgs = 8   patches = ["5.4.0","5.3.0"]
@@ -411,11 +410,11 @@ Each row is `{assertion, subject, expected, actual, ok}`.
 
 **`gircap capture` exits non-zero if any of A1-A14 fails.**
 
-### A18, added by M9 — and what `verify` does *not* re-derive
+### A18 — and what `verify` does *not* re-derive
 
 None of the seventeen asks whether `game/` is what the retained blobs say it is.
-That is the bundle's central claim and the reason `materialize` exists, so M9
-gives it an id of its own:
+That is the bundle's central claim and the reason `materialize` exists, so it gets
+an id of its own:
 
 | A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
 
@@ -423,7 +422,7 @@ A18 is a `verify`-only row. The capture cannot record it, because it is a
 statement about the bundle rather than about the run, so it never appears in a
 capture's `selfcheck.json`.
 
-### A19, added by M11 — the converse of A14
+### A19 — the converse of A14
 
 A14 asks one direction: is `game/` free of paths the tool under test would build
 a plan against? It cannot see the other failure — a capture admitted for
@@ -434,12 +433,11 @@ was captured for.
 
 | A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
 
-A19 is found by comparing the two trees by hand, which is why it exists: M11's
-step 3 does exactly that comparison and nothing in the suite asserted it. It
-skips one-sided captures (`added`, `removed`) — their file is absent from one
+A19 is found by comparing the two trees, which nothing else in the suite does.
+It skips one-sided captures (`added`, `removed`) — their file is absent from one
 tree *by construction*, which is the point of the class.
 
-### A20, added by M12 — a patchmap must add up to itself
+### A20 — a patchmap must add up to itself
 
 | A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
 
@@ -448,11 +446,10 @@ it. It re-sums `compressed_size` over the plan's `FETCH` entries, recounts
 `reuse`/`fetch`/`moved`, and checks that `expectations.download_bytes` is that same
 figure.
 
-A20 exists because the bundle that motivated it carried `"plan": null`,
-`"totals": null` and `"expectations": { … "download_bytes": 0 }` for its `added`
-capture, and `verify` passed it with 83 green rows — because nothing looked. The
-one-chunk file in that bundle costs 114 357 B to repair and the artifact said
-zero. §1 of the artifact schema records the rule that now prevents it; A20 is what
+A20 exists because a patchmap can carry `"plan": null`, `"totals": null` and
+`"expectations": { … "download_bytes": 0 }` for an `added` capture and still be
+green — nothing else looks. The one-chunk file that case describes costs 114 357 B
+to repair. §1 of the artifact schema records the rule that prevents it; A20 is what
 stops the rule being quietly dropped.
 
 It is re-derivable offline like the other seven because it reads only
@@ -556,8 +553,8 @@ tell a reader nothing the label does not. Within one object the keys are
 **names**: read them by name, never by position.
 
 A directory under the root that does not open as a bundle is **not** a record.
-It stays stderr-only, as it always was: there is no bundle to describe, so a
-record would have to carry the failure instead of the facts.
+It stays stderr-only: there is no bundle to describe, so a record would have to
+carry the failure instead of the facts.
 
 ---
 
@@ -595,9 +592,9 @@ manifest** and fetch every file in it. A run meant to repair one 2.3 MB DLL woul
 pull ~130 GB, and a `--purge-after` run would also delete every file in the
 bundle that the live manifest happens not to contain.
 
-That is correct behaviour for the main tool and was never something `gircap`
-should work around — which is why the fix was asked for in `girpr` rather than
-shimmed here. The intended invocation is now a real one:
+That is correct behaviour for the main tool and not something `gircap` should
+work around — which is why the fix belongs in `girpr` rather than shimmed here.
+The invocation is:
 
 ```
 girpr --game-path <copy-of-game> --biz hk4e_global
@@ -608,11 +605,10 @@ girpr --game-path <copy-of-game> --biz hk4e_global
 and `SUMMARY download_bytes` can be compared against each capture's
 `patchmaps/<id>.json → totals.download_bytes`.
 
-**`gircap` still does not depend on `girpr`.** It does not invoke it, does not
-read its flags, and does not shim them; §2's independence rule is unchanged and
-the grep over `tools/capture/src/` still returns doc comments only. The
-end-to-end check remains a manual step, run by hand against a scratch copy, for
-the reason §8.1.2 gives.
+**`gircap` does not depend on `girpr`.** It does not invoke it, does not read
+its flags, and does not shim them; §2's independence rule holds and the grep over
+`tools/capture/src/` returns doc comments only. The end-to-end check is a manual
+step, run by hand against a scratch copy, for the reason §8.1.2 gives.
 
 ### 8.1.1 The procedure, and the numbers it must produce
 
@@ -804,9 +800,8 @@ Expected per-capture `download_bytes` for that bundle:
 the rest, so read them with §13.1 of the schema:
 
 - **`added` has a `plan` and `totals` after all.** Every entry is `FETCH`, and
-  `download_bytes` is **114 357** — the one chunk's compressed size. An earlier
-  build emitted `plan: null`, `totals: null` and `download_bytes: 0` here, which
-  was not "unrecorded" but *false*; see §13.2 of the schema.
+  `download_bytes` is **114 357** — the one chunk's compressed size. The figure
+  is real, not a defaulted zero; see §13.2 of the schema.
 - **`removed` has no `plan` and no `totals`** — there is no new side to patch to,
   so the reuse / fetch / moved cells above are empty rather than `0 / 0 / 0`.
   Its `download_bytes` is `0`, and that is a true value: a removal downloads

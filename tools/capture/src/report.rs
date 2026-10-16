@@ -560,9 +560,8 @@ mod tests {
     }
 
     /// The whole point of the text form: split it on whitespace and every token
-    /// after the first is a `k=v` pair. A value carrying a space used to produce
-    /// bare words in the middle of the line, which is what the contract test
-    /// found.
+    /// after the first is a `k=v` pair — so a value carrying a space must be
+    /// quoted or escaped, never emitted as a bare word.
     #[test]
     fn every_text_token_is_a_key_value_pair() {
         let line = Record::summary("capture")

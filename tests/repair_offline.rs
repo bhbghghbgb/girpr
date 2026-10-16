@@ -515,7 +515,7 @@ async fn include_repairs_exactly_the_selected_file() {
         vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
         "only the selected file's chunks are fetched"
     );
-    // §2.2: a scoped run must not advance config.ini.
+    // docs/04 §2.1: a scoped run must not advance config.ini.
     assert!(
         !dir.join("config.ini").exists(),
         "a scoped run does not bump config.ini"
@@ -2160,9 +2160,9 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
     // than in `cli_contract.rs` — that file has never had one, and the bridge
     // test will keep it that way.
     //
-    // `--print-plan` is here deliberately: under `--json-summary` that flag
-    // emitted a text `PLAN …` line *and then* a JSON twin, so the stream was not
-    // JSON at all. One record per line is what removed that possibility.
+    // `--print-plan` is here deliberately: `--print-plan --output json` must
+    // still be pure NDJSON, so the plan record is exercised on the JSON plane
+    // too. One record per line is what keeps that true.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("output_json");

@@ -499,12 +499,10 @@ struct Table {
 
 /// Every `matching_field` any build publishes, in a stable order.
 ///
-/// **Derived from the builds, never declared separately.** The first version
-/// hardcoded `categories` to `[game, en-us]` while `five_classes()` published
-/// only `game`, and the mock lied: the branch claimed to publish a manifest the
-/// build did not carry, and the capture failed at the join. A mock that can
-/// disagree with itself is a mock that will one day hide a real bug behind a
-/// fabricated one.
+/// **Derived from the builds, never declared separately.** A mock that can
+/// disagree with itself hides a real bug behind a fabricated one: the branch
+/// must publish exactly the fields the build carries, or the capture fails at
+/// the join for a reason that has nothing to do with the code under test.
 fn published_fields(world: &World) -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
     for build in [&world.new, &world.old] {

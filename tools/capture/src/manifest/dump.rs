@@ -507,10 +507,10 @@ mod tests {
         assert_eq!(paths_tsv(&[]), "path\tsize\tmd5\tnchunks\tis_folder\n");
     }
 
-    /// `--manifest-detail paths-only` was a flag that did nothing until now.
-    /// The archive, the sidecar and the meta document all still land — a
-    /// sidecar with no archive beside it describes nothing checkable — and only
-    /// the multi-megabyte decode is dropped, with the omission recorded.
+    /// `--manifest-detail paths-only`: the archive, the sidecar and the meta
+    /// document all still land — a sidecar with no archive beside it describes
+    /// nothing checkable — and only the multi-megabyte decode is dropped, with
+    /// the omission recorded.
     #[test]
     fn paths_only_drops_the_decode_and_records_that_it_did() {
         let root = tmp("paths-only");

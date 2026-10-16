@@ -10,9 +10,9 @@
 //! by this tool; only `hk4e_global` is exercised live (plan §6), and a capture
 //! against the other two is not yet a supported claim.
 //!
-//! Nothing here is hardcoded that the API can answer. [`BranchParams`] is the
-//! half that used to be a constant: `package_id`, `password` and `branch` come
-//! out of `getGameBranches`, so a build that rotates them needs no code change.
+//! Nothing here is hardcoded that the API can answer: `package_id`, `password`
+//! and `branch` come out of `getGameBranches`, so a build that rotates them
+//! needs no code change.
 //!
 //! A `package_id` **is** stable per game, so hardcoding it would have worked
 //! today. It would also have worked yesterday and will work tomorrow, silently,

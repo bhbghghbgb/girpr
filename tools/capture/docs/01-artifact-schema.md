@@ -551,11 +551,11 @@ is known and a consumer should be able to compare against it.
 `expectations.download_bytes` is the sum of `compressed_size` over the plan's
 `FETCH` entries - what a correct patch costs. It is **never** null and never
 defaulted. This is stated as a rule because getting it wrong is not a cosmetic
-bug: an earlier build emitted `plan: null`, `totals: null` and
-`download_bytes: 0` for an `added` capture whose file actually cost 114 357 B to
-download. A consumer that asserted `SUMMARY download_bytes == expectations.download_bytes`
-would have compared 114 357 against 0 and called a perfectly correct run a
-failure.
+bug: `null` where a figure exists reads as *unrecorded* and `0` reads as a claim.
+An `added` capture whose file actually costs 114 357 B to download, written as
+`plan: null` / `totals: null` / `download_bytes: 0`, makes a consumer that
+asserts `SUMMARY download_bytes == expectations.download_bytes` compare 114 357
+against 0 and call a perfectly correct run a failure.
 
 Absent data has to be absent. Where a figure genuinely does not exist, the field
 that would hold it is `null` - which is why `result_path` and `result_md5` can be
@@ -580,11 +580,11 @@ and every differing file is exactly one that needs patching.
 
 > **Consuming `game/` with the main tool needs `girpr --include`.** Run against
 > this directory unscoped, the main tool builds its plan from the whole live
-> manifest and would fetch the entire game. `girpr` now ships path scoping, so
-> point it at a **copy** of `game/` and name one capture per run with
-> `--include`. See [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr)
-> for the procedure, the per-capture figures, and the one capture (`removed`)
-> whose run `girpr` currently refuses.
+> manifest and would fetch the entire game. Point it at a **copy** of `game/` and
+> name one capture per run with `--include` (`removed` takes
+> `--purge-only --include` instead). See
+> [`00-spec.md` §8](00-spec.md#8-consuming-the-bundle-with-girpr) for the
+> procedure and the per-capture figures.
 
 ## 15. `verify/checksums.json`
 

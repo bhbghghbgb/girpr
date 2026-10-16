@@ -179,13 +179,10 @@ impl Bundle {
 
         // `patchmaps/` - the plan and the ground truth.
         //
-        // The plan is spelled out rather than left null, and it used to be left
-        // null. A `partial_same_offset` capture whose patchmap carried no plan
-        // passed M9's whole suite, and A20 - added when the same defect was found
-        // in `added.json` - turned it red: a capture with a new side must say
-        // what producing it costs. Three new-side chunks: the first is new
-        // content (FETCH), the other two are in the old file at the same offsets
-        // (REUSE, neither moved).
+        // The plan is spelled out, never left null: a capture with a new side must
+        // say what producing it costs, which is exactly what A20 checks. Three
+        // new-side chunks: the first is new content (FETCH), the other two are in
+        // the old file at the same offsets (REUSE, neither moved).
         use gircap::assemble::ranges::Range as PRange;
         use gircap::assemble::{Decision, PlanEntry, SourceRange, Totals};
         let entry = |i: usize, c: &SophonChunk, offset: i64, reuse_from: Option<i64>| PlanEntry {

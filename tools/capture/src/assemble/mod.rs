@@ -848,10 +848,8 @@ fn build_map(
     // A capture with **no** side at all is reachable and is not an error: a
     // path selected out of the audio pool has no entry in the `game` manifests,
     // which `run` says outright ("that is a bug there, and here it surfaces as a
-    // one-sided pair rather than a wrong download"). It used to emit
-    // `expectations: null`, i.e. a patchmap a consumer could assert nothing
-    // about, so it is folded in with `removed`: there is no result file and
-    // nothing is downloaded. That is a weaker capture than the other classes,
+    // one-sided pair rather than a wrong download"), so it is folded in with
+    // `removed`: there is no result file and nothing is downloaded. That is a weaker capture than the other classes,
     // and saying so is better than claiming a result that does not exist.
     let expectations = match new {
         Some(n) => Expectations {

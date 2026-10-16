@@ -97,7 +97,7 @@ touches a path by name has to participate:
 | `repair::plan::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
 | `repair::post::delete_deprecated` | skip any hidden path |
 | `repair::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
-| `util::write_config_ini` (from `repair::post::run`) | **not bumped** — see §2.2 |
+| `util::write_config_ini` (from `repair::post::run`) | **not bumped** — see below |
 | `repair::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
 
 There are two ways to make a path invisible to the purge: filter inside the
@@ -169,8 +169,8 @@ Two enforcement points exist and are not interchangeable:
 
 Both produce exit `5`.
 
-**What refusal costs.** A limited run no longer produces a partially-scoped
-install. That is the desired outcome, not a regression: every option here
+**What refusal costs.** A limited run produces no partially-scoped install at
+all. That is the desired outcome, not a regression: every option here
 produces an install that is not a working install, and the sooner the tool says
 so, the better.
 

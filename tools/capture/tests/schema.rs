@@ -558,17 +558,14 @@ fn the_request_log_is_one_json_object_per_line_in_sequence_order() {
 /// The one-sided captures carry a plan, totals and expectations - the shapes
 /// `01-artifact-schema.md` §13 promises.
 ///
-/// This exists because three documents stated the shape and the writer emitted a
-/// different one for two whole milestones without a single test failing. Before
-/// the fix, `added.json` was `"plan": null`, `"totals": null` and
-/// `"expectations": null`, and `removed.json` had no `expectations` at all. Worse,
-/// `added` carried `"download_bytes": 0` where the real cost was non-zero - not
-/// "unrecorded" but *false*, and a consumer comparing against it would lose to a
-/// run behaving perfectly.
+/// This exists because three documents state the shape and the writer is a
+/// fourth: nothing checked that they agreed. `added` in particular must carry a
+/// real `download_bytes` — not "unrecorded" but *false* — or a consumer comparing
+/// against it loses to a run behaving perfectly.
 ///
 /// Asserted on the emitted JSON rather than on the struct: the struct cannot
-/// represent the old shape any more, so a struct-level assertion would pass
-/// whatever the writer wrote.
+/// represent a missing plan, so a struct-level assertion would pass whatever the
+/// writer wrote.
 #[test]
 fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
     let b = bundle();
@@ -638,9 +635,8 @@ fn a_removed_capture_carries_an_expectation_a_consumer_can_assert() {
     assert!(removed["plan"].is_null(), "and so no target to plan for");
     assert!(removed["totals"].is_null(), "and so nothing to cost");
 
-    // §13 used to say `removed` has "no `expectations`". That left a consumer
-    // with nothing to assert and nothing to check, for the one capture whose
-    // whole point is a deletion.
+    // `removed` carries `expectations` too: a consumer needs something to assert
+    // for the one capture whose whole point is a deletion.
     let e = removed["expectations"]
         .as_object()
         .expect("`removed` has expectations");

@@ -39,9 +39,9 @@ impl Budget {
 
     /// A budget with the same ceiling, already charged by `spent`.
     ///
-    /// Used to carry the forced `--files` captures' cost into the same ledger
-    /// the class loop draws from, so `Σ total_cost` is one number rather than
-    /// two that have to be added up by a reader.
+    /// The forced `--files` captures' cost rides in the same ledger the class
+    /// loop draws from, so `Σ total_cost` is one number rather than two that a
+    /// reader has to add up.
     pub fn with_spent(limit: Option<u64>, spent: u64) -> Self {
         Budget { limit, spent }
     }

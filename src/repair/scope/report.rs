@@ -70,8 +70,8 @@ impl PlanTotals {
 /// The one-line `PLAN` summary. Key order is fixed so two runs diff cleanly.
 ///
 /// A [`Record`], like every other stdout line, so `--print-plan --output json`
-/// emits a `{"event":"plan",…}` object rather than a text line with a JSON twin
-/// bolted on beside it — one object per event, so the stream parses as JSON.
+/// emits a `{"event":"plan",…}` object: one object per event, so the stream
+/// parses as JSON.
 ///
 /// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
 /// key name carries one type across the whole stream.
@@ -272,10 +272,8 @@ mod tests {
         assert_eq!(v["purge_bytes"], 4096);
         assert_eq!(v["max_chunk_bytes"], 30);
         assert_eq!(v.as_object().unwrap().len(), 7, "{json}");
-        // `scoped` is an integer here and on `SUMMARY`. It used to be a JSON
-        // boolean on this object and a `1` on the summary: one key name, two
-        // types, one stream. `SUMMARY` is the documented shape, so this is the
-        // one that changed.
+        // `scoped` is an integer here for the same reason it is one on
+        // `SUMMARY`: one key name carries one type across the whole stream.
         assert_eq!(v["scoped"], 1);
         assert!(v["scoped"].is_i64(), "{json}");
     }
