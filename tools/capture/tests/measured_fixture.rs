@@ -550,9 +550,11 @@ mod m5_matrix {
             "no file in this pair answers two classes, so nothing is `also_satisfies`"
         );
         assert!(
-            s.admitted
-                .iter()
-                .all(|a| a.primary_class_satisfies_shape(&pool)),
+            s.admitted.iter().all(|a| {
+                pool.iter()
+                    .find(|c| c.candidate.path == a.path)
+                    .is_some_and(|c| a.primary_class.matches(c.candidate.shape))
+            }),
             "every admission's file really does answer the class it was picked for"
         );
         assert_eq!(
@@ -734,13 +736,12 @@ mod m5_matrix {
         );
     }
 
-    /// The scoring document is written from the same pool the admission used, so
+    /// The scoring document is written from the same diff the admission used, so
     /// it can be checked against the answer without re-deriving anything.
     #[test]
     fn the_candidates_document_lists_every_path_once_with_its_classes() {
         let diffs = [game()];
-        let pool = select::candidates(&diffs);
-        let doc = select::candidates_document(&diffs, &pool);
+        let doc = select::candidates_document(&diffs);
         let rows = doc["rows"].as_array().expect("rows");
         // Common paths only: a one-sided row has no score to report.
         assert_eq!(rows.len(), diffs[0].counts.common as usize);

@@ -22,8 +22,6 @@ use super::selfcheck;
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash;
-
 /// One file under the artifact root, as both index documents record it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -188,11 +186,6 @@ impl Checksums {
         })
     }
 
-    /// The entry for a path, if the document lists it.
-    pub fn get(&self, path: &str) -> Option<&FileEntry> {
-        self.entries.iter().find(|e| e.path == path)
-    }
-
     /// A16: every file under the root is listed, and re-hashing matches.
     ///
     /// Both halves, because a list that omits a file is a silent gap while a list
@@ -285,20 +278,10 @@ fn encoding_of(rel_path: &str) -> crate::hash::Encoding {
 /// The artifact schema's per-file entry, reused for `MANIFEST.json → files[]`.
 pub type ManifestFile = FileEntry;
 
-/// A convenience for hashing a small in-memory body as if it were a file.
-pub fn digest_bytes(rel_path: &str, bytes: &[u8]) -> FileEntry {
-    FileEntry {
-        path: rel_path.to_string(),
-        bytes: bytes.len() as u64,
-        md5: hash::md5_hex(bytes),
-        sha256: hash::sha256_hex(bytes),
-        encoding: encoding_of(rel_path),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash;
 
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("gircap-m8-{name}-{}", std::process::id()));
@@ -373,7 +356,6 @@ mod tests {
         );
         assert_eq!(c.algorithm, "sha256");
         assert_eq!(c.schema_version, crate::SCHEMA_VERSION);
-        assert!(c.get("verify/selfcheck.json").is_some());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -424,7 +406,13 @@ mod tests {
         let root = scratch("a16ghost");
         std::fs::write(root.join("a.bin"), b"a").unwrap();
         let mut c = Checksums::scan(&root).unwrap();
-        c.entries.push(digest_bytes("never-written.bin", b"x"));
+        c.entries.push(FileEntry {
+            path: "never-written.bin".into(),
+            bytes: 1,
+            md5: hash::md5_hex(b"x"),
+            sha256: hash::sha256_hex(b"x"),
+            encoding: crate::hash::Encoding::Identity,
+        });
         c.file_count = c.entries.len() as u64;
         let (ok, detail) = c.a16(&root);
         assert!(!ok);
@@ -449,9 +437,20 @@ mod tests {
         assert_eq!(encoding_of("a.bin"), crate::hash::Encoding::Identity);
         assert_eq!(encoding_of("a.json.gz"), crate::hash::Encoding::Gzip);
         assert_eq!(encoding_of("a.json"), crate::hash::Encoding::Identity);
-        let e = digest_bytes("x.json.gz", b"body");
+        let e = &c_of("x.json.gz");
         assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
-        assert_eq!(serde_json::to_value(&e).unwrap()["encoding"], "gzip");
+        assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "gzip");
+    }
+
+    /// A synthetic entry, for the assertions that need a file that was never written.
+    fn c_of(rel_path: &str) -> FileEntry {
+        FileEntry {
+            path: rel_path.to_string(),
+            bytes: 4,
+            md5: hash::md5_hex(b"body"),
+            sha256: hash::sha256_hex(b"body"),
+            encoding: encoding_of(rel_path),
+        }
     }
 }
 

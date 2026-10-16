@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use crate::cli::{
     Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs,
 };
-use crate::report::OutputFormat;
 
 /// The audio language selected when `--audio` is not passed.
 ///
@@ -28,13 +27,6 @@ pub const DEFAULT_AUDIO: &str = "en-us";
 
 /// The `--audio` spelling that means "game only, no voice packs".
 pub const AUDIO_NONE: &str = "none";
-
-/// The gzip threshold applied when `--gzip-threshold` is not passed.
-pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
-
-/// A `--no-chunk-blobs` run.
-pub const METADATA_ONLY_NOTE: &str =
-    "metadata-only run: assertions A7-A10 are not provable without chunk blobs";
 
 /// How `--new-tag` chose a tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,8 +209,6 @@ pub struct CapturePlan {
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
     pub sophon_base: Option<String>,
-    /// stdout rendering.
-    pub output: OutputFormat,
     /// The argv as given, recorded in the artifact so a bundle says how it was made.
     pub argv: Vec<String>,
 }
@@ -272,11 +262,6 @@ impl AudioSelection {
             AudioSelection::None => &[],
         }
     }
-
-    /// Whether a voice pack is written into the fixture.
-    pub fn is_some(&self) -> bool {
-        matches!(self, AudioSelection::Codes(_))
-    }
 }
 
 impl std::fmt::Display for AudioSelection {
@@ -284,31 +269,6 @@ impl std::fmt::Display for AudioSelection {
         match self {
             AudioSelection::None => f.write_str(AUDIO_NONE),
             AudioSelection::Codes(v) => f.write_str(&v.join(",")),
-        }
-    }
-}
-
-/// The concurrency a capture is allowed to use, validated once.
-#[derive(Debug, Clone, Copy)]
-pub struct Transport {
-    /// Concurrent chunk downloads.
-    pub jobs: usize,
-    /// Attempts per request, including the first.
-    pub retries: u32,
-    /// Per-request timeout.
-    pub timeout: std::time::Duration,
-}
-
-impl Transport {
-    /// A transport that performs exactly one attempt and never waits.
-    ///
-    /// For tests driving a local mock, where a retry would turn a fast failure
-    /// into a slow one and hide the cause.
-    pub const fn immediate() -> Self {
-        Transport {
-            jobs: 1,
-            retries: 1,
-            timeout: std::time::Duration::from_secs(10),
         }
     }
 }
@@ -358,22 +318,26 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         gzip_threshold: args.gzip_threshold,
         probe_tags: args.probe_tags.clone(),
         no_chunk_blobs: args.no_chunk_blobs,
-        jobs: transport.jobs,
+        jobs: args.jobs,
         retries: transport.retries,
         timeout: transport.timeout,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
         argv,
     })
 }
 
 /// Validate the transport flags together, naming the one at fault.
-fn validate_transport(jobs: usize, retries: u32, timeout_secs: u64) -> Result<Transport> {
+///
+/// `--jobs` is range-checked here but is **not** part of the returned value:
+/// `http::Transport` is per-fetcher patience, and the concurrency a capture may
+/// use is the caller's business — the chunk fetcher reads `plan.jobs` where it
+/// builds its own queue.
+fn validate_transport(
+    jobs: usize,
+    retries: u32,
+    timeout_secs: u64,
+) -> Result<crate::http::Transport> {
     if jobs == 0 {
         return Err(UsageError::new("--jobs must be at least 1"));
     }
@@ -396,8 +360,7 @@ fn validate_transport(jobs: usize, retries: u32, timeout_secs: u64) -> Result<Tr
     if timeout_secs == 0 {
         return Err(UsageError::new("--timeout must be at least 1 second"));
     }
-    Ok(Transport {
-        jobs,
+    Ok(crate::http::Transport {
         retries,
         timeout: std::time::Duration::from_secs(timeout_secs),
     })
@@ -535,8 +498,6 @@ fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
 pub struct VerifyPlan {
     /// The bundle to re-check.
     pub artifact: PathBuf,
-    /// stdout rendering.
-    pub output: OutputFormat,
 }
 
 /// `gircap materialize` resolved and checked.
@@ -546,19 +507,12 @@ pub struct MaterializePlan {
     pub artifact: PathBuf,
     /// Where to write, if not beside the bundle.
     pub out: Option<PathBuf>,
-    /// stdout rendering.
-    pub output: OutputFormat,
 }
 
 /// Resolve `gircap verify`'s arguments.
 pub fn verify_plan(args: &VerifyArgs) -> Result<VerifyPlan> {
     Ok(VerifyPlan {
         artifact: args.artifact.clone(),
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
     })
 }
 
@@ -577,11 +531,6 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
     Ok(MaterializePlan {
         artifact: args.artifact.clone(),
         out,
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
     })
 }
 
@@ -661,7 +610,7 @@ mod tests {
             files: Vec::new(),
             audio: vec![DEFAULT_AUDIO.to_string()],
             manifest_detail: ManifestDetail::Full,
-            gzip_threshold: DEFAULT_GZIP_THRESHOLD,
+            gzip_threshold: crate::cli::DEFAULT_GZIP_THRESHOLD,
             probe_tags: Vec::new(),
             no_chunk_blobs: false,
             jobs: 4,
@@ -693,7 +642,7 @@ mod tests {
         assert_eq!(p.timeout, std::time::Duration::from_secs(60));
         assert_eq!(p.per_class, 1);
         assert!(!p.no_chunk_blobs);
-        assert_eq!(p.gzip_threshold, DEFAULT_GZIP_THRESHOLD);
+        assert_eq!(p.gzip_threshold, crate::cli::DEFAULT_GZIP_THRESHOLD);
         assert_eq!(p.argv, vec!["gircap".to_string(), "capture".to_string()]);
     }
 
@@ -710,7 +659,6 @@ mod tests {
     fn audio_none_is_its_own_selection_and_mixes_with_nothing() {
         let p = plan(|a| a.audio = vec!["none".into()]).unwrap();
         assert_eq!(p.audio, AudioSelection::None);
-        assert!(!p.audio.is_some());
         assert!(p.audio.codes().is_empty());
         assert_eq!(p.audio.to_string(), "none");
 
@@ -824,7 +772,6 @@ mod tests {
     fn metadata_only_is_a_flag_value_not_an_implicit_rejection() {
         let p = plan(|a| a.no_chunk_blobs = true).unwrap();
         assert!(p.no_chunk_blobs);
-        assert!(METADATA_ONLY_NOTE.contains("A7-A10"));
     }
 
     #[test]
@@ -840,7 +787,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v.artifact, PathBuf::from("a"));
-        assert_eq!(v.output, OutputFormat::Json);
 
         let m = materialize_plan(&MaterializeArgs {
             artifact: PathBuf::from("a"),

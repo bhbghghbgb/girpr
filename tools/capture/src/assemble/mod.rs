@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::blobs::chunks::{FilePair, Set};
+use crate::blobs::chunks::FilePair;
 use crate::blobs::{ChunkIndex, Sources};
 use crate::hash;
 use crate::manifest::proto::SophonChunkFile;
@@ -890,22 +890,6 @@ fn build_map(
         totals,
         expectations,
     })
-}
-
-/// The roles a pair's chunks are retained for, for the run log.
-pub fn roles_of(pair: &FilePair) -> (usize, usize) {
-    (
-        pair.old.as_ref().map(|o| o.entry.chunks.len()).unwrap_or(0),
-        pair.new.as_ref().map(|n| n.entry.chunks.len()).unwrap_or(0),
-    )
-}
-
-/// The `Set`s a pair's plan touches, which is what M6's A12 was about.
-pub fn sets_of(pair: &FilePair) -> Vec<Set> {
-    crate::blobs::chunks::retention(pair)
-        .sets
-        .into_keys()
-        .collect()
 }
 
 #[cfg(test)]

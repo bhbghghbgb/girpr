@@ -541,7 +541,6 @@ fn materialize_defaults_beside_the_bundle() {
     let plan = gircap::config::MaterializePlan {
         artifact: b.root.clone(),
         out: None,
-        output: gircap::report::OutputFormat::Text,
     };
     let (summary, code) = block_on(gircap::run::materialize(plan)).expect("materialize runs");
     assert_eq!(code, gircap::exit::ExitCode::Ok, "{:?}", summary);

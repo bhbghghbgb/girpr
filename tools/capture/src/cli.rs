@@ -88,6 +88,14 @@ pub struct CommonArgs {
 /// this.
 pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
 
+/// The `--audio` default: one launchable-install language, which is also a
+/// deliberate widening of the selection pool.
+///
+/// A capture that selected no audio would have one fewer manifest to score the
+/// matrix against, and every audio class would rest on nothing but the `game`
+/// field's own candidates.
+pub use crate::config::DEFAULT_AUDIO;
+
 /// `gircap capture`.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct CaptureArgs {
@@ -126,7 +134,7 @@ pub struct CaptureArgs {
 
     /// Audio languages. `none` writes an empty scan file. Each code also adds a
     /// manifest to the selection pool.
-    #[arg(long = "audio", value_name = "CODE", default_value = "en-us")]
+    #[arg(long = "audio", value_name = "CODE", default_value = DEFAULT_AUDIO)]
     pub audio: Vec<String>,
 
     /// How much of each manifest to keep. `paths-only` skips the full decode dump.
@@ -308,7 +316,7 @@ pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
             .output
             .parse::<OutputFormat>()
             .map_err(UsageError::new)?,
-        log_file: crate::logging::resolve_log_path(common.log_file.as_deref()),
+        log_file: common.log_file.clone(),
     })
 }
 

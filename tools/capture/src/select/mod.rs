@@ -338,17 +338,6 @@ impl Admission {
     pub fn satisfies(&self, class: Class) -> bool {
         self.primary_class == class || self.also_satisfies.contains(&class)
     }
-
-    /// Whether this capture's own file really does answer its primary class.
-    ///
-    /// The cheap internal check that an admission is honest: a capture tagged
-    /// `partial_same_offset` whose file has `moved > 0` would satisfy every
-    /// other consumer of the matrix and lie to the only one that matters.
-    pub fn primary_class_satisfies_shape(&self, pool: &[SizedCandidate]) -> bool {
-        pool.iter()
-            .find(|c| c.candidate.path == self.path)
-            .is_some_and(|c| self.primary_class.matches(c.candidate.shape))
-    }
 }
 
 /// Build the candidate pool from every field's diff, cheapest first.
@@ -636,7 +625,7 @@ const REPOOL_NOTE: &str = "widen --audio, or check the version pair — the spec
 ///
 /// Column-oriented so a reader can sort without re-parsing objects, and carrying
 /// `rank` so "why did it pick that?" has an answer without re-running anything.
-pub fn candidates_document(diffs: &[FieldDiff], pool: &[SizedCandidate]) -> serde_json::Value {
+pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = by_cost(diffs)
         .into_iter()
         .enumerate()
@@ -667,7 +656,6 @@ pub fn candidates_document(diffs: &[FieldDiff], pool: &[SizedCandidate]) -> serd
             })
         })
         .collect();
-    let _ = pool;
     serde_json::json!({
         "schema_version": crate::SCHEMA_VERSION,
         "columns": [
@@ -1141,8 +1129,7 @@ mod tests {
                 ),
             ],
         )];
-        let pool = candidates(&diffs);
-        let doc = candidates_document(&diffs, &pool);
+        let doc = candidates_document(&diffs);
         assert_eq!(doc["schema_version"], 1);
         let cols = doc["columns"].as_array().unwrap();
         for c in [

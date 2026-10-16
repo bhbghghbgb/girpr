@@ -181,16 +181,6 @@ impl RetryPolicy {
         }
     }
 
-    /// No waiting at all — for tests, where a backoff turns a fast failure into a
-    /// slow one and hides the cause.
-    pub const fn immediate() -> Self {
-        RetryPolicy {
-            attempts: 1,
-            base_delay: Duration::ZERO,
-            max_delay: Duration::ZERO,
-        }
-    }
-
     /// The delay before attempt number `attempt` (1-based; `1` never waits).
     ///
     /// Pure and off by construction: `base * 2^(attempt - 2)` is the delay
@@ -257,8 +247,6 @@ impl Sleep for RecordingSleep {
 /// How much concurrency and patience a fetcher has.
 #[derive(Debug, Clone, Copy)]
 pub struct Transport {
-    /// Concurrent chunk downloads. Advisory here; enforced by the caller.
-    pub jobs: usize,
     /// Attempts per request, including the first.
     pub retries: u32,
     /// Per-request timeout.
@@ -270,7 +258,6 @@ impl Transport {
     /// failure into a slow one.
     pub const fn local() -> Self {
         Transport {
-            jobs: 4,
             retries: 1,
             timeout: Duration::from_secs(10),
         }
@@ -470,11 +457,6 @@ pub struct Fetched {
 }
 
 impl Fetched {
-    /// The body as UTF-8, for a response that is asserted to be JSON.
-    pub fn text(&self) -> Result<&str, ApiError> {
-        std::str::from_utf8(&self.body).map_err(|e| ApiError::shape("response", e))
-    }
-
     /// The sequence number of this request, for `set_stored_as`.
     pub fn seq(&self) -> u64 {
         self.record.seq
@@ -966,15 +948,6 @@ mod tests {
     }
 
     #[test]
-    fn an_immediate_policy_never_waits() {
-        let p = RetryPolicy::immediate();
-        assert_eq!(p.attempts, 1);
-        for a in 1..=10 {
-            assert_eq!(p.delay_before(a), Duration::ZERO);
-        }
-    }
-
-    #[test]
     fn at_least_one_attempt_is_always_made() {
         assert_eq!(RetryPolicy::new(0).attempts, 1);
         assert_eq!(RetryPolicy::new(1).attempts, 1);
@@ -1224,7 +1197,6 @@ mod tests {
     fn fetcher(retries: u32, sleeper: Arc<dyn Sleep>) -> Fetcher {
         Fetcher::with_sleeper(
             Transport {
-                jobs: 1,
                 retries,
                 timeout: Duration::from_secs(5),
             },

@@ -330,13 +330,6 @@ pub struct Category {
     pub scenarios: Vec<String>,
 }
 
-impl Category {
-    /// Whether this category carries voice packs rather than game files.
-    pub fn is_audio(&self) -> bool {
-        self.kind == "CATEGORY_TYPE_AUDIO"
-    }
-}
-
 // ----------------------------------------------------- getGameDeprecatedFiles
 
 /// `data.deprecated_file_configs[]`.
@@ -556,14 +549,6 @@ impl GetBuild {
                 )
             })
     }
-
-    /// Every `matching_field` this build publishes, in wire order.
-    pub fn matching_fields(&self) -> Vec<&str> {
-        self.manifests
-            .iter()
-            .map(|m| m.matching_field.as_str())
-            .collect()
-    }
 }
 
 /// One `manifests[]` entry.
@@ -729,10 +714,6 @@ impl Stats {
     pub fn chunks(&self) -> Option<u64> {
         self.chunk_count.as_ref().and_then(IntOrStr::as_u64)
     }
-    /// `compressed_size` as a number, when present and well-formed.
-    pub fn compressed_bytes(&self) -> Option<u64> {
-        self.compressed_size.as_ref().and_then(IntOrStr::as_u64)
-    }
     /// `uncompressed_size` as a number, when present and well-formed.
     pub fn uncompressed_bytes(&self) -> Option<u64> {
         self.uncompressed_size.as_ref().and_then(IntOrStr::as_u64)
@@ -889,7 +870,7 @@ mod tests {
         let e = b.manifest_for("ko-kr").unwrap_err();
         assert!(e.to_string().contains("ko-kr"), "{e}");
         assert!(e.to_string().contains("game"), "{e}");
-        assert_eq!(b.matching_fields(), vec!["game"]);
+        assert_eq!(b.manifests.len(), 1);
     }
 
     /// The field a minimal client drops, and the one that decides whether a blob
@@ -1028,8 +1009,8 @@ mod tests {
         assert_eq!(m.tag, "7.1.0");
         assert_eq!(m.diff_tags, vec!["7.0.0", "6.7.0"]);
         assert_eq!(m.categories.len(), 2);
-        assert!(!m.categories[0].is_audio());
-        assert!(m.categories[1].is_audio());
+        assert_eq!(m.categories[0].kind, "CATEGORY_TYPE_RESOURCE");
+        assert_eq!(m.categories[1].kind, "CATEGORY_TYPE_AUDIO");
         assert_eq!(m.categories[1].matching_field, "en-us");
     }
 

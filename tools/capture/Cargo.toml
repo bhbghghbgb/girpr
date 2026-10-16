@@ -17,9 +17,11 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-anyhow = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
+# or handed on as raw bytes, and nothing reads a streaming body. The `stream`
+# feature is what a future "hash the blob as it lands" would ask for.
+reqwest = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 prost = "0.13"

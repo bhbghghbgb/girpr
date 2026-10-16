@@ -206,7 +206,10 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 /// The rebuilt bytes are kept rather than dropped, because [`materialize`] is the
 /// same rebuild with somewhere to put them, and rebuilding twice on a 135 MB
 /// bundle costs a minute of the operator's time for nothing.
-#[derive(Debug, Clone)]
+///
+/// Deliberately **not** [`Clone`]: `rebuilt` is the whole fixture, so a derived
+/// `Clone` is a ~135 MB copy waiting for the caller that wanted a second opinion.
+#[derive(Debug)]
 pub struct Report {
     /// The bundle it came from.
     pub bundle: Bundle,
@@ -288,27 +291,6 @@ impl Report {
             .flatten()
             .map(|s| s.bytes.len() as u64)
             .sum()
-    }
-
-    /// The re-derived rows as a `Selfcheck`, for `--output json`.
-    ///
-    /// The matrix is carried through from the manifest rather than recomputed:
-    /// A17 re-derives *that* the matrix is complete, and a document that answered
-    /// that by rebuilding the matrix from scratch would be a second, worse copy of
-    /// the capture's own selection logic.
-    pub fn to_selfcheck(&self) -> Selfcheck {
-        let matrix = self
-            .bundle
-            .manifest
-            .matrix
-            .iter()
-            .map(|m| crate::emit::selfcheck::MatrixRow {
-                class: m.class.clone(),
-                status: m.status.clone(),
-                ok: crate::emit::selfcheck::MatrixRow::ok_status(&m.status),
-            })
-            .collect();
-        Selfcheck::build(self.rows.clone(), matrix, &[])
     }
 }
 

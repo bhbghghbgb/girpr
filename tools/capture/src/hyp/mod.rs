@@ -22,7 +22,6 @@
 use crate::biz::{Biz, BranchParams, Endpoints, HypEndpoint};
 use crate::config::{NewTagSelector, OldTagSelector, VersionPair};
 use crate::http::{ApiError, Fetcher, Kind, RequestLog};
-use crate::report::OutputFormat;
 
 pub mod types;
 
@@ -326,12 +325,6 @@ pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
 /// Render a document for writing under `api/`.
 pub fn render_json(value: &impl serde::Serialize) -> Result<String, ApiError> {
     serde_json::to_string_pretty(value).map_err(|e| ApiError::shape("serialize", e))
-}
-
-/// The `--output` spelling a capture's generated documents use, so a text run and
-/// a json run produce the same tree.
-pub fn document_format(output: OutputFormat) -> OutputFormat {
-    output
 }
 
 #[cfg(test)]

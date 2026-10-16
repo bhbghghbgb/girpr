@@ -15,7 +15,7 @@ use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{OutputFormat, Record};
-use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
+use crate::{assemble, blobs, emit, hyp, manifest, select};
 
 /// The `matching_field` every run scores first, and the one every later stage
 /// needs whatever class a capture lands in.
@@ -88,7 +88,6 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let log = RequestLog::new();
     let fetcher = Fetcher::new(
         Transport {
-            jobs: plan.jobs,
             retries: plan.retries,
             timeout: plan.timeout,
         },
@@ -503,7 +502,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     written.extend(
         emit::write_selection(
             &dir,
-            &select::candidates_document(&diffs, &pool),
+            &select::candidates_document(&diffs),
             &selection,
             plan.per_class.max(1) as usize,
         )
@@ -1388,10 +1387,6 @@ pub fn failure_summary_detail(event: &'static str, code: ExitCode, detail: Optio
         None => s,
     }
 }
-
-/// Re-exported so `main.rs` can name the process exit without importing two
-/// modules for it.
-pub use exit::exit_with;
 
 /// Turn a writer's `io::Error` into exit `2` naming the directory.
 ///

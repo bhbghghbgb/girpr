@@ -89,14 +89,6 @@ impl Range {
         next.start - self.end
     }
 
-    /// As a `std` range, for slicing. `None` when inverted or empty.
-    pub fn as_std(self) -> Option<std::ops::Range<usize>> {
-        if self.start < 0 || self.is_inverted() {
-            return None;
-        }
-        Some(self.start as usize..self.end as usize)
-    }
-
     /// The slice of `bytes` this range names, if it names a valid one.
     pub fn slice<'a>(&self, bytes: &'a [u8]) -> Option<&'a [u8]> {
         if self.is_inverted() || self.start < 0 {
@@ -194,13 +186,6 @@ impl Layout {
     pub fn is_clean(&self) -> bool {
         self.violations.is_empty()
     }
-
-    /// The ranges in ascending offset order.
-    pub fn sorted(&self) -> Vec<Range> {
-        let mut r = self.ranges.clone();
-        r.sort();
-        r
-    }
 }
 
 #[cfg(test)]
@@ -252,7 +237,6 @@ mod tests {
         // different but not contradictory.
         assert!(r.is_empty());
         assert_eq!(r.len(), -6);
-        assert_eq!(r.as_std(), None, "cannot be sliced");
         assert_eq!(r.slice(b"0123456789"), None);
     }
 
@@ -360,8 +344,12 @@ mod tests {
             "{:?}",
             l.violations
         );
-        // And the ranges are still there, sorted, because assembly needs them.
-        let s = l.sorted();
+        // And the ranges are still there, in offset order, because assembly needs them.
+        let s: Vec<Range> = {
+            let mut s = l.ranges.clone();
+            s.sort();
+            s
+        };
         assert_eq!(s[0], Range::at(0, 100));
         assert_eq!(s[2], Range::at(200, 100));
     }

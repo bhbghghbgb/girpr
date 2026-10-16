@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use crate::assemble::ChunkSource;
-use crate::assemble::ranges::{Layout, Range};
+use crate::assemble::ranges::Layout;
 use crate::blobs::ChunkIndex;
 use crate::blobs::chunks::Set;
 use crate::hash;
@@ -248,19 +248,10 @@ pub fn compare(label: &str, rebuilt: &[u8], shipped: &[u8]) -> Result<(), String
     ))
 }
 
-/// The relative path a capture's file lives at under a tree.
-pub fn tree_path(tree: &str, path: &str) -> String {
-    format!("{tree}/{path}")
-}
-
-/// The ranges a rebuilt file's chunks occupy, for the run log.
-pub fn ranges(r: &Rebuilt) -> Vec<Range> {
-    r.layout.ranges.clone()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assemble::ranges::Range;
     use crate::blobs::chunks::{Reference, Set};
     use crate::blobs::props::BlobProps;
     use crate::blobs::{IndexedBlob, Store};
@@ -507,7 +498,10 @@ mod tests {
         let f = Fixture::build("match");
         let old = f.bodies("7.0.0");
         let new = f.bodies("7.1.0");
-        let (o_path, n_path) = (tree_path("game", DLL), tree_path("expected", DLL));
+        let (o_path, n_path) = (
+            format!("game/{DLL}"),
+            format!("expected/{DLL}"),
+        );
         // The tree the bundle would have written alongside the blobs.
         for (label, bytes, rel) in [("game", &old, &o_path), ("expected", &new, &n_path)] {
             let shipped = f.root.join(rel);

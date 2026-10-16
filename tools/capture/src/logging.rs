@@ -14,7 +14,7 @@
 //! each request cost, and it must survive a `--log-level warn` console.
 
 use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use tracing_appender::non_blocking::WorkerGuard;
@@ -95,19 +95,20 @@ struct AppendFile(Arc<Mutex<std::fs::File>>);
 
 impl std::io::Write for AppendFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut f = self
-            .0
-            .lock()
-            .map_err(|_| std::io::Error::other("log file mutex poisoned"))?;
-        f.write(buf)
+        self.locked().and_then(|mut f| f.write(buf))
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut f = self
-            .0
+        self.locked().and_then(|mut f| f.flush())
+    }
+}
+
+impl AppendFile {
+    /// The locked handle, naming the one way this lock can fail.
+    fn locked(&self) -> std::io::Result<std::sync::MutexGuard<'_, std::fs::File>> {
+        self.0
             .lock()
-            .map_err(|_| std::io::Error::other("log file mutex poisoned"))?;
-        f.flush()
+            .map_err(|_| std::io::Error::other("log file mutex poisoned"))
     }
 }
 
@@ -167,47 +168,45 @@ pub fn init(level: Level, log_file: Option<&Path>) -> LogGuard {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_target(true);
 
-    let guard = match log_file {
-        None => {
-            let _ = tracing_subscriber::registry()
-                .with(EnvFilter::new(FILE_FILTER_SPEC))
-                .with(stderr_layer.with_filter(EnvFilter::new(&console_spec)))
-                .try_init();
-            LogGuard { _file: None }
-        }
+    // The file sink, if `--log-file` named a writable path. A log file that
+    // cannot be opened is reported and then skipped: the capture is the thing
+    // that was asked for, and losing its narration is a lesser harm than losing
+    // it. Everything before this point happens with no subscriber installed, so
+    // the failure is a raw stderr write.
+    let file = match log_file {
+        None => None,
         Some(path) => match open_log_file(path) {
             Err(e) => {
-                // Deliberately a raw stderr write: this happens before the
-                // subscriber is installed, so there is nothing to log through.
                 eprintln!("gircap: cannot open --log-file {}: {e}", path.display());
-                let _ = tracing_subscriber::registry()
-                    .with(EnvFilter::new(FILE_FILTER_SPEC))
-                    .with(stderr_layer.with_filter(EnvFilter::new(&console_spec)))
-                    .try_init();
-                LogGuard { _file: None }
+                None
             }
-            Ok(writer) => {
-                let (non_blocking, worker) = tracing_appender::non_blocking(writer);
-                // JSON lines, not the human format: this file is the evidence for
-                // why a version pair was chosen and what each request cost, and a
-                // reader parsing it should not have to strip a timestamp and a
-                // target off the front of every line.
-                let file_layer = layer()
-                    .json()
-                    .with_ansi(false)
-                    .with_target(true)
-                    .with_writer(non_blocking);
-                let _ = tracing_subscriber::registry()
-                    .with(EnvFilter::new(FILE_FILTER_SPEC))
-                    .with(stderr_layer.with_filter(EnvFilter::new(&console_spec)))
-                    .with(file_layer.with_filter(EnvFilter::new(FILE_FILTER_SPEC)))
-                    .try_init();
-                LogGuard {
-                    _file: Some(worker),
-                }
-            }
+            Ok(writer) => Some(writer),
         },
     };
+
+    let mut worker = None;
+    let file_layer = file.map(|w| {
+        // JSON lines, not the human format: this file is the evidence for why a
+        // version pair was chosen and what each request cost, and a reader parsing
+        // it should not have to strip a timestamp and a target off the front of
+        // every line.
+        let (non_blocking, guard) = tracing_appender::non_blocking(w);
+        worker = Some(guard);
+        layer()
+            .json()
+            .with_ansi(false)
+            .with_target(true)
+            .with_writer(non_blocking)
+            .with_filter(EnvFilter::new(FILE_FILTER_SPEC))
+    });
+
+    let _ = tracing_subscriber::registry()
+        .with(EnvFilter::new(FILE_FILTER_SPEC))
+        .with(stderr_layer.with_filter(EnvFilter::new(&console_spec)))
+        .with(file_layer)
+        .try_init();
+
+    let guard = LogGuard { _file: worker };
 
     tracing::info!(
         version = crate::VERSION,
@@ -233,13 +232,12 @@ fn open_log_file(path: &Path) -> std::io::Result<AppendFile> {
 /// third party, and a request should not identify the client that made it. It is
 /// still sent as a real header rather than left to the client default, so a
 /// captured `api/requests.ndjson` records exactly what the CDN saw.
-pub fn user_agent() -> String {
-    "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)".to_string()
-}
+pub const USER_AGENT: &str =
+    "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)";
 
-/// The resolved log-file path, for a run that wants to mention it in its summary.
-pub fn resolve_log_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit.map(Path::to_path_buf)
+/// The [`USER_AGENT`] string, owned where a [`String`] is wanted.
+pub fn user_agent() -> String {
+    USER_AGENT.to_string()
 }
 
 #[cfg(test)]
@@ -271,8 +269,9 @@ mod tests {
 
     #[test]
     fn the_user_agent_is_the_generic_unity_player_string() {
+        assert_eq!(user_agent(), USER_AGENT);
         assert_eq!(
-            user_agent(),
+            USER_AGENT,
             "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)"
         );
     }

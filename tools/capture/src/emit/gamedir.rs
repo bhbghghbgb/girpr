@@ -26,7 +26,6 @@
 use std::path::Path;
 
 use crate::biz::Biz;
-use crate::hash;
 
 /// The `[General]` block `config.ini` carries.
 ///
@@ -164,15 +163,6 @@ pub struct Written {
     pub expected: Vec<String>,
 }
 
-impl Written {
-    /// Every path this wrote, both trees.
-    pub fn all(&self) -> Vec<String> {
-        let mut v = self.game.clone();
-        v.extend(self.expected.iter().cloned());
-        v
-    }
-}
-
 /// Write `config.ini` and the audio scan file, the two entries that are not
 /// variant files.
 ///
@@ -237,11 +227,6 @@ pub fn write_gamedir(
         w.expected.push(write_variant(root, "expected", f)?);
     }
     Ok(w)
-}
-
-/// The MD5 of a `config.ini` body, for the manifest's `files[]`.
-pub fn config_ini_md5(biz: &Biz, old_tag: &str) -> String {
-    hash::md5_hex(config_ini(biz, old_tag).as_bytes())
 }
 
 fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
@@ -425,11 +410,8 @@ mod tests {
     }
 
     #[test]
-    fn the_config_ini_digest_is_of_the_bytes_that_are_written() {
+    fn the_config_ini_body_names_the_biz_and_the_old_tag() {
         let ini = config_ini(&global(), "7.0.0");
-        assert_eq!(
-            config_ini_md5(&global(), "7.0.0"),
-            hash::md5_hex(ini.as_bytes())
-        );
+        assert!(ini.contains("7.0.0"), "{ini}");
     }
 }
