@@ -631,6 +631,122 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         capture.id
     );
 
+    // The `build_id` invariant of `docs/06` §4.1, measured through a real run
+    // rather than probed: every blob request's `<build_id>` must equal the build
+    // whose manifest declared that id. Only chunks are checked here because only
+    // chunk downloads carry the prefix `girpr` builds from the latest build's
+    // body (manifests were pinned directly in M1).
+    let wrong_build: Vec<(String, String)> = bridge
+        .chunk_requests()
+        .into_iter()
+        .filter(|(b, _)| *b != bundle.new_build)
+        .collect();
+    assert!(
+        wrong_build.is_empty(),
+        "{}: every chunk request must carry the new build's id ({}); these did not: \
+         {wrong_build:?}",
+        capture.id,
+        bundle.new_build
+    );
+
+    // ---- per-class expectations (docs/06 6.2) ---------------------------
+    //
+    // The four assertions above are the same for every capture; these are the
+    // places a class is *different in kind* rather than in number.
+    for class in &capture.classes {
+        match class.as_str() {
+            // Planned, then skipped on size+MD5: not downloaded, not touched.
+            // `must_not_fetch` is the only thing that proves it, since
+            // `download_bytes=0` is also what a broken run reports.
+            "identical" => {
+                assert_eq!(
+                    run.num("summary", "total"),
+                    1,
+                    "{}: it is planned",
+                    capture.id
+                );
+                assert_eq!(run.num("summary", "skipped"), 1, "{}", capture.id);
+                assert_eq!(run.num("summary", "repaired"), 0, "{}", capture.id);
+                assert_eq!(run.num("summary", "download_bytes"), 0, "{}", capture.id);
+                assert!(
+                    asked.is_empty(),
+                    "{}: nothing may be downloaded",
+                    capture.id
+                );
+                assert!(
+                    added.is_empty() && removed.is_empty() && changed.is_empty(),
+                    "{}: an intact file must not be touched at all; \
+                     added {added:?} removed {removed:?} changed {changed:?}",
+                    capture.id
+                );
+            }
+            // The path is absent from `game/` and present in the new manifest, so
+            // it is planned and downloaded in full — which makes it the one
+            // class where the tree diff must show an *addition*.
+            "added" => {
+                assert_eq!(run.num("summary", "repaired"), 1, "{}", capture.id);
+                assert!(
+                    capture.must_not_fetch.is_empty(),
+                    "{}: nothing to reuse",
+                    capture.id
+                );
+                assert!(
+                    added.contains(selected),
+                    "{}: the file is new on disk",
+                    capture.id
+                );
+                assert!(changed.is_empty() && removed.is_empty(), "{}", capture.id);
+            }
+            // No repair, so no byte total: the cleanup deletes it and the
+            // counters are the assertion.
+            "removed" => {
+                assert_eq!(run.num("summary", "total"), 0, "{}", capture.id);
+                assert_eq!(run.num("summary", "repaired"), 0, "{}", capture.id);
+                assert_eq!(run.num("summary", "skipped"), 0, "{}", capture.id);
+                assert_eq!(
+                    run.num("summary", "deleted_extra_bytes"),
+                    capture.old_size,
+                    "{}: the cleanup deleted the file the patchmap priced",
+                    capture.id
+                );
+                assert!(
+                    removed.contains(selected),
+                    "{}: it must be gone",
+                    capture.id
+                );
+                assert!(added.is_empty() && changed.is_empty(), "{}", capture.id);
+                assert!(asked.is_empty(), "{}: nothing is downloaded", capture.id);
+            }
+            // The three patchable classes and the two zero-reuse classes are
+            // the load-bearing ones, and assertions 1-3 above already bite on
+            // them: the byte total is the patchmap's, the result MD5 is the
+            // ground truth, and `must_not_fetch` is non-empty for every partial.
+            "partial_same_offset"
+            | "partial_moved_offset"
+            | "partial_size_changed"
+            | "zero_reuse_single"
+            | "zero_reuse_multi" => {
+                assert_eq!(
+                    run.num("summary", "repaired"),
+                    1,
+                    "{}: a patchable file is repaired, not skipped",
+                    capture.id
+                );
+                assert_eq!(run.num("summary", "skipped"), 0, "{}", capture.id);
+                assert!(
+                    changed.contains(selected),
+                    "{}: the bytes on disk must have moved",
+                    capture.id
+                );
+            }
+            other => println!(
+                "note: {} is class {other:?}, which docs/06 6.2 does not describe; \
+                 the four common assertions still applied",
+                capture.id
+            ),
+        }
+    }
+
     // The report says what the tool believes; the diff is the proof.
     assert_eq!(
         run.word("report", "local_version"),
@@ -691,6 +807,172 @@ async fn one_capture_patches_to_the_new_version() {
         })
         .clone();
     drive_capture(&bridge, &capture).await;
+}
+
+// ---------------------------------------------------------------------------
+// M3 — every capture, each in its own world
+// ---------------------------------------------------------------------------
+//
+// Rust runs `#[test]`s in parallel threads, so one test per capture is not a
+// style choice: it is what gives every capture its own scratch `game/` copy,
+// its own listeners, its own request log and its own before/after diff. A
+// shared tree and a shared log would mean two runs fighting over one path, one
+// run's `must_not_fetch` seeing the other's requests, and a diff comparing a
+// tree some other run had already changed — intermittent, and it would look
+// like a product bug (`docs/06` §6.3).
+//
+// One run per capture is kept regardless, because it is what makes
+// `download_bytes` attributable to a single capture.
+
+/// Drive one named capture, skipping cleanly when the bundle does not carry it.
+///
+/// A bundle may legitimately lack a class — `MANIFEST.json`'s matrix records
+/// `status: unavailable` with a reason for those. Skipping with the reason is
+/// right; failing is not, for the same reason Gate 2 is not.
+async fn drive_named(bridge: &Bridge, id: &str) {
+    let Some(capture) = bridge.capture(id).cloned() else {
+        println!(
+            "SKIP {id}: this bundle's matrix does not carry that class (it has: {:?})",
+            bridge
+                .bundle()
+                .captures
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>()
+        );
+        return;
+    };
+    drive_capture(bridge, &capture).await;
+}
+
+macro_rules! capture_test {
+    ($name:ident, $id:literal, $doc:literal) => {
+        #[doc = $doc]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+        async fn $name() {
+            let Some(bridge) = bridge_or_skip().await else {
+                return;
+            };
+            drive_named(&bridge, $id).await;
+        }
+    };
+}
+
+capture_test!(
+    capture_identical_is_planned_and_skipped,
+    "identical",
+    "`identical`: planned, then skipped on size+MD5. `download_bytes=0` is also\n\
+     what a *broken* run reports, so the load-bearing assertion here is the\n\
+     server log: not one chunk requested. The file must not be touched at all."
+);
+capture_test!(
+    capture_zero_reuse_single_downloads_its_whole_file,
+    "zero_reuse_single",
+    "`zero_reuse_single`: one chunk in the new manifest with no match on the old\n\
+     side, so the whole (tiny) file is downloaded. Assertions 1-3 all bite."
+);
+capture_test!(
+    capture_zero_reuse_multi_downloads_its_whole_file,
+    "zero_reuse_multi",
+    "`zero_reuse_multi`: the same, over a file with several chunks. A path with a\n\
+     space in it, which the `--include` glob has to carry verbatim."
+);
+capture_test!(
+    capture_partial_moved_offset_reuses_the_nine_it_can,
+    "partial_moved_offset",
+    "`partial_moved_offset`: the load-bearing reuse case at scale — 10 chunks,\n\
+     8 reused locally and 2 fetched. `must_not_fetch` names all 8."
+);
+capture_test!(
+    capture_partial_size_changed_reuses_the_nine_it_can,
+    "partial_size_changed",
+    "`partial_size_changed`: 10 chunks, 9 reused, 1 fetched (197192 bytes). The\n\
+     file also changes size, so the result MD5 is not reachable by reusing the\n\
+     old file whole."
+);
+capture_test!(
+    capture_added_is_downloaded_in_full,
+    "added",
+    "`added`: the path is absent from `game/` and present in the new manifest, so\n\
+     it is planned and downloaded in full. `must_not_fetch` is empty, and the\n\
+     tree diff must show an *addition* rather than a change."
+);
+capture_test!(
+    capture_removed_is_purged_by_the_cleanup,
+    "removed",
+    "`removed`: no repair, so no byte total — `totals: null`. It gets the\n\
+     `--purge-only` run of `docs/06` §5 and the purge-counter pre-pass of §5.1,\n\
+     where `files=0` and `purge_files=1 purge_bytes=1731133` are the assertion."
+);
+
+/// `full_reuse_reordered` is the ninth matrix class, and `MANIFEST.json`
+/// records it as **unavailable** for 7.0.0 -> 7.1.0 — no path in any selected
+/// field satisfies it. A class that never materialised must be skipped with its
+/// reason, never invented, and the two records must agree in both directions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
+    let Some(bridge) = bridge_or_skip().await else {
+        return;
+    };
+    let bundle = bridge.bundle();
+    let matrix = read_json(&bundle.root.join("MANIFEST.json"));
+    let entries = matrix["matrix"].as_array().expect("MANIFEST.json matrix[]");
+
+    for entry in entries {
+        let status = entry["status"].as_str().unwrap_or_default();
+        // `class` is on every entry; `capture_id` is only on the captured ones —
+        // an entry that never materialised has no capture id to give.
+        let id = entry["class"].as_str().expect("matrix[].class");
+        let present = bridge.capture(id).is_some();
+        if status == "captured" {
+            assert!(
+                present,
+                "{id}: recorded captured, but there is no patchmaps/{id}.json"
+            );
+            assert_eq!(
+                entry["capture_id"].as_str(),
+                Some(id),
+                "{id}: a captured entry's capture_id is the patchmap stem, i.e. its class"
+            );
+        } else {
+            assert!(
+                entry["reason"].as_str().is_some_and(|r| !r.is_empty()),
+                "{id}: an unavailable class must carry its reason"
+            );
+            assert!(
+                !present,
+                "{id}: recorded unavailable, yet the bundle carries a patchmap for it"
+            );
+        }
+    }
+    // ...and nothing on disk that the matrix does not mention.
+    for c in &bundle.captures {
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["class"].as_str() == Some(c.id.as_str())),
+            "{}: a patchmap with no matrix entry",
+            c.id
+        );
+    }
+    println!(
+        "matrix: {} entr(ies), {} capture(s) on disk, {} recorded captured",
+        entries.len(),
+        bundle.captures.len(),
+        entries
+            .iter()
+            .filter(|e| e["status"].as_str() == Some("captured"))
+            .count()
+    );
+}
+
+/// Read a JSON file from the bundle. Kept local so the driver never grows a
+/// second bundle reader beside the server's.
+fn read_json(path: &Path) -> serde_json::Value {
+    let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 /// The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the

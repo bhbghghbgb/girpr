@@ -346,3 +346,66 @@ Two decisions this milestone made:
 Scope note, so the next reader is not misled: `drive_capture` has two branches
 (the byte total for a repair capture, the purge counters for `removed`) and only
 the repair branch has been exercised. `removed` is M3's.
+
+### M3 — every capture, each in its own world
+
+One `#[ignore]`d test per `patchmaps/<id>.json`, each with its own `Bridge`, its
+own `Scratch`, its own request log and its own before/after diff — which is what
+§6.3 requires and also what makes one test per capture *possible*: Rust runs
+tests in parallel threads, so a shared tree and a shared log would mean two runs
+fighting over one path and one run's `must_not_fetch` seeing the other's
+requests.
+
+Fifteen cases green in 132 s wall-clock (the eight captures run concurrently;
+each is a pre-pass plus a real run, ~20 MB of manifests each).
+
+Measured, every capture, against its patchmap:
+
+| capture | plan `files` | plan `est` | run `dl` | chunks asked | tree |
+|---|---|---|---|---|---|
+| `identical` | 1 | 0 | 0 | **0** | untouched |
+| `zero_reuse_single` | 1 | 21 | 21 | 1 | 1 changed |
+| `zero_reuse_multi` | 1 | 336852 | 336852 | 2 | 1 changed |
+| `partial_same_offset` | 1 | 274426 | 274426 | 2 | 1 changed |
+| `partial_moved_offset` | 1 | 1564894 | 1564894 | 2 | 1 changed |
+| `partial_size_changed` | 1 | 197192 | 197192 | 1 | 1 changed |
+| `added` | 1 | 114357 | 114357 | 1 | **1 added** |
+| `removed` | **0** | 0 | 0 | 0 | **1 removed**, `deleted_extra_bytes=1731133` |
+
+Two of these are worth reading twice:
+
+- **`removed`** prints `files=0 purge_files=1 purge_bytes=1731133 scoped=1` —
+  byte-for-byte the line `docs/06` §5.1 predicts, including `scoped=1`. That
+  settles §0.1's second disagreement **by measurement rather than by reading the
+  source**: `--include` is given for `removed` too. The pre-pass now asserts
+  `scoped=1` uniformly for every capture, which is the shape `scoped=1` can only
+  have with a scope flag passed.
+- **`identical`** downloads nothing and touches nothing, so
+  `download_bytes=0` — which is also what a *broken* run reports. The assertion
+  that carries it is the request log being empty, and the tree diff showing no
+  change at all.
+
+Per-class expectations (§6.2) are now in `drive_capture` rather than in the
+tests, so a new capture id needs no new assertion code: `identical` is planned
+then skipped and untouched; `added` shows an *addition* and has an empty
+`must_not_fetch`; `removed` has `total=0` and prices the deletion into
+`deleted_extra_bytes`; the five patchable/zero-reuse classes must be *repaired*
+(never skipped) and must show their bytes moving on disk.
+
+Two structural additions:
+
+- **The `build_id` invariant, measured through a real run.** Every chunk
+  request's `<build_id>` must equal the new build's. That is §4.1's invariant as
+  a *measured* fact rather than a probed one, and it is the only route by which
+  a shim with the two blob prefixes crossed could pass.
+- **`the_matrix_and_the_patchmaps_agree_in_both_directions`.** `MANIFEST.json`'s
+  matrix and `patchmaps/*.json` must agree in both directions: a `captured` entry
+  has a patchmap and a non-`captured` entry has a reason and no patchmap, and no
+  patchmap exists without a matrix entry. Here that is 9 entries, 8 captured,
+  8 on disk — the ninth, `full_reuse_reordered`, is recorded **unavailable** with
+  its reason, and is skipped rather than invented.
+
+One thing the first draft got wrong: the matrix's `capture_id` is present only
+on `captured` entries — an entry that never materialised has no capture id, so
+the key to match on is `class`. `class == capture_id` for every captured entry
+(they are the patchmap stem), and that equality is now asserted.
