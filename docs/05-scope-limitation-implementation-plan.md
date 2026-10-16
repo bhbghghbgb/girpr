@@ -89,11 +89,11 @@ Sites touched, all one insertion at an existing branch:
 | site | change |
 |---|---|
 | `plan::build_plan` | takes `&PathScope`; drops non-visible `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
-| `purge::classify_purge_path` | gains `&PathScope` as **rule 0**: a hidden path returns `Keep` before the manifest check |
-| `purge::plan_purge` | passes the scope through; also records `PurgePlan.hidden`, which drives the A1 guard-3 warn |
+| `plan::purge::classify_purge_path` | gains `&PathScope` as **rule 0**: a hidden path returns `Keep` before the manifest check |
+| `plan::purge::plan_purge` | passes the scope through; also records `PurgePlan.hidden`, which drives the A1 guard-3 warn |
 | `post::delete_deprecated` | skips a hidden path |
 | `post::move_audio_cache` | skips the whole move when either the cache or the res dir is out of scope, and skips an individual hidden source file |
-| `post::write_config_ini` | **skipped entirely** when a scope is active; `warn` + `SUMMARY config_bumped=0` |
+| `util::write_config_ini` (called from `post::run`) | **skipped entirely** when a scope is active; `warn` + `SUMMARY config_bumped=0` |
 | `metadata::fetch` | A1 guard 2: explicit `--audio` under a scope whose scan file is hidden → exit `1` |
 
 `RunCtx.readonly()` still covers `--dry-run` / `--check-only`; the scope gates
@@ -212,7 +212,7 @@ and `stopped=bytes` on the same line is the whole argument in one output.
 ### M5 — `--print-plan`
 
 `scope/report.rs`: `PlanTotals` (pure, from the two finished plans),
-`format_plan_line`, and `PlanDocument::write_to` for `--plan-out`.
+`plan_record`, and `PlanDocument::write_to` for `--plan-out`.
 
 Placement is 4.7 — **after** the ceilings assert, before `create_dir_all`. So a
 `--print-plan` run is read-only by construction, and a ceiling still trips it
@@ -544,9 +544,21 @@ commit message and add the integration case that pins it.
 `scope/filter.rs`, ported from `tools/sync/src/filter.rs`:
 
 ```rust
-pub struct PathScope { includes: Vec<Pattern>, excludes: Vec<Pattern> }
-pub fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>>
-pub fn is_visible(&self, rel: &str) -> bool          // exclude beats include
+pub struct PathScope {
+    includes: Vec<Pattern>,
+    excludes: Vec<Pattern>,
+}
+
+impl PathScope {
+    pub fn new(includes: &[String], excludes: &[String]) -> Result<Self>;
+    pub fn is_open(&self) -> bool;
+    pub fn is_active(&self) -> bool;
+    pub fn has_includes(&self) -> bool;
+    // exclude beats include
+    pub fn is_visible(&self, rel: &str) -> bool;
+}
+
+fn compile_patterns(list: &[String]) -> Result<Vec<Pattern>>;
 ```
 
 `MatchOptions { case_sensitive: false, require_literal_separator: false,
@@ -575,12 +587,12 @@ purge *destructive* — the fixture `gircap` hands us would be eaten.
 | site | change |
 |---|---|
 | `plan::build_plan` | takes `&PathScope`; drops non-visible `rel` **before** the plan exists, so `files_total` counts only what survives |
-| `purge::classify_purge_path` | gains a `&PathScope`; a hidden path returns `Keep` **before** the manifest check |
-| `purge::plan_purge` | same, through the classifier |
+| `plan::purge::classify_purge_path` | gains a `&PathScope`; a hidden path returns `Keep` **before** the manifest check |
+| `plan::purge::plan_purge` | same, through the classifier |
 | `PurgePlan.dirs` | the kept-count pass sees hidden paths as `Keep`, so swept dirs come out right for free |
 | `post::delete_deprecated` | skips a hidden path |
 | `post::move_audio_cache` | skips a hidden source or target |
-| `post::write_config_ini` | **skipped entirely when a scope is active**; `warn` + `SUMMARY config_bumped=0` |
+| `util::write_config_ini` (called from `post::run`) | **skipped entirely when a scope is active**; `warn` + `SUMMARY config_bumped=0` |
 
 Rejected alternative: widening `server_keep` with every hidden path. It grows a
 `HashSet<String>` to tens of thousands of entries, turns `classify_purge_path`
@@ -610,8 +622,9 @@ gains: bad glob → `1`, `--include` matching nothing → `1`.
 
 The two refusals that need nothing from the network.
 
-- `--max-files <N>`: `plan.files.len()` **on the filtered plan**; `> N` →
-  `RunFailure::limit`, exit `5`, before `create_dir_all`. Checking after the
+- `--max-files <N>`: `plan.files.len()` **on the filtered plan**; `> N` → a
+  `LimitHit` from `Limits::check_preflight`, `Ok((summary, 5))`, before
+  `create_dir_all`. Checking after the
   filter is what makes the flag usable at all — checking before it would refuse
   on every real install.
 - `--max-delete-bytes <N>`: `PurgePlan.total_bytes`, computed **once over the
@@ -733,7 +746,7 @@ explicit still beats env; a mock at `127.0.0.1` serves the whole pipeline.
 
 **Not in this plan, but unblocked by it:** the **artifact-serving shim** — serve a
 `gircap` bundle on `127.0.0.1` with each body's `url_prefix` rewritten to the
-shim's own origin. That is what turns `gircap/docs/00-spec.md` §8.1.1 from a
+shim's own origin. That is what turns `tools/capture/docs/00-spec.md` §8.1.1 from a
 manual procedure into an automated assertion, and it is consumer-side work in
 `tools/capture`.
 
@@ -745,7 +758,7 @@ Three layers, unchanged in shape from [`03-repair-rust-implementation-plan.md` �
 
 **Unit** (`#[cfg(test)] mod tests` next to the code): the filter, the ceiling
 predicates, `est_download_bytes`, `plan_purge`'s classification and emptied-dir
-derivation, `format_plan_line`, and the conditional `SUMMARY` keys. All pure, all
+derivation, `plan_record`, and the conditional `SUMMARY` keys. All pure, all
 filesystem-free.
 
 **Integration** (`tests/repair_offline.rs`): one `#[tokio::test]` per behaviour
@@ -821,7 +834,7 @@ useful part.
 
 ## 7. Definition of done
 
-M0 through M7 — the set that unblocks `gircap/docs/00-spec.md` §8.1 — plus:
+M0 through M7 — the set that unblocks `tools/capture/docs/00-spec.md` §8.1 — plus:
 
 - [x] every `SUMMARY` key verified **absent** when its flag is absent
       (`the_summary_growth_keys_appear_only_when_their_flag_is_active`, plus the

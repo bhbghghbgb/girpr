@@ -43,7 +43,7 @@ paths work; one does not:
 | prove the bundle's own integrity (`gircap verify`) | ✅ |
 | **run `girpr --game-path <artifact>/game` and assert it patches to the new version** | ❌ **blocked** |
 
-The blocker is recorded verbatim in `gircap/docs/00-spec.md` §8.1 and re-confirmed
+The blocker is recorded verbatim in `tools/capture/docs/00-spec.md` §8.1 and re-confirmed
 at M11 against the shipped binary: `girpr --help` offers `--game-path`, `--biz`,
 `--audio`, `--io-threads`, `--purge-after`, `--purge-before`, `--check-only`,
 `--dry-run`, `--json-summary`, `--log-level`. **Nothing narrows a path.**
@@ -65,11 +65,11 @@ at M11 against the shipped binary: `girpr --help` offers `--game-path`, `--biz`,
 
 None of that is a bug. It is the correct behaviour of a whole-install patcher
 given a whole-install input, and `gircap` must not shim around it — the fix
-belongs in `girpr` (`gircap/docs/00-spec.md` §8.1).
+belongs in `girpr` (`tools/capture/docs/00-spec.md` §8.1).
 
 ### 1.3 What the end-to-end check has to produce
 
-The procedure is already written down (`gircap/docs/00-spec.md` §8.1.1) and it
+The procedure is already written down (`tools/capture/docs/00-spec.md` §8.1.1) and it
 has three assertions per capture, not one:
 
 1. `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes`;
@@ -179,11 +179,11 @@ enumerated, because **narrowing the plan alone makes purge destructive**:
 | `repair::plan::build_plan` | blacklist filter | additionally drop non-matching `rel` — **before** the plan exists, so `files_total` already counts only what survives |
 | `repair::file::repair_all` | iterates `plan.files` | already narrowed; nothing to do |
 | `repair::check::verify_plan` | iterates `plan.files` | already narrowed |
-| `repair::purge::purge_extra` | keep = `expected_paths()` ∪ `keep_set()` ∪ audio-version patterns; **everything else deletes** | filtered paths must be invisible **here too**, or `--purge-*` deletes the fixture |
-| `repair::purge::remove_emptied_dirs` | `remove_dir` on every empty dir | a directory whose only contents were filtered away must not be swept |
+| `repair::plan::purge::plan_purge` / `apply_purge` | keep = `expected_paths()` ∪ `keep_set()` ∪ audio-version patterns; **everything else deletes** | filtered paths must be invisible **here too**, or `--purge-*` deletes the fixture |
+| `repair::plan::purge::remove_emptied_dirs` | `remove_dir` on every empty dir | a directory whose only contents were filtered away must not be swept |
 | `repair::post::delete_deprecated` | deletes every present deprecated path | skip any hidden path |
 | `repair::post::move_audio_cache` | moves `cache/**` → `res/**` unconditionally | gate; a scoped dev run should not relocate audio |
-| `repair::post::write_config_ini` | always bumps `game_version` | **see §2.2** |
+| `util::write_config_ini` (called from `repair::post::run`) | always bumps `game_version` | **see §2.2** |
 | `repair::metadata` → `audio::write_scan_file` | writes the scan file on explicit `--audio` | gate under a scope |
 
 `purge` is the one that must not be missed. Note also that `plan.expected_paths()`
@@ -235,7 +235,7 @@ resulting test rigour rather than a demo. **P2** is worth having if cheap.
 #### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0**
 
 **How.** `glob` crate patterns matched against the `/`-separated, game-dir-rooted
-rel path — the same string `plan.rs` stores and `util::normalize_rel` converts at
+rel path — the same string `plan/mod.rs` stores and `util::normalize_rel` converts at
 the filesystem boundary. Empty `--include` admits everything. `--exclude` beats
 `--include`. Ported from `tools/sync/src/filter.rs` essentially verbatim,
 including `MatchOptions { require_literal_separator: false,
@@ -279,7 +279,7 @@ way this feature is misused:
 resolves with no network. ~40 lines for the filter, plus the purge/`post` gating
 in §2.
 
-**Use.** The whole `gircap` matrix: `gircap/docs/00-spec.md` §8.1.1 step 2's
+**Use.** The whole `gircap` matrix: `tools/capture/docs/00-spec.md` §8.1.1 step 2's
 intended invocation is one run per capture with an `--include` set of exactly
 one path.
 
@@ -326,7 +326,7 @@ est_download_bytes(rel) = Σ c.compressed_size
 ```
 
 That is character-for-character the capture's `patch_fetch` definition
-(`gircap/docs/00-spec.md` §5) and therefore its `totals.download_bytes`. And
+(`tools/capture/docs/00-spec.md` §5) and therefore its `totals.download_bytes`. And
 because capture invariant **A6** asserts `len(raw blob) == compressed_size` while
 `file.rs` counts `stats.download_bytes += blob.len()`, the estimate and the
 runner's counter are the same quantity by construction — a testable prediction,
@@ -348,9 +348,10 @@ not a hope.
   run exits `5`.
 
 **Cost.** ~120 lines. The `Budget` shape is liftable in spirit from
-`gircap/src/select/budget.rs` (saturating arithmetic, `describe()` for the log) —
-**lift the shape, not the code**: `gircap` shares no code with `girpr` by design
-(`gircap/docs/00-spec.md` §2) and a shared crate would violate that rule.
+`tools/capture/src/select/budget.rs` (saturating arithmetic, `describe()` for the
+log) — **lift the shape, not the code**: `gircap` shares no code with `girpr` by
+design (`tools/capture/docs/00-spec.md` §2) and a shared crate would violate that
+rule.
 
 #### B3 · `--max-write-bytes <N>` — **P1** — runtime hard stop
 
@@ -485,7 +486,7 @@ This is not a reason to skip D1. It is the reason the `gircap` consumer needs a
 thin **artifact-serving shim** — serve `api/*.json`, `manifests/*` and
 `chunks/blobs/*` from the bundle with each body's `url_prefix` rewritten to the
 shim's own origin. That shim is a *consumer-side* artifact of this feature, it
-belongs to the follow-on work (`gircap/docs/00-spec.md` §8.1.1 step 3 is
+belongs to the follow-on work (`tools/capture/docs/00-spec.md` §8.1.1 step 3 is
 otherwise unrunnable), and its existence should be recorded here so it is not
 rediscovered later as a mystery.
 
@@ -515,8 +516,8 @@ honest, and the run reaches its `SUMMARY` in seconds.
 
 The `removed` matrix class is *only* reachable through the purge path, and
 `gircap`'s own procedure (§8.1.1) says not to pass a purge flag at all. So the
-one class that exercises `purge::purge_extra` + `remove_emptied_dirs` end to end
-is the one class the harness tells you to skip.
+one class that exercises `plan::purge::plan_purge` + `apply_purge` +
+`remove_emptied_dirs` end to end is the one class the harness tells you to skip.
 
 `--purge-only` runs phases 1–5 and 7 and skips 6: metadata → manifests → plan →
 purge → post. It is `check_only` inverted — the existing flag answers "is it
@@ -533,7 +534,7 @@ Two different jobs in one flag, both real:
 - **Memory.** S1 buffers whole chunks (`sophon::fetch_chunk_bytes` → `decode_all`,
   `file.rs::write_downloaded_chunk`). Peak RAM per active chunk is roughly
   `compressed + uncompressed`, and the capture measured the largest real Genshin
-  chunk at **3 689 476 B compressed** (`gircap/docs/00-spec.md` §3.6). At
+  chunk at **3 689 476 B compressed** (`tools/capture/docs/00-spec.md` §3.6). At
   `--io-threads 8` that is a real number. Skipping files whose largest chunk
   exceeds `N` bounds it.
 - **Targeting.** The same measurement makes the flag a way to *deliberately
@@ -554,7 +555,7 @@ skip, which is the main reason the tool is low-disk.
 
 `sophon::select_manifests` returns the `game` field plus one field per selected
 audio language, each ~1 MB compressed and ~177 further file entries
-(`gircap/docs/00-spec.md` §4.1). Capping to `game` cuts fetch and parse cost when
+(`tools/capture/docs/00-spec.md` §4.1). Capping to `game` cuts fetch and parse cost when
 the audio manifests cannot hold the file under test. Low value — `--audio none`
 plus `--audio en-us` already spans it — and it adds a third way to say "which
 manifests", so it is listed last and should be cut if the surface needs trimming.
@@ -729,7 +730,7 @@ src/repair/scope/
 ```
 
 The pure modules unit-test without a filesystem, exactly like
-`purge::classify_purge_path` and `plan::build_plan` do today. The impure part is
+`plan::purge::classify_purge_path` and `plan::build_plan` do today. The impure part is
 the ledger and the gate calls in `file.rs`.
 
 Touch points outside the two directories, all of them one-line insertions at an
@@ -738,11 +739,11 @@ existing branch:
 | file | change |
 |---|---|
 | `src/cli.rs` | flags + `into_ctx` |
-| `src/config.rs` | `PathScope` + `Limits` on `RunCtx`; `RunFailure::limit` |
+| `src/config.rs` | `PathScope` + `Limits` on `RunCtx`; `RunFailure::{usage,metadata,write}` |
 | `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
 | `src/repair/post.rs` | scope gate on deprecated deletes and audio move |
 | `src/repair/file.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
-| `src/report.rs` | conditional `SUMMARY` keys + `format_plan_line` |
+| `src/repair/scope/report.rs` | `plan_record` + the `--plan-out` JSON document |
 | `README.md` | flag table, machine-contract table, exit-code table |
 
 ---
@@ -755,7 +756,7 @@ existing branch:
 - **Rate limiting / bandwidth caps.** `gircap` measures a 2.37 MB total for its
   six patchable captures; nothing here needs a throttle. The README already
   lists "no speed limiter" as a v1 gap, and it is still correctly a gap.
-- **Sharing code with `gircap`.** `gircap/docs/00-spec.md` §2 makes independence
+- **Sharing code with `gircap`.** `tools/capture/docs/00-spec.md` §2 makes independence
   non-negotiable and CI-enforced. `Budget` is a ~40-line idea that will be
   written twice.
 - **Making any of this default.** Every option here produces an install that is
@@ -831,5 +832,5 @@ Build order, acceptance checks and the commit per milestone live in
 
 Follow-on work that this unblocks but does not include: the **artifact-serving
 shim** (serve a `gircap` bundle on `127.0.0.1` with `url_prefix` bodies rewritten
-to itself), which is what finally turns `gircap/docs/00-spec.md` §8.1.1 from a
+to itself), which is what finally turns `tools/capture/docs/00-spec.md` §8.1.1 from a
 manual procedure into an automated assertion.
