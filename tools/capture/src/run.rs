@@ -16,13 +16,13 @@ use std::path::PathBuf;
 
 use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, VersionPair, artifact_dir};
+use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::manifest::CapturedManifest;
-use crate::emit::selfcheck::Selfcheck;
+use crate::manifest::diff;
 use crate::report::{OutputFormat, Record};
 use crate::{assemble, blobs, emit, exit, hyp, manifest, select};
-use crate::manifest::diff;
 
 /// The `matching_field` every run scores first, and the one every later stage
 /// needs whatever class a capture lands in.
@@ -110,7 +110,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         biz.bases()
     } else {
         Endpoints::owned(
-            plan.hyp_base.clone().unwrap_or_else(|| biz.hyp_base().to_string()),
+            plan.hyp_base
+                .clone()
+                .unwrap_or_else(|| biz.hyp_base().to_string()),
             plan.sophon_base
                 .clone()
                 .unwrap_or_else(|| biz.sophon_base().to_string()),
@@ -137,7 +139,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // Assert what the capture depends on, before a blob is fetched: the launcher
     // must be on chunk delivery, both builds must echo the tags they were asked
     // for, and every published manifest must be storable.
-    captured.validate().map_err(|e| assertion("validate the capture", &e))?;
+    captured
+        .validate()
+        .map_err(|e| assertion("validate the capture", &e))?;
 
     let versions = &captured.versions;
     let params = captured
@@ -178,8 +182,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &params.diff_tags,
         &known,
     )
-        .await
-        .map_err(|e| apierr("tag probe", &e))?;
+    .await
+    .map_err(|e| apierr("tag probe", &e))?;
     tracing::info!(probe = %probe.describe(), served = ?probe.served(), "tag probe complete");
 
     // 6. The manifests, both builds, for every selected `matching_field`.
@@ -307,12 +311,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         Some(n) => select::Budget::capped(n),
         None => select::Budget::unlimited(),
     };
-    let selection = select::select(
-        &pool,
-        plan.per_class.max(1) as usize,
-        budget,
-        &plan.files,
-    );
+    let selection = select::select(&pool, plan.per_class.max(1) as usize, budget, &plan.files);
     for a in &selection.admitted {
         tracing::info!(
             capture_id = %a.capture_id,
@@ -557,14 +556,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // reader actually wants, which is that the bundle cannot be materialized. An
     // empty directory costs nothing and makes the layout uniform.
     std::fs::create_dir_all(dir.join("patchmaps")).map_err(|e| write_err(&dir, e))?;
-    written.push(
-        emit::write_chunk_index(&dir, &index).map_err(|e| {
-            apierr(
-                &format!("write {}", dir.display()),
-                &ApiError::shape("artifact writer", e),
-            )
-        })?,
-    );
+    written.push(emit::write_chunk_index(&dir, &index).map_err(|e| {
+        apierr(
+            &format!("write {}", dir.display()),
+            &ApiError::shape("artifact writer", e),
+        )
+    })?);
 
     // 7c. Assembly. Old, new, and the patch flow, from the blobs just stored.
     //     A7-A12 are asserted here rather than left to M9, because a capture that
@@ -585,13 +582,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .audio_pkg_scan_dir()
         .map_err(|e| apierr("read getGameConfigs.audio_pkg_scan_dir", &e))?
         .to_string();
-    let mut rows: Vec<emit::selfcheck::Assertion> = api_and_manifest_assertions(
-        &captured,
-        versions,
-        &manifests,
-        &index,
-        plan.no_chunk_blobs,
-    );
+    let mut rows: Vec<emit::selfcheck::Assertion> =
+        api_and_manifest_assertions(&captured, versions, &manifests, &index, plan.no_chunk_blobs);
     let mut assembled_ids: Vec<String> = Vec::new();
     // (old md5, new md5) per capture, for A19. The digests, not the bytes:
     // A19 only asks whether the two sides differ, and holding the assembled
@@ -644,14 +636,14 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                             out.new.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
                         ),
                     );
-                    written.push(
-                        emit::write_patchmap(&dir, &a.capture_id, &out.map).map_err(|e| {
+                    written.push(emit::write_patchmap(&dir, &a.capture_id, &out.map).map_err(
+                        |e| {
                             apierr(
                                 &format!("write {}", dir.display()),
                                 &ApiError::shape("artifact writer", e),
                             )
-                        })?,
-                    );
+                        },
+                    )?);
                     // `game/` is the fixture, `expected/` the ground truth. A
                     // `removed` capture contributes only to the first.
                     if let Some(o) = &out.old {
@@ -701,14 +693,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // simply had no config in it, and reported a missing file as a broken
     // assertion. The flag suppresses *chunk blobs*, not the launcher metadata.
     prelude.extend(
-        emit::gamedir::write_prelude(
-            &dir,
-            &biz,
-            &old_tag,
-            &scan_dir,
-            plan.audio.codes(),
-        )
-        .map_err(|e| write_err(&dir, e))?,
+        emit::gamedir::write_prelude(&dir, &biz, &old_tag, &scan_dir, plan.audio.codes())
+            .map_err(|e| write_err(&dir, e))?,
     );
     written.extend(prelude);
     let assembly_failures = rows.iter().filter(|a| !a.ok).count();
@@ -726,7 +712,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             "assemble the admitted captures",
             &ApiError::shape(
                 "A7-A12",
-                format!("{assembly_failures} of {} selfcheck rows failed", rows.len()),
+                format!(
+                    "{assembly_failures} of {} selfcheck rows failed",
+                    rows.len()
+                ),
             ),
         ));
     }
@@ -785,7 +774,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         argv: &plan.argv,
         complete: true,
     };
-    let mut manifest = build_manifest(&input).map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
+    let mut manifest = build_manifest(&input)
+        .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
     // A17 is about the matrix this document carries, so it is settled here and
     // appended to the rows the rest of the close-out will write.
     let (a17_ok, a17_detail) = manifest.a17();
@@ -832,13 +822,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         })
         .collect();
 
-    let mut selfcheck =
-        emit::selfcheck::Selfcheck::build(rows.clone(), matrix_rows, &skipped);
+    let mut selfcheck = emit::selfcheck::Selfcheck::build(rows.clone(), matrix_rows, &skipped);
     emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
     written.push(emit::write_manifest(&dir, &manifest).map_err(|e| write_err(&dir, e))?);
-    written.push(
-        emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?,
-    );
+    written.push(emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?);
     let (_, checksums) = emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
     let (a16_ok, a16_detail) = checksums.a16(&dir);
     written.push("verify/checksums.json".to_string());
@@ -863,11 +850,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                 &a16_detail,
             )
         });
-        selfcheck = emit::selfcheck::Selfcheck::build(
-            selfcheck.assertions,
-            selfcheck.matrix,
-            &skipped,
-        );
+        selfcheck =
+            emit::selfcheck::Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
         emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
         emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
     }
@@ -898,10 +882,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         "manifests written"
     );
 
-    let legacy_behind = captured
-        .legacy_staleness()
-        .map(|(n, _)| n)
-        .unwrap_or(0);
+    let legacy_behind = captured.legacy_staleness().map(|(n, _)| n).unwrap_or(0);
     let max_chunk = flat
         .iter()
         .map(|m| m.meta.decoded.max_chunk_compressed_bytes)
@@ -927,11 +908,24 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .set("captures_admitted", selection.admitted.len() as u64)
         .set("captures_over_budget", selection.rejected.len() as u64)
         .set("forced_files_requested", plan.files.len() as u64)
-        .set("forced_files_skipped", selection.forced_skipped.len() as u64)
+        .set(
+            "forced_files_skipped",
+            selection.forced_skipped.len() as u64,
+        )
         .set("chunk_blobs_wanted", wants.len() as u64)
-        .set("chunk_blobs_stored", index.blobs.iter().filter(|b| b.props.stored_path.is_some()).count() as u64)
+        .set(
+            "chunk_blobs_stored",
+            index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count() as u64,
+        )
         .set("chunk_bytes_projected", projected)
-        .set("chunk_bytes_fetched", index.blobs.iter().map(|b| b.props.bytes).sum::<u64>())
+        .set(
+            "chunk_bytes_fetched",
+            index.blobs.iter().map(|b| b.props.bytes).sum::<u64>(),
+        )
         .set("chunk_fetches_failed", fetch_errors.len() as u64)
         .set("chunk_a6_failing", index.failing().len() as u64)
         .set("patch_fetch_chunks", index.sets["patch_fetch"].len() as u64)
@@ -961,7 +955,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             "reuse_md5_present_in_old",
             pool_stats.new_chunks_md5_present_in_old_manifest,
         )
-        .set("reuse_cross_file_only_chunks", pool_stats.cross_file_only_chunks)
+        .set(
+            "reuse_cross_file_only_chunks",
+            pool_stats.cross_file_only_chunks,
+        )
         .set(
             "reuse_cross_file_bytes_forgone",
             pool_stats.cross_file_only_bytes_forgone,
@@ -1018,11 +1015,7 @@ fn required_classes(plan: &CapturePlan) -> Result<Vec<select::Class>, Failure> {
 
 /// How many classes the matrix answers, captured or covered.
 fn satisfied(selection: &select::Selection) -> u64 {
-    selection
-        .matrix
-        .iter()
-        .filter(|r| r.is_satisfied())
-        .count() as u64
+    selection.matrix.iter().filter(|r| r.is_satisfied()).count() as u64
 }
 
 /// The two things a decoded manifest must satisfy before any byte of it is
@@ -1116,12 +1109,18 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
         .set("bundle", report.bundle.manifest.capture.id.clone())
         .set("old_tag", report.bundle.manifest.versions.old.tag.clone())
         .set("new_tag", report.bundle.manifest.versions.new.tag.clone())
-        .set("files_checked", report.bundle.checksums.entries.len() as u64)
+        .set(
+            "files_checked",
+            report.bundle.checksums.entries.len() as u64,
+        )
         .set("blobs_checked", report.bundle.index.blobs.len() as u64)
         .set("captures_rebuilt", report.rebuilt.len() as u64)
         .set("bytes_rebuilt", report.rebuilt_bytes())
         .set("checks_derived", crate::verify::derived_ids().join(","))
-        .set("checks_covered_by_recording", covered_ids(&report.bundle.recorded))
+        .set(
+            "checks_covered_by_recording",
+            covered_ids(&report.bundle.recorded),
+        )
         .set("checks_total", total)
         .set("checks_passed", passed)
         .set("checks_failed", failed)
@@ -1130,12 +1129,23 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
         .set("recorded_result", selfcheck_slug(&report.bundle.recorded))
         .set(
             "exit_code",
-            if ok { ExitCode::Ok.code() } else { ExitCode::AssertionFailed.code() },
+            if ok {
+                ExitCode::Ok.code()
+            } else {
+                ExitCode::AssertionFailed.code()
+            },
         );
     if let Some(h) = report.headline() {
         return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
     }
-    Ok((summary, if ok { ExitCode::Ok } else { ExitCode::AssertionFailed }))
+    Ok((
+        summary,
+        if ok {
+            ExitCode::Ok
+        } else {
+            ExitCode::AssertionFailed
+        },
+    ))
 }
 
 /// `gircap materialize` — rebuild both files from `chunks/`, no network.
@@ -1192,8 +1202,7 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
             let rel = format!("{tree}/{}", s.path);
             let dest = out.join(&rel);
             if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| write_err(&plan.artifact, e))?;
+                std::fs::create_dir_all(parent).map_err(|e| write_err(&plan.artifact, e))?;
             }
             std::fs::write(&dest, &s.bytes).map_err(|e| write_err(&dest, e))?;
             written.push(rel);
@@ -1225,12 +1234,23 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
         .set("agrees_with_recording", report.agrees)
         .set(
             "exit_code",
-            if ok { ExitCode::Ok.code() } else { ExitCode::AssertionFailed.code() },
+            if ok {
+                ExitCode::Ok.code()
+            } else {
+                ExitCode::AssertionFailed.code()
+            },
         );
     if let Some(h) = report.headline() {
         return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
     }
-    Ok((summary, if ok { ExitCode::Ok } else { ExitCode::AssertionFailed }))
+    Ok((
+        summary,
+        if ok {
+            ExitCode::Ok
+        } else {
+            ExitCode::AssertionFailed
+        },
+    ))
 }
 
 /// `gircap list` — index every capture under a root.
@@ -1251,8 +1271,7 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// instead of the facts, and a caller asking "which bundles are here" would get
 /// an entry that is not one.
 pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
-    let found = crate::verify::list(&root)
-        .map_err(|e| Failure::usage(e.to_string()))?;
+    let found = crate::verify::list(&root).map_err(|e| Failure::usage(e.to_string()))?;
     let capturing = found.iter().filter(|f| f.selfcheck == "pass").count() as u64;
     let blobs: u64 = found.iter().map(|f| f.blobs as u64).sum();
     for f in &found {
@@ -1281,11 +1300,23 @@ pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failur
         .set("root", root.as_path())
         .set("bundles", found.len() as u64)
         .set("bundles_passing", capturing)
-        .set("bundles_incomplete", found.iter().filter(|f| !f.complete).count() as u64)
-        .set("patchmaps", found.iter().map(|f| f.patchmaps as u64).sum::<u64>())
+        .set(
+            "bundles_incomplete",
+            found.iter().filter(|f| !f.complete).count() as u64,
+        )
+        .set(
+            "patchmaps",
+            found.iter().map(|f| f.patchmaps as u64).sum::<u64>(),
+        )
         .set("blobs", blobs)
-        .set("first", found.first().map(|f| f.path.clone()).unwrap_or_default())
-        .set("last", found.last().map(|f| f.path.clone()).unwrap_or_default())
+        .set(
+            "first",
+            found.first().map(|f| f.path.clone()).unwrap_or_default(),
+        )
+        .set(
+            "last",
+            found.last().map(|f| f.path.clone()).unwrap_or_default(),
+        )
         .set("exit_code", ExitCode::Ok.code());
     Ok((summary, ExitCode::Ok))
 }
@@ -1353,11 +1384,7 @@ pub fn failure_summary(event: &'static str, code: ExitCode) -> Record {
 ///
 /// The cause is a field rather than prose, so the whole line stays
 /// whitespace-free and splittable.
-pub fn failure_summary_detail(
-    event: &'static str,
-    code: ExitCode,
-    detail: Option<&str>,
-) -> Record {
+pub fn failure_summary_detail(event: &'static str, code: ExitCode, detail: Option<&str>) -> Record {
     let s = Record::summary(event)
         .set("result", "error")
         .set("exit_code", code.code())
@@ -1373,7 +1400,6 @@ pub fn failure_summary_detail(
 /// Re-exported so `main.rs` can name the process exit without importing two
 /// modules for it.
 pub use exit::exit_with;
-
 
 /// Turn a writer's `io::Error` into exit `2` naming the directory.
 ///
@@ -1509,7 +1535,11 @@ fn closing_assertions(
                     a.path,
                     a.capture_id,
                     if differs { "differs" } else { "is unchanged" },
-                    if should_differ { "differ" } else { "be unchanged" }
+                    if should_differ {
+                        "differ"
+                    } else {
+                        "be unchanged"
+                    }
                 ));
             }
         }
@@ -1574,20 +1604,19 @@ fn closing_assertions(
     }
 
     // `--no-chunk-blobs` contributes **no** A7-A12 rows.
-//
-// This used to emit one red row per id, reading
-// `expected: asserted` / `actual: not asserted`. That is the second half of the
-// same bug the A6 rows had: a declared gap rendered as a failure. The gap is
-// declared the way the design already declares it - by listing the ids in
-// `skipped`, which is what makes `Selfcheck::build` answer `incomplete` rather
-// than `fail`. A row that says "not asserted" and is marked `ok: false` tells a
-// reader the bundle is broken when it is honestly incomplete.
+    //
+    // This used to emit one red row per id, reading
+    // `expected: asserted` / `actual: not asserted`. That is the second half of the
+    // same bug the A6 rows had: a declared gap rendered as a failure. The gap is
+    // declared the way the design already declares it - by listing the ids in
+    // `skipped`, which is what makes `Selfcheck::build` answer `incomplete` rather
+    // than `fail`. A row that says "not asserted" and is marked `ok: false` tells a
+    // reader the bundle is broken when it is honestly incomplete.
     if no_chunk_blobs {
         tracing::debug!("--no-chunk-blobs: A7-A12 are declared skipped, not asserted");
     }
     rows
 }
-
 
 /// Everything `build_manifest` needs, as one argument.
 struct ManifestInput<'a> {
@@ -1626,10 +1655,7 @@ struct ManifestInput<'a> {
 /// Every field is something the run already knew; nothing here recomputes a
 /// measurement, so the document cannot disagree with the tree it describes.
 fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String> {
-    let id = i
-        .started
-        .format("%Y%m%dT%H%M%SZ")
-        .to_string();
+    let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
     let manifest_entries: BTreeMap<String, u64> = i
         .fields
         .iter()
@@ -1657,9 +1683,12 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
                 path: row.path.clone(),
                 matching_field: admission.map(|a| a.matching_field.clone()),
                 covered_by: row.covered_by.clone(),
-                also_satisfies: admission
-                    .filter(|a| !a.also_satisfies.is_empty())
-                    .map(|a| a.also_satisfies.iter().map(|c| c.id().to_string()).collect()),
+                also_satisfies: admission.filter(|a| !a.also_satisfies.is_empty()).map(|a| {
+                    a.also_satisfies
+                        .iter()
+                        .map(|c| c.id().to_string())
+                        .collect()
+                }),
                 reason: row.reason.clone(),
                 candidates_considered: Some(row.candidates_considered),
             }
@@ -1713,12 +1742,16 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
         selection_pool: emit::index::SelectionPool {
             fields: i.fields.to_vec(),
             manifest_entries,
-            note: "--audio widens this pool; captures may come from any listed field"
-                .to_string(),
+            note: "--audio widens this pool; captures may come from any listed field".to_string(),
         },
         totals: emit::index::Totals {
             files_captured: i.selection.admitted.len() as u64,
-            chunks_blobs: i.index.blobs.iter().filter(|b| b.props.stored_path.is_some()).count() as u64,
+            chunks_blobs: i
+                .index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count() as u64,
             bytes_downloaded: i.bytes_downloaded,
             bytes_on_disk: 0,
         },
@@ -1788,13 +1821,7 @@ fn api_and_manifest_assertions(
             versions.old.tag.as_str(),
         ),
     ] {
-        rows.push(Assertion::check(
-            "A2",
-            wording("A2"),
-            &file,
-            want,
-            got,
-        ));
+        rows.push(Assertion::check("A2", wording("A2"), &file, want, got));
     }
 
     // A3, A4, A5: per manifest.
@@ -1821,12 +1848,14 @@ fn api_and_manifest_assertions(
             "A4",
             wording("A4"),
             &format!("{subject} (id prefix)"),
-            &format!("{} recorded as {}", m.meta.id_parts.prefix_16hex, m.meta.id_parts.prefix_semantics),
+            &format!(
+                "{} recorded as {}",
+                m.meta.id_parts.prefix_16hex, m.meta.id_parts.prefix_semantics
+            ),
         ));
-        for (name, declared, actual) in manifest::reconcile(
-            &m.meta.decoded,
-            m.meta.declared.stats.as_ref(),
-        ) {
+        for (name, declared, actual) in
+            manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref())
+        {
             rows.push(Assertion::check(
                 "A5",
                 wording("A5"),
@@ -1855,9 +1884,10 @@ fn api_and_manifest_assertions(
     // reach the selfcheck too, or a declared gap reads as a broken artifact.
     if !no_chunk_blobs {
         for b in &index.blobs {
-            let subject = b.props.stored_path.clone().unwrap_or_else(|| {
-                format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
-            });
+            let subject =
+                b.props.stored_path.clone().unwrap_or_else(|| {
+                    format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
+                });
             let v = b.props.verified;
             rows.push(match v {
                 Some(v) if v.all_green() && b.props.decode_error.is_none() => {
@@ -1928,12 +1958,21 @@ mod tests {
     fn a_failure_summary_names_the_code_and_says_whether_the_tree_can_be_believed() {
         let s = failure_summary("capture", ExitCode::Network);
         assert_eq!(s.get("exit_code"), Some(&crate::report::Val::Int(2)));
-        assert_eq!(s.get("exit_code_slug"), Some(&crate::report::Val::Str("network".into())));
-        assert_eq!(s.get("result"), Some(&crate::report::Val::Str("error".into())));
+        assert_eq!(
+            s.get("exit_code_slug"),
+            Some(&crate::report::Val::Str("network".into()))
+        );
+        assert_eq!(
+            s.get("result"),
+            Some(&crate::report::Val::Str("error".into()))
+        );
         assert_eq!(s.get("detail"), None);
 
         let d = failure_summary_detail("capture", ExitCode::AssertionFailed, Some("boom"));
-        assert_eq!(d.get("detail"), Some(&crate::report::Val::Str("boom".into())));
+        assert_eq!(
+            d.get("detail"),
+            Some(&crate::report::Val::Str("boom".into()))
+        );
         assert_eq!(
             d.get("artifact_trustworthy"),
             Some(&crate::report::Val::Bool(false)),
@@ -1943,8 +1982,12 @@ mod tests {
 
     #[test]
     fn the_detail_survives_the_text_rendering_as_one_token() {
-        let line = failure_summary_detail("capture", ExitCode::Network, Some("getBuild: retcode -202 (not found)"))
-            .to_text_line();
+        let line = failure_summary_detail(
+            "capture",
+            ExitCode::Network,
+            Some("getBuild: retcode -202 (not found)"),
+        )
+        .to_text_line();
         assert_eq!(
             line.split_whitespace().filter(|t| t.contains('=')).count(),
             line.split_whitespace().count() - 1,

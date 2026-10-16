@@ -86,7 +86,10 @@ pub fn should_gzip(len: usize, threshold: u64) -> bool {
 /// bundle depends on the compressed bytes being reproducible, which is exactly
 /// why the decompressed digest is the one recorded.
 pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut enc = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4), flate2::Compression::default());
+    let mut enc = flate2::write::GzEncoder::new(
+        Vec::with_capacity(bytes.len() / 4),
+        flate2::Compression::default(),
+    );
     enc.write_all(bytes)?;
     enc.finish()
 }
@@ -121,7 +124,11 @@ pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
             "{what}: not a decodable zstd blob ({} bytes, magic {:02x?}{}): {e}",
             bytes.len(),
             &bytes[..bytes.len().min(4)],
-            if is_zstd(bytes) { " has-zstd-magic" } else { " no-zstd-magic" },
+            if is_zstd(bytes) {
+                " has-zstd-magic"
+            } else {
+                " no-zstd-magic"
+            },
         )
     })
 }
@@ -154,7 +161,11 @@ mod tests {
     fn digests_are_lowercase_hex_of_the_right_width() {
         assert_eq!(md5_hex(b"x").len(), 32);
         assert_eq!(sha256_hex(b"x").len(), 64);
-        assert!(md5_hex(b"x").chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            md5_hex(b"x")
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     /// *Measured* live 2026-10-14: the 7.1.0 game archive is 9 007 187 bytes and
@@ -177,7 +188,11 @@ mod tests {
             (0, 0, false),
             (1, 0, true),
         ] {
-            assert_eq!(should_gzip(len as usize, threshold), want, "{len} vs {threshold}");
+            assert_eq!(
+                should_gzip(len as usize, threshold),
+                want,
+                "{len} vs {threshold}"
+            );
         }
         // The default from `--gzip-threshold`.
         assert!(!should_gzip(1_048_576, 1_048_576));

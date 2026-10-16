@@ -486,8 +486,16 @@ mod tests {
         assert_eq!(v.artifact, PathBuf::from("a"));
         assert_eq!(v.common.output, "json");
 
-        let Cmd::Materialize(m) =
-            parse(&["materialize", "--artifact", "a", "--out", "b", "--log-level", "trace"]).cmd
+        let Cmd::Materialize(m) = parse(&[
+            "materialize",
+            "--artifact",
+            "a",
+            "--out",
+            "b",
+            "--log-level",
+            "trace",
+        ])
+        .cmd
         else {
             panic!("expected materialize")
         };
@@ -504,15 +512,7 @@ mod tests {
     #[test]
     fn repeatable_flags_accumulate_rather_than_overwrite() {
         let Cmd::Capture(a) = parse(&[
-            "capture",
-            "--files",
-            "a",
-            "--files",
-            "b",
-            "--audio",
-            "zh-cn",
-            "--audio",
-            "ja-jp",
+            "capture", "--files", "a", "--files", "b", "--audio", "zh-cn", "--audio", "ja-jp",
         ])
         .cmd
         else {
@@ -535,13 +535,22 @@ mod tests {
         let Cmd::Capture(b) = parse(&["capture", "--audio", "en-us"]).cmd else {
             panic!("expected capture")
         };
-        assert_eq!(b.audio, a.audio, "explicit default and absent are indistinguishable");
+        assert_eq!(
+            b.audio, a.audio,
+            "explicit default and absent are indistinguishable"
+        );
     }
 
     #[test]
     fn an_unknown_flag_and_an_unknown_subcommand_both_fail() {
-        assert_eq!(parse_err(&["capture", "--nope"]).kind(), clap::error::ErrorKind::UnknownArgument);
-        assert_eq!(parse_err(&["frobnicate"]).kind(), clap::error::ErrorKind::InvalidSubcommand);
+        assert_eq!(
+            parse_err(&["capture", "--nope"]).kind(),
+            clap::error::ErrorKind::UnknownArgument
+        );
+        assert_eq!(
+            parse_err(&["frobnicate"]).kind(),
+            clap::error::ErrorKind::InvalidSubcommand
+        );
     }
 
     #[test]

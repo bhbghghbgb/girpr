@@ -370,7 +370,10 @@ mod tests {
 
     #[test]
     fn the_channel_tuple_differs_per_region() {
-        assert_eq!(Biz::resolve(BizId::Hk4eCn).channel_tuple(), ("1", "1", "hyp_mihoyo"));
+        assert_eq!(
+            Biz::resolve(BizId::Hk4eCn).channel_tuple(),
+            ("1", "1", "hyp_mihoyo")
+        );
         assert_eq!(
             Biz::resolve(BizId::Hk4eGlobal).channel_tuple(),
             ("1", "0", "hyp_hoyoverse")
@@ -394,10 +397,16 @@ mod tests {
 
     #[test]
     fn a_configs_url_is_the_measured_one() {
-        let got = Biz::resolve(BizId::Hk4eGlobal).bases().hyp_url(&Biz::resolve(BizId::Hk4eGlobal), HypEndpoint::GameConfigs, "en-us");
+        let got = Biz::resolve(BizId::Hk4eGlobal).bases().hyp_url(
+            &Biz::resolve(BizId::Hk4eGlobal),
+            HypEndpoint::GameConfigs,
+            "en-us",
+        );
         assert_eq!(
             got,
-            format!("{GLOBAL}/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3")
+            format!(
+                "{GLOBAL}/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3"
+            )
         );
     }
 
@@ -409,8 +418,14 @@ mod tests {
         let b = Biz::resolve(BizId::Hk4eBilibili);
         let ep = b.bases();
         let deprecated = ep.hyp_url(&b, HypEndpoint::GameDeprecatedFileConfigs, "en-us");
-        assert!(deprecated.contains("&channel=14&sub_channel=0"), "{deprecated}");
-        assert!(deprecated.ends_with("&channel=14&sub_channel=0"), "{deprecated}");
+        assert!(
+            deprecated.contains("&channel=14&sub_channel=0"),
+            "{deprecated}"
+        );
+        assert!(
+            deprecated.ends_with("&channel=14&sub_channel=0"),
+            "{deprecated}"
+        );
 
         for endpoint in [
             HypEndpoint::GameConfigs,
@@ -421,10 +436,15 @@ mod tests {
             assert!(!url.contains("channel="), "{ep:?} must not carry it: {url}");
         }
         assert_eq!(
-            [HypEndpoint::GameConfigs, HypEndpoint::GameBranches, HypEndpoint::GameDeprecatedFileConfigs, HypEndpoint::GamePackages]
-                .iter()
-                .filter(|e| e.needs_channel())
-                .count(),
+            [
+                HypEndpoint::GameConfigs,
+                HypEndpoint::GameBranches,
+                HypEndpoint::GameDeprecatedFileConfigs,
+                HypEndpoint::GamePackages
+            ]
+            .iter()
+            .filter(|e| e.needs_channel())
+            .count(),
             1
         );
     }
@@ -444,7 +464,11 @@ mod tests {
     #[test]
     fn query_values_are_encoded() {
         assert_eq!(enc("a b/c+d?e"), "a%20b%2Fc%2Bd%3Fe");
-        assert_eq!(enc("hk4e_global"), "hk4e_global", "ordinary ids pass through");
+        assert_eq!(
+            enc("hk4e_global"),
+            "hk4e_global",
+            "ordinary ids pass through"
+        );
         let p = BranchParams {
             package_id: "pkg id".into(),
             password: "p@ss/word".into(),

@@ -43,8 +43,8 @@
 //! is the README's version strings (`docs/00-spec.md` §2).
 
 pub mod assemble;
-pub mod blobs;
 pub mod biz;
+pub mod blobs;
 pub mod cli;
 pub mod config;
 pub mod emit;

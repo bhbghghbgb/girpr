@@ -13,7 +13,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::cli::{Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs};
+use crate::cli::{
+    Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs,
+};
 use crate::report::OutputFormat;
 
 /// The audio language selected when `--audio` is not passed.
@@ -146,8 +148,7 @@ impl VersionPair {
 }
 
 /// Why there is no default old version, stated as a remedy rather than a fact.
-const NO_DIFF_TAGS: &str =
-    "the branch lists no diff_tags, so there is no default old version; pass --old-tag with a \
+const NO_DIFF_TAGS: &str = "the branch lists no diff_tags, so there is no default old version; pass --old-tag with a \
      tag the API serves (see `gircap capture --probe-tags`, or spec section 3.4)";
 
 impl CapturePlan {
@@ -239,7 +240,10 @@ fn validate_base(raw: Option<&str>, flag: &str) -> Result<Option<String>> {
             url.scheme()
         )));
     }
-    let loopback = matches!(url.host_str(), Some("127.0.0.1") | Some("localhost") | Some("::1"));
+    let loopback = matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1")
+    );
     if url.scheme() != "https" && !loopback {
         return Err(UsageError::new(format!(
             "{flag} {raw:?} is plaintext to a non-loopback host; only https is allowed \
@@ -359,7 +363,11 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         timeout: transport.timeout,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
-        output: args.common.output.parse::<OutputFormat>().map_err(UsageError::new)?,
+        output: args
+            .common
+            .output
+            .parse::<OutputFormat>()
+            .map_err(UsageError::new)?,
         argv,
     })
 }
@@ -376,7 +384,9 @@ fn validate_transport(jobs: usize, retries: u32, timeout_secs: u64) -> Result<Tr
         )));
     }
     if retries == 0 {
-        return Err(UsageError::new("--retries must be at least 1 (it counts the first attempt)"));
+        return Err(UsageError::new(
+            "--retries must be at least 1 (it counts the first attempt)",
+        ));
     }
     if retries > 10 {
         return Err(UsageError::new(format!(
@@ -544,7 +554,11 @@ pub struct MaterializePlan {
 pub fn verify_plan(args: &VerifyArgs) -> Result<VerifyPlan> {
     Ok(VerifyPlan {
         artifact: args.artifact.clone(),
-        output: args.common.output.parse::<OutputFormat>().map_err(UsageError::new)?,
+        output: args
+            .common
+            .output
+            .parse::<OutputFormat>()
+            .map_err(UsageError::new)?,
     })
 }
 
@@ -563,7 +577,11 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
     Ok(MaterializePlan {
         artifact: args.artifact.clone(),
         out,
-        output: args.common.output.parse::<OutputFormat>().map_err(UsageError::new)?,
+        output: args
+            .common
+            .output
+            .parse::<OutputFormat>()
+            .map_err(UsageError::new)?,
     })
 }
 
@@ -709,11 +727,18 @@ mod tests {
 
     #[test]
     fn zero_jobs_zero_retries_and_zero_timeout_are_all_refused_by_name() {
-        assert!(plan(|a| a.jobs = 0).unwrap_err().message().contains("--jobs"));
-        assert!(plan(|a| a.retries = 0)
-            .unwrap_err()
-            .message()
-            .contains("--retries"));
+        assert!(
+            plan(|a| a.jobs = 0)
+                .unwrap_err()
+                .message()
+                .contains("--jobs")
+        );
+        assert!(
+            plan(|a| a.retries = 0)
+                .unwrap_err()
+                .message()
+                .contains("--retries")
+        );
         assert!(
             plan(|a| a.timeout = 0)
                 .unwrap_err()
@@ -778,8 +803,7 @@ mod tests {
     #[test]
     fn latest_is_accepted_for_new_tag_and_refused_for_a_probe() {
         assert!(
-            plan(|a| a.new_tag = Some("latest".into()))
-                .is_ok(),
+            plan(|a| a.new_tag = Some("latest".into())).is_ok(),
             "the sentinel belongs to --new-tag"
         );
         assert!(validate_tag("latest", "--probe-tags").is_err());
@@ -857,7 +881,12 @@ mod tests {
     #[test]
     fn the_bundle_lives_under_biz_then_the_pair_then_the_id() {
         let d = pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0");
-        assert_eq!(d, PathBuf::from("artifacts").join("hk4e_global").join("7.0.0__7.1.0"));
+        assert_eq!(
+            d,
+            PathBuf::from("artifacts")
+                .join("hk4e_global")
+                .join("7.0.0__7.1.0")
+        );
     }
 
     /// The measured branch of `hk4e_global`, 2026-10-14.
@@ -903,7 +932,10 @@ mod tests {
         ] {
             assert_eq!(pair_plan(flag, None).new_selector(), want, "{flag:?}");
         }
-        assert_eq!(pair_plan(None, None).old_selector(), OldTagSelector::FirstDiffTag);
+        assert_eq!(
+            pair_plan(None, None).old_selector(),
+            OldTagSelector::FirstDiffTag
+        );
         assert_eq!(
             pair_plan(None, Some("5.5.0")).old_selector(),
             OldTagSelector::Explicit("5.5.0")
@@ -968,7 +1000,12 @@ mod tests {
         ] {
             assert!(validate_base(Some(good), "--hyp-base").is_ok(), "{good}");
         }
-        for bad in ["not a url", "ftp://x/api", "http://example.com/api", "/relative"] {
+        for bad in [
+            "not a url",
+            "ftp://x/api",
+            "http://example.com/api",
+            "/relative",
+        ] {
             let e = validate_base(Some(bad), "--sophon-base").unwrap_err();
             assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage, "{bad:?}");
         }
@@ -1011,12 +1048,10 @@ mod tests {
 
         let full = artifact_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0", t);
         assert!(full.ends_with("20261014T101500Z"));
-        assert_eq!(full.parent().unwrap(), pair_dir(
-            Path::new("artifacts"),
-            Biz::Hk4eGlobal,
-            "7.0.0",
-            "7.1.0"
-        ));
+        assert_eq!(
+            full.parent().unwrap(),
+            pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0")
+        );
     }
 
     #[test]
@@ -1029,6 +1064,9 @@ mod tests {
         );
         // A path outside the root is reported whole rather than silently
         // relativised into something that looks in-tree.
-        assert_eq!(rel_path_string(root, Path::new("/elsewhere/x")), "/elsewhere/x");
+        assert_eq!(
+            rel_path_string(root, Path::new("/elsewhere/x")),
+            "/elsewhere/x"
+        );
     }
 }

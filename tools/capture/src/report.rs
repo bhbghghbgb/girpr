@@ -523,7 +523,10 @@ mod tests {
         let v: Json = serde_json::from_str(&line).expect("still one valid object");
         assert_eq!(v["note"], r#"a "quoted", back\slashed path"#);
         assert_eq!(v["out"], r"C:\tmp\x");
-        assert_eq!(json_keys_in_order(&line), vec!["event", "tool", "version", "note", "out"]);
+        assert_eq!(
+            json_keys_in_order(&line),
+            vec!["event", "tool", "version", "note", "out"]
+        );
     }
 
     /// The text form encodes whitespace but does **not** escape quotes. Inventing an
@@ -546,10 +549,14 @@ mod tests {
     /// A value containing `=` or a space must not shift the text parsing.
     #[test]
     fn a_path_field_survives_the_text_rendering_intact() {
-        let s = Record::summary("verify").set("artifact", r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
+        let s =
+            Record::summary("verify").set("artifact", r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
         let line = s.to_text_line();
         let tail = line.rsplit_once("artifact=").unwrap().1;
-        assert_eq!(percent_decode(tail), r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id");
+        assert_eq!(
+            percent_decode(tail),
+            r"E:\artifacts\hk4e_global\7.0.0__7.1.0\id"
+        );
     }
 
     /// The whole point of the text form: split it on whitespace and every token
@@ -577,7 +584,10 @@ mod tests {
                 ("event".into(), "capture".to_string()),
                 ("tool".into(), "gircap".to_string()),
                 ("version".into(), crate::VERSION.to_string()),
-                ("exit_code_meaning".into(), "an assertion failed".to_string()),
+                (
+                    "exit_code_meaning".into(),
+                    "an assertion failed".to_string()
+                ),
                 ("artifact".into(), r"E:\a b\artifacts".to_string()),
                 ("pct".into(), "100%".to_string()),
                 ("tab".into(), "a\tb".to_string()),

@@ -146,10 +146,7 @@ mod tests {
     #[test]
     fn only_assertion_failures_mark_an_artifact_untrustworthy() {
         for c in ExitCode::ALL {
-            let want = matches!(
-                c,
-                ExitCode::AssertionFailed | ExitCode::RequirementUnmet
-            );
+            let want = matches!(c, ExitCode::AssertionFailed | ExitCode::RequirementUnmet);
             assert_eq!(c.artifact_is_untrustworthy(), want, "{c}");
         }
     }
