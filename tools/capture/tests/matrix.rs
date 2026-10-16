@@ -101,7 +101,12 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
         })
         .unwrap_or_else(|| panic!("no SUMMARY:\n{stdout}\n{stderr}"));
     let bundle = find_bundle(&scratch.out());
-    Captured { _scratch: scratch, _mock: mock, bundle, summary }
+    Captured {
+        _scratch: scratch,
+        _mock: mock,
+        bundle,
+        summary,
+    }
 }
 
 fn find_bundle(dir: &std::path::Path) -> PathBuf {
@@ -111,8 +116,11 @@ fn find_bundle(dir: &std::path::Path) -> PathBuf {
             return d;
         }
         if let Ok(rd) = std::fs::read_dir(&d) {
-            let mut subs: Vec<PathBuf> =
-                rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+            let mut subs: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
             subs.sort();
             stack.extend(subs.into_iter().rev());
         }
@@ -131,7 +139,10 @@ impl Captured {
     }
 
     fn matrix(&self) -> Vec<serde_json::Value> {
-        self.manifest()["matrix"].as_array().expect("a matrix").clone()
+        self.manifest()["matrix"]
+            .as_array()
+            .expect("a matrix")
+            .clone()
     }
 
     fn diff(&self) -> serde_json::Value {
@@ -167,8 +178,15 @@ fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
             "{r} has an unknown status"
         );
         // And `ok` agrees with the status, rather than being a second opinion.
-        let ok = matches!(r["status"].as_str(), Some("captured" | "covered_by" | "unavailable"));
-        assert_eq!(r["status"] == "over_budget", !ok, "{r}: status and ok disagree");
+        let ok = matches!(
+            r["status"].as_str(),
+            Some("captured" | "covered_by" | "unavailable")
+        );
+        assert_eq!(
+            r["status"] == "over_budget",
+            !ok,
+            "{r}: status and ok disagree"
+        );
     }
 }
 
@@ -196,7 +214,10 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
         .map(|c| c.as_str().unwrap())
         .collect();
     for want in ["path", "matching_field", "total_cost", "classes", "rank"] {
-        assert!(cols.contains(&want), "the column {want} is missing: {cols:?}");
+        assert!(
+            cols.contains(&want),
+            "the column {want} is missing: {cols:?}"
+        );
     }
     let rows = candidates["rows"].as_array().expect("rows");
     assert!(!rows.is_empty(), "candidates were scored: {candidates:#?}");
@@ -212,14 +233,15 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
         "candidates are not in ascending cost order: {costs:?}"
     );
     // And every path appears exactly once.
-    let mut paths: Vec<&str> = rows
-        .iter()
-        .map(|r| r["path"].as_str().unwrap())
-        .collect();
+    let mut paths: Vec<&str> = rows.iter().map(|r| r["path"].as_str().unwrap()).collect();
     let total = paths.len();
     paths.sort_unstable();
     paths.dedup();
-    assert_eq!(paths.len(), total, "a path appears twice in the candidate list");
+    assert_eq!(
+        paths.len(),
+        total,
+        "a path appears twice in the candidate list"
+    );
 
     // The admission charge is at most the sum of every candidate, and at least
     // the cheapest one - the first thing a greedy loop admits.
@@ -276,9 +298,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         "and admission did not exceed it"
     );
     assert!(
-        c.matrix()
-            .iter()
-            .any(|r| r["status"] == "over_budget"),
+        c.matrix().iter().any(|r| r["status"] == "over_budget"),
         "a refused candidate is recorded as over_budget, not unavailable: {:#?}",
         c.matrix()
     );
@@ -310,7 +330,10 @@ fn the_diff_on_disk_matches_the_files_the_captures_name() {
 
     // The world publishes 4 files on the new side across both fields: three `game`
     // files plus the one `en-us` file, which is identical across the pair.
-    assert_eq!(common, 4, "browser_assets, zero.blk, HoYoChannel.dll, vo_all");
+    assert_eq!(
+        common, 4,
+        "browser_assets, zero.blk, HoYoChannel.dll, vo_all"
+    );
     assert_eq!(added, 1, "libNew.dll");
     assert_eq!(removed, 1, "old.blk");
     assert_eq!(identical, 2, "browser_assets and vo_all are unchanged");
@@ -338,7 +361,9 @@ fn audio_candidates_are_attributed_to_their_own_field() {
     let rows = candidates["rows"].as_array().expect("candidate rows");
     assert!(!rows.is_empty());
     for r in rows {
-        let field = r["matching_field"].as_str().expect("every candidate names its field");
+        let field = r["matching_field"]
+            .as_str()
+            .expect("every candidate names its field");
         assert!(
             field == "game" || field == "en-us",
             "an unexpected field: {r}"
@@ -366,7 +391,12 @@ fn per_class_two_admits_two_files_and_numbers_them() {
     let ids: Vec<String> = std::fs::read_dir(c.bundle.join("patchmaps"))
         .unwrap()
         .flatten()
-        .map(|e| e.file_name().to_string_lossy().trim_end_matches(".json").to_string())
+        .map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
         .collect();
     for id in &ids {
         // An id is `<class>` or `<class>+<n>`; a bare class means the first.
@@ -399,7 +429,12 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
         let mut v: Vec<String> = std::fs::read_dir(b.join("patchmaps"))
             .unwrap()
             .flatten()
-            .map(|e| e.file_name().to_string_lossy().trim_end_matches(".json").to_string())
+            .map(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .trim_end_matches(".json")
+                    .to_string()
+            })
             .collect();
         v.sort();
         v

@@ -106,14 +106,14 @@ fn help_and_version_are_zero() {
 #[test]
 fn every_argument_error_is_one() {
     let cases: &[&[&str]] = &[
-        &[],                                 // no subcommand
-        &["capture", "--nope"],              // unknown flag
-        &["frobnicate"],                     // unknown subcommand
+        &[],                                  // no subcommand
+        &["capture", "--nope"],               // unknown flag
+        &["frobnicate"],                      // unknown subcommand
         &["capture", "--biz", "hk4e_turkey"], // bad enum
         &["capture", "--per-class", "many"],  // bad number
         &["capture", "--log-level", "loud"],  // unvalidated string flag
         &["capture", "--output", "yaml"],
-        &["verify"],                         // missing --artifact
+        &["verify"], // missing --artifact
         &["materialize"],
         &["list"],
         &["verify", "--artifact", "a", "--output"], // missing value
@@ -143,7 +143,11 @@ fn the_summary_is_the_only_thing_on_stdout() {
     let r = run(&["--help"]);
     assert!(r.stdout.contains("Usage:"), "{:?}", r.stdout);
     for cmd in ["capture", "verify", "materialize", "list"] {
-        assert!(r.stdout.contains(cmd), "{cmd} missing from --help:\n{}", r.stdout);
+        assert!(
+            r.stdout.contains(cmd),
+            "{cmd} missing from --help:\n{}",
+            r.stdout
+        );
     }
 
     let r = run_owned(&offline_capture(&["--output", "json"]));
@@ -212,7 +216,13 @@ fn list_emits_one_record_per_bundle_then_a_summary() {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).expect("empty root");
 
-    let r = run(&["list", "--root", &scratch.to_string_lossy(), "--output", "json"]);
+    let r = run(&[
+        "list",
+        "--root",
+        &scratch.to_string_lossy(),
+        "--output",
+        "json",
+    ]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(
@@ -231,10 +241,24 @@ fn list_emits_one_record_per_bundle_then_a_summary() {
     let junk = scratch.join("not-a-bundle");
     std::fs::create_dir_all(&junk).expect("junk dir");
     std::fs::write(junk.join("MANIFEST.json"), b"{ not json").expect("junk manifest");
-    let r = run(&["list", "--root", &scratch.to_string_lossy(), "--output", "json"]);
-    assert_eq!(r.code, 0, "a junk directory does not fail the walk: {}", r.stderr);
+    let r = run(&[
+        "list",
+        "--root",
+        &scratch.to_string_lossy(),
+        "--output",
+        "json",
+    ]);
+    assert_eq!(
+        r.code, 0,
+        "a junk directory does not fail the walk: {}",
+        r.stderr
+    );
     let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(lines.len(), 1, "still no bundle, so still one line: {lines:?}");
+    assert_eq!(
+        lines.len(),
+        1,
+        "still no bundle, so still one line: {lines:?}"
+    );
     let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(v["bundles"], 0);
 
@@ -256,9 +280,27 @@ fn every_record_puts_event_first_and_the_stream_is_pure_ndjson() {
     std::fs::create_dir_all(&scratch).expect("root");
 
     for argv in [
-        vec!["list", "--root", &scratch.to_string_lossy(), "--output", "json"],
-        vec!["verify", "--artifact", &scratch.to_string_lossy(), "--output", "json"],
-        vec!["materialize", "--artifact", &scratch.to_string_lossy(), "--output", "json"],
+        vec![
+            "list",
+            "--root",
+            &scratch.to_string_lossy(),
+            "--output",
+            "json",
+        ],
+        vec![
+            "verify",
+            "--artifact",
+            &scratch.to_string_lossy(),
+            "--output",
+            "json",
+        ],
+        vec![
+            "materialize",
+            "--artifact",
+            &scratch.to_string_lossy(),
+            "--output",
+            "json",
+        ],
     ] {
         let r = run_owned(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         let lines: Vec<&str> = r.stdout.lines().filter(|l| !l.is_empty()).collect();
@@ -311,8 +353,8 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
     let r = run_owned(&offline_capture(&["--log-file", log.to_str().unwrap()]));
     assert_eq!(r.code, 2);
 
-    let text = std::fs::read_to_string(&log)
-        .unwrap_or_else(|e| panic!("--log-file was not written: {e}"));
+    let text =
+        std::fs::read_to_string(&log).unwrap_or_else(|e| panic!("--log-file was not written: {e}"));
     assert!(
         text.lines().any(|l| l.contains("\"gircap start\"")),
         "the start event is missing from the log:\n{text}"
@@ -431,7 +473,15 @@ fn verify_takes_no_base_flags_and_needs_none() {
         "--hyp-base",
         "http://127.0.0.1:1",
     ]);
-    assert_eq!(r.code, 1, "an unknown flag is a usage error, as every argument error is: {}", r.stderr);
-    assert!(r.stderr.contains("--hyp-base"), "and clap names the flag: {}", r.stderr);
+    assert_eq!(
+        r.code, 1,
+        "an unknown flag is a usage error, as every argument error is: {}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("--hyp-base"),
+        "and clap names the flag: {}",
+        r.stderr
+    );
     let _ = std::fs::remove_dir_all(&d);
 }

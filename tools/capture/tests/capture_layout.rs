@@ -74,7 +74,12 @@ impl Run {
             .stdout
             .lines()
             .find(|l| l.starts_with("SUMMARY "))
-            .unwrap_or_else(|| panic!("no SUMMARY on stdout:\n{}\n---\n{}", self.stdout, self.stderr));
+            .unwrap_or_else(|| {
+                panic!(
+                    "no SUMMARY on stdout:\n{}\n---\n{}",
+                    self.stdout, self.stderr
+                )
+            });
         line.strip_prefix("SUMMARY ")
             .expect("starts with SUMMARY")
             .split(' ')
@@ -146,7 +151,9 @@ fn bundle_in(out: &Path) -> PathBuf {
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -186,7 +193,10 @@ fn a_capture_leaves_no_failed_selfcheck_rows() {
         .filter(|a| a["ok"] != serde_json::Value::Bool(true))
         .collect();
     assert!(failed.is_empty(), "failed rows left in place: {failed:#?}");
-    assert!(doc["counts"]["total"].as_u64().unwrap() > 0, "and rows were produced");
+    assert!(
+        doc["counts"]["total"].as_u64().unwrap() > 0,
+        "and rows were produced"
+    );
 }
 
 /// M10: `cargo test -p gircap` green and no network. The "no network" half is
@@ -206,11 +216,23 @@ fn every_request_the_capture_made_went_to_the_mock() {
     }
     // The four HoYoPlay endpoints, in the order the capture issues them.
     let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
-    let configs = order.iter().position(|p| p.ends_with("/getGameConfigs")).expect("getGameConfigs");
-    let branches = order.iter().position(|p| p.ends_with("/getGameBranches")).expect("getGameBranches");
-    let builds = order.iter().position(|p| p.ends_with("/getBuild")).expect("getBuild");
+    let configs = order
+        .iter()
+        .position(|p| p.ends_with("/getGameConfigs"))
+        .expect("getGameConfigs");
+    let branches = order
+        .iter()
+        .position(|p| p.ends_with("/getGameBranches"))
+        .expect("getGameBranches");
+    let builds = order
+        .iter()
+        .position(|p| p.ends_with("/getBuild"))
+        .expect("getBuild");
     assert!(configs < branches, "getGameConfigs before getGameBranches");
-    assert!(branches < builds, "the branch that carries package_id is fetched before getBuild");
+    assert!(
+        branches < builds,
+        "the branch that carries package_id is fetched before getBuild"
+    );
 }
 
 /// `api/error_shapes.json` records what the API does with requests it will not
@@ -243,7 +265,11 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
         assert_eq!(r["family"], "blob", "{id}");
         assert_eq!(r["status"], 404, "{id}: {r}");
         assert_eq!(r["content_type"], ctype, "{id}: {r}");
-        assert_eq!(r["retcode"], serde_json::Value::Null, "{id}: a blob has no retcode");
+        assert_eq!(
+            r["retcode"],
+            serde_json::Value::Null,
+            "{id}: a blob has no retcode"
+        );
         assert_eq!(r["error"], true, "{id}");
         // The volatile fields are named, because the body cannot be replayed
         // byte-for-byte and a replayer has to know that.
@@ -254,7 +280,10 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
             .map(|v| v.as_str().unwrap())
             .collect();
         for want in ["RequestId", "HostId", "Key"] {
-            assert!(volatile.contains(&want), "{id} must mark {want}: {volatile:?}");
+            assert!(
+                volatile.contains(&want),
+                "{id} must mark {want}: {volatile:?}"
+            );
         }
     }
 
@@ -371,7 +400,15 @@ fn probe_chunk_ids(bundle: &std::path::Path) -> Vec<String> {
         .unwrap()
         .iter()
         .filter(|s| s["family"] == "blob" && s["url"].as_str().unwrap().contains("/chunk/"))
-        .map(|s| s["url"].as_str().unwrap().rsplit('/').next().unwrap().to_string())
+        .map(|s| {
+            s["url"]
+                .as_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_string()
+        })
         .collect()
 }
 
@@ -432,7 +469,13 @@ fn manifest_chunk_ids(bundle: &std::path::Path, tag: &str) -> Vec<String> {
 fn list_emits_one_bundle_record_per_bundle_and_a_summary_last() {
     let (mock, scratch, r, bundle) = capture_ok("listrec");
     let root = scratch.out();
-    let v = run(&["list", "--root", &root.to_string_lossy(), "--output", "json"]);
+    let v = run(&[
+        "list",
+        "--root",
+        &root.to_string_lossy(),
+        "--output",
+        "json",
+    ]);
     assert_eq!(v.code, 0, "{}\n{}", v.stdout, v.stderr);
 
     let lines: Vec<&str> = v.stdout.lines().filter(|l| !l.is_empty()).collect();
@@ -468,7 +511,10 @@ fn list_emits_one_bundle_record_per_bundle_and_a_summary_last() {
     let s: serde_json::Value = serde_json::from_str(lines[1]).expect("NDJSON");
     assert_eq!(s["event"], "list");
     assert_eq!(s["bundles"], 1);
-    assert_eq!(s["patchmaps"], b["patchmaps"], "the summary totals the records");
+    assert_eq!(
+        s["patchmaps"], b["patchmaps"],
+        "the summary totals the records"
+    );
     assert_eq!(s["blobs"], b["blobs"], "the summary totals the records");
     assert_eq!(s["exit_code"], 0);
 
@@ -509,7 +555,11 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "verify/checksums.json",
         "verify/selfcheck.json",
     ] {
-        assert!(bundle.join(rel).is_file(), "missing {rel} in {}", bundle.display());
+        assert!(
+            bundle.join(rel).is_file(),
+            "missing {rel} in {}",
+            bundle.display()
+        );
     }
     for rel in [
         "manifests/7.0.0/game.manifest.meta.json",
@@ -565,8 +615,11 @@ fn ureq_get(url: &str) -> Vec<u8> {
     let rest = url.strip_prefix("http://").expect("an http url");
     let (host_port, path) = rest.split_once('/').expect("a path");
     let mut s = std::net::TcpStream::connect(host_port).expect("connect to the mock");
-    s.write_all(format!("GET /{path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n").as_bytes())
-        .unwrap();
+    s.write_all(
+        format!("GET /{path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .unwrap();
     let mut all = Vec::new();
     s.read_to_end(&mut all).unwrap();
     let split = all
@@ -586,12 +639,15 @@ fn ureq_get(url: &str) -> Vec<u8> {
 #[test]
 fn every_request_url_in_the_bundle_is_a_loopback_address() {
     let (mock, _s, _r, bundle) = capture_ok("loopback");
-    let text = std::fs::read_to_string(bundle.join("api/requests.ndjson")).expect("the request log");
+    let text =
+        std::fs::read_to_string(bundle.join("api/requests.ndjson")).expect("the request log");
     let mut checked = 0;
     for line in text.lines() {
         let v: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
         for field in ["url", "final_url"] {
-            let Some(url) = v[field].as_str() else { continue };
+            let Some(url) = v[field].as_str() else {
+                continue;
+            };
             assert!(
                 url.starts_with("http://127.0.0.1:"),
                 "{field} is not loopback: {url}"
@@ -630,9 +686,20 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
     // `MANIFEST.json` records which bases were used, so a reader can tell from
     // the bundle alone.
     let manifest: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(bundle.join("MANIFEST.json")).unwrap()).unwrap();
-    assert!(manifest["biz"]["hyp_base"].as_str().unwrap().contains("127.0.0.1"));
-    assert!(manifest["biz"]["sophon_base"].as_str().unwrap().contains("127.0.0.1"));
+        serde_json::from_str(&std::fs::read_to_string(bundle.join("MANIFEST.json")).unwrap())
+            .unwrap();
+    assert!(
+        manifest["biz"]["hyp_base"]
+            .as_str()
+            .unwrap()
+            .contains("127.0.0.1")
+    );
+    assert!(
+        manifest["biz"]["sophon_base"]
+            .as_str()
+            .unwrap()
+            .contains("127.0.0.1")
+    );
 }
 
 // ------------------------------------------- the offline half, on this bundle
@@ -656,8 +723,7 @@ fn the_captured_bundle_verifies_offline() {
     // at. A reader who cannot tell what was checked from what was merely
     // recorded would take this list at face value.
     assert_eq!(
-        s["checks_derived"],
-        "A16,A6,A11,A7,A8,A13,A17,A18,A20",
+        s["checks_derived"], "A16,A6,A11,A7,A8,A13,A17,A18,A20",
         "verify names exactly what it re-derived"
     );
     // And the two sets stay apart: the summary names nine, but only seven can be
@@ -707,7 +773,9 @@ fn the_captured_bundle_materializes_to_the_same_bytes() {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -790,8 +858,14 @@ fn audio_widens_the_selection_pool() {
     assert_eq!(without.code, 0, "{}\n{}", without.stdout, without.stderr);
     assert_eq!(without.summary()["selection_pool"], "game");
     let a = with.summary()["manifests_captured"].parse::<u64>().unwrap();
-    let b = without.summary()["manifests_captured"].parse::<u64>().unwrap();
-    assert_eq!(a, b + 2, "the audio field contributes one manifest per build");
+    let b = without.summary()["manifests_captured"]
+        .parse::<u64>()
+        .unwrap();
+    assert_eq!(
+        a,
+        b + 2,
+        "the audio field contributes one manifest per build"
+    );
 }
 
 /// A pool naming a field no build publishes is refused, naming the field.
@@ -803,7 +877,10 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
     let detail = percent_decode(&r.summary()["detail"]);
     assert!(detail.contains("en-us"), "{detail}");
-    assert!(detail.contains("published"), "and what is published: {detail}");
+    assert!(
+        detail.contains("published"),
+        "and what is published: {detail}"
+    );
 }
 
 /// `--require-class` on a class the world has no candidate for is exit `4`,
@@ -812,7 +889,11 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
 fn requiring_an_unavailable_class_is_exit_four() {
     let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("require");
-    let r = capture(&mock, &scratch, &["--require-class", "full_reuse_reordered"]);
+    let r = capture(
+        &mock,
+        &scratch,
+        &["--require-class", "full_reuse_reordered"],
+    );
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
@@ -858,16 +939,16 @@ fn no_chunk_blobs_is_incomplete_not_pass() {
         .iter()
         .filter(|r| r.starts_with("0000000000000000_"))
         .count();
-    assert_eq!(bogus, 1, "the chunk_missing probe asks for the bogus id: {chunk_reqs:?}");
+    assert_eq!(
+        bogus, 1,
+        "the chunk_missing probe asks for the bogus id: {chunk_reqs:?}"
+    );
     assert_eq!(
         chunk_reqs.len() - bogus,
         1,
         "and the wrong-build probe asks for one real id: {chunk_reqs:?}"
     );
-    assert!(
-        count_blobs(&bundle) == 0,
-        "and still nothing was stored"
-    );
+    assert!(count_blobs(&bundle) == 0, "and still nothing was stored");
     // And such a bundle cannot be materialized, which is what `verify` says.
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
     assert_eq!(v.code, 3, "{}\n{}", v.stdout, v.stderr);
@@ -903,7 +984,10 @@ fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
     let detail = percent_decode(&r.summary()["detail"]);
-    assert!(detail.contains("6.7.0"), "it resolved to what diff_tags[0] names: {detail}");
+    assert!(
+        detail.contains("6.7.0"),
+        "it resolved to what diff_tags[0] names: {detail}"
+    );
     assert!(detail.contains("-202"), "{detail}");
 }
 
@@ -929,7 +1013,10 @@ fn the_probe_records_an_unservable_tag_rather_than_pretending() {
         .filter(|t| t["served"].as_bool() == Some(true))
         .map(|t| t["tag"].as_str().unwrap_or_default())
         .collect();
-    assert!(servable.contains(&"7.0.0") && servable.contains(&"7.1.0"), "{servable:?}");
+    assert!(
+        servable.contains(&"7.0.0") && servable.contains(&"7.1.0"),
+        "{servable:?}"
+    );
 }
 
 /// A shared chunk is fetched once, not once per build.
@@ -959,5 +1046,8 @@ fn a_chunk_shared_by_both_builds_is_fetched_once() {
     let s = r.summary();
     let patch_fetch = s["patch_fetch_chunks"].parse::<u64>().unwrap();
     let stored = s["chunk_blobs_stored"].parse::<u64>().unwrap();
-    assert!(stored >= patch_fetch, "{stored} stored vs {patch_fetch} patch fetches");
+    assert!(
+        stored >= patch_fetch,
+        "{stored} stored vs {patch_fetch} patch fetches"
+    );
 }

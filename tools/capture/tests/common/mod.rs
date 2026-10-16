@@ -239,9 +239,21 @@ impl World {
                     "game".into(),
                     vec![
                         File::new("GenshinImpact_Data/Resources/browser_assets", &[1, 2], 512),
-                        File::new("GenshinImpact_Data/StreamingAssets/blocks/old.blk", &[91], 1024),
-                        File::new("GenshinImpact_Data/StreamingAssets/blocks/zero.blk", &[70, 71], 512),
-                        File::new("GenshinImpact_Data/Plugins/HoYoChannel.dll", &[10, 11, 12], 1024),
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/old.blk",
+                            &[91],
+                            1024,
+                        ),
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
+                            &[70, 71],
+                            512,
+                        ),
+                        File::new(
+                            "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+                            &[10, 11, 12],
+                            1024,
+                        ),
                     ],
                 ),
                 ("en-us".into(), vec![shared.clone()]),
@@ -257,8 +269,16 @@ impl World {
                         File::new("GenshinImpact_Data/Resources/browser_assets", &[1, 2], 512),
                         // Present only on the new side: `added`.
                         File::new("GenshinImpact_Data/Plugins/libNew.dll", &[90], 256),
-                        File::new("GenshinImpact_Data/StreamingAssets/blocks/zero.blk", &[80, 81], 512),
-                        File::new("GenshinImpact_Data/Plugins/HoYoChannel.dll", &[99, 11, 12], 1024),
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
+                            &[80, 81],
+                            512,
+                        ),
+                        File::new(
+                            "GenshinImpact_Data/Plugins/HoYoChannel.dll",
+                            &[99, 11, 12],
+                            1024,
+                        ),
                     ],
                 ),
                 ("en-us".into(), vec![shared]),
@@ -326,7 +346,8 @@ impl World {
         let plain = pb.encode_to_vec();
         let raw = zstd::encode_all(plain.as_slice(), 3).map_err(|e| e.to_string())?;
         let checksum = md5_hex(&plain);
-        let prefix = md5_hex(format!("manifest/{}/{}", build.tag, field).as_bytes())[..16].to_string();
+        let prefix =
+            md5_hex(format!("manifest/{}/{}", build.tag, field).as_bytes())[..16].to_string();
         Ok(Archive {
             id: format!("manifest_{prefix}_{checksum}"),
             checksum,
@@ -335,7 +356,10 @@ impl World {
             file_count: files.len() as i64,
             chunk_count: files.iter().map(|f| f.chunks.len() as i64).sum(),
             uncompressed_size: files.iter().map(|f| f.size()).sum(),
-            compressed_size: files.iter().map(|f| f.chunks.iter().map(|c| c.compressed_size).sum::<i64>()).sum(),
+            compressed_size: files
+                .iter()
+                .map(|f| f.chunks.iter().map(|c| c.compressed_size).sum::<i64>())
+                .sum(),
         })
     }
 }
@@ -437,7 +461,10 @@ impl Mock {
 
     /// Every request answered so far, in order.
     pub fn requests(&self) -> Vec<Recorded> {
-        self.log.lock().expect("the request log is not poisoned").clone()
+        self.log
+            .lock()
+            .expect("the request log is not poisoned")
+            .clone()
     }
 
     /// The chunk ids requested, in order.
@@ -724,13 +751,15 @@ fn build_table(world: &World, base: &str) -> Table {
             .render(),
         ),
     );
-let mut builds = BTreeMap::new();
+    let mut builds = BTreeMap::new();
     let mut archives = BTreeMap::new();
     let mut chunks: BTreeMap<(String, String), Blob> = BTreeMap::new();
     for build in [&world.new, &world.old] {
         let mut manifests = Vec::new();
         for (field, files) in &build.fields {
-            let archive = world.archive(build, field).expect("the world is self-consistent");
+            let archive = world
+                .archive(build, field)
+                .expect("the world is self-consistent");
             for f in files {
                 for c in &f.chunks {
                     // Keyed by build as well as id: the same content under two
@@ -741,7 +770,10 @@ let mut builds = BTreeMap::new();
                         .or_insert_with(|| c.clone());
                 }
             }
-            archives.insert((build.build_id.clone(), archive.id.clone()), archive.clone());
+            archives.insert(
+                (build.build_id.clone(), archive.id.clone()),
+                archive.clone(),
+            );
             let download = |kind: &str| {
                 J::Obj(vec![
                     ("encryption".into(), J::Num(0)),
@@ -786,7 +818,10 @@ let mut builds = BTreeMap::new();
                 (
                     "stats".into(),
                     J::Obj(vec![
-                        ("compressed_size".into(), J::s(archive.compressed_size.to_string())),
+                        (
+                            "compressed_size".into(),
+                            J::s(archive.compressed_size.to_string()),
+                        ),
                         (
                             "uncompressed_size".into(),
                             J::s(archive.uncompressed_size.to_string()),
@@ -876,13 +911,21 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
         }
     }
 
-    let target = request_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let target = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .to_string();
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_string(), q.to_string()),
         None => (target.clone(), String::new()),
     };
     let tag = query_param(&query, "tag");
-    log.lock().expect("log").push(Recorded { path: path.clone(), query: query.clone(), tag: tag.clone() });
+    log.lock().expect("log").push(Recorded {
+        path: path.clone(),
+        query: query.clone(),
+        tag: tag.clone(),
+    });
 
     let Some(bytes) = respond(table, &path, &query, tag.as_deref()) else {
         // A blob route's miss is the measured shape, not a generic one: the real
@@ -931,8 +974,7 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
     // Whether this request asked for the game the mock knows. Hoisted because
     // both `hyp` endpoints need it and the guard is long enough to read better
     // as a name.
-    let known_game =
-        query_param(query, "game_ids[]").as_deref() == Some(table.game_id.as_str());
+    let known_game = query_param(query, "game_ids[]").as_deref() == Some(table.game_id.as_str());
     let known_package =
         query_param(query, "package_id").as_deref() == Some(table.package_id.as_str());
     let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();

@@ -60,11 +60,13 @@ struct Blob {
 fn reference(tag: &str, path: &str, role: Set, offset: i64) -> Reference {
     Reference {
         tag: tag.into(),
-        build_id: Some(match tag {
-            "7.0.0" => "3XnPviMfoILi",
-            _ => "sMXGW2ll3Fuu",
-        }
-        .into()),
+        build_id: Some(
+            match tag {
+                "7.0.0" => "3XnPviMfoILi",
+                _ => "sMXGW2ll3Fuu",
+            }
+            .into(),
+        ),
         capture_id: CAPTURE.into(),
         path: path.into(),
         role,
@@ -97,7 +99,12 @@ impl Bundle {
         let (c, cb, cr) = chunk(0xc3, 32, 0xa431_4f3c_1ba1_d7d4);
         let blobs = vec![
             // Offset 0 is different content in each build: same length, new id.
-            Blob { chunk: a.clone(), raw: ar, refs: vec![reference(OLD_TAG, DLL, Set::MaterializeOld, 0)], sets: vec![Set::MaterializeOld] },
+            Blob {
+                chunk: a.clone(),
+                raw: ar,
+                refs: vec![reference(OLD_TAG, DLL, Set::MaterializeOld, 0)],
+                sets: vec![Set::MaterializeOld],
+            },
             // Offset 690719 - here 64 - is byte-identical in both.
             Blob {
                 chunk: b.clone(),
@@ -147,7 +154,11 @@ impl Bundle {
             let mut props = BlobProps::measure(&b.raw, &b.chunk).expect("measure");
             props.set_stored(rel);
             entries.push((
-                IndexedBlob { props, referenced_by: b.refs.clone(), sets: b.sets.clone() },
+                IndexedBlob {
+                    props,
+                    referenced_by: b.refs.clone(),
+                    sets: b.sets.clone(),
+                },
                 b.sets.clone(),
             ));
         }
@@ -179,7 +190,11 @@ impl Bundle {
         use gircap::assemble::{Decision, PlanEntry, SourceRange, Totals};
         let entry = |i: usize, c: &SophonChunk, offset: i64, reuse_from: Option<i64>| PlanEntry {
             i,
-            decision: if reuse_from.is_some() { Decision::Reuse } else { Decision::Fetch },
+            decision: if reuse_from.is_some() {
+                Decision::Reuse
+            } else {
+                Decision::Fetch
+            },
             target_range: PRange::at(offset, c.uncompressed_size),
             source_range: reuse_from.map(|s| SourceRange {
                 start: s,
@@ -221,8 +236,18 @@ impl Bundle {
                 path: DLL.into(),
                 matching_field: "game".into(),
                 classes: vec![gircap::select::Class::PartialSameOffset],
-                old: Some(Side { tag: OLD_TAG.into(), size: old_bytes.len() as i64, md5: old_md5, nchunks: 3 }),
-                new: Some(Side { tag: NEW_TAG.into(), size: new_bytes.len() as i64, md5: new_md5.clone(), nchunks: 3 }),
+                old: Some(Side {
+                    tag: OLD_TAG.into(),
+                    size: old_bytes.len() as i64,
+                    md5: old_md5,
+                    nchunks: 3,
+                }),
+                new: Some(Side {
+                    tag: NEW_TAG.into(),
+                    size: new_bytes.len() as i64,
+                    md5: new_md5.clone(),
+                    nchunks: 3,
+                }),
                 plan: Some(plan),
                 totals: Some(totals),
                 expectations: gircap::assemble::Expectations {
@@ -245,7 +270,16 @@ impl Bundle {
 
         // `verify/selfcheck.json`, then `verify/checksums.json` last - the same
         // two-pass order `capture` uses, and for the same reason.
-        let recorded = Selfcheck::build(vec![Assertion::pass("A6", "every blob checks out", "chunks/", "ok")], Vec::new(), &[]);
+        let recorded = Selfcheck::build(
+            vec![Assertion::pass(
+                "A6",
+                "every blob checks out",
+                "chunks/",
+                "ok",
+            )],
+            Vec::new(),
+            &[],
+        );
         write_json(&root.join("verify/selfcheck.json"), &recorded);
         let checksums = Checksums::scan(&root).expect("scan");
         write_json(&root.join("verify/checksums.json"), &checksums);
@@ -288,15 +322,30 @@ fn manifest() -> Manifest {
         ("zero_reuse_single", "unavailable", "zero_reuse_single"),
         ("zero_reuse_multi", "unavailable", "zero_reuse_multi"),
         ("partial_same_offset", "captured", "partial_same_offset"),
-        ("partial_moved_offset", "unavailable", "partial_moved_offset"),
-        ("partial_size_changed", "unavailable", "partial_size_changed"),
+        (
+            "partial_moved_offset",
+            "unavailable",
+            "partial_moved_offset",
+        ),
+        (
+            "partial_size_changed",
+            "unavailable",
+            "partial_size_changed",
+        ),
         ("added", "unavailable", "added"),
         ("removed", "unavailable", "removed"),
-        ("full_reuse_reordered", "unavailable", "full_reuse_reordered"),
+        (
+            "full_reuse_reordered",
+            "unavailable",
+            "full_reuse_reordered",
+        ),
     ];
     Manifest {
         schema_version: gircap::SCHEMA_VERSION,
-        tool: gircap::emit::index::Tool { name: "gircap".into(), version: "0.1.0".into() },
+        tool: gircap::emit::index::Tool {
+            name: "gircap".into(),
+            version: "0.1.0".into(),
+        },
         capture: gircap::emit::index::Capture {
             id: "20261014T000000Z".into(),
             captured_at: "2026-10-14T00:00:00Z".into(),
@@ -428,14 +477,22 @@ fn verify_reports_a_damaged_blob_by_name() {
     let head = r.headline().expect("a headline for a failed bundle");
     assert!(head.contains(&rel), "names the blob: {head}");
     assert!(
-        r.rows.iter().any(|x| x.id == "A6" && !x.ok && x.subject == rel),
+        r.rows
+            .iter()
+            .any(|x| x.id == "A6" && !x.ok && x.subject == rel),
         "has a red A6 row for the blob: {:?}",
         r.failures()
     );
     // A16 was re-checksummed, so it must *not* be what fires - otherwise the
     // bundle's digest list would be a moving target and A6 would never be read.
-    assert!(r.rows.iter().any(|x| x.id == "A16" && x.ok), "A16 holds: the list is current");
-    assert!(!r.agrees, "a bundle that changed under its own recording does not agree");
+    assert!(
+        r.rows.iter().any(|x| x.id == "A16" && x.ok),
+        "A16 holds: the list is current"
+    );
+    assert!(
+        !r.agrees,
+        "a bundle that changed under its own recording does not agree"
+    );
 }
 
 /// A blob deleted outright is a different fault from a damaged one, and says so.
@@ -447,7 +504,11 @@ fn verify_reports_a_deleted_blob_by_name() {
     std::fs::remove_file(b.root.join(&rel)).unwrap();
     let r = reverify(&b.root);
     assert_eq!(r.result(), "fail");
-    let a6 = r.rows.iter().find(|x| x.id == "A6" && !x.ok).expect("a red A6");
+    let a6 = r
+        .rows
+        .iter()
+        .find(|x| x.id == "A6" && !x.ok)
+        .expect("a red A6");
     assert_eq!(a6.subject, rel);
     assert!(a6.actual.contains("unreadable"), "{}", a6.actual);
     assert!(r.closure.is_some(), "and the closure failed too");
@@ -460,8 +521,14 @@ fn materialize_rebuilds_both_files_byte_for_byte() {
     let b = Bundle::build("materialize");
     let r = reverify(&b.root);
     let pair = r.rebuilt.first().expect("one capture rebuilt");
-    assert_eq!(pair.old.as_ref().unwrap().bytes, std::fs::read(b.root.join(format!("game/{DLL}"))).unwrap());
-    assert_eq!(pair.new.as_ref().unwrap().bytes, std::fs::read(b.root.join(format!("expected/{DLL}"))).unwrap());
+    assert_eq!(
+        pair.old.as_ref().unwrap().bytes,
+        std::fs::read(b.root.join(format!("game/{DLL}"))).unwrap()
+    );
+    assert_eq!(
+        pair.new.as_ref().unwrap().bytes,
+        std::fs::read(b.root.join(format!("expected/{DLL}"))).unwrap()
+    );
 }
 
 /// `materialize` writes beside the bundle by default, and writing inside it is
@@ -481,7 +548,10 @@ fn materialize_defaults_beside_the_bundle() {
     };
     let (summary, code) = block_on(gircap::run::materialize(plan)).expect("materialize runs");
     assert_eq!(code, gircap::exit::ExitCode::Ok, "{:?}", summary);
-    assert!(out.join(format!("game/{DLL}")).is_file(), "wrote beside the bundle");
+    assert!(
+        out.join(format!("game/{DLL}")).is_file(),
+        "wrote beside the bundle"
+    );
     assert!(out.join(format!("expected/{DLL}")).is_file());
     assert!(!b.root.join("materialized").exists(), "and not inside it");
     let _ = std::fs::remove_dir_all(&out);
@@ -497,7 +567,10 @@ fn list_finds_a_bundle_from_the_root() {
     std::fs::write(sibling.join("readme.txt"), b"nothing here").unwrap();
 
     let found = gircap::verify::list(b.root.parent().unwrap()).expect("lists");
-    let hit = found.iter().find(|f| f.path.ends_with(b.root.file_name().unwrap().to_string_lossy().as_ref()));
+    let hit = found.iter().find(|f| {
+        f.path
+            .ends_with(b.root.file_name().unwrap().to_string_lossy().as_ref())
+    });
     let hit = hit.unwrap_or_else(|| panic!("the bundle was not found in {found:#?}"));
     assert_eq!(hit.capture_id, "20261014T000000Z");
     assert_eq!(hit.tags, format!("{OLD_TAG} -> {NEW_TAG}"));
@@ -520,7 +593,10 @@ fn a_bundle_that_does_not_open_is_skipped_rather_than_fatal() {
     std::fs::write(broken.join("MANIFEST.json"), b"{ not json").unwrap();
     let found = gircap::verify::list(parent).expect("lists");
     assert!(found.iter().all(|f| !f.path.contains("broken-bundle")));
-    assert!(found.iter().any(|f| f.capture_id == "20261014T000000Z"), "the good one is still there");
+    assert!(
+        found.iter().any(|f| f.capture_id == "20261014T000000Z"),
+        "the good one is still there"
+    );
     let _ = std::fs::remove_dir_all(&broken);
 }
 
@@ -582,7 +658,11 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     let p = &r.rebuilt[0];
     let o = &p.old.as_ref().unwrap().bytes;
     let n = &p.new.as_ref().unwrap().bytes;
-    assert_eq!(o.len(), n.len(), "the fixture only varies content, not size");
+    assert_eq!(
+        o.len(),
+        n.len(),
+        "the fixture only varies content, not size"
+    );
     assert_ne!(o, n, "offset 0 holds different content on each side");
     assert_eq!(&o[64..192], &n[64..192], "and the middle chunk is shared");
     // The rebuild must agree with what `materialize::rebuild` says, not with

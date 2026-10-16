@@ -127,7 +127,12 @@ fn json(path: &std::path::Path) -> serde_json::Value {
 }
 
 fn keys(v: &serde_json::Value) -> Vec<&str> {
-    let mut k: Vec<&str> = v.as_object().expect("an object").keys().map(|s| s.as_str()).collect();
+    let mut k: Vec<&str> = v
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
     k.sort_unstable();
     k
 }
@@ -195,9 +200,10 @@ fn the_manifest_index_key_set_is_the_documented_one() {
         "MANIFEST.json's top-level keys"
     );
     assert_eq!(keys(&doc["versions"]), vec!["diff_tags", "new", "old"]);
-    assert_eq!(keys(&doc["capture"]), vec![
-        "captured_at", "complete", "host_os", "id", "tool_argv"
-    ]);
+    assert_eq!(
+        keys(&doc["capture"]),
+        vec!["captured_at", "complete", "host_os", "id", "tool_argv"]
+    );
 }
 
 /// The chunk index's key set, pinned. A blob entry is what `materialize` reads
@@ -285,7 +291,10 @@ fn a_capture_records_which_documents_it_gzipped_and_why() {
     // `checksums.json` - the complete list - says which is which.
     let checksums = json(&b.join("verify/checksums.json"));
     let entries = checksums["entries"].as_array().unwrap();
-    let encodings: Vec<&str> = entries.iter().map(|e| e["encoding"].as_str().unwrap()).collect();
+    let encodings: Vec<&str> = entries
+        .iter()
+        .map(|e| e["encoding"].as_str().unwrap())
+        .collect();
     assert!(
         encodings.contains(&"gzip"),
         "nothing was gzipped, so the rule never fired: {encodings:?}"
@@ -306,8 +315,10 @@ fn a_capture_records_which_documents_it_gzipped_and_why() {
         .expect("the threshold is recorded");
     let governed: Vec<&serde_json::Value> = entries
         .iter()
-        .filter(|e| e["path"].as_str().unwrap().ends_with(".manifest.json")
-            || e["path"].as_str().unwrap().ends_with(".manifest.json.gz"))
+        .filter(|e| {
+            e["path"].as_str().unwrap().ends_with(".manifest.json")
+                || e["path"].as_str().unwrap().ends_with(".manifest.json.gz")
+        })
         .collect();
     assert!(
         governed.len() >= 2,
@@ -408,14 +419,19 @@ fn the_checksum_totals_agree_with_the_entries() {
     assert_eq!(c["total_bytes"].as_u64().unwrap(), bytes);
     assert_eq!(c["algorithm"], "sha256");
     // Sorted by path, so a diff between two bundles is readable.
-    let paths: Vec<&str> = entries.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    let paths: Vec<&str> = entries
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
     let mut sorted = paths.clone();
     sorted.sort_unstable();
     assert_eq!(paths, sorted, "entries are not in path order");
 }
 
 fn collect(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -448,7 +464,10 @@ fn the_manifest_file_list_is_a_prefix_of_the_complete_one() {
         .collect();
     assert!(!prefix.is_empty(), "files[] is empty");
     for p in &prefix {
-        assert!(complete.contains(*p), "{p} is in files[] but not in checksums");
+        assert!(
+            complete.contains(*p),
+            "{p} is in files[] but not in checksums"
+        );
     }
     // And it is genuinely incomplete: it cannot contain itself, the README or
     // the checksums, because none of those existed when it was written.
@@ -486,7 +505,10 @@ fn the_api_bodies_are_byte_exact_and_the_generated_one_is_marked() {
     );
     // The mock's JSON is compact with no spaces after separators, which is the
     // tell that nothing was re-rendered on the way to disk.
-    assert!(!configs.contains(": "), "spaces after separators mean a re-render");
+    assert!(
+        !configs.contains(": "),
+        "spaces after separators mean a re-render"
+    );
     // `tag_probe.json` is this tool's measurement, not the API's words, and it
     // is the one document there that is re-rendered.
     let probe = json(&b.join("api/tag_probe.json"));
@@ -559,7 +581,9 @@ fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
         .as_array()
         .expect("`added` has a plan: every chunk is fetched whole");
     assert!(!plan.is_empty(), "a plan with no entries is not a plan");
-    let nchunks = added["new"]["nchunks"].as_u64().expect("declared chunk count");
+    let nchunks = added["new"]["nchunks"]
+        .as_u64()
+        .expect("declared chunk count");
     assert_eq!(
         plan.len() as u64,
         nchunks,
@@ -569,14 +593,19 @@ fn a_one_sided_capture_carries_the_plan_and_totals_the_schema_promises() {
     let mut bytes = 0_i64;
     for e in plan {
         assert_eq!(e["decision"], "FETCH", "an `added` chunk cannot be reused");
-        assert!(e["source_range"].is_null(), "there is no old side to slice from");
+        assert!(
+            e["source_range"].is_null(),
+            "there is no old side to slice from"
+        );
         assert!(!e["chunk_id"].as_str().unwrap_or_default().is_empty());
         assert!(
             e["note"].is_string(),
             "a reader seeing no `source_range` should be told why, not left guessing"
         );
         fetched += 1;
-        bytes += e["compressed_size"].as_i64().expect("declared compressed size");
+        bytes += e["compressed_size"]
+            .as_i64()
+            .expect("declared compressed size");
     }
 
     // The arithmetic, re-done by this test from the plan rather than trusted.
@@ -612,7 +641,9 @@ fn a_removed_capture_carries_an_expectation_a_consumer_can_assert() {
     // §13 used to say `removed` has "no `expectations`". That left a consumer
     // with nothing to assert and nothing to check, for the one capture whose
     // whole point is a deletion.
-    let e = removed["expectations"].as_object().expect("`removed` has expectations");
+    let e = removed["expectations"]
+        .as_object()
+        .expect("`removed` has expectations");
     assert_eq!(e["absent_after"], true, "the outcome is deletion");
     assert!(e["result_path"].is_null(), "there is nothing to rebuild");
     assert!(e["result_md5"].is_null());
@@ -670,5 +701,8 @@ fn every_capture_carries_expectations_so_none_is_assert_against_nothing() {
         }
         checked += 1;
     }
-    assert!(checked >= 5, "expected the mock's five classes, saw {checked}");
+    assert!(
+        checked >= 5,
+        "expected the mock's five classes, saw {checked}"
+    );
 }

@@ -232,10 +232,18 @@ fn the_five_path_counts_are_what_the_live_capture_measured() {
 fn identical_and_changed_partition_the_common_set() {
     let d = game();
     assert_eq!(d.counts.identical + d.counts.changed(), d.counts.common);
-    for row in d.rows.iter().filter(|r| matches!(r.state, diff::State::Identical | diff::State::Changed)) {
+    for row in d
+        .rows
+        .iter()
+        .filter(|r| matches!(r.state, diff::State::Identical | diff::State::Changed))
+    {
         assert!(row.score.is_some(), "a common path always carries a score");
     }
-    assert!(d.scores.iter().all(|s| !s.same_md5 || s.reused == s.nchunks));
+    assert!(
+        d.scores
+            .iter()
+            .all(|s| !s.same_md5 || s.reused == s.nchunks)
+    );
 }
 
 /// The pool's headline numbers, with the two identities kept apart.
@@ -243,7 +251,10 @@ fn identical_and_changed_partition_the_common_set() {
 fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
     let d = game();
     let p: &ReusePool = &d.pool;
-    assert_eq!(p.new_chunks_total, 15, "{MEASURED}: 113610 in the live 7.1.0");
+    assert_eq!(
+        p.new_chunks_total, 15,
+        "{MEASURED}: 113610 in the live 7.1.0"
+    );
     // Seven of the fifteen new chunks are brand new: `llll`, `pppp`, `mmmm`,
     // `qqqq`, the voice pack's pair and `nnnn`. The other eight — including the
     // two `aaaa` and two `kkkk` — have their md5 somewhere in the old manifest.
@@ -251,8 +262,14 @@ fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
     // And exactly one is cross-file-only: `kkkk`, which lives in a different
     // old file. `aaaa` appears in two new files but is in each of its own old
     // files, so it is not cross-file-only.
-    assert_eq!(p.cross_file_only_chunks, 1, "{MEASURED}: 2 in the live pair");
-    assert_eq!(p.files_with_a_cross_file_only_chunk, 1, "{MEASURED}: 2 live");
+    assert_eq!(
+        p.cross_file_only_chunks, 1,
+        "{MEASURED}: 2 in the live pair"
+    );
+    assert_eq!(
+        p.files_with_a_cross_file_only_chunk, 1,
+        "{MEASURED}: 2 live"
+    );
     assert_eq!(
         p.cross_file_only_bytes_forgone, 1_776_356,
         "{MEASURED}: 1776356 B forgone by same-file-only reuse"
@@ -263,7 +280,11 @@ fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
 #[test]
 fn total_cost_is_what_the_table_says_and_patch_bytes_is_not() {
     let d = game();
-    let dll = d.scores.iter().find(|s| s.path.ends_with("HoYoChannel.dll")).unwrap();
+    let dll = d
+        .scores
+        .iter()
+        .find(|s| s.path.ends_with("HoYoChannel.dll"))
+        .unwrap();
     assert_eq!(dll.nchunks, 3);
     assert_eq!(dll.reused, 2, "bbbb and cccc survive");
     assert_eq!(dll.moved, 0, "both at the same offset");
@@ -299,7 +320,8 @@ fn a_moved_chunk_is_reused_and_counted_as_moved() {
     assert_eq!(blk.old_bytes, 100 + 90 + 100);
     assert_eq!(blk.new_bytes, 100 + 90 + 100);
     assert_eq!(
-        blk.total_cost, blk.old_bytes + blk.new_bytes,
+        blk.total_cost,
+        blk.old_bytes + blk.new_bytes,
         "the same 290 B on both sides, so the block sits mid-table by cost"
     );
 }
@@ -382,7 +404,11 @@ fn the_flat_tsv_carries_every_row_of_both_sides() {
         "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost"
     );
     // 8 old entries + 9 new entries, minus the 7 common counted once.
-    assert_eq!(lines.len(), 1 + 7 + 2 + 1, "header plus every path in either side");
+    assert_eq!(
+        lines.len(),
+        1 + 7 + 2 + 1,
+        "header plus every path in either side"
+    );
     assert!(!tsv.contains('\r'));
     let states: Vec<&str> = lines[1..]
         .iter()
@@ -393,8 +419,16 @@ fn the_flat_tsv_carries_every_row_of_both_sides() {
     assert_eq!(
         sorted,
         vec![
-            "added", "added", "changed", "changed", "changed", "changed", "changed",
-            "identical", "identical", "removed"
+            "added",
+            "added",
+            "changed",
+            "changed",
+            "changed",
+            "changed",
+            "changed",
+            "identical",
+            "identical",
+            "removed"
         ]
     );
 }
@@ -417,14 +451,46 @@ mod m5_matrix {
     /// moved, and inventing one here would hide the very case the matrix has to
     /// be able to say "unavailable" about.
     const CHEAPEST: &[(Class, Option<&str>, u64)] = &[
-        (Class::Identical, Some("GenshinImpact_Data/Resources/browser_assets"), 108),
-        (Class::ZeroReuseSingle, Some("GenshinImpact_Data/AssetBundles/data_revision"), 84),
-        (Class::ZeroReuseMulti, Some("GenshinImpact_Data/StreamingAssets/unity default resources"), 1_180_000),
-        (Class::PartialSameOffset, Some("GenshinImpact_Data/Plugins/HoYoChannel.dll"), 2_085_875),
-        (Class::PartialMovedOffset, Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"), 580),
-        (Class::PartialSizeChanged, Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00981562.blk"), 900),
-        (Class::Added, Some("GenshinImpact_Data/Plugins/libHttpClient.GDK.dll"), 116_800),
-        (Class::Removed, Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"), 1_048_576),
+        (
+            Class::Identical,
+            Some("GenshinImpact_Data/Resources/browser_assets"),
+            108,
+        ),
+        (
+            Class::ZeroReuseSingle,
+            Some("GenshinImpact_Data/AssetBundles/data_revision"),
+            84,
+        ),
+        (
+            Class::ZeroReuseMulti,
+            Some("GenshinImpact_Data/StreamingAssets/unity default resources"),
+            1_180_000,
+        ),
+        (
+            Class::PartialSameOffset,
+            Some("GenshinImpact_Data/Plugins/HoYoChannel.dll"),
+            2_085_875,
+        ),
+        (
+            Class::PartialMovedOffset,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"),
+            580,
+        ),
+        (
+            Class::PartialSizeChanged,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00981562.blk"),
+            900,
+        ),
+        (
+            Class::Added,
+            Some("GenshinImpact_Data/Plugins/libHttpClient.GDK.dll"),
+            116_800,
+        ),
+        (
+            Class::Removed,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"),
+            1_048_576,
+        ),
         (Class::FullReuseReordered, None, 0),
     ];
 
@@ -484,12 +550,18 @@ mod m5_matrix {
             "no file in this pair answers two classes, so nothing is `also_satisfies`"
         );
         assert!(
-            s.admitted.iter().all(|a| a.primary_class_satisfies_shape(&pool)),
+            s.admitted
+                .iter()
+                .all(|a| a.primary_class_satisfies_shape(&pool)),
             "every admission's file really does answer the class it was picked for"
         );
         assert_eq!(
             s.bytes_admitted,
-            CHEAPEST.iter().filter(|(_, p, _)| p.is_some()).map(|(_, _, c)| c).sum::<u64>()
+            CHEAPEST
+                .iter()
+                .filter(|(_, p, _)| p.is_some())
+                .map(|(_, _, c)| c)
+                .sum::<u64>()
         );
     }
 
@@ -508,11 +580,17 @@ mod m5_matrix {
             .find(|r| r.class == Class::FullReuseReordered)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::Unavailable);
-        assert_eq!(row.candidates_considered, 0, "nothing in the pool satisfies it");
+        assert_eq!(
+            row.candidates_considered, 0,
+            "nothing in the pool satisfies it"
+        );
         assert!(row.path.is_none() && row.capture_id.is_none());
         let reason = row.reason.as_deref().unwrap_or_default();
         assert!(reason.contains("full_reuse_reordered"), "{reason}");
-        assert!(reason.contains("--audio"), "the remedy, not just the fact: {reason}");
+        assert!(
+            reason.contains("--audio"),
+            "the remedy, not just the fact: {reason}"
+        );
     }
 
     /// The matrix rows come out in `REQUIRED_ORDER`, which is what makes
@@ -556,7 +634,9 @@ mod m5_matrix {
         // The rejected one is named, costed and explained.
         let rejected: Vec<&str> = s.rejected.iter().map(|r| r.path.as_str()).collect();
         assert!(
-            rejected.contains(&"GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000001.blk"),
+            rejected.contains(
+                &"GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000001.blk"
+            ),
             "{rejected:?}"
         );
         let rej = s
@@ -565,8 +645,15 @@ mod m5_matrix {
             .find(|r| r.primary_class == Class::Identical)
             .expect("the second identical candidate is recorded");
         assert_eq!(rej.budget_cost, 1_775_744);
-        assert!(rej.reason.contains("1775744"), "names the cost: {}", rej.reason);
-        assert_ne!(rej.capture_id, second.capture_id, "a rejected id is not a capture id");
+        assert!(
+            rej.reason.contains("1775744"),
+            "names the cost: {}",
+            rej.reason
+        );
+        assert_ne!(
+            rej.capture_id, second.capture_id,
+            "a rejected id is not a capture id"
+        );
 
         // And nothing was captured twice.
         let mut paths = s.paths();
@@ -606,7 +693,11 @@ mod m5_matrix {
         assert_eq!(nothing.bytes_admitted, 0);
         assert!(!nothing.rejected.is_empty());
         let everything = select::select(&pool, 2, Budget::capped(u64::MAX), &[]);
-        assert!(everything.rejected.is_empty(), "{}", everything.rejected.len());
+        assert!(
+            everything.rejected.is_empty(),
+            "{}",
+            everything.rejected.len()
+        );
         // Eight one-per-class captures, plus the second `identical`
         // (00000001.blk) and the second `added` (00000002.blk) that
         // `--per-class 2` asks for.
@@ -682,7 +773,10 @@ mod m5_matrix {
         assert!(
             one.admitted.iter().all(|a| !a.capture_id.contains('+')),
             "{:?}",
-            one.admitted.iter().map(|a| &a.capture_id).collect::<Vec<_>>()
+            one.admitted
+                .iter()
+                .map(|a| &a.capture_id)
+                .collect::<Vec<_>>()
         );
 
         // At `--per-class 3` only the two classes with more than one candidate
@@ -738,7 +832,11 @@ mod m5_matrix {
             vec![Class::FullReuseReordered],
             "the ninth row is the only shortfall"
         );
-        assert!(open.admitted.iter().all(|a| a.primary_class != Class::FullReuseReordered));
+        assert!(
+            open.admitted
+                .iter()
+                .all(|a| a.primary_class != Class::FullReuseReordered)
+        );
 
         // Over budget: nine shortfalls, and the eight that had a candidate each
         // name its cost. The ninth stays `Unavailable` — no ceiling could fund
@@ -752,13 +850,20 @@ mod m5_matrix {
             }
             assert_eq!(row.status, MatrixStatus::OverBudget, "{row:?}");
             assert!(
-                row.reason.as_deref().unwrap_or_default().contains("B and the budget"),
+                row.reason
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("B and the budget"),
                 "{}",
                 row.reason.as_deref().unwrap_or_default()
             );
         }
         assert_eq!(tight.bytes_admitted, 0);
-        assert_eq!(tight.rejected.len(), 8, "every wanted candidate is accounted for");
+        assert_eq!(
+            tight.rejected.len(),
+            8,
+            "every wanted candidate is accounted for"
+        );
     }
 }
 /// M6: the chunk store, over the same frozen pair.
@@ -811,7 +916,13 @@ mod m6_chunk_store {
     /// of them the same bytes in both.
     fn hoyo_pair() -> FilePair {
         let old = vec![
-            measured("7d3f050443837e58", "bbce8a315a3d7a834c089e8061dbe26f", 0, 259_794, 690_719),
+            measured(
+                "7d3f050443837e58",
+                "bbce8a315a3d7a834c089e8061dbe26f",
+                0,
+                259_794,
+                690_719,
+            ),
             measured(
                 "f5dc3ca1f3a0ba3d",
                 "291a7719a4a23664d37825a41fad3c5b",
@@ -828,7 +939,13 @@ mod m6_chunk_store {
             ),
         ];
         let new = vec![
-            measured("ddb31a9fd85346c4", "de1cfe6927dacbc58d2d55a0b45ea0f3", 0, 259_795, 690_719),
+            measured(
+                "ddb31a9fd85346c4",
+                "de1cfe6927dacbc58d2d55a0b45ea0f3",
+                0,
+                259_795,
+                690_719,
+            ),
             measured(
                 "f5dc3ca1f3a0ba3d",
                 "291a7719a4a23664d37825a41fad3c5b",
@@ -909,13 +1026,20 @@ mod m6_chunk_store {
             .find(|x| x.chunk.id.starts_with("f5dc3ca1"))
             .expect("the shared chunk");
         assert_eq!(
-            shared.sources.iter().map(|s| s.tag.as_str()).collect::<Vec<_>>(),
+            shared
+                .sources
+                .iter()
+                .map(|s| s.tag.as_str())
+                .collect::<Vec<_>>(),
             vec!["7.1.0", "7.0.0"],
             "newest first: the old CDN is the one that may stop serving"
         );
         assert_eq!(shared.sets, vec![Set::MaterializeOld, Set::MaterializeNew]);
         assert_eq!(shared.references.len(), 2, "one per build");
-        assert!(shared.conflicts.is_empty(), "both builds declare it identically");
+        assert!(
+            shared.conflicts.is_empty(),
+            "both builds declare it identically"
+        );
         assert_eq!(shared.chunk.uncompressed_size, 1_626_019);
     }
 
@@ -929,8 +1053,14 @@ mod m6_chunk_store {
         let old0 = &p.old.as_ref().unwrap().entry.chunks[0];
         let new0 = &p.new.as_ref().unwrap().entry.chunks[0];
         assert_eq!(old0.offset, new0.offset, "offset 0 in both");
-        assert_eq!(old0.uncompressed_size, new0.uncompressed_size, "and the same length");
-        assert_ne!(old0.uncompressed_md5, new0.uncompressed_md5, "different bytes");
+        assert_eq!(
+            old0.uncompressed_size, new0.uncompressed_size,
+            "and the same length"
+        );
+        assert_ne!(
+            old0.uncompressed_md5, new0.uncompressed_md5,
+            "different bytes"
+        );
         assert_ne!(old0.id, new0.id);
         assert!(
             !r.reuse.contains(&new0.id),
@@ -951,14 +1081,19 @@ mod m6_chunk_store {
             assert!(b.props.stored_path.is_none());
             assert!(b.props.verified.is_none(), "{}", b.props.chunk_id);
             assert!(!b.props.is_usable());
-            assert!(b.props.failures().is_empty(), "no failures, but no evidence");
+            assert!(
+                b.props.failures().is_empty(),
+                "no failures, but no evidence"
+            );
             assert!(b.props.why_unusable().unwrap().contains("never measured"));
         }
         assert_eq!(idx.sets["patch_fetch"].len(), 2);
         // The declared size survives even though the bytes did not, so a reader
         // knows exactly how big the gap is.
         assert!(
-            idx.blobs.iter().any(|b| b.props.uncompressed_size == 1_626_019),
+            idx.blobs
+                .iter()
+                .any(|b| b.props.uncompressed_size == 1_626_019),
             "the declared size is still there"
         );
     }
@@ -997,8 +1132,8 @@ mod m7_assembly {
     use super::*;
 
     use gircap::assemble::{self, AssemblyInput, ChunkSource, Decision};
-    use gircap::blobs::chunks::{FilePair, NewFile, OldFile};
     use gircap::blobs::Sources;
+    use gircap::blobs::chunks::{FilePair, NewFile, OldFile};
     use gircap::hash;
     use gircap::select::Class;
 
@@ -1028,7 +1163,9 @@ mod m7_assembly {
     /// the declaration and the source.
     fn seeded(prefix: &str, len: usize) -> Vec<u8> {
         let seed = u8::from_str_radix(&prefix[..2], 16).unwrap_or(0);
-        (0..len).map(|i| seed.wrapping_mul(31).wrapping_add(i as u8)).collect()
+        (0..len)
+            .map(|i| seed.wrapping_mul(31).wrapping_add(i as u8))
+            .collect()
     }
 
     fn body_of(c: &SophonChunk) -> Vec<u8> {
@@ -1073,8 +1210,16 @@ mod m7_assembly {
         FilePair {
             capture_id: "partial_same_offset".into(),
             path: HOYO.into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: new,
+            }),
         }
     }
 
@@ -1116,10 +1261,16 @@ mod m7_assembly {
         let kinds: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             kinds,
-            ["A7", "A8", "A9", "A10", "A11", "A12"].into_iter().collect(),
+            ["A7", "A8", "A9", "A10", "A11", "A12"]
+                .into_iter()
+                .collect(),
             "every assertion is represented: {rows:?}"
         );
-        assert!(a.all_green(), "{:?}", rows.iter().filter(|r| !r.ok).collect::<Vec<_>>());
+        assert!(
+            a.all_green(),
+            "{:?}",
+            rows.iter().filter(|r| !r.ok).collect::<Vec<_>>()
+        );
         for r in &rows {
             assert!(r.ok, "{}: {}", r.id, r.actual);
             assert!(!r.actual.is_empty(), "{} carries no detail", r.id);
@@ -1166,10 +1317,16 @@ mod m7_assembly {
         let e = &plan[0];
         assert_eq!(e.decision, Decision::Fetch);
         assert!(e.source_range.is_none());
-        assert_eq!(e.uncompressed_size, 690_719, "the same length in both builds");
+        assert_eq!(
+            e.uncompressed_size, 690_719,
+            "the same length in both builds"
+        );
         let old0 = &pair.old.as_ref().unwrap().entry.chunks[0];
         assert_eq!(old0.uncompressed_size, e.uncompressed_size);
-        assert_ne!(old0.uncompressed_md5, e.uncompressed_md5, "but not the same bytes");
+        assert_ne!(
+            old0.uncompressed_md5, e.uncompressed_md5,
+            "but not the same bytes"
+        );
         assert!(e.url.as_deref().unwrap().starts_with("https://cdn/new/"));
     }
 
@@ -1183,7 +1340,14 @@ mod m7_assembly {
         assert_eq!(p.bytes, n.bytes);
         assert_eq!(p.bytes.len(), 2_340_264);
         assert_eq!(p.md5, n.md5);
-        assert_eq!(n.md5, n.declared_md5, "A8: the new file hashes to its manifest md5");
-        assert_eq!(a.old.as_ref().unwrap().md5, a.old.as_ref().unwrap().declared_md5, "A7");
+        assert_eq!(
+            n.md5, n.declared_md5,
+            "A8: the new file hashes to its manifest md5"
+        );
+        assert_eq!(
+            a.old.as_ref().unwrap().md5,
+            a.old.as_ref().unwrap().declared_md5,
+            "A7"
+        );
     }
 }
