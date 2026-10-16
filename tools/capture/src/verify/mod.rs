@@ -123,7 +123,14 @@ impl Bundle {
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
         let patchmaps = read_patchmaps(root)?;
-        Ok(Bundle { root: root.to_path_buf(), manifest, index, patchmaps, checksums, recorded })
+        Ok(Bundle {
+            root: root.to_path_buf(),
+            manifest,
+            index,
+            patchmaps,
+            checksums,
+            recorded,
+        })
     }
 
     /// One line naming the bundle, for the stderr narration.
@@ -257,7 +264,11 @@ impl Report {
     /// `(total, passed, failed)`.
     pub fn counts(&self) -> (u64, u64, u64) {
         let failed = self.rows.iter().filter(|r| !r.ok).count() as u64;
-        (self.rows.len() as u64, self.rows.len() as u64 - failed, failed)
+        (
+            self.rows.len() as u64,
+            self.rows.len() as u64 - failed,
+            failed,
+        )
     }
 
     /// How many rows each id produced.
@@ -370,7 +381,9 @@ pub fn reverify(bundle: Bundle) -> Report {
         }
     };
     for p in &rebuilt {
-        let Some(map) = bundle.patchmaps.get(&p.capture_id) else { continue };
+        let Some(map) = bundle.patchmaps.get(&p.capture_id) else {
+            continue;
+        };
         rows.extend(check_pair(&root, p, map));
     }
 
@@ -396,7 +409,14 @@ pub fn reverify(bundle: Bundle) -> Report {
 
     // 5. The recording, last.
     let agrees = check_agreement(&bundle, &rows);
-    Report { bundle, rows, rebuilt, findings, closure: None, agrees }
+    Report {
+        bundle,
+        rows,
+        rebuilt,
+        findings,
+        closure: None,
+        agrees,
+    }
 }
 
 /// A18's id, as the spec spells ids.
@@ -501,7 +521,9 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
         (&pair.old, "game", map.old.as_ref()),
         (&pair.new, "expected", map.new.as_ref()),
     ] {
-        let (Some(r), Some(d)) = (side, declared) else { continue };
+        let (Some(r), Some(d)) = (side, declared) else {
+            continue;
+        };
         let rel = format!("{tree}/{}", r.path);
 
         // A11: `rebuild` refuses to place a byte into a layout that violates it,
@@ -541,7 +563,11 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
                     A18_ID,
                     A18,
                     &rel,
-                    &format!("{} B rebuilt, {} B shipped, byte-for-byte", r.bytes.len(), shipped.len()),
+                    &format!(
+                        "{} B rebuilt, {} B shipped, byte-for-byte",
+                        r.bytes.len(),
+                        shipped.len()
+                    ),
                 )),
                 Err(e) => rows.push(Assertion::fail(
                     A18_ID,
@@ -706,9 +732,12 @@ fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
         }
     };
     vec![match crate::emit::gamedir::parse_game_version(&text) {
-        Ok(v) if v == old_tag => {
-            Assertion::pass("A13", wording("A13"), subject, &format!("game_version == {v}"))
-        }
+        Ok(v) if v == old_tag => Assertion::pass(
+            "A13",
+            wording("A13"),
+            subject,
+            &format!("game_version == {v}"),
+        ),
         Ok(v) => Assertion::fail(
             "A13",
             wording("A13"),
@@ -806,7 +835,9 @@ pub fn list(root: &Path) -> Result<Vec<Listed>, String> {
             // A bundle does not contain another bundle.
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut subs: Vec<PathBuf> = rd
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_dir())
@@ -834,7 +865,12 @@ fn listed_of(root: &Path, b: &Bundle) -> Listed {
         captured_at: b.manifest.capture.captured_at.clone(),
         tags: format!("{} -> {}", v.old.tag, v.new.tag),
         patchmaps: b.patchmaps.len(),
-        blobs: b.index.blobs.iter().filter(|x| x.props.stored_path.is_some()).count(),
+        blobs: b
+            .index
+            .blobs
+            .iter()
+            .filter(|x| x.props.stored_path.is_some())
+            .count(),
         selfcheck: serde_json::to_string(&b.recorded.result)
             .unwrap_or_else(|_| "?".into())
             .trim_matches('"')
@@ -890,11 +926,16 @@ mod tests {
         // what keeps `check_agreement` honest.
         for id in DERIVED_UNRECORDED {
             assert!(
-                !crate::emit::selfcheck::WORDING.iter().any(|(w, _)| *w == id),
+                !crate::emit::selfcheck::WORDING
+                    .iter()
+                    .any(|(w, _)| *w == id),
                 "A{id} is claimed as never recorded, but a capture records it"
             );
         }
-        assert_eq!(derived_ids().len(), REDERIVED.len() + DERIVED_UNRECORDED.len());
+        assert_eq!(
+            derived_ids().len(),
+            REDERIVED.len() + DERIVED_UNRECORDED.len()
+        );
     }
 
     /// A20 re-derives a patchmap's arithmetic from the patchmap, so it needs no
@@ -909,7 +950,9 @@ mod tests {
     /// The set is deliberately smaller than the seventeen.
     #[test]
     fn assertions_needing_the_api_are_not_claimed_as_re_derived() {
-        for id in ["A1", "A2", "A3", "A4", "A5", "A9", "A10", "A12", "A14", "A15"] {
+        for id in [
+            "A1", "A2", "A3", "A4", "A5", "A9", "A10", "A12", "A14", "A15",
+        ] {
             assert!(!REDERIVED.contains(&id), "A{id} is listed as re-derived");
         }
     }
@@ -918,15 +961,16 @@ mod tests {
     fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
         let index = ChunkIndex::build(vec![]);
         assert!(check_blobs(Path::new("."), &index).is_empty());
-        let props = crate::blobs::props::BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
-            id: "aa00_".to_string() + &"0".repeat(32),
-            uncompressed_md5: "0".repeat(32),
-            offset: 0,
-            compressed_size: 10,
-            uncompressed_size: 100,
-            unknown_field6: 0,
-            compressed_md5: "1".repeat(32),
-        });
+        let props =
+            crate::blobs::props::BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
+                id: "aa00_".to_string() + &"0".repeat(32),
+                uncompressed_md5: "0".repeat(32),
+                offset: 0,
+                compressed_size: 10,
+                uncompressed_size: 100,
+                unknown_field6: 0,
+                compressed_md5: "1".repeat(32),
+            });
         assert!(props.stored_path.is_none());
         let index = ChunkIndex::build(vec![(
             crate::blobs::IndexedBlob {
@@ -938,8 +982,15 @@ mod tests {
         )]);
         let rows = check_blobs(Path::new("."), &index);
         assert_eq!(rows.len(), 1);
-        assert!(!rows[0].ok, "a listed-but-unstored blob cannot be materialized");
-        assert!(rows[0].actual.contains("nothing was stored"), "{}", rows[0].actual);
+        assert!(
+            !rows[0].ok,
+            "a listed-but-unstored blob cannot be materialized"
+        );
+        assert!(
+            rows[0].actual.contains("nothing was stored"),
+            "{}",
+            rows[0].actual
+        );
     }
 
     #[test]
@@ -962,10 +1013,17 @@ mod tests {
         let mut props = crate::blobs::props::BlobProps::measure(&raw, &chunk).unwrap();
         props.set_stored("chunks/ab/cd");
         let index = ChunkIndex::build(vec![(
-            crate::blobs::IndexedBlob { props, referenced_by: Vec::new(), sets: Vec::new() },
+            crate::blobs::IndexedBlob {
+                props,
+                referenced_by: Vec::new(),
+                sets: Vec::new(),
+            },
             Vec::new(),
         )]);
-        assert!(check_blobs(&d, &index)[0].ok, "the good bundle's row is green");
+        assert!(
+            check_blobs(&d, &index)[0].ok,
+            "the good bundle's row is green"
+        );
 
         // Flip one byte inside the frame: it still decodes, to different bytes.
         let mut bad = raw.clone();
@@ -985,6 +1043,8 @@ mod tests {
         assert!(crate::emit::selfcheck::MatrixRow::ok_status("covered_by"));
         assert!(crate::emit::selfcheck::MatrixRow::ok_status("unavailable"));
         assert!(!crate::emit::selfcheck::MatrixRow::ok_status("over_budget"));
-        assert!(!crate::emit::selfcheck::MatrixRow::ok_status("something else"));
+        assert!(!crate::emit::selfcheck::MatrixRow::ok_status(
+            "something else"
+        ));
     }
 }

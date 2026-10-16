@@ -16,10 +16,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::assemble::ranges::{Layout, Range};
 use crate::assemble::ChunkSource;
-use crate::blobs::chunks::Set;
+use crate::assemble::ranges::{Layout, Range};
 use crate::blobs::ChunkIndex;
+use crate::blobs::chunks::Set;
 use crate::hash;
 
 /// One side of a capture, rebuilt from the index alone.
@@ -109,12 +109,7 @@ pub fn rebuild(
         .collect();
     let parts: Vec<(i64, i64)> = chunks
         .iter()
-        .map(|(id, o)| {
-            (
-                *o,
-                sizes.get(id.as_str()).copied().unwrap_or(0) as i64,
-            )
-        })
+        .map(|(id, o)| (*o, sizes.get(id.as_str()).copied().unwrap_or(0) as i64))
         .collect();
     let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
     let layout = Layout::of(&parts, declared_size);
@@ -176,8 +171,24 @@ pub fn rebuild_all(
     let mut out = Vec::new();
     for name in names {
         let map = &patchmaps[name];
-        let old = rebuild_side(root, index, &src, name, map.path.as_str(), map.old.as_ref(), Set::MaterializeOld)?;
-        let new = rebuild_side(root, index, &src, name, map.path.as_str(), map.new.as_ref(), Set::MaterializeNew)?;
+        let old = rebuild_side(
+            root,
+            index,
+            &src,
+            name,
+            map.path.as_str(),
+            map.old.as_ref(),
+            Set::MaterializeOld,
+        )?;
+        let new = rebuild_side(
+            root,
+            index,
+            &src,
+            name,
+            map.path.as_str(),
+            map.new.as_ref(),
+            Set::MaterializeNew,
+        )?;
         out.push(Pair {
             capture_id: name.clone(),
             path: map.path.clone(),
@@ -263,7 +274,9 @@ mod tests {
     /// manifests use — two builds that publish the same content under different
     /// prefixes are exactly what the closure set has to survive.
     fn chunk(seed: u8, len: usize, prefix: u64) -> (SophonChunk, Vec<u8>, Vec<u8>) {
-        let body: Vec<u8> = (0..len).map(|i| seed.wrapping_mul(31).wrapping_add(i as u8)).collect();
+        let body: Vec<u8> = (0..len)
+            .map(|i| seed.wrapping_mul(31).wrapping_add(i as u8))
+            .collect();
         let raw = zstd::encode_all(body.as_slice(), 1).expect("encode");
         let c = SophonChunk {
             id: format!("{prefix:016x}_{}", hash::md5_hex(&body)),
@@ -280,11 +293,13 @@ mod tests {
     fn reference(tag: &str, capture: &str, path: &str, role: Set, offset: i64) -> Reference {
         Reference {
             tag: tag.into(),
-            build_id: Some(match tag {
-                "7.0.0" => "3XnPviMfoILi",
-                _ => "sMXGW2ll3Fuu",
-            }
-            .into()),
+            build_id: Some(
+                match tag {
+                    "7.0.0" => "3XnPviMfoILi",
+                    _ => "sMXGW2ll3Fuu",
+                }
+                .into(),
+            ),
             capture_id: capture.into(),
             path: path.into(),
             role,
@@ -438,7 +453,12 @@ mod tests {
             vec![0, 64, 192],
             "same layout, different content at offset 0"
         );
-        assert_eq!(chunks_for(&f.index, "7.1.0", "c", DLL, Set::PatchFetch).unwrap().len(), 1);
+        assert_eq!(
+            chunks_for(&f.index, "7.1.0", "c", DLL, Set::PatchFetch)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// The closure check: the blobs alone reproduce the file. Read from disk,
@@ -447,16 +467,32 @@ mod tests {
     fn both_sides_rebuild_from_the_blobs_alone() {
         let f = Fixture::build("rebuild");
         let src = f.source();
-        let old = rebuild(&f.root, &f.index, &src, "7.0.0", "c", DLL, Set::MaterializeOld)
-            .expect("old side");
+        let old = rebuild(
+            &f.root,
+            &f.index,
+            &src,
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+        )
+        .expect("old side");
         assert_eq!(old.bytes.len(), 224, "64 + 128 + 32");
         assert_eq!(old.md5, hash::md5_hex(&old.bytes));
         assert_eq!(old.nchunks, 3);
         assert!(old.layout.is_clean());
         assert_eq!(old.layout.ranges[1], Range::at(64, 128));
 
-        let new = rebuild(&f.root, &f.index, &src, "7.1.0", "c", DLL, Set::MaterializeNew)
-            .expect("new side");
+        let new = rebuild(
+            &f.root,
+            &f.index,
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+        )
+        .expect("new side");
         assert_eq!(new.bytes.len(), 224, "the same three ranges");
         // Offset 0 now holds different content, which is the whole point: a
         // rebuild that ignored the new chunk would still be 224 B and would
@@ -510,7 +546,11 @@ mod tests {
             .index
             .blobs
             .iter()
-            .find(|b| b.referenced_by.iter().any(|r| r.role == Set::MaterializeOld))
+            .find(|b| {
+                b.referenced_by
+                    .iter()
+                    .any(|r| r.role == Set::MaterializeOld)
+            })
             .unwrap()
             .props
             .stored_path
@@ -581,7 +621,10 @@ mod tests {
             .push(reference("7.0.0", "c", DLL, Set::MaterializeOld, 999));
         let e = chunks_for(&index, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap_err();
         assert!(e.contains("referenced 2 times"), "{e}");
-        assert!(e.contains("at offsets 64, 999"), "and names both offsets: {e}");
+        assert!(
+            e.contains("at offsets 64, 999"),
+            "and names both offsets: {e}"
+        );
         assert!(e.contains(&id), "and the chunk: {e}");
     }
 
@@ -617,7 +660,10 @@ mod tests {
         assert!(e.contains("first difference at offset 3"), "{e}");
     }
 
-    fn side_map(old: Option<(&str, i64, usize)>, new: Option<(&str, i64, usize)>) -> crate::assemble::PatchMap {
+    fn side_map(
+        old: Option<(&str, i64, usize)>,
+        new: Option<(&str, i64, usize)>,
+    ) -> crate::assemble::PatchMap {
         let side = |s: Option<(&str, i64, usize)>| {
             s.map(|(tag, size, nchunks)| crate::assemble::Side {
                 tag: tag.into(),
@@ -666,7 +712,10 @@ mod tests {
         let mut wrong_maps = BTreeMap::new();
         wrong_maps.insert("c".to_string(), wrong);
         let e = rebuild_all(&f.root, &f.index, &wrong_maps).unwrap_err();
-        assert!(e.contains("the index names 3 materialize_old chunks"), "{e}");
+        assert!(
+            e.contains("the index names 3 materialize_old chunks"),
+            "{e}"
+        );
     }
 
     /// `added` and `removed` are one-sided and must rebuild the side they have,
@@ -692,10 +741,7 @@ mod tests {
     fn a_one_sided_capture_with_matching_references_rebuilds_its_one_side() {
         let f = Fixture::build("onesidedok");
         let mut maps = BTreeMap::new();
-        maps.insert(
-            "c".to_string(),
-            side_map(None, Some(("7.1.0", 224, 3))),
-        );
+        maps.insert("c".to_string(), side_map(None, Some(("7.1.0", 224, 3))));
         let pairs = rebuild_all(&f.root, &f.index, &maps).expect("rebuilds");
         assert!(pairs[0].old.is_none(), "no old side to rebuild");
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
