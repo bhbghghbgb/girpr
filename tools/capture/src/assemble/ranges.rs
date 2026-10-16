@@ -276,7 +276,10 @@ mod tests {
         assert!(l.is_clean(), "{:?}", l.violations);
         assert_eq!(l.total, 300);
         assert_eq!(l.ranges.len(), 3);
-        assert_eq!(l.ranges[2].end, l.declared_size, "and it ends where the file ends");
+        assert_eq!(
+            l.ranges[2].end, l.declared_size,
+            "and it ends where the file ends"
+        );
     }
 
     #[test]
@@ -287,7 +290,11 @@ mod tests {
         let l = Layout::of(&[(0, 100), (150, 100)], 200);
         assert!(!l.is_clean());
         assert_eq!(l.violations.len(), 1, "{:?}", l.violations);
-        assert!(l.violations[0].contains("gap of 50 B"), "{:?}", l.violations);
+        assert!(
+            l.violations[0].contains("gap of 50 B"),
+            "{:?}",
+            l.violations
+        );
         assert!(l.violations[0].contains("chunk 0") && l.violations[0].contains("chunk 1"));
     }
 
@@ -328,8 +335,16 @@ mod tests {
     fn a_total_that_disagrees_with_the_declared_size_is_its_own_violation() {
         let l = Layout::of(&[(0, 100), (100, 100)], 999);
         assert_eq!(l.violations.len(), 1, "{:?}", l.violations);
-        assert!(l.violations[0].contains("total 200 B"), "{:?}", l.violations);
-        assert!(l.violations[0].contains("declares 999 B"), "{:?}", l.violations);
+        assert!(
+            l.violations[0].contains("total 200 B"),
+            "{:?}",
+            l.violations
+        );
+        assert!(
+            l.violations[0].contains("declares 999 B"),
+            "{:?}",
+            l.violations
+        );
     }
 
     /// Out-of-order chunk lists are legal to describe and illegal to use, and
@@ -339,7 +354,9 @@ mod tests {
         let l = Layout::of(&[(200, 100), (0, 100), (100, 100)], 300);
         assert!(!l.is_clean());
         assert!(
-            l.violations.iter().any(|v| v.contains("100 bytes before") || v.contains("overlap")),
+            l.violations
+                .iter()
+                .any(|v| v.contains("100 bytes before") || v.contains("overlap")),
             "{:?}",
             l.violations
         );

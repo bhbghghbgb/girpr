@@ -380,17 +380,18 @@ impl Assembled {
 }
 
 /// One A11 row per violation, plus a green one when there are none.
-fn layout_rows(
-    tag: &str,
-    layout: &Layout,
-) -> Vec<crate::emit::selfcheck::Assertion> {
+fn layout_rows(tag: &str, layout: &Layout) -> Vec<crate::emit::selfcheck::Assertion> {
     use crate::emit::selfcheck::{Assertion, wording};
     if layout.is_clean() {
         return vec![Assertion::pass(
             "A11",
             wording("A11"),
             tag,
-            &format!("{} chunks tile {} B from 0", layout.ranges.len(), layout.declared_size),
+            &format!(
+                "{} chunks tile {} B from 0",
+                layout.ranges.len(),
+                layout.declared_size
+            ),
         )];
     }
     layout
@@ -450,8 +451,8 @@ impl ChunkSource {
                     .get(chunk_id)
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
                 let path = root.join(&e.stored_path);
-                let raw = std::fs::read(&path)
-                    .map_err(|io| format!("read {}: {io}", path.display()))?;
+                let raw =
+                    std::fs::read(&path).map_err(|io| format!("read {}: {io}", path.display()))?;
                 let out = hash::zstd_decompress(&raw, &format!("chunk {chunk_id}"))?;
                 // The index is a claim; this is the check. A store that read a
                 // corrupted blob without noticing would make M9's `verify`
@@ -719,7 +720,9 @@ fn patch_flow(
             Decision::Fetch => fetched += 1,
         }
         if decision == Decision::Reuse
-            && source_range.as_ref().is_some_and(|s| s.start != target.start)
+            && source_range
+                .as_ref()
+                .is_some_and(|s| s.start != target.start)
         {
             moved += 1;
         }
@@ -792,9 +795,7 @@ fn fetch_all_plan(
             compressed_size: c.compressed_size,
             uncompressed_size: c.uncompressed_size,
             uncompressed_md5: c.uncompressed_md5.clone(),
-            note: Some(
-                "no old side: this file is new, so every chunk is downloaded whole".into(),
-            ),
+            note: Some("no old side: this file is new, so every chunk is downloaded whole".into()),
         })
         .collect())
 }
@@ -817,7 +818,11 @@ fn build_map(
         fetch: p.iter().filter(|e| e.decision == Decision::Fetch).count(),
         moved: p
             .iter()
-            .filter(|e| e.source_range.as_ref().is_some_and(|s| s.start != e.target_range.start))
+            .filter(|e| {
+                e.source_range
+                    .as_ref()
+                    .is_some_and(|s| s.start != e.target_range.start)
+            })
             .count(),
         download_bytes: p
             .iter()
@@ -828,10 +833,10 @@ fn build_map(
         materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
     });
     // `plan` is `Some` for every capture that has a new side, so `totals` is too.
-// Checked rather than defaulted: a `download_bytes` of `0` on a capture that
-// does have a plan would be a false claim, and one with no plan would be
-// unrecordable. Either way a silent `0` is the wrong answer.
-if new.is_some() && totals.is_none() {
+    // Checked rather than defaulted: a `download_bytes` of `0` on a capture that
+    // does have a plan would be a false claim, and one with no plan would be
+    // unrecordable. Either way a silent `0` is the wrong answer.
+    if new.is_some() && totals.is_none() {
         return Err(format!(
             "{}: a capture with a new side must carry a plan, or its cost is unrecordable",
             input.pair.path
@@ -899,21 +904,26 @@ pub fn roles_of(pair: &FilePair) -> (usize, usize) {
 
 /// The `Set`s a pair's plan touches, which is what M6's A12 was about.
 pub fn sets_of(pair: &FilePair) -> Vec<Set> {
-    crate::blobs::chunks::retention(pair).sets.into_keys().collect()
+    crate::blobs::chunks::retention(pair)
+        .sets
+        .into_keys()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blobs::chunks::{NewFile, OldFile};
     use crate::blobs::Sources;
+    use crate::blobs::chunks::{NewFile, OldFile};
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
     /// Distinct payload bytes, so a test can never pass because two chunks were
     /// accidentally the same content.
     fn payload(seed: u8, n: usize) -> Vec<u8> {
-        (0..n).map(|i| seed.wrapping_mul(31).wrapping_add(i as u8)).collect()
+        (0..n)
+            .map(|i| seed.wrapping_mul(31).wrapping_add(i as u8))
+            .collect()
     }
 
     /// A chunk holding `payload(seed, len)` at `offset`, with a compressed size
@@ -976,10 +986,13 @@ mod tests {
     }
 
     fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
-        let entries: Vec<&SophonChunkFile> = [pair.old.as_ref().map(|o| &o.entry), pair.new.as_ref().map(|n| &n.entry)]
-            .into_iter()
-            .flatten()
-            .collect();
+        let entries: Vec<&SophonChunkFile> = [
+            pair.old.as_ref().map(|o| &o.entry),
+            pair.new.as_ref().map(|n| &n.entry),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let src = ChunkSource::from_memory(memory_of(&entries));
         let classes = [Class::PartialSameOffset];
         assemble(&AssemblyInput {
@@ -993,13 +1006,27 @@ mod tests {
 
     /// The measured shape: three chunks, one shared at the same offset, two new.
     fn same_offset_pair() -> FilePair {
-        let old = file("dll", vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)]);
-        let new = file("dll", vec![chunk(9, 0, 64), chunk(2, 64, 128), chunk(8, 192, 40)]);
+        let old = file(
+            "dll",
+            vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)],
+        );
+        let new = file(
+            "dll",
+            vec![chunk(9, 0, 64), chunk(2, 64, 128), chunk(8, 192, 40)],
+        );
         FilePair {
             capture_id: "partial_same_offset".into(),
             path: "dll".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: new,
+            }),
         }
     }
 
@@ -1026,7 +1053,10 @@ mod tests {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
         let p = a.patch.as_ref().expect("a patch");
         let n = a.new.as_ref().expect("a new side");
-        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
+        assert!(
+            p.equals_new,
+            "the patch flow and the direct assembly disagree"
+        );
         assert_eq!(p.bytes, n.bytes);
         assert_eq!(p.md5, n.md5);
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
@@ -1057,7 +1087,10 @@ mod tests {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
         let plan = a.map.plan.as_ref().unwrap();
         for e in plan.iter().filter(|e| e.decision == Decision::Fetch) {
-            let u = e.url.as_deref().unwrap_or_else(|| panic!("entry {} has no url", e.i));
+            let u = e
+                .url
+                .as_deref()
+                .unwrap_or_else(|| panic!("entry {} has no url", e.i));
             assert!(u.starts_with("https://cdn/new/"), "{u}");
             assert!(u.ends_with(&e.chunk_id), "{u} does not name the chunk");
             assert!(e.source_range.is_none(), "a FETCH has no local source");
@@ -1068,28 +1101,53 @@ mod tests {
     /// patch flow has to read them from where they *are*, not where they land.
     #[test]
     fn a_moved_chunk_is_reused_from_its_old_offset_and_counted_as_moved() {
-        let old = file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)]);
+        let old = file(
+            "blk",
+            vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)],
+        );
         // chunk 1 stays at 0, chunk 3 moves 192 -> 64, chunk 4 is brand new.
-        let new = file("blk", vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)]);
+        let new = file(
+            "blk",
+            vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
+        );
         let a = assemble_pair(&FilePair {
             capture_id: "partial_moved_offset".into(),
             path: "blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: new,
+            }),
         })
         .expect("assembles");
         let p = a.patch.as_ref().unwrap();
-        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
+        assert!(
+            p.equals_new,
+            "the patch flow and the direct assembly disagree"
+        );
         assert_eq!(p.reused, 2, "chunk 1 stays and chunk 3 moves");
         assert_eq!(p.fetched, 1, "chunk 4 is new content");
         assert_eq!(p.moved, 1, "only chunk 3 changed offset");
         let plan = a.map.plan.as_ref().unwrap();
         let moved = plan
             .iter()
-            .find(|e| e.source_range.as_ref().is_some_and(|s| s.start != e.target_range.start))
+            .find(|e| {
+                e.source_range
+                    .as_ref()
+                    .is_some_and(|s| s.start != e.target_range.start)
+            })
             .expect("a moved entry");
         assert_eq!(moved.target_range.start, 64);
-        assert_eq!(moved.source_range.as_ref().unwrap().start, 192, "read from where it is");
+        assert_eq!(
+            moved.source_range.as_ref().unwrap().start,
+            192,
+            "read from where it is"
+        );
         assert!(moved.note.as_deref().unwrap().contains("moved"));
         assert_eq!(a.map.totals.as_ref().unwrap().moved, 1);
     }
@@ -1098,20 +1156,40 @@ mod tests {
     /// nothing is fetched at all, and A9 still has to hold.
     #[test]
     fn a_pure_reorder_fetches_nothing_and_still_equals_the_new_assembly() {
-        let old = file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)]);
-        let new = file("blk", vec![chunk(3, 0, 32), chunk(1, 32, 64), chunk(2, 96, 128)]);
+        let old = file(
+            "blk",
+            vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)],
+        );
+        let new = file(
+            "blk",
+            vec![chunk(3, 0, 32), chunk(1, 32, 64), chunk(2, 96, 128)],
+        );
         let a = assemble_pair(&FilePair {
             capture_id: "full_reuse_reordered".into(),
             path: "blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
-            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: new,
+            }),
         })
         .expect("assembles");
         let p = a.patch.as_ref().unwrap();
         assert_eq!(p.fetched, 0, "nothing new: every chunk is in the old file");
         assert_eq!(p.reused, 3);
-        assert_eq!(p.moved, 3, "every chunk changed offset: that is what a reorder is");
-        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
+        assert_eq!(
+            p.moved, 3,
+            "every chunk changed offset: that is what a reorder is"
+        );
+        assert!(
+            p.equals_new,
+            "the patch flow and the direct assembly disagree"
+        );
         assert_eq!(a.map.totals.as_ref().unwrap().download_bytes, 0);
         assert_eq!(a.map.expectations.must_not_fetch.len(), 3);
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
@@ -1126,7 +1204,11 @@ mod tests {
             capture_id: "added".into(),
             path: "new.dll".into(),
             old: None,
-            new: Some(NewFile { tag: "7.1.0".into(), build_id: "sMXGW2ll3Fuu".into(), entry: new }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: new,
+            }),
         })
         .expect("assembles");
         assert!(a.old.is_none());
@@ -1142,7 +1224,10 @@ mod tests {
         for e in plan {
             assert_eq!(e.decision, Decision::Fetch);
             assert!(e.source_range.is_none(), "no old side to slice from");
-            assert!(e.note.is_some(), "so a reader is told why, not left guessing");
+            assert!(
+                e.note.is_some(),
+                "so a reader is told why, not left guessing"
+            );
         }
         let t = a.map.totals.as_ref().expect("the cost of the plan");
         assert_eq!(t.reuse, 0);
@@ -1166,7 +1251,11 @@ mod tests {
         let a = assemble_pair(&FilePair {
             capture_id: "removed".into(),
             path: "gone.blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
             new: None,
         })
         .expect("assembles");
@@ -1233,7 +1322,11 @@ mod tests {
         let e = assemble_pair(&FilePair {
             capture_id: "x".into(),
             path: "bad.blk".into(),
-            old: Some(OldFile { tag: "7.0.0".into(), build_id: "3XnPviMfoILi".into(), entry: old }),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: old,
+            }),
             new: None,
         })
         .unwrap_err();
@@ -1254,7 +1347,11 @@ mod tests {
         // Corrupt the old file's assembly so its bytes no longer match the
         // identity the new manifest reuses, without touching the identity itself.
         let shared = pair.new.as_ref().unwrap().entry.chunks[1].clone();
-        let entries: Vec<&SophonChunkFile> = [&pair.old.as_ref().unwrap().entry, &pair.new.as_ref().unwrap().entry].into();
+        let entries: Vec<&SophonChunkFile> = [
+            &pair.old.as_ref().unwrap().entry,
+            &pair.new.as_ref().unwrap().entry,
+        ]
+        .into();
         let mut mem = memory_of(&entries);
         mem.insert(shared.id.clone(), payload(200, 128)); // wrong content, same id
         let classes = [Class::PartialSameOffset];
@@ -1269,7 +1366,10 @@ mod tests {
         .expect("assembles");
 
         // The old side is now wrong, so A7 fails and the patch had to fetch.
-        assert!(!a.old.as_ref().unwrap().md5_matches(), "A7 fails by construction");
+        assert!(
+            !a.old.as_ref().unwrap().md5_matches(),
+            "A7 fails by construction"
+        );
         let p = a.patch.as_ref().unwrap();
         assert!(!p.a10_holds(), "the REUSE was attempted and rejected");
         assert_eq!(p.reuse_failures.len(), 1, "{:?}", p.reuse_failures);
@@ -1290,11 +1390,19 @@ mod tests {
             .find(|e| e.chunk_id == shared.id)
             .unwrap();
         assert_eq!(e.decision, Decision::Fetch);
-        assert!(e.note.as_deref().unwrap().contains("REUSE attempted and rejected"));
+        assert!(
+            e.note
+                .as_deref()
+                .unwrap()
+                .contains("REUSE attempted and rejected")
+        );
         assert!(e.url.is_some(), "so it can be downloaded after all");
         // And A9 still holds: the flow fetched the right bytes and produced the
         // new file regardless of the failed REUSE.
-        assert!(p.equals_new, "the patch flow and the direct assembly disagree");
+        assert!(
+            p.equals_new,
+            "the patch flow and the direct assembly disagree"
+        );
         assert_eq!(p.md5, a.new.as_ref().unwrap().md5);
         let _ = &mut a;
     }
@@ -1330,7 +1438,13 @@ mod tests {
             1,
             "one row per assertion instance, not per assertion kind: {kinds:?}"
         );
-        assert!(kinds.contains(&"A8") && kinds.contains(&"A9") && kinds.contains(&"A10") && kinds.contains(&"A11") && kinds.contains(&"A12"));
+        assert!(
+            kinds.contains(&"A8")
+                && kinds.contains(&"A9")
+                && kinds.contains(&"A10")
+                && kinds.contains(&"A11")
+                && kinds.contains(&"A12")
+        );
         assert!(a.all_green());
         assert!(
             rows.iter().all(|r| r.ok && !r.actual.is_empty()),
@@ -1340,8 +1454,14 @@ mod tests {
 
     #[test]
     fn decisions_serialise_the_way_the_schema_doc_writes_them() {
-        assert_eq!(serde_json::to_string(&Decision::Reuse).unwrap(), "\"REUSE\"");
-        assert_eq!(serde_json::to_string(&Decision::Fetch).unwrap(), "\"FETCH\"");
+        assert_eq!(
+            serde_json::to_string(&Decision::Reuse).unwrap(),
+            "\"REUSE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Decision::Fetch).unwrap(),
+            "\"FETCH\""
+        );
         assert_eq!(Decision::Fetch.to_string(), "FETCH");
     }
 
@@ -1368,7 +1488,12 @@ mod tests {
             "docs/01-artifact-schema.md §13"
         );
         let entry = &v["plan"][0];
-        let mut ek: Vec<&str> = entry.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut ek: Vec<&str> = entry
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         ek.sort_unstable();
         assert_eq!(
             ek,
