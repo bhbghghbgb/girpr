@@ -8,7 +8,7 @@ use crate::Biz;
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
 /// Endpoint shapes follow `HoYoPlayClient` (hyp vs sophon bases, `launcher_id` +
 /// `language` query) — see
-/// https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L108-L113
+/// <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.Core/HoYoPlay/HoYoPlayClient.cs#L108-L113>
 /// Request URLs are logged verbatim at debug.
 pub struct HypClient {
     client: reqwest::Client,
@@ -171,6 +171,36 @@ pub struct DeprecatedFile {
     pub name: String,
 }
 
+/// Whether a `retcode` means the *request* is wrong, so an identical retry will
+/// be answered identically.
+///
+/// Measured against the live endpoints on 2026-10-16:
+///
+/// | retcode | request | what it means |
+/// |---|---|---|
+/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as [`SophonNotFound`], which the local-build fallback is built around |
+/// | `-201` | `getBuild` with a bad `package_id` | `invalid params` |
+/// | `-1001` | `getGameConfigs` / `getGameBranches` with a bad `game_ids[]` | `invalid params` |
+///
+/// Retrying any of these costs ~15 s of backoff to learn exactly what the first
+/// response already said.
+///
+/// **What is deliberately not in this table: `retcode: 0` with an empty node.**
+/// `getGameBranches` answers `{"retcode":0,…,"data":{"game_branches":[]}}` for a
+/// game id it does not know. That is a success with nothing in it, not a
+/// failure, and it is handled downstream by `game_branch`'s
+/// `empty game_branches` — which is why this has to stay a retcode check and not
+/// become a "did we get anything" check.
+///
+/// The two route families disagree about what failure looks like: the blob
+/// routes answer `404`, these JSON routes answer `200` and put it in
+/// `retcode`. So the retry policy is written per family — see
+/// [`crate::sophon::retryable`] for the blob half, which uses the same rule as
+/// `gircap`'s `RetryPolicy::should_retry_status`.
+pub fn terminal_retcode(retcode: i64) -> bool {
+    matches!(retcode, -201 | -202 | -1001)
+}
+
 impl HypClient {
     pub fn new(biz: Biz) -> Result<Self> {
         let (host, _, _) = biz.endpoints();
@@ -254,6 +284,9 @@ impl HypClient {
                             w.message,
                             url
                         );
+                        if terminal_retcode(w.retcode) {
+                            return Err(last_err);
+                        }
                     } else {
                         let node_val = w
                             .data
@@ -306,7 +339,13 @@ impl HypClient {
                             url
                         );
                         if w.retcode == -202 {
+                            // Distinct from the other terminal codes: the caller
+                            // maps this one to "no local manifest" and falls back,
+                            // where an invalid-params code is a hard stop.
                             return Err(SophonNotFound.into());
+                        }
+                        if terminal_retcode(w.retcode) {
+                            return Err(last_err);
                         }
                     } else if let Some(d) = w.data {
                         tracing::debug!(api = "sophon", url = %url, attempt, "ok");
@@ -424,6 +463,20 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The measured `retcode`s are terminal; everything else is not. `0` is the
+    /// important negative: it is a *success*, and `getGameBranches` returns it
+    /// with an empty node for a game id it does not know, which is a real answer
+    /// the caller handles rather than a failure to retry.
+    #[test]
+    fn the_measured_terminal_retcodes_are_terminal_and_nothing_else_is() {
+        for r in [-202, -201, -1001] {
+            assert!(terminal_retcode(r), "{r} is invalid-params/not-found");
+        }
+        for r in [0, -1, -200, -2000] {
+            assert!(!terminal_retcode(r), "{r} must not be treated as terminal");
+        }
+    }
 
     #[test]
     fn wrapper_node_parse() {

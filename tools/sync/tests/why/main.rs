@@ -175,4 +175,3 @@ fn resolved(
         .unwrap_or_else(|e| panic!("{temp_tag}: resolving dst: {e:#}"));
     (sm.map, dm.map, plans)
 }
-

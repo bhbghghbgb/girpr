@@ -46,6 +46,11 @@ pub enum Repaired {
     Repaired(ChunkStats),
     /// `--dry-run`: the file would be repaired, nothing was written.
     DryRun,
+    /// A runtime hard stop fired. The file was **not** failed and
+    /// **not** repaired: its `*_tmp` is left in place and the next run resumes
+    /// from it (S3), which is what makes an aborted run a smaller run rather
+    /// than a broken one. Not counted in any counter.
+    Stopped,
 }
 
 /// Per-file chunk accounting (logged on success, aggregated into the run).
@@ -62,6 +67,11 @@ pub struct ChunkStats {
 ///
 /// Per-file failures are counted, never fatal; the caller decides that a
 /// non-zero `files_failed` skips the post-phase.
+///
+/// `output` rides along rather than being read from a global: the progress
+/// ticker this spawns emits records, and a record's plane has to come from the
+/// same place the rest of the run's does.
+#[allow(clippy::too_many_arguments)] // one parameter per input the repair loop needs
 pub async fn repair_all(
     http: reqwest::Client,
     game_dir: PathBuf,
@@ -70,6 +80,7 @@ pub async fn repair_all(
     summary: Summary,
     jobs: usize,
     dry_run: bool,
+    output: crate::report::OutputFormat,
 ) -> Summary {
     let summary = Arc::new(summary);
     let total_files = plan.files.len();
@@ -85,10 +96,20 @@ pub async fn repair_all(
         summary: summary.clone(),
         dry_run,
     });
-    let progress = crate::report::spawn_progress_reporter(summary.clone());
+    let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
     let mut handles = Vec::with_capacity(total_files);
     for idx in 0..total_files {
+        // `--fail-fast`: once a file has exhausted its retries, no further file
+        // is started. The unstarted ones are simply not counted — the caller
+        // sees `done < total` in `PROGRESS` and `failed > 0` in `SUMMARY`.
+        if ctx.summary.aborted() {
+            tracing::warn!(
+                remaining = total_files - idx,
+                "fail-fast: not starting the remaining files"
+            );
+            break;
+        }
         let sem = sem.clone();
         let ctx = ctx.clone();
         handles.push(tokio::spawn(async move {
@@ -110,16 +131,23 @@ pub async fn repair_all(
                     Ok(Repaired::Skipped) => {
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(Repaired::Repaired(stats)) => {
+                    Ok(Repaired::Repaired(_stats)) => {
+                        // `download_bytes` is already live: it is incremented
+                        // per chunk inside `write_downloaded_chunk`, because the
+                        // runtime hard stop has to read it mid-flight.
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
-                        ctx.summary
-                            .download_bytes
-                            .fetch_add(stats.download_bytes, Ordering::Relaxed);
                     }
-                    Ok(Repaired::DryRun) => {}
+                    Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
                         ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
                         tracing::error!("repair failed: {e:#}");
+                        // `--fail-fast`: the file that failed is honestly
+                        // counted and the run now stops instead of grinding
+                        // through hours of retry backoff. No new counter — the
+                        // fact is already visible as `failed > 0` + exit 3.
+                        if ctx.summary.fail_fast() {
+                            ctx.summary.abort();
+                        }
                     }
                 }
             }
@@ -150,6 +178,11 @@ struct FileCtx {
 
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
+    // A runtime hard stop already fired: drop out without touching the file.
+    // Its `*_tmp` (if any) stays, and the next run resumes from it.
+    if ctx.summary.download_stopped() || ctx.summary.write_stopped() || ctx.summary.aborted() {
+        return Ok(Repaired::Stopped);
+    }
     let file = &ctx.plan.files[idx];
     let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
     if let Some(parent) = final_path.parent()
@@ -191,12 +224,34 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
 
-    for attempt in 1..=MAX_ATTEMPTS {
+    // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
+    // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
+    // mean that while the *first* file alone spends 5 × (15 s of chunk-fetch
+    // backoff + 10 s of file-level backoff) ≈ 125 s of pure sleeping before anyone
+    // else is spared. The flag is an explicit "tell me fast"; a user who wants the
+    // full budget does not pass it. Counter semantics are unchanged: a file that
+    // fails on its first attempt is still just `files_failed`.
+    let max_attempts = if ctx.summary.fail_fast() {
+        1
+    } else {
+        MAX_ATTEMPTS
+    };
+    for attempt in 1..=max_attempts {
         match repair_attempt(ctx, file, &prefix, &tmp_path).await {
             Ok(stats) => return Ok(Repaired::Repaired(stats)),
+            // The ceiling, not the file: this must not be counted as a
+            // failure and must not be retried.
+            Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
+                tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
+                return Ok(Repaired::Stopped);
+            }
             Err(e) => {
                 tracing::warn!(attempt, "attempt failed: {e:#}");
-                if attempt == MAX_ATTEMPTS {
+                // `--fail-fast` cuts the backoff short. Without it, one bad
+                // file spends 5 × linear sleep (and each of those attempts has
+                // its own 5× chunk retry inside `fetch_chunk_bytes`) before the
+                // run even starts on the next file.
+                if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
@@ -205,7 +260,6 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     }
     unreachable!("attempt loop always returns")
 }
-
 /// One full pass over a file's chunks, then verify + promote.
 async fn repair_attempt(
     ctx: &FileCtx,
@@ -217,6 +271,30 @@ async fn repair_attempt(
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
+    let outcome = repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await;
+    if outcome.is_err() {
+        // This attempt is being abandoned, so the bytes it fetched are given
+        // back. That is what keeps `SUMMARY download_bytes` meaning
+        // **the bytes of files that were actually promoted** — rather than
+        // "bytes that crossed the wire at some point, including on the four
+        // attempts that failed". The ceiling still saw them while they
+        // were in flight, which is the whole reason the counter is live; this
+        // only decides what a *finished* run reports.
+        ctx.summary
+            .adjust_download_bytes(-(stats.download_bytes as i64));
+    }
+    outcome
+}
+
+/// One full pass over a file's chunks, then verify + promote. The caller
+/// ([`repair_attempt`]) owns the accounting of a failed attempt.
+async fn repair_attempt_inner(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    tmp_path: &std::path::Path,
+    stats: &mut ChunkStats,
+) -> Result<ChunkStats> {
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -240,13 +318,13 @@ async fn repair_attempt(
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
-                write_downloaded_chunk(ctx, prefix, c, &mut f, &mut stats).await?;
+                write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await?;
             }
         }
     }
     f.flush()?;
     drop(f);
-    promote_tmp(ctx, file, tmp_path, &stats)
+    promote_tmp(ctx, file, tmp_path, stats)
 }
 
 /// What one chunk needed. `Resumed` (already complete) and `Reused` (copied
@@ -315,6 +393,9 @@ fn try_reuse_slice(
                     tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
                     return Ok(ChunkOutcome::Download);
                 }
+                // The write ceiling counts *this* copy: it goes into `*_tmp` and
+                // appears in neither `download_bytes` nor the plan's estimate.
+                reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
                 remaining -= n as u64;
             }
@@ -345,10 +426,37 @@ async fn write_downloaded_chunk(
     out: &mut File,
     stats: &mut ChunkStats,
 ) -> Result<()> {
-    let blob = sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id)
-        .await
-        .with_context(|| format!("chunk {}", c.id))?;
-    stats.download_bytes += blob.len() as u64;
+    // Reserve before fetching, not after: the pre-flight estimate is a *lower
+    // bound* (a reuse slice whose MD5 fails falls back to a download), so this
+    // compare-and-swap is what actually bounds the run. Reserving the manifest's
+    // `compressed_size` keeps the stop exact under `--io-threads N` instead of
+    // overshooting by up to N-1 chunks, and the real `blob.len()` is folded back
+    // in below so `SUMMARY download_bytes` stays the true figure.
+    let reserved = c.compressed_size.max(0) as u64;
+    if !ctx.summary.reserve_download_bytes(reserved) {
+        ctx.summary.stop_downloads();
+        tracing::warn!(
+            limit = ?ctx.summary.max_download_bytes(),
+            have = ctx.summary.download_bytes.load(Ordering::Relaxed),
+            "download-bytes ceiling reached -> stopping the run"
+        );
+        anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
+    }
+    // A failed fetch delivers nothing, so the reservation goes straight back.
+    // Without this the `?` below would leak `compressed_size` per attempt, for
+    // bytes that never arrived — and with no ceiling set the sentinel is
+    // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
+    let blob = match sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id).await {
+        Ok(b) => b,
+        Err(e) => {
+            ctx.summary.adjust_download_bytes(-(reserved as i64));
+            return Err(e).with_context(|| format!("chunk {}", c.id));
+        }
+    };
+    let actual = blob.len() as u64;
+    ctx.summary
+        .adjust_download_bytes(actual as i64 - reserved as i64);
+    stats.download_bytes += actual;
     let decoded = zstd::stream::decode_all(std::io::Cursor::new(&blob))
         .with_context(|| format!("zstd chunk {}", c.id))?;
     tracing::trace!(chunk = %c.id, compressed_bytes = blob.len(), decompressed_bytes = decoded.len(), "chunk decoded");
@@ -366,9 +474,31 @@ async fn write_downloaded_chunk(
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
     out.seek(SeekFrom::Start(c.offset as u64))?;
+    reserve_write(ctx, decoded.len() as u64)?;
     out.write_all(&decoded)?;
     stats.chunks_downloaded += 1;
     Ok(())
+}
+
+/// Reserve `n` bytes of disk write against `--max-write-bytes`, or trip the
+/// runtime hard stop.
+///
+/// Reserving **before** the write is what makes the ceiling meaningful: the
+/// bytes land in `*_tmp` as soon as `write_all` returns, so a check-then-write
+/// under `--io-threads N` would overshoot by up to N-1 buffers. On refusal the
+/// file is left where it is and `*_tmp` keeps whatever prefix it already had,
+/// which S3 resume-by-length picks up next run.
+fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
+    if ctx.summary.reserve_write_bytes(n) {
+        return Ok(());
+    }
+    ctx.summary.stop_writes();
+    tracing::warn!(
+        limit = ?ctx.summary.max_write_bytes(),
+        have = ctx.summary.write_bytes.load(Ordering::Relaxed),
+        "write-bytes ceiling reached -> stopping the run"
+    );
+    anyhow::bail!("write-bytes ceiling reached")
 }
 
 /// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the

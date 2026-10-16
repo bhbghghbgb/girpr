@@ -133,16 +133,6 @@ fn fixture(t: &TempRoot) -> (PathBuf, PathBuf) {
     pair(t, &spec, &["md5"], false)
 }
 
-/// Remove both caches so the next resolution is a cold run over the *same* bytes.
-///
-/// The alternative — build a fresh pair per setting — would make the whole test
-/// vacuous: `wfile` stamps each file at write time, so two "identical" fixtures
-/// have different mtimes, and `EffRec` carries `mtime_ns`. The maps would then
-/// differ for a reason that has nothing to do with the limiter, and a loose
-/// assertion would wave it through. One pair, re-resolved cold, is the only shape
-/// in which map equality means what it says.
-
-
 /// Action events `sync` emits, as opposed to the records that describe why.
 ///
 /// Copied rather than imported: `sync_plan.rs` owns this vocabulary and duplicating

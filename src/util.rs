@@ -58,7 +58,7 @@ pub fn normalize_rel(rel: &str) -> String {
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
 /// (`matches[^1]` over `game_version=(.+)`); missing file means fresh install.
 /// Do not "fix" to first-match.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L47-L70
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L47-L70>
 pub fn read_game_version(game_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
     let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;
