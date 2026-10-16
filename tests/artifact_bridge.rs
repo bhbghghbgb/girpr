@@ -251,8 +251,16 @@ impl Scratch {
 
     /// Somewhere for the binary to put its trace log, so the run does not
     /// scatter `logs/` under the build directory.
+    ///
+    /// The pre-pass gets its **own** file: `logging::open_log_file` opens with
+    /// `append`, so one shared file would carry both runs' records and the
+    /// log-file cross-check could not say which run downloaded what.
     fn log_file(&self) -> PathBuf {
         self.root.join("girpr.log")
+    }
+
+    fn pre_log_file(&self) -> PathBuf {
+        self.root.join("girpr-pre.log")
     }
 
     fn plan_out(&self) -> PathBuf {
@@ -309,6 +317,40 @@ fn snapshot(game: &Path) -> BTreeMap<String, (u64, String)> {
     }
     let mut out = BTreeMap::new();
     walk(game, game, &mut out);
+    out
+}
+
+/// The chunk ids a trace log records as **downloaded** (`docs/06` §4.7's
+/// documented last resort).
+///
+/// Only the two download records are matched:
+///
+/// | record | site | when |
+/// |---|---|---|
+/// | `chunk downloaded chunk=<id>` | `sophon::try_fetch_chunk` | the body was read — a real download |
+/// | `no local reuse candidate -> download chunk=<id>` | `repair::file::try_reuse_slice` | the decision, before the fetch |
+///
+/// **Never the bare id.** A reused chunk is logged too — `reuse slice md5 ok
+/// -> copy chunk=<id>` and `chunk already complete -> keep chunk=<id>` — so a
+/// substring search for an id finds it in the "reused it" line and
+/// false-positives.
+fn downloaded_chunks(log: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for line in log.lines() {
+        for marker in ["chunk downloaded ", "no local reuse candidate -> download "] {
+            let Some(at) = line.find(marker) else {
+                continue;
+            };
+            let rest = &line[at + marker.len()..];
+            let Some(id) = rest.strip_prefix("chunk=") else {
+                continue;
+            };
+            let id = id.split_whitespace().next().unwrap_or_default();
+            if !id.is_empty() {
+                out.insert(id.to_string());
+            }
+        }
+    }
     out
 }
 
@@ -408,7 +450,7 @@ async fn girpr(args: &[String]) -> Run {
 /// No cleanup flag either: a scoped cleanup sees only the one selected path,
 /// which the manifest contains, so it has nothing to delete. The one capture
 /// that *wants* a cleanup is `removed`, and that is the row that says so.
-fn base_args(game: &Path, bundle: &Bundle, o: &Origins, scratch: &Scratch) -> Vec<String> {
+fn base_args(game: &Path, bundle: &Bundle, o: &Origins, log: &Path) -> Vec<String> {
     vec![
         "--game-path".into(),
         game.display().to_string(),
@@ -423,9 +465,8 @@ fn base_args(game: &Path, bundle: &Bundle, o: &Origins, scratch: &Scratch) -> Ve
         "1".into(),
         "--output".into(),
         "json".into(),
-        // Keep the trace log in the scratch dir rather than under target/.
         "--log-file".into(),
-        scratch.log_file().display().to_string(),
+        log.display().to_string(),
     ]
 }
 
@@ -467,7 +508,12 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     // separates the two failure modes that otherwise arrive tangled in one red
     // run: when `files=1` fails the glob is wrong; when the real run's
     // `download_bytes` fails, reuse is wrong.
-    let mut pre = base_args(&scratch.game(), &bundle, bridge.origins(), &scratch);
+    let mut pre = base_args(
+        &scratch.game(),
+        &bundle,
+        bridge.origins(),
+        &scratch.pre_log_file(),
+    );
     pre.push("--print-plan".into());
     pre.push("--plan-out".into());
     pre.push(scratch.plan_out().display().to_string());
@@ -525,7 +571,12 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     }
 
     // ---- the real run ---------------------------------------------------
-    let mut args = base_args(&scratch.game(), &bundle, bridge.origins(), &scratch);
+    let mut args = base_args(
+        &scratch.game(),
+        &bundle,
+        bridge.origins(),
+        &scratch.log_file(),
+    );
     args.extend(capture_args(capture));
     let run = girpr(&args).await;
 
@@ -606,6 +657,34 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         capture.id,
         forbidden,
         asked.len()
+    );
+
+    // The same fact from the **documented last resort** (`docs/06` §4.7), which
+    // is what makes that rule worth writing down at all. The server's log is
+    // the primary source; this is the cross-check that `--log-file` parsing
+    // would actually work, so it has to agree.
+    //
+    // Note what is matched: the two *download records*, never the bare id. A
+    // reused chunk is logged too — `reuse slice md5 ok -> copy chunk=<id>` —
+    // so a substring search for an id finds it there and false-positives. That
+    // is not hypothetical: the first attempt at this check failed on 19 chunks
+    // that were never downloaded, for exactly that reason.
+    let log = std::fs::read_to_string(scratch.log_file()).unwrap_or_default();
+    let downloaded = downloaded_chunks(&log);
+    assert_eq!(
+        downloaded, asked,
+        "{}: the trace log's download records must agree with the server's request log",
+        capture.id
+    );
+    let logged_forbidden: Vec<&String> = capture
+        .must_not_fetch
+        .iter()
+        .filter(|id| downloaded.contains(*id))
+        .collect();
+    assert!(
+        logged_forbidden.is_empty(),
+        "{}: must_not_fetch ids reported as downloaded: {logged_forbidden:?}",
+        capture.id
     );
 
     // ---- 4, continued: the before/after tree diff ----------------------
@@ -973,6 +1052,271 @@ async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
 fn read_json(path: &Path) -> serde_json::Value {
     let raw = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// M4 — not-found is replayed, not invented (`docs/06` §4.4)
+// ---------------------------------------------------------------------------
+
+/// Blank out the fields `docs/06` §4.4.1 marks volatile, so two bodies can be
+/// compared for everything else.
+fn without_volatile(body: &str) -> String {
+    let mut out = body.to_string();
+    for tag in ["Key", "RequestId"] {
+        if let (Some(a), Some(b)) = (
+            out.find(&format!("<{tag}>")),
+            out.find(&format!("</{tag}>")),
+        ) && b > a
+        {
+            out.replace_range(a..b + tag.len() + 3, &format!("<{tag}/>"));
+        }
+    }
+    out
+}
+
+/// The length of `<Key>`'s contents, which is the only part of a recorded
+/// shape whose length legitimately changes on replay.
+fn key_len(body: &str) -> usize {
+    body.split("<Key>")
+        .nth(1)
+        .and_then(|s| s.split("</Key>").next())
+        .map(str::len)
+        .unwrap_or(0)
+}
+
+/// Assert one 404 against the shape the bundle recorded for it.
+async fn assert_replays(bridge: &Bridge, shape_id: &str, url: &str) {
+    let (status, ctype, body) = get(url).await;
+    let Some((rec_status, rec_ctype, rec_body)) = bridge.recorded_shape(shape_id) else {
+        panic!(
+            "{shape_id}: this bundle has no api/error_shapes.json, so there is no \
+             evidence to replay. That is the `shapes_synthesized` case, not this one."
+        )
+    };
+    // `girpr` calls `.error_for_status()` and never reads the body, so status
+    // and content-type are the contract and the body is fidelity.
+    assert_eq!(status, rec_status, "{shape_id}: replayed status");
+    assert_eq!(ctype, rec_ctype, "{shape_id}: replayed content-type");
+
+    let replayed = String::from_utf8_lossy(&body).into_owned();
+    assert_eq!(
+        without_volatile(&replayed),
+        without_volatile(&rec_body),
+        "{shape_id}: only RequestId / Key (and the length that follows from Key) \
+         may differ from the recorded body"
+    );
+    // The body must name the key that was actually requested, and its length
+    // must follow from that substitution rather than being copied verbatim.
+    let requested = url
+        .split_once("://")
+        .map(|(_, rest)| rest.split_once('/').map(|(_, p)| p).unwrap_or_default())
+        .unwrap_or_default();
+    assert!(
+        replayed.contains(&format!("<Key>{requested}</Key>")),
+        "{shape_id}: the replayed body must name the requested key"
+    );
+    assert_eq!(
+        replayed.len(),
+        rec_body.len() - key_len(&rec_body) + requested.len(),
+        "{shape_id}: the body length must follow from the substituted Key alone"
+    );
+    assert!(
+        !replayed.contains("6AD16DF4"),
+        "{shape_id}: the recorded RequestId is marked volatile and must be synthesized"
+    );
+}
+
+/// The two route families answer failure **differently**, and both answers are
+/// replayed from what the bundle recorded rather than chosen here. Measured on
+/// 2026-10-16 and tabulated in `docs/06` §4.4:
+///
+/// | family | request | answer |
+/// |---|---|---|
+/// | blob (`AliyunOSS`) | bogus id, unknown build, a valid id under the other build | `404` + `application/xml` `NoSuchKey` |
+/// | JSON (`sg-downloader-api`) | `getBuild?tag=<unknown>` | `200` + `retcode -202` |
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn not_found_is_replayed_from_the_recorded_shapes() {
+    let Some(bridge) = bridge_or_skip().await else {
+        return;
+    };
+    let bundle = bridge.bundle().clone();
+    let o = bridge.origins().clone();
+    assert!(
+        !bridge.shapes_synthesized(),
+        "this bundle carries api/error_shapes.json, so these are replayed"
+    );
+
+    let missing = "0000000000000000_00000000000000000000000000000000";
+    let manifest_ns = format!(
+        "{}/client_app/sophon/manifests/cxhpq4g4rgg0",
+        o.manifest_origin
+    );
+    let chunk_ns = format!("{}/client_app/sophon/chunks/cxhpq4g4rgg0", o.chunk_origin);
+
+    // The blob family: 404 + application/xml, for all three recorded reasons.
+    assert_replays(
+        &bridge,
+        "blob_missing",
+        &format!("{manifest_ns}/{}/{missing}", bundle.new_build),
+    )
+    .await;
+    assert_replays(
+        &bridge,
+        "chunk_missing",
+        &format!("{chunk_ns}/{}/{missing}", bundle.new_build),
+    )
+    .await;
+    assert_replays(
+        &bridge,
+        "blob_wrong_build",
+        &format!("{chunk_ns}/{}/{missing}", bundle.old_build),
+    )
+    .await;
+
+    // The JSON family: 200 + retcode -202, which is the call that populates the
+    // chunk-reuse map.
+    let (status, ctype, body) = get(&format!(
+        "{}/getBuild?branch=main&package_id=x&password=&tag=0.0.0-nope",
+        o.sophon_base
+    ))
+    .await;
+    let (rec_status, rec_ctype, rec_body) = bridge
+        .recorded_shape("getbuild_unknown_tag")
+        .expect("recorded");
+    assert_eq!((status, ctype), (rec_status, rec_ctype));
+    assert_eq!(String::from_utf8_lossy(&body), rec_body);
+
+    // The document's other three shapes have no route here, because the bridge
+    // never issues such a request: a bad `package_id` or a bad `game_ids[]` is
+    // something only `gircap capture` sends. They are still checked for
+    // presence and shape, so the bundle's record is read rather than assumed.
+    for (id, status, retcode) in [
+        ("getbuild_bad_package", 200u16, -201i64),
+        ("getgameconfigs_bad_game_id", 200, -1001),
+        ("getgamebranches_bad_game_id", 200, 0),
+    ] {
+        let (s, ct, b) = bridge.recorded_shape(id).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!((s, ct.as_str()), (status, "application/json"), "{id}");
+        let v: serde_json::Value = serde_json::from_str(&b).expect("json body");
+        assert_eq!(v["retcode"].as_i64(), Some(retcode), "{id}");
+    }
+    println!(
+        "not-found: 4 shapes replayed on their routes, 3 more present and unmodified \
+         (no route: the bridge never issues those requests)"
+    );
+}
+
+/// A bundle that **predates** `api/error_shapes.json` has no evidence to
+/// replay. The shim then answers with the measured live shape — `404` +
+/// `application/xml` — and **says so**, rather than passing the not-found
+/// assertions silently. Inventing the statuses would make `docs/06`'s claim
+/// about the API unfounded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn a_bundle_without_recorded_shapes_says_so_instead_of_inventing() {
+    let Some(bundle) = bundle_or_skip() else {
+        return;
+    };
+    let shadow = ShadowBundle::new(&bundle);
+    assert!(
+        !shadow.dir().join("api").join("error_shapes.json").exists(),
+        "the shadow bundle must not carry the file it is here to test the absence of"
+    );
+    let bridge = Bridge::start(Bundle::open(shadow.dir())).await;
+    assert!(
+        bridge.shapes_synthesized(),
+        "with no api/error_shapes.json the shapes are synthesized, and the bridge \
+         must be able to say so"
+    );
+    assert!(
+        bridge.recorded_shape("chunk_missing").is_none(),
+        "there is nothing recorded to replay"
+    );
+
+    let b = bridge.bundle().clone();
+    let o = bridge.origins().clone();
+    let missing = "0000000000000000_00000000000000000000000000000000";
+    for url in [
+        format!(
+            "{}/client_app/sophon/chunks/cxhpq4g4rgg0/{}/{missing}",
+            o.chunk_origin, b.new_build
+        ),
+        format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{}/{missing}",
+            o.manifest_origin, b.new_build
+        ),
+    ] {
+        let (status, ctype, body) = get(&url).await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            ctype, "application/xml",
+            "the measured blob 404 content-type"
+        );
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("NoSuchKey"), "{text}");
+        assert!(text.contains(&format!(
+            "<Key>{}</Key>",
+            url.split_once("://").unwrap().1.split_once('/').unwrap().1
+        )));
+    }
+    println!(
+        "SKIP the replayed-shape assertions for {}: the bundle carries no \
+         api/error_shapes.json, so the 404 shape was synthesized from the measured \
+         live behaviour rather than replayed from evidence",
+        b.root.display()
+    );
+}
+
+/// The bundle's small files, without `api/error_shapes.json`.
+///
+/// Only the files the server reads at `load()` time are copied — `MANIFEST.json`,
+/// `patchmaps/` and the four `api/` bodies, ~120 KB in total. `manifests/` and
+/// `chunks/` are deliberately **not** present: nothing in this test asks for a
+/// real id, and inventing placeholder archives would be exactly the "serves
+/// something the bundle does not vouch for" the spec forbids.
+struct ShadowBundle {
+    dir: PathBuf,
+}
+
+impl ShadowBundle {
+    fn new(bundle: &Bundle) -> Self {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "girpr_artifact_bridge_noshapes_{}_{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("api")).expect("create shadow api/");
+        std::fs::create_dir_all(dir.join("patchmaps")).expect("create shadow patchmaps/");
+        std::fs::copy(bundle.root.join("MANIFEST.json"), dir.join("MANIFEST.json")).expect("copy");
+        copy_tree(&bundle.root.join("patchmaps"), &dir.join("patchmaps"));
+        for name in [
+            "getGameConfigs.json",
+            "getGameBranches.json",
+            "getGameDeprecatedFileConfigs.json",
+            &format!("getBuild.{}.json", bundle.old_tag),
+            &format!("getBuild.{}.json", bundle.new_tag),
+        ] {
+            std::fs::copy(
+                bundle.root.join("api").join(name),
+                dir.join("api").join(name),
+            )
+            .unwrap_or_else(|e| panic!("copy api/{name}: {e}"));
+        }
+        Self { dir }
+    }
+
+    fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for ShadowBundle {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the

@@ -756,10 +756,20 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// A `RequestId` shaped like the recorded one (24 uppercase hex) but derived
-/// from the key, so a given request replays identically on every run.
+/// A `RequestId` shaped like the recorded one and derived from the key, so a
+/// given request replays identically on every run.
+///
+/// The length matters as much as the alphabet: the recorded ids are 24
+/// characters (`6AD16DF4…`), and `docs/06` §4.4.1 says the *body length* is
+/// volatile only "as follows from `Key`". A longer synthetic id would make the
+/// replayed body's length differ for a second, undocumented reason — and the
+/// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    format!("{:x}", md5::compute(key.as_bytes())).to_uppercase()
+    format!("{:x}", md5::compute(key.as_bytes()))
+        .to_uppercase()
+        .chars()
+        .take(24)
+        .collect()
 }
 
 /// Replace a prefix's **scheme and authority**, keeping the path.

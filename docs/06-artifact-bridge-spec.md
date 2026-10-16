@@ -1,9 +1,15 @@
 # `docs/06-artifact-bridge-spec.md` — serving a capture bundle to `girpr`
 
-**Status: spec. Nothing here is implemented.** It states what a harness must do
-and what it must not do, so the implementation can be written against a contract
-rather than against the shape of whatever came first. No code, no module tree,
-no milestone split — those belong to the implementation.
+**Status: implemented.** `tests/artifact_bridge.rs` +
+`tests/artifact_bridge/server.rs` in the `girpr` package. The build order and
+what each milestone decided are in
+[`07-artifact-bridge-implementation-plan.md`](07-artifact-bridge-implementation-plan.md);
+§0.1 of that file is the only place allowed to record what changed from what is
+written below, and it lists two places this document disagrees with itself.
+
+This document states what the harness does and what it does not do. The
+implementation is written against it, so the contract stands as written even
+where the implementation had to choose.
 
 **Scope:** `girpr` (the main crate) only, plus its test tree. It names
 `tools/capture` because that is where the input comes from; it changes nothing

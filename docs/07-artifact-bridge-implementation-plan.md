@@ -409,3 +409,71 @@ One thing the first draft got wrong: the matrix's `capture_id` is present only
 on `captured` entries — an entry that never materialised has no capture id, so
 the key to match on is `class`. `class == capture_id` for every captured entry
 (they are the patchmap stem), and that equality is now asserted.
+
+### M4 — not-found is replayed, not invented; and the docs
+
+`docs/06` §4.4, in full, and the documentation the bridge needs to be findable.
+**Seventeen cases green**; the plan's M0–M4 are all landed.
+
+**Not-found replay.** `not_found_is_replayed_from_the_recorded_shapes` drives
+all four shapes that have a route here and compares each against the bundle's
+own `api/error_shapes.json` record:
+
+- status and content-type must equal the recorded ones (they are the contract —
+  `girpr` calls `.error_for_status()` and never reads the body);
+- the body must be equal to the recorded one **after blanking `Key` and
+  `RequestId`**, which are the only fields `docs/06` §4.4.1 marks volatile;
+- the body must name the key that was actually requested;
+- **the body length must equal `recorded − len(recorded Key) + len(requested
+  Key)`** — the length follows from the substituted `Key` alone;
+- the recorded `RequestId` must not survive.
+
+The document's other three shapes (`getbuild_bad_package`,
+`getgameconfigs_bad_game_id`, `getgamebranches_bad_game_id`) have **no route**,
+because the bridge never issues such a request — a bad `package_id` or a bad
+`game_ids[]` is something only `gircap capture` sends. They are checked for
+presence, status, content-type and retcode so the bundle's record is read rather
+than assumed, and the test says so out loud.
+
+**The no-evidence branch.** `a_bundle_without_recorded_shapes_says_so_instead_of_inventing`
+builds a shadow bundle from the real one's *small* files — `MANIFEST.json`,
+`patchmaps/`, the four `api/` bodies, ~120 KB — deliberately **without**
+`api/error_shapes.json`, and with `manifests/` and `chunks/` absent (nothing
+here asks for a real id, and placeholder archives would be exactly the "serves
+something the bundle does not vouch for" §7 forbids). It then asserts
+`shapes_synthesized()`, that `recorded_shape("chunk_missing")` is `None`, that
+the 404s still come back `404` + `application/xml` with a `NoSuchKey` body
+naming the requested key — and prints that the replayed-shape assertions were
+skipped for lack of evidence, which is the contract §4.4.2 asks for.
+
+**The `--log-file` last resort, proven.** `downloaded_chunks` parses the trace
+log matching **only** the two download records — `chunk downloaded chunk=<id>`
+(`sophon::try_fetch_chunk`) and `no local reuse candidate -> download
+chunk=<id>` (`repair::file::try_reuse_slice`) — and `drive_capture` asserts its
+result equals the server's request log, for every capture. That is what makes
+§4.7's rule worth writing down: a reused chunk is logged too (`reuse slice md5
+ok -> copy chunk=<id>`), so a bare-id search false-positives. The pre-pass gets
+its **own** log file, because `logging::open_log_file` opens with `append` and
+one shared file could not say which run downloaded what.
+
+One fix this milestone forced: the synthetic `RequestId` is truncated to 24
+characters, like the recorded ones. At 32 it made the replayed body 8 bytes
+longer for a second, undocumented reason — and body length is one of the two
+things the not-found assertions compare.
+
+**Docs.** `README.md`: module-map rows for both new files, the `--ignored`
+invocation, and the "nothing yet proves a flag reaches the HTTP client" bullet
+replaced by what now does and what it asserts. `tools/capture/README.md`: the
+end-to-end check is no longer "run by hand … does not exist yet", plus the
+one-directional-independence note and the consumer's invocation.
+`docs/06-artifact-bridge-spec.md`: status line flipped from "spec. Nothing here
+is implemented" to implemented, pointing at this file for what changed and
+leaving the contract itself as written.
+
+### Done
+
+`cargo test -p girpr --test artifact_bridge -- --ignored --nocapture` — 17 cases,
+~140 s with the eight captures concurrent. `cargo test` — 82 + 6 + 53, with the
+17 bridge cases reported ignored. `cargo clippy --all-targets` and
+`cargo fmt --check` clean. `gircap verify` 90/90 exit `0` throughout: the bundle
+was never written.

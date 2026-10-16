@@ -55,6 +55,8 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + deterministic fixture | `MockServer`, `build_fixture`, `MockOpts` |
+| `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, one test per capture |
+| `tests/artifact_bridge/server.rs` | the loopback replay server, reached only by the test above | `Bridge`, `Bundle`, `Capture`, `Hit` |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
 
@@ -241,6 +243,9 @@ the configured base, so a local mock must return bodies pointing at itself.
 cargo test            # 82 unit + 59 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
+
+# the artifact bridge: #[ignore]d, needs a bundle (docs/06)
+cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 ```
 
 - No test touches the internet: every case builds a `MockServer` on
@@ -259,10 +264,27 @@ cargo clippy --all-targets
   precedence is pinned; they still run against the mock, not against real bytes.
   `tests/cli_contract.rs` is the other file that spawns the binary, and it never
   reaches the API at all — it is argument handling and exit codes only.
-- **Nothing yet proves a flag reaches the HTTP client against real bytes.**
-  `tests/artifact_bridge.rs` is the test that will: it replays a `gircap` bundle
-  over loopback and runs the real binary against it. It does not exist yet —
-  `docs/06-artifact-bridge-spec.md` is its specification.
+- **Real bytes, real flags.** `tests/artifact_bridge.rs` runs the built binary
+  against a `gircap` artifact bundle replayed over loopback, which is what
+  proves `--include` and `--hyp-base` / `--sophon-base` reach `HypClient`
+  through the real flag-parsing path. It is `#[ignore]`d (it compiles under
+  `cargo test`, it never runs) and it **skips, never fails**, when no bundle is
+  present: `GIRPR_ARTIFACT_BUNDLE`, else a bundle under `artifacts/`, else a
+  printed reason and the command that would produce one.
+  - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md);
+    the build order and what landed are in
+    [`docs/07-artifact-bridge-implementation-plan.md`](docs/07-artifact-bridge-implementation-plan.md).
+  - The server rewrites only the **scheme and authority** of the `url_prefix`
+    inside each `getBuild` body, because manifest and chunk URLs are built from
+    that body rather than from the flags. It never writes to the bundle; the
+    working tree is a scratch copy, and `gircap verify` must still pass
+    afterwards.
+  - Per capture it asserts: `download_bytes` equals the patchmap's total, the
+    patched file's MD5 equals `expectations.result_md5`, no id in
+    `must_not_fetch` was requested, exit `0` with `config_bumped=0` and nothing
+    outside the scope touched on disk, and `local_manifest` did not come back
+    `unavailable` (a run with no local manifest still exits `0`, downloads
+    everything, and is the failure mode byte counts alone will not catch).
 - Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.

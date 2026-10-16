@@ -102,14 +102,22 @@ builds, diffs them, and assembles a **complete artifact**:
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
 Both reference bundles — `hk4e_global` 7.0.0 → 7.1.0 — **verify 90/90, exit
-`0`**. And the end-to-end check has been **run by hand**: the bundle was handed to
-the real `girpr` binary against a scratch copy of `game/`, all eight captures,
-every one exit `0` and every `download_bytes` matching its patchmap to the byte
-(§8.1.1).
+`0`**. And the end-to-end check is now **automated**: the bundle is replayed
+over loopback and the real `girpr` binary is run against it, once per capture,
+by `girpr`'s `tests/artifact_bridge.rs`. All eight captures exit `0` and every
+`download_bytes` matches its patchmap to the byte (§8.1.1).
 
-What has *not* been built is the **automated** version of that run — a replay
-server plus a test that drives the binary through it. That is specified in
-`girpr`'s `docs/06-artifact-bridge-spec.md` and does not exist yet.
+```powershell
+# in the girpr package; needs a bundle, skips cleanly without one
+cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+```
+
+The harness lives on the `girpr` side and **must**: `gircap` does not depend on
+`girpr` and does not invoke it, so the check that `girpr` works does not couple
+the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, the build
+order is `docs/07-artifact-bridge-implementation-plan.md`, and the consumer never
+regenerates or repairs a bundle — it reads `patchmaps/`, `expected/` and `game/`,
+and runs `gircap verify` as its precondition.
 
 The build order lives in `docs/02-plan.md` §3 and each module's own header
 says which milestone it lands in.
