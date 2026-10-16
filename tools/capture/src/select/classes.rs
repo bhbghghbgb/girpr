@@ -42,7 +42,10 @@ pub enum Shape {
 
 impl Shape {
     /// Build a shape from a score, treating a one-sided row as itself.
-    pub fn from_row(state: crate::manifest::diff::State, s: &crate::manifest::diff::PathScore) -> Shape {
+    pub fn from_row(
+        state: crate::manifest::diff::State,
+        s: &crate::manifest::diff::PathScore,
+    ) -> Shape {
         match state {
             crate::manifest::diff::State::Added => Shape::Added,
             crate::manifest::diff::State::Removed => Shape::Removed,
@@ -156,15 +159,12 @@ impl Class {
 
     /// Parse a `--require-class` value, naming the valid set on failure.
     pub fn parse(s: &str) -> Result<Class, String> {
-        Class::ALL
-            .into_iter()
-            .find(|c| c.id() == s)
-            .ok_or_else(|| {
-                format!(
-                    "unknown class {s:?}; expected one of: {}",
-                    Class::ALL.map(|c| c.id()).join(", ")
-                )
-            })
+        Class::ALL.into_iter().find(|c| c.id() == s).ok_or_else(|| {
+            format!(
+                "unknown class {s:?}; expected one of: {}",
+                Class::ALL.map(|c| c.id()).join(", ")
+            )
+        })
     }
 
     /// Whether this shape satisfies the class.
@@ -173,7 +173,15 @@ impl Class {
         match self {
             Class::Identical => matches!(s, Scored { same_md5: true, .. }),
             Class::ZeroReuseSingle => {
-                matches!(s, Scored { same_md5: false, nchunks: 1, reused: 0, .. })
+                matches!(
+                    s,
+                    Scored {
+                        same_md5: false,
+                        nchunks: 1,
+                        reused: 0,
+                        ..
+                    }
+                )
             }
             Class::ZeroReuseMulti => {
                 matches!(s, Scored { same_md5: false, reused: 0, nchunks, .. } if nchunks > 1)
@@ -290,13 +298,25 @@ mod tests {
     fn the_boundaries_between_the_three_partial_shapes_are_exact() {
         let same_offset = scored(false, true, 3, 1, 0);
         assert!(Class::PartialSameOffset.matches(same_offset));
-        assert!(!Class::PartialSizeChanged.matches(same_offset), "size is equal");
-        assert!(!Class::PartialMovedOffset.matches(same_offset), "moved == 0");
+        assert!(
+            !Class::PartialSizeChanged.matches(same_offset),
+            "size is equal"
+        );
+        assert!(
+            !Class::PartialMovedOffset.matches(same_offset),
+            "moved == 0"
+        );
 
         let size_changed = scored(false, false, 3, 1, 0);
         assert!(Class::PartialSizeChanged.matches(size_changed));
-        assert!(!Class::PartialSameOffset.matches(size_changed), "size differs");
-        assert!(!Class::PartialMovedOffset.matches(size_changed), "moved == 0");
+        assert!(
+            !Class::PartialSameOffset.matches(size_changed),
+            "size differs"
+        );
+        assert!(
+            !Class::PartialMovedOffset.matches(size_changed),
+            "moved == 0"
+        );
 
         let moved = scored(false, true, 3, 1, 1);
         assert!(Class::PartialMovedOffset.matches(moved));
@@ -326,7 +346,10 @@ mod tests {
             Class::PartialMovedOffset,
             Class::PartialSizeChanged,
         ] {
-            assert!(!c.matches(all_reused), "{c} must not take reused == nchunks");
+            assert!(
+                !c.matches(all_reused),
+                "{c} must not take reused == nchunks"
+            );
         }
         assert!(Class::FullReuseReordered.matches(all_reused));
     }
@@ -348,10 +371,7 @@ mod tests {
     /// every file in the game.
     #[test]
     fn a_one_sided_path_is_exactly_one_class() {
-        assert_eq!(
-            Class::all_satisfied_by(Shape::Added),
-            vec![Class::Added]
-        );
+        assert_eq!(Class::all_satisfied_by(Shape::Added), vec![Class::Added]);
         assert_eq!(
             Class::all_satisfied_by(Shape::Removed),
             vec![Class::Removed]
@@ -363,7 +383,11 @@ mod tests {
     #[test]
     fn an_empty_changed_file_matches_nothing_and_that_is_fine() {
         let empty = scored(false, true, 0, 0, 0);
-        assert!(Class::all_satisfied_by(empty).is_empty(), "{:?}", Class::all_satisfied_by(empty));
+        assert!(
+            Class::all_satisfied_by(empty).is_empty(),
+            "{:?}",
+            Class::all_satisfied_by(empty)
+        );
         // An empty *identical* file is still the skip branch.
         assert_eq!(
             Class::all_satisfied_by(scored(true, true, 0, 0, 0)),

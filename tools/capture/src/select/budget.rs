@@ -23,7 +23,10 @@ pub struct Budget {
 impl Budget {
     /// No ceiling.
     pub const fn unlimited() -> Self {
-        Budget { limit: None, spent: 0 }
+        Budget {
+            limit: None,
+            spent: 0,
+        }
     }
 
     /// A hard ceiling on `Σ total_cost`.
@@ -177,7 +180,11 @@ mod tests {
         let mut b = Budget::unlimited();
         b.charge(u64::MAX);
         b.charge(10);
-        assert_eq!(b.spent(), u64::MAX, "a budget must never wrap into a small number");
+        assert_eq!(
+            b.spent(),
+            u64::MAX,
+            "a budget must never wrap into a small number"
+        );
     }
 
     /// Smallest-first over the whole set, which is the rule the budget exists to
@@ -189,7 +196,12 @@ mod tests {
         let (fates, b) = admit_in_order(&costs, Budget::capped(120));
         assert_eq!(
             fates,
-            vec![Fate::Admitted, Fate::Admitted, Fate::Admitted, Fate::OverBudget]
+            vec![
+                Fate::Admitted,
+                Fate::Admitted,
+                Fate::Admitted,
+                Fate::OverBudget
+            ]
         );
         assert_eq!(b.spent(), 120);
         assert_eq!(total_admitted(&fates, &costs), 120);
@@ -203,7 +215,12 @@ mod tests {
         let (fates, b) = admit_in_order(&costs, Budget::capped(119));
         assert_eq!(
             fates,
-            vec![Fate::Admitted, Fate::Admitted, Fate::OverBudget, Fate::OverBudget]
+            vec![
+                Fate::Admitted,
+                Fate::Admitted,
+                Fate::OverBudget,
+                Fate::OverBudget
+            ]
         );
         assert_eq!(b.spent(), 100);
     }

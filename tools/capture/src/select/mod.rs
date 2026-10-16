@@ -226,7 +226,10 @@ impl MatrixRow {
     /// `over_budget` does **not** count: the caller was told to take it and the
     /// tool could not, which is exactly what `--require-class` turns into exit 4.
     pub fn is_satisfied(&self) -> bool {
-        matches!(self.status, MatrixStatus::Captured | MatrixStatus::CoveredBy)
+        matches!(
+            self.status,
+            MatrixStatus::Captured | MatrixStatus::CoveredBy
+        )
     }
 
     /// The unmet ones, for the refusal message.
@@ -445,10 +448,7 @@ pub fn select(
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     let mut notes: Vec<MatrixRow> = Vec::new();
     for class in Class::REQUIRED_ORDER {
-        let considered = pool
-            .iter()
-            .filter(|c| c.candidate.satisfies(class))
-            .count() as u64;
+        let considered = pool.iter().filter(|c| c.candidate.satisfies(class)).count() as u64;
 
         // Already answered by something captured for another reason?
         if let Some(cover) = admitted.iter().find(|a| a.satisfies(class)) {
@@ -470,7 +470,9 @@ pub fn select(
             let pick = pool.iter().find(|c| {
                 c.candidate.satisfies(class)
                     && !admitted.iter().any(|a| a.path == c.candidate.path)
-                    && !wants.iter().any(|(_, _, w)| w.candidate.path == c.candidate.path)
+                    && !wants
+                        .iter()
+                        .any(|(_, _, w)| w.candidate.path == c.candidate.path)
             });
             let Some(pick) = pick else { break };
             picked_any = true;
@@ -564,9 +566,9 @@ pub fn select(
             MatrixStatus::Unavailable => {}
             MatrixStatus::CoveredBy => {}
             MatrixStatus::Captured | MatrixStatus::OverBudget => {
-                let hit = admitted
-                    .iter()
-                    .find(|a| a.primary_class == row.class || a.also_satisfies.contains(&row.class));
+                let hit = admitted.iter().find(|a| {
+                    a.primary_class == row.class || a.also_satisfies.contains(&row.class)
+                });
                 match hit {
                     Some(a) => {
                         row.status = MatrixStatus::Captured;
@@ -627,8 +629,7 @@ fn unavailable_reason(class: Class, considered: u64) -> String {
 /// The note the matrix carries when a class has no candidate at all, so a reader
 /// can tell "this version pair does not have one" from "this tool looked
 /// somewhere it should not have".
-const REPOOL_NOTE: &str =
-    "widen --audio, or check the version pair — the spec records this class as \
+const REPOOL_NOTE: &str = "widen --audio, or check the version pair — the spec records this class as \
      absent for 7.0.0 -> 7.1.0";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
@@ -641,7 +642,11 @@ pub fn candidates_document(diffs: &[FieldDiff], pool: &[SizedCandidate]) -> serd
         .enumerate()
         .map(|(rank, (field, s))| {
             let all = Class::all_satisfied_by(Shape::from_row(
-                if s.same_md5 { State::Identical } else { State::Changed },
+                if s.same_md5 {
+                    State::Identical
+                } else {
+                    State::Changed
+                },
                 &s,
             ));
             serde_json::json!({
@@ -698,7 +703,13 @@ mod tests {
     ///
     /// * `(old_size, new_size)`
     /// * `(nchunks, reused, moved)`
-    fn scored(path: &str, cost: u64, size: (i64, i64), chunks: (u64, u64, u64), md5: bool) -> PathScore {
+    fn scored(
+        path: &str,
+        cost: u64,
+        size: (i64, i64),
+        chunks: (u64, u64, u64),
+        md5: bool,
+    ) -> PathScore {
         let (old_size, new_size) = size;
         let (nchunks, reused, moved) = chunks;
         PathScore {
@@ -717,7 +728,12 @@ mod tests {
     }
 
     fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
-        PathRow { path: path.into(), state, size, score: s }
+        PathRow {
+            path: path.into(),
+            state,
+            size,
+            score: s,
+        }
     }
 
     fn field(field: &str, rows: Vec<PathRow>) -> FieldDiff {
@@ -736,12 +752,54 @@ mod tests {
             "game",
             vec![
                 // identical, cheapest of all
-                row("a/identical", State::Identical, Some(scored("a/identical", 108, (54, 54), (1, 1, 0), true)), 54),
-                row("b/zero_single", State::Changed, Some(scored("b/zero_single", 84, (42, 42), (1, 0, 0), false)), 42),
-                row("c/zero_multi", State::Changed, Some(scored("c/zero_multi", 2_200, (1000, 1200), (3, 0, 0), false)), 1200),
-                row("d/same_offset", State::Changed, Some(scored("d/same_offset", 1_826_067, (2340264, 2340264), (3, 1, 0), false)), 2340264),
-                row("e/moved", State::Changed, Some(scored("e/moved", 300, (100, 100), (3, 1, 1), false)), 100),
-                row("f/size_changed", State::Changed, Some(scored("f/size_changed", 500, (100, 200), (2, 1, 0), false)), 200),
+                row(
+                    "a/identical",
+                    State::Identical,
+                    Some(scored("a/identical", 108, (54, 54), (1, 1, 0), true)),
+                    54,
+                ),
+                row(
+                    "b/zero_single",
+                    State::Changed,
+                    Some(scored("b/zero_single", 84, (42, 42), (1, 0, 0), false)),
+                    42,
+                ),
+                row(
+                    "c/zero_multi",
+                    State::Changed,
+                    Some(scored(
+                        "c/zero_multi",
+                        2_200,
+                        (1000, 1200),
+                        (3, 0, 0),
+                        false,
+                    )),
+                    1200,
+                ),
+                row(
+                    "d/same_offset",
+                    State::Changed,
+                    Some(scored(
+                        "d/same_offset",
+                        1_826_067,
+                        (2340264, 2340264),
+                        (3, 1, 0),
+                        false,
+                    )),
+                    2340264,
+                ),
+                row(
+                    "e/moved",
+                    State::Changed,
+                    Some(scored("e/moved", 300, (100, 100), (3, 1, 1), false)),
+                    100,
+                ),
+                row(
+                    "f/size_changed",
+                    State::Changed,
+                    Some(scored("f/size_changed", 500, (100, 200), (2, 1, 0), false)),
+                    200,
+                ),
                 row("g/added", State::Added, None, 114_000),
                 row("h/removed", State::Removed, None, 1_730_000),
             ],
@@ -753,10 +811,16 @@ mod tests {
         let pool = all_nine();
         assert_eq!(pool.len(), 8);
         let by_path = |p: &str| pool.iter().find(|c| c.candidate.path == p).unwrap();
-        assert_eq!(by_path("a/identical").candidate.classes, vec![Class::Identical]);
+        assert_eq!(
+            by_path("a/identical").candidate.classes,
+            vec![Class::Identical]
+        );
         assert_eq!(by_path("g/added").candidate.classes, vec![Class::Added]);
         assert_eq!(by_path("h/removed").candidate.classes, vec![Class::Removed]);
-        assert_eq!(by_path("b/zero_single").candidate.classes, vec![Class::ZeroReuseSingle]);
+        assert_eq!(
+            by_path("b/zero_single").candidate.classes,
+            vec![Class::ZeroReuseSingle]
+        );
     }
 
     /// `removed` has no new side and `added` has to be fetched whole. Charging
@@ -765,8 +829,14 @@ mod tests {
     fn a_one_sided_path_is_charged_its_own_size() {
         let pool = all_nine();
         let g = pool.iter().find(|c| c.candidate.path == "g/added").unwrap();
-        let h = pool.iter().find(|c| c.candidate.path == "h/removed").unwrap();
-        let d = pool.iter().find(|c| c.candidate.path == "d/same_offset").unwrap();
+        let h = pool
+            .iter()
+            .find(|c| c.candidate.path == "h/removed")
+            .unwrap();
+        let d = pool
+            .iter()
+            .find(|c| c.candidate.path == "d/same_offset")
+            .unwrap();
         assert_eq!(g.budget_cost(), 114_000);
         assert_eq!(h.budget_cost(), 1_730_000);
         assert_eq!(d.budget_cost(), 1_826_067, "a common path is old + new");
@@ -809,7 +879,10 @@ mod tests {
             ]
         );
         assert_eq!(s.admitted.len(), 8);
-        assert!(s.unmet().contains(&Class::FullReuseReordered), "and it has no candidate");
+        assert!(
+            s.unmet().contains(&Class::FullReuseReordered),
+            "and it has no candidate"
+        );
     }
 
     /// Each class gets its own cheapest because the predicates are disjoint, and
@@ -817,19 +890,27 @@ mod tests {
     #[test]
     fn an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count() {
         let s = select(&all_nine(), 1, Budget::unlimited(), &[]);
-        let row = s.matrix.iter().find(|r| r.class == Class::FullReuseReordered).unwrap();
+        let row = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::FullReuseReordered)
+            .unwrap();
         assert_eq!(row.status, MatrixStatus::Unavailable);
         assert_eq!(row.candidates_considered, 0);
         let reason = row.reason.clone().unwrap();
         assert!(reason.contains("full_reuse_reordered"), "{reason}");
         assert!(reason.contains("--audio"), "the remedy: {reason}");
-        assert!(!s.matrix.iter().any(|r| r.capture_id.is_none() && r.status == MatrixStatus::Captured));
+        assert!(
+            !s.matrix
+                .iter()
+                .any(|r| r.capture_id.is_none() && r.status == MatrixStatus::Captured)
+        );
     }
 
     /// A forced capture answers its class *without* having been selected for it —
-/// which is `covered_by`, and it is satisfied either way. What matters is that
-/// the file is captured once, not once per class it happens to answer.
-#[test]
+    /// which is `covered_by`, and it is satisfied either way. What matters is that
+    /// the file is captured once, not once per class it happens to answer.
+    #[test]
     fn a_class_with_candidates_already_captured_is_covered_by_not_recaptured() {
         // One file that satisfies two classes.
         let pool = candidates(&[field(
@@ -843,7 +924,11 @@ mod tests {
         )]);
         let s = select(&pool, 1, Budget::unlimited(), &["x/both".into()]);
         assert_eq!(s.admitted.len(), 1, "forced once, not twice");
-        let same = s.matrix.iter().find(|r| r.class == Class::PartialSameOffset).unwrap();
+        let same = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::PartialSameOffset)
+            .unwrap();
         assert_eq!(same.status, MatrixStatus::CoveredBy);
         assert_eq!(same.covered_by.as_deref(), Some("x/both"));
         assert!(same.is_satisfied(), "covered counts: the capture exists");
@@ -859,9 +944,24 @@ mod tests {
         let pool = candidates(&[field(
             "game",
             vec![
-                row("x/a", State::Changed, Some(scored("x/a", 200, (100, 100), (3, 1, 0), false)), 100),
-                row("x/b", State::Changed, Some(scored("x/b", 400, (100, 100), (3, 2, 0), false)), 200),
-                row("x/c", State::Changed, Some(scored("x/b", 400, (100, 100), (3, 2, 0), false)), 300),
+                row(
+                    "x/a",
+                    State::Changed,
+                    Some(scored("x/a", 200, (100, 100), (3, 1, 0), false)),
+                    100,
+                ),
+                row(
+                    "x/b",
+                    State::Changed,
+                    Some(scored("x/b", 400, (100, 100), (3, 2, 0), false)),
+                    200,
+                ),
+                row(
+                    "x/c",
+                    State::Changed,
+                    Some(scored("x/b", 400, (100, 100), (3, 2, 0), false)),
+                    300,
+                ),
             ],
         )]);
         let s = select(&pool, 2, Budget::unlimited(), &[]);
@@ -871,17 +971,22 @@ mod tests {
             .filter(|a| a.primary_class == Class::PartialSameOffset)
             .map(|a| a.path.as_str())
             .collect();
-        assert_eq!(for_class, vec!["x/a", "x/b"], "cheapest first, then the next");
-        assert!(s.admitted.iter().any(|a| a.capture_id.contains('+')), "the second is `class+n`");
+        assert_eq!(
+            for_class,
+            vec!["x/a", "x/b"],
+            "cheapest first, then the next"
+        );
+        assert!(
+            s.admitted.iter().any(|a| a.capture_id.contains('+')),
+            "the second is `class+n`"
+        );
     }
 
     /// A tight ceiling plus `--per-class 2` is the acceptance case: one fits,
     /// the second is recorded as over budget rather than dropped.
     #[test]
     fn per_class_two_under_a_tight_ceiling_tags_the_second_over_budget() {
-        let mk = |p: &str, size: i64| {
-            row(p, State::Added, None, size)
-        };
+        let mk = |p: &str, size: i64| row(p, State::Added, None, size);
         let pool = candidates(&[field(
             "game",
             vec![mk("x/a", 100), mk("x/b", 500), mk("x/c", 900)],
@@ -890,7 +995,13 @@ mod tests {
         let s = select(&pool, 3, Budget::capped(600), &[]);
         let row = s.matrix.iter().find(|r| r.class == Class::Added).unwrap();
         assert_eq!(row.status, MatrixStatus::Captured);
-        assert_eq!(s.admitted.iter().filter(|a| a.primary_class == Class::Added).count(), 2);
+        assert_eq!(
+            s.admitted
+                .iter()
+                .filter(|a| a.primary_class == Class::Added)
+                .count(),
+            2
+        );
         assert_eq!(s.bytes_admitted, 600);
     }
 
@@ -906,7 +1017,11 @@ mod tests {
         let s = select(&pool, 1, Budget::capped(50), &[]);
         let row = s.matrix.iter().find(|r| r.class == Class::Added).unwrap();
         assert_eq!(row.status, MatrixStatus::OverBudget);
-        assert!(row.reason.as_deref().unwrap_or("").contains("100"), "names the cost: {:?}", row.reason);
+        assert!(
+            row.reason.as_deref().unwrap_or("").contains("100"),
+            "names the cost: {:?}",
+            row.reason
+        );
         // And over-budget is *not* satisfied, which is what --require-class acts on.
         assert!(row.unsatisfied());
         assert!(!row.is_satisfied());
@@ -935,11 +1050,20 @@ mod tests {
     fn unmet_reports_over_budget_and_unavailable_but_not_covered_by() {
         let pool = candidates(&[field(
             "game",
-            vec![row("x/a", State::Changed, Some(scored("x/a", 200, (100, 100), (3, 1, 0), false)), 100)],
+            vec![row(
+                "x/a",
+                State::Changed,
+                Some(scored("x/a", 200, (100, 100), (3, 1, 0), false)),
+                100,
+            )],
         )]);
         let s = select(&pool, 1, Budget::unlimited(), &["x/a".into()]);
         assert_eq!(s.paths(), vec!["x/a"], "the forced one is the only capture");
-        let covered = s.matrix.iter().find(|r| r.class == Class::PartialSameOffset).unwrap();
+        let covered = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::PartialSameOffset)
+            .unwrap();
         assert_eq!(covered.status, MatrixStatus::CoveredBy);
         assert!(
             !s.unmet().contains(&Class::PartialSameOffset),
@@ -984,7 +1108,12 @@ mod tests {
 
     #[test]
     fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
-        let s = select(&all_nine(), 1, Budget::unlimited(), &["nope/not/in/manifest".into()]);
+        let s = select(
+            &all_nine(),
+            1,
+            Budget::unlimited(),
+            &["nope/not/in/manifest".into()],
+        );
         // A path the manifests do not carry is skipped, not fatal: the caller
         // may be naming a file for a future version. The matrix is still
         // complete, because a phantom path says nothing about which classes the
@@ -998,8 +1127,18 @@ mod tests {
         let diffs = [field(
             "game",
             vec![
-                row("a", State::Changed, Some(scored("a", 20, (10, 10), (3, 1, 0), false)), 10),
-                row("b", State::Changed, Some(scored("b", 40, (20, 20), (1, 0, 0), false)), 20),
+                row(
+                    "a",
+                    State::Changed,
+                    Some(scored("a", 20, (10, 10), (3, 1, 0), false)),
+                    10,
+                ),
+                row(
+                    "b",
+                    State::Changed,
+                    Some(scored("b", 40, (20, 20), (1, 0, 0), false)),
+                    20,
+                ),
             ],
         )];
         let pool = candidates(&diffs);
@@ -1007,7 +1146,13 @@ mod tests {
         assert_eq!(doc["schema_version"], 1);
         let cols = doc["columns"].as_array().unwrap();
         for c in [
-            "path", "reused", "moved", "patch_bytes", "total_cost", "classes", "rank",
+            "path",
+            "reused",
+            "moved",
+            "patch_bytes",
+            "total_cost",
+            "classes",
+            "rank",
         ] {
             assert!(cols.iter().any(|x| x == c), "missing {c}");
         }
