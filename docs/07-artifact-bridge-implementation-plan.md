@@ -477,3 +477,36 @@ leaving the contract itself as written.
 17 bridge cases reported ignored. `cargo clippy --all-targets` and
 `cargo fmt --check` clean. `gircap verify` 90/90 exit `0` throughout: the bundle
 was never written.
+
+### M5 — closing the audit
+
+A pass back through `docs/06` against what actually shipped turned up one gap
+and one thing that was already covered elsewhere.
+
+**The gap: Gate 2's discovery primitive.** §0 of this file says the resolution
+order is `GIRPR_ARTIFACT_BUNDLE` → `gircap list --root artifacts` → print the
+reason. The implementation did the first and the third and quietly replaced the
+second with a directory scan — which works, but is not what the plan claims and
+not what §3 names ("the primitive for this already exists"). It is now
+`gircap_list` first, with the scan as the fallback when `gircap` is not built,
+and `discovery_agrees_whether_it_asks_gircap_or_scans` asserts the two name the
+same bundles in the same order. Without that assertion a bundle could be found
+by one mechanism and missed by the other, and which one ran would depend on
+whether a sibling workspace member happened to be compiled.
+
+**Not a gap: §4.4.3's "a 404 is asked once, with no backoff."** That is already
+pinned, and pinned better than the bridge could:
+`tests/repair_offline.rs::a_404_is_asked_once_where_a_500_is_asked_five_times`
+counts the requests from the origin's side of the wire — 1 for a 404 against
+`ATTEMPTS` (5) for a 500, with a wall-clock ceiling on each. Duplicating it here
+would have been a second, weaker copy. What the bridge contributes is the
+*honest* 404 that makes the cheap branch reachable at all.
+
+**The file was also reordered.** The M1 cases had drifted to the bottom of the
+file, under M4's banner, because the driver section was written into the M1
+banner's place. The sections now read M1 → M2 → M3 → M4, which is the order the
+milestones landed in.
+
+Eighteen cases, and the same four numbers as M4: `cargo test` 82 + 6 + 53 with
+the 18 bridge cases ignored; `gircap verify` 90/90 exit `0`; clippy and fmt
+clean; no scratch directories left behind.
