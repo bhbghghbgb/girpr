@@ -12,7 +12,7 @@
 //!
 //! The whole phase is skipped in read-only modes and whenever any file failed.
 //! The deprecated list itself is **not** fetched here — it arrives as an
-//! argument, having been read during the plan phase (docs/05 M0).
+//! argument, having been read during the plan phase.
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -35,12 +35,10 @@ use super::scope::PathScope;
 /// `deprecated` is the server's deprecated-file list, already fetched (and
 /// already possibly empty, if the call failed) during the plan phase.
 ///
-/// **This phase owns its own `--dry-run` discipline.** It used to rely on
-/// `repair::run` reaching it only through `if !readonly`, and `--purge-only`
-/// added a second call site that is not behind that gate — so
-/// `--purge-only --dry-run` deleted files, renamed the audio cache and swept
-/// the cleanup for real. A gate that every caller has to remember is not a
-/// gate; each destructive step below therefore consults `ctx.dry_run` itself.
+/// **This phase owns its own `--dry-run` discipline.** `repair::run` does not
+/// reach it only through `if !readonly` — `--purge-only` is a second call site —
+/// and a gate every caller has to remember is not a gate. Each destructive step
+/// below therefore consults `ctx.dry_run` itself.
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
@@ -74,12 +72,12 @@ pub async fn run(
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
     }
-    // docs/04 §2.2: `config.ini` is bumped last so the on-disk version only
+    // `config.ini` is bumped last so the on-disk version only
     // advances once the bytes are in place. Two situations make that premise
     // false by construction — the bytes were deliberately *not* put in place:
     //
-    // - an active path scope (M2): the run only repaired a subset of the tree,
-    // - `--purge-only` (M6): a cleanup put no bytes in place at all.
+    // - an active path scope: the run only repaired a subset of the tree,
+    // - `--purge-only`: a cleanup put no bytes in place at all.
     //
     // Bumping would be exactly the launcher desync the ordering exists to
     // prevent. Skip it, say so, and let `SUMMARY` carry `config_bumped=0` so a
@@ -163,7 +161,7 @@ fn delete_deprecated(
 ///
 /// A scoped run does not relocate audio: a file whose source or destination is
 /// outside the scope is left alone, since moving it is a mutation of a path the
-/// scope may not have admitted (docs/04 §2).
+/// scope may not have admitted.
 ///
 /// `dry_run` logs the move and does none of it.
 fn move_audio_cache(

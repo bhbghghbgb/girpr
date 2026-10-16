@@ -5,11 +5,10 @@
 //! set-difference of the files on disk against the live manifest, the same idea
 //! as Collapse's `GetUnusedFileInfoList`.
 //!
-//! The walk and the delete are **separate calls** (docs/05 M0), so the whole
+//! The walk and the delete are **separate calls**, so the whole
 //! decision — which files, which directories, how many bytes — exists before
 //! anything is deleted. That is what makes "how much would this purge delete?"
-//! answerable (`--max-delete-bytes`, docs/04 B4) and printable (`--print-plan`,
-//! docs/04 C1). Nothing else about the cleanup changed.
+//! answerable (`--max-delete-bytes`) and printable (`--print-plan`).
 //!
 //! The keep rules are a pure function ([`classify_purge_path`]) so they can be
 //! unit-tested exhaustively without touching a filesystem.
@@ -33,7 +32,7 @@ pub struct PurgeCandidate {
     pub bytes: u64,
 }
 
-/// The complete, unexecuted files-cleanup decision (docs/05 M0).
+/// The complete, unexecuted files-cleanup decision.
 ///
 /// Built by `plan_purge`, consumed by `apply_purge`. Everything the run will
 /// delete is here before the first byte is deleted.
@@ -46,7 +45,8 @@ pub struct PurgePlan {
     /// `files` summed — the number a delete-bytes ceiling is checked against.
     pub total_bytes: u64,
     /// On-disk files kept **only** because the path scope hides them. Zero on
-    /// an unflagged run; the A1 guard-3 warn is driven off this.
+    /// an unflagged run; the "scope and a purge flag agree" warn is driven off
+    /// this.
     pub hidden: u64,
 }
 
@@ -125,10 +125,10 @@ pub fn plan_purge(
         .collect();
     dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
     let total_bytes = files.iter().map(|c| c.bytes).sum();
-    // docs/04 A1 guard 3: the scope and a purge flag agreeing is correct, but
-    // it should be visible. `plan_purge` runs once per purge pass, so a run
-    // with both `--purge-before` and `--purge-after` says this twice — one line
-    // per decision, which is what actually happened.
+    // The scope and a purge flag agreeing is correct, but it should be
+    // visible. `plan_purge` runs once per purge pass, so a run with both
+    // `--purge-before` and `--purge-after` says this twice — one line per
+    // decision, which is what actually happened.
     if hidden > 0 {
         tracing::warn!(
             "{hidden} on-disk paths are outside the active --include/--exclude scope and will not be deleted"
@@ -186,10 +186,10 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
     Ok(deleted_bytes)
 }
 
-/// Remove the directories the purge emptied, deepest first. The set is already
-/// derived from the walk ([`PurgePlan::dirs`]), so this no longer re-walks; only
-/// the `remove_dir` calls remain, which still fail harmlessly if something
-/// appeared since the plan was built. `game_dir` is never in the set.
+/// Remove the directories the purge emptied, deepest first. The set comes from
+/// the walk ([`PurgePlan::dirs`]), so no second walk is needed; the `remove_dir`
+/// calls still fail harmlessly if something appeared since the plan was built.
+/// `game_dir` is never in the set.
 fn remove_emptied_dirs(dirs: &[PathBuf]) {
     for d in dirs {
         let _ = std::fs::remove_dir(d);
@@ -238,7 +238,7 @@ pub enum PurgeVerdict {
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
 /// Rule order matters (first match wins); each rule names its provenance:
-/// 0. **Path scope** (docs/04 §2): a path outside `--include`/`--exclude`
+/// 0. **Path scope**: a path outside `--include`/`--exclude`
 ///    does not exist, so it is kept — *before* the manifest check, not after.
 ///    Order is load-bearing: `plan.expected_paths()` is the only
 ///    manifest-derived input to the keep set, so a scope applied anywhere but
@@ -411,7 +411,7 @@ mod tests {
         }
     }
 
-    /// The load-bearing case of docs/04 §2: a path the scope hides must be
+    /// The load-bearing case of the scope rule above: a path the scope hides must be
     /// `Keep` **whatever** the other rules would say — a manifest path, a plain
     /// orphan, a temp, and an audio bookkeeping file alike.
     #[test]
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(rels, vec!["a.dat", "b.dat"], "sorted by path");
         assert_eq!(pp.total_bytes, 8);
         assert_eq!(pp.hidden, 0, "an open scope hides nothing");
-        // Planning alone mutates nothing (M0's whole point).
+        // Planning alone mutates nothing.
         assert!(dir.join("a.dat").exists());
         assert!(dir.join("b.dat").exists());
         std::fs::remove_dir_all(&dir).ok();

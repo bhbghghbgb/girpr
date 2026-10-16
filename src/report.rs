@@ -6,10 +6,9 @@
 //! prints `{"event":"report","total":…}` from the same field list, so the two
 //! planes cannot drift the way two independent `format!`s can.
 //!
-//! That drift was real: `--json-summary` used to make only `REPORT` and
-//! `SUMMARY` JSON, `PLAN` was text on every plane with a JSON twin bolted on
-//! beside it, and `scoped` was a boolean in one object and an integer in the
-//! other. One record per line, rendered once, is what removes the possibility.
+//! One record per line, rendered once, is what removes the possibility of a
+//! record that is text on one plane and a differently-typed JSON object on the
+//! other.
 //!
 //! Records reach stdout *and* the log, so a caller that captures either stream
 //! sees the same `REPORT` / `PROGRESS` / `PLAN` / `SUMMARY` sequence. Building
@@ -63,10 +62,9 @@ impl std::fmt::Display for OutputFormat {
 ///
 /// **Two variants, not three.** There is no boolean: every flag-shaped fact in
 /// the contract is a `1`/`0` integer (`scoped=1`, `config_bumped=0`,
-/// `limited=1`), and the one field that used to disagree — `scoped`, a JSON
-/// `true` on the `PLAN` object and a `1` on the `SUMMARY` object — is normalised
-/// to the integer because `SUMMARY` is the documented shape. Leaving `Bool` out
-/// is what stops the collision from being reintroduced.
+/// `limited=1`), with `SUMMARY` the documented shape. Leaving `Bool` out is what
+/// stops a `true`-in-one-object / `1`-in-the-other collision from being
+/// reintroduced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Val {
     Str(String),
@@ -326,7 +324,8 @@ impl Summary {
     }
 }
 
-/// The **conditional** `SUMMARY` keys (docs/04 §4.6).
+/// The **conditional** `SUMMARY` keys — see
+/// [`docs/04-scope-limitation-spec.md`](../docs/04-scope-limitation-spec.md).
 ///
 /// Every one is emitted *only* when its flag is active — the same discipline
 /// `girsync` used for `identical=N`: an unflagged run's output is byte-identical
@@ -407,8 +406,8 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if f.scoped || f.config_bumped_zero {
         // A scoped (or `--purge-only`) run deliberately did not put the bytes
-        // in place, so it does not advance config.ini (docs/04 §2.2). Emitted
-        // as a key rather than left to be discovered by reading the file.
+        // in place, so it does not advance config.ini. Emitted as a key
+        // rather than left to be discovered by reading the file.
         out.push(Extra::Num("config_bumped", 0));
     }
     if f.limited || f.scoped {
@@ -525,8 +524,8 @@ pub fn report_record(
 
 /// The final `SUMMARY`, ending every run.
 ///
-/// Trailing conditional keys (docs/04 §4.6: `limited`, `scoped`,
-/// `config_bumped`, `plan_files`, …) are appended only when their flag is
+/// Trailing conditional keys (`limited`, `scoped`, `config_bumped`,
+/// `plan_files`, …) are appended only when their flag is
 /// active, so an unflagged run's line is byte-identical to a run that passes no
 /// flags at all.
 pub fn summary_record(sum: &Summary, exit: i32) -> Record {
@@ -595,9 +594,9 @@ mod tests {
             rec.text(),
             "PROGRESS done=6 total=10 skipped=3 repaired=2 failed=1 download_bytes=123"
         );
-        // `done` and `total` are two numbers on both planes. They used to be
-        // one text field printed as `6/10`, which cannot be a JSON number —
-        // that is why they are separate fields rather than one pre-joined one.
+        // `done` and `total` are two numbers on both planes. They are separate
+        // fields rather than one pre-joined `6/10` string, because a pre-joined
+        // string cannot be a JSON number.
         let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
         assert_eq!(v["event"], "progress");
         assert_eq!(v["done"], 6);

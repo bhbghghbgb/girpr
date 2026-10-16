@@ -15,16 +15,16 @@
 //!
 //! `audio` owns the audio scan-file format used by `metadata` and `post`.
 //!
-//! Since docs/05 M0 the run has two halves:
+//! The run has two halves:
 //!
 //! **Plan** — metadata → `REPORT` → manifests → `plan::build_plan` → the
-//! server's deprecated list. Nothing on disk has been touched at the end of
-//! this half, so every decision the run will act on is already made and
-//! inspectable.
+//! purge plan → the server's deprecated list. Nothing on disk has been touched
+//! at the end of this half, so every decision the run will act on is already
+//! made and inspectable. That is what lets the scope-of-work ceilings refuse
+//! *before* any of it runs.
 //!
 //! **Execute** — `create_dir_all` → `--purge-before` → `--check-only` → the
-//! repair loop → the post-phase. Every write and delete lives here, which is
-//! what lets the scope-of-work ceilings refuse *before* any of it runs.
+//! repair loop → the post-phase. Every write and delete lives here.
 //!
 //! Phase order overall:
 //! 1. prepare `game_dir` (create when missing, unless read-only),
@@ -72,11 +72,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only.
     let readonly = ctx.readonly();
-    // NOTE: `game_dir` is NOT created here. M0 moved `create_dir_all` into the
+    // NOTE: `game_dir` is NOT created here. `create_dir_all` lives in the
     // execution phase so a run that refuses before doing any work leaves no
-    // directory behind (docs/05 M0 step 3 — the one documented behavior
-    // change of that milestone). Reads tolerate a missing dir, so the plan
-    // phase can proceed against it.
+    // directory behind. Reads tolerate a missing dir, so the plan phase can
+    // proceed against it.
     let game_dir = ctx
         .game_dir
         .canonicalize()
@@ -170,18 +169,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
-    // exists to remove. Exit 1 (a property of the request), not 5 (the answer
-    // was too big) — see docs/04 §7.2.1.
+    // exists to remove. Exit `1` — a property of the request — rather than `5`,
+    // which means the request was well-formed and the answer was too big.
     //
     // "Nothing at all" spans both plans, which is why this sits after 4.1. An
     // empty *repair* plan on its own is not a typo: a path that is on disk but
     // absent from the new manifest — the ordinary "removed upstream" case, and
     // `gircap`'s `removed` capture — is in no repair plan by construction, and
     // `--purge-only --include <that path>` is precisely the request that deletes
-    // it. Refusing on the repair plan alone made the one thing `--purge-only`
-    // exists for unreachable. (This also means a new `--include` on a
-    // `--print-plan` run reports `files=0 purge_files=1` instead of erroring,
-    // which is what "print the plan" should do.)
+    // it. (This also means a new `--include` on a `--print-plan` run reports
+    // `files=0 purge_files=1` instead of erroring, which is what "print the
+    // plan" should do.)
     let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
     if scope.has_includes() && plan.files.is_empty() && purge_candidates == 0 {
         // Say which of the two plans came back empty: the diagnosis differs, and
@@ -203,15 +201,14 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         return Err(RunFailure::usage(anyhow::anyhow!("{message}")));
     }
 
-    // 4.3 the server's deprecated-file list, fetched here rather than lazily in
-    // the post-phase: it is part of what the run will act on, so it belongs with
-    // the rest of the plan. Still best-effort (the list is advisory).
+    // 4.3 the server's deprecated-file list, fetched here rather than in the
+    // post-phase: it is part of what the run will act on, so it belongs with the
+    // rest of the plan. Still best-effort (the list is advisory).
     //
-    // Read-only modes skip it: the post-phase is the only consumer, and before
-    // M0 the call lived inside it — so `--dry-run`, `--check-only` and
-    // `--print-plan` issued **zero** `getGameDeprecatedFileConfigs` requests.
-    // Fetching it unconditionally would add a network round-trip to every
-    // read-only run and then throw the answer away. (`--print-plan` is not
+    // Read-only modes skip it. The post-phase is its only consumer, and a
+    // read-only run never reaches the post-phase, so issuing the request would
+    // add a network round-trip to every `--dry-run`, `--check-only` and
+    // `--print-plan` run and then throw the answer away. (`--print-plan` is not
     // covered by `readonly()` — it leaves by an early return — hence the
     // explicit disjunct.)
     //
@@ -227,9 +224,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // === assert: the ceilings, before anything is mutated ===
     //
-    // Filter → assert → work, in that order (docs/04 §4.1). Checking the
-    // ceilings *after* the scope filter is what makes them usable at all:
-    // before filtering, `--max-files 8` would refuse on every real install.
+    // Filter → assert → work, in that order. Checking the ceilings
+    // *after* the scope filter is what makes them usable at all: before
+    // filtering, `--max-files 8` would refuse on every real install.
     //
     // The download estimate is `Σ compressed_size` over the chunks the local
     // reuse map cannot supply. It is exactly `gircap`'s `patch_fetch` formula,
@@ -256,7 +253,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         }
         // Exit `5`, returned rather than raised: it is "the run failed", not
         // "the run was misconfigured", and routing it through the normal return
-        // gives every exit path one uniform SUMMARY tail (docs/04 §7.3.1).
+        // gives every exit path one uniform SUMMARY tail.
         // Nothing has been written at this point — no directory created, no
         // `_tmp` opened, no file deleted, no `config.ini` touched.
         return Ok((summary, 5));
@@ -276,10 +273,8 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             est_download_bytes,
             scope.is_active(),
         );
-        // One `PLAN` record, rendered once. The old shape printed the text line
-        // and then, under `--json-summary`, a *second* line carrying the same
-        // numbers — so the JSON stream was not JSON, and a consumer reading it
-        // got an object per plan that was not an object per event.
+        // One `PLAN` record, rendered once, so the JSON plane carries one
+        // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
@@ -293,7 +288,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // === execution phase: everything below may touch the disk ===
 
     // 5. prepare `game_dir` (create when missing, unless read-only). Deferred
-    // from the top of the run on purpose — see the note above.
+    // from the top of the run so a refusal above creates nothing.
     if !readonly {
         std::fs::create_dir_all(&ctx.game_dir)
             .context("create game dir")
@@ -326,13 +321,12 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 
-    // 5.6 purge-only: `check_only` inverted — phases 1–5 and 7, skipping 6.
+    // 5.6 purge-only: `check_only` inverted — every phase but the repair loop.
     // One early return, beside the `--check-only` one. It **implies** the
     // cleanup (a flag that cleaned up nothing would be a lie), and
     // `config.ini` is **not** bumped: a cleanup does not put the bytes in
-    // place, so claiming the newer version would be the same launcher desync
-    // docs/04 §2.2 describes, and on an already-current install it is a no-op
-    // anyway.
+    // place, so claiming the newer version would desync the launcher the same way
+    // a scoped run does, and on an already-current install it is a no-op anyway.
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");

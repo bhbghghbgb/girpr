@@ -684,15 +684,14 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    client-side log line describes.
 
    The procedure below reads assertion 3 out of `<exe-dir>/logs/girpr_<ts>.log`
-   at `--log-level trace` instead, and that is its **predecessor** — it is what
-   was done when this fixture was first patched, and it stays here because it is
-   what a reader with no shim has to fall back on. Its own caveat is the reason
-   the server log is better: **a reused chunk is logged too**, as
-   `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the
-   id reports a violation on a perfectly correct reuse — which is how the first
-   attempt at this check failed, on 19 chunks that were never downloaded. Match
-   on the *download* record, never on the bare id: `chunk downloaded chunk=<id>`
-   and `no local reuse candidate -> download chunk=<id>`.
+   at `--log-level trace` instead, and that is the fallback for a reader with no
+   shim. Its own caveat is the reason the server log is better: **a reused chunk
+   is logged too**, as `reuse slice md5 ok -> copy chunk=<id>`, so a naive
+   substring search for the id reports a violation on a perfectly correct reuse —
+   which is how a first attempt at this check failed, on 19 chunks that were never
+   downloaded. Match on the *download* record, never on the bare id:
+   `chunk downloaded chunk=<id>` and
+   `no local reuse candidate -> download chunk=<id>`.
 
    `local_manifest=ok` is assertion 4's teeth. Without it a run whose local
    manifest failed to load still exits `0` with a plausible byte count, having
@@ -701,14 +700,13 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    Assertion 4's tree diff is the only thing that proves the scope held across
    the whole filesystem rather than just the repair plan.
 
-5. **Cleanup flags are safe under a scope, and that is a change.** Do **not** pass
-   `--purge-after` / `--purge-before` for a repair run anyway — there is nothing
-   to delete, and a run that deletes something is a run whose evidence you now
-   have to reason about. But the *reason* the old runbook gave for avoiding them
-   no longer holds: `plan::purge::classify_purge_path` tests the scope first and
+5. **Do not pass `--purge-after` / `--purge-before` for a repair run anyway.**
+   There is nothing to delete under a one-path scope, and a run that deletes
+   something is a run whose evidence you then have to reason about. Passing them
+   is not *unsafe* — `plan::purge::classify_purge_path` tests the scope first and
    returns `Keep` for anything not visible, so a scoped cleanup cannot reach the
-   rest of the fixture. `purge_files=0` in the `PLAN` line above is the direct
-   evidence.
+   rest of the fixture — but `purge_files=0` in the `PLAN` line above is the
+   direct evidence that the cleanup had nothing to do.
 
 **Result, all eight, exit `0`:**
 

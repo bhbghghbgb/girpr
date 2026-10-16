@@ -1,5 +1,4 @@
-//! The runtime ledger: the live counters the mid-flight hard stops read
-//! (docs/04 Group B, "runtime hard stop").
+//! The runtime ledger: the live counters the mid-flight hard stops read.
 //!
 //! A pre-flight refusal asks *"is this plan too big?"* — answerable before any
 //! work starts. A runtime hard stop asks *"has this run already done too much?"*

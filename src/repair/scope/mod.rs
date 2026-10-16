@@ -1,7 +1,8 @@
-//! Scope of work: *which paths exist* and *how much work* (docs/04).
+//! Scope of work: *which paths exist* and *how much work*. See
+//! [`docs/04-scope-limitation-spec.md`](../../../../docs/04-scope-limitation-spec.md).
 //!
 //! Two tiers, deliberately separate because they answer different questions
-//! and fail differently (docs/04 §1.4):
+//! and fail differently:
 //!
 //! | tier | module | question | failure if wrong |
 //! |---|---|---|---|
@@ -11,11 +12,11 @@
 //! The ceilings are worthless without the selector being right most of the
 //! time, and the selector is worthless without a backstop — so both live here.
 //!
-//! The load-bearing invariant, from girsync and docs/04 §2: **a filtered-out
-//! path is treated as nonexistent on *both* sides** — it is absent from the
-//! plan *and* invisible to the files-cleanup. Narrowing the plan alone would
-//! leave the purge with a *narrower* keep-set than an unfiltered run, which is
-//! the worst possible outcome.
+//! The load-bearing invariant, from girsync: **a filtered-out path is treated
+//! as nonexistent on *both* sides** — it is absent from the plan *and* invisible
+//! to the files-cleanup. Narrowing the plan alone would leave the purge with a
+//! *narrower* keep-set than an unfiltered run, which is the worst possible
+//! outcome.
 //!
 //! | module | concern |
 //! |---|---|

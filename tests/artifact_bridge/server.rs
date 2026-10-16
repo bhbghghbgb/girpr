@@ -11,10 +11,9 @@
 //! pointed at it with `--hyp-base` / `--sophon-base` and patch a scratch copy of
 //! the bundle's `game/` fixture.
 //!
-//! **Four listeners, one route family each** (`docs/06` §4 calls them "four
-//! families, six listeners"; the count that matters is that *manifests and
-//! chunks are on different ports*, which is what makes a crossed prefix
-//! impossible rather than merely unlikely):
+//! **Four listeners, one route family each.** The count that matters is that
+//! *manifests and chunks are on different ports*, which is what makes a crossed
+//! prefix impossible rather than merely unlikely (`docs/06` §4):
 //!
 //! | listener | request | served from |
 //! |---|---|---|
@@ -138,7 +137,7 @@ pub struct Capture {
     pub result_md5: String,
     /// `true` when the file must be **gone** afterwards.
     pub absent_after: bool,
-    /// Chunk ids that must never be requested (`docs/06` §6 assertion 3).
+    /// Chunk ids that must never be requested (`docs/06` §7 assertion 3).
     pub must_not_fetch: Vec<String>,
 }
 
@@ -176,7 +175,7 @@ impl MatrixClass {
 ///
 /// Nothing in this struct is a cache of a live server: every path points into
 /// the bundle, and every rule is derived from what the bundle recorded. The
-/// bridge never writes here — `docs/06` §6.4: the bundle is the *input*, a
+/// bridge never writes here — `docs/06` §6.3: the bundle is the *input*, a
 /// scratch copy is the working tree.
 #[derive(Clone, Debug)]
 pub struct Bundle {
@@ -297,7 +296,7 @@ fn read_capture(path: &Path) -> Capture {
     let ex = &v["expectations"];
     // `totals: null` is the `removed` class's shape: nothing to patch, so there
     // is no byte total to compare against and the capture is driven by the
-    // purge counters instead (`docs/06` §5.1).
+    // purge counters instead (`docs/06` §6.1).
     let download_bytes = v["totals"]["download_bytes"].as_u64();
     Capture {
         id: str_field(&v["capture_id"], path),
@@ -383,13 +382,13 @@ struct Served {
     shapes: Option<HashMap<String, Shape>>,
     /// `true` when the bundle predates the file and the not-found shapes are
     /// being synthesized rather than replayed. The bridge logs this rather than
-    /// passing the not-found assertions silently (`docs/06` §4.4.2).
+    /// passing the not-found assertions silently (`docs/06` §4.4).
     shapes_synthesized: bool,
     log: Mutex<Vec<Hit>>,
 }
 
 /// A measured failure shape, replayed verbatim except for the fields the
-/// document marks volatile (`docs/06` §4.4.1).
+/// document marks volatile (`docs/06` §4.4).
 struct Shape {
     status: u16,
     content_type: String,
@@ -679,7 +678,7 @@ impl Served {
     /// worst failure mode in `docs/06` §4.3, because it is **green**: the run
     /// falls back to an empty reuse map, downloads everything, and still exits
     /// `0`. That is why the driver asserts both the byte figure and
-    /// `local_manifest` (`docs/06` §6).
+    /// `local_manifest` (`docs/06` §7).
     fn build_response(&self, tag: Option<&str>) -> Response {
         let tag = tag.unwrap_or(&self.bundle.new_tag);
         let Some(body) = self.builds.get(tag) else {
@@ -725,7 +724,7 @@ impl Served {
     }
 
     /// Replay a recorded failure shape, synthesizing only the fields
-    /// `docs/06` §4.4.1 marks volatile: `RequestId`, `HostId` and `Key` (and
+    /// `docs/06` §4.4 marks volatile: `RequestId`, `HostId` and `Key` (and
     /// the body length that follows from `Key`). `girpr` calls
     /// `.error_for_status()` and never reads the body, so **status and
     /// content-type are the contract** and the body is fidelity, for a human
@@ -803,7 +802,7 @@ fn xml_escape(s: &str) -> String {
 /// given request replays identically on every run.
 ///
 /// The length matters as much as the alphabet: the recorded ids are 24
-/// characters (`6AD16DF4…`), and `docs/06` §4.4.1 says the *body length* is
+/// characters (`6AD16DF4…`), and `docs/06` §4.4 says the *body length* is
 /// volatile only "as follows from `Key`". A longer synthetic id would make the
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
@@ -858,7 +857,7 @@ fn last_two(path: &str) -> Option<(String, String)> {
 /// The cache is **outside the listeners and shared by all of them** — including
 /// across the eight per-capture bridges — because it holds bytes that are a
 /// function of the bundle alone, so nothing about per-capture isolation
-/// (`docs/06` §6.3) is lost by sharing it, and every capture pays the disk read
+/// (`docs/06` §6.2) is lost by sharing it, and every capture pays the disk read
 /// once instead of eight times.
 static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 

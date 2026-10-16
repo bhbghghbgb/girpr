@@ -1,9 +1,10 @@
-//! Resource ceilings (docs/04 Group B).
+//! Resource ceilings. See
+//! [`docs/04-scope-limitation-spec.md`](../../../../docs/04-scope-limitation-spec.md).
 //!
 //! **Every ceiling here is an enforcement bound, not a selector.** A run whose
 //! plan exceeds one *refuses before it does the work*. There is deliberately no
 //! admission: "take the first N" / "take the cheapest N" is a selection, not an
-//! enforcement, and it wants its own name ([`04` §1.5](04-scope-limitation-options.md)).
+//! enforcement, and it wants its own name.
 //!
 //! That reframing is what makes the two tiers complementary rather than
 //! redundant: `--include` **selects**, a ceiling **verifies the selection**. With
@@ -20,7 +21,7 @@
 //!
 //! Both produce exit `5`. Both are implemented here as pure predicates over a
 //! finished plan; the impure side (the ledger the runtime stops read) lives in
-//! [`ledger`](super::ledger) from M4/M6.
+//! [`ledger`](super::ledger).
 
 use crate::repair::plan::{PurgePlan, RepairPlan};
 
@@ -50,7 +51,7 @@ pub struct Limits {
     pub files: Option<u64>,
     /// `--max-download-bytes`: estimated chunk downloads for the plan.
     pub download_bytes: Option<u64>,
-    /// `--max-write-bytes`: cumulative bytes written into `*_tmp` (M6).
+    /// `--max-write-bytes`: cumulative bytes written into `*_tmp`.
     pub write_bytes: Option<u64>,
     /// `--max-delete-bytes`: bytes the files-cleanup would delete.
     pub delete_bytes: Option<u64>,
@@ -135,7 +136,7 @@ fn delete_hit(limit: u64, actual: u64) -> LimitHit {
 pub struct LimitHit {
     /// The flag as the user typed it, so the message is actionable.
     pub what: &'static str,
-    /// Metric name, from the `SUMMARY` vocabulary of docs/04 §4.6.
+    /// Metric name, from the `SUMMARY` vocabulary.
     pub key: &'static str,
     pub actual: u64,
     pub limit: u64,

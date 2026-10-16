@@ -46,7 +46,7 @@ pub enum Repaired {
     Repaired(ChunkStats),
     /// `--dry-run`: the file would be repaired, nothing was written.
     DryRun,
-    /// A runtime hard stop fired (docs/04 §4.3). The file was **not** failed and
+    /// A runtime hard stop fired. The file was **not** failed and
     /// **not** repaired: its `*_tmp` is left in place and the next run resumes
     /// from it (S3), which is what makes an aborted run a smaller run rather
     /// than a broken one. Not counted in any counter.
@@ -240,7 +240,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         match repair_attempt(ctx, file, &prefix, &tmp_path).await {
             Ok(stats) => return Ok(Repaired::Repaired(stats)),
             // The ceiling, not the file: this must not be counted as a
-            // failure and must not be retried (docs/04 §3 B2/B3).
+            // failure and must not be retried.
             Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
                 tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
                 return Ok(Repaired::Stopped);
@@ -274,10 +274,10 @@ async fn repair_attempt(
     let outcome = repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await;
     if outcome.is_err() {
         // This attempt is being abandoned, so the bytes it fetched are given
-        // back. That is what keeps `SUMMARY download_bytes` meaning what it
-        // meant before M4 — **the bytes of files that were actually promoted** —
-        // rather than "bytes that crossed the wire at some point, including on
-        // the four attempts that failed". The ceiling still saw them while they
+        // back. That is what keeps `SUMMARY download_bytes` meaning
+        // **the bytes of files that were actually promoted** — rather than
+        // "bytes that crossed the wire at some point, including on the four
+        // attempts that failed". The ceiling still saw them while they
         // were in flight, which is the whole reason the counter is live; this
         // only decides what a *finished* run reports.
         ctx.summary

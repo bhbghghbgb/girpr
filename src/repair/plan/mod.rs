@@ -2,10 +2,11 @@
 //! one's chunks are downloaded from (docs/02 step 4) — plus the purge
 //! candidates the run would delete (docs/02 steps 5 and 7).
 //!
-//! Both are **plans**: they decide, they do not act. As of docs/05 M0 the run
-//! builds both of them before it mutates anything, so "what will this run do?"
-//! is answerable at one point in the pipeline — which is what the scope-of-work
-//! ceilings ([`docs/04` B1/B2/B4]) and `--print-plan` (C1) are written against.
+//! Both are **plans**: they decide, they do not act. The run builds both of them
+//! before it mutates anything, so "what will this run do?" is answerable at one
+//! point in the pipeline — which is what the scope-of-work ceilings
+//! (`--max-files`, `--max-download-bytes`, `--max-delete-bytes`) and
+//! `--print-plan` are written against.
 //! [`purge`] owns the cleanup half; the repair half is this module.
 //!
 //! The repair plan is derived from the **latest** manifest alone, which is what
@@ -51,7 +52,7 @@ impl RepairPlan {
     /// to a download whenever a local slice fails its MD5, so a file estimated
     /// at 0 bytes can still download its whole body. It is what
     /// `--max-download-bytes` refuses on, and the runtime hard stop is what
-    /// actually enforces — see docs/04 §3 B2.
+    /// actually enforces.
     pub fn est_download_bytes(&self, local_map: &LocalChunkMap) -> u64 {
         self.files
             .iter()
@@ -63,8 +64,8 @@ impl RepairPlan {
 /// Per-file download estimate: `Σ c.compressed_size for c in plan[rel].chunks
 /// where (c.uncompressed_md5, c.uncompressed_size) ∉ local_map[rel]`.
 ///
-/// This is character-for-character `gircap`'s `patch_fetch` formula
-/// (`docs/04` §3 B2), so the `PLAN` line, the `SUMMARY plan_download_bytes` key
+/// This is character-for-character `gircap`'s `patch_fetch` formula,
+/// so the `PLAN` line, the `SUMMARY plan_download_bytes` key
 /// and the capture's `totals.download_bytes` are the same figure. With no local
 /// map (a fresh install) it degenerates to "every chunk downloads", which is
 /// the honest worst case.
@@ -87,7 +88,7 @@ pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i
 /// A path outside `scope` is dropped **here**, before the plan exists, so
 /// `files_total`, the repair loop and `expected_paths()` all see the same
 /// narrowed world. Dropping it later instead would leave the purge with a
-/// *narrower* keep-set than an unfiltered run (docs/04 §2).
+/// *narrower* keep-set than an unfiltered run.
 pub fn build_plan(
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     blacklist: &HashSet<String>,

@@ -84,8 +84,8 @@ impl PathScope {
         !self.excludes.iter().any(|p| p.matches_with(rel, opts))
     }
 
-    /// The `--include` globs as written, for the "matched nothing" usage error
-    /// (docs/04 A1 guard 1) — an error that names its own typo is the point.
+    /// The `--include` globs as written, for the "matched nothing" usage
+    /// error — an error that names its own typo is the point.
     pub fn describe_includes(&self) -> String {
         join_patterns(&self.includes)
     }

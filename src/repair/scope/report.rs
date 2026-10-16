@@ -1,7 +1,7 @@
-//! The `PLAN` line and the `--plan-out` document (docs/04 C1).
+//! The `PLAN` line and the `--plan-out` document.
 //!
 //! `--dry-run` does not cover this and cannot be bent into covering it, for
-//! three separate reasons (docs/04 C1):
+//! three separate reasons:
 //!
 //! 1. **Cost.** `repair_one_file` runs `util::file_len` *then*
 //!    `util::md5_file` and only *then* hits `if ctx.dry_run { return DryRun }`.
@@ -53,8 +53,8 @@ impl PlanTotals {
             // The largest single chunk is what bounds peak RAM (a whole chunk is
             // buffered compressed + uncompressed) and, multiplied by
             // `io_threads`, transient disk. Worth reporting even though nothing
-            // enforces it in v1 — it is the number `--max-chunk-bytes` (docs/04
-            // E3) would take.
+            // enforces it: it is the number a `--max-chunk-bytes` ceiling would
+            // take, and it is one line to print.
             max_chunk_bytes: plan
                 .files
                 .iter()
@@ -70,9 +70,8 @@ impl PlanTotals {
 /// The one-line `PLAN` summary. Key order is fixed so two runs diff cleanly.
 ///
 /// A [`Record`], like every other stdout line, so `--print-plan --output json`
-/// emits a `{"event":"plan",…}` object instead of a text line with a JSON twin
-/// bolted on beside it — which is what used to happen, and is why the JSON
-/// stream could not be parsed as JSON.
+/// emits a `{"event":"plan",…}` object rather than a text line with a JSON twin
+/// bolted on beside it — one object per event, so the stream parses as JSON.
 ///
 /// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
 /// key name carries one type across the whole stream.
@@ -88,11 +87,10 @@ pub fn plan_record(t: &PlanTotals) -> Record {
 
 /// The `--plan-out` document.
 ///
-/// **JSON**, decided in docs/04 §7.3.2: `girsync --output json` and the whole
-/// artifact side of this repo (`gircap`'s bundle, `patchmaps/<id>.json`) are
-/// JSON, and a parser that reads `SUMMARY` *and* the plan wants one
-/// `serde_json` reader. The `key=value` plane keeps its own job: one line per
-/// fact, greppable, no nesting.
+/// **JSON**: `girsync --output json` and the whole artifact side of this repo
+/// (`gircap`'s bundle, `patchmaps/<id>.json`) are JSON, and a parser that reads
+/// `SUMMARY` *and* the plan wants one `serde_json` reader. The `key=value` plane
+/// keeps its own job: one line per fact, greppable, no nesting.
 #[derive(Debug, Serialize)]
 pub struct PlanDocument<'a> {
     /// Every planned file: what it is, how big, what it would cost.
@@ -259,10 +257,8 @@ mod tests {
         );
     }
 
-    /// `PLAN` used to be a text line on every plane with a JSON object bolted on
-    /// beside it under `--json-summary`, so the JSON stream was not JSON. One
-    /// record fixes that — and it is why the JSON keys are the same names the
-    /// text line uses, including `files` rather than the old `plan`.
+    /// One record per event, on either plane. The JSON keys are the same names the
+    /// text line uses — `files`, not `plan` — so a parser reads one vocabulary.
     #[test]
     fn the_plan_is_one_record_on_either_plane() {
         let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);

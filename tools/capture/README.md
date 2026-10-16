@@ -115,8 +115,8 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
-the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, the build
-order is `docs/07-artifact-bridge-implementation-plan.md`, and the consumer never
+the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, and the
+consumer never
 regenerates or repairs a bundle — it reads `patchmaps/`, `expected/` and `game/`,
 and runs `gircap verify` as its precondition.
 

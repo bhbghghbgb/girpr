@@ -3,11 +3,10 @@
 //! Everything runs against a local mock HoYoPlay + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
 //! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
-//! mock, so a sandbox without internet still passes. The three M7 cases run the
+//! mock, so a sandbox without internet still passes. Three cases run the
 //! real binary instead, over those same overrides.
 //!
-//! The first ten cases are the original repair pipeline (each a full
-//! `repair::run`):
+//! The first ten cases are the repair pipeline (each a full `repair::run`):
 //! 1. repair of missing + corrupt files (exit 0, bytes verified, tmp swept)
 //! 2. `--check-only` clean (exit 0) and dirty (exit 4, writes nothing)
 //! 3. `--dry-run` writes nothing
@@ -19,7 +18,8 @@
 //! 9. a non-chunk `default_download_mode` is refused with exit 1
 //! 10. the deprecated-files call carries the per-launcher channel
 //!
-//! The rest are grouped by the work they cover (docs/04, docs/05):
+//! The rest are grouped by the tier they cover (see
+//! [`docs/04-scope-limitation-spec.md`](../docs/04-scope-limitation-spec.md)):
 //! - **path scope** — include-only repairs exactly one file, a purge under a
 //!   scope leaves the fixture alone, deprecated files out of scope survive, an
 //!   `--include` matching nothing and `--audio` under a scope are exit `1`
@@ -28,12 +28,12 @@
 //!   reuse path trips the runtime stop, a refused run leaves no `game_dir`
 //! - **`--print-plan`** — reports the plan, writes nothing, `--plan-out` JSON
 //!   agrees with the plan total, a ceiling still trips it
-//! - **M6** — `--max-write-bytes`, `--fail-fast` against a 500 origin,
-//!   `--purge-only` (alone, and with `--dry-run`)
+//! - **`--max-write-bytes`, `--fail-fast`, `--purge-only`** — the write stop, a
+//!   500 origin, and `--purge-only` alone and with `--dry-run`
 //! - **read-only discipline** — no deprecated-list call, `download_bytes`
 //!   counts only promoted files even after a retry
-//! - **M7** — the real binary over `--hyp-base` / `--sophon-base`, and the
-//!   explicit-beats-env precedence
+//! - **endpoint override** — the real binary over `--hyp-base` / `--sophon-base`,
+//!   and the explicit-beats-env precedence
 
 #[path = "common/mod.rs"]
 mod common;
@@ -449,10 +449,9 @@ async fn non_chunk_download_mode_is_a_usage_error() {
 
 #[tokio::test]
 async fn a_run_that_stops_before_acting_creates_no_game_dir() {
-    // M0: `create_dir_all` moved from the top of the run into the execution
-    // phase, so a run that never reaches it (here: the non-chunk download-mode
-    // refusal) leaves nothing on disk. This is the one documented behavior
-    // change of docs/05 M0.
+    // `create_dir_all` lives in the execution phase, not at the top of
+    // the run, so a run that never reaches it (here: the non-chunk
+    // download-mode refusal) leaves nothing on disk.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -478,12 +477,12 @@ async fn a_run_that_stops_before_acting_creates_no_game_dir() {
 }
 
 // ---------------------------------------------------------------------------
-// path scope (docs/04 A1)
+// path scope
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn include_repairs_exactly_the_selected_file() {
-    // The `gircap` use case (docs/04 A1): one run per fixture path, with the
+    // The `gircap` use case: one run per fixture path, with the
     // exact chunk download set as the assertion.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
@@ -581,7 +580,7 @@ async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
 
 #[tokio::test]
 async fn an_unscoped_purge_still_deletes_orphans() {
-    // The control: without a scope, the cleanup is unchanged by M2.
+    // The control: with no scope, the cleanup is unchanged.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("scope_unscoped_purge");
@@ -617,7 +616,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
 
 #[tokio::test]
 async fn an_include_matching_nothing_is_a_usage_error() {
-    // Guard 1 (docs/04 A1): a scope that selected nothing is a typo, and exit
+    // Guard 1: a scope that selected nothing is a typo, and exit
     // 1 — not exit 5, which means "well-formed but the answer was too big".
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
@@ -650,7 +649,7 @@ async fn an_include_matching_nothing_is_a_usage_error() {
 
 #[tokio::test]
 async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scope() {
-    // Guard 2 (docs/04 §7.1 Q2): two flags asking for opposite scopes is a
+    // Guard 2: two flags asking for opposite scopes is a
     // contradiction, not a merge. The scan file's rel path comes from
     // getGameConfigs and is never hardcoded.
     let fx = build_fixture();
@@ -744,7 +743,7 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
 }
 
 // ---------------------------------------------------------------------------
-// resource ceilings (docs/04 Group B)
+// resource ceilings
 // ---------------------------------------------------------------------------
 
 /// A game dir that does not exist yet, pointed at by `parent/missing`.
@@ -786,16 +785,14 @@ async fn max_files_refuses_before_touching_anything() {
     assert!(read_game_file(&dir, &fx2.files[0].rel).is_none());
 
     // The same refusal against a game dir that does not exist yet: not even
-    // the directory may be created (M0 step 3 + M3's assert placement).
+    // the directory may be created, because the ceiling asserts before
+    // `create_dir_all`.
     let missing = absent_game_dir(&parent);
     let mut ctx = ctx_for(missing.clone(), &mock, 1);
     ctx.limits.files = Some(1);
     let (_, code) = repair::run(ctx).await.expect("a refusal is not an error");
     assert_eq!(code, 5);
-    assert!(
-        !missing.exists(),
-        "a refusal must not even create game_dir (M0 step 3 + M3)"
-    );
+    assert!(!missing.exists(), "a refusal must not even create game_dir");
 
     mock.stop();
     std::fs::remove_dir_all(&parent).ok();
@@ -827,8 +824,9 @@ async fn max_files_at_the_boundary_does_not_refuse() {
 
 #[tokio::test]
 async fn max_files_zero_is_a_ceiling_not_a_usage_error() {
-    // docs/04 §4.4: `0` is a perfectly meaningful ceiling. Only an unparseable
-    // value is exit 1, and that is clap's job.
+    // `0` is a perfectly meaningful ceiling: it is not an error on an empty
+    // plan and it is on a 3000-file one. Only an unparseable value is
+    // exit `1`, and that is clap's job.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("max_files_zero");
@@ -943,8 +941,8 @@ async fn an_out_of_scope_path_never_counts_toward_the_delete_ceiling() {
 
 #[tokio::test]
 async fn a_tripped_ceiling_still_emits_a_summary_tail() {
-    // docs/04 §7.3.1 (decided here): a refusal is returned, not raised, so
-    // every exit path ends with one uniform SUMMARY.
+    // A refusal is *returned*, not raised, so every exit path ends with
+    // one uniform SUMMARY.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("max_files_summary");
@@ -1111,8 +1109,8 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
 
 #[tokio::test]
 async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
-    // docs/04 §7: every new key is emitted only when its flag is active, so an
-    // unflagged run stays byte-identical to today's.
+    // Every scope/ceiling key is emitted only when its flag is active, so
+    // an unflagged run stays byte-identical to one that passes no flags.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("summary_absent");
@@ -1309,7 +1307,7 @@ async fn print_plan_with_dry_run_is_coherent() {
 }
 
 // ---------------------------------------------------------------------------
-// docs/04 M6: --max-write-bytes, --fail-fast, --purge-only
+// --max-write-bytes, --fail-fast, --purge-only
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1802,9 +1800,9 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
 
 #[tokio::test]
 async fn a_read_only_run_issues_no_deprecated_file_call() {
-    // Before M0 the deprecated list was fetched inside `post::run`, which only
-    // ran when `!readonly` — so `--dry-run`, `--check-only` and
-    // `--print-plan` issued zero `getGameDeprecatedFileConfigs` requests.
+    // The deprecated list is fetched during the plan phase, and read-only
+    // modes skip that phase's network calls: `--dry-run`, `--check-only` and
+    // `--print-plan` must issue zero `getGameDeprecatedFileConfigs` requests.
     for mode in ["dry", "check", "plan"] {
         let fx = build_fixture();
         let mock = MockServer::start(
@@ -1842,13 +1840,14 @@ async fn a_read_only_run_issues_no_deprecated_file_call() {
 
 #[tokio::test]
 async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
-    // The pre-M4 contract: `download_bytes` is the bytes of files that were
-    // actually promoted. M4 moved the counter from a per-file aggregate to a
-    // live per-chunk ledger so the runtime hard stop can read it mid-flight,
-    // which put two ways of inflating it in reach of an unflagged run:
+    // `download_bytes` is the bytes of files that were actually
+    // promoted. The counter is live per-chunk so the runtime hard stop can
+    // read it mid-flight, which puts two ways of inflating it in reach of an
+    // unflagged run — and both are exactly what an *abandoned* attempt looks
+    // like:
     //
     //  - a reservation the `?` on a failed fetch never gave back, and
-    //  - the bytes an *abandoned* attempt had already downloaded.
+    //  - the bytes that attempt had already downloaded.
     //
     // The mock serves one corrupt-but-well-formed chunk, so the first attempt
     // really does transfer bytes and then fail its MD5.
@@ -2015,12 +2014,12 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
 }
 
 // ---------------------------------------------------------------------------
-// docs/04 D1/M7: endpoint overrides, through the real binary
+// endpoint overrides, through the real binary
 // ---------------------------------------------------------------------------
 
 /// Run the shipped binary. The endpoint overrides are the only seam a
-/// *binary-level* test can use, and this is where that seam is finally
-/// exercised: the library tests inject `RunCtx::hyp_base_override` directly,
+/// *binary-level* test can use, and this is where that seam is exercised: the
+/// library tests inject `RunCtx::hyp_base_override` directly,
 /// which proves nothing about whether a flag reaches `HypClient`.
 ///
 /// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
@@ -2271,7 +2270,7 @@ async fn an_explicit_base_beats_the_env_var() {
 
 #[tokio::test]
 async fn the_env_seam_still_works_without_the_flags() {
-    // M7 must not break the seam every offline e2e run already used.
+    // The env seam every offline e2e run already uses must keep working.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("base_env");

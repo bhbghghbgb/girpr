@@ -65,13 +65,13 @@ pub struct RunCtx {
     /// game-only empty set). `false` (flag omitted) means autodetect: keep the
     /// scan file, else default `en-us` for automation.
     pub audio_explicit: bool,
-    /// Compiled `--include` / `--exclude` globs (docs/04 A1). The patterns are
+    /// Compiled `--include` / `--exclude` globs. The patterns are
     /// compiled once, in [`crate::cli::Args::into_ctx`], so a `RunCtx` that
     /// exists at all has a valid scope — a bad glob was already exit `1`. An
     /// *open* scope admits every path, which makes every `is_active()` gate
     /// downstream a no-op, so an unflagged run is unaffected.
     pub path_scope: PathScope,
-    /// Manually requested resource ceilings (docs/04 Group B). All `None` in an
+    /// Manually requested resource ceilings. All `None` in an
     /// unflagged run, which is what makes every refusal a no-op and keeps
     /// `SUMMARY limited=1` absent.
     pub limits: Limits,

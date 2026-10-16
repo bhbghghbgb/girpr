@@ -1,7 +1,6 @@
 //! The `gircap`→`girpr` end-to-end artifact bridge.
 //!
 //! Spec: [`docs/06-artifact-bridge-spec.md`](../docs/06-artifact-bridge-spec.md).
-//! Plan: [`docs/07-artifact-bridge-implementation-plan.md`](../docs/07-artifact-bridge-implementation-plan.md).
 //!
 //! `gircap capture` writes a self-contained bundle — a real `game/` fixture,
 //! the API bodies and manifests behind it, every chunk blob, `expected/` ground
@@ -36,10 +35,10 @@
 //! Because this file is only ever run intentionally. A skip on a missing
 //! prerequisite would turn "I ran the check and it found nothing to check" into
 //! a green line — and that is the one reading this harness must never permit.
-//! Nobody types `cargo test -- --ignored` here by accident, so the old hazard
-//! ("people run it with `--ignored` forever and stop reading") does not apply;
-//! its opposite does. If the bundle is missing, the run **fails**, and says
-//! exactly what to run to produce one:
+//! Nobody types `cargo test -- --ignored` here by accident, so the hazard a
+//! skip guards against (people run it with `--ignored` forever and stop reading)
+//! does not exist; its opposite does. If the bundle is missing, the run
+//! **fails**, and says exactly what to run to produce one:
 //!
 //! ```text
 //! cargo run -p gircap -- capture --out artifacts
@@ -47,9 +46,8 @@
 //! set GIRPR_ARTIFACT_BUNDLE=<dir>
 //! ```
 //!
-//! Resolution order is unchanged: `GIRPR_ARTIFACT_BUNDLE` always wins, then
-//! `gircap list --root artifacts`, then a directory scan. Only the *consequence*
-//! of finding nothing changed.
+//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then
+//! `gircap list --root artifacts`, then a directory scan.
 //!
 //! # What this file is allowed to touch
 //!
@@ -58,10 +56,10 @@
 //! cleanup flag into a way to destroy the evidence, and the bundle has to still
 //! pass `gircap verify` afterwards.
 
-// The server's surface is wider than M1's half of it exercises — the request
-// log, the per-capture lookups and the `--purge-only` predicate are read by the
-// driver milestones (M2/M3), so the allowance is about the milestone split and
-// not about code nothing reaches.
+// The server's surface is wider than the server-only cases exercise — the
+// request log, the per-capture lookups and the `--purge-only` predicate are
+// read by the driver, so the allowance is about that split and not about code
+// nothing reaches.
 #[allow(dead_code)]
 #[path = "artifact_bridge/server.rs"]
 mod server;
@@ -328,7 +326,9 @@ async fn discovery_agrees_whether_it_asks_gircap_or_scans() {
 }
 
 // ---------------------------------------------------------------------------
-// M1 — the server
+// ---------------------------------------------------------------------------
+// the server
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 /// The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the
@@ -517,7 +517,7 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
     assert!(
         uncarried > 0,
         "a getBuild body declares five manifests and the bundle stores the fields it \
-         captured; if every one resolved, docs/06 4.5's --audio warning has no teeth"
+         captured; if every one resolved, docs/06 §4.5's --audio warning has no teeth"
     );
 
     // An id no build declared is a 404, not a best-effort guess.
@@ -706,7 +706,7 @@ async fn the_capture_matrix_loads_with_distinct_paths() {
         );
         match c.download_bytes {
             // `removed` carries `totals: null` and is driven by the purge
-            // counters instead (`docs/06` §5.1).
+            // counters instead (`docs/06` §6.1).
             None => {
                 assert!(c.absent_after, "{}: no byte total implies a deletion", c.id);
                 assert!(
@@ -742,7 +742,9 @@ async fn the_capture_matrix_loads_with_distinct_paths() {
     let _ = b.capture_id;
 }
 
-// M2 — the driver
+// ---------------------------------------------------------------------------
+// the driver
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -754,7 +756,7 @@ use server::{Capture, Origins};
 /// The copy is of the whole fixture rather than of the one selected path
 /// because a capture is one path *out of* the fixture: the other captures' files
 /// are what "every path outside the scope is untouched" is measured against.
-/// `docs/06` §6.4 — the bundle is the input, a copy is the working tree.
+/// `docs/06` §6.3 — the bundle is the input, a copy is the working tree.
 /// Pointing `--game-path` at the bundle in place is what turns a cleanup flag
 /// into a way to destroy the evidence.
 struct Scratch {
@@ -1020,7 +1022,7 @@ fn capture_args(capture: &Capture) -> Vec<String> {
     args
 }
 
-/// Drive one capture end to end and assert `docs/06` §6's four per-capture
+/// Drive one capture end to end and assert `docs/06` §7's four per-capture
 /// facts plus the §4.3 degraded-but-green guards.
 ///
 /// **One run per capture**, always: a `download_bytes` total is only
@@ -1030,7 +1032,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     let scratch = Scratch::new(&bundle);
     let before = snapshot(&scratch.game());
 
-    // ---- the free pre-pass (docs/06 5.1) --------------------------------
+    // ---- the free pre-pass (docs/06 §6.1) --------------------------------
     //
     // `--print-plan` returns before `create_dir_all`, so it costs no disk and
     // separates the two failure modes that otherwise arrive tangled in one red
@@ -1218,7 +1220,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     // ---- 4, continued: the before/after tree diff ----------------------
     //
     // The only check that the scope held across the whole filesystem rather
-    // than just the repair plan. Per run, because §6.3 gives every capture its
+    // than just the repair plan. Per run, because §6.2 gives every capture its
     // own copy: a shared baseline would compare two different trees.
     let after = snapshot(&scratch.game());
     let (added, removed) = tree_delta(&before, &after);
@@ -1242,7 +1244,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     // rather than probed: every blob request's `<build_id>` must equal the build
     // whose manifest declared that id. Only chunks are checked here because only
     // chunk downloads carry the prefix `girpr` builds from the latest build's
-    // body (manifests were pinned directly in M1).
+    // body (manifests are pinned directly against the rewritten body).
     let wrong_build: Vec<(String, String)> = bridge
         .chunk_requests()
         .into_iter()
@@ -1256,7 +1258,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         bundle.new_build
     );
 
-    // ---- per-class expectations (docs/06 6.2) ---------------------------
+    // ---- per-class expectations (docs/06 §7.2) ---------------------------
     //
     // The four assertions above are the same for every capture; these are the
     // places a class is *different in kind* rather than in number.
@@ -1347,7 +1349,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
                 );
             }
             other => println!(
-                "note: {} is class {other:?}, which docs/06 6.2 does not describe; \
+                "note: {} is class {other:?}, which docs/06 §7.2 does not describe; \
                  the four common assertions still applied",
                 capture.id
             ),
@@ -1415,7 +1417,9 @@ async fn one_capture_patches_to_the_new_version() {
 }
 
 // ---------------------------------------------------------------------------
-// M3 — every capture, each in its own world
+// ---------------------------------------------------------------------------
+// every capture, each in its own world
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 //
 // Rust runs `#[test]`s in parallel threads, so one test per capture is not a
@@ -1424,7 +1428,7 @@ async fn one_capture_patches_to_the_new_version() {
 // shared tree and a shared log would mean two runs fighting over one path, one
 // run's `must_not_fetch` seeing the other's requests, and a diff comparing a
 // tree some other run had already changed — intermittent, and it would look
-// like a product bug (`docs/06` §6.3).
+// like a product bug (`docs/06` §6.2).
 //
 // One run per capture is kept regardless, because it is what makes
 // `download_bytes` attributable to a single capture.
@@ -1520,7 +1524,7 @@ capture_test!(
     capture_removed_is_purged_by_the_cleanup,
     "removed",
     "`removed`: no repair, so no byte total — `totals: null`. It gets the\n\
-     `--purge-only` run of `docs/06` §5 and the purge-counter pre-pass of §5.1,\n\
+     `--purge-only` run of `docs/06` §5 and the purge-counter pre-pass of §6.1,\n\
      where `files=0` and `purge_files=1 purge_bytes=1731133` are the assertion."
 );
 
@@ -1578,10 +1582,12 @@ async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
 }
 
 // ---------------------------------------------------------------------------
-// M4 — not-found is replayed, not invented (`docs/06` §4.4)
+// ---------------------------------------------------------------------------
+// not-found is replayed, not invented (docs/06 §4.4)
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
-/// Blank out the fields `docs/06` §4.4.1 marks volatile, so two bodies can be
+/// Blank out the fields `docs/06` §4.4 marks volatile, so two bodies can be
 /// compared for everything else.
 fn without_volatile(body: &str) -> String {
     let mut out = body.to_string();

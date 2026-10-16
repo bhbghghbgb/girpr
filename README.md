@@ -12,11 +12,12 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 | series | docs | describes |
 |---|---|---|
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
-| **scope limitations** (shipped) | [`docs/04-scope-limitation-options.md`](docs/04-scope-limitation-options.md) · [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
+| **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 
-The repair-spec series is not amended by the scope-limitations work; its build
-plan is [`docs/05-scope-limitation-implementation-plan.md`](docs/05-scope-limitation-implementation-plan.md)
-and it names the milestone that may touch them (none).
+The repair-spec series describes the whole-install patcher and is unaffected by
+the scope-limitations tier: a flag list and a byte ceiling are not a change to
+the repair algorithm. `docs/04` names every `girpr` site a path scope has to
+reach.
 
 ## For developers / AI agents — read this first
 
@@ -78,7 +79,7 @@ flowchart TD
     G --> H
     H -->|yes| I["check::verify_plan<br/>exit 0 clean / 4 damaged<br/>writes nothing"]
     H -->|no| J{"--purge-only?"}
-    J -->|yes| M0["post::run, no repair loop<br/>cleanup + post-phase<br/>exit 0, config.ini not bumped"]
+    J -->|yes| MP["post::run, no repair loop<br/>cleanup + post-phase<br/>exit 0, config.ini not bumped"]
     J -->|no| J2["file::repair_all: ≤jobs files in parallel<br/>chunks sequential per file"]
     subgraph perfile ["per file"]
         J1["skip if size+MD5 match"] --> J2a["reuse verified local slice (S2)<br/>else resume _tmp prefix by length (S3)<br/>else download chunk → zstd → MD5 → write at offset"]
@@ -137,7 +138,7 @@ flowchart TD
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
-  promoted**, as it always has. An attempt that fails and is retried hands its
+  promoted**. An attempt that fails and is retried hands its
   bytes back, so a run that had to retry does not report what the network cost
   the retries. The counter is nevertheless live during the repair, which is what
   `--max-download-bytes` needs to stop mid-flight.
@@ -223,7 +224,7 @@ cargo build --release
 | `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into `*_tmp`. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
-| `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx now costs nothing, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
+| `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
 | `--dry-run` | off | Log actions; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
@@ -257,8 +258,8 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   resolved in `RunCtx::api_bases`).
 - **What the tests actually drive.** `tests/repair_offline.rs` is 53 cases, and
   most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
-  — that exercises the library, not the flag surface. Five of them (the M7
-  endpoint-override cases, plus the `--output` format case added later) spawn the
+  — that exercises the library, not the flag surface. Five of them (the
+  endpoint-override cases and the `--output` format case) spawn the
   real binary through
   `CARGO_BIN_EXE_girpr`, which is how the `--hyp-base` / `--sophon-base`
   precedence is pinned; they still run against the mock, not against real bytes.
@@ -279,9 +280,7 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   **missing prerequisite is an error**: no bundle under `artifacts/` and no
   `GIRPR_ARTIFACT_BUNDLE` fails the run with the command that would produce
   one, rather than passing quietly having checked nothing.
-  - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md);
-    the build order and what landed are in
-    [`docs/07-artifact-bridge-implementation-plan.md`](docs/07-artifact-bridge-implementation-plan.md).
+  - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md).
   - The server rewrites only the **scheme and authority** of the `url_prefix`
     inside each `getBuild` body, because manifest and chunk URLs are built from
     that body rather than from the flags. It never writes to the bundle; the

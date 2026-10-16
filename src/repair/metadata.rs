@@ -133,7 +133,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let explicit = ctx.audio_explicit.then_some(&ctx.audio);
     let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit);
     if ctx.audio_explicit && !ctx.readonly() && !config.audio_pkg_scan_dir.is_empty() {
-        // docs/04 §7.1 Q2: an explicit `--audio` under an active path scope is a
+        // An explicit `--audio` under an active path scope is a
         // contradiction, not a merge — the flag would mutate a path the scope
         // may not have admitted. The escape hatch is to include the scan
         // file's own rel path; it is never hardcoded, it comes from

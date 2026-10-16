@@ -279,8 +279,8 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
 
 #[test]
 fn exit_five_is_a_refusal_not_an_argument_error() {
-    // docs/04 §4.4: a tripped ceiling is exit `5`, deliberately *not* `1`.
-    // Whether a limit trips is only knowable after the API is fetched, so a
+    // A tripped ceiling is exit `5`, deliberately *not* `1`. Whether a limit
+    // trips is only knowable after the API is fetched, so a
     // "the run was misconfigured" code cannot mean both — which is also why
     // `--max-files 0` must parse here rather than be rejected: it is a
     // meaningful ceiling, and only an unparseable value is exit `1`.
