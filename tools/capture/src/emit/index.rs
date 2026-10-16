@@ -166,11 +166,51 @@ impl Checksums {
     /// no fixed point, so the one file that cannot be in the list is the one that
     /// is the list.
     pub fn scan(root: &Path) -> std::io::Result<Checksums> {
+        Checksums::scan_reusing(root, &[], &[])
+    }
+
+    /// Digest everything under `root`, except `checksums.json`, **reusing**
+    /// `known`'s digests for the paths it already covers.
+    ///
+    /// This is how a capture close-out goes from four full-tree digest passes to
+    /// two. It walks the tree every time — that is a `read_dir`, not a hash —
+    /// and only reads and digests a file when it is not in `known`, or when it
+    /// is named in `rewritten`.
+    ///
+    /// ## The contract, and why it is safe
+    ///
+    /// A digest is reused for a path `p` only when `p ∈ known`, `p ∉ rewritten`,
+    /// and no `p` was written since `known` was taken. Every call site below
+    /// meets that by construction: the writes between one call and the next are
+    /// the ones it passes in `rewritten`.
+    ///
+    /// Nothing is assumed about files that *appear* — a path on disk that is not
+    /// in `known` is simply digested, because the walk is what decides membership,
+    /// not the caller's list. What the caller must get right is `rewritten`:
+    /// **naming a file that changed but is not listed would produce a document
+    /// that claims a digest for bytes that are no longer there.**
+    ///
+    /// `A16` is unaffected and remains the reason this is safe to do at all:
+    /// [`Checksums::a16`] re-reads and re-digests every listed file from disk and
+    /// compares, so a wrong reuse here is *caught* rather than published.
+    pub fn scan_reusing(
+        root: &Path,
+        known: &[FileEntry],
+        rewritten: &[&str],
+    ) -> std::io::Result<Checksums> {
         const SELF: &str = "verify/checksums.json";
+        let known: std::collections::BTreeMap<&str, &FileEntry> =
+            known.iter().map(|e| (e.path.as_str(), e)).collect();
         let mut entries = Vec::new();
         for p in walk(root)? {
             let r = rel(root, &p);
             if r == SELF {
+                continue;
+            }
+            if !rewritten.contains(&r.as_str())
+                && let Some(e) = known.get(r.as_str())
+            {
+                entries.push((*e).clone());
                 continue;
             }
             let mut e = digest_file(&root.join(&p), encoding_of(&r))?;
@@ -359,6 +399,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A16 is green on an untouched tree.
     #[test]
     fn a16_is_green_on_an_untouched_tree() {
         let root = scratch("a16ok");
@@ -369,6 +410,72 @@ mod tests {
         let (ok, detail) = c.a16(&root);
         assert!(ok, "{detail}");
         assert!(detail.contains("re-hashed"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Reusing a digest must produce **exactly** what re-hashing would have.
+    ///
+    /// This is the whole safety argument for `scan_reusing`, and it is only true
+    /// if the caller names every file it rewrote. Three cases, because the ways
+    /// it can go wrong are different: nothing changed, the named file changed,
+    /// and a file appeared that the seed never saw.
+    #[test]
+    fn reusing_digests_gives_the_same_document_as_hashing_everything() {
+        let root = scratch("reuse");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"aaaa").unwrap();
+        std::fs::write(root.join("keep.bin"), b"keep").unwrap();
+
+        // Nothing changed: `rewritten` empty.
+        let seeded = Checksums::scan(&root).unwrap();
+        let reused = Checksums::scan_reusing(&root, &seeded.entries, &[]).unwrap();
+        assert_eq!(reused, Checksums::scan(&root).unwrap());
+
+        // The named file changed. This is the close-out's second
+        // `selfcheck.json`, and the only reuse that is ever done.
+        std::fs::write(root.join("a.bin"), b"aaaaaa").unwrap();
+        let reused = Checksums::scan_reusing(&root, &seeded.entries, &["a.bin"]).unwrap();
+        let fresh = Checksums::scan(&root).unwrap();
+        assert_eq!(reused, fresh, "the rewritten file's digest must be fresh");
+        assert_ne!(
+            reused.entries,
+            seeded.entries,
+            "and it really did change"
+        );
+
+        // A file appeared that the seed never saw: the walk decides membership,
+        // not the caller's list, so it is digested rather than missed. The seed
+        // is taken from the *current* tree — reusing the stale one would be the
+        // wrong-`rewritten` mistake, which the next test covers.
+        let current = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("surprise.bin"), b"new").unwrap();
+        let reused = Checksums::scan_reusing(&root, &current.entries, &[]).unwrap();
+        assert_eq!(reused, Checksums::scan(&root).unwrap());
+        assert!(
+            reused.entries.iter().any(|e| e.path == "surprise.bin"),
+            "a new file must be digested, not dropped"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a *wrong* `rewritten` list costs, and what catches it.
+    ///
+    /// This is the failure mode `scan_reusing` makes possible: a file changed
+    /// and the caller forgot to name it, so the stale digest is published. It
+    /// must still be caught, because A16 re-reads from disk.
+    #[test]
+    fn a_stale_reuse_is_still_caught_by_a16() {
+        let root = scratch("stalereuse");
+        std::fs::write(root.join("a.bin"), b"aaaa").unwrap();
+        let seeded = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"aaaaaa").unwrap();
+
+        // The mistake: reusing `a.bin`'s digest after changing it.
+        let wrong = Checksums::scan_reusing(&root, &seeded.entries, &[]).unwrap();
+        assert_eq!(wrong, seeded, "nothing was re-digested, so it is stale");
+        let (ok, detail) = wrong.a16(&root);
+        assert!(!ok, "and A16 must still see it");
+        assert!(detail.contains("a.bin"), "{detail}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

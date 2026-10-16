@@ -771,7 +771,14 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // `files[]` now that every other document exists, so it lists as much as it
     // can. It cannot list itself, README or checksums — `checksums.json` is the
     // complete list, and its doc comment says so.
-    manifest.files = manifest_file_list(&dir).map_err(|e| write_err(&dir, e))?;
+    //
+    // This is the close-out's **one** full-tree digest pass. It used to be a
+    // fourth one, in a private function that also re-implemented
+    // `Checksums::scan`'s walk and inlined its `encoding_of` — so a third
+    // encoding would have taught `MANIFEST.json` the wrong one while
+    // `checksums.json` learned the right one.
+    let (listed, seeded) = emit::write_manifest_files(&dir).map_err(|e| write_err(&dir, e))?;
+    manifest.files = listed;
     manifest.totals.bytes_on_disk = manifest.files.iter().map(|f| f.bytes).sum::<u64>();
 
     // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing to
@@ -798,26 +805,36 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
     written.push(emit::write_manifest(&dir, &manifest).map_err(|e| write_err(&dir, e))?);
     written.push(emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?);
-    let (_, checksums) = emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
+    let (_, checksums) = emit::write_checksums_reusing(&dir, &seeded, &[]).map_err(|e| write_err(&dir, e))?;
+    // The independent half of A16: re-reads every listed file from disk and
+    // compares. This is deliberately **not** folded into the scan above — a
+    // re-hash that reuses the digests it is checking would be a tautology.
     let (a16_ok, a16_detail) = checksums.a16(&dir);
     written.push("verify/checksums.json".to_string());
 
-    if !selfcheck.by_id().contains_key("A16") {
-        // Second pass: record A16, then re-write the two documents it changed.
-        // The re-scan sees the final `selfcheck.json`, so the second
-        // `checksums.json` is the authoritative one.
-        selfcheck.assertions.push(selfcheck_row(
-            "A16",
-            "verify/checksums.json",
-            "covers every file under the artifact root, and re-hashing matches",
-            a16_ok,
-            &a16_detail,
-        ));
-        selfcheck =
-            emit::selfcheck::Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
-        emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
-        emit::write_checksums(&dir).map_err(|e| write_err(&dir, e))?;
-    }
+    // Second pass: record A16, then re-write the two documents it changed.
+    // The re-scan sees the final `selfcheck.json`, so the second
+    // `checksums.json` is the authoritative one.
+    //
+    // **Unconditional.** This used to be guarded by
+    // `if !selfcheck.by_id().contains_key("A16")`, which could never be false:
+    // `selfcheck` is built from `rows`, and A16 is pushed *inside* the guard.
+    // A conditional that always fires is worse than none — it reads as "this
+    // might converge in one pass", and the comment above the pair is what
+    // actually guarantees it.
+    selfcheck.assertions.push(selfcheck_row(
+        "A16",
+        "verify/checksums.json",
+        "covers every file under the artifact root, and re-hashing matches",
+        a16_ok,
+        &a16_detail,
+    ));
+    selfcheck =
+        emit::selfcheck::Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
+    emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
+    // Only `selfcheck.json` moved since the scan above, so only it is re-digested.
+    emit::write_checksums_reusing(&dir, &checksums.entries, &["verify/selfcheck.json"])
+        .map_err(|e| write_err(&dir, e))?;
 
     tracing::info!(
         selfcheck = ?selfcheck.result,
@@ -1759,26 +1776,6 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
         files: Vec::new(),
         totals_by_set,
     })
-}
-
-/// Digest every file under `dir` into `MANIFEST.json → files[]`.
-fn manifest_file_list(dir: &std::path::Path) -> std::io::Result<Vec<emit::index::FileEntry>> {
-    let mut out = Vec::new();
-    for p in emit::index::walk(dir)? {
-        let r = emit::index::rel(dir, &p);
-        let mut e = emit::index::digest_file(
-            &dir.join(&r),
-            if r.ends_with(".gz") {
-                crate::hash::Encoding::Gzip
-            } else {
-                crate::hash::Encoding::Identity
-            },
-        )?;
-        e.path = r;
-        out.push(e);
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
 }
 
 /// A1 through A6: what the API and the manifests said, and what arrived.

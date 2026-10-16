@@ -116,6 +116,25 @@ pub fn write_selfcheck(root: &Path, s: &selfcheck::Selfcheck) -> std::io::Result
     write_doc(root, "verify/selfcheck.json", s)
 }
 
+/// Digest every file under `root`, returning both the list for
+/// `MANIFEST.json → files[]` and the same entries as the seed for
+/// `verify/checksums.json`.
+///
+/// Two consumers, one read of each file. The seed exists so the close-out's
+/// later `checksums.json` can carry the digests it already holds instead of
+/// re-hashing a whole bundle to re-list a tree that has not changed — see
+/// [`write_checksums_reusing`].
+///
+/// This replaces a private `run.rs` helper that walked the tree a second time
+/// and inlined `encoding_of`, so a third encoding would have taught
+/// `MANIFEST.json` the wrong rule while `checksums.json` learned the right one.
+pub fn write_manifest_files(
+    root: &Path,
+) -> std::io::Result<(Vec<index::FileEntry>, Vec<index::FileEntry>)> {
+    let c = index::Checksums::scan(root)?;
+    Ok((c.entries.clone(), c.entries))
+}
+
 /// Digest everything under `root` and write `verify/checksums.json`.
 ///
 /// Written **last**, so the document covers every other file in the bundle
@@ -123,7 +142,25 @@ pub fn write_selfcheck(root: &Path, s: &selfcheck::Selfcheck) -> std::io::Result
 /// document that hashes itself has no fixed point — which is the one gap, and
 /// `Checksums::scan` excludes exactly that one path.
 pub fn write_checksums(root: &Path) -> std::io::Result<(String, index::Checksums)> {
-    let c = index::Checksums::scan(root)?;
+    write_checksums_reusing(root, &[], &[])
+}
+
+/// [`write_checksums`], reusing the digests in `known` for everything not named
+/// in `rewritten`.
+///
+/// **This is the second half of A16's convergence, not a shortcut around it.**
+/// `run` writes `verify/selfcheck.json` a second time to record A16's own row,
+/// which changes that one file; the re-scan therefore re-digests one file rather
+/// than the whole bundle, and `Checksums::a16` still re-reads every file from
+/// disk to prove the result. `verify` passes nothing and scans everything, which
+/// is correct: a bundle may have been tampered with since it was written, and
+/// there is no honest way to carry a digest across that.
+pub fn write_checksums_reusing(
+    root: &Path,
+    known: &[index::FileEntry],
+    rewritten: &[&str],
+) -> std::io::Result<(String, index::Checksums)> {
+    let c = index::Checksums::scan_reusing(root, known, rewritten)?;
     write_doc(root, "verify/checksums.json", &c)?;
     Ok(("verify/checksums.json".to_string(), c))
 }
