@@ -102,7 +102,11 @@ pub fn write_manifest(root: &Path, m: &index::Manifest) -> std::io::Result<Strin
 }
 
 /// Write `README.md`, rendered from `MANIFEST.json` and the selfcheck.
-pub fn write_readme(root: &Path, m: &index::Manifest, s: &selfcheck::Selfcheck) -> std::io::Result<String> {
+pub fn write_readme(
+    root: &Path,
+    m: &index::Manifest,
+    s: &selfcheck::Selfcheck,
+) -> std::io::Result<String> {
     write_bytes(root, "README.md", m.readme(s).as_bytes())?;
     Ok("README.md".to_string())
 }
@@ -201,7 +205,11 @@ fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf>
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(&path, bytes)?;
-    debug_assert_eq!(rel_path_string(root, &path), rel, "the path must round-trip");
+    debug_assert_eq!(
+        rel_path_string(root, &path),
+        rel,
+        "the path must round-trip"
+    );
     Ok(path)
 }
 
@@ -230,9 +238,12 @@ mod tests {
             tag: "7.1.0".into(),
             diff_tags: vec!["7.0.0".into()],
         };
-        let mut versions =
-            VersionPair::select(&params, NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag)
-                .unwrap();
+        let mut versions = VersionPair::select(
+            &params,
+            NewTagSelector::BranchHead,
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap();
         versions.attach_build_ids("n", "o");
         Captured {
             configs: body("getGameConfigs.json", "getGameConfigs"),
@@ -349,7 +360,8 @@ mod tests {
     /// every consumer of a bundle breaks on it.
     #[test]
     fn the_error_shapes_document_is_valid_json_despite_its_xml_body() {
-        let dir = std::env::temp_dir().join(format!("gircap-api-shapes-json-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("gircap-api-shapes-json-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/error_shapes.json")).unwrap();
@@ -360,7 +372,10 @@ mod tests {
         assert_eq!(v["shapes"][0]["status"], 404);
         assert_eq!(v["shapes"][0]["family"], "blob");
         // The XML body is carried as a string, escaped, not dropped.
-        assert_eq!(v["shapes"][0]["body"], "<Error><Code>NoSuchKey</Code></Error>");
+        assert_eq!(
+            v["shapes"][0]["body"],
+            "<Error><Code>NoSuchKey</Code></Error>"
+        );
         assert_eq!(v["shapes"][0]["retryable"], false);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -369,7 +384,10 @@ mod tests {
     fn the_log_lands_at_api_requests_ndjson_and_creates_its_directory() {
         let dir = std::env::temp_dir().join(format!("gircap-emit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("hk4e_global").join("7.0.0__7.1.0").join("20261014T101500Z");
+        let root = dir
+            .join("hk4e_global")
+            .join("7.0.0__7.1.0")
+            .join("20261014T101500Z");
 
         let log = RequestLog::new();
         assert_eq!(write_requests_log(&root, &log).unwrap(), 0);

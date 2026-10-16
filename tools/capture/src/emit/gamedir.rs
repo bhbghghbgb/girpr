@@ -199,11 +199,7 @@ pub fn write_prelude(
 }
 
 /// Write one variant file into `tree` (`game` or `expected`).
-pub fn write_variant(
-    root: &Path,
-    tree: &str,
-    file: &VariantFile<'_>,
-) -> std::io::Result<String> {
+pub fn write_variant(root: &Path, tree: &str, file: &VariantFile<'_>) -> std::io::Result<String> {
     let rel = format!("{tree}/{}", file.rel_path);
     tracing::info!(
         capture_id = file.capture_id,
@@ -275,7 +271,10 @@ mod tests {
             "[General]\nchannel=1\ncps=hyp_hoyoverse\ngame_biz=hk4e_global\ngame_version=7.0.0\nsdk_version=\nsub_channel=0\n",
             "the key order is the writer's, because a surgical rewrite has to leave it alone"
         );
-        assert!(ini.ends_with('\n'), "a trailing newline: most INI readers want one");
+        assert!(
+            ini.ends_with('\n'),
+            "a trailing newline: most INI readers want one"
+        );
         assert_eq!(parse_game_version(&ini).unwrap(), "7.0.0");
     }
 
@@ -295,7 +294,10 @@ mod tests {
     #[test]
     fn game_version_is_readable_from_the_shapes_a_reader_will_actually_meet() {
         assert_eq!(
-            parse_game_version("noise\n[Other]\ngame_version=9.9.9\n[General]\ngame_version=7.0.0\n").unwrap(),
+            parse_game_version(
+                "noise\n[Other]\ngame_version=9.9.9\n[General]\ngame_version=7.0.0\n"
+            )
+            .unwrap(),
             "7.0.0",
             "the [General] section wins over an earlier section"
         );
@@ -325,7 +327,10 @@ mod tests {
         let f = audio_scan_file(&["en-us".to_string()]).unwrap();
         assert_eq!(f, "English(US)\n");
         let none = audio_scan_file(&[]).unwrap();
-        assert_eq!(none, "", "--audio none writes an empty file, which is a real state");
+        assert_eq!(
+            none, "",
+            "--audio none writes an empty file, which is a real state"
+        );
     }
 
     /// Two runs with the same selection must produce the same file, whatever
@@ -361,9 +366,21 @@ mod tests {
     fn writing_the_tree_produces_three_kinds_of_entry_and_nothing_else() {
         let root = std::env::temp_dir().join(format!("gircap-m8-gamedir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let old = VariantFile { rel_path: "GenshinImpact_Data/a.dll", bytes: b"old", capture_id: "identical" };
-        let new = VariantFile { rel_path: "GenshinImpact_Data/a.dll", bytes: b"new", capture_id: "identical" };
-        let gone = VariantFile { rel_path: "GenshinImpact_Data/gone.blk", bytes: b"bye", capture_id: "removed" };
+        let old = VariantFile {
+            rel_path: "GenshinImpact_Data/a.dll",
+            bytes: b"old",
+            capture_id: "identical",
+        };
+        let new = VariantFile {
+            rel_path: "GenshinImpact_Data/a.dll",
+            bytes: b"new",
+            capture_id: "identical",
+        };
+        let gone = VariantFile {
+            rel_path: "GenshinImpact_Data/gone.blk",
+            bytes: b"bye",
+            capture_id: "removed",
+        };
         let w = write_gamedir(
             &root,
             &global(),
@@ -375,10 +392,21 @@ mod tests {
         )
         .expect("writes");
 
-        assert_eq!(w.game.len(), 4, "config.ini, the scan file, and two old files");
-        assert_eq!(w.expected.len(), 1, "a removed capture contributes no expected file");
+        assert_eq!(
+            w.game.len(),
+            4,
+            "config.ini, the scan file, and two old files"
+        );
+        assert_eq!(
+            w.expected.len(),
+            1,
+            "a removed capture contributes no expected file"
+        );
         assert!(w.game.contains(&"game/config.ini".to_string()));
-        assert!(w.game.contains(&"game/GenshinImpact_Data/Persistent/audio_lang_14".to_string()));
+        assert!(
+            w.game
+                .contains(&"game/GenshinImpact_Data/Persistent/audio_lang_14".to_string())
+        );
         assert_eq!(
             std::fs::read_to_string(root.join("game/GenshinImpact_Data/a.dll")).unwrap(),
             "old"
@@ -399,6 +427,9 @@ mod tests {
     #[test]
     fn the_config_ini_digest_is_of_the_bytes_that_are_written() {
         let ini = config_ini(&global(), "7.0.0");
-        assert_eq!(config_ini_md5(&global(), "7.0.0"), hash::md5_hex(ini.as_bytes()));
+        assert_eq!(
+            config_ini_md5(&global(), "7.0.0"),
+            hash::md5_hex(ini.as_bytes())
+        );
     }
 }

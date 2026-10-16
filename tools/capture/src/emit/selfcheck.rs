@@ -37,7 +37,12 @@ pub struct Assertion {
 
 impl Assertion {
     /// A green row.
-    pub fn pass(id: &'static str, assertion: &'static str, subject: &str, value: &str) -> Assertion {
+    pub fn pass(
+        id: &'static str,
+        assertion: &'static str,
+        subject: &str,
+        value: &str,
+    ) -> Assertion {
         Assertion {
             id: id.to_string(),
             assertion: assertion.to_string(),
@@ -96,23 +101,62 @@ impl Assertion {
 /// of the patch it was taken for.
 pub const WORDING: [(&str, &str); 18] = [
     ("A1", "every API response captured has retcode == 0"),
-    ("A2", "getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag"),
+    (
+        "A2",
+        "getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
+    ),
     ("A3", "manifest blob md5(decompressed) == manifest.checksum"),
-    ("A4", "manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque"),
-    ("A5", "decoded manifest file_count/chunk_count/uncompressed_size reconcile with getBuild.stats"),
-    ("A6", "len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size"),
+    (
+        "A4",
+        "manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque",
+    ),
+    (
+        "A5",
+        "decoded manifest file_count/chunk_count/uncompressed_size reconcile with getBuild.stats",
+    ),
+    (
+        "A6",
+        "len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+    ),
     ("A7", "assemble(materialize_old) has md5 == old entry.md5"),
     ("A8", "assemble(materialize_new) has md5 == new entry.md5"),
-    ("A9", "assemble(REUSE-from-old union patch_fetch) byte-equals assemble(materialize_new)"),
-    ("A10", "every reused chunk's old-file slice MD5 == uncompressed_md5"),
-    ("A11", "chunk offsets gapless from 0, ascending, sum(uncompressed_size) == size"),
-    ("A12", "patch_fetch disjoint from the reuse set, and a subset of materialize_new"),
-    ("A13", "game/config.ini re-parses with game_version == --old-tag"),
-    ("A14", "game/ contains no path outside expected/'s manifest set + the tool-read config files"),
+    (
+        "A9",
+        "assemble(REUSE-from-old union patch_fetch) byte-equals assemble(materialize_new)",
+    ),
+    (
+        "A10",
+        "every reused chunk's old-file slice MD5 == uncompressed_md5",
+    ),
+    (
+        "A11",
+        "chunk offsets gapless from 0, ascending, sum(uncompressed_size) == size",
+    ),
+    (
+        "A12",
+        "patch_fetch disjoint from the reuse set, and a subset of materialize_new",
+    ),
+    (
+        "A13",
+        "game/config.ini re-parses with game_version == --old-tag",
+    ),
+    (
+        "A14",
+        "game/ contains no path outside expected/'s manifest set + the tool-read config files",
+    ),
     ("A15", "diff/ counts equal the recomputed set differences"),
-    ("A16", "checksums.json covers every file written under the artifact root, and re-hashing matches"),
-    ("A17", "each required matrix class is captured | covered_by | unavailable - never absent"),
-    ("A19", "each two-sided captured file differs between game/ and expected/ exactly when its class says it should"),
+    (
+        "A16",
+        "checksums.json covers every file written under the artifact root, and re-hashing matches",
+    ),
+    (
+        "A17",
+        "each required matrix class is captured | covered_by | unavailable - never absent",
+    ),
+    (
+        "A19",
+        "each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
+    ),
 ];
 
 /// The wording for an id, or a placeholder for one this build does not know.
@@ -132,7 +176,17 @@ pub fn wording(id: &str) -> &'static str {
 pub fn is_fatal(id: &str) -> bool {
     matches!(
         id,
-        "A1" | "A2" | "A3" | "A4" | "A5" | "A6" | "A7" | "A8" | "A9" | "A10" | "A11" | "A12"
+        "A1" | "A2"
+            | "A3"
+            | "A4"
+            | "A5"
+            | "A6"
+            | "A7"
+            | "A8"
+            | "A9"
+            | "A10"
+            | "A11"
+            | "A12"
             | "A13"
             | "A14"
             | "A15"
@@ -209,7 +263,11 @@ impl Selfcheck {
     ///
     /// Derived rather than passed in, because a selfcheck whose counts disagree
     /// with its own rows is the one document nobody can use.
-    pub fn build(assertions: Vec<Assertion>, matrix: Vec<MatrixRow>, skipped: &[&str]) -> Selfcheck {
+    pub fn build(
+        assertions: Vec<Assertion>,
+        matrix: Vec<MatrixRow>,
+        skipped: &[&str],
+    ) -> Selfcheck {
         let failed = assertions.iter().filter(|a| !a.ok).count() as u64;
         let total = assertions.len() as u64;
         let result = if failed > 0 {
@@ -285,7 +343,14 @@ mod tests {
             Vec::new(),
             &[],
         );
-        assert_eq!(s.counts, Counts { total: 3, passed: 2, failed: 1 });
+        assert_eq!(
+            s.counts,
+            Counts {
+                total: 3,
+                passed: 2,
+                failed: 1
+            }
+        );
         assert_eq!(s.result, Result_::Fail);
         assert!(!s.is_pass());
         assert_eq!(s.failures().len(), 1);
@@ -379,6 +444,9 @@ mod tests {
     fn the_result_serialises_lowercase_the_schema_doc_writes() {
         assert_eq!(serde_json::to_string(&Result_::Pass).unwrap(), "\"pass\"");
         assert_eq!(serde_json::to_string(&Result_::Fail).unwrap(), "\"fail\"");
-        assert_eq!(serde_json::to_string(&Result_::Incomplete).unwrap(), "\"incomplete\"");
+        assert_eq!(
+            serde_json::to_string(&Result_::Incomplete).unwrap(),
+            "\"incomplete\""
+        );
     }
 }

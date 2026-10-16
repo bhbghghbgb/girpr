@@ -193,7 +193,7 @@ impl Checksums {
         self.entries.iter().find(|e| e.path == path)
     }
 
-/// A16: every file under the root is listed, and re-hashing matches.
+    /// A16: every file under the root is listed, and re-hashing matches.
     ///
     /// Both halves, because a list that omits a file is a silent gap while a list
     /// whose digests are stale is a lie, and only checking one leaves the other.
@@ -367,7 +367,10 @@ mod tests {
         let paths: Vec<&str> = c.entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec!["a.bin", "verify/selfcheck.json"]);
         assert_eq!(c.file_count, 2);
-        assert_eq!(c.total_bytes, 3, "1 B of a.bin plus 2 B of the selfcheck stub");
+        assert_eq!(
+            c.total_bytes, 3,
+            "1 B of a.bin plus 2 B of the selfcheck stub"
+        );
         assert_eq!(c.algorithm, "sha256");
         assert_eq!(c.schema_version, crate::SCHEMA_VERSION);
         assert!(c.get("verify/selfcheck.json").is_some());
@@ -399,13 +402,19 @@ mod tests {
         std::fs::write(root.join("surprise.bin"), b"s").unwrap();
         let (ok, detail) = c.a16(&root);
         assert!(!ok);
-        assert!(detail.contains("surprise.bin") && detail.contains("not in"), "{detail}");
+        assert!(
+            detail.contains("surprise.bin") && detail.contains("not in"),
+            "{detail}"
+        );
 
         std::fs::remove_file(root.join("surprise.bin")).unwrap();
         std::fs::write(root.join("a.bin"), b"CHANGED").unwrap();
         let (ok, detail) = c.a16(&root);
         assert!(!ok);
-        assert!(detail.contains("a.bin") && detail.contains("on disk"), "{detail}");
+        assert!(
+            detail.contains("a.bin") && detail.contains("on disk"),
+            "{detail}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -419,7 +428,10 @@ mod tests {
         c.file_count = c.entries.len() as u64;
         let (ok, detail) = c.a16(&root);
         assert!(!ok);
-        assert!(detail.contains("never-written.bin") && detail.contains("does not exist"), "{detail}");
+        assert!(
+            detail.contains("never-written.bin") && detail.contains("does not exist"),
+            "{detail}"
+        );
 
         let root2 = scratch("a16total");
         std::fs::write(root2.join("a.bin"), b"a").unwrap();
@@ -643,7 +655,11 @@ impl Manifest {
         ));
         s.push_str(&format!(
             "\n**{}**: `{}` (`{}`) → `{}` (`{}`)",
-            if self.capture.complete { "complete" } else { "INCOMPLETE" },
+            if self.capture.complete {
+                "complete"
+            } else {
+                "INCOMPLETE"
+            },
             self.versions.old.tag,
             self.versions.old.build_id,
             self.versions.new.tag,
@@ -660,11 +676,7 @@ impl Manifest {
         let sizes: BTreeMap<&str, u64> = self
             .files
             .iter()
-            .filter_map(|f| {
-                f.path
-                    .strip_prefix("game/")
-                    .map(|p| (p, f.bytes))
-            })
+            .filter_map(|f| f.path.strip_prefix("game/").map(|p| (p, f.bytes)))
             .collect();
         for row in &self.matrix {
             let bytes = row
@@ -736,7 +748,10 @@ impl Manifest {
             ) {
                 return (
                     false,
-                    format!("{} is `{}`, which is not one of captured/covered_by/unavailable", row.class, row.status),
+                    format!(
+                        "{} is `{}`, which is not one of captured/covered_by/unavailable",
+                        row.class, row.status
+                    ),
                 );
             }
             if seen.contains(&row.class.as_str()) {
@@ -746,7 +761,10 @@ impl Manifest {
         }
         (
             true,
-            format!("{} classes, each present and in an acceptable state", seen.len()),
+            format!(
+                "{} classes, each present and in an acceptable state",
+                seen.len()
+            ),
         )
     }
 }
