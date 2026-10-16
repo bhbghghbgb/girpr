@@ -185,6 +185,17 @@ pub fn write_selection(
     Ok(out)
 }
 
+/// The tree a capture writes its **old-side** assembled files into.
+pub const GAME_TREE: &str = "game";
+/// The tree a capture writes its **new-side** assembled files into.
+///
+/// **`expected/` is named once, here, on purpose.** `assemble` records
+/// `Expectations::result_path` as a claim about where the file *will be*, and
+/// this module writes it. With two literals, renaming the tree would have made
+/// the recorded expectation a lie that no test could see — every assertion
+/// would have been checking the new spelling in both places at once.
+pub const EXPECTED_TREE: &str = "expected";
+
 /// Write one artifact-relative document, pretty-printed, newline-terminated.
 fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::Result<String> {
     let body = serde_json::to_string_pretty(value)

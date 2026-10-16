@@ -310,6 +310,16 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
                 r["capture_id"].is_null(),
                 "{r} is over budget yet names a capture"
             );
+            // The wording is an artifact string. The default capture is
+            // unlimited, so `tests/bundle_diff.rs` never reaches it; this is the
+            // only place that does, which makes it the only place that can hold
+            // it still.
+            let reason = r["reason"].as_str().expect("over_budget names itself");
+            assert!(
+                reason.starts_with("the cheapest candidate costs ")
+                    && reason.ends_with(" B and the budget could not fund it"),
+                "{reason:?}"
+            );
         }
     }
     // The run still succeeds: a budget is a preference, not a failure.

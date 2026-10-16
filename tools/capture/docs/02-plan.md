@@ -65,6 +65,8 @@ tools/capture/
 │   ├── exit.rs           # ExitCode enum + the exit-code table
 │   ├── config.rs         # Resolved plan: tags, classes, budgets, paths
 │   ├── biz.rs            # launcher/game ids, hyp+sophon bases, channel tuple
+│   ├── hash.rs           # md5/sha256/hex, the gzip rule, zstd helpers
+│   ├── run.rs            # the four entry points + the capture orchestrator
 │   ├── report.rs         # stdout data plane (single owner of println!)
 │   ├── logging.rs        # tracing init + --log-file (JSON lines)
 │   ├── http/
@@ -90,7 +92,7 @@ tools/capture/
 │   │   ├── mod.rs        # build a file from chunks; old, new, and patch flow
 │   │   └── ranges.rs     # range algebra + gap/overlap checks
 │   ├── emit/
-│   │   ├── mod.rs        # artifact writer; tmp/ -> move-into-place
+│   │   ├── mod.rs        # artifact writer; document + tree helpers
 │   │   ├── gamedir.rs    # config.ini + audio scan file + variant files
 │   │   ├── index.rs      # MANIFEST.json, candidates.json, chunks/index.json
 │   │   └── selfcheck.rs  # the A1–A17 assertion log
@@ -100,18 +102,29 @@ tools/capture/
 └── tests/
     ├── common/mod.rs     # local mock server (own code; borrows nothing from girpr)
     ├── capture_layout.rs # end-to-end artifact shape + selfcheck green
+    ├── cli_contract.rs   # argv -> exit code, the process-level contract
     ├── matrix.rs         # class predicates + greedy admission + budget
-    └── schema.rs         # JSON schema stability, gzip rule, checksums coverage
+    ├── measured_fixture.rs # the synthetic corpus the costs are measured against
+    ├── offline_bundle.rs # build a bundle with the crate's own writers, read it back
+    ├── schema.rs         # JSON schema stability, gzip rule, checksums coverage
+    └── bundle_diff.rs    # two captures of one fixture must agree (§4 gate)
 ```
 
 ### Dependencies
 
-`clap`, `anyhow`, `tokio`, `reqwest`, `serde`, `serde_json`, `prost`, `zstd`,
-`md5`, `sha2`, `flate2` (gzip), `tracing`, `tracing-subscriber`, `chrono`.
+`clap`, `tokio`, `reqwest`, `serde`, `serde_json`, `prost`, `zstd`,
+`md5`, `sha2`, `flate2` (gzip), `tracing`, `tracing-subscriber`,
+`tracing-appender`, `chrono`.
 
 Deliberately **not** `twox-hash`: the manifest-id prefix turned out not to be a
 hash of anything observable (spec §3.7), so an xxh64 implementation would be
 unused code asserting something false.
+
+Also deliberately **not** `anyhow`, and not reqwest's `json` or `stream`
+features: every failure in this crate is a `Result<T, String>` or
+`Result<T, io::Error>` re-wrapped through `ApiError::shape`, all decoding is
+`serde_json::from_slice`, and nothing reads a streaming body. A dependency that
+is declared and never used is a dependency a reader has to check the crate for.
 
 ### Style constraints (inherited from this repo)
 
@@ -128,15 +141,16 @@ unused code asserting something false.
 
 ## 3. Milestones
 
-Each ends with something runnable, a stated acceptance check, and **its own
-commit**. Nothing starts before the previous milestone's check passes, and no
-milestone is left uncommitted — if a milestone is abandoned, the work is
-reverted or the reason is in the commit message.
+**All of these have landed.** The section is kept as the build record — what was
+built, in what order, and what was accepted as proof at the time — because that
+is the only thing it was ever for. Each milestone ended with something runnable,
+a stated acceptance check, and its own commit; nothing started before the
+previous milestone's check passed.
 
 Commit messages use `gircap: M<N> — <summary>` as the subject, so
 `git log --oneline` reads as the build order.
 
-### M0 — skeleton and independence
+### M0 — skeleton and independence ✅ landed
 Add the workspace entry (`Cargo.toml` `members`), the module tree with empty
 modules, `cli.rs`, `exit.rs`, `report.rs`, `logging.rs`. Add `artifacts/` to
 `.gitignore`.
@@ -145,7 +159,7 @@ modules, `cli.rs`, `exit.rs`, `report.rs`, `logging.rs`. Add `artifacts/` to
 only doc comments; `cargo clippy -p gircap --all-targets` is clean.
 **Commit:** `gircap: M0 — crate skeleton, CLI surface, workspace member`
 
-### M1 — transport and provenance
+### M1 — transport and provenance ✅ landed
 `biz.rs`, `http/mod.rs` (retries, timeout, UA, `attempts` count), `http/probe.rs`.
 **Accept:** against the live API, `api/requests.ndjson` is written with correct
 status/elapsed/headers for a `getGameConfigs` and a `getBuild`; a deliberately
@@ -153,7 +167,7 @@ bad tag exits `2`. Unit tests for URL building, retry/backoff counting, and the
 `Range` header path run offline.
 **Commit:** `gircap: M1 — HTTP fetcher with request provenance log and tag probe`
 
-### M2 — metadata endpoints
+### M2 — metadata endpoints ✅ landed
 `hyp/mod.rs`, `hyp/types.rs`. Capture all four HoYoPlay bodies byte-exact plus
 both `getBuild` bodies; resolve the version pair and validate the download mode.
 **Accept:** live run writes the seven `api/*.json` files plus `tag_probe.json`;
@@ -162,7 +176,7 @@ named. `types.rs` models `stats`, `compression`, `encryption`, `password`,
 `categories[]` — the fields a minimal client discards.
 **Commit:** `gircap: M2 — HoYoPlay + Sophon getBuild capture and version-pair resolution`
 
-### M3 — manifests
+### M3 — manifests ✅ landed
 `manifest/{mod,proto,dump}.rs`. zstd-decode, verify decompressed MD5 against
 `checksum` and against the id suffix, label the prefix `opaque`, dump full JSON
 (gzipped past the threshold) and the `paths.tsv` sidecar.
@@ -172,14 +186,14 @@ recorded (`encoding` in `MANIFEST.json`). Unit tests cover the protobuf decoder
 including an empty file entry and an `is_folder` entry.
 **Commit:** `gircap: M3 — manifest fetch, verify, decode and dump`
 
-### M4 — diff and the reuse pool
+### M4 — diff and the reuse pool ✅ landed
 `manifest/diff.rs`.
 **Accept:** live run reproduces the measured numbers — 2 662 common, 1 592
 identical, 82 added, 11 removed, 98 910 same-manifest md5 hits, 2 cross-file-only.
 These are asserted in a test against a frozen fixture, not just eyeballed.
 **Commit:** `gircap: M4 — path diff and cross-file reuse-pool measurement`
 
-### M5 — scoring, classes, budget
+### M5 — scoring, classes, budget ✅ landed
 `select/{mod,classes,budget}.rs`.
 **Accept:** with `--files /dev/null` (score only, fetch nothing) the tool
 reproduces the measured candidate table for all nine classes; greedy admission
@@ -212,7 +226,7 @@ recorded here because each one is a decision a later milestone inherits.
 The selection pool is `game` ∪ `--audio`'s codes, so a `capture` now fetches
 and diffs the audio manifests too — about 1.2 MB compressed per tag per code.
 
-### M6 — the chunk store
+### M6 — the chunk store ✅ landed
 `blobs/{mod,props,chunks}.rs`. Content-addressed by chunk id; one fetch per id;
 `materialize_old` / `materialize_new` / `patch_fetch` set construction; A6 rows.
 **Accept:** live run on the `partial_same_offset` candidate fetches 5 distinct
@@ -245,7 +259,7 @@ measured, recorded with `verified: false` and a named `decode_error`, and left i
 the index. Only a blob with no zstd frame at all is an error, because the build
 declared `compression: 1` and there is then nothing to measure.
 
-### M7 — assembly
+### M7 — assembly ✅ landed
 `assemble/{mod,ranges}.rs`. Build old from `materialize_old`, new from
 `materialize_new`, and the patch flow (REUSE slice verified by MD5, else FETCH)
 then assert the patch result byte-equals the direct new assembly.
@@ -276,7 +290,7 @@ Three decisions:
    build from a violating layout, so the record and the behaviour agree — the
    layout is described in full and *then* not used.
 
-### M8 — the artifact
+### M8 — the artifact ✅ landed
 `emit/{mod,gamedir,index,selfcheck}.rs`. Full tree, `game/`, `expected/`,
 `config.ini`, audio scan file, `MANIFEST.json`, `checksums.json`, `README.md`.
 **Accept:** a live capture produces a tree that passes `emit`'s own completeness
@@ -314,7 +328,7 @@ Three decisions:
    it and `checksums.json` covers everything except itself. Both documents say
    so. A document that hashes itself has no fixed point.
 
-### M9 — offline re-verification
+### M9 — offline re-verification ✅ landed
 `verify/{mod,materialize}.rs`.
 **Accept:** `gircap verify` on a good artifact exits 0; after corrupting one byte
 of one chunk blob it exits `3` naming the blob and the assertion. `gircap
@@ -383,7 +397,7 @@ Both sides now render the same five fields in the same order, and the test that
 caught it (`a_blob_whose_bytes_were_altered_turns_its_row_red`) is the one that
 matters.
 
-### M10 — tests
+### M10 — tests ✅ landed
 `tests/*` against a local mock server.
 **Accept:** `cargo test -p gircap` is green and **touches no network** — the mock
 serves synthetic manifests built by the test, exactly as `girpr`'s own suite does
@@ -468,7 +482,7 @@ rendered by a 40-line order-preserving JSON value rather than by `json!`, becaus
 to the tool and fatal to the "stored exactly as served" claim the byte-exactness
 test exists to check.
 
-### M11 — first real capture
+### M11 — first real capture ✅ landed
 Run against `hk4e_global` 7.0.0 → 7.1.0, selection pool `game` + `en-us`, all
 nine classes.
 **Accept:** exit 0; `selfcheck.json` `result: "pass"`; artifact under
@@ -596,7 +610,7 @@ a digest list that recorded compressed bytes while promising decompressed ones.
 
 ---
 
-### M12 - the one-sided patchmaps
+### M12 - the one-sided patchmaps ✅ landed
 
 Not a planned milestone: a review of the M11 bundle. It found that
 `patchmaps/added.json` emitted `"plan": null`, `"totals": null` and
@@ -668,15 +682,36 @@ is the one capture whose run is a `--purge-only` cleanup rather than a repair.
 | unit, inline | URL building, protobuf decode, range algebra, class predicates, greedy admission, budget trim, gzip rule, hash helpers, `config.ini` + audio-scan writers | never |
 | `tests/common` | a local HTTP server serving synthetic `game` manifests/chunks for `hk4e_global`-shaped responses | never |
 | `tests/capture_layout` | the emitted tree matches the schema doc's paths and key names; `MANIFEST.json` is complete | never |
+| `tests/cli_contract` | argv → exit code, at the process level, including `--help` and a missing subcommand | never |
 | `tests/matrix` | each class admits the expected path; `covered_by` / `over_budget` / `unavailable` are all reachable | never |
+| `tests/measured_fixture` | the measured costs and cheapest-candidate-per-class, against a synthetic corpus sized to reproduce them | never |
+| `tests/offline_bundle` | a bundle built by the crate's own writers, read back through its own readers | never |
 | `tests/schema` | `schema_version` present everywhere, gzip decision recorded, `checksums.json` covers the tree | never |
+| `tests/bundle_diff` | two captures of one fixture agree, once the never-deterministic fields are normalised | never |
 | live (manual) | M11 | yes, deliberately |
 
-Frozen fixture: the measured 7.0.0 → 7.1.0 numbers (counts, class populations,
-cheapest candidate per class) are written into a test as literal expectations over
-a *stored* decoded manifest fixture. They will drift when HoYo ships a new
-version — that is the point. The test names them `measured_2026_10_14` so the
-drift is legible rather than mysterious.
+**There is no stored decoded-manifest fixture, and that is a decision, not an
+oversight.** The original strategy here was to check in a decoded 7.1.0 `game`
+manifest and assert the measured numbers over it. It was declined in favour of
+building a *synthetic* corpus of the same shape, for the reason that decides
+everything else in this crate: a checked-in fixture can only ever test what it
+happened to contain, and it silently becomes wrong the moment HoYo ships a new
+version — with the failure looking like a code bug. The measured numbers are
+still asserted, as literals, against a corpus constructed to reproduce them, and
+the corpus is regenerated by the test every run.
+
+The one place the real artifact *is* checked in is the reference bundle under
+`artifacts/`, and it is read by `gircap verify` and by `girpr`'s
+`artifact_bridge` rather than by a Rust assertion.
+
+Two further properties the suite holds deliberately, and which are worth
+preserving through any change to it:
+
+- **no `#[ignore]`** — nothing is silently skipped. The two expensive suites
+  (`artifact_bridge`, and the live capture) are run by hand, not ignored into
+  the default run.
+- **no fixture files under `tests/`** — the directory is 100% `.rs`, and every
+  fixture is generated at test time.
 
 ---
 

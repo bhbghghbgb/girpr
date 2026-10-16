@@ -84,6 +84,17 @@ pub enum Class {
     FullReuseReordered,
 }
 
+/// Whether a shape is *partially* reusable: some chunks survive and some do not.
+///
+/// Three of the nine classes are exactly this, differing only in whether the
+/// offset moved and whether the size changed. It was spelled out three times
+/// inside [`Class::matches`], and each spelling is a place where the definition
+/// of "partial" can drift without anything noticing — the same failure the
+/// `select` sort comparator has already had once.
+const fn is_partial(reused: u64, nchunks: u64) -> bool {
+    reused > 0 && reused < nchunks
+}
+
 impl Class {
     /// Whether this class is the skip branch.
     ///
@@ -115,17 +126,12 @@ impl Class {
     /// the classes that are cheap and reliably satisfiable pick first, and the
     /// one that is usually unsatisfiable never costs a class that could use a
     /// cheap candidate.
-    pub const REQUIRED_ORDER: [Class; 9] = [
-        Class::Identical,
-        Class::ZeroReuseSingle,
-        Class::ZeroReuseMulti,
-        Class::PartialSameOffset,
-        Class::PartialMovedOffset,
-        Class::PartialSizeChanged,
-        Class::Added,
-        Class::Removed,
-        Class::FullReuseReordered,
-    ];
+    ///
+    /// **`= ALL`, not a second list.** The two were spelled out separately and
+    /// had drifted into the same contents; the day they stop agreeing, a class
+    /// added to one and not the other becomes either invisible to `parse` or
+    /// invisible to admission, and neither failure names the other list.
+    pub const REQUIRED_ORDER: [Class; 9] = Class::ALL;
 
     /// The wire spelling, and the directory name a capture is filed under.
     pub const fn id(self) -> &'static str {
@@ -189,16 +195,17 @@ impl Class {
             Class::PartialSameOffset => matches!(
                 s,
                 Scored { size_equal: true, moved: 0, reused, nchunks, .. }
-                    if reused > 0 && reused < nchunks
+                    if is_partial(reused, nchunks)
             ),
             Class::PartialMovedOffset => matches!(
                 s,
-                Scored { moved, reused, nchunks, .. } if moved > 0 && reused > 0 && reused < nchunks
+                Scored { moved, reused, nchunks, .. }
+                    if moved > 0 && is_partial(reused, nchunks)
             ),
             Class::PartialSizeChanged => matches!(
                 s,
                 Scored { size_equal: false, moved: 0, reused, nchunks, .. }
-                    if reused > 0 && reused < nchunks
+                    if is_partial(reused, nchunks)
             ),
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
@@ -426,11 +433,12 @@ mod tests {
 
     #[test]
     fn every_required_order_entry_is_a_real_class_and_uniquely_once() {
-        assert_eq!(all_in_admission_order().len(), 9);
+        let n = Class::ALL.len();
+        assert_eq!(all_in_admission_order().len(), n);
         let mut sorted = all_in_admission_order();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), 9, "a class appears twice in REQUIRED_ORDER");
+        assert_eq!(sorted.len(), n, "a class appears twice in REQUIRED_ORDER");
         assert_eq!(sorted, Class::ALL);
     }
 

@@ -26,20 +26,39 @@ use std::io::Write as _;
 
 /// Hex MD5 of `bytes`, lowercase.
 pub fn md5_hex(bytes: &[u8]) -> String {
-    hex(&md5::compute(bytes).0)
+    hex_bytes(&md5::compute(bytes).0)
 }
 
 /// Hex SHA-256 of `bytes`, lowercase.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
-    hex(&Sha256::digest(bytes))
+    hex_bytes(&Sha256::digest(bytes))
 }
 
+const HEX_LOWER: [u8; 16] = *b"0123456789abcdef";
+const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
+
 /// Lowercase hex, two characters per byte.
-fn hex(bytes: &[u8]) -> String {
+///
+/// **Table-driven, and `with_capacity`.** The hand-rolled versions this
+/// replaced each called `format!` once per byte, so a 32-byte MD5 allocated 32
+/// `String`s to build one — and `emit::index` ran it over every file in the
+/// bundle on every digest pass. Two pushes into a pre-sized buffer is the same
+/// answer for none of the cost.
+pub fn hex_bytes(bytes: &[u8]) -> String {
+    hex_with(bytes, &HEX_LOWER)
+}
+
+/// Uppercase hex, two characters per byte — the form percent-encoding requires.
+pub fn hex_bytes_upper(bytes: &[u8]) -> String {
+    hex_with(bytes, &HEX_UPPER)
+}
+
+fn hex_with(bytes: &[u8], table: &[u8; 16]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+    for &b in bytes {
+        s.push(table[(b >> 4) as usize] as char);
+        s.push(table[(b & 0x0F) as usize] as char);
     }
     s
 }
@@ -166,6 +185,22 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         );
+    }
+
+    /// `hex_bytes` is the one place the crate spells hex now, so its own edges
+    /// are worth pinning: every value, both cases, and the empty body.
+    #[test]
+    fn hex_covers_every_byte_value_in_both_cases() {
+        let all: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(hex_bytes(&all).len(), 512);
+        assert_eq!(hex_bytes(&all), all.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        assert_eq!(
+            hex_bytes_upper(&all),
+            all.iter().map(|b| format!("{b:02X}")).collect::<String>()
+        );
+        assert_eq!(hex_bytes(b""), "");
+        assert_eq!(hex_bytes(&[0x00, 0x0f, 0xf0, 0xff]), "000ff0ff");
+        assert_eq!(hex_bytes_upper(&[0x00, 0x0f, 0xf0, 0xff]), "000FF0FF");
     }
 
     /// *Measured* live 2026-10-14: the 7.1.0 game archive is 9 007 187 bytes and

@@ -105,14 +105,12 @@ fn percent_encode(s: &str) -> String {
         return s.to_string();
     }
     let mut out = String::with_capacity(s.len() + 8);
+    let mut buf = [0u8; 4];
     for c in s.chars() {
         if TEXT_ESCAPES.contains(&c) {
             // Non-ASCII is encoded too, as UTF-8 bytes, so the encoding is
             // reversible on any host and not just one with the right codepage.
-            let mut buf = [0u8; 4];
-            for b in c.encode_utf8(&mut buf).as_bytes() {
-                out.push_str(&format!("%{b:02X}"));
-            }
+            out.push_str(&crate::biz::percent(c.encode_utf8(&mut buf).as_bytes()));
         } else {
             out.push(c);
         }
@@ -176,7 +174,7 @@ impl From<&[u8]> for Val {
         if let Ok(s) = std::str::from_utf8(v) {
             return Val::Str(s.to_string());
         }
-        Val::Str(v.iter().map(|b| format!("{b:02x}")).collect())
+        Val::Str(crate::hash::hex_bytes(v))
     }
 }
 impl From<i64> for Val {

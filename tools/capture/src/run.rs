@@ -689,9 +689,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     );
     written.extend(prelude);
     let assembly_failures = rows.iter().filter(|a| !a.ok).count();
-    for a in rows.iter().filter(|a| !a.ok) {
-        tracing::error!(assertion = a.id, subject = %a.subject, detail = %a.actual, "selfcheck row failed");
-    }
+    report_failed_rows(&rows);
     tracing::info!(
         rows = rows.len(),
         failures = assembly_failures,
@@ -739,15 +737,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &written,
         plan.no_chunk_blobs,
     ));
-    for a in rows.iter().filter(|a| !a.ok) {
-        tracing::error!(
-            assertion = a.id,
-            subject = %a.subject,
-            expected = %a.expected,
-            actual = %a.actual,
-            "selfcheck row failed"
-        );
-    }
+    report_failed_rows(&rows);
 
     let input = ManifestInput {
         started,
@@ -770,22 +760,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // A17 is about the matrix this document carries, so it is settled here and
     // appended to the rows the rest of the close-out will write.
     let (a17_ok, a17_detail) = manifest.a17();
-    rows.push(if a17_ok {
-        emit::selfcheck::Assertion::pass(
-            "A17",
-            emit::selfcheck::wording("A17"),
-            "MANIFEST.json matrix",
-            &a17_detail,
-        )
-    } else {
-        emit::selfcheck::Assertion::fail(
-            "A17",
-            emit::selfcheck::wording("A17"),
-            "MANIFEST.json matrix",
-            "every class captured | covered_by | unavailable",
-            &a17_detail,
-        )
-    });
+    rows.push(selfcheck_row(
+        "A17",
+        "MANIFEST.json matrix",
+        "every class captured | covered_by | unavailable",
+        a17_ok,
+        &a17_detail,
+    ));
 
     // `files[]` now that every other document exists, so it lists as much as it
     // can. It cannot list itself, README or checksums — `checksums.json` is the
@@ -825,22 +806,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         // Second pass: record A16, then re-write the two documents it changed.
         // The re-scan sees the final `selfcheck.json`, so the second
         // `checksums.json` is the authoritative one.
-        selfcheck.assertions.push(if a16_ok {
-            emit::selfcheck::Assertion::pass(
-                "A16",
-                emit::selfcheck::wording("A16"),
-                "verify/checksums.json",
-                &a16_detail,
-            )
-        } else {
-            emit::selfcheck::Assertion::fail(
-                "A16",
-                emit::selfcheck::wording("A16"),
-                "verify/checksums.json",
-                "covers every file under the artifact root, and re-hashing matches",
-                &a16_detail,
-            )
-        });
+        selfcheck.assertions.push(selfcheck_row(
+            "A16",
+            "verify/checksums.json",
+            "covers every file under the artifact root, and re-hashing matches",
+            a16_ok,
+            &a16_detail,
+        ));
         selfcheck =
             emit::selfcheck::Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
         emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
@@ -1385,6 +1357,50 @@ pub fn failure_summary_detail(event: &'static str, code: ExitCode, detail: Optio
     match detail {
         Some(d) => s.set("detail", d),
         None => s,
+    }
+}
+
+/// One selfcheck row, pass or fail.
+///
+/// `expected` is stated even on a pass, because `selfcheck.json` records what
+/// was being checked and a reader who has to infer it from the id has to go and
+/// look it up. A17 and A16 were each spelled out inline; they differ only in
+/// their subject and their expectation.
+fn selfcheck_row(
+    id: &'static str,
+    subject: &'static str,
+    expected: &'static str,
+    ok: bool,
+    detail: &str,
+) -> emit::selfcheck::Assertion {
+    if ok {
+        emit::selfcheck::Assertion::pass(id, emit::selfcheck::wording(id), subject, detail)
+    } else {
+        emit::selfcheck::Assertion::fail(
+            id,
+            emit::selfcheck::wording(id),
+            subject,
+            expected,
+            detail,
+        )
+    }
+}
+
+/// Log every selfcheck row that did not pass, with what it expected.
+///
+/// **The fuller of the two spellings this replaced.** One call site logged
+/// `detail` and omitted `expected`; the other logged both. The one that dropped
+/// a field was the strict subset, so keeping the fuller form means no log line
+/// anywhere in the crate is less informative than it used to be.
+fn report_failed_rows(rows: &[crate::emit::selfcheck::Assertion]) {
+    for a in rows.iter().filter(|a| !a.ok) {
+        tracing::error!(
+            assertion = a.id,
+            subject = %a.subject,
+            expected = %a.expected,
+            actual = %a.actual,
+            "selfcheck row failed"
+        );
     }
 }
 

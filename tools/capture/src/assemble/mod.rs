@@ -77,6 +77,20 @@ pub struct PlanEntry {
     pub note: Option<String>,
 }
 
+impl PlanEntry {
+    /// Whether this chunk's bytes come from a **different offset** in the old
+    /// file than where they land in the new one.
+    ///
+    /// One definition for the `partial_moved_offset` class, the `Totals::moved`
+    /// count and the per-entry note. It was spelled out three times, and the
+    /// three had to agree or the note would contradict the count.
+    pub fn is_moved(&self) -> bool {
+        self.source_range
+            .as_ref()
+            .is_some_and(|s| s.start != self.target_range.start)
+    }
+}
+
 /// A local range in the old file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceRange {
@@ -816,14 +830,7 @@ fn build_map(
         chunks: p.len(),
         reuse: p.iter().filter(|e| e.decision == Decision::Reuse).count(),
         fetch: p.iter().filter(|e| e.decision == Decision::Fetch).count(),
-        moved: p
-            .iter()
-            .filter(|e| {
-                e.source_range
-                    .as_ref()
-                    .is_some_and(|s| s.start != e.target_range.start)
-            })
-            .count(),
+        moved: p.iter().filter(|e| e.is_moved()).count(),
         download_bytes: p
             .iter()
             .filter(|e| e.decision == Decision::Fetch)
@@ -853,7 +860,11 @@ fn build_map(
     // and saying so is better than claiming a result that does not exist.
     let expectations = match new {
         Some(n) => Expectations {
-            result_path: Some(format!("expected/{}", input.pair.path)),
+            result_path: Some(format!(
+                "{}/{}",
+                crate::emit::EXPECTED_TREE,
+                input.pair.path
+            )),
             result_md5: Some(n.declared_md5.clone()),
             absent_after: false,
             download_bytes: totals.map_or(0, |t| t.download_bytes),
@@ -1116,14 +1127,7 @@ mod tests {
         assert_eq!(p.fetched, 1, "chunk 4 is new content");
         assert_eq!(p.moved, 1, "only chunk 3 changed offset");
         let plan = a.map.plan.as_ref().unwrap();
-        let moved = plan
-            .iter()
-            .find(|e| {
-                e.source_range
-                    .as_ref()
-                    .is_some_and(|s| s.start != e.target_range.start)
-            })
-            .expect("a moved entry");
+        let moved = plan.iter().find(|e| e.is_moved()).expect("a moved entry");
         assert_eq!(moved.target_range.start, 64);
         assert_eq!(
             moved.source_range.as_ref().unwrap().start,

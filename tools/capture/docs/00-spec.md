@@ -1,6 +1,9 @@
 # `gircap` — live-artifact capture for `girpr` testing
 
-**Status:** spec (design agreed, nothing built yet)
+**Status:** implemented. The crate is complete through M13 and is the tool this
+document specifies; the milestones in [`02-plan.md`](02-plan.md) have all landed.
+What remains here is specification, not a to-do list — where this document and the
+code disagree, the code is right and this document is a bug.
 **Scope:** `tools/capture` only. This document and its siblings describe *this*
 tool; they say nothing about `girpr`'s behaviour beyond what is needed to know
 what a correct artifact looks like.
@@ -286,8 +289,11 @@ For a captured path `P` and version pair `(O, N)`:
 
 **`materialize_old ∪ materialize_new` is closed.** Nothing in the artifact may
 depend on a file or blob that was not retained. This is asserted during capture
-and re-provable offline by `gircap materialize --offline`, which rebuilds both
-files from `chunks/` with no network and checks both manifest MD5s.
+and re-provable offline by `gircap materialize`, which rebuilds both files from
+`chunks/` with no network and checks both manifest MD5s. There is no `--offline`
+flag: `materialize` never opens a socket, so the flag would have asserted
+something it cannot affect. (`gircap verify --artifact` is the read-only half and
+is likewise offline by construction.)
 
 Blobs are stored **content-addressed by chunk id**, once, at
 `chunks/blobs/<chunk-id>.zst`, with `chunks/index.json` mapping every
@@ -408,7 +414,14 @@ Each row is `{assertion, subject, expected, actual, ok}`.
 | A16 | `checksums.json` covers every file written under the artifact root, and re-hashing matches |
 | A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` - never absent |
 
-**`gircap capture` exits non-zero if any of A1-A14 fails.**
+**`gircap capture` exits non-zero if any of the assertions it records fails.**
+
+Precisely: `capture` records **A1-A17 and A19** — twenty rows minus the two that
+are `verify`-only, which are A18 and A20. It exits `3` when any *recorded* row
+failed. A row that was **skipped** rather than failed is a different verdict and
+exits `0`: a `--no-chunk-blobs` run cannot prove A6-A12 or A19, records them as
+skipped, and reports `result: "incomplete"` in its `SUMMARY` line rather than
+claiming a pass. A caller that cares must read `result`, not just the exit code.
 
 ### A18 — and what `verify` does *not* re-derive
 
@@ -484,6 +497,23 @@ at `stored_path` is the bytes the index describes. A blob the index lists with n
 path (which is what `--no-chunk-blobs` produces) is **red, not skipped**: that is
 the finding that the bundle cannot be materialized.
 
+### `--require-class` defaults to **nothing**
+
+An empty `--require-class` is **not** "every required class". The implementation
+requires nothing unless a class is named, so a capture whose matrix leaves a
+class `unavailable` still exits `0`; the unavailable row is the finding, not the
+exit code. This reverses the design this document originally described, and the
+reversal is deliberate and recorded in [`02-plan.md`](02-plan.md): a bundle that
+is honest about a class it cannot cover is a useful fixture, and failing the
+whole capture over it would make the tool unusable on a real version pair. A
+caller that needs the stronger rule asks for it:
+
+```
+gircap capture … --require-class identical --require-class added
+```
+
+and gets exit `4` when one of them is unmet.
+
 ---
 
 ## 7. CLI
@@ -496,7 +526,7 @@ gircap capture
   [--old-tag <tag>]                           (default: main.diff_tags[0])
   [--per-class N]                             (default 1 — files per matrix class)
   [--max-download-bytes N]                    (default: unlimited)
-  [--require-class <id>…]                     (fail if unmet; default: all required)
+  [--require-class <id>…]                     (fail if unmet; default: NONE)
   [--files <rel-path>…]                       (bypass selection; still scored + recorded)
   [--audio <code>…|none]                      (default en-us; sets the scan file AND
                                                the selection pool — see §4.1/§4.3)
@@ -516,11 +546,16 @@ gircap list        --root <DIR>               # index every capture under a root
 
 | code | meaning |
 |---|---|
-| `0` | artifact complete and every asserted invariant green |
+| `0` | the run completed. **Read `result`**: `pass` means every asserted invariant is green, `incomplete` means rows were *skipped* (a `--no-chunk-blobs` bundle) rather than proven |
 | `1` | usage / configuration error |
 | `2` | network or API failure (incl. an unservable `--old-tag`) |
 | `3` | an assertion failed — the artifact is **not** trustworthy |
 | `4` | a `--require-class` could not be satisfied |
+
+Exit `0` with `result: incomplete` is not a pass. A `--no-chunk-blobs` capture
+provably cannot establish A6-A12 or A19, so it exits `0` and records them as
+skipped; a harness that treats "exited 0" as "every claim in this bundle is
+proven" will be wrong about exactly the bundles that prove least.
 
 ### Output
 

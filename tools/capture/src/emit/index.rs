@@ -22,6 +22,8 @@ use super::selfcheck;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hash;
+
 /// One file under the artifact root, as both index documents record it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -94,12 +96,11 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
             }
         }
     };
-    let to_hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
     Ok(FileEntry {
         path: String::new(),
         bytes,
-        md5: to_hex(&md5c.compute().0),
-        sha256: to_hex(&sha2::Digest::finalize(sha)),
+        md5: hash::hex_bytes(&md5c.compute().0),
+        sha256: hash::hex_bytes(&sha2::Digest::finalize(sha)),
         encoding,
     })
 }
@@ -281,7 +282,6 @@ pub type ManifestFile = FileEntry;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash;
 
     fn scratch(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("gircap-m8-{name}-{}", std::process::id()));

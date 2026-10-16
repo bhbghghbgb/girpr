@@ -372,13 +372,42 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
             });
         }
     }
-    out.sort_by(|a, b| {
-        a.budget_cost()
-            .cmp(&b.budget_cost())
-            .then_with(|| field_rank(&a.candidate.field).cmp(&field_rank(&b.candidate.field)))
-            .then_with(|| a.candidate.path.cmp(&b.candidate.path))
-    });
+    out.sort_by(cost_then_field_then_path);
     out
+}
+
+/// Cheapest first, then the field with `game` ranked first, then by path.
+///
+/// **One definition, two call sites.** [`candidates`] sorts the pool with it and
+/// [`select`] sorts `wants` with it, and those two orders must agree: a fate
+/// list computed over one order and read at the positions of the other admitted
+/// a 108 B candidate under a 100 B ceiling, exactly as the comment at the phase-2
+/// sort records. The tie-break is part of the artifact, so it is spelled once.
+fn cost_then_field_then_path(a: &SizedCandidate, b: &SizedCandidate) -> std::cmp::Ordering {
+    a.budget_cost()
+        .cmp(&b.budget_cost())
+        .then_with(|| field_rank(&a.candidate.field).cmp(&field_rank(&b.candidate.field)))
+        .then_with(|| a.candidate.path.cmp(&b.candidate.path))
+}
+
+/// The clause that ends both of the artifact's "the budget would not fund this"
+/// sentences.
+///
+/// `Rejection.reason` and `MatrixRow.reason` are two *different* sentences and
+/// both already appear in shipped bundles, so they cannot be unified without
+/// being a band-3 change to two artifact-visible strings. What can be shared is
+/// the part that would silently drift — the verb, the cost and the reason — and
+/// that is what this is.
+///
+/// The subjects differ on purpose: a rejection names the candidate that was
+/// refused, a matrix row names the cheapest candidate of a class, and a reader
+/// looking at one of those rows is answering a different question.
+///
+/// **This string is only reachable when a budget is set.** The default capture is
+/// unlimited, so the byte-diff harness cannot see it; the wording is pinned by
+/// `tests/matrix.rs` instead.
+fn unfunded(cost: u64) -> String {
+    format!("costs {cost} B and the budget could not fund it")
 }
 
 /// Run the three admission phases.
@@ -501,12 +530,7 @@ pub fn select(
     // two orders were silently out of step.
     let mut ordered: Vec<usize> = (0..wants.len()).collect();
     ordered.sort_by(|&a, &b| {
-        let sa = &wants[a].2;
-        let sb = &wants[b].2;
-        sa.budget_cost()
-            .cmp(&sb.budget_cost())
-            .then_with(|| field_rank(&sa.candidate.field).cmp(&field_rank(&sb.candidate.field)))
-            .then_with(|| sa.candidate.path.cmp(&sb.candidate.path))
+        cost_then_field_then_path(&wants[a].2, &wants[b].2)
     });
     let costs: Vec<u64> = ordered.iter().map(|&i| wants[i].2.budget_cost()).collect();
     let (fates, final_budget) =
@@ -523,10 +547,7 @@ pub fn select(
                 matching_field: c.candidate.field.clone(),
                 state: c.candidate.state,
                 budget_cost: c.budget_cost(),
-                reason: format!(
-                    "costs {} B and the budget could not fund it",
-                    c.budget_cost()
-                ),
+                reason: unfunded(c.budget_cost()),
             });
             continue;
         }
@@ -555,9 +576,7 @@ pub fn select(
             MatrixStatus::Unavailable => {}
             MatrixStatus::CoveredBy => {}
             MatrixStatus::Captured | MatrixStatus::OverBudget => {
-                let hit = admitted.iter().find(|a| {
-                    a.primary_class == row.class || a.also_satisfies.contains(&row.class)
-                });
+                let hit = admitted.iter().find(|a| a.satisfies(row.class));
                 match hit {
                     Some(a) => {
                         row.status = MatrixStatus::Captured;
@@ -566,15 +585,15 @@ pub fn select(
                     }
                     None => {
                         row.status = MatrixStatus::OverBudget;
+                        let cheapest = wants
+                            .iter()
+                            .filter(|(c, _, _)| *c == row.class)
+                            .map(|(_, _, c)| c.budget_cost())
+                            .min()
+                            .unwrap_or(0);
                         row.reason = Some(format!(
-                            "the cheapest candidate costs {} B and the budget could not \
-                             fund it",
-                            wants
-                                .iter()
-                                .filter(|(c, _, _)| *c == row.class)
-                                .map(|(_, _, c)| c.budget_cost())
-                                .min()
-                                .unwrap_or(0)
+                            "the cheapest candidate {}",
+                            unfunded(cheapest)
                         ));
                     }
                 }
@@ -923,7 +942,7 @@ mod tests {
         assert!(!same.unsatisfied());
         // Nothing else has a candidate, so every other row is unavailable and
         // the matrix is complete rather than short.
-        assert_eq!(s.matrix.len(), 9);
+        assert_eq!(s.matrix.len(), Class::ALL.len());
     }
 
     /// `--per-class 2` takes a second candidate per class, cheapest first.
@@ -1029,7 +1048,7 @@ mod tests {
             .filter(|r| r.status == MatrixStatus::Unavailable)
             .count();
         assert_eq!(unavailable, 7);
-        assert_eq!(s.unmet().len(), 9, "nothing in this fixture is satisfied");
+        assert_eq!(s.unmet().len(), Class::ALL.len(), "nothing in this fixture is satisfied");
         assert!(s.admitted.is_empty());
         assert_eq!(s.bytes_admitted, 0);
     }
@@ -1063,7 +1082,7 @@ mod tests {
     #[test]
     fn the_matrix_has_exactly_one_row_per_class_in_admission_order() {
         let s = select(&all_nine(), 1, Budget::unlimited(), &[]);
-        assert_eq!(s.matrix.len(), 9);
+        assert_eq!(s.matrix.len(), Class::ALL.len());
         let ids: Vec<Class> = s.matrix.iter().map(|r| r.class).collect();
         assert_eq!(ids, Class::REQUIRED_ORDER.to_vec());
     }
@@ -1106,7 +1125,7 @@ mod tests {
         // may be naming a file for a future version. The matrix is still
         // complete, because a phantom path says nothing about which classes the
         // pool can satisfy.
-        assert_eq!(s.matrix.len(), 9);
+        assert_eq!(s.matrix.len(), Class::ALL.len());
         assert_eq!(s.admitted.len(), 8, "the eight real ones still went in");
     }
 

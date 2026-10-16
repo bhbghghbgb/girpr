@@ -883,7 +883,7 @@ fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
                     // A header with non-UTF-8 bytes is recorded as its hex, not
                     // dropped: losing it would make the record incomplete in a
                     // way nobody could see.
-                    .unwrap_or_else(|_| v.as_bytes().iter().map(|b| format!("{b:02x}")).collect()),
+                    .unwrap_or_else(|_| crate::hash::hex_bytes(v.as_bytes())),
             )
         })
         .collect()

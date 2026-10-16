@@ -338,13 +338,39 @@ fn push_pair(url: &mut String, key: &str, value: &str) {
 /// so a `password` with a `/` or a space cannot change the request's shape.
 pub fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut run = Vec::new();
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                // Flush any pending escape run first, so a literal byte is never
+                // emitted after the escapes that follow it.
+                if !run.is_empty() {
+                    out.push_str(&percent(&run));
+                    run.clear();
+                }
                 out.push(b as char)
             }
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => run.push(b),
         }
+    }
+    if !run.is_empty() {
+        out.push_str(&percent(&run));
+    }
+    out
+}
+
+/// `%XX` for each byte, uppercase — the spelling `application/x-www-form-
+/// urlencoded` requires.
+///
+/// Public because `report` percent-encodes the same way for the `SUMMARY`
+/// line; two encoders that disagree would make a value unquotable.
+pub fn percent(bytes: &[u8]) -> String {
+    let hex = crate::hash::hex_bytes_upper(bytes);
+    let mut out = String::with_capacity(bytes.len() * 3);
+    for pair in hex.as_bytes().chunks(2) {
+        out.push('%');
+        out.push(pair[0] as char);
+        out.push(pair[1] as char);
     }
     out
 }

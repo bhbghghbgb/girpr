@@ -39,6 +39,7 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   └── <field>.paths.tsv                     # always plain; path \t size \t md5 \t nchunks
 ├── diff/
 │   ├── paths.diff.json
+│   ├── matrix.json                             # one row per matrix class
 │   ├── paths.tsv                             # path \t state \t old_size \t new_size \t cost
 │   ├── candidates.json
 │   └── reuse_pool.json
@@ -60,9 +61,16 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `partial_same_offset`,
 `partial_moved_offset+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
-Nothing under `chunks/` or `manifests/` is ever deleted by the tool. Any
-temporary file it creates is written into `tmp/` and moved into place, and is
-removed only on success — `verify/checksums.json` proves nothing is missing.
+Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
+
+**Atomicity is not uniform, and this is deliberate.** Chunk blobs are the only
+artifacts written through a `tmp/` file that is then moved into place, and a
+blob's `stored_path` points at a name that does not exist until the move
+happens. The metadata documents, the assembled `game/` and `expected/` files and
+`manifests/*` are written with a plain create-and-write: each is small enough
+that a torn write is a small, reproducible failure, and routing them through the
+same dance would only hide *which* step failed. A reader must therefore not
+assume any document in a bundle was renamed into position.
 
 ---
 
@@ -97,9 +105,9 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   },
   "totals": {
     "files_captured": 8,
-    "chunks_blobs": 41,
-    "bytes_downloaded": 96041377,
-    "bytes_on_disk": 98812044
+    "chunks_blobs": 38,
+    "bytes_downloaded": 47592933,
+    "bytes_on_disk": 208234547
   },
   "matrix": [                            // one row per required class, in admission order
     { "class": "identical", "status": "captured", "capture_id": "identical",
@@ -359,15 +367,16 @@ new_size \t reused \t moved \t patch_bytes \t total_cost`), sorted by `path`.
 
 ## 10. `diff/candidates.json`
 
-The scoring table, for every common path (not just the winners) unless
-`--max-candidate-rows` trims it. Lets a later run ask "why did it pick that?"
+The scoring table, for **every** common path, not just the winners. Lets a later
+run ask "why did it pick that?"
 
 ```jsonc
 { "schema_version": 1,
-  "columns": ["path","old_size","new_size","nchunks","reused","moved","same_md5",
-              "old_bytes","new_bytes","patch_bytes","total_cost","classes"],
+  "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
+              "same_md5","old_bytes","new_bytes","patch_bytes","total_cost","classes","rank"],
   "rows": [
-    { "path": "…/HoYoChannel.dll", "old_size": 2340264, "new_size": 2340264,
+    { "path": "…/HoYoChannel.dll", "matching_field": "game",
+      "old_size": 2340264, "new_size": 2340264,
       "nchunks": 3, "reused": 1, "moved": 0, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
       "total_cost": 1826067, "classes": ["partial_same_offset"], "rank": 1 }
@@ -375,6 +384,11 @@ The scoring table, for every common path (not just the winners) unless
 ```
 
 Column-oriented so a reader can sort without re-parsing objects.
+
+`matching_field` names the pool the path was scored from (`game`, or an audio
+code). It is a row column because the same relative path can appear in more than
+one pool, and without it a reader summing `total_cost` across rows would double
+count. `rank` is 1-based, in `total_cost` order.
 
 ## 11. `diff/reuse_pool.json`
 
@@ -409,8 +423,9 @@ when several files or both builds reference it.
       "sha256_compressed": "…",
       "uncompressed_size": 1626019,
       "unknown_field6": 5814299429820432384,
-      "verified": { "md5_compressed_matches": true, "md5_decompressed_matches": true,
-                    "size_matches": true },
+      "decode_error": null,
+      "verified": { "raw_size_matches": true, "md5_compressed_matches": true,
+                    "md5_decompressed_matches": true, "decoded_size_matches": true },
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
           "capture_id": "partial_same_offset",
@@ -429,6 +444,27 @@ when several files or both builds reference it.
 
 `role` ∈ `materialize_old` | `materialize_new` | `patch_fetch`. `patch_fetch` is
 always a subset of `materialize_new` for the same file (assertion A12).
+
+### `verified` — four keys, not three
+
+`verified` carries the **four** A6 checks, and the names are precise:
+
+| key | claim |
+|---|---|
+| `raw_size_matches` | `len(raw) == compressed_size` — the blob arrived whole |
+| `md5_compressed_matches` | `md5(raw) == compressed_md5` — it arrived *intact*, not merely complete |
+| `md5_decompressed_matches` | `md5(zstd(raw)) == uncompressed_md5` — it is the chunk the manifest named |
+| `decoded_size_matches` | `len(decoded) == uncompressed_size` |
+
+There is **no `size_matches` key**; the two size claims are named separately
+because they are separate facts about different byte counts (the frame's length
+as served, and the length after decoding).
+
+`decode_error` sits beside `verified` and is **`null` on every blob today's
+captures contain**. It is the reason a blob that arrived but would not decode is
+still recorded — with the two decode-dependent `verified` keys false — rather than
+dropped. A reader that requires `decode_error` to be present must read it as
+optional: the field is `Option<String>`.
 
 ### `build_id` — part of the chunk's address
 
@@ -597,7 +633,7 @@ and every differing file is exactly one that needs patching.
       "md5": "d992a78915ebc0cc31b86d10b05c14e4f",
       "sha256": "…", "encoding": "identity" }
   ],
-  "file_count": 96, "total_bytes": 98812044 }
+  "file_count": 96, "total_bytes": 208303086 }
 ```
 
 **`encoding: gzip` means the digest is of the _decompressed_ body**, and `bytes`
@@ -619,7 +655,7 @@ the implementation disagreed.
 ```jsonc
 { "schema_version": 1,
   "result": "pass",                                  // pass | fail | incomplete
-  "counts": { "total": 71, "passed": 71, "failed": 0 },
+  "counts": { "total": 116, "passed": 116, "failed": 0 },
   "assertions": [
     { "id": "A6", "assertion": "chunk decompressed md5 matches",
       "subject": "chunks/blobs/340ca86e….zst",
@@ -631,15 +667,22 @@ the implementation disagreed.
 }
 ```
 
-One row per assertion **instance**, not per assertion kind — 71 chunks produce 71
-A6 rows. `ok:false` rows are never dropped; a failing capture leaves them in
-place so the failure is inspectable rather than summarized away.
+One row per assertion **instance**, not per assertion kind — 38 stored chunks
+produce 38 A6 rows, so `counts.total` is much larger than the number of ids. In
+the reference bundle it is 116: 38 A6 rows plus the other 78 instances. `ok:false`
+rows are never dropped; a failing capture leaves them in place so the failure is
+inspectable rather than summarized away.
 
-A capture's `selfcheck.json` never contains an `A18` row: A18 is a statement
-about the bundle rather than about the run, so only `gircap verify` can assert
-it. A reader who sees an `A18` row in this file has been handed a `verify`
-report, not a capture's own account of itself — which is exactly why it carries
-an id outside the seventeen rather than being folded into A7/A8.
+A skipped row is recorded too, and is **not** a failure: `ok` is absent and the
+row is listed under `skipped`. A `--no-chunk-blobs` capture skips A6-A12 and
+A19, reports `result: "incomplete"`, and exits `0`.
+
+A capture's `selfcheck.json` never contains an `A18` **or** an `A20` row: both
+are statements about the bundle rather than about the run, so only
+`gircap verify` can assert them. A reader who sees either id in this file has
+been handed a `verify` report, not a capture's own account of itself — which is
+exactly why they carry ids outside the seventeen rather than being folded into
+A7/A8.
 
 ## 17. `README.md`
 
