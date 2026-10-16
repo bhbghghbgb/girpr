@@ -23,8 +23,8 @@
 use serde::Serialize;
 
 use crate::hash;
-use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
 use crate::hash::Encoding;
+use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
 use crate::hyp::GetBuild;
 
 pub mod diff;
@@ -334,11 +334,7 @@ impl CapturedManifest {
 
     /// The archive URL it came from.
     pub fn url(&self) -> String {
-        self.meta
-            .declared
-            .manifest_download
-            .url_prefix
-            .to_owned()
+        self.meta.declared.manifest_download.url_prefix.to_owned()
             + "/"
             + &self.meta.manifest.id
             + &self.meta.declared.manifest_download.url_suffix
@@ -396,7 +392,8 @@ pub async fn capture(
             ),
         ));
     }
-    let decompressed = hash::zstd_decompress(&fetched.body, &url).map_err(|e| ApiError::shape(&url, e))?;
+    let decompressed =
+        hash::zstd_decompress(&fetched.body, &url).map_err(|e| ApiError::shape(&url, e))?;
 
     // The declared sizes, as strings, beside what was actually fetched.
     let declared_compressed = size_of(declared.manifest.compressed_size.as_ref());
@@ -591,7 +588,11 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         folders: entries.iter().filter(|e| e.is_folder).count() as u64,
         total_chunks: entries.iter().map(|e| e.chunks.len() as u64).sum(),
         max_chunk_compressed_bytes: max_chunk,
-        total_file_bytes: entries.iter().filter(|e| !e.is_folder).map(|e| e.size as u64).sum(),
+        total_file_bytes: entries
+            .iter()
+            .filter(|e| !e.is_folder)
+            .map(|e| e.size as u64)
+            .sum(),
         structure: s,
     }
 }
@@ -614,7 +615,11 @@ pub fn reconcile(
         }
     };
     check("file_count", stats.and_then(|s| s.files()), decoded.files);
-    check("chunk_count", stats.and_then(|s| s.chunks()), decoded.total_chunks);
+    check(
+        "chunk_count",
+        stats.and_then(|s| s.chunks()),
+        decoded.total_chunks,
+    );
     check(
         "uncompressed_size",
         stats.and_then(|s| s.uncompressed_bytes()),
@@ -659,15 +664,14 @@ mod tests {
     #[test]
     fn a_clean_manifest_reports_every_structure_counter_zero() {
         let entries = vec![
-            file(
-                "a",
-                vec![chunk(0, 100), chunk(100, 50)],
-                150,
-            ),
+            file("a", vec![chunk(0, 100), chunk(100, 50)], 150),
             file("b/c", vec![], 0),
         ];
         let d = decode_counts(&entries);
-        assert_eq!((d.entries, d.files, d.folders, d.total_chunks), (2, 2, 0, 2));
+        assert_eq!(
+            (d.entries, d.files, d.folders, d.total_chunks),
+            (2, 2, 0, 2)
+        );
         assert_eq!(d.total_file_bytes, 150);
         assert_eq!(d.max_chunk_compressed_bytes, 100);
         assert!(d.structure.clean(), "{:?}", d.structure);
@@ -677,19 +681,27 @@ mod tests {
     /// Spec §3.6: a violation must be *counted*, not fatal — the capture still
     /// works and the selfcheck says which property broke.
     /// Each input breaks the property it is named for.
-///
-/// Asserting *containment* rather than equality is deliberate, and is the honest
-/// form: the six properties are not independent. Walking a chunk list in the
-/// order it is stored, any out-of-order offsets are *also* non-gapless — there
-/// is no way to present them out of order and still cover `0..size` in one pass.
-/// A test demanding that one broken property be the only broken one would be
-/// demanding the counters be wrong.
-#[test]
+    ///
+    /// Asserting *containment* rather than equality is deliberate, and is the honest
+    /// form: the six properties are not independent. Walking a chunk list in the
+    /// order it is stored, any out-of-order offsets are *also* non-gapless — there
+    /// is no way to present them out of order and still cover `0..size` in one pass.
+    /// A test demanding that one broken property be the only broken one would be
+    /// demanding the counters be wrong.
+    #[test]
     fn each_input_breaks_the_property_it_is_named_for() {
         let cases: Vec<(&str, SophonChunkFile, &str)> = vec![
             ("empty_paths", file("", vec![], 0), "empty_paths"),
-            ("backslash_paths", file("a\\b", vec![], 0), "backslash_paths"),
-            ("non_ascii_paths", file("a/\u{4e2d}\u{6587}", vec![], 0), "non_ascii_paths"),
+            (
+                "backslash_paths",
+                file("a\\b", vec![], 0),
+                "backslash_paths",
+            ),
+            (
+                "non_ascii_paths",
+                file("a/\u{4e2d}\u{6587}", vec![], 0),
+                "non_ascii_paths",
+            ),
             (
                 "unsorted_chunk_offsets",
                 file("x", vec![chunk(100, 50), chunk(0, 100)], 150),
@@ -725,7 +737,10 @@ mod tests {
         // a hole at 50..60, so `Σ == size` holds and only the gap is reported.
         let gap = decode_counts(&[file("x", vec![chunk(0, 50), chunk(60, 90)], 140)]);
         assert_eq!(gap.structure.violations(), vec!["non_gapless_files"]);
-        assert_eq!(gap.structure.unsorted_chunk_offsets, 0, "offsets are still ascending");
+        assert_eq!(
+            gap.structure.unsorted_chunk_offsets, 0,
+            "offsets are still ascending"
+        );
         assert_eq!(gap.structure.size_mismatch_files, 0);
 
         // Chunks covering 0..100 exactly, against a declared size of 200: the
@@ -746,7 +761,11 @@ mod tests {
 
     #[test]
     fn a_duplicate_path_is_counted_per_extra_occurrence() {
-        let d = decode_counts(&[file("a", vec![], 0), file("a", vec![], 0), file("a", vec![], 0)]);
+        let d = decode_counts(&[
+            file("a", vec![], 0),
+            file("a", vec![], 0),
+            file("a", vec![], 0),
+        ]);
         assert_eq!(d.structure.duplicate_paths, 2);
         assert_eq!(d.structure.violations(), vec!["duplicate_paths"]);
     }
@@ -830,10 +849,7 @@ mod tests {
             compressed_size: Some("9007187".into()),
             uncompressed_size: Some("16827424".into()),
         };
-        assert_eq!(
-            m.id_prefix(),
-            Some("manifest_671e1a92a6cf53ff")
-        );
+        assert_eq!(m.id_prefix(), Some("manifest_671e1a92a6cf53ff"));
         assert_eq!(m.id_suffix(), Some(m.checksum.as_str()));
         let parts = IdParts {
             prefix_16hex: m.id_prefix().unwrap().to_string(),
@@ -857,8 +873,14 @@ mod tests {
         };
         assert!(ok.all_green());
         for bad in [
-            Verified { decompressed_md5_matches_checksum: false, ..ok.clone() },
-            Verified { checksum_matches_id_suffix: false, ..ok.clone() },
+            Verified {
+                decompressed_md5_matches_checksum: false,
+                ..ok.clone()
+            },
+            Verified {
+                checksum_matches_id_suffix: false,
+                ..ok.clone()
+            },
         ] {
             assert!(!bad.all_green());
         }

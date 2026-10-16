@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::hash::{self, Encoding};
 use crate::cli::ManifestDetail;
+use crate::hash::{self, Encoding};
 use crate::manifest::proto::SophonChunkFile;
 use crate::manifest::{CapturedManifest, ManifestMeta, Stored};
 
@@ -75,7 +75,6 @@ pub fn write(
     gzip_threshold: u64,
     detail: crate::cli::ManifestDetail,
 ) -> std::io::Result<Vec<StoredAs>> {
-    
     let tag = captured.tag.clone();
     let field = captured.matching_field.clone();
     let mut out = Vec::with_capacity(4);
@@ -103,7 +102,10 @@ pub fn write(
         let gzipped = hash::should_gzip(body.len(), gzip_threshold);
         let uncompressed_bytes = body.len() as u64;
         let (rel, encoding) = if gzipped {
-            (format!("{}.json.gz", full_prefix(&tag, &field)), Encoding::Gzip)
+            (
+                format!("{}.json.gz", full_prefix(&tag, &field)),
+                Encoding::Gzip,
+            )
         } else {
             (
                 format!("{}.json", full_prefix(&tag, &field)),
@@ -416,7 +418,9 @@ mod tests {
         assert!(plain_root.join(&full.path).exists());
         assert_eq!(
             full.uncompressed_bytes,
-            std::fs::metadata(plain_root.join(&full.path)).unwrap().len()
+            std::fs::metadata(plain_root.join(&full.path))
+                .unwrap()
+                .len()
         );
 
         let gz_root = tmp("gzip-gz");
@@ -457,8 +461,7 @@ mod tests {
         // The plain and gzipped forms decompress to the same document, which is
         // what makes `checksums.json` able to carry one digest for both.
         let plain =
-            std::fs::read_to_string(plain_root.join("manifests/7.1.0/game.manifest.json"))
-                .unwrap();
+            std::fs::read_to_string(plain_root.join("manifests/7.1.0/game.manifest.json")).unwrap();
         assert_eq!(hash::md5_hex(plain.as_bytes()), hash::md5_hex(&back));
 
         let _ = std::fs::remove_dir_all(&plain_root);
@@ -475,7 +478,10 @@ mod tests {
         assert_eq!(tsv.encoding, Encoding::Identity);
         assert!(!tsv.path.ends_with(".gz"));
         let text = std::fs::read_to_string(root.join(&tsv.path)).unwrap();
-        assert!(text.starts_with("path\tsize\tmd5\tnchunks\tis_folder\n"), "{text}");
+        assert!(
+            text.starts_with("path\tsize\tmd5\tnchunks\tis_folder\n"),
+            "{text}"
+        );
         assert!(!text.contains('\r'), "LF endings only");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -498,10 +504,7 @@ mod tests {
 
     #[test]
     fn a_manifest_with_no_entries_still_produces_a_header() {
-        assert_eq!(
-            paths_tsv(&[]),
-            "path\tsize\tmd5\tnchunks\tis_folder\n"
-        );
+        assert_eq!(paths_tsv(&[]), "path\tsize\tmd5\tnchunks\tis_folder\n");
     }
 
     /// `--manifest-detail paths-only` was a flag that did nothing until now.
@@ -523,8 +526,14 @@ mod tests {
             ]
         );
         assert!(!root.join(full_prefix("7.1.0", "game") + ".json").exists());
-        assert!(root.join(archive_rel("7.1.0", "game")).exists(), "the archive stays");
-        assert!(root.join(paths_rel("7.1.0", "game")).exists(), "the sidecar stays");
+        assert!(
+            root.join(archive_rel("7.1.0", "game")).exists(),
+            "the archive stays"
+        );
+        assert!(
+            root.join(paths_rel("7.1.0", "game")).exists(),
+            "the sidecar stays"
+        );
 
         let meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join(paths[2])).unwrap()).unwrap();
@@ -562,7 +571,10 @@ mod tests {
         assert_eq!(v["build_id"], "sMXGW2ll3Fuu");
         assert_eq!(v["matching_field"], "game");
         let e = &v["entries"][0];
-        assert!(e["chunks"][0].get("unknown_field6").is_some(), "field 6 is preserved");
+        assert!(
+            e["chunks"][0].get("unknown_field6").is_some(),
+            "field 6 is preserved"
+        );
         assert_eq!(v["entries"].as_array().unwrap().len(), 3);
         let _ = std::fs::remove_dir_all(&root);
     }

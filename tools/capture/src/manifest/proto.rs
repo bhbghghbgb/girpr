@@ -89,34 +89,32 @@ mod tests {
 
     fn sample() -> SophonChunkManifest {
         SophonChunkManifest {
-            chuncks: vec![
-                SophonChunkFile {
-                    file: "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
-                    chunks: vec![
-                        SophonChunk {
-                            id: "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3".into(),
-                            uncompressed_md5: "de1cfe6927dacbc58d2d55a0b45ea0f3".into(),
-                            offset: 0,
-                            compressed_size: 259_795,
-                            uncompressed_size: 690_719,
-                            unknown_field6: 8_640_275_792_690_937_856,
-                            compressed_md5: "06ba73bb".into(),
-                        },
-                        SophonChunk {
-                            id: "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b".into(),
-                            uncompressed_md5: "291a7719a4a23664d37825a41fad3c5b".into(),
-                            offset: 690_719,
-                            compressed_size: 638_614,
-                            uncompressed_size: 1_626_019,
-                            unknown_field6: 5_814_299_429_820_432_384,
-                            compressed_md5: "79f1d319".into(),
-                        },
-                    ],
-                    is_folder: false,
-                    size: 2_340_264,
-                    md5: "d992a789".into(),
-                },
-            ],
+            chuncks: vec![SophonChunkFile {
+                file: "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
+                chunks: vec![
+                    SophonChunk {
+                        id: "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3".into(),
+                        uncompressed_md5: "de1cfe6927dacbc58d2d55a0b45ea0f3".into(),
+                        offset: 0,
+                        compressed_size: 259_795,
+                        uncompressed_size: 690_719,
+                        unknown_field6: 8_640_275_792_690_937_856,
+                        compressed_md5: "06ba73bb".into(),
+                    },
+                    SophonChunk {
+                        id: "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b".into(),
+                        uncompressed_md5: "291a7719a4a23664d37825a41fad3c5b".into(),
+                        offset: 690_719,
+                        compressed_size: 638_614,
+                        uncompressed_size: 1_626_019,
+                        unknown_field6: 5_814_299_429_820_432_384,
+                        compressed_md5: "79f1d319".into(),
+                    },
+                ],
+                is_folder: false,
+                size: 2_340_264,
+                md5: "d992a789".into(),
+            }],
         }
     }
 
@@ -147,7 +145,11 @@ mod tests {
         assert!(got.chuncks[0].chunks.is_empty());
         assert_eq!(got.chuncks[0].size, 0);
         assert_eq!(got.chuncks[0].chunk_bytes(), 0);
-        assert_eq!(got.chuncks[0].covered_end(), 0, "an empty file covers nothing");
+        assert_eq!(
+            got.chuncks[0].covered_end(),
+            0,
+            "an empty file covers nothing"
+        );
         assert_eq!(got.chuncks[0].md5, "d41d8cd98f00b204e9800998ecf8427e");
     }
 
@@ -182,8 +184,12 @@ mod tests {
 
     #[test]
     fn an_empty_manifest_decodes_to_no_entries() {
-        let got = SophonChunkManifest::decode(SophonChunkManifest { chuncks: vec![] }.encode_to_vec().as_slice())
-            .expect("decodes");
+        let got = SophonChunkManifest::decode(
+            SophonChunkManifest { chuncks: vec![] }
+                .encode_to_vec()
+                .as_slice(),
+        )
+        .expect("decodes");
         assert!(got.chuncks.is_empty());
     }
 
@@ -239,6 +245,9 @@ mod tests {
             ]
         );
         // Field 6 is preserved verbatim, not dropped for being unknown.
-        assert_eq!(f["chunks"][0]["unknown_field6"], 8_640_275_792_690_937_856i64);
+        assert_eq!(
+            f["chunks"][0]["unknown_field6"],
+            8_640_275_792_690_937_856i64
+        );
     }
 }

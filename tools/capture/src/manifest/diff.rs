@@ -453,8 +453,8 @@ fn reuse_pool(
                 pool.new_chunks_md5_present_in_old_manifest += 1;
             }
             // Reachable from this same file?
-            let in_same_file = file_index
-                .is_some_and(|idx| idx.contains_key(&c.identity().into_key()));
+            let in_same_file =
+                file_index.is_some_and(|idx| idx.contains_key(&c.identity().into_key()));
             if in_manifest && !in_same_file {
                 pool.cross_file_only_chunks += 1;
                 pool.cross_file_only_bytes_forgone += c.compressed_size.max(0) as u64;
@@ -469,11 +469,7 @@ fn reuse_pool(
 }
 
 /// Aggregate several field diffs into `diff/paths.diff.json`.
-pub fn aggregate(
-    old_tag: &str,
-    new_tag: &str,
-    fields: &[FieldDiff],
-) -> PathDiff {
+pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff {
     let mut counts = Counts::default();
     let mut byte_counts = ByteCounts::default();
     let mut added = Vec::new();
@@ -523,7 +519,10 @@ pub fn aggregate(
         added,
         removed,
         by_field,
-        new_chunks_reusable_at_all: fields.iter().map(|f| f.pool.new_chunks_md5_present_in_old_manifest).sum(),
+        new_chunks_reusable_at_all: fields
+            .iter()
+            .map(|f| f.pool.new_chunks_md5_present_in_old_manifest)
+            .sum(),
     }
 }
 
@@ -743,13 +742,19 @@ mod tests {
         assert_eq!(moved.old_bytes, 10, "two old chunks of 5");
         assert_eq!(moved.new_bytes, 12, "5 + 7");
         assert_eq!(moved.patch_bytes, 7, "only ee is unfetchable");
-        assert_eq!(moved.total_cost, 22, "old_bytes + new_bytes, not patch_bytes");
+        assert_eq!(
+            moved.total_cost, 22,
+            "old_bytes + new_bytes, not patch_bytes"
+        );
         assert!(!moved.same_md5);
 
         let same = d.scores.iter().find(|s| s.path == "same").unwrap();
         assert_eq!(same.reused, 1);
         assert_eq!(same.moved, 0);
-        assert_eq!(same.patch_bytes, 0, "nothing to fetch for an identical file");
+        assert_eq!(
+            same.patch_bytes, 0,
+            "nothing to fetch for an identical file"
+        );
         assert!(same.same_md5);
     }
 
@@ -774,8 +779,14 @@ mod tests {
     /// the same content and must not be reused.
     #[test]
     fn a_chunk_with_a_shared_md5_but_a_different_length_is_not_reusable() {
-        let old = manifest("7.0.0", vec![file("f", "o", vec![chunk("a", "shared", 0, 10, 5)])]);
-        let new = manifest("7.1.0", vec![file("f", "n", vec![chunk("a", "shared", 0, 7, 5)])]);
+        let old = manifest(
+            "7.0.0",
+            vec![file("f", "o", vec![chunk("a", "shared", 0, 10, 5)])],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![file("f", "n", vec![chunk("a", "shared", 0, 7, 5)])],
+        );
         let d = diff_field(&old, &new).unwrap();
         assert_eq!(d.scores[0].reused, 0);
         assert_eq!(d.scores[0].patch_bytes, 5);
@@ -811,8 +822,7 @@ mod tests {
         let d = diff_field(&old, &new).unwrap();
         assert_eq!(d.pool.new_chunks_total, 2);
         assert_eq!(
-            d.pool.new_chunks_md5_present_in_old_manifest,
-            2,
+            d.pool.new_chunks_md5_present_in_old_manifest, 2,
             "`shared` is in `donor` and `own` is in `hungry`; both are present \
              somewhere in the old manifest"
         );
@@ -859,8 +869,14 @@ mod tests {
 
     #[test]
     fn a_chunk_in_its_own_old_file_is_never_counted_as_cross_file() {
-        let old = manifest("7.0.0", vec![file("f", "o", vec![chunk("a", "aa", 0, 10, 5)])]);
-        let new = manifest("7.1.0", vec![file("f", "n", vec![chunk("a", "aa", 0, 10, 5)])]);
+        let old = manifest(
+            "7.0.0",
+            vec![file("f", "o", vec![chunk("a", "aa", 0, 10, 5)])],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![file("f", "n", vec![chunk("a", "aa", 0, 10, 5)])],
+        );
         let d = diff_field(&old, &new).unwrap();
         assert_eq!(d.pool.cross_file_only_chunks, 0);
         assert_eq!(d.pool.cross_file_only_bytes_forgone, 0);
@@ -969,7 +985,10 @@ mod tests {
     fn game_ranks_before_the_audio_fields_not_alphabetically() {
         assert!(field_rank(GAME_FIELD) < field_rank("en-us"));
         assert!(field_rank(GAME_FIELD) < field_rank("zh-cn"));
-        assert!(field_rank("en-us") < field_rank("zh-cn"), "and then by name");
+        assert!(
+            field_rank("en-us") < field_rank("zh-cn"),
+            "and then by name"
+        );
         assert_eq!(field_rank("en-us"), (1, "en-us"));
     }
 
@@ -1015,7 +1034,10 @@ mod tests {
         assert_eq!(lines.len(), 5, "header plus four paths");
         assert!(!tsv.contains('\r'), "LF endings only");
         // Sorted by path, so two tags' sidecars diff as a diff.
-        let paths: Vec<&str> = lines[1..].iter().map(|l| l.split('\t').nth(1).unwrap()).collect();
+        let paths: Vec<&str> = lines[1..]
+            .iter()
+            .map(|l| l.split('\t').nth(1).unwrap())
+            .collect();
         assert_eq!(paths, vec!["fresh", "gone", "moved", "same"]);
         assert!(lines[1].contains("\tadded\t"), "{}", lines[1]);
         // A one-sided row has no score, and says so with empties rather than
@@ -1051,7 +1073,11 @@ mod tests {
         assert_eq!(diff.by_field.len(), 2);
         assert_eq!(diff.by_field["game"].common, 2);
         assert_eq!(diff.by_field["en-us"].added, 1);
-        assert!(diff.added.iter().all(|s| s.contains(':')), "{:?}", diff.added);
+        assert!(
+            diff.added.iter().all(|s| s.contains(':')),
+            "{:?}",
+            diff.added
+        );
         assert!(diff.added.contains(&"game:fresh".to_string()));
         assert!(diff.added.contains(&"en-us:fresh".to_string()));
         assert!(diff.is_a_real_upgrade());
@@ -1059,7 +1085,10 @@ mod tests {
 
     #[test]
     fn a_pair_of_identical_manifests_is_not_an_upgrade() {
-        let same = manifest("7.1.0", vec![file("a", "m", vec![chunk("x", "xx", 0, 1, 1)])]);
+        let same = manifest(
+            "7.1.0",
+            vec![file("a", "m", vec![chunk("x", "xx", 0, 1, 1)])],
+        );
         let d = diff_field(&same, &same).unwrap();
         assert!(!aggregate("7.0.0", "7.1.0", &[d]).is_a_real_upgrade());
     }
