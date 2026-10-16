@@ -151,7 +151,7 @@ message SophonChunkFile {
 message SophonChunk {
   string id = 1;  string uncompressed_md5 = 2;
   int64 offset = 3;  int64 compressed_size = 4;  int64 uncompressed_size = 5;
-  int64 unknown = 6;  string compressed_md5 = 7;
+  int64 unknown_field6 = 6;  string compressed_md5 = 7;
 }
 ```
 

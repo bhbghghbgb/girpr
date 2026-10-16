@@ -85,7 +85,7 @@ selfcheck does not pass, is not a fixture: re-capture it.
 
 ## Status
 
-Built through milestone **M12**. A live `capture` writes the `api/` documents
+Built through milestone **M13**. A live `capture` writes the `api/` documents
 byte-exact — including `api/tag_probe.json` and `api/error_shapes.json`, the two
 generated measurements — fetches and verifies the `game` manifest for both
 builds, diffs them, and assembles a **complete artifact**:
