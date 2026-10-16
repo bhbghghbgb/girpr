@@ -361,12 +361,16 @@ pub async fn probe_error_shapes(
     // Same shape, three ways: the request this tool would have made, with
     // exactly one thing wrong. Built from the good URL rather than assembled by
     // hand, so a probe cannot drift into a spelling the tool never sends.
+    //
+    // The bogus values are deliberately generic (`null` / `undefined`) rather
+    // than naming this tool: a request the origin logs must not identify the
+    // client behind it.
     let good_build = endpoints.get_build_url(params, None);
-    let bad_package = with_param(&good_build, "package_id", "gircap-probe-no-such-package");
-    let unknown_tag = endpoints.get_build_url(params, Some("0.0.0-gircap-probe"));
+    let bad_package = with_param(&good_build, "package_id", "undefined");
+    let unknown_tag = endpoints.get_build_url(params, Some("null"));
     let good_configs = endpoints.hyp_url(biz, crate::biz::HypEndpoint::GameConfigs, "en-us");
     let good_branches = endpoints.hyp_url(biz, crate::biz::HypEndpoint::GameBranches, "en-us");
-    let bad_game = "gircap-probe-no-such-game";
+    let bad_game = "undefined";
 
     let wanted: Vec<(&str, Family, String, String, bool)> = vec![
         (

@@ -229,11 +229,12 @@ fn open_log_file(path: &Path) -> std::io::Result<AppendFile> {
 
 /// The `User-Agent` every request carries.
 ///
-/// Sent as a real header rather than left to the client default so that a captured
-/// `api/requests.ndjson` records who issued the request, and so the CDN's logs
-/// name this tool rather than an anonymous `reqwest`.
+/// A generic Unity player string rather than one naming this tool: the API is a
+/// third party, and a request should not identify the client that made it. It is
+/// still sent as a real header rather than left to the client default, so a
+/// captured `api/requests.ndjson` records exactly what the CDN saw.
 pub fn user_agent() -> String {
-    format!("gircap/{}", crate::VERSION)
+    "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)".to_string()
 }
 
 /// The resolved log-file path, for a run that wants to mention it in its summary.
@@ -269,10 +270,11 @@ mod tests {
     }
 
     #[test]
-    fn the_user_agent_names_the_tool_and_its_version() {
-        let ua = user_agent();
-        assert!(ua.starts_with("gircap/"), "{ua}");
-        assert!(ua.ends_with(crate::VERSION), "{ua}");
+    fn the_user_agent_is_the_generic_unity_player_string() {
+        assert_eq!(
+            user_agent(),
+            "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)"
+        );
     }
 
     #[test]

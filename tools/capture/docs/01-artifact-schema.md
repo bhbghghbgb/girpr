@@ -147,7 +147,7 @@ One object per HTTP request, in issue order.
   "range": null,                        // literal Range header sent, if any
   "status": 200, "final_url": "https://…", "redirected": false,
   "elapsed_ms": 418,
-  "req_headers":  { "user-agent": "gircap/0.1.0", "accept-encoding": "gzip" },
+  "req_headers":  { "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)", "accept-encoding": "gzip" },
   "resp_headers": { "content-type": "application/octet-stream", "content-length": "9007187",
                     "etag": "\"313EA8…\"", "last-modified": "…", "accept-ranges": "bytes",
                     "content-md5": "MT6ox…", "server": "AliyunOSS", "x-cache": "Hit from cloudfront",

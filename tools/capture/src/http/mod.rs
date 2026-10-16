@@ -1087,7 +1087,10 @@ mod tests {
             final_url: "https://x/getGameConfigs".into(),
             redirected: false,
             elapsed_ms: 418,
-            req_headers: BTreeMap::from([("user-agent".to_string(), "gircap/0.1.0".to_string())]),
+            req_headers: BTreeMap::from([(
+                "user-agent".to_string(),
+                "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)".to_string(),
+            )]),
             resp_headers: BTreeMap::from([("etag".to_string(), "\"313EA8\"".to_string())]),
             bytes_in: 1529,
             stored_as: Some("api/getGameConfigs.json".into()),
