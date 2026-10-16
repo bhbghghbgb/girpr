@@ -510,12 +510,13 @@ fn assemble_side(
     tag: &str,
     src: &ChunkSource,
 ) -> Result<FileResult, String> {
-    let parts: Vec<(i64, i64)> = entry
-        .chunks
-        .iter()
-        .map(|c| (c.offset, c.uncompressed_size))
-        .collect();
-    let layout = Layout::of(&parts, entry.size);
+    let layout = Layout::of(
+        entry
+            .chunks
+            .iter()
+            .map(|c| (c.offset, c.uncompressed_size)),
+        entry.size,
+    );
     if !layout.is_clean() {
         return Err(format!(
             "{tag} {}: does not satisfy A11 — {}",
@@ -826,19 +827,35 @@ fn build_map(
         md5: r.declared_md5.clone(),
         nchunks: r.nchunks,
     };
-    let totals = plan.map(|p| Totals {
-        chunks: p.len(),
-        reuse: p.iter().filter(|e| e.decision == Decision::Reuse).count(),
-        fetch: p.iter().filter(|e| e.decision == Decision::Fetch).count(),
-        moved: p.iter().filter(|e| e.is_moved()).count(),
-        download_bytes: p
-            .iter()
-            .filter(|e| e.decision == Decision::Fetch)
-            .map(|e| e.compressed_size)
-            .sum(),
-        materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
-        materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
-    });
+    let totals = // One pass for all four numbers. It was five, each re-walking the plan and
+        // each calling `is_moved()` or comparing `decision` again.
+        plan.map(|p| {
+            let mut reuse = 0_usize;
+            let mut fetch = 0_usize;
+            let mut moved = 0_usize;
+            let mut download_bytes = 0_i64;
+            for e in p {
+                match e.decision {
+                    Decision::Reuse => reuse += 1,
+                    Decision::Fetch => {
+                        fetch += 1;
+                        download_bytes += e.compressed_size;
+                    }
+                }
+                if e.is_moved() {
+                    moved += 1;
+                }
+            }
+            Totals {
+                chunks: p.len(),
+                reuse,
+                fetch,
+                moved,
+                download_bytes,
+                materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
+                materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
+            }
+        });
     // `plan` is `Some` for every capture that has a new side, so `totals` is too.
     // Checked rather than defaulted: a `download_bytes` of `0` on a capture that
     // does have a plan would be a false claim, and one with no plan would be

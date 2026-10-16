@@ -31,6 +31,7 @@ pub mod props;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,22 +70,33 @@ impl ChunkIndex {
     /// *meant* to agree and are written by different code is how an index comes
     /// to claim a blob is in `patch_fetch` while no reference says so.
     pub fn build(entries: Vec<(IndexedBlob, Vec<Set>)>) -> ChunkIndex {
-        let mut sets: BTreeMap<String, Vec<String>> = Set::ALL
+        // Keyed by `&str` and looked up by `&str`, so a blob's id is *borrowed*
+        // while it is filed rather than cloned once per role it belongs to. The
+        // three role lists are pre-seeded below, so the lookup never allocates a
+        // key either; it only grows a `Vec`.
+        //
+        // Two passes: the first borrows, the second consumes. That is strictly
+        // less work than the one pass it replaces, which cloned every blob in
+        // order to move it into `blobs` a few lines later.
+        let mut sets: BTreeMap<&str, Vec<&str>> = Set::ALL
             .iter()
-            .map(|s| (s.id().to_string(), Vec::new()))
+            .map(|s| (s.id(), Vec::new()))
             .collect();
-        let mut blobs = Vec::with_capacity(entries.len());
-        for (blob, roles) in entries {
-            for role in &roles {
-                sets.entry(role.id().to_string())
+        for (blob, roles) in &entries {
+            for role in roles {
+                sets.entry(role.id())
                     .or_default()
-                    .push(blob.props.chunk_id.clone());
+                    .push(&blob.props.chunk_id);
             }
-            blobs.push(blob);
         }
+        // Owned before `entries` is consumed, so the borrow of the ids ends.
+        let sets: BTreeMap<String, Vec<String>> = sets
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.into_iter().map(str::to_string).collect()))
+            .collect();
         ChunkIndex {
             schema_version: crate::SCHEMA_VERSION,
-            blobs,
+            blobs: entries.into_iter().map(|(blob, _)| blob).collect(),
             sets,
         }
     }
@@ -98,7 +110,7 @@ impl ChunkIndex {
     pub fn failing(&self) -> Vec<&IndexedBlob> {
         self.blobs
             .iter()
-            .filter(|b| !b.props.failures().is_empty() || b.props.decode_error.is_some())
+            .filter(|b| b.props.any_failure() || b.props.decode_error.is_some())
             .collect()
     }
 }
@@ -153,6 +165,17 @@ impl Sources {
 pub struct Store {
     root: PathBuf,
     sources: Sources,
+    /// `chunks/blobs/` has been created for this store.
+    ///
+    /// Every blob lands in that one directory and `write` runs once per blob
+    /// from concurrent tasks, so without this a capture pays a `create_dir_all`
+    /// — a stat chain, several of them on Windows — per blob to learn a fact
+    /// that cannot change mid-run. Only success is cached: an `Err` is retried
+    /// on the next blob, which is both harmless and the behaviour a caller
+    /// would want if the cause were transient.
+    ///
+    /// `Clone` shares it, which is what makes it correct across tasks.
+    blob_dir: Arc<std::sync::OnceLock<()>>,
 }
 
 impl Store {
@@ -170,6 +193,7 @@ impl Store {
         Store {
             root: root.to_path_buf(),
             sources,
+            blob_dir: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -349,8 +373,15 @@ impl Store {
     /// Write one blob, via `tmp/`, into `chunks/blobs/`.
     fn write(&self, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
         let final_path = self.root.join(rel);
-        let dir = final_path.parent().expect("a blob path has a parent");
-        std::fs::create_dir_all(dir)?;
+        let dir = final_path.parent().unwrap_or(&self.root);
+        // Created once per store, not once per blob. Only ever one directory: the
+        // one `BlobProps::stored_path_for` names. An `Err` is *not* cached, so
+        // a transient failure does not skip the rest of the run.
+        if self.blob_dir.get().is_none() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", dir.display())))?;
+            let _ = self.blob_dir.set(());
+        }
         let tmp = dir.join(format!(
             ".{}.tmp",
             final_path.file_name().unwrap_or_default().to_string_lossy()

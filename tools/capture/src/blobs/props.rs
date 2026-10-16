@@ -55,35 +55,64 @@ impl Verified {
     /// MD5 of this blob does not match what the manifest said", which is the
     /// difference between a bisectable report and a shrug.
     pub fn failures(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        if !self.raw_size_matches {
-            out.push("len(raw blob) == compressed_size");
-        }
-        if !self.md5_compressed_matches {
-            out.push("md5(raw blob) == compressed_md5");
-        }
-        if !self.md5_decompressed_matches {
-            out.push("md5(zstd(raw blob)) == uncompressed_md5");
-        }
-        if !self.decoded_size_matches {
-            out.push("len(decoded) == uncompressed_size");
-        }
-        out
+        self.failures_iter().collect()
+    }
+
+    /// Whether any of the four failed.
+    ///
+    /// For callers that only need the yes/no. `failures()` allocates a `Vec` to
+    /// say the same thing, and it is called from inside a `filter` over every
+    /// blob in the store — so the answer was being built and dropped once per
+    /// blob per format.
+    pub const fn any_failure(&self) -> bool {
+        !self.raw_size_matches
+            || !self.md5_compressed_matches
+            || !self.md5_decompressed_matches
+            || !self.decoded_size_matches
+    }
+
+    /// Which of the four did not hold, in the spec's order.
+    ///
+    /// The primitive: [`Verified::failures`] collects it and `Display` walks it
+    /// without collecting, so rendering a blob does not allocate on the two paths
+    /// that matter — all green, and exactly one failure.
+    pub fn failures_iter(&self) -> impl Iterator<Item = &'static str> {
+        [
+            (!self.raw_size_matches).then_some("len(raw blob) == compressed_size"),
+            (!self.md5_compressed_matches).then_some("md5(raw blob) == compressed_md5"),
+            (!self.md5_decompressed_matches).then_some("md5(zstd(raw blob)) == uncompressed_md5"),
+            (!self.decoded_size_matches).then_some("len(decoded) == uncompressed_size"),
+        ]
+        .into_iter()
+        .flatten()
     }
 }
 
 impl std::fmt::Display for Verified {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.failures().as_slice() {
-            [] => f.write_str("all four A6 checks hold"),
-            [only] => write!(f, "{only} does not hold"),
-            many => write!(
-                f,
-                "{} of the four A6 checks do not hold: {}",
-                many.len(),
-                many.join(", ")
-            ),
-        }
+        // Walked rather than collected: a `Display` that allocates a `Vec` to
+        // decide between "none", "one" and "many" pays for the rare case on
+        // every render, and this renders once per A6 row.
+        //
+        // `next()` is peeked, not destructured: consuming the second failure
+        // into a `_` pattern would drop it from the "many" branch.
+        let mut it = self.failures_iter();
+        let Some(first) = it.next() else {
+            return f.write_str("all four A6 checks hold");
+        };
+        let Some(second) = it.next() else {
+            return write!(f, "{first} does not hold");
+        };
+        let rest: Vec<&str> = std::iter::once(first)
+            .chain(std::iter::once(second))
+            .chain(it)
+            .collect();
+        write!(
+            f,
+            "{} of the four A6 checks do not hold: {}",
+            rest.len(),
+            rest.join(", ")
+        )
     }
 }
 
@@ -214,6 +243,15 @@ impl BlobProps {
     /// blob failing three of four is three findings.
     pub fn failures(&self) -> Vec<&'static str> {
         self.verified.map(|v| v.failures()).unwrap_or_default()
+    }
+
+    /// Whether this blob contributes any A6 row.
+    ///
+    /// See [`Verified::any_failure`]: this exists so the call site inside
+    /// `Store::index`'s `filter` does not build a `Vec` per blob to ask a
+    /// yes/no question.
+    pub fn any_failure(&self) -> bool {
+        self.verified.is_some_and(|v| v.any_failure())
     }
 
     /// Whether this blob can be assembled from.

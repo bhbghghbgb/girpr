@@ -62,7 +62,12 @@ impl State {
 ///
 /// Keyed by both because MD5 alone cannot distinguish a truncated chunk from a
 /// whole one, and a patch that reused a truncated chunk would be silently wrong.
-type ChunkKey = (String, i64);
+///
+/// **Borrowed, not owned.** This was `(String, i64)` built by an `into_key()`
+/// helper, so every chunk lookup allocated a `String` for a key that already
+/// existed inside the manifest — roughly 454 000 of them for a `game` field
+/// diff. `(&str, i64)` is already `Hash + Eq`, so the helper is gone.
+type ChunkKey<'a> = (&'a str, i64);
 
 /// One common path's score (§5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -268,14 +273,14 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     // Building them separately and then scanning for the entry inside the loop
     // would be O(n²) over ~2 700 paths — enough to be visible in a capture's
     // wall clock, and for no benefit.
-    let old_by_path: HashMap<&str, (&SophonChunkFile, HashMap<ChunkKey, Vec<i64>>)> = old
+    let old_by_path: HashMap<&str, (&SophonChunkFile, OldFileIndex<'_>)> = old
         .entries
         .iter()
         .map(|e| (e.file.as_str(), (e, index_file(e))))
         .collect();
 
-    // Old manifest-wide MD5 → set of paths holding it, for the reuse pool.
-    let old_md5_paths: HashMap<&str, HashSet<&str>> = build_md5_path_index(&old.entries);
+    // Old manifest-wide set of MD5s that appear anywhere, for the reuse pool.
+    let old_md5_paths: HashSet<&str> = build_md5_path_index(&old.entries);
 
     let new_paths: HashSet<&str> = new.entries.iter().map(|e| e.file.as_str()).collect();
 
@@ -333,7 +338,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     scores.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let pool = reuse_pool(old, new, &old_md5_paths);
+    let pool = reuse_pool(new, &old_by_path, &old_md5_paths);
 
     Ok(FieldDiff {
         field,
@@ -344,37 +349,58 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     })
 }
 
-/// `(key) -> [offsets]` for one file's chunks.
-fn index_file(e: &SophonChunkFile) -> HashMap<ChunkKey, Vec<i64>> {
-    let mut m: HashMap<ChunkKey, Vec<i64>> = HashMap::with_capacity(e.chunks.len());
-    for c in &e.chunks {
-        m.entry(c.identity().into_key()).or_default().push(c.offset);
-    }
-    m
-}
+/// Where each identity sits in one old file.
+type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
 
-trait KeyExt {
-    fn into_key(self) -> ChunkKey;
-}
-
-impl KeyExt for (&str, i64) {
-    fn into_key(self) -> ChunkKey {
-        (self.0.to_string(), self.1)
-    }
-}
-
-/// `uncompressed_md5 -> the old paths whose chunks carry it`.
+/// One old file's chunk index, plus the sum `score` would otherwise walk its
+/// chunks again to compute.
 ///
-/// MD5-only and one path per hash rather than one per chunk: the question this
-/// answers is "could this content come from *anywhere*", and a content hash
-/// appearing 400 times in one file is still one file.
-fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashMap<&str, HashSet<&str>> {
-    let mut m: HashMap<&str, HashSet<&str>> = HashMap::new();
+/// The byte total is folded into the index build because that walk is already
+/// happening: `score` used to make a second pass over the old file's chunks for
+/// `old_bytes`, once per common path.
+///
+/// Public because [`score`] is, and a public function cannot take a private
+/// type. Nothing outside this module should build one: [`index_file`] is the
+/// only way, and it is what guarantees the offset lists are sorted.
+pub struct OldFileIndex<'a> {
+    /// Where each identity sits in the old file.
+    offsets: FileIndex<'a>,
+    /// `Σ compressed_size` over the old file's chunks.
+    compressed_bytes: u64,
+}
+
+/// `(key) -> [offsets]` for one file's chunks, and its compressed byte total.
+///
+/// The offset lists are **sorted**, because the only thing done with them is a
+/// membership test and a linear `Vec::contains` is O(n) per chunk — quadratic
+/// in the chunks of one file, for a file with 400 of them.
+fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
+    let mut offsets: FileIndex<'_> = HashMap::with_capacity(e.chunks.len());
+    let mut compressed_bytes = 0_u64;
+    for c in &e.chunks {
+        offsets.entry(c.identity()).or_default().push(c.offset);
+        compressed_bytes += c.compressed_size.max(0) as u64;
+    }
+    for v in offsets.values_mut() {
+        v.sort_unstable();
+    }
+    OldFileIndex {
+        offsets,
+        compressed_bytes,
+    }
+}
+
+/// Old manifest-wide set of MD5s that appear anywhere.
+///
+/// A `HashSet`, not a `HashMap<&str, HashSet<&str>>`. The map's values were
+/// built for 113 610 old chunks and then never read — the one consumer asks
+/// `contains_key`, so every one of those inner sets was allocated to be
+/// discarded.
+fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
+    let mut m: HashSet<&str> = HashSet::with_capacity(entries.len());
     for e in entries {
         for c in &e.chunks {
-            m.entry(c.uncompressed_md5.as_str())
-                .or_default()
-                .insert(e.file.as_str());
+            m.insert(c.uncompressed_md5.as_str());
         }
     }
     m
@@ -384,7 +410,7 @@ fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashMap<&str, HashSet<&s
 pub fn score(
     new: &SophonChunkFile,
     old: &SophonChunkFile,
-    old_index: &HashMap<ChunkKey, Vec<i64>>,
+    old_index: &OldFileIndex<'_>,
 ) -> PathScore {
     let mut reused = 0_u64;
     let mut moved = 0_u64;
@@ -392,21 +418,20 @@ pub fn score(
     let mut new_bytes = 0_u64;
     for c in &new.chunks {
         new_bytes += c.compressed_size.max(0) as u64;
-        match old_index.get(&c.identity().into_key()) {
+        match old_index.offsets.get(&c.identity()) {
             Some(offsets) => {
                 reused += 1;
-                if !offsets.contains(&c.offset) {
+                // Binary search: `offsets` is sorted by `index_file`.
+                if offsets.binary_search(&c.offset).is_err() {
                     moved += 1;
                 }
             }
             None => patch_bytes += c.compressed_size.max(0) as u64,
         }
     }
-    let old_bytes = old
-        .chunks
-        .iter()
-        .map(|c| c.compressed_size.max(0) as u64)
-        .sum();
+    // Taken from the index build rather than walked again. `old` is still named
+    // for the fields below.
+    let old_bytes = old_index.compressed_bytes;
     PathScore {
         path: new.file.clone(),
         old_size: old.size,
@@ -423,17 +448,16 @@ pub fn score(
 }
 
 /// Measure what same-file-only reuse forgoes.
-fn reuse_pool(
-    old: &CapturedManifest,
+/// `old_by_path` is borrowed rather than rebuilt.
+///
+/// This used to construct the same `HashMap<&str, FileIndex>` — 113 610 inserts
+/// — from the same inputs, in the same call, a few lines after `diff_field` had
+/// already built it. About 40% of `diff`'s runtime, spent twice.
+fn reuse_pool<'a>(
     new: &CapturedManifest,
-    old_md5_paths: &HashMap<&str, HashSet<&str>>,
+    old_by_path: &HashMap<&'a str, (&'a SophonChunkFile, OldFileIndex<'a>)>,
+    old_md5_paths: &HashSet<&'a str>,
 ) -> ReusePool {
-    let old_by_path: HashMap<&str, HashMap<ChunkKey, Vec<i64>>> = old
-        .entries
-        .iter()
-        .map(|e| (e.file.as_str(), index_file(e)))
-        .collect();
-
     let mut pool = ReusePool {
         new_chunks_total: 0,
         new_chunks_md5_present_in_old_manifest: 0,
@@ -444,17 +468,17 @@ fn reuse_pool(
     };
 
     for e in &new.entries {
-        let file_index = old_by_path.get(e.file.as_str());
+        let file_index = old_by_path.get(e.file.as_str()).map(|(_, idx)| idx);
         let mut file_has_cross = false;
         for c in &e.chunks {
             pool.new_chunks_total += 1;
-            let in_manifest = old_md5_paths.contains_key(c.uncompressed_md5.as_str());
+            let in_manifest = old_md5_paths.contains(c.uncompressed_md5.as_str());
             if in_manifest {
                 pool.new_chunks_md5_present_in_old_manifest += 1;
             }
             // Reachable from this same file?
             let in_same_file =
-                file_index.is_some_and(|idx| idx.contains_key(&c.identity().into_key()));
+                file_index.is_some_and(|idx| idx.offsets.contains_key(&c.identity()));
             if in_manifest && !in_same_file {
                 pool.cross_file_only_chunks += 1;
                 pool.cross_file_only_bytes_forgone += c.compressed_size.max(0) as u64;

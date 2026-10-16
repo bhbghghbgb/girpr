@@ -376,6 +376,30 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     out
 }
 
+/// How many pool candidates satisfy each class, indexed by [`Class::ALL`].
+///
+/// One walk of the pool instead of nine. The nine numbers are the same ones the
+/// per-class `filter().count()` produced.
+fn considered_counts(pool: &[SizedCandidate]) -> [u64; 9] {
+    let mut counts = [0_u64; 9];
+    for c in pool {
+        for (i, class) in Class::ALL.iter().enumerate() {
+            if c.candidate.satisfies(*class) {
+                counts[i] += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// Where a class sits in [`Class::ALL`], for indexing [`considered_counts`].
+fn class_idx(class: Class) -> usize {
+    Class::ALL
+        .iter()
+        .position(|c| *c == class)
+        .expect("every class is in ALL")
+}
+
 /// Cheapest first, then the field with `game` ranked first, then by path.
 ///
 /// **One definition, two call sites.** [`candidates`] sorts the pool with it and
@@ -465,8 +489,12 @@ pub fn select(
     // order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     let mut notes: Vec<MatrixRow> = Vec::new();
+    // `candidates_considered` for every class, in **one** pass over the pool.
+    // It used to be nine, one per class, each re-walking 2 921 candidates; the
+    // counts are the same, they were just being recomputed nine times.
+    let considered_by_class = considered_counts(pool);
     for class in Class::REQUIRED_ORDER {
-        let considered = pool.iter().filter(|c| c.candidate.satisfies(class)).count() as u64;
+        let considered = considered_by_class[class_idx(class)];
 
         // Already answered by something captured for another reason?
         if let Some(cover) = admitted.iter().find(|a| a.satisfies(class)) {
@@ -687,6 +715,12 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
 }
 
 /// Every class in a row's `classes` list, in [`Class::ALL`] order.
+///
+/// Left as the linear `contains`. The plan lists it as a redundant pass, on the
+/// assumption that this runs per diff row; it does not — it has one caller, and
+/// it is a test. Routing it through [`Class::parse`] would replace nine string
+/// comparisons with nine *fallible* parses, each of which allocates an error
+/// string for an unparseable id.
 pub fn classes_in_order(ids: &[&str]) -> Vec<Class> {
     Class::ALL
         .into_iter()

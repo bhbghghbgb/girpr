@@ -522,10 +522,24 @@ fn render_size(v: Option<&crate::hyp::IntOrStr>) -> String {
 }
 
 /// Count the decode: totals, the largest chunk, and the six structural counters.
+///
+/// **One pass, and an O(1) duplicate test.** Every number this returns is
+/// accumulated in the loop below. It used to re-walk the same entries five more
+/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`, and
+/// to call `chunk_bytes()` for a sixth — a sum the chunk loop had already
+/// computed as its `cursor`, whenever the chunks happened to tile. And the
+/// duplicate check was `Vec::contains`, which is 2 744² / 2 ≈ 3.8 M string
+/// comparisons for the `game` field alone, on a value this module's own `diff`
+/// says must never be quadratic.
 pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
     let mut s = Structure::default();
-    let mut seen: Vec<&str> = Vec::with_capacity(entries.len());
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(entries.len());
     let mut max_chunk = 0_u64;
+    let mut files = 0_u64;
+    let mut folders = 0_u64;
+    let mut total_chunks = 0_u64;
+    let mut total_file_bytes = 0_u64;
 
     for e in entries {
         if e.file.is_empty() {
@@ -537,15 +551,26 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         if !e.file.is_ascii() {
             s.non_ascii_paths += 1;
         }
-        if seen.contains(&e.file.as_str()) {
+        if !seen.insert(e.file.as_str()) {
             s.duplicate_paths += 1;
-        } else {
-            seen.push(&e.file);
         }
+
+        if e.is_folder {
+            folders += 1;
+        } else {
+            files += 1;
+            total_file_bytes += e.size as u64;
+        }
+        total_chunks += e.chunks.len() as u64;
 
         let mut ascending = true;
         let mut gapless = true;
         let mut cursor = 0_i64;
+        // `Σ uncompressed_size`, which is what `chunk_bytes()` recomputed on a
+        // second walk. For a gapless file it is also `cursor`, so the two agree;
+        // for a gapful one only this sum is meaningful, which is why it is
+        // accumulated rather than read off the cursor.
+        let mut chunk_bytes = 0_i64;
         for (i, c) in e.chunks.iter().enumerate() {
             if c.compressed_size as u64 > max_chunk {
                 max_chunk = c.compressed_size as u64;
@@ -557,6 +582,7 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
                 gapless = false;
             }
             cursor = c.offset + c.uncompressed_size;
+            chunk_bytes += c.uncompressed_size;
         }
         // A folder carries no bytes, so none of the byte-level properties apply
         // to it; counting one would report a violation on every folder entry and
@@ -577,22 +603,18 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         if !gapless {
             s.non_gapless_files += 1;
         }
-        if e.chunk_bytes() != e.size {
+        if chunk_bytes != e.size {
             s.size_mismatch_files += 1;
         }
     }
 
     Decoded {
         entries: entries.len() as u64,
-        files: entries.iter().filter(|e| !e.is_folder).count() as u64,
-        folders: entries.iter().filter(|e| e.is_folder).count() as u64,
-        total_chunks: entries.iter().map(|e| e.chunks.len() as u64).sum(),
+        files,
+        folders,
+        total_chunks,
         max_chunk_compressed_bytes: max_chunk,
-        total_file_bytes: entries
-            .iter()
-            .filter(|e| !e.is_folder)
-            .map(|e| e.size as u64)
-            .sum(),
+        total_file_bytes,
         structure: s,
     }
 }

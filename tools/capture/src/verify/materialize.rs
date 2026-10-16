@@ -112,7 +112,9 @@ pub fn rebuild(
         .map(|(id, o)| (*o, sizes.get(id.as_str()).copied().unwrap_or(0) as i64))
         .collect();
     let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
-    let layout = Layout::of(&parts, declared_size);
+    // `parts` is still needed for `declared_size`; `Layout::of` takes it by
+    // value so the one-vector-holds-both property holds at the call site too.
+    let layout = Layout::of(parts.iter().copied(), declared_size);
     if !layout.is_clean() {
         return Err(format!(
             "{tag} {path} ({role}): does not satisfy A11 — {}",

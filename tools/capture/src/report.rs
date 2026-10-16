@@ -20,6 +20,7 @@
 //! writes here, which is what lets `--output json` be piped straight into a
 //! parser.
 
+use std::io::Write as _;
 use std::sync::Mutex;
 
 use crate::VERSION;
@@ -306,22 +307,27 @@ impl Record {
     /// label lowercased, so a non-terminal record (`BUNDLE` → `bundle`) is still
     /// self-identifying. The field is not written twice.
     pub fn to_json_line(&self) -> String {
-        let event = self
-            .fields
-            .iter()
-            .find(|(k, _)| *k == "event")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| Val::Str(self.json_event()));
+        // Borrowed, not cloned. It used to `clone()` the whole `Val` — and a
+        // `Val::Str` is a `String` — to render one field of a record it already
+        // held a reference to.
+        let fallback;
+        let event = match self.fields.iter().find(|(k, _)| *k == "event") {
+            Some((_, v)) => v,
+            None => {
+                fallback = Val::Str(self.json_event());
+                &fallback
+            }
+        };
         let mut s = String::with_capacity(64 + 24 * self.fields.len());
         s.push('{');
-        s.push_str(&json_string("event"));
+        push_json_key(&mut s, "event");
         s.push(':');
-        s.push_str(&json_value(&event));
+        push_json_value(&mut s, event);
         for (k, v) in self.fields.iter().filter(|(k, _)| *k != "event") {
             s.push(',');
-            s.push_str(&json_string(k));
+            push_json_key(&mut s, k);
             s.push(':');
-            s.push_str(&json_value(v));
+            push_json_value(&mut s, v);
         }
         s.push('}');
         s
@@ -339,6 +345,33 @@ impl Record {
             OutputFormat::Json => self.to_json_line(),
         });
     }
+}
+
+/// Push `"key"` onto `out`.
+///
+/// **Written straight into the buffer**, because a key is a `&'static str` of
+/// this crate's own choosing — `event`, `exit_code`, `result` — and every one
+/// of them is plain ASCII. `json_string` allocated a `String` per key, twice
+/// over for `event`, purely to be appended and dropped. The escape path is
+/// still there for the one case that needs it: a key that is *not* from this
+/// crate.
+fn push_json_key(out: &mut String, k: &str) {
+    out.push('"');
+    if is_plain_ascii_json(k) {
+        out.push_str(k);
+    } else {
+        out.push_str(&json_string(k));
+    }
+    out.push('"');
+}
+
+/// Whether `s` can go into a JSON string literal unescaped.
+///
+/// `serde_json` would escape `"` and `\`; both are excluded here so the two
+/// paths agree.
+fn is_plain_ascii_json(s: &str) -> bool {
+    s.bytes()
+        .all(|b| b >= 0x20 && b != b'"' && b != b'\\' && b.is_ascii())
 }
 
 /// A JSON string literal, with the escapes a raw quote would need.
@@ -359,11 +392,22 @@ fn json_string(s: &str) -> String {
 }
 
 /// A [`Val`] as a JSON literal, preserving its type.
-fn json_value(v: &Val) -> String {
+fn push_json_value(out: &mut String, v: &Val) {
+    use std::fmt::Write as _;
     match v {
-        Val::Str(s) => json_string(s),
-        Val::Int(i) => i.to_string(),
-        Val::Bool(b) => b.to_string(),
+        // The common case, written in place. A Windows artifact path is full of
+        // backslashes but JSON allows those unescaped, so most values take
+        // this branch and allocate nothing.
+        Val::Str(s) if is_plain_ascii_json(s) => {
+            out.push('"');
+            out.push_str(s);
+            out.push('"');
+        }
+        Val::Str(s) => out.push_str(&json_string(s)),
+        Val::Int(i) => {
+            let _ = write!(out, "{i}");
+        }
+        Val::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
     }
 }
 
@@ -379,8 +423,17 @@ static STDOUT_LOCK: Mutex<()> = Mutex::new(());
 /// Everything else on the data plane goes through [`Record::emit`], so there is
 /// no second writer for a record to escape from.
 pub fn emit(line: &str) {
+    // `writeln!` into an explicitly-locked handle, rather than `println!`.
+    //
+    // `println!` takes the stdout lock itself and then checks whether the
+    // handle is a terminal on every single call, so it pays for a "maybe a user
+    // is watching" decision once per record. `list` is the only unbounded
+    // producer — one `BUNDLE` per bundle under a root — and for the
+    // single-record commands this is noise. The handle is flushed by the
+    // `LineWriter` behind stdout on `drop`, and `exit_with` flushes too.
     let _guard = STDOUT_LOCK.lock();
-    println!("{line}");
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
     if let Some(rest) = line.strip_prefix("SUMMARY ") {
         tracing::debug!(summary = rest, "summary");
     } else {
