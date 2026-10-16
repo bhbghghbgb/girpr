@@ -77,7 +77,12 @@ impl std::fmt::Display for Verified {
         match self.failures().as_slice() {
             [] => f.write_str("all four A6 checks hold"),
             [only] => write!(f, "{only} does not hold"),
-            many => write!(f, "{} of the four A6 checks do not hold: {}", many.len(), many.join(", ")),
+            many => write!(
+                f,
+                "{} of the four A6 checks do not hold: {}",
+                many.len(),
+                many.join(", ")
+            ),
         }
     }
 }
@@ -171,7 +176,8 @@ impl BlobProps {
             verified: Some(Verified {
                 raw_size_matches: raw.len() as i64 == chunk.compressed_size,
                 md5_compressed_matches: md5_compressed == chunk.compressed_md5,
-                md5_decompressed_matches: md5_decompressed.as_deref() == Some(&chunk.uncompressed_md5),
+                md5_decompressed_matches: md5_decompressed.as_deref()
+                    == Some(&chunk.uncompressed_md5),
                 decoded_size_matches: matches!(decoded.as_ref(), Ok(d) if d.len() as i64 == chunk.uncompressed_size),
             }),
         })
@@ -266,7 +272,11 @@ mod tests {
     fn chunk_with(payload: &[u8]) -> (SophonChunk, Vec<u8>) {
         let raw = zstd::encode_all(payload, 3).expect("encode");
         let c = SophonChunk {
-            id: format!("{:016x}_{}", 0xabcd_ef01_2345_6789u64, hash::md5_hex(payload)),
+            id: format!(
+                "{:016x}_{}",
+                0xabcd_ef01_2345_6789u64,
+                hash::md5_hex(payload)
+            ),
             uncompressed_md5: hash::md5_hex(payload),
             offset: 0,
             compressed_size: raw.len() as i64,
@@ -293,7 +303,10 @@ mod tests {
         assert_eq!(p.uncompressed_size, 4096);
         assert_eq!(p.container, "zstd");
         assert_eq!(p.md5_decompressed, c.uncompressed_md5);
-        assert_eq!(p.unknown_field6, c.unknown_field6, "carried through verbatim");
+        assert_eq!(
+            p.unknown_field6, c.unknown_field6,
+            "carried through verbatim"
+        );
         assert_eq!(p.chunk_id, c.id);
     }
 
@@ -308,7 +321,11 @@ mod tests {
         let p = BlobProps::measure(cut, &c).expect("it still has the zstd magic");
         let v = p.verified.expect("measured");
         assert!(!v.all_green());
-        assert!(!v.raw_size_matches, "the manifest said {}", c.compressed_size);
+        assert!(
+            !v.raw_size_matches,
+            "the manifest said {}",
+            c.compressed_size
+        );
         assert!(!v.md5_compressed_matches, "different bytes");
         assert!(!v.md5_decompressed_matches);
         assert!(!v.decoded_size_matches);
@@ -343,25 +360,40 @@ mod tests {
         // 1. raw length: a different declared size, same bytes.
         let mut wrong_len = c.clone();
         wrong_len.compressed_size += 1;
-        let v = BlobProps::measure(&raw, &wrong_len).unwrap().verified.unwrap();
+        let v = BlobProps::measure(&raw, &wrong_len)
+            .unwrap()
+            .verified
+            .unwrap();
         assert_eq!(v.failures(), vec!["len(raw blob) == compressed_size"]);
 
         // 2. compressed md5.
         let mut wrong_c = c.clone();
         wrong_c.compressed_md5 = "0".repeat(32);
-        let v = BlobProps::measure(&raw, &wrong_c).unwrap().verified.unwrap();
+        let v = BlobProps::measure(&raw, &wrong_c)
+            .unwrap()
+            .verified
+            .unwrap();
         assert_eq!(v.failures(), vec!["md5(raw blob) == compressed_md5"]);
 
         // 3. decompressed md5, via the manifest's `uncompressed_md5`.
         let mut wrong_u = c.clone();
         wrong_u.uncompressed_md5 = "0".repeat(32);
-        let v = BlobProps::measure(&raw, &wrong_u).unwrap().verified.unwrap();
-        assert_eq!(v.failures(), vec!["md5(zstd(raw blob)) == uncompressed_md5"]);
+        let v = BlobProps::measure(&raw, &wrong_u)
+            .unwrap()
+            .verified
+            .unwrap();
+        assert_eq!(
+            v.failures(),
+            vec!["md5(zstd(raw blob)) == uncompressed_md5"]
+        );
 
         // 4. decoded length.
         let mut wrong_d = c.clone();
         wrong_d.uncompressed_size += 1;
-        let v = BlobProps::measure(&raw, &wrong_d).unwrap().verified.unwrap();
+        let v = BlobProps::measure(&raw, &wrong_d)
+            .unwrap()
+            .verified
+            .unwrap();
         assert_eq!(v.failures(), vec!["len(decoded) == uncompressed_size"]);
     }
 
@@ -377,7 +409,10 @@ mod tests {
         assert_eq!(v.failures().len(), 4);
         let s = v.to_string();
         assert!(s.starts_with("4 of the four"), "{s}");
-        assert!(s.contains("compressed_md5") && s.contains("uncompressed_size"), "{s}");
+        assert!(
+            s.contains("compressed_md5") && s.contains("uncompressed_size"),
+            "{s}"
+        );
     }
 
     /// An unframed blob is a protocol violation, not a digest mismatch, and the
@@ -401,7 +436,10 @@ mod tests {
         let (c, _) = chunk_with(&payload(64));
         let p = BlobProps::unmeasured(&c);
         assert!(p.verified.is_none());
-        assert!(!p.is_usable(), "nothing was measured, so nothing can be assembled");
+        assert!(
+            !p.is_usable(),
+            "nothing was measured, so nothing can be assembled"
+        );
         assert!(p.failures().is_empty(), "no failures, but also no evidence");
         assert!(p.why_unusable().unwrap().contains("never measured"));
         assert!(p.require_path().unwrap_err().contains(&c.id));
@@ -409,7 +447,10 @@ mod tests {
         // The manifest's identity survives; the digests do not pretend to.
         assert_eq!(p.md5_decompressed, c.uncompressed_md5);
         assert_eq!(p.md5_compressed, "");
-        assert_eq!(p.uncompressed_size, 64, "declared, so a reader knows the gap");
+        assert_eq!(
+            p.uncompressed_size, 64,
+            "declared, so a reader knows the gap"
+        );
     }
 
     #[test]
@@ -439,7 +480,12 @@ mod tests {
         let mut p = BlobProps::measure(&raw, &c).expect("a frame");
         p.set_stored(BlobProps::stored_path_for(&c.id));
         let v = serde_json::to_value(&p).expect("serialise");
-        let mut keys: Vec<&str> = v.as_object().expect("an object").keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = v
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
@@ -479,6 +525,9 @@ mod tests {
         // And `seq` is *not* here: provenance lives in api/requests.ndjson, so
         // the index cannot drift out of step with it.
         assert!(v.get("seq").is_none());
-        assert!(v["decode_error"].is_null(), "a green blob serialises it away");
+        assert!(
+            v["decode_error"].is_null(),
+            "a green blob serialises it away"
+        );
     }
 }

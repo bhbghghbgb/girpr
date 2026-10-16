@@ -76,8 +76,7 @@ impl ChunkIndex {
         let mut blobs = Vec::with_capacity(entries.len());
         for (blob, roles) in entries {
             for role in &roles {
-                sets
-                    .entry(role.id().to_string())
+                sets.entry(role.id().to_string())
                     .or_default()
                     .push(blob.props.chunk_id.clone());
             }
@@ -115,7 +114,9 @@ impl Sources {
     ///
     /// From `CapturedManifest` rather than from the raw `getBuild` body so a
     /// chunk URL is built by exactly the same code the archive URL was.
-    pub fn from_manifests<'a>(manifests: impl IntoIterator<Item = &'a CapturedManifest>) -> Sources {
+    pub fn from_manifests<'a>(
+        manifests: impl IntoIterator<Item = &'a CapturedManifest>,
+    ) -> Sources {
         let mut bases = BTreeMap::new();
         for m in manifests {
             bases.insert(m.tag.clone(), m.chunk_url_prefix().to_string());
@@ -188,7 +189,8 @@ impl Store {
         wants: &[Want],
         jobs: usize,
     ) -> (Vec<(IndexedBlob, Vec<Set>)>, Vec<String>) {
-        let mut out: Vec<Option<(IndexedBlob, Vec<Set>)>> = (0..wants.len()).map(|_| None).collect();
+        let mut out: Vec<Option<(IndexedBlob, Vec<Set>)>> =
+            (0..wants.len()).map(|_| None).collect();
         let mut errors: Vec<String> = Vec::new();
         let mut next = 0_usize;
         let mut set = tokio::task::JoinSet::new();
@@ -198,7 +200,12 @@ impl Store {
         while next < wants.len() && set.len() < jobs.max(1) {
             let i = next;
             next += 1;
-            set.spawn(Store::one(self.clone(), i, fetcher.clone(), wants[i].clone()));
+            set.spawn(Store::one(
+                self.clone(),
+                i,
+                fetcher.clone(),
+                wants[i].clone(),
+            ));
         }
         while let Some(joined) = set.join_next().await {
             match joined {
@@ -212,7 +219,12 @@ impl Store {
             if next < wants.len() {
                 let i = next;
                 next += 1;
-                set.spawn(Store::one(self.clone(), i, fetcher.clone(), wants[i].clone()));
+                set.spawn(Store::one(
+                    self.clone(),
+                    i,
+                    fetcher.clone(),
+                    wants[i].clone(),
+                ));
             }
         }
 
@@ -230,7 +242,10 @@ impl Store {
                 *o = Some(self.unfilled(&wants[i]));
             }
         }
-        (out.into_iter().flatten().collect(), [errors, missing].concat())
+        (
+            out.into_iter().flatten().collect(),
+            [errors, missing].concat(),
+        )
     }
 
     /// The index for a run that stored no blobs at all (`--no-chunk-blobs`).
@@ -278,13 +293,12 @@ impl Store {
                     let mut props = BlobProps::measure(&fetched.body, &want.chunk)
                         .map_err(|e| e.to_string())?;
                     let rel = BlobProps::stored_path_for(&want.chunk.id);
-                    self_.write(&rel, &fetched.body)
+                    self_
+                        .write(&rel, &fetched.body)
                         .map_err(|e| format!("{}: write: {e}", want.chunk.id))?;
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
-                    fetcher
-                        .log()
-                        .set_stored_as(fetched.seq(), rel.clone());
+                    fetcher.log().set_stored_as(fetched.seq(), rel.clone());
                     if !want.conflicts.is_empty() {
                         tracing::warn!(
                             chunk = %want.chunk.id,
@@ -372,12 +386,11 @@ pub fn file_pairs(
         .admitted
         .iter()
         .map(|a| {
-            let find =
-                |tag: &str| -> Option<(&crate::manifest::proto::SophonChunkFile, &str)> {
-                    let m = manifests.get(tag)?;
-                    let entry = m.entries.iter().find(|e| e.file == a.path)?;
-                    Some((entry, m.build_id.as_str()))
-                };
+            let find = |tag: &str| -> Option<(&crate::manifest::proto::SophonChunkFile, &str)> {
+                let m = manifests.get(tag)?;
+                let entry = m.entries.iter().find(|e| e.file == a.path)?;
+                Some((entry, m.build_id.as_str()))
+            };
             FilePair {
                 capture_id: a.capture_id.clone(),
                 path: a.path.clone(),
@@ -428,7 +441,11 @@ pub fn describe(wants: &[Want], index: &ChunkIndex) -> String {
         projected_download(wants),
         stored,
         index.blobs.len(),
-        index.blobs.iter().map(|b| b.referenced_by.len()).sum::<usize>(),
+        index
+            .blobs
+            .iter()
+            .map(|b| b.referenced_by.len())
+            .sum::<usize>(),
         index.failing().len(),
     )
 }
@@ -527,7 +544,9 @@ mod tests {
         // naming an absent blob would send M7 looking for bytes that are not there.
         for (role, ids) in &idx.sets {
             for id in ids {
-                let b = idx.get(id).unwrap_or_else(|| panic!("{role} names a missing blob {id}"));
+                let b = idx
+                    .get(id)
+                    .unwrap_or_else(|| panic!("{role} names a missing blob {id}"));
                 assert!(
                     b.sets.iter().any(|s| s.id() == role),
                     "{id} is in the {role} list but its entry does not say so"
@@ -562,7 +581,11 @@ mod tests {
                 )
             })
             .collect();
-        let ids: Vec<String> = ChunkIndex::build(entries).blobs.iter().map(|b| b.props.chunk_id.clone()).collect();
+        let ids: Vec<String> = ChunkIndex::build(entries)
+            .blobs
+            .iter()
+            .map(|b| b.props.chunk_id.clone())
+            .collect();
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted);
@@ -645,7 +668,12 @@ mod tests {
         assert_eq!(roles, w[0].sets);
         assert!(entry.props.stored_path.is_none());
         assert!(
-            entry.props.decode_error.as_deref().unwrap().contains("not stored"),
+            entry
+                .props
+                .decode_error
+                .as_deref()
+                .unwrap()
+                .contains("not stored"),
             "{:?}",
             entry.props.decode_error
         );

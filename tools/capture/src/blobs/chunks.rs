@@ -259,8 +259,7 @@ impl Retention {
     pub fn a12_holds(&self) -> bool {
         let new = self.ids(Set::MaterializeNew);
         let fetch = self.ids(Set::PatchFetch);
-        fetch.iter().all(|id| new.contains(id))
-            && !fetch.iter().any(|id| self.reuse.contains(id))
+        fetch.iter().all(|id| new.contains(id)) && !fetch.iter().any(|id| self.reuse.contains(id))
     }
 
     /// Which half of A12 failed, if either.
@@ -269,7 +268,11 @@ impl Retention {
         if self.ids(Set::PatchFetch).iter().any(|id| !new.contains(id)) {
             return Some("patch_fetch is not a subset of materialize_new");
         }
-        if self.ids(Set::PatchFetch).iter().any(|id| self.reuse.contains(id)) {
+        if self
+            .ids(Set::PatchFetch)
+            .iter()
+            .any(|id| self.reuse.contains(id))
+        {
             return Some("patch_fetch overlaps the reuse set");
         }
         None
@@ -339,7 +342,9 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
         let mut push = |tag: &str, build_id: &str, c: &SophonChunk, role: Set| {
             let w = by_id.entry(c.id.clone()).or_insert_with(|| Want {
                 chunk: c.clone(),
-                sources: vec![Source { tag: tag.to_string() }],
+                sources: vec![Source {
+                    tag: tag.to_string(),
+                }],
                 references: Vec::new(),
                 sets: Vec::new(),
                 conflicts: Vec::new(),
@@ -350,7 +355,9 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
                 // if it does not, that is recorded rather than silently
                 // resolved.
                 if Identity::of(&w.chunk) == Identity::of(c) {
-                    w.sources.push(Source { tag: tag.to_string() });
+                    w.sources.push(Source {
+                        tag: tag.to_string(),
+                    });
                 } else if !w.conflicts.iter().any(|k| k.tag == tag) {
                     w.conflicts.push(Conflict {
                         tag: tag.to_string(),
@@ -359,7 +366,10 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
                     });
                 }
             }
-            let already = w.references.iter().any(|r| r.role == role && r.path == pair.path);
+            let already = w
+                .references
+                .iter()
+                .any(|r| r.role == role && r.path == pair.path);
             if !already {
                 w.references.push(Reference {
                     tag: tag.to_string(),
@@ -462,7 +472,6 @@ mod tests {
         }
     }
 
-
     // ---------------------------------------------------------------- sets
 
     #[test]
@@ -477,7 +486,11 @@ mod tests {
             "the two new chunks whose content is not in this old file"
         );
         assert_eq!(r.fetch.len(), 2);
-        assert_eq!(r.reuse.len(), 1, "the one chunk that really is the same bytes");
+        assert_eq!(
+            r.reuse.len(),
+            1,
+            "the one chunk that really is the same bytes"
+        );
     }
 
     #[test]
@@ -485,8 +498,14 @@ mod tests {
         let r = retention(&hoyo());
         assert!(r.a12_holds(), "{:?}", r.a12_failure());
         for id in r.ids(Set::PatchFetch) {
-            assert!(r.ids(Set::MaterializeNew).contains(id), "{id} is not in materialize_new");
-            assert!(!r.reuse.contains(id), "{id} would be both reused and fetched");
+            assert!(
+                r.ids(Set::MaterializeNew).contains(id),
+                "{id} is not in materialize_new"
+            );
+            assert!(
+                !r.reuse.contains(id),
+                "{id} would be both reused and fetched"
+            );
         }
     }
 
@@ -540,7 +559,11 @@ mod tests {
             }),
         };
         let r = retention(&p);
-        assert!(r.reuse.contains(&b.id), "reused: {reused:?}", reused = r.reuse);
+        assert!(
+            r.reuse.contains(&b.id),
+            "reused: {reused:?}",
+            reused = r.reuse
+        );
         assert!(r.fetch.is_empty(), "nothing to fetch");
         assert!(r.a12_holds());
     }
@@ -620,7 +643,11 @@ mod tests {
             .expect("the shared chunk");
         assert_eq!(shared.conflicts, Vec::new(), "both builds agree on it");
         assert_eq!(
-            shared.sources.iter().map(|s| s.tag.as_str()).collect::<Vec<_>>(),
+            shared
+                .sources
+                .iter()
+                .map(|s| s.tag.as_str())
+                .collect::<Vec<_>>(),
             vec!["7.1.0", "7.0.0"],
             "newest first: the old CDN is the one that may stop serving"
         );
@@ -636,7 +663,11 @@ mod tests {
             vec![Set::MaterializeOld, Set::MaterializeNew]
         );
         assert_eq!(
-            shared.references.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(),
+            shared
+                .references
+                .iter()
+                .map(|r| r.tag.as_str())
+                .collect::<Vec<_>>(),
             vec!["7.0.0", "7.1.0"]
         );
         // Each reference carries the build its chunk is addressed under, and the
@@ -691,9 +722,12 @@ mod tests {
     #[test]
     fn a_chunk_in_both_builds_is_one_blob_with_two_sources() {
         let w = wants(&[hoyo()]);
-        let from_old_only: Vec<&Want> =
-            w.iter().filter(|x| x.sources.len() == 1).collect();
-        assert_eq!(from_old_only.len(), 4, "every chunk but the shared one has one source");
+        let from_old_only: Vec<&Want> = w.iter().filter(|x| x.sources.len() == 1).collect();
+        assert_eq!(
+            from_old_only.len(),
+            4,
+            "every chunk but the shared one has one source"
+        );
         let two_source = w.iter().filter(|x| x.sources.len() == 2).count();
         assert_eq!(two_source, 1);
         // And the patch_fetch set names two of the five, never the shared one.
@@ -775,14 +809,17 @@ mod tests {
         let paths: Vec<&str> = w[0].references.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(paths, vec!["a.bin", "b.bin"], "and both are named");
         assert_eq!(w[0].references[0].offset, 0);
-        assert!(w[0].references.iter().all(|r| r.role == Set::MaterializeOld));
+        assert!(
+            w[0].references
+                .iter()
+                .all(|r| r.role == Set::MaterializeOld)
+        );
     }
 
     #[test]
     fn wants_are_in_a_deterministic_order() {
-        let ids = |p: &[FilePair]| -> Vec<String> {
-            wants(p).into_iter().map(|w| w.chunk.id).collect()
-        };
+        let ids =
+            |p: &[FilePair]| -> Vec<String> { wants(p).into_iter().map(|w| w.chunk.id).collect() };
         let alone = ids(&[hoyo()]);
         assert_eq!(alone, ids(&[hoyo()]), "the same inputs, the same order");
         // Adding a pair adds exactly its own chunk, and does not reshuffle.
@@ -791,7 +828,10 @@ mod tests {
         assert_eq!(both.len(), 6);
         let mut sorted = both.clone();
         sorted.sort_unstable();
-        assert_eq!(both, sorted, "sorted by chunk id, so insertion order cannot leak in");
+        assert_eq!(
+            both, sorted,
+            "sorted by chunk id, so insertion order cannot leak in"
+        );
         assert!(both.contains(&removed_id));
         // And the order does not depend on which pair is visited first.
         assert_eq!(both, ids(&[removal_pair(), hoyo()]));
@@ -829,7 +869,17 @@ mod tests {
         assert_eq!(Set::MaterializeOld.id(), "materialize_old");
         assert_eq!(Set::MaterializeNew.id(), "materialize_new");
         assert_eq!(Set::PatchFetch.id(), "patch_fetch");
-        let json: Vec<String> = Set::ALL.iter().map(|s| serde_json::to_string(s).unwrap()).collect();
-        assert_eq!(json, vec!["\"materialize_old\"", "\"materialize_new\"", "\"patch_fetch\""]);
+        let json: Vec<String> = Set::ALL
+            .iter()
+            .map(|s| serde_json::to_string(s).unwrap())
+            .collect();
+        assert_eq!(
+            json,
+            vec![
+                "\"materialize_old\"",
+                "\"materialize_new\"",
+                "\"patch_fetch\""
+            ]
+        );
     }
 }
