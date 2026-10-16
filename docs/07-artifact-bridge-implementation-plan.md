@@ -221,3 +221,72 @@ resort rather than what the bridge actually reads.
 ## 0.1 Landed
 
 Appended per milestone, newest last.
+
+### M1 — the replay server
+
+`tests/artifact_bridge/server.rs` (~900 lines) and a `tests/artifact_bridge.rs`
+that is, for now, the crate root plus the server module. Six `#[ignore]`d cases,
+all green against the reference bundle, and `gircap verify` still reports
+`checks_total=90 checks_failed=0 exit_code=0` afterwards — the bundle was
+opened read-only and never written.
+
+What the six pin, in the order they matter:
+
+- **`the_rewrite_changes_only_the_two_url_prefixes`** — for both tags, every
+  field of every entry in `data.manifests[]` is compared against the recorded
+  body, `manifest{}` included, with `manifest.checksum` and `manifest.id` then
+  pinned by name and by reason.
+- **`each_namespace_keeps_its_path_and_gets_its_own_origin`** — every rewritten
+  prefix starts with its own listener's origin and the remainder equals the
+  recorded prefix's path byte-for-byte.
+- **`a_manifest_id_resolves_to_the_field_archive_of_its_own_build`** — each
+  declared id resolves to `(tag, matching_field, declaring build_id)`, the
+  `carried` flag agrees with the archive existing on disk, the carried ones are
+  fetched over loopback and come back 200, and a synthetic id is a 404 with the
+  measured `application/xml` content-type. It also asserts that **some**
+  declared manifests are *not* carried (2 of 5 per tag here) — otherwise
+  `docs/06` §4.5's `--audio` warning would have no teeth.
+- **`a_blob_under_the_other_builds_prefix_is_refused`** — the new build's own
+  manifest id is served under the new build and refused under the old one, and
+  the replayed body names the build actually requested.
+- **`an_unserved_getbuild_tag_replays_the_recorded_not_found`** — both served
+  tags are real bodies, an unserved one is `200` + `retcode -202` with `data:
+  null`, and the body is compared against the recorded shape verbatim (this one
+  has no volatile fields, so it *can* be). The request log distinguishes
+  "latest" from an explicit tag.
+- **`the_capture_matrix_loads_with_distinct_paths`** — `docs/06` assertion 5,
+  plus the per-capture ground-truth invariants: a capture with no byte total is
+  `absent_after`, one with a zero byte total has a non-empty `must_not_fetch`,
+  and every `result_path` exists.
+
+Three things this milestone decided or discovered:
+
+1. **The `build_id` invariant is enforced strictly for manifests and as
+   "the latest build" for chunks.** `docs/06` §4.1 states one rule for both
+   blob namespaces. For manifests the map built during the rewrite answers it
+   exactly. For chunks it cannot be answered from the bundle:
+   `chunks/index.json` records `referenced_by` — which *capture* referenced a
+   blob, for materialization — not which build's manifest declares it. And it
+   would be the wrong question anyway: every chunk download goes to the latest
+   build's `chunk_download.url_prefix` (`repair::manifest::fetch_latest`),
+   because the local build's manifests only feed the *reuse* map, which is a
+   local copy. So the chunk listener serves an id only under the latest build's
+   id, and refuses everything else as `blob_wrong_build`. That still catches
+   the failure the two ports exist to catch — a shim with the blob prefixes
+   crossed.
+2. **`gircap capture` takes `--out`, not `--root`.** `gircap list` takes
+   `--root`. The Gate 2 skip message names the exact command that would produce
+   a bundle, so this is not a cosmetic detail: the first draft said
+   `capture --root`, which would have shipped a skip message naming a flag that
+   does not exist.
+3. **`manifests/<tag>/<field>.manifest.meta.json` was checked and deliberately
+   not wired in.** It carries `tag`, `build_id`, `manifest.id`,
+   `manifest.checksum` and the *recorded* `declared.*.url_prefix`, so it could
+   cross-check the rewrite against the bundle's own record of the live prefix.
+   It was left out: `getBuild.<tag>.json` is the authoritative body the client
+   actually parses, and adding a second source of truth for the same fact is
+   the kind of thing that drifts.
+
+Not yet done, per the milestone split: the `gircap verify` precondition, the
+scratch `game/` copy, the tree diff, the `--print-plan` pre-pass and the real
+`girpr` runs are all M2.
