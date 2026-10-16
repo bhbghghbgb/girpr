@@ -290,3 +290,59 @@ Three things this milestone decided or discovered:
 Not yet done, per the milestone split: the `gircap verify` precondition, the
 scratch `game/` copy, the tree diff, the `--print-plan` pre-pass and the real
 `girpr` runs are all M2.
+
+### M2 — the driver, one capture green
+
+The harness the rest of the milestones reuse, plus the first real `girpr` runs.
+Seven `#[ignore]`d cases green (M1's six plus the new one).
+
+What landed:
+
+- **`assert_bundle_verifies`** — the §3 precondition, `gircap verify --artifact
+  <dir>` exit `0`, found next to `CARGO_BIN_EXE_girpr` (a workspace member
+  lands in the same target directory, so there is no guessing and no
+  `cargo build -p gircap` step to remember). Not re-implemented here: `gircap`
+  owns that verdict. When `gircap` is not built the precondition is **skipped
+  with its reason printed**, per §3.
+- **`Scratch`** — a per-run copy of the **whole** `game/` fixture, removed on
+  `Drop`. The whole fixture, not the one selected path, because a capture is
+  one path *out of* the fixture and the other seven are what "outside the scope
+  is untouched" is measured against (§6.4).
+- **`snapshot` / `tree_delta` / `tree_changed`** — `rel -> (bytes, md5)` before
+  and after. MD5 rather than length and mtime, because "untouched" has to mean
+  *byte-identical*: a run that rewrote a file to the same length would otherwise
+  pass.
+- **`girpr(...)`** — spawns the real binary, parses `--output json` NDJSON into
+  records indexed by `event` name. `--log-file` is pointed into the scratch dir
+  so a run does not scatter `logs/` under the build directory.
+- **`base_args` / `capture_args`** — §5's flag set, verbatim, with `--audio`
+  omitted deliberately.
+- **`drive_capture`** — pre-pass, real run, then §6's four assertions plus the
+  §4.3 degraded-but-green guards.
+
+Measured, on `partial_same_offset`:
+
+```
+bridge partial_same_offset  plan files=1 est=274426
+  | run total=1 skipped=0 repaired=1 failed=0 dl=274426 deleted=0
+  | chunks requested=2 | tree +0 -0 ~1
+```
+
+That is the figure `docs/06` §5.1 quotes, and the reuse map is provably what
+produced it: only 2 chunks were requested (the patchmap's `fetch=2`), the one id
+in `must_not_fetch` was never asked for, and `local_manifest=ok`. §4.3's
+degraded-but-green alternative for this same run is `913040` with
+`local_manifest=unavailable` — a factor of 3.3 that would still have exited `0`.
+
+Two decisions this milestone made:
+
+1. **A bundle that fails `gircap verify` is a hard failure, not a skip.** Gate 2
+   is about an *absent* input turning people off `--ignored` forever; a corrupt
+   bundle is a real problem and must not hide behind a green run. §3 wants the
+   verdict consumed, and consuming it means saying so when it is bad.
+2. **`Scratch` copies the whole fixture**, not just the capture's path — as
+   §6.3 requires, and ~32 MB per run.
+
+Scope note, so the next reader is not misled: `drive_capture` has two branches
+(the byte total for a repair capture, the purge counters for `removed`) and only
+the repair branch has been exercised. `removed` is M3's.

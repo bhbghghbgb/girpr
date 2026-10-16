@@ -126,9 +126,70 @@ fn bundle_or_skip() -> Option<Bundle> {
     locate_bundle().map(Bundle::open)
 }
 
+/// `gircap verify --artifact <dir>`, exit `0`. **The precondition** of every
+/// run (`docs/06` §3): it makes a failing check rule the bundle out as the
+/// cause instead of leaving it as the first suspect.
+///
+/// Deliberately **not** re-implemented here — `gircap` owns that verdict, and
+/// a second implementation would be a second thing to be wrong. When `gircap`
+/// is not built the precondition is *skipped*, with its reason printed, rather
+/// than replaced by a substitute.
+///
+/// A bundle that fails verification is a hard failure, not a skip: Gate 2 is
+/// about an *absent* input turning people off `--ignored` forever, and a
+/// corrupt bundle is a real problem that must not hide behind a green run.
+async fn assert_bundle_verifies(bundle: &Bundle) {
+    let Some(exe) = gircap_exe() else {
+        println!(
+            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`",
+            girpr_exe_dir().display()
+        );
+        return;
+    };
+    let out = tokio::process::Command::new(&exe)
+        .args(["verify", "--artifact"])
+        .arg(&bundle.root)
+        .output()
+        .await
+        .expect("run gircap verify");
+    let code = out.status.code().unwrap_or(-1);
+    assert_eq!(
+        code,
+        0,
+        "`gircap verify` must pass before the bridge runs anything against this bundle.\n\
+         stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    println!(
+        "precondition: gircap verify {} -> exit 0",
+        bundle.root.display()
+    );
+}
+
+fn girpr_exe_dir() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_girpr"))
+        .parent()
+        .expect("the binary has a parent dir")
+        .to_path_buf()
+}
+
+/// `gircap` is a workspace member, so Cargo builds it into the same target
+/// directory as `girpr` — which is exactly where `CARGO_BIN_EXE_girpr` points.
+fn gircap_exe() -> Option<PathBuf> {
+    let dir = girpr_exe_dir();
+    for name in ["gircap.exe", "gircap"] {
+        let p = dir.join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Start the four listeners over `bundle`.
 async fn bridge_or_skip() -> Option<Bridge> {
     let bundle = bundle_or_skip()?;
+    assert_bundle_verifies(&bundle).await;
     Some(Bridge::start(bundle).await)
 }
 
@@ -153,8 +214,484 @@ async fn get(url: &str) -> (u16, String, Vec<u8>) {
 }
 
 // ---------------------------------------------------------------------------
-// M1 — the server
+// M2 — the driver
 // ---------------------------------------------------------------------------
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use server::{Capture, Origins};
+
+/// A scratch copy of the bundle's **whole** `game/` fixture, removed on drop.
+///
+/// The copy is of the whole fixture rather than of the one selected path
+/// because a capture is one path *out of* the fixture: the other captures' files
+/// are what "every path outside the scope is untouched" is measured against.
+/// `docs/06` §6.4 — the bundle is the input, a copy is the working tree.
+/// Pointing `--game-path` at the bundle in place is what turns a cleanup flag
+/// into a way to destroy the evidence.
+struct Scratch {
+    root: PathBuf,
+}
+
+impl Scratch {
+    fn new(bundle: &Bundle) -> Self {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("girpr_artifact_bridge_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch root");
+        copy_tree(&bundle.root.join("game"), &root.join("game"));
+        Self { root }
+    }
+
+    fn game(&self) -> PathBuf {
+        self.root.join("game")
+    }
+
+    /// Somewhere for the binary to put its trace log, so the run does not
+    /// scatter `logs/` under the build directory.
+    fn log_file(&self) -> PathBuf {
+        self.root.join("girpr.log")
+    }
+
+    fn plan_out(&self) -> PathBuf {
+        self.root.join("plan.json")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("create dst");
+    for entry in std::fs::read_dir(src).unwrap_or_else(|e| panic!("read {}: {e}", src.display())) {
+        let entry = entry.expect("read dir entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_tree(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy file");
+        }
+    }
+}
+
+/// Every file under `game/` as `rel -> (bytes, md5)`, `/`-separated.
+///
+/// MD5 rather than length and timestamp, because "untouched" has to mean
+/// *byte-identical*: a run that rewrote a file to the same length would
+/// otherwise pass.
+fn snapshot(game: &Path) -> BTreeMap<String, (u64, String)> {
+    fn walk(dir: &Path, base: &Path, out: &mut BTreeMap<String, (u64, String)>) {
+        for entry in
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        {
+            let entry = entry.expect("read dir entry");
+            let path = entry.path();
+            if entry.file_type().expect("file type").is_dir() {
+                walk(&path, base, out);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(base)
+                .expect("under the base")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let bytes = std::fs::read(&path).expect("read file");
+            out.insert(
+                rel,
+                (bytes.len() as u64, format!("{:x}", md5::compute(&bytes))),
+            );
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(game, game, &mut out);
+    out
+}
+
+/// Which paths a before/after pair disagrees about, added and removed.
+fn tree_delta(
+    before: &BTreeMap<String, (u64, String)>,
+    after: &BTreeMap<String, (u64, String)>,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let added: BTreeSet<String> = after
+        .keys()
+        .filter(|k| !before.contains_key(*k))
+        .cloned()
+        .collect();
+    let removed: BTreeSet<String> = before
+        .keys()
+        .filter(|k| !after.contains_key(*k))
+        .cloned()
+        .collect();
+    (added, removed)
+}
+
+/// Paths whose bytes moved: same key, different `(len, md5)`.
+fn tree_changed(
+    before: &BTreeMap<String, (u64, String)>,
+    after: &BTreeMap<String, (u64, String)>,
+) -> BTreeSet<String> {
+    before
+        .iter()
+        .filter(|(k, v)| after.get(*k).is_some_and(|w| w != *v))
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
+/// One `girpr` invocation's result, with its NDJSON records indexed by name.
+struct Run {
+    code: i32,
+    records: BTreeMap<String, serde_json::Value>,
+    stdout: String,
+    stderr: String,
+}
+
+impl Run {
+    fn record(&self, event: &str) -> &serde_json::Value {
+        self.records
+            .get(event)
+            .unwrap_or_else(|| panic!("no {event} record in:\n{}", self.stdout))
+    }
+    fn num(&self, event: &str, key: &str) -> u64 {
+        self.record(event)[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{event}.{key} is not a number in {:?}", self.record(event)))
+    }
+    fn word(&self, event: &str, key: &str) -> String {
+        self.record(event)[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("{event}.{key} is not a string in {:?}", self.record(event)))
+            .to_string()
+    }
+}
+
+/// Run the real binary (`CARGO_BIN_EXE_girpr` — this is the whole reason the
+/// bridge is an integration test in this package and not a separate crate).
+async fn girpr(args: &[String]) -> Run {
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args(args)
+        .output()
+        .await
+        .expect("spawn girpr");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let mut records = BTreeMap::new();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("--output json line is not JSON ({e}): {line}"));
+        // Last one wins: `PROGRESS` ticks repeatedly and `SUMMARY` is terminal,
+        // so the newest record of a name is the one that describes the run.
+        if let Some(event) = v["event"].as_str() {
+            records.insert(event.to_string(), v);
+        }
+    }
+    Run {
+        code: out.status.code().expect("process must exit normally"),
+        records,
+        stdout,
+        stderr,
+    }
+}
+
+/// The flags every run carries (`docs/06` §5).
+///
+/// `--audio` is omitted **deliberately**: an explicit audio selection under an
+/// active path scope is refused when the scan file falls outside that scope,
+/// and `GenshinImpact_Data/Persistent/audio_lang_14` does. Omitting it lets the
+/// run autodetect from the scan file and resolve to `en-us` — the state the
+/// bundle was captured in.
+///
+/// No cleanup flag either: a scoped cleanup sees only the one selected path,
+/// which the manifest contains, so it has nothing to delete. The one capture
+/// that *wants* a cleanup is `removed`, and that is the row that says so.
+fn base_args(game: &Path, bundle: &Bundle, o: &Origins, scratch: &Scratch) -> Vec<String> {
+    vec![
+        "--game-path".into(),
+        game.display().to_string(),
+        // `MANIFEST.json -> biz.id`, not a hardcoded region.
+        "--biz".into(),
+        bundle.biz.clone(),
+        "--hyp-base".into(),
+        o.hyp_base.clone(),
+        "--sophon-base".into(),
+        o.sophon_base.clone(),
+        "--io-threads".into(),
+        "1".into(),
+        "--output".into(),
+        "json".into(),
+        // Keep the trace log in the scratch dir rather than under target/.
+        "--log-file".into(),
+        scratch.log_file().display().to_string(),
+    ]
+}
+
+/// The flags one capture's runs carry, on top of [`base_args`].
+fn capture_args(capture: &Capture) -> Vec<String> {
+    let mut args = vec![
+        // Exactly one path: the patchmap's own `path` field.
+        "--include".into(),
+        capture.path.clone(),
+        // A shim fault should stop the run, not spend the budget discovering
+        // the same 404 on every remaining file.
+        "--fail-fast".into(),
+    ];
+    if capture.is_purge_only() {
+        // `removed`: the files-cleanup without the repair loop. No
+        // `--max-files` — the repair plan is empty by construction, so the
+        // ceiling would be vacuous and `limited=1` would be a lie about it.
+        args.push("--purge-only".into());
+    } else {
+        args.push("--max-files".into());
+        args.push("1".into());
+    }
+    args
+}
+
+/// Drive one capture end to end and assert `docs/06` §6's four per-capture
+/// facts plus the §4.3 degraded-but-green guards.
+///
+/// **One run per capture**, always: a `download_bytes` total is only
+/// attributable to a single capture.
+async fn drive_capture(bridge: &Bridge, capture: &Capture) {
+    let bundle = bridge.bundle().clone();
+    let scratch = Scratch::new(&bundle);
+    let before = snapshot(&scratch.game());
+
+    // ---- the free pre-pass (docs/06 5.1) --------------------------------
+    //
+    // `--print-plan` returns before `create_dir_all`, so it costs no disk and
+    // separates the two failure modes that otherwise arrive tangled in one red
+    // run: when `files=1` fails the glob is wrong; when the real run's
+    // `download_bytes` fails, reuse is wrong.
+    let mut pre = base_args(&scratch.game(), &bundle, bridge.origins(), &scratch);
+    pre.push("--print-plan".into());
+    pre.push("--plan-out".into());
+    pre.push(scratch.plan_out().display().to_string());
+    pre.extend(capture_args(capture));
+    let plan = girpr(&pre).await;
+    assert_eq!(plan.code, 0, "--print-plan must exit 0\n{}", plan.stderr);
+    assert_eq!(
+        plan.num("plan", "files"),
+        if capture.is_purge_only() { 0 } else { 1 },
+        "the scope must select exactly the capture's path ({})\n{}",
+        capture.path,
+        plan.stdout
+    );
+    assert_eq!(
+        plan.num("plan", "scoped"),
+        1,
+        "every capture is scoped, `removed` included: src/repair/mod.rs 4.2 makes \
+         `--purge-only --include <path>` the request that deletes it\n{}",
+        plan.stdout
+    );
+
+    match capture.download_bytes {
+        // A repair capture: the estimate IS the patchmap's total. Equal by
+        // construction (A6 asserts `len(blob) == compressed_size`), and it is
+        // the assertion that catches a run whose local manifest did not load:
+        // with an empty reuse map the estimate becomes the whole file.
+        Some(total) => {
+            assert_eq!(
+                plan.num("plan", "est_download_bytes"),
+                total,
+                "the pre-pass estimate must equal the patchmap total for {}",
+                capture.id
+            );
+            assert_eq!(plan.num("plan", "purge_files"), 0, "{}", capture.id);
+            assert_eq!(plan.num("plan", "purge_bytes"), 0, "{}", capture.id);
+        }
+        // `removed`: the rule of 5.1 is false for this capture. A `removed`
+        // patchmap carries `totals: null` because there is nothing to patch, so
+        // the *purge* counters are the assertion.
+        None => {
+            assert_eq!(
+                plan.num("plan", "purge_files"),
+                1,
+                "{}: the cleanup must find exactly the removed path",
+                capture.id
+            );
+            assert_eq!(
+                plan.num("plan", "purge_bytes"),
+                capture.old_size,
+                "{}: priced from the old file's size",
+                capture.id
+            );
+            assert_eq!(plan.num("plan", "est_download_bytes"), 0, "{}", capture.id);
+        }
+    }
+
+    // ---- the real run ---------------------------------------------------
+    let mut args = base_args(&scratch.game(), &bundle, bridge.origins(), &scratch);
+    args.extend(capture_args(capture));
+    let run = girpr(&args).await;
+
+    // ---- 4: exit 0, config_bumped=0, nothing else touched --------------
+    assert_eq!(
+        run.code, 0,
+        "{}: exit must be 0\n{}\n{}",
+        capture.id, run.stdout, run.stderr
+    );
+    assert_eq!(run.num("summary", "exit"), 0, "{}", capture.id);
+    assert_eq!(
+        run.num("summary", "config_bumped"),
+        0,
+        "{}: a scoped run deliberately did not put the bytes in place",
+        capture.id
+    );
+    assert_eq!(run.num("summary", "scoped"), 1, "{}", capture.id);
+    // §4.3: the one degradation that is otherwise invisible. A tag the shim does
+    // not serve degrades to the local-build fallback: an empty reuse map, every
+    // chunk downloaded, and still exit 0. This key and the byte comparison
+    // below are the two things that catch it.
+    assert_eq!(
+        run.word("summary", "local_manifest"),
+        "ok",
+        "{}: the local build's manifests must have loaded",
+        capture.id
+    );
+
+    // ---- 1: the byte total, exactly ------------------------------------
+    if let Some(total) = capture.download_bytes {
+        assert_eq!(
+            run.num("summary", "download_bytes"),
+            total,
+            "{}: girpr's download_bytes counts the bytes of files it promoted; the \
+             patchmap total is the sum of compressed_size over the chunks with no old-side \
+             match, and the two are equal by construction",
+            capture.id
+        );
+    }
+
+    // ---- 2: the patched file's MD5 -------------------------------------
+    let target = scratch.game().join(&capture.path);
+    if capture.absent_after {
+        assert!(
+            !target.exists(),
+            "{}: {} must be gone after the cleanup",
+            capture.id,
+            capture.path
+        );
+    } else {
+        let bytes = std::fs::read(&target)
+            .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));
+        assert_eq!(
+            format!("{:x}", md5::compute(&bytes)),
+            capture.result_md5,
+            "{}: the patched file must equal expectations.result_md5",
+            capture.id
+        );
+        assert_eq!(
+            bytes.len() as u64,
+            capture.new_size,
+            "{}: new size",
+            capture.id
+        );
+    }
+
+    // ---- 3: no forbidden chunk id was ever requested --------------------
+    let asked: BTreeSet<String> = bridge.chunk_ids().into_iter().collect();
+    let forbidden: Vec<&String> = capture
+        .must_not_fetch
+        .iter()
+        .filter(|id| asked.contains(*id))
+        .collect();
+    assert!(
+        forbidden.is_empty(),
+        "{}: these ids are in must_not_fetch, so they must not have been requested \
+         (reuse was broken): {:?}\nserver saw {} chunk request(s)",
+        capture.id,
+        forbidden,
+        asked.len()
+    );
+
+    // ---- 4, continued: the before/after tree diff ----------------------
+    //
+    // The only check that the scope held across the whole filesystem rather
+    // than just the repair plan. Per run, because §6.3 gives every capture its
+    // own copy: a shared baseline would compare two different trees.
+    let after = snapshot(&scratch.game());
+    let (added, removed) = tree_delta(&before, &after);
+    let changed = tree_changed(&before, &after);
+    let selected = capture.path.as_str();
+    let outside = added
+        .iter()
+        .chain(removed.iter())
+        .chain(changed.iter())
+        .filter(|p| p.as_str() != selected)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(
+        outside.is_empty(),
+        "{}: every path outside the scope must be untouched on disk. \
+         changed outside the scope: {outside:?}\nadded: {added:?}\nremoved: {removed:?}",
+        capture.id
+    );
+
+    // The report says what the tool believes; the diff is the proof.
+    assert_eq!(
+        run.word("report", "local_version"),
+        bundle.old_tag,
+        "{}: the fixture is materialized at the old tag",
+        capture.id
+    );
+    assert_eq!(
+        run.word("report", "latest_version"),
+        bundle.new_tag,
+        "{}",
+        capture.id
+    );
+
+    println!(
+        "bridge {:<24} plan files={} est={} | run total={} skipped={} repaired={} failed={} \
+         dl={} deleted={} | chunks requested={} | tree +{} -{} ~{}",
+        capture.id,
+        plan.num("plan", "files"),
+        plan.num("plan", "est_download_bytes"),
+        run.num("summary", "total"),
+        run.num("summary", "skipped"),
+        run.num("summary", "repaired"),
+        run.num("summary", "failed"),
+        run.num("summary", "download_bytes"),
+        run.num("summary", "deleted_extra_bytes"),
+        asked.len(),
+        added.len(),
+        removed.len(),
+        changed.len(),
+    );
+}
+
+/// One capture, end to end, against real bundle bytes.
+///
+/// `partial_same_offset` is the load-bearing first case: it is the one
+/// `docs/06` quotes a figure for (`download_bytes=274426`), and it is a
+/// three-chunk file where two chunks must come from the local reuse map and one
+/// pair must come off the network — so assertions 1, 2 and 3 all bite at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a gircap bundle: cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn one_capture_patches_to_the_new_version() {
+    let Some(bridge) = bridge_or_skip().await else {
+        return;
+    };
+    let capture = bridge
+        .capture("partial_same_offset")
+        .unwrap_or_else(|| {
+            panic!(
+                "this bundle has no partial_same_offset capture: {:?}",
+                bridge
+                    .bundle()
+                    .captures
+                    .iter()
+                    .map(|c| &c.id)
+                    .collect::<Vec<_>>()
+            )
+        })
+        .clone();
+    drive_capture(&bridge, &capture).await;
+}
 
 /// The rewrite must be surgical. `sophon::fetch_manifest` MD5-verifies the
 /// **decompressed** manifest against `manifest.checksum`, so a checksum that
