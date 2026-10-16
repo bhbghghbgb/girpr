@@ -101,9 +101,7 @@ impl TagProbe {
     pub fn describe(&self) -> String {
         format!(
             "{}/{} tags served, {} outside diff_tags",
-            self.summary.served,
-            self.summary.requested,
-            self.summary.not_in_diff_tags_but_served,
+            self.summary.served, self.summary.requested, self.summary.not_in_diff_tags_but_served,
         )
     }
 }
@@ -154,8 +152,8 @@ pub async fn probe_tags(
         let (http, retcode, build_id, tag_echoed, served) =
             match fetcher.get(&url, Kind::Probe, None).await {
                 Ok(f) => {
-                    let v: serde_json::Value = serde_json::from_slice(&f.body)
-                        .map_err(|e| ApiError::shape(&url, e))?;
+                    let v: serde_json::Value =
+                        serde_json::from_slice(&f.body).map_err(|e| ApiError::shape(&url, e))?;
                     let rc = v.get("retcode").and_then(|r| r.as_i64()).unwrap_or(-1);
                     let bid = v
                         .pointer("/data/build_id")
@@ -302,7 +300,11 @@ pub struct ErrorShape {
 impl ErrorShapes {
     /// A one-line human summary for the run's stderr narration.
     pub fn describe(&self) -> String {
-        let blob = self.shapes.iter().filter(|s| s.family == Family::Blob).count();
+        let blob = self
+            .shapes
+            .iter()
+            .filter(|s| s.family == Family::Blob)
+            .count();
         let json = self.shapes.len() - blob;
         format!(
             "{} shapes recorded: {blob} blob (404), {json} json (200+retcode)",
@@ -371,7 +373,11 @@ pub async fn probe_error_shapes(
             "blob_missing",
             Family::Blob,
             "a manifest id under the new build's prefix that the build does not have".into(),
-            format!("{}/{}", probes.manifest_prefix.trim_end_matches('/'), BOGUS_ID),
+            format!(
+                "{}/{}",
+                probes.manifest_prefix.trim_end_matches('/'),
+                BOGUS_ID
+            ),
             true,
         ),
         (
@@ -645,7 +651,10 @@ mod tests {
                 200,
                 r#"{"retcode":0,"data":{"build_id":"sMXGW2ll3Fuu","tag":"7.1.0"}}"#.into(),
             ),
-            (200, r#"{"data":null,"message":"not found","retcode":-202}"#.into()),
+            (
+                200,
+                r#"{"data":null,"message":"not found","retcode":-202}"#.into(),
+            ),
         ]);
         let params = BranchParams {
             package_id: "p".into(),
@@ -654,8 +663,11 @@ mod tests {
             tag: "7.1.0".into(),
             diff_tags: vec![],
         };
-        let fetcher = Fetcher::new(crate::http::Transport::local(), crate::http::RequestLog::new())
-            .unwrap();
+        let fetcher = Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .unwrap();
         let probe = probe_tags(
             &fetcher,
             &format!("http://127.0.0.1:{port}/api"),
@@ -674,7 +686,10 @@ mod tests {
         assert!(!probe.results[0].in_diff_tags);
         assert!(!probe.results[1].served);
         assert_eq!(probe.results[1].retcode, -202);
-        assert_eq!(probe.results[1].http, 200, "the API answers 200 and then says no");
+        assert_eq!(
+            probe.results[1].http, 200,
+            "the API answers 200 and then says no"
+        );
         assert_eq!(probe.summary.served, 1);
         assert_eq!(probe.summary.not_in_diff_tags_but_served, 1);
     }
@@ -695,8 +710,11 @@ mod tests {
             tag: "7.1.0".into(),
             diff_tags: vec![],
         };
-        let fetcher = Fetcher::new(crate::http::Transport::local(), crate::http::RequestLog::new())
-            .unwrap();
+        let fetcher = Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .unwrap();
         let probe = probe_tags(
             &fetcher,
             &format!("http://127.0.0.1:{port}/api"),
@@ -708,19 +726,29 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(hits.load(Ordering::SeqCst), 1, "only the unknown tag was fetched");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "only the unknown tag was fetched"
+        );
         assert!(probe.results[0].served);
         assert_eq!(probe.results[0].build_id.as_deref(), Some("sMXGW2ll3Fuu"));
         assert!(probe.results[0].already_fetched);
         assert!(!probe.results[0].in_diff_tags);
         assert_eq!(probe.results[1].build_id.as_deref(), Some("OTHER"));
         assert!(!probe.results[1].already_fetched);
-        assert_eq!(probe.summary.served, 2, "a reused answer still counts as served");
+        assert_eq!(
+            probe.summary.served, 2,
+            "a reused answer still counts as served"
+        );
     }
 
     #[tokio::test]
     async fn every_probe_is_recorded_as_kind_probe() {
-        let (port, _) = spawn(vec![(200, r#"{"retcode":0,"data":{"build_id":"b","tag":"t"}}"#.into())]);
+        let (port, _) = spawn(vec![(
+            200,
+            r#"{"retcode":0,"data":{"build_id":"b","tag":"t"}}"#.into(),
+        )]);
         let params = BranchParams {
             package_id: "p".into(),
             password: "w".into(),
@@ -729,8 +757,7 @@ mod tests {
             diff_tags: vec![],
         };
         let log = crate::http::RequestLog::new();
-        let fetcher =
-            Fetcher::new(crate::http::Transport::local(), log.clone()).unwrap();
+        let fetcher = Fetcher::new(crate::http::Transport::local(), log.clone()).unwrap();
         probe_tags(
             &fetcher,
             &format!("http://127.0.0.1:{port}/api"),

@@ -138,11 +138,19 @@ impl ApiError {
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::Transport { url, attempts, detail } => write!(
+            ApiError::Transport {
+                url,
+                attempts,
+                detail,
+            } => write!(
                 f,
                 "{url}: transport failed after {attempts} attempt(s): {detail}"
             ),
-            ApiError::Status { url, status, attempts } => {
+            ApiError::Status {
+                url,
+                status,
+                attempts,
+            } => {
                 write!(f, "{url}: HTTP {status} after {attempts} attempt(s)")
             }
             ApiError::Shape { subject, detail } => write!(f, "{subject}: {detail}"),
@@ -361,7 +369,12 @@ impl RequestLog {
 
     /// Every record, in `seq` order.
     pub fn records(&self) -> Vec<RequestRecord> {
-        let mut v = self.0.lock().expect("request log is not poisoned").records.clone();
+        let mut v = self
+            .0
+            .lock()
+            .expect("request log is not poisoned")
+            .records
+            .clone();
         // Sorted here, not appended in order. `reserve()` assigns `seq` at issue
         // time, so a `--jobs 8` capture reserves 1..N and then *lands* them in
         // whatever order the network finished; appending would leave the file's
@@ -389,7 +402,11 @@ impl RequestLog {
 
     /// How many requests were made.
     pub fn len(&self) -> usize {
-        self.0.lock().expect("request log is not poisoned").records.len()
+        self.0
+            .lock()
+            .expect("request log is not poisoned")
+            .records
+            .len()
     }
 
     /// Whether nothing was requested.
@@ -571,11 +588,16 @@ impl Fetcher {
     pub async fn observe(&self, url: &str, kind: Kind) -> Result<Observation, ApiError> {
         let started = Instant::now();
         let seq = self.log.reserve();
-        let resp = self.client.get(url).send().await.map_err(|e| ApiError::Transport {
-            url: url.to_string(),
-            attempts: 1,
-            detail: e.to_string(),
-        })?;
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ApiError::Transport {
+                url: url.to_string(),
+                attempts: 1,
+                detail: e.to_string(),
+            })?;
         let status = resp.status().as_u16();
         let final_url = resp.url().to_string();
         let redirected = !final_url.eq_ignore_ascii_case(url);
@@ -591,7 +613,16 @@ impl Fetcher {
         let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
         let bytes_in = body.len() as u64;
         let record = self.record(
-            seq, kind, url, None, status, resp_headers, &final_url, redirected, bytes_in, 1,
+            seq,
+            kind,
+            url,
+            None,
+            status,
+            resp_headers,
+            &final_url,
+            redirected,
+            bytes_in,
+            1,
             started,
         );
         self.log.push(record.clone());
@@ -661,7 +692,11 @@ impl Fetcher {
     /// The `retcode` check is here rather than at each call site so that no
     /// endpoint can be read without it. A `200` carrying `retcode -202` is the
     /// documented way this API says *no such tag*.
-    pub async fn get_json(&self, url: &str, kind: Kind) -> Result<(Vec<u8>, serde_json::Value), ApiError> {
+    pub async fn get_json(
+        &self,
+        url: &str,
+        kind: Kind,
+    ) -> Result<(Vec<u8>, serde_json::Value), ApiError> {
         let f = self.get(url, kind, None).await?;
         let v: serde_json::Value = serde_json::from_slice(&f.body).map_err(|e| {
             // A CDN error page lands here. Naming the wrapper it should have been
@@ -680,7 +715,9 @@ impl Fetcher {
                 subject: url.to_string(),
                 detail: format!(
                     "retcode {retcode} ({})",
-                    v.get("message").and_then(|m| m.as_str()).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("no message")
                 ),
             });
         }
@@ -721,7 +758,19 @@ impl Fetcher {
                     attempts,
                     detail: e.to_string(),
                 };
-                let record = self.record(seq, kind, url, range, 0, BTreeMap::new(), url, false, 0, attempts, started);
+                let record = self.record(
+                    seq,
+                    kind,
+                    url,
+                    range,
+                    0,
+                    BTreeMap::new(),
+                    url,
+                    false,
+                    0,
+                    attempts,
+                    started,
+                );
                 return Err((err, record));
             }
         };
@@ -742,14 +791,38 @@ impl Fetcher {
                 status,
                 attempts,
             };
-            let record = self.record(seq, kind, url, range, status, resp_headers, &final_url, redirected, 0, attempts, started);
+            let record = self.record(
+                seq,
+                kind,
+                url,
+                range,
+                status,
+                resp_headers,
+                &final_url,
+                redirected,
+                0,
+                attempts,
+                started,
+            );
             return Err((err, record));
         }
 
         match resp.bytes().await {
             Ok(b) => {
                 let bytes_in = b.len() as u64;
-                let record = self.record(seq, kind, url, range, status, resp_headers, &final_url, redirected, bytes_in, attempts, started);
+                let record = self.record(
+                    seq,
+                    kind,
+                    url,
+                    range,
+                    status,
+                    resp_headers,
+                    &final_url,
+                    redirected,
+                    bytes_in,
+                    attempts,
+                    started,
+                );
                 Ok((b.to_vec(), record))
             }
             Err(e) => {
@@ -758,7 +831,19 @@ impl Fetcher {
                     attempts,
                     detail: format!("reading the body: {e}"),
                 };
-                let record = self.record(seq, kind, url, range, status, resp_headers, &final_url, redirected, 0, attempts, started);
+                let record = self.record(
+                    seq,
+                    kind,
+                    url,
+                    range,
+                    status,
+                    resp_headers,
+                    &final_url,
+                    redirected,
+                    0,
+                    attempts,
+                    started,
+                );
                 Err((err, record))
             }
         }
@@ -841,7 +926,8 @@ mod tests {
     fn the_measured_global_urls_are_reproduced_exactly() {
         let b = Biz::resolve(BizId::Hk4eGlobal);
         assert_eq!(
-            b.bases().hyp_url(&b, crate::biz::HypEndpoint::GameConfigs, "en-us"),
+            b.bases()
+                .hyp_url(&b, crate::biz::HypEndpoint::GameConfigs, "en-us"),
             "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api/getGameConfigs\
              ?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3"
         );
@@ -948,7 +1034,11 @@ mod tests {
         let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
         assert_eq!(seqs, vec![a, b], "records come back in seq order");
         let urls: Vec<&str> = records.iter().map(|r| r.url.as_str()).collect();
-        assert_eq!(urls, vec!["/first", "/second"], "so issue order is recoverable");
+        assert_eq!(
+            urls,
+            vec!["/first", "/second"],
+            "so issue order is recoverable"
+        );
         assert_eq!(log.bytes_in(), 20);
         assert_eq!(log.len(), 2);
         assert!(!log.is_empty());
@@ -1011,9 +1101,21 @@ mod tests {
         assert_eq!(text.lines().count(), 1);
         let v: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         for key in [
-            "seq", "ts", "kind", "method", "url", "range", "status", "final_url",
-            "redirected", "elapsed_ms", "req_headers", "resp_headers", "bytes_in",
-            "stored_as", "attempts",
+            "seq",
+            "ts",
+            "kind",
+            "method",
+            "url",
+            "range",
+            "status",
+            "final_url",
+            "redirected",
+            "elapsed_ms",
+            "req_headers",
+            "resp_headers",
+            "bytes_in",
+            "stored_as",
+            "attempts",
         ] {
             assert!(v.get(key).is_some(), "missing {key} in {text}");
         }
@@ -1138,7 +1240,10 @@ mod tests {
         let mock = spawn(vec![(200, b"hello")], "");
         let sleeper = Arc::new(RecordingSleep::default());
         let f = fetcher(3, sleeper.clone());
-        let got = f.get(&url(&mock, "/x"), Kind::Chunk, None).await.expect("200");
+        let got = f
+            .get(&url(&mock, "/x"), Kind::Chunk, None)
+            .await
+            .expect("200");
 
         assert_eq!(got.body, b"hello");
         assert_eq!(got.record.attempts, 1);
@@ -1151,18 +1256,18 @@ mod tests {
             got.record.req_headers["user-agent"],
             crate::logging::user_agent()
         );
-        assert_eq!(sleeper.delays(), Vec::<Duration>::new(), "no backoff on success");
+        assert_eq!(
+            sleeper.delays(),
+            Vec::<Duration>::new(),
+            "no backoff on success"
+        );
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn a_server_fault_is_retried_and_the_recovered_record_says_so() {
         let mock = spawn(
-            vec![
-                (503, b"busy"),
-                (503, b"busy"),
-                (200, b"recovered"),
-            ],
+            vec![(503, b"busy"), (503, b"busy"), (200, b"recovered")],
             "",
         );
         let sleeper = Arc::new(RecordingSleep::default());
@@ -1173,7 +1278,10 @@ mod tests {
             .expect("third attempt succeeds");
 
         assert_eq!(got.body, b"recovered");
-        assert_eq!(got.record.attempts, 3, "the provenance row must show the retries");
+        assert_eq!(
+            got.record.attempts, 3,
+            "the provenance row must show the retries"
+        );
         assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
         assert_eq!(
             sleeper.delays(),
@@ -1201,10 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_404_is_not_retried_because_retrying_it_changes_nothing() {
-        let mock = spawn(
-            vec![(404, b"gone"), (200, b"never reached")],
-            "",
-        );
+        let mock = spawn(vec![(404, b"gone"), (200, b"never reached")], "");
         let sleeper = Arc::new(RecordingSleep::default());
         let f = fetcher(5, sleeper.clone());
         let err = f
@@ -1213,13 +1318,19 @@ mod tests {
             .expect_err("404 is fatal");
 
         match &err {
-            ApiError::Status { status, attempts, .. } => {
+            ApiError::Status {
+                status, attempts, ..
+            } => {
                 assert_eq!(*status, 404);
                 assert_eq!(*attempts, 1);
             }
             other => panic!("expected a status error, got {other:?}"),
         }
-        assert_eq!(mock.hits.load(Ordering::SeqCst), 1, "the second answer is unused");
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            1,
+            "the second answer is unused"
+        );
         assert!(sleeper.delays().is_empty());
         assert_eq!(err.exit_code(), ExitCode::Network);
         assert_eq!(f.log().len(), 1, "the failure is still recorded");
@@ -1227,10 +1338,7 @@ mod tests {
 
     #[tokio::test]
     async fn exhausting_the_attempts_fails_and_logs_every_one() {
-        let mock = spawn(
-            vec![(503, b"a"), (503, b"b"), (503, b"c")],
-            "",
-        );
+        let mock = spawn(vec![(503, b"a"), (503, b"b"), (503, b"c")], "");
         let sleeper = Arc::new(RecordingSleep::default());
         let f = fetcher(3, sleeper.clone());
         let err = f
@@ -1280,7 +1388,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_range_request_sends_the_literal_header_and_records_it() {
-        let mock = spawn(vec![(206, b"0123456789")], "Content-Range: bytes 0-9/100\r\n");
+        let mock = spawn(
+            vec![(206, b"0123456789")],
+            "Content-Range: bytes 0-9/100\r\n",
+        );
         let sleeper = Arc::new(RecordingSleep::default());
         let f = fetcher(1, sleeper.clone());
         let got = f
@@ -1306,11 +1417,16 @@ mod tests {
     async fn a_response_without_a_range_sends_no_range_header() {
         let mock = spawn(vec![(200, b"whole")], "");
         let f = fetcher(1, Arc::new(RecordingSleep::default()));
-        let got = f.get(&url(&mock, "/m"), Kind::Manifest, None).await.unwrap();
+        let got = f
+            .get(&url(&mock, "/m"), Kind::Manifest, None)
+            .await
+            .unwrap();
         assert_eq!(got.record.range, None);
         assert!(!got.record.req_headers.contains_key("range"));
         assert!(
-            !mock.requests.lock().unwrap()[0].to_ascii_lowercase().contains("range:"),
+            !mock.requests.lock().unwrap()[0]
+                .to_ascii_lowercase()
+                .contains("range:"),
             "an absent --range must not be sent as an empty header"
         );
     }
@@ -1321,9 +1437,15 @@ mod tests {
         let f = fetcher(1, Arc::new(RecordingSleep::default()));
         let got = f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
         let keys: Vec<&String> = got.record.resp_headers.keys().collect();
-        assert!(keys.iter().all(|k| k.chars().all(|c| !c.is_ascii_uppercase())));
+        assert!(
+            keys.iter()
+                .all(|k| k.chars().all(|c| !c.is_ascii_uppercase()))
+        );
         assert_eq!(got.record.resp_headers["server"], "MockOSS");
-        assert_eq!(got.record.resp_headers["etag"], "\"abc\"", "quotes are kept");
+        assert_eq!(
+            got.record.resp_headers["etag"], "\"abc\"",
+            "quotes are kept"
+        );
     }
 
     #[tokio::test]
@@ -1336,7 +1458,10 @@ mod tests {
 
         // The documented way this API says "no such tag": HTTP 200, retcode -202.
         let mock2 = spawn(
-            vec![(200, br#"{"data":null,"message":"not found","retcode":-202}"#)],
+            vec![(
+                200,
+                br#"{"data":null,"message":"not found","retcode":-202}"#,
+            )],
             "",
         );
         let f2 = fetcher(1, Arc::new(RecordingSleep::default()));
@@ -1392,8 +1517,16 @@ mod tests {
     #[test]
     fn every_api_error_maps_to_exit_two() {
         for e in [
-            ApiError::Transport { url: "u".into(), attempts: 1, detail: "d".into() },
-            ApiError::Status { url: "u".into(), status: 500, attempts: 1 },
+            ApiError::Transport {
+                url: "u".into(),
+                attempts: 1,
+                detail: "d".into(),
+            },
+            ApiError::Status {
+                url: "u".into(),
+                status: 500,
+                attempts: 1,
+            },
             ApiError::shape("s", "d"),
         ] {
             assert_eq!(e.exit_code(), ExitCode::Network);
