@@ -29,7 +29,7 @@ pub mod types;
 pub use types::{
     BuildManifest, Category, DOWNLOAD_MODE_CHUNK, DeprecatedFile, DeprecatedFiles, Download,
     GameBranch, GameBranches, GameConfigs, GamePackage, GamePackages, GetBuild, IntOrStr,
-    LaunchConfig, LegacyAudio, LegacyArchive, LegacyMain, LegacyRelease, ManifestRef, Stats,
+    LaunchConfig, LegacyArchive, LegacyAudio, LegacyMain, LegacyRelease, ManifestRef, Stats,
     Wrapper,
 };
 
@@ -60,8 +60,7 @@ impl CapturedBody {
     /// bytes even when the typed view is rejected, because a body this tool
     /// cannot understand is still evidence about what the API said.
     pub fn parse<T: serde::de::DeserializeOwned>(&self) -> Result<T, ApiError> {
-        serde_json::from_slice(&self.bytes)
-            .map_err(|e| ApiError::shape(self.endpoint, e))
+        serde_json::from_slice(&self.bytes).map_err(|e| ApiError::shape(self.endpoint, e))
     }
 
     /// The `data` payload.
@@ -133,7 +132,6 @@ impl Captured {
     pub fn branch_params(&self) -> Result<BranchParams, ApiError> {
         BranchParams::from_branches(&self.branches.bytes)
     }
-
 
     /// The new build.
     pub fn new_build(&self) -> Result<GetBuild, ApiError> {
@@ -227,7 +225,9 @@ impl<'a> HypClient<'a> {
 
     /// Fetch one HoYoPlay endpoint, byte-exact.
     pub async fn endpoint(&self, endpoint: HypEndpoint) -> Result<CapturedBody, ApiError> {
-        let url = self.endpoints.hyp_url(&self.biz, endpoint, CAPTURE_LANGUAGE);
+        let url = self
+            .endpoints
+            .hyp_url(&self.biz, endpoint, CAPTURE_LANGUAGE);
         self.fetch(&url, endpoint.path(), format!("{}.json", endpoint.path()))
             .await
     }
@@ -239,7 +239,8 @@ impl<'a> HypClient<'a> {
         tag: &str,
     ) -> Result<CapturedBody, ApiError> {
         let url = self.endpoints.get_build_url(params, Some(tag));
-        self.fetch(&url, "getBuild", format!("getBuild.{tag}.json")).await
+        self.fetch(&url, "getBuild", format!("getBuild.{tag}.json"))
+            .await
     }
 
     async fn fetch(
@@ -274,10 +275,12 @@ impl<'a> HypClient<'a> {
         let branches = self.endpoint(HypEndpoint::GameBranches).await?;
         let params = BranchParams::from_branches(&branches.bytes)?;
 
-        let mut versions =
-            VersionPair::select(&params, new, old).map_err(|m| ApiError::shape("version pair", m))?;
+        let mut versions = VersionPair::select(&params, new, old)
+            .map_err(|m| ApiError::shape("version pair", m))?;
 
-        let deprecated = self.endpoint(HypEndpoint::GameDeprecatedFileConfigs).await?;
+        let deprecated = self
+            .endpoint(HypEndpoint::GameDeprecatedFileConfigs)
+            .await?;
         let packages = self.endpoint(HypEndpoint::GamePackages).await?;
 
         let build_new = self.get_build(&params, &versions.new.tag).await?;
@@ -511,7 +514,9 @@ mod tests {
 
     #[test]
     fn a_good_capture_validates() {
-        mock_captured().validate().expect("the mock is self-consistent");
+        mock_captured()
+            .validate()
+            .expect("the mock is self-consistent");
     }
 
     /// The one failure mode that would make every URL in the bundle right and the
@@ -538,7 +543,9 @@ mod tests {
     fn an_undecodable_storage_declaration_is_refused() {
         let mut c = mock_captured();
         let s = String::from_utf8(c.build_new.bytes.clone()).unwrap();
-        c.build_new.bytes = s.replacen("\"compression\":1", "\"compression\":0", 1).into_bytes();
+        c.build_new.bytes = s
+            .replacen("\"compression\":1", "\"compression\":0", 1)
+            .into_bytes();
         let e = c.validate().unwrap_err();
         assert!(e.to_string().contains("compression"), "{e}");
     }
@@ -594,10 +601,19 @@ mod tests {
     #[tokio::test]
     async fn only_the_deprecated_request_carries_the_channel_tuple() {
         let mock = spawn(vec![
-            ("getGameConfigs", r#"{"retcode":0,"data":{"launch_configs":[]}}"#.into()),
+            (
+                "getGameConfigs",
+                r#"{"retcode":0,"data":{"launch_configs":[]}}"#.into(),
+            ),
             ("getGameBranches", branch_body()),
-            ("getGameDeprecatedFileConfigs", r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()),
-            ("getGamePackages", r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()),
+            (
+                "getGameDeprecatedFileConfigs",
+                r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into(),
+            ),
+            (
+                "getGamePackages",
+                r#"{"retcode":0,"data":{"game_packages":[]}}"#.into(),
+            ),
             ("getBuild", build_body("7.1.0", "n")),
             ("getBuild", build_body("7.0.0", "o")),
         ]);
@@ -614,9 +630,17 @@ mod tests {
             .await
             .unwrap();
         let seen = mock.seen.lock().unwrap().clone();
-        assert!(seen[2].contains("channel=1") && seen[2].contains("sub_channel=0"), "{:?}", seen[2]);
+        assert!(
+            seen[2].contains("channel=1") && seen[2].contains("sub_channel=0"),
+            "{:?}",
+            seen[2]
+        );
         for i in [0, 1, 3] {
-            assert!(!seen[i].contains("channel="), "request {i} carried it: {}", seen[i]);
+            assert!(
+                !seen[i].contains("channel="),
+                "request {i} carried it: {}",
+                seen[i]
+            );
         }
     }
 
@@ -627,7 +651,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             for i in 0..6 {
-                let Ok((stream, _)) = listener.accept() else { return };
+                let Ok((stream, _)) = listener.accept() else {
+                    return;
+                };
                 let body = if i == 5 {
                     // The first getBuild is for the pair's new tag and succeeds;
                     // the second, for the unservable old tag, is the one that
@@ -689,7 +715,10 @@ mod tests {
     #[test]
     fn each_body_finds_the_request_that_produced_it() {
         let log = RequestLog::new();
-        for (url, tag) in [("https://x/getGameConfigs", "api"), ("https://y/getBuild", "api")] {
+        for (url, tag) in [
+            ("https://x/getGameConfigs", "api"),
+            ("https://y/getBuild", "api"),
+        ] {
             let seq = log.reserve();
             log.push(crate::http::RequestRecord {
                 seq,
@@ -710,8 +739,18 @@ mod tests {
             });
             let _ = tag;
         }
-        let mut a = CapturedBody { endpoint: "getBuild", file: "f".into(), seq: 0, bytes: vec![] };
-        let mut b = CapturedBody { endpoint: "getGameConfigs", file: "f".into(), seq: 0, bytes: vec![] };
+        let mut a = CapturedBody {
+            endpoint: "getBuild",
+            file: "f".into(),
+            seq: 0,
+            bytes: vec![],
+        };
+        let mut b = CapturedBody {
+            endpoint: "getGameConfigs",
+            file: "f".into(),
+            seq: 0,
+            bytes: vec![],
+        };
         attach_seq(&log, &mut [&mut a, &mut b]);
         assert_eq!(a.seq, 2);
         assert_eq!(b.seq, 1);
@@ -720,7 +759,10 @@ mod tests {
     #[test]
     fn documents_render_as_pretty_json_and_are_stable() {
         let a = render_json(&serde_json::json!({"b":1,"a":2})).unwrap();
-        assert_eq!(a, serde_json::to_string_pretty(&serde_json::json!({"b":1,"a":2})).unwrap());
+        assert_eq!(
+            a,
+            serde_json::to_string_pretty(&serde_json::json!({"b":1,"a":2})).unwrap()
+        );
         assert!(a.contains('\n'), "a document is not one long line");
     }
 }

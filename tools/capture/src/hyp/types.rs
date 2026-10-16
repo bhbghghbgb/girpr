@@ -434,7 +434,13 @@ impl GamePackages {
     /// releases between `5.9.0` and `7.1.0` cannot be derived from two strings,
     /// and guessing a middle would put a fabricated number in the bundle.
     pub fn staleness(&self, branch_tag: &str) -> Option<(u64, Vec<String>)> {
-        let major = self.major_version().ok()?.split('.').next()?.parse::<u64>().ok()?;
+        let major = self
+            .major_version()
+            .ok()?
+            .split('.')
+            .next()?
+            .parse::<u64>()
+            .ok()?;
         let live = branch_tag.split('.').next()?.parse::<u64>().ok()?;
         // `checked_sub`, not `then_some(live - major)`: `then_some` evaluates its
         // argument eagerly, so the branch being behind would overflow before the
@@ -542,7 +548,10 @@ impl GetBuild {
                     "getBuild",
                     format!(
                         "no manifest for matching_field {matching_field:?}; published: {:?}",
-                        self.manifests.iter().map(|m| &m.matching_field).collect::<Vec<_>>()
+                        self.manifests
+                            .iter()
+                            .map(|m| &m.matching_field)
+                            .collect::<Vec<_>>()
                     ),
                 )
             })
@@ -550,7 +559,10 @@ impl GetBuild {
 
     /// Every `matching_field` this build publishes, in wire order.
     pub fn matching_fields(&self) -> Vec<&str> {
-        self.manifests.iter().map(|m| m.matching_field.as_str()).collect()
+        self.manifests
+            .iter()
+            .map(|m| m.matching_field.as_str())
+            .collect()
     }
 }
 
@@ -670,7 +682,10 @@ impl Download {
         if self.encryption != 0 {
             return Err(ApiError::shape(
                 what,
-                format!("encryption is {}, not 0; encrypted blobs are not supported", self.encryption),
+                format!(
+                    "encryption is {}, not 0; encrypted blobs are not supported",
+                    self.encryption
+                ),
             ));
         }
         if self.compression != 1 {
@@ -789,10 +804,15 @@ mod tests {
         let b = build();
         assert_eq!(b.build_id, "sMXGW2ll3Fuu");
         assert_eq!(b.tag, "7.1.0");
-        let m = b.manifest_for("game").expect("the game manifest is present");
+        let m = b
+            .manifest_for("game")
+            .expect("the game manifest is present");
         assert_eq!(m.category_id, "10016");
         assert_eq!(m.category_name, "游戏本体", "non-ASCII survives");
-        assert_eq!(m.manifest.id, "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d");
+        assert_eq!(
+            m.manifest.id,
+            "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d"
+        );
         assert_eq!(m.stats.as_ref().unwrap().files(), Some(2744));
     }
 
@@ -808,7 +828,10 @@ mod tests {
             Some("8d4dfb34d2ee2cf64aae45a9b1ecf58d")
         );
         assert_eq!(m.manifest.id_suffix(), Some(m.manifest.checksum.as_str()));
-        assert_eq!(m.manifest.id_prefix().unwrap().len(), "manifest_".len() + 16);
+        assert_eq!(
+            m.manifest.id_prefix().unwrap().len(),
+            "manifest_".len() + 16
+        );
     }
 
     #[test]
@@ -875,7 +898,9 @@ mod tests {
     fn storage_declined_is_refused_before_a_byte_is_fetched() {
         let b = build();
         let m = b.manifest_for("game").unwrap();
-        m.chunk_download.require_zstd_plaintext("chunk_download").unwrap();
+        m.chunk_download
+            .require_zstd_plaintext("chunk_download")
+            .unwrap();
         m.manifest_download
             .require_zstd_plaintext("manifest_download")
             .unwrap();
@@ -887,7 +912,12 @@ mod tests {
             url_prefix: String::new(),
             url_suffix: String::new(),
         };
-        assert!(bad.require_zstd_plaintext("chunk_download").unwrap_err().to_string().contains("encryption"));
+        assert!(
+            bad.require_zstd_plaintext("chunk_download")
+                .unwrap_err()
+                .to_string()
+                .contains("encryption")
+        );
         let bad = Download {
             encryption: 0,
             password: String::new(),
@@ -895,7 +925,12 @@ mod tests {
             url_prefix: String::new(),
             url_suffix: String::new(),
         };
-        assert!(bad.require_zstd_plaintext("chunk_download").unwrap_err().to_string().contains("compression"));
+        assert!(
+            bad.require_zstd_plaintext("chunk_download")
+                .unwrap_err()
+                .to_string()
+                .contains("compression")
+        );
     }
 
     #[test]
@@ -935,7 +970,9 @@ mod tests {
         assert_eq!(configs().require_chunk_mode().unwrap(), DOWNLOAD_MODE_CHUNK);
 
         let other = CONFIGS.replace("DOWNLOAD_MODE_CHUNK", "DOWNLOAD_MODE_LDIFF");
-        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(&other).unwrap().data;
+        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(&other)
+            .unwrap()
+            .data;
         let e = c.require_chunk_mode().unwrap_err();
         assert!(e.to_string().contains("DOWNLOAD_MODE_LDIFF"), "{e}");
         assert!(e.to_string().contains("DOWNLOAD_MODE_CHUNK"), "{e}");
@@ -944,7 +981,9 @@ mod tests {
     #[test]
     fn a_missing_required_config_field_is_named_rather_than_defaulted() {
         let bare = r#"{"retcode":0,"data":{"launch_configs":[{}]}}"#;
-        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(bare).unwrap().data;
+        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(bare)
+            .unwrap()
+            .data;
         for f in [
             c.download_mode().unwrap_err().to_string(),
             c.audio_pkg_scan_dir().unwrap_err().to_string(),
@@ -953,7 +992,9 @@ mod tests {
             assert!(f.contains("response does not carry this field"), "{f}");
         }
         let empty = r#"{"retcode":0,"data":{"launch_configs":[]}}"#;
-        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(empty).unwrap().data;
+        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(empty)
+            .unwrap()
+            .data;
         assert!(c.launch().unwrap_err().to_string().contains("empty"));
     }
 
@@ -961,8 +1002,13 @@ mod tests {
     /// raw body regardless, and refusing to parse would be refusing to record it.
     #[test]
     fn an_unknown_field_does_not_stop_a_parse() {
-        let extra = CONFIGS.replace("\"enable_ldiff\":true", "\"enable_ldiff\":true,\"brand_new_field\":42");
-        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(&extra).unwrap().data;
+        let extra = CONFIGS.replace(
+            "\"enable_ldiff\":true",
+            "\"enable_ldiff\":true,\"brand_new_field\":42",
+        );
+        let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(&extra)
+            .unwrap()
+            .data;
         assert_eq!(c.require_chunk_mode().unwrap(), DOWNLOAD_MODE_CHUNK);
     }
 
@@ -990,7 +1036,9 @@ mod tests {
     #[test]
     fn a_branch_with_no_main_entry_is_an_error() {
         let b = r#"{"retcode":0,"data":{"game_branches":[{"main":{"branch":"beta","package_id":"x","password":"y","tag":"z"}}]}}"#;
-        let b: GameBranches = serde_json::from_str::<Wrapper<GameBranches>>(b).unwrap().data;
+        let b: GameBranches = serde_json::from_str::<Wrapper<GameBranches>>(b)
+            .unwrap()
+            .data;
         assert!(b.main().unwrap_err().to_string().contains("main"));
     }
 
@@ -999,7 +1047,9 @@ mod tests {
     #[test]
     fn deprecated_files_parse_to_manifest_relative_paths() {
         let body = r#"{"retcode":0,"data":{"deprecated_file_configs":[{"game":{"id":"g","biz":"b"},"deprecated_files":[{"name":"UnityPlayer.dll"},{"name":"GenshinImpact_Data/Plugins/hdiffz.dll"}]}]}}"#;
-        let d: DeprecatedFiles = serde_json::from_str::<Wrapper<DeprecatedFiles>>(body).unwrap().data;
+        let d: DeprecatedFiles = serde_json::from_str::<Wrapper<DeprecatedFiles>>(body)
+            .unwrap()
+            .data;
         let files = d.files().unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[1].name, "GenshinImpact_Data/Plugins/hdiffz.dll");
@@ -1010,22 +1060,31 @@ mod tests {
     #[test]
     fn the_legacy_endpoint_reports_its_own_staleness() {
         let body = r#"{"retcode":0,"data":{"game_packages":[{"game":{"id":"g","biz":"b"},"main":{"major":{"version":"5.5.0","game_pkgs":[{"url":"u","md5":"m","size":"10737418240","decompressed_size":"21485322240"}],"audio_pkgs":[{"language":"en-us","url":"a","size":"18412580831"}]},"patches":[{"version":"5.4.0"},{"version":"5.3.0"}]}}]}}"#;
-        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(body).unwrap().data;
+        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(body)
+            .unwrap()
+            .data;
         assert_eq!(p.major_version().unwrap(), "5.5.0");
         assert_eq!(p.patch_versions(), vec!["5.4.0", "5.3.0"]);
 
-        let (behind, patches) = p.staleness("7.1.0").expect("a 7.x branch is ahead of 5.5.0");
+        let (behind, patches) = p
+            .staleness("7.1.0")
+            .expect("a 7.x branch is ahead of 5.5.0");
         assert_eq!(behind, 2, "5.5.0 -> 7.1.0 is two major versions");
         assert_eq!(patches.len(), 2);
         // The url contains parentheses in the real body; they must not need
         // escaping to be held.
-        assert_eq!(p.package().unwrap().main.as_ref().unwrap().major.audio_pkgs[0].language, "en-us");
+        assert_eq!(
+            p.package().unwrap().main.as_ref().unwrap().major.audio_pkgs[0].language,
+            "en-us"
+        );
     }
 
     #[test]
     fn staleness_is_zero_when_the_branch_is_not_ahead() {
         let body = r#"{"retcode":0,"data":{"game_packages":[{"main":{"major":{"version":"7.1.0"}},"patches":[]}]}}"#;
-        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(body).unwrap().data;
+        let p: GamePackages = serde_json::from_str::<Wrapper<GamePackages>>(body)
+            .unwrap()
+            .data;
         // Zero is an answer — "not stale" — and is reported as such. `None` is
         // reserved for "could not be computed", so the two are distinguishable.
         assert_eq!(p.staleness("7.1.0"), Some((0, Vec::<String>::new())));
