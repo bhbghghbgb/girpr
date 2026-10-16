@@ -693,48 +693,15 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
 
 /// A13, re-read from disk.
 ///
-/// The same check the capture made, for the same reason: a parsed version
-/// compared against a configured tag only means something if the parse went
-/// through the file a reader would read.
+/// **Delegates to [`crate::run::check_config_ini`]**, which the capture also
+/// calls. This was a second copy of the same read → parse → compare, with
+/// different wording in every branch: it said `readable` where the capture says
+/// `game_version == <tag>`, and reported the value as `game_version == v` where
+/// the capture writes `game_version is v`. Since `verify` cross-checks its rows
+/// against the capture's recorded ones, two spellings means the check can
+/// disagree with the record it is supposed to be re-deriving.
 fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
-    use crate::emit::selfcheck::wording;
-    let old_tag = manifest.versions.old.tag.as_str();
-    let cfg = root.join("game").join("config.ini");
-    let subject = "game/config.ini";
-    let text = match std::fs::read_to_string(&cfg) {
-        Ok(t) => t,
-        Err(e) => {
-            return vec![Assertion::fail(
-                "A13",
-                wording("A13"),
-                subject,
-                "readable",
-                &format!("{e}"),
-            )];
-        }
-    };
-    vec![match crate::emit::gamedir::parse_game_version(&text) {
-        Ok(v) if v == old_tag => Assertion::pass(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {v}"),
-        ),
-        Ok(v) => Assertion::fail(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {old_tag}"),
-            &format!("game_version == {v}"),
-        ),
-        Err(e) => Assertion::fail(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {old_tag}"),
-            &e,
-        ),
-    }]
+    vec![crate::run::check_config_ini(root, &manifest.versions.old.tag)]
 }
 
 /// Does the recomputation agree with what the capture recorded?

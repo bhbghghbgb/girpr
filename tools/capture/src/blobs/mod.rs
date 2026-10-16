@@ -51,6 +51,26 @@ pub struct ChunkIndex {
     pub sets: BTreeMap<String, Vec<String>>,
 }
 
+/// The index row for a `Want`, given the measurement of its bytes.
+///
+/// **One constructor, three call sites.** A stored blob, a blob that was
+/// `--no-chunk-blobs`-planned, and a blob whose fetch came back empty all built
+/// the same struct with the same two clones, in three places. The rule that a
+/// row's `referenced_by` and `sets` are *the want's* is exactly the kind of
+/// thing that has to be said once: `chunks/index.json` is derived data, and a
+/// row whose `sets` disagreed with its `referenced_by` is the failure mode the
+/// `ChunkIndex::build` doc comment is about.
+fn indexed_from(props: BlobProps, want: &Want) -> (IndexedBlob, Vec<Set>) {
+    (
+        IndexedBlob {
+            props,
+            referenced_by: want.references.clone(),
+            sets: want.sets.clone(),
+        },
+        want.sets.clone(),
+    )
+}
+
 /// One blob as `chunks/index.json` lists it: the measurement plus who wanted it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexedBlob {
@@ -280,16 +300,7 @@ impl Store {
     pub fn plan_only(wants: &[Want]) -> Vec<(IndexedBlob, Vec<Set>)> {
         wants
             .iter()
-            .map(|w| {
-                (
-                    IndexedBlob {
-                        props: BlobProps::unmeasured(&w.chunk),
-                        referenced_by: w.references.clone(),
-                        sets: w.sets.clone(),
-                    },
-                    w.sets.clone(),
-                )
-            })
+            .map(|w| indexed_from(BlobProps::unmeasured(&w.chunk), w))
             .collect()
     }
 
@@ -331,17 +342,8 @@ impl Store {
                              measured against the first",
                         );
                     }
-                    return Ok((
-                        slot,
-                        (
-                            IndexedBlob {
-                                props,
-                                referenced_by: want.references,
-                                sets: want.sets.clone(),
-                            },
-                            want.sets,
-                        ),
-                    ));
+                    // The two fields are moved rather than cloned: this is the last use of `want`.
+                    return Ok((slot, indexed_from(props, &want)));
                 }
                 Err(e) => {
                     tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e, "chunk fetch failed");
@@ -360,14 +362,7 @@ impl Store {
     fn unfilled(&self, want: &Want) -> (IndexedBlob, Vec<Set>) {
         let mut props = BlobProps::unmeasured(&want.chunk);
         props.decode_error = Some("fetched but not stored".to_string());
-        (
-            IndexedBlob {
-                props,
-                referenced_by: want.references.clone(),
-                sets: want.sets.clone(),
-            },
-            want.sets.clone(),
-        )
+        indexed_from(props, want)
     }
 
     /// Write one blob, via `tmp/`, into `chunks/blobs/`.

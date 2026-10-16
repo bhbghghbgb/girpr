@@ -466,12 +466,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //    stay useful, and the bytes are the evidence behind every number in the
     //    summary.
     let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
-    let mut written = emit::write_api(&dir, &captured, &probe, &error_shapes).map_err(|e| {
-        apierr(
-            &format!("write {}", dir.display()),
-            &ApiError::shape("artifact writer", e),
-        )
-    })?;
+    let mut written =
+        emit::write_api(&dir, &captured, &probe, &error_shapes)
+            .map_err(|e| write_err(&dir, e))?;
     // Counted from what the writer returned, never restated: a hand-written
     // count goes stale silently the moment a document is added, and nothing
     // fails when it does.
@@ -479,12 +476,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     for pair in &mut manifests {
         for m in pair {
             let stored = manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail)
-                .map_err(|e| {
-                    apierr(
-                        &format!("write {}", dir.display()),
-                        &ApiError::shape("artifact writer", e),
-                    )
-                })?;
+                .map_err(|e| write_err(&dir, e))?;
             // `stored_as` is filled in here rather than by the writer: only now is it
             // known where the archive ended up, and only the request log can say it.
             manifest::mark_stored(&log, m, &stored[0].path);
@@ -492,18 +484,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         }
     }
     written.extend(
-        emit::write_diff(
-            &dir,
-            &agg,
-            &diffs[0].pool,
-            &diffs,
-        )
-        .map_err(|e| {
-            apierr(
-                &format!("write {}", dir.display()),
-                &ApiError::shape("artifact writer", e),
-            )
-        })?,
+        emit::write_diff(&dir, &agg, &diffs[0].pool, &diffs).map_err(|e| write_err(&dir, e))?,
     );
     written.extend(
         emit::write_selection(
@@ -512,12 +493,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             &selection,
             plan.per_class.max(1) as usize,
         )
-        .map_err(|e| {
-            apierr(
-                &format!("write {}", dir.display()),
-                &ApiError::shape("artifact writer", e),
-            )
-        })?,
+        .map_err(|e| write_err(&dir, e))?,
     );
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //
@@ -553,12 +529,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // reader actually wants, which is that the bundle cannot be materialized. An
     // empty directory costs nothing and makes the layout uniform.
     std::fs::create_dir_all(dir.join("patchmaps")).map_err(|e| write_err(&dir, e))?;
-    written.push(emit::write_chunk_index(&dir, &index).map_err(|e| {
-        apierr(
-            &format!("write {}", dir.display()),
-            &ApiError::shape("artifact writer", e),
-        )
-    })?);
+    written.push(emit::write_chunk_index(&dir, &index).map_err(|e| write_err(&dir, e))?);
 
     // 7c. Assembly. Old, new, and the patch flow, from the blobs just stored.
     //     A7-A12 are asserted here rather than left to M9, because a capture that
@@ -633,14 +604,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                             out.new.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
                         ),
                     );
-                    written.push(emit::write_patchmap(&dir, &a.capture_id, &out.map).map_err(
-                        |e| {
-                            apierr(
-                                &format!("write {}", dir.display()),
-                                &ApiError::shape("artifact writer", e),
-                            )
-                        },
-                    )?);
+                    written.push(
+                        emit::write_patchmap(&dir, &a.capture_id, &out.map)
+                            .map_err(|e| write_err(&dir, e))?,
+                    );
                     // `game/` is the fixture, `expected/` the ground truth. A
                     // `removed` capture contributes only to the first.
                     if let Some(o) = &out.old {
@@ -1465,36 +1432,8 @@ fn closing_assertions(
     //
     // Re-read from disk rather than from the string that produced it: the
     // question is whether a *reader* can get the version out, and comparing
-    // against the same input would pass even if the format were unreadable. The
-    // row is built rather than `check`ed, because what is compared is a parsed
-    // version against a configured tag, not two strings of prose.
-    let cfg = dir.join("game").join("config.ini");
-    let expected = format!("game_version == {old_tag}");
-    rows.push(match std::fs::read_to_string(&cfg) {
-        Err(e) => Assertion::fail(
-            "A13",
-            wording("A13"),
-            "game/config.ini",
-            &expected,
-            &format!("unreadable: {e}"),
-        ),
-        Ok(text) => match emit::gamedir::parse_game_version(&text) {
-            Err(e) => Assertion::fail("A13", wording("A13"), "game/config.ini", &expected, &e),
-            Ok(got) if got == old_tag => Assertion::pass(
-                "A13",
-                wording("A13"),
-                "game/config.ini",
-                &format!("game_version is {got}"),
-            ),
-            Ok(got) => Assertion::fail(
-                "A13",
-                wording("A13"),
-                "game/config.ini",
-                &expected,
-                &format!("game_version is {got}, the old tag is {old_tag}"),
-            ),
-        },
-    });
+    // against the same input would pass even if the format were unreadable.
+    rows.push(check_config_ini(dir, old_tag));
 
     // A14: `game/` holds nothing but the tool-read config and the variant
     // files. Anything else is a file the tool under test would build a plan
@@ -1789,6 +1728,53 @@ fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String
         files: Vec::new(),
         totals_by_set,
     })
+}
+
+/// A13: read `game/config.ini` back and check the version a reader would find.
+///
+/// **One implementation, two callers.** `verify` ran its own copy — same file,
+/// same parse, same comparison, and *different wording* for every branch, which
+/// is the worst kind of duplication: the two can disagree about what a passing
+/// A13 looks like on paper while agreeing about whether it passes.
+///
+/// The capture's wording is the one kept, because `verify` compares its rows
+/// against the capture's recorded ones, and the recorded row is what a reader
+/// has already seen. `verify` no longer says `readable` where the capture says
+/// `game_version == <tag>`, nor `game_version == v` where the capture writes
+/// `game_version is v`.
+pub fn check_config_ini(
+    dir: &std::path::Path,
+    old_tag: &str,
+) -> emit::selfcheck::Assertion {
+    use crate::emit::selfcheck::{Assertion, wording};
+    const SUBJECT: &str = "game/config.ini";
+    let cfg = dir.join("game").join("config.ini");
+    let expected = format!("game_version == {old_tag}");
+    match std::fs::read_to_string(&cfg) {
+        Err(e) => Assertion::fail(
+            "A13",
+            wording("A13"),
+            SUBJECT,
+            &expected,
+            &format!("unreadable: {e}"),
+        ),
+        Ok(text) => match emit::gamedir::parse_game_version(&text) {
+            Err(e) => Assertion::fail("A13", wording("A13"), SUBJECT, &expected, &e),
+            Ok(got) if got == old_tag => Assertion::pass(
+                "A13",
+                wording("A13"),
+                SUBJECT,
+                &format!("game_version is {got}"),
+            ),
+            Ok(got) => Assertion::fail(
+                "A13",
+                wording("A13"),
+                SUBJECT,
+                &expected,
+                &format!("game_version is {got}, the old tag is {old_tag}"),
+            ),
+        },
+    }
 }
 
 /// A1 through A6: what the API and the manifests said, and what arrived.

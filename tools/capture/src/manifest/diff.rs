@@ -555,9 +555,26 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
 /// One row per path in either manifest: `path`, `state`, `old_size`, `new_size`,
 /// `reused`, `moved`, `patch_bytes`, `total_cost`. Plain text always, header
 /// line, LF endings — this is the file a reader greps.
+/// The two `paths.tsv` writers are **not** duplicates, despite the name.
+///
+/// This one is `diff/paths.tsv` — `field path state old_size … total_cost`,
+/// one row per common and one-sided path across every scored field.
+/// [`crate::manifest::dump::paths_tsv`] is the per-manifest sidecar,
+/// `path size md5 nchunks is_folder`, one row per manifest entry. Same format,
+/// different documents; a reader greps them for different things and merging
+/// them would lose a column.
+///
+/// What they do share is a weakness: **neither escapes a tab**, so one path
+/// containing a tab corrupts both identically. Real manifests carry none, and
+/// escaping would change bytes that shipped bundles already contain, so it is
+/// left as a recorded property rather than a fix.
 pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
-    let header = "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
-    let mut s = String::from(header);
+    const HEADER: &str =
+        "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
+    // Sized from the header and the row count rather than `String::from`,
+    // which starts at zero and reallocates as a 2 744-row table lands.
+    let mut s = String::with_capacity(HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>());
+    s.push_str(HEADER);
     for f in diffs {
         for row in &f.rows {
             s.push_str(&f.field);
@@ -568,17 +585,14 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
             s.push('\t');
             match &row.score {
                 Some(sc) => {
-                    s.push_str(&sc.old_size.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.new_size.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.reused.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.moved.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.patch_bytes.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.total_cost.to_string());
+                    use std::fmt::Write as _;
+                    // Seven `to_string()` calls per row, each a fresh
+                    // allocation, for numbers that go straight back out.
+                    let _ = write!(
+                        s,
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        sc.old_size, sc.new_size, sc.reused, sc.moved, sc.patch_bytes, sc.total_cost
+                    );
                 }
                 None => s.push_str("\t\t0\t0\t0\t0"),
             }

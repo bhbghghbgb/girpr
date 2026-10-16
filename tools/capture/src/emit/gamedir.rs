@@ -183,8 +183,8 @@ pub fn write_prelude(
     // finished.
     let scan = audio_scan_file(audio).map_err(std::io::Error::other)?;
     Ok(vec![
-        write_bytes(root, "game/config.ini", config_ini(biz, old_tag).as_bytes())?,
-        write_bytes(root, &format!("game/{scan_dir}"), scan.as_bytes())?,
+        super::write_rel(root, "game/config.ini", config_ini(biz, old_tag).as_bytes())?,
+        super::write_rel(root, &format!("game/{scan_dir}"), scan.as_bytes())?,
     ])
 }
 
@@ -198,7 +198,7 @@ pub fn write_variant(root: &Path, tree: &str, file: &VariantFile<'_>) -> std::io
         tree,
         "variant file written"
     );
-    write_bytes(root, &rel, file.bytes)
+    super::write_rel(root, &rel, file.bytes)
 }
 
 /// Write `game/` and `expected/` in one call.
@@ -229,15 +229,6 @@ pub fn write_gamedir(
             .push(write_variant(root, super::EXPECTED_TREE, f)?);
     }
     Ok(w)
-}
-
-fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
-    let path = root.join(rel);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, bytes)?;
-    Ok(rel.to_string())
 }
 
 #[cfg(test)]

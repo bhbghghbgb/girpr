@@ -80,7 +80,7 @@ pub fn write(
     let mut out = Vec::with_capacity(4);
 
     // 1. The archive, byte-exact.
-    let archive = write_file(root, &archive_rel(&tag, &field), &captured.raw)?;
+    let archive = crate::emit::write_rel(root, &archive_rel(&tag, &field), &captured.raw)?;
     captured.meta.stored.path = archive.clone();
     out.push(StoredAs {
         path: archive,
@@ -117,7 +117,7 @@ pub fn write(
         } else {
             body.into_bytes()
         };
-        write_file(root, &rel, &payload)?;
+        crate::emit::write_rel(root, &rel, &payload)?;
         out.push(StoredAs {
             path: rel,
             encoding,
@@ -129,7 +129,7 @@ pub fn write(
     //    it is the thing a reader greps when the decode beside it is `.gz`, and
     //    under `paths-only` it is the *only* per-path document there is.
     let tsv = paths_tsv(&captured.entries);
-    write_file(root, &paths_rel(&tag, &field), tsv.as_bytes())?;
+    crate::emit::write_rel(root, &paths_rel(&tag, &field), tsv.as_bytes())?;
     out.push(StoredAs {
         path: paths_rel(&tag, &field),
         encoding: Encoding::Identity,
@@ -141,11 +141,9 @@ pub fn write(
     captured.meta.full_decode_written = detail == ManifestDetail::Full;
     let meta = serde_json::to_string_pretty(&captured.meta)
         .map_err(|e| std::io::Error::other(format!("serialise the manifest meta: {e}")))?;
-    write_file(
-        root,
-        &meta_rel(&tag, &field),
-        format!("{meta}\n").as_bytes(),
-    )?;
+    // The newline is written as a second `write_all` rather than by
+    // `format!("{meta}\n")`, which copied the whole document to append a byte.
+    crate::emit::write_newline_doc(root, &meta_rel(&tag, &field), meta.as_bytes())?;
     out.push(StoredAs {
         path: meta_rel(&tag, &field),
         encoding: Encoding::Identity,
@@ -190,43 +188,31 @@ impl FullDecode {
 /// reordering — decode order is an implementation detail of the archive, and a
 /// reader comparing two versions is comparing *paths*.
 pub fn paths_tsv(entries: &[SophonChunkFile]) -> String {
-    let mut rows: Vec<(String, i64, String, usize, bool)> = entries
-        .iter()
-        .map(|e| {
-            (
-                e.file.clone(),
-                e.size,
-                e.md5.clone(),
-                e.chunks.len(),
-                e.is_folder,
-            )
-        })
-        .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut s = String::with_capacity(rows.len() * 96 + 48);
-    s.push_str("path\tsize\tmd5\tnchunks\tis_folder\n");
-    for (p, size, md5, n, folder) in rows {
-        s.push_str(&p);
-        s.push('\t');
-        s.push_str(&size.to_string());
-        s.push('\t');
-        s.push_str(&md5);
-        s.push('\t');
-        s.push_str(&n.to_string());
-        s.push('\t');
-        s.push_str(if folder { "true" } else { "false" });
+    const HEADER: &str = "path\tsize\tmd5\tnchunks\tis_folder\n";
+    // Sorted references, no tuples: this built a `Vec<(String, i64, String,
+    // usize, bool)>` with two `String` clones per entry, sorted that, and only
+    // then rendered. Zero clones and one allocation to start with.
+    let mut paths: Vec<&str> = entries.iter().map(|e| e.file.as_str()).collect();
+    paths.sort_unstable();
+    let by_path: std::collections::HashMap<&str, &SophonChunkFile> =
+        entries.iter().map(|e| (e.file.as_str(), e)).collect();
+    let mut s = String::with_capacity(HEADER.len() + paths.len() * 96);
+    s.push_str(HEADER);
+    for p in paths {
+        let e = by_path[p];
+        use std::fmt::Write as _;
+        let _ = write!(
+            s,
+            "{}\t{}\t{}\t{}\t{}",
+            e.file,
+            e.size,
+            e.md5,
+            e.chunks.len(),
+            if e.is_folder { "true" } else { "false" }
+        );
         s.push('\n');
     }
     s
-}
-
-fn write_file(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
-    let path = root.join(rel);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, bytes)?;
-    Ok(rel.to_string())
 }
 
 /// Reconcile a decode against `getBuild.stats` and log the verdict.

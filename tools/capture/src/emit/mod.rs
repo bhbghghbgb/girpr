@@ -59,18 +59,10 @@ pub fn write_api(
         written.push(format!("api/{}", body.file));
     }
     let probe_json = hyp::render_json(probe).map_err(std::io::Error::other)?;
-    write_bytes(
-        root,
-        "api/tag_probe.json",
-        format!("{probe_json}\n").as_bytes(),
-    )?;
+    write_newline_doc(root, "api/tag_probe.json", probe_json.as_bytes())?;
     written.push("api/tag_probe.json".to_string());
     let shapes_json = hyp::render_json(shapes).map_err(std::io::Error::other)?;
-    write_bytes(
-        root,
-        "api/error_shapes.json",
-        format!("{shapes_json}\n").as_bytes(),
-    )?;
+    write_newline_doc(root, "api/error_shapes.json", shapes_json.as_bytes())?;
     written.push("api/error_shapes.json".to_string());
     Ok(written)
 }
@@ -237,21 +229,61 @@ pub const EXPECTED_TREE: &str = "expected";
 fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::Result<String> {
     let body = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
-    write_bytes(root, rel, format!("{body}\n").as_bytes())?;
+    write_newline_doc(root, rel, body.as_bytes())?;
     Ok(rel.to_string())
 }
 
 /// Write one artifact-relative file, creating its parents.
 ///
-/// The small metadata documents written here are not written atomically: a
-/// half-written one is a small, reproducible failure. The large artifacts (blobs,
-/// game files) go through `tmp/`-and-move in `write_atomic`.
-fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// **The one place a bundle file is written.** It was six, governing 23 call
+/// sites across `emit`, `emit::gamedir`, `manifest::dump` and `run` — two of
+/// them byte-identical, the rest differing only in the return type (`PathBuf`
+/// or `String`) and in whether they asserted the path round-trips. Six copies of
+/// "create the parent, write the bytes" is six places for a bundle rule to be
+/// stated once and forgotten five times.
+///
+/// The small metadata documents written here are **not** written atomically: a
+/// half-written one is a small, reproducible failure. Chunk blobs are the only
+/// thing written through `tmp/`-and-move, and that is
+/// [`crate::blobs::Store`]'s own `write`.
+pub fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    write_parts(root, rel, &[bytes])
+}
+
+/// [`write_bytes`] for a document that must end with a newline.
+///
+/// **Written as two `write_all` calls.** Every call site used
+/// `format!("{body}\n")`, which allocates a second full copy of the whole
+/// document to append one byte — 27 MB for the `game` manifest decode, the
+/// largest document this tool produces.
+///
+/// The newline is not optional and is not the writer's to invent: bundle
+/// documents have always ended in one, `checksums.json` records the digest
+/// that results, and a change here would be invisible to
+/// `tests/bundle_diff.rs`, which compares two *new* captures to each other
+/// rather than either of them to a bundle already on disk.
+pub fn write_newline_doc(root: &Path, rel: &str, body: &[u8]) -> std::io::Result<PathBuf> {
+    write_parts(root, rel, &[body, b"\n"])
+}
+
+/// [`write_bytes`], returning the artifact-relative path that was written.
+///
+/// For the call sites that go straight into `MANIFEST.json → files[]`, where the
+/// answer is the name and not the `PathBuf` it was built from.
+pub fn write_rel(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
+    write_bytes(root, rel, bytes)?;
+    Ok(rel.to_string())
+}
+
+fn write_parts(root: &Path, rel: &str, parts: &[&[u8]]) -> std::io::Result<PathBuf> {
     let path = root.join(rel);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&path, bytes)?;
+    let mut f = std::fs::File::create(&path)?;
+    for p in parts {
+        std::io::Write::write_all(&mut f, p)?;
+    }
     debug_assert_eq!(
         rel_path_string(root, &path),
         rel,
