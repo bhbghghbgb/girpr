@@ -336,6 +336,42 @@ pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
     zstd::decode_all(bytes).map_err(|e| zstd_error(bytes, what, e))
 }
 
+/// [`zstd_decompress`] over a reader, optionally pre-sized.
+///
+/// §5.5 row 8. The one caller that matters used to do
+/// `std::fs::read(path)` and then decode from that `Vec`, so the **compressed**
+/// bytes stayed alive for the whole decode beside the decompressed ones — peak
+/// `compressed + decompressed`, on a 22 MB file with a 2 MB blob. Decoding
+/// straight from the file drops that to the decompressed buffer plus one read
+/// window.
+///
+/// `expected` is the decompressed length when the caller knows it, which for a
+/// chunk it does — the index carries it. It is a capacity hint and nothing else:
+/// the returned length is whatever actually decoded, and a wrong hint costs a
+/// reallocation rather than a wrong answer.
+pub fn zstd_decompress_from<R: std::io::Read>(
+    mut reader: R,
+    what: &str,
+    expected: Option<u64>,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    // The magic is read up front so a refusal can quote it — a reader being
+    // consumed cannot be re-read. Same shape as `zstd_measure_from`.
+    let mut first = [0_u8; 4];
+    let n = read_upto(&mut reader, &mut first)
+        .map_err(|e| zstd_error_streamed(&[], what, e))?;
+    let head: &[u8] = &first[..n];
+    if !is_zstd(head) {
+        return Err(zstd_error_streamed(head, what, "not a zstd frame"));
+    }
+    let mut out = Vec::with_capacity(expected.unwrap_or(0) as usize);
+    let mut dec = zstd::stream::read::Decoder::new(std::io::Cursor::new(head).chain(reader))
+        .map_err(|e| zstd_error_streamed(head, what, e))?;
+    dec.read_to_end(&mut out)
+        .map_err(|e| zstd_error_streamed(head, what, e))?;
+    Ok(out)
+}
+
 fn zstd_error(bytes: &[u8], what: &str, e: impl std::fmt::Display) -> String {
     format!(
         "{what}: not a decodable zstd blob ({} bytes, magic {:02x?}{}): {e}",
@@ -722,6 +758,47 @@ mod tests {
         );
         assert_ne!(digests, md5_sha256(second));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
+        // **§5.5 row 8's gate.** `ChunkSource::decoded` no longer reads the blob
+        // into a `Vec` before decoding it, so the two paths must be the same
+        // function. Checked on a real frame, and with the capacity hint both
+        // right and wrong, because a hint that changed the output would be a
+        // silent corruption of an assembled file.
+        use std::io::Cursor;
+        let payload = b"the quick brown fox jumps over the lazy dog".repeat(900);
+        let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
+
+        let from_buffer = zstd_decompress(&frame, "blob").expect("buffer");
+        assert_eq!(from_buffer, payload);
+
+        for expected in [None, Some(payload.len() as u64), Some(0), Some(1 << 30)] {
+            let from_reader =
+                zstd_decompress_from(Cursor::new(&frame), "blob", expected).expect("reader");
+            assert_eq!(
+                from_reader, payload,
+                "capacity hint {expected:?} changed the output"
+            );
+        }
+    }
+
+    #[test]
+    fn decompressing_from_a_reader_refuses_the_same_things_the_buffer_does() {
+        // The refusals must match too, since `decoded` now takes this path for a
+        // blob it would previously have read whole.
+        use std::io::Cursor;
+        let xml = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let e = zstd_decompress_from(Cursor::new(xml), "blob", None).expect_err("not a frame");
+        assert!(e.contains("no-zstd-magic"), "{e}");
+        assert!(e.contains("blob"), "the message must name the blob: {e}");
+
+        let mut truncated = zstd::encode_all(vec![7_u8; 4096].as_slice(), 1).expect("encode");
+        truncated.truncate(truncated.len() / 2);
+        let e =
+            zstd_decompress_from(Cursor::new(&truncated), "blob", None).expect_err("half a frame");
+        assert!(e.contains("has-zstd-magic"), "{e}");
     }
 
     #[test]

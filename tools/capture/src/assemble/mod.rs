@@ -538,9 +538,23 @@ impl<'i> ChunkSource<'i> {
                     .as_deref()
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
                 let path = root.join(rel);
-                let raw =
-                    std::fs::read(&path).map_err(|io| format!("read {}: {io}", path.display()))?;
-                let out = hash::zstd_decompress(&raw, &format!("chunk {chunk_id}"))?;
+                // **Decoded from the file, not from a `Vec` of it.** §5.5 row 8:
+                // this used to `std::fs::read` the whole blob and then decode from
+                // that buffer, so the compressed bytes stayed alive for the whole
+                // decode beside the decompressed ones. Decoding straight through a
+                // buffered reader drops the compressed copy entirely — peak is the
+                // output plus one read window.
+                //
+                // The capacity comes from the index, which carries the declared
+                // decompressed length, so the output buffer is allocated once
+                // rather than grown by doubling across ~20 reallocations.
+                let file = std::fs::File::open(&path)
+                    .map_err(|io| format!("open {}: {io}", path.display()))?;
+                let out = hash::zstd_decompress_from(
+                    std::io::BufReader::with_capacity(64 * 1024, file),
+                    &format!("chunk {chunk_id}"),
+                    Some(b.props.uncompressed_size),
+                )?;
                 if !b.props.md5_decompressed.is_empty() {
                     let got = hash::md5_hex(&out);
                     if got != b.props.md5_decompressed {

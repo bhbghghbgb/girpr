@@ -758,10 +758,11 @@ async fn drain_capped<W: std::io::Write>(
     attempts: u32,
 ) -> Result<u64, ApiError> {
 
-    if let Some(declared) = resp.content_length()
-        && declared > cap
+    let declared = resp.content_length();
+    if let Some(d) = declared
+        && d > cap
     {
-        return Err(too_big(url, declared, cap));
+        return Err(too_big(url, d, cap));
     }
     let mut seen = 0_u64;
     loop {
@@ -1432,7 +1433,9 @@ impl Fetcher {
                     );
                     (err, record)
                 };
-                let mut buf: Vec<u8> = Vec::new();
+                let mut buf: Vec<u8> = Vec::with_capacity(
+                    resp.content_length().unwrap_or(0) as usize,
+                );
                 match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
                     Ok(n) => {
                         bytes_in = n;
