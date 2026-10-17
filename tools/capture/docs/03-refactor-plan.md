@@ -1157,21 +1157,67 @@ path entirely, moves nothing —
 That is the §3.2 fix having worked. The O(n²) walk `by_seq` replaced was the
 real cost; what remains under that lock is a `BTreeMap` lookup.
 
-**But there is a serialisation point, and it is not that one.** Per-blob latency
-grows ~6x from `--jobs 1` to `--jobs 16` while throughput barely moves, which is
-the signature of a contended shared resource rather than of per-item cost. Total
-CPU stayed under one of four cores throughout, so it is not CPU exhaustion and
-not connection setup either — the mock's keep-alive fix (`428fc8e`) bought 14% at
-`--jobs 8` and **nothing** at `--jobs 1`. Logging is not it (`RUST_LOG=off`
-changes nothing), and there is no `fsync` anywhere in the write path.
+**But there is a serialisation point, and it turned out to be the filesystem.**
+Per-blob latency grows ~6x from `--jobs 1` to `--jobs 16` while throughput barely
+moves, which is the signature of a contended shared resource rather than of
+per-item cost. Total CPU stayed under one of four cores throughout, so it is not
+CPU exhaustion and not connection setup either — the mock's keep-alive fix
+(`428fc8e`) bought 14% at `--jobs 8` and **nothing** at `--jobs 1`. Logging is not
+it (`RUST_LOG=off` changes nothing), and there is no `fsync` anywhere in the
+write path.
 
-**What remains open, stated as open.** The remaining serialisation is not
-localised. It is not the `RequestLog`, not the logger, not the mock's accept
-loop, and not connection setup — the remaining candidate is the blob write path
-(4 000 files created in a single `chunks/blobs/` directory, which on Windows is
-not free and does not parallelise), but that is a hypothesis, not a measurement,
-and this plan does not claim it. `Store::fill` is confirmed *not* to be the
-limit: it runs a `tokio::task::JoinSet` with exactly `jobs` tasks in flight.
+**Localised** by instrumenting the four phases of `Store::stream_from`
+(temporary, removed again). 4 000 blobs at `--jobs 1`, averages per blob:
+
+| phase | µs/blob |
+|---|---|
+| fetch (HTTP + hash-while-streaming) | 582 |
+| `HashingFile::finish` | 82 |
+| `fs::rename` | 500 |
+| `spawn_blocking(measure_file)` | **7 449** |
+
+Timing inside the closure shows the 7 449 is the **body**, not the
+`spawn_blocking` round-trip (body 7 329 of 7 449). And `measure_file` is not
+where the time goes — a micro-benchmark on one 2 048-byte frame, release build:
+
+| | ms/op |
+|---|---|
+| `zstd` decode only, in memory | 0.099 |
+| `Decoder::new` alone | 0.037 |
+| `measure_file`, same file read 500 times | 0.293 |
+| **create + rename + reopen a fresh file, no decode at all** | **2.387** |
+
+The decode is ~4% of `measure_file`; the file operations are the rest. **Windows
+filesystem metadata is the serialisation point, not gircap's logic** — which is
+also why it does not parallelise and why it shows no user CPU.
+
+**The directory hypothesis, as first stated, was wrong, and is recorded as
+wrong.** The guess was that 4 000 files in one `chunks/blobs/` directory get
+progressively more expensive. They do not:
+
+| blobs | wall at `--jobs 1` | per blob |
+|---|---|---|
+| 1 000 | 12.38 s | 12.4 ms |
+| 2 000 | 20.84 s | 10.4 ms |
+| 4 000 | 47.70 s | 11.9 ms |
+| 8 000 | 102.58 s | 12.8 ms |
+
+Flat. Cost is per file, not per directory entry. The corrected form — per-file
+filesystem cost, not a growing directory — is what the measurements support.
+
+**What this does and does not license.** It localises the cost and says the fix is
+not a data structure. It does **not** say the fix is cheap: removing the
+rename-and-reopen would change what `verify` can trust about a partial write, and
+§5.5 row 2 is explicit that the `tmp/`-and-rename step is deliberate — a crash
+mid-write would otherwise leave a truncated file at the final path, which
+`verify` could not distinguish from a good blob. And `verify` already runs a 129 MB
+bundle in 1.9 s, so the ceiling here is what the filesystem gives, not what this
+plan can change. Left as a finding.
+
+**What remains open, stated as open.** Only that: the cost is localised but no
+change is proposed, and none of the measurements say one would pay. `Store::fill`
+is confirmed *not* to be the limit — it runs a `tokio::task::JoinSet` with exactly
+`jobs` tasks in flight.
 
 **What is not claimed.** The gate gap §5.5 named is now closed for
 `api/requests.ndjson` — `d745680` pins all 28 rows of a mock capture, so a
@@ -1185,7 +1231,8 @@ claimed:
   `README.md`, `verify/checksums.json` and `verify/selfcheck.json` are still only
   compared between two runs of one binary, and a drift all four share is still
   invisible. Generalising the pin to them is real work that this plan did not do.
-- The serialisation point found above is still unlocalised, and the remaining
-  candidate — 4 000 files created in one `chunks/blobs/` directory — is a
-  hypothesis. Nothing here claims it.
+- The serialisation point found above is localised to Windows filesystem
+  metadata, and no change is proposed for it. The §5.5 row-2 `tmp/`-and-rename
+  step is what makes `verify` able to trust a blob, so removing the file
+  operations is not a free win, and nothing measured here says a change pays.
 
