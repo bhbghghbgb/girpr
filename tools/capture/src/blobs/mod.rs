@@ -122,8 +122,23 @@ impl ChunkIndex {
     }
 
     /// The blob entry for an id.
+    ///
+    /// `blobs` is documented as ordered by id and [`ChunkIndex::build`] produces
+    /// it that way, so this is a binary search over 38 entries rather than a
+    /// scan of all of them.
+    ///
+    /// A bundle is a file someone can edit, though, and `blobs` is a `pub`
+    /// field — so an index that is *not* sorted must not silently turn "found"
+    /// into "not found". The fallback scan is what keeps the lookup correct for
+    /// any order; it costs one pass, and only on the way to an error.
     pub fn get(&self, chunk_id: &str) -> Option<&IndexedBlob> {
-        self.blobs.iter().find(|b| b.props.chunk_id == chunk_id)
+        match self
+            .blobs
+            .binary_search_by_key(&chunk_id, |b| b.props.chunk_id.as_str())
+        {
+            Ok(i) => self.blobs.get(i),
+            Err(_) => self.blobs.iter().find(|b| b.props.chunk_id == chunk_id),
+        }
     }
 
     /// Every blob that failed at least one A6 check.
@@ -525,6 +540,60 @@ mod tests {
             size,
             md5: "ff".repeat(16),
         }
+    }
+
+    /// `blobs` is documented as ordered by id, which is what makes the lookup a
+    /// binary search. A bundle is a file someone can edit and `blobs` is a `pub`
+    /// field, so the lookup has to stay correct for an index that is *not*
+    /// sorted — otherwise a hand-edited bundle turns "found" into "not found",
+    /// and the failure reads like a missing blob rather than a corrupt index.
+    #[test]
+    fn a_blob_is_found_whether_or_not_the_index_is_sorted() {
+        let ids = ["aaa", "mmm", "zzz"];
+        let blob = |id: &str| IndexedBlob {
+            props: BlobProps {
+                chunk_id: id.to_string(),
+                stored_path: None,
+                bytes: 0,
+                container: String::new(),
+                md5_compressed: String::new(),
+                md5_decompressed: String::new(),
+                sha256_compressed: String::new(),
+                uncompressed_size: 0,
+                unknown_field6: 0,
+                verified: None,
+                decode_error: None,
+            },
+            referenced_by: Vec::new(),
+            sets: Vec::new(),
+        };
+        let build = |order: &[&str]| {
+            let entries: Vec<(IndexedBlob, Vec<Set>)> = order
+                .iter()
+                .map(|id| (blob(id), vec![Set::MaterializeOld]))
+                .collect();
+            ChunkIndex::build(entries)
+        };
+        let sorted = build(&ids);
+        let reversed = build(&ids.iter().rev().copied().collect::<Vec<_>>());
+        assert_eq!(
+            sorted.blobs.iter().map(|b| &b.props.chunk_id).collect::<Vec<_>>(),
+            ids,
+            "build orders by id, which is what the lookup assumes"
+        );
+        for id in ids {
+            assert_eq!(
+                sorted.get(id).map(|b| b.props.chunk_id.as_str()),
+                Some(id),
+                "found in a sorted index"
+            );
+            assert_eq!(
+                reversed.get(id).map(|b| b.props.chunk_id.as_str()),
+                Some(id),
+                "and still found in one that is not sorted"
+            );
+        }
+        assert!(reversed.get("no-such-blob").is_none());
     }
 
     fn pair() -> FilePair {

@@ -12,6 +12,7 @@ pub mod ranges;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,27 +30,26 @@ use ranges::{Layout, Range};
 /// generic on every function below; the union reads the same and keeps
 /// [`ChunkSource::decoded`] the one place that decides how a chunk is obtained.
 #[derive(Debug, Clone)]
-pub struct ChunkSource {
-    inner: Inner,
+pub struct ChunkSource<'i> {
+    inner: Inner<'i>,
 }
 
 #[derive(Debug, Clone)]
-enum Inner {
+enum Inner<'i> {
     /// Read `chunks/blobs/<id>.zst` and decompress it.
     Disk {
         root: PathBuf,
-        index: BTreeMap<String, IndexEntry>,
+        /// Borrowed, not copied. This used to build a `BTreeMap` of every
+        /// chunk's id, stored path and md5 at construction, which meant a
+        /// second copy of the index's whole id space for the life of the
+        /// source.
+        index: &'i ChunkIndex,
+        /// One cell per stored blob, filled on first decode, when
+        /// [`ChunkSource::memoizing`] asked for it.
+        cache: Option<BTreeMap<String, OnceLock<Vec<u8>>>>,
     },
     /// Already-decoded bytes, keyed by chunk id.
     Memory(BTreeMap<String, Vec<u8>>),
-}
-
-/// The one fact the disk mode needs from the index: where a blob is, and what it
-/// decoded to.
-#[derive(Debug, Clone)]
-struct IndexEntry {
-    stored_path: String,
-    md5_decompressed: String,
 }
 
 /// One chunk's contribution to an assembled file.
@@ -415,34 +415,79 @@ fn layout_rows(tag: &str, layout: &Layout) -> Vec<crate::emit::selfcheck::Assert
         .collect()
 }
 
-impl ChunkSource {
+impl<'i> ChunkSource<'i> {
     /// A source that reads the bundle's stored blobs.
-    pub fn from_index(root: &std::path::Path, index: &ChunkIndex) -> ChunkSource {
-        let index = index
-            .blobs
-            .iter()
-            .filter_map(|b| {
-                b.props.stored_path.as_deref().map(|p| {
-                    (
-                        b.props.chunk_id.clone(),
-                        IndexEntry {
-                            stored_path: p.to_string(),
-                            md5_decompressed: b.props.md5_decompressed.clone(),
-                        },
-                    )
-                })
-            })
-            .collect();
+    ///
+    /// Nothing is copied out of `index` and nothing is cached: the two expensive
+    /// choices this type makes are the caller's, and both are documented on
+    /// [`ChunkSource::decoded`].
+    pub fn from_index(root: &std::path::Path, index: &'i ChunkIndex) -> ChunkSource<'i> {
         ChunkSource {
             inner: Inner::Disk {
                 root: root.to_path_buf(),
                 index,
+                cache: None,
             },
         }
     }
 
+    /// Keep every chunk this source decodes, so one referenced N times is read
+    /// and decompressed once.
+    ///
+    /// **Verify asks for this; capture does not**, and the reason is the same
+    /// fact seen from two ends.
+    ///
+    /// A capture assembles each file once per side and the repeats are close
+    /// together in time, so the page cache serves them; remembering the bytes
+    /// instead would hold the whole fixture resident, which is the one thing
+    /// capture is careful not to do.
+    ///
+    /// A `verify` is the opposite. It rebuilds every capture the index knows
+    /// about, and a blob that two captures share — which is most of them, since
+    /// sharing is the point of a blob store — is read and decompressed once per
+    /// reference. Measured on the reference bundle (`gircap verify`, 38 blobs,
+    /// 66 references):
+    ///
+    /// | | today | memoised |
+    /// |---|---|---|
+    /// | blob bytes read | 78,747,429 B across 104 opens | 27,612,723 B across 38 |
+    /// | bytes decompressed | 70,010,206 B | 39,559,611 B |
+    /// | peak resident | — | +39,559,611 B of decoded blobs |
+    ///
+    /// That last row is the price, and it is the reason this is opt-in: it is a
+    /// real increase in peak memory in exchange for less than half the I/O.
+    /// `verify` already holds every rebuilt file at once by design, so the
+    /// addition is in the same order as what it already spends.
+    ///
+    /// The cells are sized from the index rather than grown on demand, so a
+    /// chunk nobody asks for costs a `OnceLock`, not a decode.
+    pub fn memoizing(mut self) -> Self {
+        if let Inner::Disk { index, cache, .. } = &self.inner
+            && cache.is_none()
+        {
+            let cells = index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .map(|b| (b.props.chunk_id.clone(), OnceLock::new()))
+                .collect();
+            let Inner::Disk {
+                root, index, ..
+            } = std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
+            else {
+                unreachable!("just matched on Disk")
+            };
+            self.inner = Inner::Disk {
+                root,
+                index,
+                cache: Some(cells),
+            };
+        }
+        self
+    }
+
     /// A source backed by already-decoded bytes.
-    pub fn from_memory(map: BTreeMap<String, Vec<u8>>) -> ChunkSource {
+    pub fn from_memory(map: BTreeMap<String, Vec<u8>>) -> ChunkSource<'i> {
         ChunkSource {
             inner: Inner::Memory(map),
         }
@@ -451,37 +496,61 @@ impl ChunkSource {
     /// The decoded bytes of one chunk.
     ///
     /// Borrowed in memory mode and decompressed on demand from disk otherwise.
-    /// Nothing is cached across calls: the three assemblies of a 22 MB file
-    /// would otherwise hold three copies of it, and the later reads are close
-    /// enough in time for the page cache to have them anyway.
+    /// Caching is [`ChunkSource::memoizing`]'s business; this says "nothing is
+    /// cached across calls", because for capture that is the right default — the
+    /// three assemblies of a 22 MB file would otherwise hold three copies of
+    /// it.
+    ///
+    /// The md5 the index claims is checked here and not merely recorded, every
+    /// time: a store that read a corrupted blob without noticing would make
+    /// `verify` impossible, and the whole point of this milestone is that
+    /// `verify` can trust what it reads. A memoised source checks it on the
+    /// decode that fills the cell, which is still every blob it ever returns.
     pub fn decoded(&self, chunk_id: &str) -> Result<Cow<'_, [u8]>, String> {
         match &self.inner {
             Inner::Memory(m) => m
                 .get(chunk_id)
                 .map(|v| Cow::Borrowed(v.as_slice()))
                 .ok_or_else(|| format!("chunk {chunk_id} is not in the source")),
-            Inner::Disk { root, index } => {
-                let e = index
+            Inner::Disk { root, index, cache } => {
+                let cell = cache.as_ref().and_then(|c| c.get(chunk_id));
+                if let Some(held) = cell.and_then(OnceLock::get) {
+                    return Ok(Cow::Borrowed(held.as_slice()));
+                }
+                let b = index
                     .get(chunk_id)
+                    .ok_or_else(|| format!("chunk {chunk_id} is not in the index"))?;
+                let rel = b
+                    .props
+                    .stored_path
+                    .as_deref()
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
-                let path = root.join(&e.stored_path);
+                let path = root.join(rel);
                 let raw =
                     std::fs::read(&path).map_err(|io| format!("read {}: {io}", path.display()))?;
                 let out = hash::zstd_decompress(&raw, &format!("chunk {chunk_id}"))?;
-                // The index is a claim; this is the check. A store that read a
-                // corrupted blob without noticing would make M9's `verify`
-                // impossible, and the whole point of this milestone is that M9
-                // can trust what it reads.
-                if !e.md5_decompressed.is_empty() {
+                if !b.props.md5_decompressed.is_empty() {
                     let got = hash::md5_hex(&out);
-                    if got != e.md5_decompressed {
+                    if got != b.props.md5_decompressed {
                         return Err(format!(
-                            "chunk {chunk_id}: {} decodes to md5 {got}, the index says {}",
-                            e.stored_path, e.md5_decompressed
+                            "chunk {chunk_id}: {rel} decodes to md5 {got}, the index says {}",
+                            b.props.md5_decompressed
                         ));
                     }
                 }
-                Ok(Cow::Owned(out))
+                match cell {
+                    // `set` either stores the value or finds the cell already
+                    // full, and both leave it populated, so handing back a
+                    // borrow is sound either way — and saves copying the decode
+                    // a second time into the caller's buffer.
+                    Some(cell) => {
+                        let _ = cell.set(out);
+                        Ok(Cow::Borrowed(
+                            cell.get().expect("a set cell is full").as_slice(),
+                        ))
+                    }
+                    None => Ok(Cow::Owned(out)),
+                }
             }
         }
     }
@@ -490,7 +559,11 @@ impl ChunkSource {
     pub fn len(&self) -> usize {
         match &self.inner {
             Inner::Memory(m) => m.len(),
-            Inner::Disk { index, .. } => index.len(),
+            Inner::Disk { index, .. } => index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count(),
         }
     }
 
@@ -607,7 +680,7 @@ fn assemble_side(
 ///
 /// Six parameters is past the point where a reader can hold them in their head,
 /// and three of them are always the same three things.
-pub struct AssemblyInput<'a> {
+pub struct AssemblyInput<'a, 'i> {
     /// The pair to assemble.
     pub pair: &'a FilePair,
     /// The `matching_field` to stamp on the map.
@@ -617,7 +690,7 @@ pub struct AssemblyInput<'a> {
     /// Where chunks are fetched from, for the `url` of a FETCH entry.
     pub sources: &'a Sources,
     /// Where decoded bytes come from.
-    pub chunks: &'a ChunkSource,
+    pub chunks: &'a ChunkSource<'i>,
 }
 
 /// Assemble one file pair and return everything M7 produces.
@@ -629,7 +702,7 @@ pub struct AssemblyInput<'a> {
 /// 2. Verify the local slice against the declared decompressed MD5 (A10).
 /// 3. If that fails, FETCH instead — and say so, because a silently downgraded
 ///    REUSE is indistinguishable from one that was never a candidate.
-pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
+pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     let pair = input.pair;
     let old_entry = pair.old.as_ref().map(|o| &o.entry);
     let new_entry = pair.new.as_ref().map(|n| &n.entry);
@@ -683,7 +756,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
 
 /// The patch flow proper.
 fn patch_flow(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     new_entry: &SophonChunkFile,
     old: &FileResult,
     old_tag: &str,
@@ -846,7 +919,7 @@ fn patch_flow(
 /// `note` says why, so a reader who expected a `source_range` is not left
 /// guessing whether the field was forgotten.
 fn fetch_all_plan(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     new_entry: &SophonChunkFile,
     new_tag: &str,
 ) -> Result<Vec<PlanEntry>, String> {
@@ -870,7 +943,7 @@ fn fetch_all_plan(
 }
 
 fn build_map(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     old: Option<&FileResult>,
     new: Option<&FileResult>,
     plan: Option<Vec<PlanEntry>>,

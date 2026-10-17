@@ -665,8 +665,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     // itself: a second implementation of the same wrong thing is not a check.
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
     let direct = materialize::rebuild(
-        &b.root,
-        &index,
+        &materialize::ChunksByFile::build(&index),
         &gircap::assemble::ChunkSource::from_index(&b.root, &index),
         OLD_TAG,
         CAPTURE,

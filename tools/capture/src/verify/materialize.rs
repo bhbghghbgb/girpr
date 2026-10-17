@@ -43,6 +43,11 @@ pub struct Rebuilt {
 ///
 /// `(chunk_id, offset)`, ordered by offset so the caller's layout check and the
 /// assembly both see the file the way a reader would.
+///
+/// **One file's worth of [`ChunksByFile`].** This is a convenience over the
+/// index that every caller inside [`rebuild_all`] shares — asking it separately
+/// means rebuilding the grouping, which is the work the grouping exists to do
+/// once. Nothing outside this module needs it.
 pub fn chunks_for(
     index: &ChunkIndex,
     tag: &str,
@@ -50,67 +55,165 @@ pub fn chunks_for(
     path: &str,
     role: Set,
 ) -> Result<Vec<(String, i64)>, String> {
-    let mut out: Vec<(String, i64)> = Vec::new();
-    for b in &index.blobs {
-        let hits: Vec<i64> = b
-            .referenced_by
-            .iter()
-            .filter(|r| {
-                r.tag == tag && r.capture_id == capture_id && r.path == path && r.role == role
-            })
-            .map(|r| r.offset)
-            .collect();
-        match hits.len() {
-            0 => continue,
-            // One blob referenced at two offsets for one file is a manifest that
-            // places the same bytes twice. Taking the first would silently drop
-            // the second and produce a file with a hole; recorded, not resolved.
-            n if n > 1 => {
+    Ok(ChunksByFile::build(index)
+        .get(tag, capture_id, path, role)?
+        .into_iter()
+        .map(|(id, offset)| (id.to_string(), offset))
+        .collect())
+}
+
+/// One reference: the bytes of `chunk_id`, at `offset`, inside one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ref<'i> {
+    tag: &'i str,
+    capture_id: &'i str,
+    path: &'i str,
+    role: Set,
+    chunk_id: &'i str,
+    offset: i64,
+}
+
+impl Ref<'_> {
+    fn key(&self) -> (&str, &str, &str, Set) {
+        (self.tag, self.capture_id, self.path, self.role)
+    }
+}
+
+/// Every reference in the index, grouped by the file it places bytes into.
+///
+/// [`chunks_for`] answered one question by walking **every** blob's entire
+/// `referenced_by` vector, and then [`rebuild`] built a fresh map of **every**
+/// blob's size — per side, and `rebuild_all` calls it twice per capture. On the
+/// reference bundle that is 38 blobs and 66 references scanned sixteen times to
+/// answer sixteen questions, and sixteen maps of 38 entries thrown away.
+///
+/// Built once instead, and sorted, so a lookup is a binary search and a walk of
+/// the (short) run of rows that share the key. Nothing is cloned: the rows
+/// borrow the index's own strings.
+///
+/// Sorted by `(tag, capture_id, path, role, chunk_id, offset)`.
+///
+/// The key first, so a lookup is a binary search and then a walk of the rows
+/// that share it. `chunk_id` next, so a chunk placed twice inside one file is
+/// two **adjacent** rows rather than two rows a reader has to correlate. The
+/// answer is re-sorted by offset before it is handed back, which is what the
+/// caller wants and what the rows came out in before.
+#[derive(Debug, Clone, Default)]
+pub struct ChunksByFile<'i> {
+    rows: Vec<Ref<'i>>,
+    /// `chunk_id` -> decompressed size, for the layout check.
+    sizes: BTreeMap<&'i str, i64>,
+}
+
+impl<'i> ChunksByFile<'i> {
+    /// Read every reference in the index, once.
+    pub fn build(index: &'i ChunkIndex) -> Self {
+        let mut rows: Vec<Ref<'i>> = Vec::new();
+        let mut sizes = BTreeMap::new();
+        for b in &index.blobs {
+            sizes.insert(b.props.chunk_id.as_str(), b.props.uncompressed_size as i64);
+            rows.extend(b.referenced_by.iter().map(|r| Ref {
+                tag: r.tag.as_str(),
+                capture_id: r.capture_id.as_str(),
+                path: r.path.as_str(),
+                role: r.role,
+                chunk_id: b.props.chunk_id.as_str(),
+                offset: r.offset,
+            }));
+        }
+        rows.sort_by(|a, b| {
+            a.key()
+                .cmp(&b.key())
+                .then(a.chunk_id.cmp(b.chunk_id))
+                .then(a.offset.cmp(&b.offset))
+        });
+        Self { rows, sizes }
+    }
+
+    /// How many references the index holds, across every file.
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the index references nothing at all.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// The chunks that make up one file on one side, in offset order.
+    ///
+    /// The same answer as [`chunks_for`], including its refusal: one blob placed
+    /// at two offsets in one file is a manifest that repeats itself, and taking
+    /// the first would produce a file with a hole. Recorded, not resolved.
+    pub fn get(
+        &self,
+        tag: &str,
+        capture_id: &str,
+        path: &str,
+        role: Set,
+    ) -> Result<Vec<(&'i str, i64)>, String> {
+        let key = (tag, capture_id, path, role);
+        let start = self.rows.partition_point(|r| r.key() < key);
+        let run = &self.rows[start..];
+        let end = run.iter().position(|r| r.key() != key).unwrap_or(run.len());
+        let mut hits = run[..end].to_vec();
+
+        // One blob referenced at two offsets for one file is a manifest that
+        // places the same bytes twice. Taking the first would silently drop the
+        // second and produce a file with a hole; recorded, not resolved.
+        //
+        // `hits` is grouped by chunk id, so the duplicates are adjacent.
+        for pair in hits.windows(2) {
+            if pair[0].chunk_id == pair[1].chunk_id {
+                let offsets: Vec<String> = hits
+                    .iter()
+                    .filter(|r| r.chunk_id == pair[0].chunk_id)
+                    .map(|r| r.offset.to_string())
+                    .collect();
                 return Err(format!(
-                    "chunk {} is referenced {n} times by {tag} {path} ({role}), at offsets {}",
-                    b.props.chunk_id,
-                    hits.iter()
-                        .map(i64::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "chunk {} is referenced {} times by {tag} {path} ({role}), at offsets {}",
+                    pair[0].chunk_id,
+                    offsets.len(),
+                    offsets.join(", ")
                 ));
             }
-            _ => out.push((b.props.chunk_id.clone(), hits[0])),
         }
+        hits.sort_by_key(|r| r.offset);
+        Ok(hits.into_iter().map(|r| (r.chunk_id, r.offset)).collect())
     }
-    out.sort_by_key(|(_, o)| *o);
-    Ok(out)
+
+    /// The decompressed size the index records for a chunk.
+    ///
+    /// `0` for a chunk the index does not list, which is what the old
+    /// `sizes.get(..).copied().unwrap_or(0)` said. Such a chunk cannot be
+    /// decoded either, so it fails one step later and with a better message.
+    pub fn size(&self, chunk_id: &str) -> i64 {
+        self.sizes.get(chunk_id).copied().unwrap_or(0)
+    }
 }
 
 /// Rebuild one side of one capture from the stored blobs.
 ///
 /// The layout is checked before any byte is placed (A11), so a closure set with
 /// a hole produces an error naming the hole rather than a short file.
+///
+/// `root` is not a parameter: where the blobs live is already inside `src`, and
+/// this function used to take one and discard it.
 pub fn rebuild(
-    root: &std::path::Path,
-    index: &ChunkIndex,
-    src: &ChunkSource,
+    by_file: &ChunksByFile<'_>,
+    src: &ChunkSource<'_>,
     tag: &str,
     capture_id: &str,
     path: &str,
     role: Set,
 ) -> Result<Rebuilt, String> {
-    let _ = root;
-    let chunks = chunks_for(index, tag, capture_id, path, role)?;
+    let chunks = by_file.get(tag, capture_id, path, role)?;
     if chunks.is_empty() {
         return Err(format!(
             "{tag} {path} ({role}): the index references no chunks for it"
         ));
     }
-    let sizes: BTreeMap<&str, u64> = index
-        .blobs
-        .iter()
-        .map(|b| (b.props.chunk_id.as_str(), b.props.uncompressed_size))
-        .collect();
-    let parts: Vec<(i64, i64)> = chunks
-        .iter()
-        .map(|(id, o)| (*o, sizes.get(id.as_str()).copied().unwrap_or(0) as i64))
-        .collect();
+    let parts: Vec<(i64, i64)> = chunks.iter().map(|(id, o)| (*o, by_file.size(id))).collect();
     let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
     // `parts` is still needed for `declared_size`; `Layout::of` takes it by
     // value so the one-vector-holds-both property holds at the call site too.
@@ -119,9 +222,10 @@ pub fn rebuild(
     // capture's own: the tiling, and every message it can produce, is one
     // function. See `assemble::tile`.
     let label = format!("{tag} {path} ({role})");
-    let ids: Vec<&str> = chunks.iter().map(|(id, _)| id.as_str()).collect();
-    let bytes =
-        crate::assemble::tile(&label, &layout, declared_size, &ids, |id| src.decoded(id))?;
+    let ids: Vec<&str> = chunks.iter().map(|(id, _)| *id).collect();
+    let bytes = crate::assemble::tile(&label, &layout, declared_size, &ids, |id| {
+        src.decoded(id)
+    })?;
     Ok(Rebuilt {
         tag: tag.to_string(),
         path: path.to_string(),
@@ -149,20 +253,24 @@ pub struct Pair {
 ///
 /// Ordered by `capture_id` then path, so two runs produce the same report in the
 /// same order regardless of how the index's own lists were built.
+///
+/// The two things this walk would otherwise redo per side are done once here:
+/// the index's references are grouped by file ([`ChunksByFile::build`]) and the
+/// decoded chunks are remembered ([`ChunkSource::memoizing`]).
 pub fn rebuild_all(
     root: &std::path::Path,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
 ) -> Result<Vec<Pair>, String> {
-    let src = ChunkSource::from_index(root, index);
+    let by_file = ChunksByFile::build(index);
+    let src = ChunkSource::from_index(root, index).memoizing();
     let mut names: Vec<&String> = patchmaps.keys().collect();
     names.sort();
     let mut out = Vec::new();
     for name in names {
         let map = &patchmaps[name];
         let old = rebuild_side(
-            root,
-            index,
+            &by_file,
             &src,
             name,
             map.path.as_str(),
@@ -170,8 +278,7 @@ pub fn rebuild_all(
             Set::MaterializeOld,
         )?;
         let new = rebuild_side(
-            root,
-            index,
+            &by_file,
             &src,
             name,
             map.path.as_str(),
@@ -194,9 +301,8 @@ pub fn rebuild_all(
 /// old side" is `None` rather than an error — and a map that claims a side the
 /// index cannot supply *is* an error, because that is the closure check failing.
 fn rebuild_side(
-    root: &std::path::Path,
-    index: &ChunkIndex,
-    src: &ChunkSource,
+    by_file: &ChunksByFile<'_>,
+    src: &ChunkSource<'_>,
     capture_id: &str,
     path: &str,
     side: Option<&crate::assemble::Side>,
@@ -205,7 +311,7 @@ fn rebuild_side(
     let Some(side) = side else {
         return Ok(None);
     };
-    let r = rebuild(root, index, src, &side.tag, capture_id, path, role)?;
+    let r = rebuild(by_file, src, &side.tag, capture_id, path, role)?;
     if r.nchunks != side.nchunks {
         return Err(format!(
             "{capture_id}: the index names {} {role} chunks, the patchmap says {}",
@@ -316,13 +422,11 @@ mod tests {
             ));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(&root).expect("scratch");
-
             // (chunk, body, compressed, references)
             let (a, ab, ar) = chunk(1, 64, 0x7d3f_0504_4383_7e58);
             let (b, bb, br) = chunk(2, 128, 0xf5dc_3ca1_f3a0_ba3d);
             let (c, cb, cr) = chunk(3, 32, 0xa431_4f3c_1ba1_d7d4);
             let (d, db, dr) = chunk(9, 64, 0xddb3_1a9f_d853_46c4);
-
             let spec: Vec<Spec> = vec![
                 (
                     a.clone(),
@@ -362,7 +466,6 @@ mod tests {
                     vec![Set::MaterializeNew, Set::PatchFetch],
                 ),
             ];
-
             let mut entries = Vec::new();
             for (chunk, _body, raw, refs, sets) in &spec {
                 let rel = BlobProps::stored_path_for(&chunk.id);
@@ -386,15 +489,18 @@ mod tests {
             }
         }
 
-        fn source(&self) -> ChunkSource {
+        fn source(&self) -> ChunkSource<'_> {
             ChunkSource::from_index(&self.root, &self.index)
+        }
+
+        fn by_file(&self) -> ChunksByFile<'_> {
+            ChunksByFile::build(&self.index)
         }
 
         fn bodies(&self, tag: &str) -> Vec<u8> {
             let src = self.source();
             let r = rebuild(
-                &self.root,
-                &self.index,
+                &self.by_file(),
                 &src,
                 tag,
                 "c",
@@ -441,6 +547,32 @@ mod tests {
         );
     }
 
+    /// The grouping and the convenience wrapper must agree, because the wrapper
+    /// is what every test in this module asks and the grouping is what
+    /// production asks. They are the same code today; this is what stops that
+    /// from quietly ceasing to be true.
+    #[test]
+    fn the_one_file_wrapper_answers_what_the_grouped_index_answers() {
+        let f = Fixture::build("agree");
+        let by_file = f.by_file();
+        assert_eq!(by_file.len(), 7, "every reference in the index");
+        for (tag, role, want) in [
+            ("7.0.0", Set::MaterializeOld, 3),
+            ("7.1.0", Set::MaterializeNew, 3),
+            ("7.1.0", Set::PatchFetch, 1),
+        ] {
+            let one = by_file.get(tag, "c", DLL, role).unwrap();
+            let many = chunks_for(&f.index, tag, "c", DLL, role).unwrap();
+            assert_eq!(one.len(), want, "{tag} {role}");
+            assert_eq!(
+                one.iter().map(|(i, o)| (i.to_string(), *o)).collect::<Vec<_>>(),
+                many,
+                "{tag} {role}"
+            );
+        }
+        assert!(by_file.get("6.7.0", "c", DLL, Set::MaterializeOld).unwrap().is_empty());
+    }
+
     /// The closure check: the blobs alone reproduce the file. Read from disk,
     /// through the same store a capture used, with no manifest consulted.
     #[test]
@@ -448,8 +580,7 @@ mod tests {
         let f = Fixture::build("rebuild");
         let src = f.source();
         let old = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &src,
             "7.0.0",
             "c",
@@ -462,10 +593,8 @@ mod tests {
         assert_eq!(old.nchunks, 3);
         assert!(old.layout.is_clean());
         assert_eq!(old.layout.ranges[1], Range::at(64, 128));
-
         let new = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &src,
             "7.1.0",
             "c",
@@ -497,8 +626,7 @@ mod tests {
             std::fs::create_dir_all(shipped.parent().unwrap()).unwrap();
             std::fs::write(&shipped, bytes).unwrap();
             let r = rebuild(
-                &f.root,
-                &f.index,
+                &f.by_file(),
                 &f.source(),
                 if label == "game" { "7.0.0" } else { "7.1.0" },
                 "c",
@@ -540,15 +668,13 @@ mod tests {
             .clone()
             .unwrap();
         let p = f.root.join(&victim);
-
         // Inside the frame: it still decodes, to different bytes.
         let mut raw = std::fs::read(&p).unwrap();
         let last = raw.len() - 1;
         raw[last] ^= 0xFF;
         std::fs::write(&p, &raw).unwrap();
         let e = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &f.source(),
             "7.0.0",
             "c",
@@ -558,14 +684,12 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("decodes to md5"), "{e}");
         assert!(e.contains(&victim), "and names the blob: {e}");
-
         // And the magic: not a frame at all, reported as such.
         let mut raw = std::fs::read(&p).unwrap();
         raw[0] ^= 0xFF;
         std::fs::write(&p, &raw).unwrap();
         let e = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &f.source(),
             "7.0.0",
             "c",
@@ -581,8 +705,7 @@ mod tests {
     fn a_side_with_no_references_is_an_error_not_an_empty_file() {
         let f = Fixture::build("noside");
         let e = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &f.source(),
             "6.7.0",
             "c",
@@ -619,8 +742,7 @@ mod tests {
         let victim = f.index.blobs[0].props.stored_path.clone().unwrap();
         std::fs::remove_file(f.root.join(&victim)).unwrap();
         let e = rebuild(
-            &f.root,
-            &f.index,
+            &f.by_file(),
             &f.source(),
             "7.0.0",
             "c",
@@ -629,6 +751,56 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains(&victim), "{e}");
+    }
+
+    /// The memo is what turns a `verify` from 104 blob reads into 38, so it has
+    /// to be *on* for the rebuild walk and it has to actually avoid the second
+    /// read. Deleting the blob out from under a source that has already decoded
+    /// it is the only way to observe that from outside.
+    #[test]
+    fn a_memoised_source_serves_a_blob_it_can_no_longer_read() {
+        let f = Fixture::build("memo");
+        let id = f.index.blobs[1].props.chunk_id.clone();
+        let rel = f.index.blobs[1].props.stored_path.clone().unwrap();
+
+        let memo = f.source().memoizing();
+        let first = memo.decoded(&id).expect("first decode reads the blob");
+        // What the rebuild would have placed at offset 64, captured while the
+        // blob is still on disk.
+        let in_the_file = f.bodies("7.0.0")[64..192].to_vec();
+        std::fs::remove_file(f.root.join(&rel)).expect("gone");
+        let second = memo.decoded(&id).expect("second decode comes from memory");
+        assert_eq!(first, second, "and it is the same bytes");
+        assert_eq!(first.as_ref(), &in_the_file, "and the real content");
+
+        // The default source re-reads every time, so the same call now fails.
+        // That difference is the whole point of the two constructors: capture
+        // wants the page cache, verify wants the memory.
+        let e = f.source().decoded(&id).unwrap_err();
+        assert!(e.contains(&rel), "{e}");
+    }
+
+    /// Memoising must not become trusting: a blob whose bytes disagree with the
+    /// index is refused on the decode that fills the cell, which is every blob
+    /// the source ever returns.
+    #[test]
+    fn a_memoised_source_still_refuses_a_blob_the_index_disagrees_with() {
+        let f = Fixture::build("memobad");
+        let id = f.index.blobs[0].props.chunk_id.clone();
+        let rel = f.index.blobs[0].props.stored_path.clone().unwrap();
+        let p = f.root.join(&rel);
+        let mut raw = std::fs::read(&p).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 0xFF;
+        std::fs::write(&p, &raw).unwrap();
+
+        let memo = f.source().memoizing();
+        let e = memo.decoded(&id).unwrap_err();
+        assert!(e.contains("decodes to md5"), "{e}");
+        assert!(e.contains(&rel), "and names the blob: {e}");
+        // And it refused, rather than caching the bad bytes and serving them.
+        let e = memo.decoded(&id).unwrap_err();
+        assert!(e.contains("decodes to md5"), "{e}");
     }
 
     #[test]
@@ -687,7 +859,6 @@ mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].old.as_ref().unwrap().bytes.len(), 224);
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
-
         // A patchmap claiming the wrong chunk count is caught rather than
         // silently producing a file.
         let mut wrong = maps.get("c").unwrap().clone();
