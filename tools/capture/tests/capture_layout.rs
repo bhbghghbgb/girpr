@@ -214,12 +214,14 @@ fn every_request_the_capture_made_went_to_the_mock() {
             "a request the mock does not own: {r:?}"
         );
     }
-    // The four HoYoPlay endpoints, in the order the capture issues them.
+    // **Only the ordering that still exists.** `getGameConfigs` and
+    // `getGameBranches` used to be asserted to arrive in that order, and that
+    // was always an accident: only the *second* carries the `package_id` that
+    // `getBuild` needs, so only `branches < builds` is a real invariant. The
+    // four HoYoPlay endpoints are now issued together, because none of them
+    // depends on another, and an assertion about which of two concurrent
+    // requests the mock happened to accept first is a test of the mock.
     let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
-    let configs = order
-        .iter()
-        .position(|p| p.ends_with("/getGameConfigs"))
-        .expect("getGameConfigs");
     let branches = order
         .iter()
         .position(|p| p.ends_with("/getGameBranches"))
@@ -228,7 +230,6 @@ fn every_request_the_capture_made_went_to_the_mock() {
         .iter()
         .position(|p| p.ends_with("/getBuild"))
         .expect("getBuild");
-    assert!(configs < branches, "getGameConfigs before getGameBranches");
     assert!(
         branches < builds,
         "the branch that carries package_id is fetched before getBuild"

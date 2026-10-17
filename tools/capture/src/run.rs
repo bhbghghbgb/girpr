@@ -12,6 +12,7 @@ use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, VersionPair, artif
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
+use crate::hyp::GetBuild;
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{OutputFormat, Record};
@@ -173,6 +174,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &tags,
         &params.diff_tags,
         &known,
+        plan.jobs,
     )
     .await
     .map_err(|e| apierr("tag probe", &e))?;
@@ -197,17 +199,55 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // Indexed [field][0=old, 1=new], so `manifests[f][t]` is the manifest a
     // field contributes to the diff and nothing downstream has to remember the
     // interleaving the fetch loop used.
-    let mut manifests: Vec<Vec<CapturedManifest>> = Vec::with_capacity(fields.len());
-    for field in &fields {
-        let mut pair = Vec::with_capacity(2);
-        for (tag, build) in [(&old_tag, &old_build), (&new_tag, &new_build)] {
-            let m = manifest::capture(&fetcher, build, tag, field)
-                .await
-                .map_err(|e| apierr(&format!("fetch the {tag} {field} manifest"), &e))?;
-            verify_manifest(&m, tag, field)?;
-            pair.push(m);
-        }
-        manifests.push(pair);
+    //
+    // These are fetched **all at once**. The loop this replaces was
+    // `for field { for tag { capture().await } }`, which put a 9 MB download
+    // after a 2 MB download after a 9 MB download after a 2 MB download for no
+    // reason: nothing here depends on anything else here. On the reference
+    // bundle that is ~20 MB strictly in series.
+    //
+    // The order they are *verified and filed* in is unchanged and is still
+    // input order, because `map_concurrently` returns input order — so which
+    // download finished first cannot move anything in the bundle.
+    let wanted: Vec<(String, GetBuild, String)> = fields
+        .iter()
+        .flat_map(|field| {
+            [(&old_tag, &old_build), (&new_tag, &new_build)]
+                .into_iter()
+                .map(move |(tag, build)| {
+                    (
+                        field.to_string(),
+                        build.clone(),
+                        (*tag).to_string(),
+                    )
+                })
+        })
+        .collect();
+    let fetched = fetcher
+        .map_concurrently(&wanted, plan.jobs, |fetcher, i, (field, build, tag)| async move {
+            match manifest::capture(&fetcher, &build, &tag, &field).await {
+                Ok(m) => (i, Ok(m)),
+                Err(e) => (i, Err(e.to_string())),
+            }
+        })
+        .await;
+
+    let mut manifests: Vec<Vec<CapturedManifest>> =
+        (0..fields.len()).map(|_| Vec::with_capacity(2)).collect();
+    for (k, r) in fetched.into_iter().enumerate() {
+        let field = &fields[k / 2];
+        let tag = if k % 2 == 0 { &old_tag } else { &new_tag };
+        let m = match r {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(apierr(
+                    &format!("fetch the {tag} {field} manifest"),
+                    &ApiError::shape(tag, e),
+                ));
+            }
+        };
+        verify_manifest(&m, tag, field)?;
+        manifests[k / 2].push(m);
     }
 
     // 6a. What the API does with a request it will not serve. Placed here rather
@@ -270,6 +310,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             other_chunk_prefix: old_game.chunk_url_prefix(),
             new_only_chunk_id: &new_only_chunk_id,
         },
+        plan.jobs,
     )
     .await
     .map_err(|e| apierr("negative probes", &e))?;

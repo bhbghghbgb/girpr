@@ -25,6 +25,8 @@
 //! (`getGameBranches` with an unknown game id answers `retcode 0` with an empty
 //! node), which is the specific mistake this document exists to prevent.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::biz::BranchParams;
@@ -121,6 +123,13 @@ impl TagProbe {
 /// because a row that was not fetched and a row that was filled in are
 /// indistinguishable to a reader — which is correct, since both are the same
 /// fact.
+/// What one tag's `getBuild` probe found.
+///
+/// Five values with five names. A tuple would be read positionally at the one
+/// site that builds it and the one site that consumes it, and nothing would say
+/// which `Option<String>` is the build id and which is the echoed tag.
+type Answered = (u16, i64, Option<String>, Option<String>, bool);
+
 pub async fn probe_tags(
     fetcher: &Fetcher,
     sophon_base: &str,
@@ -128,32 +137,32 @@ pub async fn probe_tags(
     tags: &[String],
     diff_tags: &[String],
     known: &[(String, String)],
+    jobs: usize,
 ) -> Result<TagProbe, ApiError> {
-    let mut results = Vec::with_capacity(tags.len());
-    for tag in tags {
-        if let Some((_, build_id)) = known.iter().find(|(t, _)| t == tag) {
-            results.push(TagProbeRow {
-                tag: tag.clone(),
-                in_diff_tags: in_diff_tags(diff_tags, tag),
-                http: 200,
-                retcode: 0,
-                build_id: Some(build_id.clone()),
-                tag_echoed: Some(tag.clone()),
-                served: true,
-                // Recorded so a reader can tell a reused answer from a fetched
-                // one. It changes no number in the document.
-                already_fetched: true,
-            });
-            continue;
-        }
-        let url = params.get_build_url(sophon_base, Some(tag));
-        // `Kind::Probe` so a reader can ask "what did the metadata cost?" without
-        // matching on URLs; no blob is fetched either way.
-        let (http, retcode, build_id, tag_echoed, served) =
+    // Tags already answered by the pair's own `getBuild` cost nothing, and the
+    // rest used to be fetched strictly one after another. They do not depend on
+    // each other, so they go together; `diff_tags` is unbounded by contract and
+    // the real run asks about seven.
+    //
+    // The document is still assembled in `tags` order, which is what
+    // `requested` and every reader's row order assume. Which probe answered
+    // first is not allowed to be observable.
+    let wanted: Vec<(usize, String)> = tags
+        .iter()
+        .enumerate()
+        .filter(|(_, tag)| !known.iter().any(|(t, _)| t == *tag))
+        .map(|(i, tag)| (i, params.get_build_url(sophon_base, Some(tag))))
+        .collect();
+    let fetched = fetcher
+        .map_concurrently(&wanted, jobs, |fetcher, i, (_i, url)| async move {
+            // `Kind::Probe` so a reader can ask "what did the metadata cost?"
+            // without matching on URLs; no blob is fetched either way.
             match fetcher.get(&url, Kind::Probe, None).await {
                 Ok(f) => {
-                    let v: serde_json::Value =
-                        serde_json::from_slice(&f.body).map_err(|e| ApiError::shape(&url, e))?;
+                    let v: serde_json::Value = match serde_json::from_slice(&f.body) {
+                        Ok(v) => v,
+                        Err(e) => return (i, Err(ApiError::shape(&url, e).to_string())),
+                    };
                     let rc = v.get("retcode").and_then(|r| r.as_i64()).unwrap_or(-1);
                     let bid = v
                         .pointer("/data/build_id")
@@ -164,23 +173,68 @@ pub async fn probe_tags(
                         .and_then(|t| t.as_str())
                         .map(str::to_string);
                     let served = rc == 0 && bid.is_some();
-                    (f.status, rc, bid, echo, served)
+                    (i, Ok((f.status, rc, bid, echo, served)))
                 }
                 // A transport failure is a failure of the probe, not of the
                 // tag: a tag that does not exist arrives as a `200` carrying
                 // `retcode -202`, so anything landing here means the network
                 // broke mid-probe and the row would be a guess.
-                Err(e) => return Err(e),
-            };
+                Err(e) => (i, Err(e.to_string())),
+            }
+        })
+        .await;
+    // Input order, so `fetched[k]` answers `wanted[k]` — and an error is
+    // reported against its own tag rather than against whichever probe happened
+    // to fail first.
+    let mut answered: BTreeMap<usize, Answered> = BTreeMap::new();
+    for (r, (i, _url)) in fetched.into_iter().zip(&wanted) {
+        match r {
+            Ok(answer) => {
+                answered.insert(*i, answer);
+            }
+            Err(e) => {
+                return Err(ApiError::shape(&tags[*i], e));
+            }
+        }
+    }
+
+    let mut results = Vec::with_capacity(tags.len());
+    for (i, tag) in tags.iter().enumerate() {
+        if let Some((http, retcode, build_id, tag_echoed, served)) = answered.remove(&i) {
+            results.push(TagProbeRow {
+                tag: tag.clone(),
+                in_diff_tags: in_diff_tags(diff_tags, tag),
+                http,
+                retcode,
+                build_id,
+                tag_echoed,
+                served,
+                already_fetched: false,
+            });
+            continue;
+        }
+        // Reused rather than re-requested: a probe costs one JSON request per
+        // tag, the pair is always in the list, and re-asking it would be the
+        // single largest avoidable cost in a metadata-only run. The document
+        // still answers the full question, because a row that was not fetched
+        // and a row that was filled in are indistinguishable to a reader —
+        // which is correct, since both are the same fact.
+        let build_id = known
+            .iter()
+            .find(|(t, _)| t == tag)
+            .map(|(_, b)| b.clone())
+            .unwrap_or_default();
         results.push(TagProbeRow {
             tag: tag.clone(),
             in_diff_tags: in_diff_tags(diff_tags, tag),
-            http,
-            retcode,
-            build_id,
-            tag_echoed,
-            served,
-            already_fetched: false,
+            http: 200,
+            retcode: 0,
+            build_id: Some(build_id),
+            tag_echoed: Some(tag.clone()),
+            served: true,
+            // Recorded so a reader can tell a reused answer from a fetched
+            // one. It changes no number in the document.
+            already_fetched: true,
         });
     }
 
@@ -357,6 +411,7 @@ pub async fn probe_error_shapes(
     biz: &crate::biz::Biz,
     params: &BranchParams,
     probes: &ErrorProbes<'_>,
+    jobs: usize,
 ) -> Result<ErrorShapes, ApiError> {
     // Same shape, three ways: the request this tool would have made, with
     // exactly one thing wrong. Built from the good URL rather than assembled by
@@ -435,34 +490,49 @@ pub async fn probe_error_shapes(
         ),
     ];
 
+    // A probe that never reached the origin is not a shape, so the failure
+    // propagates — and it propagates against its own URL, because input order
+    // means `observed[k]` is `wanted[k]`'s and no other.
+    let observed = fetcher
+        .map_concurrently(&wanted, jobs, |fetcher, i, (id, family, request, url, error)| async move {
+            let o = match fetcher.observe(&url, Kind::Probe).await {
+                Ok(o) => o,
+                Err(e) => return (i, Err(e.to_string())),
+            };
+            let retcode = o.retcode();
+            (
+                i,
+                Ok(ErrorShape {
+                    id: id.to_string(),
+                    family,
+                    request,
+                    url,
+                    status: o.status,
+                    content_type: o.content_type.clone(),
+                    retcode,
+                    error,
+                    body: o.text(),
+                    volatile_fields: if family == Family::Blob {
+                        vec![
+                            "RequestId".to_string(),
+                            "HostId".to_string(),
+                            "Key".to_string(),
+                            // `Key` echoes the requested path, so the body's
+                            // length is a function of the URL rather than of the
+                            // shape.
+                            "body length (follows Key)".to_string(),
+                        ]
+                    } else {
+                        Vec::new()
+                    },
+                    retryable: false,
+                }),
+            )
+        })
+        .await;
     let mut shapes = Vec::with_capacity(wanted.len());
-    for (id, family, request, url, error) in wanted {
-        let o = fetcher.observe(&url, Kind::Probe).await?;
-        let retcode = o.retcode();
-        shapes.push(ErrorShape {
-            id: id.to_string(),
-            family,
-            request,
-            url,
-            status: o.status,
-            content_type: o.content_type.clone(),
-            retcode,
-            error,
-            body: o.text(),
-            volatile_fields: if family == Family::Blob {
-                vec![
-                    "RequestId".to_string(),
-                    "HostId".to_string(),
-                    "Key".to_string(),
-                    // `Key` echoes the requested path, so the body's length is a
-                    // function of the URL rather than of the shape.
-                    "body length (follows Key)".to_string(),
-                ]
-            } else {
-                Vec::new()
-            },
-            retryable: false,
-        });
+    for (r, w) in observed.into_iter().zip(&wanted) {
+        shapes.push(r.map_err(|e| ApiError::shape(&w.3, e))?);
     }
 
     Ok(ErrorShapes {
@@ -679,6 +749,7 @@ mod tests {
             &["7.1.0".into(), "0.0.1".into()],
             &["7.0.0".into()],
             &[],
+            4,
         )
         .await
         .expect("a -202 is an answer, not a failure");
@@ -726,6 +797,7 @@ mod tests {
             &["7.1.0".into(), "6.7.0".into()],
             &["7.0.0".into()],
             &[("7.1.0".into(), "sMXGW2ll3Fuu".into())],
+            4,
         )
         .await
         .unwrap();
@@ -769,6 +841,7 @@ mod tests {
             &["t".into()],
             &[],
             &[],
+            4,
         )
         .await
         .unwrap();
