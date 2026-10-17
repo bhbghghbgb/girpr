@@ -795,8 +795,11 @@ Both mutants below were caught **only** by the new test — every other suite,
     A10's wording narrowed by three words    FAILS the pin, 574-2 pass elsewhere
 
 What is still unpinned, deliberately: any **digest** in these documents (A16 owns
-those, and they move for `requests.ndjson` and its three cascade rows by design),
-and `attempts` for the reason above.
+those, and they move for `requests.ndjson` and its three cascade rows by design).
+
+So the gate is now closed for all five documents against uniform drift, by
+construction rather than by luck: every gate compares two runs of one binary, and
+each of those five now has a pinned expectation that a second run must match.
 
 ### The re-capture band 3 owed
 
@@ -1242,9 +1245,13 @@ is confirmed *not* to be the limit — it runs a `tokio::task::JoinSet` with exa
 change both runs share fails a test. Two things about it are deliberately *not*
 claimed:
 
-- `attempts` is 1 on every row of that fixture, so the pin catches a spurious
-  retry and not a hidden one. It says "nothing was retried", not "retries are
-  recorded". Closing that needs a mock route that fails once and then answers.
+- `attempts` is 1 on every row of the *pinned* capture, so that pin alone says
+  "nothing was retried" and cannot see a hidden retry. `527833c` closed that by
+  giving the mock a route that answers `503` exactly once — a `5xx` is what
+  `RetryPolicy` retries — and pinning that the resulting row records
+  `attempts: 2`, with its body in the bundle. Forcing `attempts` to `1` is the
+  mutant that survived the row pin and is killed by the new one, so the two are
+  complementary rather than redundant.
 - It pins the rows of `requests.ndjson`. The other four volatile documents are
   now pinned too (`43f66fa`) — `MANIFEST.json`, `verify/checksums.json` and
   `README.md` by document inventory and scalar headers, `verify/selfcheck.json` by
