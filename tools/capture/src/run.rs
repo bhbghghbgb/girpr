@@ -309,7 +309,21 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let assembly_failures = fixture.failures;
     written.extend(fixture.written);
 
-    emit::write_requests_log(&dir, &log).map_err(|e| write_err(&dir, e))?;
+    // On the blocking pool. §5.5 row 10: this serialises every record and writes
+    // them, which is both CPU-bound and synchronous `std::fs`, and it ran inline
+    // inside `async fn capture` — so a worker was unavailable to *fetch*
+    // anything for the duration. `RequestLog` is `Arc`-backed and cheap to clone,
+    // so the log moves to the pool rather than being borrowed.
+    {
+        let for_the_pool = log.clone();
+        let dir_for_the_pool = dir.clone();
+        tokio::task::spawn_blocking(move || {
+            emit::write_requests_log(&dir_for_the_pool, &for_the_pool)
+        })
+        .await
+        .map_err(|e| write_err(&dir, std::io::Error::other(format!("{e}"))))?
+        .map_err(|e| write_err(&dir, e))?;
+    }
 
     // 7d. The closing documents, and A16.
     //

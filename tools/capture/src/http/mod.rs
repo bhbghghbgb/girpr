@@ -602,39 +602,87 @@ impl RequestLog {
         }
     }
 
-    /// The log as newline-delimited JSON, one object per line.
-    pub fn to_ndjson(&self) -> String {
-        let mut out = String::new();
-        for r in self.records() {
-            match serde_json::to_string(&r) {
-                Ok(line) => {
-                    out.push_str(&line);
-                    out.push('\n');
-                }
+    /// Write the log as newline-delimited JSON to `out`, one object per line.
+///
+/// **§5.5 row 10.** This replaces a `to_ndjson() -> String` that
+/// - built every record into one `String` — ~75-100 MB at 113 610 records, and
+/// - got them by calling [`RequestLog::records`], which **deep-clones every
+///   record while holding the lock**.
+///
+/// Nothing needs a clone here: a record is serialised, written, and forgotten. So
+/// the lock is taken once to build the *ordering* — a `Vec<usize>` of indices,
+/// 0.9 MB at that size rather than 113 610 deep copies — and then once per record
+/// for the few microseconds it takes to serialise one.
+///
+/// The ordering is by `seq`, for the reason [`RequestLog::records`] gives: `seq`
+/// is assigned at reserve time, so a `--jobs 8` capture lands rows in completion
+/// order while the `seq` column claims otherwise.
+pub fn write_ndjson_to<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
+    // One lock for the whole ordering. Sorting under it keeps `records` borrowed
+    // for the comparison instead of re-locking 113 610 times per sort.
+    let mut order: Vec<usize> = {
+        let s = self.lock();
+        let mut order: Vec<usize> = (0..s.records.len()).collect();
+        order.sort_by_key(|&i| s.records[i].seq);
+        order
+    };
+    let n = order.len();
+
+    for i in order.drain(..) {
+        // The lock is held for one record's serialisation and **not** for the
+        // write, so a slow disk cannot stall a fetch that is still logging.
+        let line = {
+            let s = self.lock();
+            let r = &s.records[i];
+            match serde_json::to_string(r) {
+                Ok(line) => line,
                 // A record that cannot serialize would otherwise vanish silently,
                 // and a log with a hole in it is worse than one that says it has
                 // one. `RequestRecord` is all primitives, so this is unreachable;
                 // the line says so rather than being dropped.
                 Err(e) => {
-                    out.push_str(&format!(
-                        "{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}\n",
-                        r.seq
-                    ));
+                    format!("{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}", r.seq)
                 }
             }
-        }
-        out
+        };
+        out.write_all(line.as_bytes())?;
+        out.write_all(b"\n")?;
     }
+    Ok(n)
+}
 
-    /// Write the log to `path`, creating parent directories.
-    pub fn write_ndjson(&self, path: &Path) -> std::io::Result<usize> {
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir)?;
-        }
-        let text = self.to_ndjson();
-        std::fs::write(path, text.as_bytes())?;
-        Ok(self.len())
+/// The log as newline-delimited JSON, one object per line.
+///
+/// **For tests and small logs.** The capture path uses
+/// [`RequestLog::write_ndjson_to`], which does not build the whole document in
+/// memory; this exists because a handful of assertions want to compare a string.
+pub fn to_ndjson(&self) -> String {
+    let mut out = Vec::new();
+    self.write_ndjson_to(&mut out)
+        .expect("writing to a Vec cannot fail");
+    String::from_utf8(out).expect("serde_json emits UTF-8")
+}
+
+/// Write the log to `path`, creating parent directories.
+///
+/// **Buffered, and one record at a time.** §5.5 row 10: this wrote
+/// `std::fs::write(path, whole_string)` — the whole document in memory, in one
+/// syscall, on whatever thread called it.
+///
+/// The `flush` is explicit rather than left to `BufWriter`'s `Drop`, and that is
+/// the whole reason it is here: a full disk surfaces at flush, and `Drop` throws
+/// that error away. Swallowed, the run would report having written a request log
+/// and leave a truncated file where `verify` would later read it.
+pub fn write_ndjson(&self, path: &Path) -> std::io::Result<usize> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
     }
+    let f = std::fs::File::create(path)?;
+    let mut w = std::io::BufWriter::with_capacity(256 * 1024, f);
+    let n = self.write_ndjson_to(&mut w)?;
+    std::io::Write::flush(&mut w)?;
+    Ok(n)
+}
 }
 
 /// A fetched body and the record of how it arrived.
@@ -1876,12 +1924,279 @@ mod tests {
         assert!(text.ends_with('\n'), "ndjson must be newline-terminated");
     }
 
-    #[test]
+    /// A writer that announces it has started writing, then stays inside
+/// `write` for long enough that a lock held across the write is observable.
+struct SlowWrite {
+    started: std::sync::mpsc::Sender<()>,
+}
+
+impl std::io::Write for SlowWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // One signal, however many times `write` is called.
+        // Unbounded std channel: `send` only fails if the receiver is gone, and
+        // the receiver is alive here. Only the first call matters; the rest are
+        // buffered and never read.
+        let _ = self.started.send(());
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A writer that accepts `ok` bytes, then fails.
+struct FailsAfter {
+    left: usize,
+}
+
+impl std::io::Write for FailsAfter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.left == 0 {
+            return Err(std::io::Error::other("no space left on device"));
+        }
+        let n = self.left.min(buf.len());
+        self.left -= n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A disk that fills mid-write must **not** be reported as a successful log.
+///
+/// §5.5 row 10 traded a whole-document write for a streamed one, which
+/// introduces a hazard the old code did not have: a partially written
+/// `requests.ndjson` is a file that exists and is short. `write_ndjson_to`
+/// propagates the write error instead of returning a count, so the run fails
+/// loudly — and the count it *would* have returned is exactly the number of
+/// records that made it to disk, which is why the error must not be swallowed.
+#[test]
+fn a_write_that_fails_mid_stream_is_an_error_not_a_short_log() {
+    let log = RequestLog::new();
+    for _ in 0..20 {
+        let seq = log.reserve();
+        log.push(RequestRecord {
+            seq,
+            ts: now_rfc3339(),
+            kind: Kind::Chunk,
+            method: "GET",
+            url: "/x".into(),
+            range: None,
+            status: 200,
+            final_url: "/x".into(),
+            redirected: false,
+            elapsed_ms: 1,
+            req_headers: BTreeMap::new(),
+            resp_headers: BTreeMap::new(),
+            bytes_in: 1,
+            stored_as: None,
+            attempts: 1,
+        });
+    }
+
+    // Enough for a few rows, nowhere near all twenty.
+    let mut w = FailsAfter { left: 40 };
+    let err = log
+        .write_ndjson_to(&mut w)
+        .expect_err("a failing writer must not look like a short success");
+    assert!(
+        err.to_string().contains("no space left"),
+        "the OS error must survive, not be replaced: {err}"
+    );
+
+    // And a sink that never fails still gets everything.
+    let mut ok: Vec<u8> = Vec::new();
+    assert_eq!(log.write_ndjson_to(&mut ok).unwrap(), 20);
+    assert_eq!(ok.iter().filter(|&&b| b == b'\n').count(), 20);
+}
+
+/// §5.5 row 10's second claim: the write happens **outside** the lock.
+///
+/// A byte-for-byte test cannot see this — moving the `write_all` calls inside
+/// the locked scope produces identical output — and it matters because the log
+/// is shared with the fetchers: a slow disk holding the log lock would stall
+/// every in-flight request's bookkeeping, which is the opposite of what this
+/// change is for.
+///
+/// So it is checked directly. The writer is held inside `write` for 150 ms; if
+/// the lock were held across that window, `try_lock` could not succeed for any
+/// of it. Correct code releases the lock before writing, so `try_lock` succeeds
+/// on the first attempt.
+#[test]
+fn the_write_happens_with_the_log_lock_released() {
+    use std::sync::mpsc;
+
+    let log = RequestLog::new();
+    for _ in 0..4 {
+        let seq = log.reserve();
+        log.push(RequestRecord {
+            seq,
+            ts: now_rfc3339(),
+            kind: Kind::Chunk,
+            method: "GET",
+            url: "/x".into(),
+            range: None,
+            status: 200,
+            final_url: "/x".into(),
+            redirected: false,
+            elapsed_ms: 1,
+            req_headers: BTreeMap::new(),
+            resp_headers: BTreeMap::new(),
+            bytes_in: 1,
+            stored_as: None,
+            attempts: 1,
+        });
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let writer_log = log.clone();
+    let handle = std::thread::spawn(move || {
+        let mut w = SlowWrite { started: tx };
+        writer_log.write_ndjson_to(&mut w).expect("write");
+    });
+
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("the writer should have reached write()");
+
+    // We are now inside the writer's sleep, on the other thread.
+    let free = log.0.try_lock().is_ok();
+    handle.join().expect("writer thread");
+
+    assert!(
+        free,
+        "the log lock is held across the write, so a slow disk would stall \
+         every fetch that is still logging"
+    );
+}
+
+#[test]
     fn an_empty_log_is_an_empty_file() {
         let log = RequestLog::new();
         assert!(log.is_empty());
         assert_eq!(log.to_ndjson(), "");
         assert_eq!(log.bytes_in(), 0);
+    }
+
+    /// The §5.5 row 10 gate: `write_ndjson_to` sorts indices rather than sorting
+    /// cloned records, so it has to reproduce `records()`'s ordering **exactly**.
+    ///
+    /// Two properties, and the second is the one a mutation would break:
+    ///
+    /// 1. Records land out of order (a saturated chunk fetcher) and come out in
+    ///    `seq` order — an unsorted writer passes on a log pushed in order, which
+    ///    is why the push order here is deliberately reversed.
+    /// 2. A **duplicate `seq` loses no row.** `records()` refuses to read through
+    ///    `by_seq` for exactly this reason; sorting indices keeps that property,
+    ///    and a writer that deduplicated by `seq` would quietly drop a row from
+    ///    the audit log this tool exists to produce. Three rows share `seq` 2, so
+    ///    a length assertion alone is not enough — every row is matched by its
+    ///    URL too.
+    #[test]
+    fn the_streaming_writer_orders_by_seq_and_drops_nothing() {
+        let log = RequestLog::new();
+        let mk = |seq: u64, url: &str| RequestRecord {
+            seq,
+            ts: now_rfc3339(),
+            kind: Kind::Chunk,
+            method: "GET",
+            url: url.to_string(),
+            range: None,
+            status: 200,
+            final_url: url.to_string(),
+            redirected: false,
+            elapsed_ms: 1,
+            req_headers: BTreeMap::new(),
+            resp_headers: BTreeMap::new(),
+            bytes_in: 7,
+            stored_as: None,
+            attempts: 1,
+        };
+        // Push order is the reverse of seq order, plus a three-way seq collision.
+        for (seq, url) in [
+            (3_u64, "/c"),
+            (2, "/a"),
+            (1, "/z"),
+            (2, "/b"),
+            (2, "/d"),
+        ] {
+            log.push(mk(seq, url));
+        }
+
+        let mut out: Vec<u8> = Vec::new();
+        let n = log.write_ndjson_to(&mut out).unwrap();
+        assert_eq!(n, 5, "every row must be written, duplicates included");
+
+        let got = String::from_utf8(out).expect("utf8");
+        let rows: Vec<serde_json::Value> = got
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("a row"))
+            .collect();
+        assert_eq!(rows.len(), 5);
+
+        // Sorted by seq...
+        let seqs: Vec<u64> = rows.iter().map(|r| r["seq"].as_u64().unwrap()).collect();
+        assert_eq!(seqs, vec![1, 2, 2, 2, 3], "rows must come out in seq order");
+
+        // ...and stable within a collision, so all three seq-2 rows survive with
+        // distinct URLs. A dedup-by-seq writer fails here, not on `n`.
+        let dup_urls: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["seq"] == 2)
+            .map(|r| r["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(dup_urls, vec!["/a", "/b", "/d"]);
+
+        // And it agrees with the document `records()` would have produced.
+        let expected: String = log
+            .records()
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(got, format!("{expected}\n"));
+    }
+
+    /// `write_ndjson` goes through `BufWriter`, so its output has to equal
+    /// `to_ndjson`'s — a buffer boundary inside the file would be the kind of
+    /// thing only a byte comparison catches.
+    #[test]
+    fn the_buffered_file_write_equals_the_string() {
+        let log = RequestLog::new();
+        for _ in 0..300 {
+            let seq = log.reserve();
+            log.push(RequestRecord {
+                seq,
+                ts: now_rfc3339(),
+                kind: Kind::Chunk,
+                method: "GET",
+                url: format!("/chunk/{seq}/{}", "x".repeat(900)),
+                range: Some(format!("bytes={seq}-")),
+                status: 200,
+                final_url: format!("/chunk/{seq}"),
+                redirected: false,
+                elapsed_ms: 3,
+                req_headers: BTreeMap::new(),
+                resp_headers: BTreeMap::new(),
+                bytes_in: 1000 + seq,
+                stored_as: None,
+                attempts: 1,
+            });
+        }
+        // 300 rows of ~950 B is ~285 KB, past the 256 KB BufWriter, so the
+        // write really does cross a flush boundary mid-document.
+        let dir = std::env::temp_dir().join(format!("gircap-http-ndjson-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("api").join("requests.ndjson");
+        let n = log.write_ndjson(&path).expect("write");
+        assert_eq!(n, 300);
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            log.to_ndjson().into_bytes(),
+            "the buffered file must be byte-identical to the string"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ------------------------------------------------------------- sleeper --
