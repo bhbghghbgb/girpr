@@ -16,7 +16,7 @@ use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
-use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
+use crate::http::{ApiError, Fetcher, RequestLog, Transport, negative, probe};
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
@@ -157,54 +157,19 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let mut manifests =
         manifest::fetch::fetch_all(&fetcher, &manifest_wants, fields.len(), plan.jobs).await?;
 
-    // 6a. What the API does with a request it will not serve. Placed here rather
-    //     than beside the tag probe because it needs the pair's blob prefixes, and
-    //     a `404` measured against an invented prefix would prove nothing: the
-    //     point is that the *real* prefix answers `404` for an id the real build
-    //     does not have, and `404` for a real id under the other build's.
+    // 6a. What the API does with a request it will not serve.
     //
-    //     Costs seven small requests and downloads no blob. It must not be able to
-    //     fail the capture: a negative response is the measurement.
-    let game_pair = fields
-        .iter()
-        .zip(&manifests)
-        .find(|(field, _)| field.as_str() == manifest::MANIFEST_FIELD)
-        .map(|(_, pair)| pair)
-        .ok_or_else(|| {
-            apierr(
-                "the negative probes",
-                &ApiError::shape(
-                    "the game manifest pair",
-                    "no `game` manifest to take blob prefixes from",
-                ),
-            )
-        })?;
-    let (old_game, new_game) = (&game_pair[0], &game_pair[1]);
-    // A chunk the new build has and the old one does not — see `ErrorProbes`.
-    // A shared chunk would make the wrong-build probe record a `200` and claim the
-    // opposite of what it is there to show.
-    let old_chunk_ids: std::collections::HashSet<&str> = old_game
-        .entries
-        .iter()
-        .flat_map(|f: &crate::manifest::proto::SophonChunkFile| f.chunks.iter())
-        .map(|c| c.id.as_str())
-        .collect();
-    let new_only_chunk_id = new_game
-        .entries
-        .iter()
-        .flat_map(|f: &crate::manifest::proto::SophonChunkFile| f.chunks.iter())
-        .find(|c| !old_chunk_ids.contains(c.id.as_str()))
-        .map(|c| c.id.clone())
-        .ok_or_else(|| {
-            apierr(
-                "the negative probes",
-                &ApiError::shape(
-                    "the two `game` manifests",
-                    "every chunk of the new build is also in the old one, so there is \
-                     no id to ask for under the wrong prefix",
-                ),
-            )
-        })?;
+    //     Seven small requests and no blob downloaded. It must not be able to fail
+    //     the capture: a negative response *is* the measurement. `negative` owns
+    //     the two decisions that decide what gets asked for - which pair, and
+    //     which chunk id - because both are pure and both were previously only
+    //     reachable by running a capture against the live API.
+    let game_pair = negative::game_pair(&fields, &manifests)?;
+    let (old_game, new_game) = negative::pair_sides(game_pair, "the game manifest pair")?;
+    let new_only_chunk_id = negative::new_only_chunk_id(
+        negative::chunk_ids(old_game),
+        negative::chunk_ids(new_game),
+    )?;
     let error_shapes = probe::probe_error_shapes(
         &fetcher,
         &endpoints,

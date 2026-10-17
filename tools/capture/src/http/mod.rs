@@ -38,6 +38,7 @@ use serde::Serialize;
 
 use crate::exit::ExitCode;
 
+pub mod negative;
 pub mod probe;
 
 pub use probe::TagProbe;
