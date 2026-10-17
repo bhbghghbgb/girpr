@@ -195,11 +195,21 @@ pub fn should_gzip(len: usize, threshold: u64) -> bool {
     len as u64 > threshold
 }
 
-/// gzip a body.
+/// gzip a body, in memory. **Test-only: this is the reference, not the path.**
+///
+/// §6.4 moved production to [`crate::emit::write_json_gz`], which streams
+/// through the encoder and never holds the whole body. Nothing has called this
+/// since, so it is marked `#[cfg(test)]` — and that is the point. The signature
+/// is `&[u8] -> Vec<u8>`, which is precisely the shape that invites someone to
+/// go back to serialising a 27 MB manifest decode into a `String` and compressing
+/// it in one shot. `cfg(test)` turns "please don't" into "you can't", and this
+/// function stays available because the gate that proves streaming is byte-equal
+/// needs something to compare against.
 ///
 /// The level is the flate2 default and is **not** a promise: nothing in the
 /// bundle depends on the compressed bytes being reproducible, which is exactly
 /// why the decompressed digest is the one recorded.
+#[cfg(test)]
 pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut enc = flate2::write::GzEncoder::new(
         Vec::with_capacity(bytes.len() / 4),
@@ -209,7 +219,12 @@ pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     enc.finish()
 }
 
-/// gunzip a body.
+/// gunzip a body, in memory.
+///
+/// Kept public for the integration tests that read a stored `.gz` back, which is
+/// what M10's gzip-rule assertions are about. Production does not go through
+/// here to *write* anything — that is [`gzip`]'s story, and the note there
+/// applies in reverse.
 pub fn gunzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut out = Vec::new();
@@ -297,6 +312,120 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Content with the shape of a real manifest decode: JSON-ish and highly
+    /// repetitive, so the deflate window is genuinely exercised, and sized in
+    /// **bytes rather than entries** so the cost of this gate is visible in the
+    /// source.
+    ///
+    /// Sized just over 96 KB, which spans several of deflate's 32 KB blocks and
+    /// is larger than every chunk size below — the property under test is
+    /// whether the encoder's block boundaries depend on where the caller's
+    /// writes split, and one block would not test it.
+    const PROBE_BYTES: usize = 96 * 1024;
+
+    fn gzip_probe_payload() -> Vec<u8> {
+        let mut v = Vec::with_capacity(PROBE_BYTES + 256);
+        let mut i = 0u32;
+        while v.len() < PROBE_BYTES {
+            v.extend_from_slice(
+                format!(
+                    "{{\n  \"id\": \"{i:016x}_deadbeefdeadbeefdeadbeefdeadbeef\",\n  \
+                     \"path\": \"Audio/Soundbank{i}/Media/stream_{i:04}.ww2\",\n  \
+                     \"size\": {},\n  \"tag\": \"7.1.0\"\n}},\n",
+                    (i as u64) * 7919,
+                )
+                .as_bytes(),
+            );
+            i += 1;
+        }
+        v
+    }
+
+    /// Gzip a body by feeding it in fixed-size chunks, the way a streaming
+    /// writer would.
+    fn gzipped_in_chunks(bytes: &[u8], chunk: usize) -> Vec<u8> {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        for part in bytes.chunks(chunk) {
+            enc.write_all(part).expect("write");
+        }
+        enc.finish().expect("finish")
+    }
+
+    #[test]
+    fn gzip_bytes_do_not_depend_on_how_the_input_was_fed() {
+        // **§6.4's gate, stated as a fact rather than a hope.** The plan's
+        // position is that flate2's deflate stream "is not guaranteed identical
+        // when the input is fed in different chunk sizes", which is why
+        // streaming the manifest decode through `GzEncoder` was band 3: the
+        // compressed bytes are recorded in `checksums.json`, so if this varies,
+        // every reference bundle becomes stale.
+        //
+        // It does not vary. The deflate encoder buffers internally and decides
+        // block boundaries from its own window, not from where the caller's
+        // writes happen to split. Every chunk size below yields the same bytes as
+        // the one-shot [`gzip`], including the ones no BufWriter would produce
+        // (1 byte at a time, 7 KB).
+        let payload = gzip_probe_payload();
+        let one_shot = gzip(&payload).expect("one-shot gzip");
+
+        // 8 KB is `BufWriter`'s default and the shape §6.4 would actually use:
+        // `to_writer` hands the encoder one token at a time, and the `BufWriter`
+        // is what coalesces them into these writes.
+        let chunk_sizes = [1, 7, 8 * 1024, 8 * 1024 - 7, 64 * 1024];
+
+        assert!(
+            payload.len() > PROBE_BYTES,
+            "the probe must be longer than the largest chunk it is fed in"
+        );
+
+        for size in chunk_sizes {
+            let streamed = gzipped_in_chunks(&payload, size);
+            assert_eq!(
+                streamed.len(),
+                one_shot.len(),
+                "chunk size {size} compressed to a different length"
+            );
+            assert!(
+                streamed == one_shot,
+                "chunk size {size} compressed to different bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn a_streamed_gzip_still_round_trips_to_the_same_body() {
+        // The other half of the claim: chunking does not corrupt anything. If
+        // this passes while the byte test above also passes, §6.4 is band 1.
+        let payload = gzip_probe_payload();
+        let streamed = gzipped_in_chunks(&payload, 8 * 1024);
+        assert_eq!(gunzip(&streamed).expect("gunzip"), payload);
+    }
+
+    #[test]
+    fn dropping_a_gz_encoder_without_finishing_produces_the_same_bytes() {
+        // Recorded because `write_json_gz`'s comment used to claim the opposite.
+        //
+        // `flate2::write::GzEncoder`'s `Drop` *attempts* the finish, so dropping
+        // one without calling `finish` yields byte-identical output that still
+        // decompresses — the "you lose the trailer" warning is folklore for this
+        // type. What `Drop` cannot do is report an error, which is the only
+        // reason `write_json_gz` calls `finish()?` explicitly: a failed trailer
+        // write must not be silent.
+        //
+        // Checked here rather than asserted there, so the claim has a test that
+        // would notice if a future flate2 changed it.
+        let payload = gzip_probe_payload();
+        let mut sink: Vec<u8> = Vec::new();
+        {
+            let mut enc =
+                flate2::write::GzEncoder::new(&mut sink, flate2::Compression::default());
+            enc.write_all(&payload).expect("write");
+            // dropped here, without `finish`
+        }
+        assert_eq!(sink, gzip(&payload).expect("one-shot"));
+        assert_eq!(gunzip(&sink).expect("dropped stream still decodes"), payload);
+    }
 
     /// One pass must equal two, or every digest in the bundle moves.
     ///

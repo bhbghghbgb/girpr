@@ -325,6 +325,116 @@ fn write_parts(root: &Path, rel: &str, parts: &[&[u8]]) -> std::io::Result<PathB
     Ok(path)
 }
 
+/// A `Write` that counts what passes through it and keeps none of it.
+///
+/// §6.4. [`json_len`] needs to know how long a serialised document will be
+/// before deciding how to write it, and a streaming writer cannot be asked.
+struct Counter(usize);
+
+impl std::io::Write for Counter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// How many bytes `value` occupies serialised pretty-printed, without building it.
+///
+/// **The same bytes [`write_doc`] would have produced**, so the length this
+/// returns is the length of the document that gets written and nothing else.
+/// `what` names the document in the error, because a serialisation failure
+/// halfway into a 27 MB decode with no subject is a bad error report.
+pub fn json_len(value: &impl serde::Serialize, what: &str) -> std::io::Result<usize> {
+    let mut c = Counter(0);
+    serde_json::to_writer_pretty(&mut c, value)
+        .map_err(|e| std::io::Error::other(format!("serialise {what}: {e}")))?;
+    Ok(c.0)
+}
+
+/// Write a serialisable document straight into its file, gzipping on the way.
+///
+/// §6.4. `serde_json::to_string_pretty` built the whole body in memory — a
+/// ~27 MB `String` for a 2 744-entry manifest decode — and the gzip call then
+/// built a second ~7 MB compressed copy while that `String` was still alive.
+/// Serialising through the encoder holds neither: peak allocation is the
+/// 8 KB `BufWriter` and the encoder's own window.
+///
+/// **The bytes are the same as the buffered path**, which is what makes this
+/// band 1 rather than band 3. Two facts, both tested:
+///
+///  - `to_writer_pretty` and `to_string_pretty` share one `PrettyFormatter`, so
+///    the uncompressed document is identical. Pinned by
+///    `streaming_a_plain_document_writes_the_bytes_the_buffered_path_wrote`.
+///  - `flate2`'s deflate output does not depend on how the input is chunked, so
+///    the `BufWriter` coalescing `to_writer`'s token-at-a-time writes cannot
+///    change the compressed bytes. Pinned by
+///    `streaming_a_gzipped_document_writes_the_bytes_the_buffered_path_wrote`
+///    and, underneath it, `hash::tests::gzip_bytes_do_not_depend_on_how_the_input_was_fed`
+///    — the test the plan's "try it in band 1 with a test that both paths produce
+///    identical gzip bytes" refers to.
+///
+/// Not written atomically, like every other bundle document here: see
+/// [`write_bytes`]. A partial manifest decode is a small, reproducible failure,
+/// and the alternative was keeping 34 MB alive to make it merely unlikely.
+///
+/// `gzip` is the caller's decision, not this function's — it is taken by
+/// comparing the length from [`json_len`] against `--gzip-threshold`, and it
+/// determines the file's name, which is why the length is measured before the
+/// body is written.
+pub fn write_json_gz(
+    root: &Path,
+    rel: &str,
+    value: &impl serde::Serialize,
+    gzip: bool,
+) -> std::io::Result<PathBuf> {
+    let path = root.join(rel);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file = std::fs::File::create(&path)?;
+    if gzip {
+        // **The buffer goes between serde_json and the encoder**, which is the
+        // opposite end from where it looks like it belongs, and the order is the
+        // difference between this change costing 12 s and costing 46 s.
+        //
+        // `to_writer_pretty` emits a token at a time, so a document with 2 744
+        // entries is tens of millions of tiny `write` calls. Wrapping the encoder
+        // in the buffer lets deflate see 8 KB at a time; buffering the encoder's
+        // *output* instead leaves deflate being called once per token, which
+        // costs about 4x the wall clock for the same bytes. Measured, not assumed.
+        let mut w =
+            std::io::BufWriter::new(flate2::write::GzEncoder::new(file, flate2::Compression::default()));
+        serde_json::to_writer_pretty(&mut w, value)
+            .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
+        // `into_inner` flushes the buffer and hands the encoder back; it is where
+        // the last partial buffer reaches the encoder.
+        let enc = w
+            .into_inner()
+            .map_err(|e| std::io::Error::other(format!("flush {rel}: {}", e.into_error())))?;
+        // `finish()?` and not a bare drop. **The bytes are the same either way**
+        // — `flate2::write::GzEncoder`'s `Drop` attempts the finish, so the
+        // trailer is not what this call is for, contrary to what the comment
+        // here used to say. `Drop` cannot report an error, though, and a
+        // truncated manifest decode must not be written silently. Pinned by
+        // `hash::tests::dropping_a_gz_encoder_without_finishing_produces_the_same_bytes`.
+        enc.finish()?;
+    } else {
+        let mut w = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut w, value)
+            .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
+        std::io::Write::flush(&mut w)?;
+    }
+    debug_assert_eq!(
+        rel_path_string(root, &path),
+        rel,
+        "the path must round-trip"
+    );
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +442,171 @@ mod tests {
     use crate::config::{NewTagSelector, OldTagSelector, VersionPair};
     use crate::http::probe::{TagProbeRow, finish};
     use crate::hyp::CapturedBody;
+
+    /// A document shaped like a real manifest decode, ~200 entries.
+    ///
+    /// **A stand-in, and honestly so.** The real `FullDecode` needs a captured
+    /// manifest, and a fixture built from it would be a bundle-sized setup for a
+    /// claim about serialisation. What matters is that this carries the same JSON
+    /// shapes in the same proportions: borrowed strings, a u32, a bool, an i64,
+    /// and a nested array of nested structs — so `to_writer_pretty` is walking
+    /// the same kinds of tokens as the real decode.
+    ///
+    /// **Sized past `BufWriter`'s 8 KB**, so the buffer actually fills and the
+    /// encoder is handed partial buffers rather than one clean write. A document
+    /// under 8 KB never exercises the boundary this change is about.
+    #[derive(serde::Serialize)]
+    struct Decode {
+        schema_version: u32,
+        tag: &'static str,
+        build_id: &'static str,
+        matching_field: &'static str,
+        entries: Vec<Entry>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct Entry {
+        file: String,
+        chunks: Vec<Chunk>,
+        is_folder: bool,
+        size: i64,
+        md5: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct Chunk {
+        id: String,
+        compressed_size: i64,
+        uncompressed_size: i64,
+        md5_compressed: String,
+        md5_uncompressed: String,
+        unknown_field6: i64,
+    }
+
+    fn decode_fixture() -> Decode {
+        let entries = (0..200)
+            .map(|i| Entry {
+                file: format!("Audio/Soundbank{i}/Media/stream_{i:04}.ww2"),
+                chunks: (0..3u64)
+                    .map(|c| Chunk {
+                        id: format!("{:016x}_{c:032x}", (i as u64) * 7919 + c),
+                        compressed_size: (i as i64) * 1013,
+                        uncompressed_size: (i as i64) * 7919 + c as i64,
+                        md5_compressed: format!("{:032x}", (i as u64) * 31 + c),
+                        md5_uncompressed: format!("{:032x}", (i as u64) * 17 + c),
+                        unknown_field6: c as i64,
+                    })
+                    .collect(),
+                is_folder: i % 17 == 0,
+                size: (i as i64) * 23_713,
+                md5: format!("{:032x}", (i as u64) * 104_729),
+            })
+            .collect();
+        Decode {
+            schema_version: 1,
+            tag: "7.1.0",
+            build_id: "e0ea3f6d",
+            matching_field: "game",
+            entries,
+        }
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        // Per test name, not per process: these run concurrently in one process,
+        // so a shared path means one test's `remove_dir_all` deletes another's
+        // tree mid-run.
+        let d = std::env::temp_dir().join(format!("gircap-emit-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn streaming_a_gzipped_document_writes_the_bytes_the_buffered_path_wrote() {
+        // **§6.4's gate.** The compressed bytes of `manifests/*.json.gz` are in
+        // `checksums.json`, so if streaming through the encoder moved a single
+        // byte, every reference bundle on disk becomes stale and
+        // `SCHEMA_VERSION` would have to move with it. The plan allowed trying
+        // this in band 1 *only* on the strength of such a test, so this is it.
+        //
+        // The comparison is against the code this replaced — `to_string_pretty`,
+        // then `hash::gzip`, then one `write_all` — not against a golden file, so
+        // it cannot rot.
+        let root = tmp("gz-identical");
+        let d = decode_fixture();
+        write_json_gz(&root, "manifest.json.gz", &d, true).expect("streamed write");
+
+        let buffered = crate::hash::gzip(
+            serde_json::to_string_pretty(&d)
+                .expect("to_string_pretty")
+                .as_bytes(),
+        )
+        .expect("buffered gzip");
+        let streamed = std::fs::read(root.join("manifest.json.gz")).expect("read back");
+
+        assert_eq!(
+            streamed.len(),
+            buffered.len(),
+            "the compressed body changed size"
+        );
+        assert!(
+            streamed == buffered,
+            "the compressed body changed bytes: every manifest digest in every \
+             reference bundle would move"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn streaming_a_plain_document_writes_the_bytes_the_buffered_path_wrote() {
+        // The identity branch, which a `--gzip-threshold` above the body size
+        // takes. Same claim, no encoder involved: `to_writer_pretty` and
+        // `to_string_pretty` must agree.
+        let root = tmp("plain-identical");
+        let d = decode_fixture();
+        write_json_gz(&root, "manifest.json", &d, false).expect("streamed write");
+
+        let buffered = serde_json::to_string_pretty(&d).expect("to_string_pretty");
+        assert!(
+            buffered.len() > 8 * 1024,
+            "the fixture must outgrow BufWriter's 8 KB, or the buffer boundary \
+             this change is about is never crossed (fixture is {} B)",
+            buffered.len(),
+        );
+        let streamed = std::fs::read(root.join("manifest.json")).expect("read back");
+
+        assert_eq!(streamed, buffered.as_bytes());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn json_len_is_the_length_of_the_bytes_that_get_written() {
+        // The reason §6.4 walks the document twice. `json_len` decides the file's
+        // *name* and what `files[].uncompressed_bytes` claims, and the stream that
+        // follows cannot be consulted about either. So the two must agree, for
+        // both branches — otherwise the bundle records a length no reader can
+        // reproduce from the file beside it.
+        let root = tmp("len-agrees");
+        let d = decode_fixture();
+        let claimed = json_len(&d, "the fixture").expect("json_len");
+
+        write_json_gz(&root, "plain.json", &d, false).expect("plain");
+        assert_eq!(
+            claimed,
+            std::fs::read(root.join("plain.json")).expect("read").len(),
+            "the plain document is not the length that was measured"
+        );
+
+        write_json_gz(&root, "gz.json.gz", &d, true).expect("gz");
+        let round_tripped =
+            crate::hash::gunzip(&std::fs::read(root.join("gz.json.gz")).expect("read"))
+                .expect("gunzip");
+        assert_eq!(
+            claimed,
+            round_tripped.len(),
+            "the gzipped document does not decompress to the length that was measured"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn body(name: &str, endpoint: &'static str) -> CapturedBody {
         CapturedBody {

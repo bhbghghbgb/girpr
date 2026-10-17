@@ -97,10 +97,17 @@ pub fn write(
     //    files[].encoding` says which one is on disk.
     if detail == ManifestDetail::Full {
         let full = FullDecode::from_captured(captured);
-        let body = serde_json::to_string_pretty(&full)
-            .map_err(|e| std::io::Error::other(format!("serialise the decode: {e}")))?;
-        let gzipped = hash::should_gzip(body.len(), gzip_threshold);
-        let uncompressed_bytes = body.len() as u64;
+        // **Measured, then written.** §6.4 removed the ~27 MB `String` this used
+        // to hold: the body was serialised into memory, measured, compressed into
+        // a second buffer, and only then written. Two things needed the length —
+        // the `--gzip-threshold` rule and `files[].uncompressed_bytes` — and the
+        // file's *name* depends on the answer, so the length has to exist before
+        // the write starts. Hence the counting pass: a second walk over the
+        // decode that allocates nothing, in exchange for ~34 MB of peak RSS that
+        // was alive for both manifests and every audio manifest in turn.
+        let uncompressed_bytes =
+            crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
+        let gzipped = hash::should_gzip(uncompressed_bytes, gzip_threshold);
         let (rel, encoding) = if gzipped {
             (
                 format!("{}.json.gz", full_prefix(&tag, &field)),
@@ -112,16 +119,11 @@ pub fn write(
                 Encoding::Identity,
             )
         };
-        let payload = if gzipped {
-            hash::gzip(body.as_bytes())?
-        } else {
-            body.into_bytes()
-        };
-        crate::emit::write_rel(root, &rel, &payload)?;
+        crate::emit::write_json_gz(root, &rel, &full, gzipped)?;
         out.push(StoredAs {
             path: rel,
             encoding,
-            uncompressed_bytes,
+            uncompressed_bytes: uncompressed_bytes as u64,
         });
     }
 
