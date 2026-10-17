@@ -468,6 +468,13 @@ impl Store {
     /// could — but a crash mid-write would then leave a truncated file at the
     /// final path, where it is indistinguishable from a good blob to every reader,
     /// including `verify`. One rename is not worth that.
+    ///
+    /// The *other* half of that item — "`fs::rename` fails on Windows when the
+    /// destination exists, so re-capturing into an existing bundle directory
+    /// fails on every blob" — is **not true**, and is checked rather than assumed:
+    /// `renaming_a_blob_over_an_existing_one_replaces_it` in this module's tests.
+    /// `std::fs::rename` replaces. Had it been believed, the "fix" would have been
+    /// to delete the atomic step this function exists to provide.
     fn paths_for(&self, rel: &str) -> (PathBuf, PathBuf) {
         let final_path = self.root.join(rel);
         let dir = final_path.parent().unwrap_or(&self.root).to_path_buf();
@@ -603,6 +610,47 @@ mod tests {
     use super::*;
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("gircap-blobs-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    /// §5.5 row 2 said `fs::rename` fails on Windows when the destination exists,
+    /// and that "re-capturing into an existing bundle directory fails on every
+    /// single blob". **It does not.** `std::fs::rename` calls `MoveFileExW` with
+    /// `MOVEFILE_REPLACE_EXISTING`, so the destination is replaced.
+    ///
+    /// Checked rather than argued, because the claim was filed as a reproducible
+    /// bug on the platform this repo develops on and would otherwise have been
+    /// "fixed" by deleting an atomic step the code needs. The destination here is
+    /// deliberately *longer* than the source, so a copy-not-replace
+    /// implementation would leave a tail behind and be caught.
+    #[test]
+    fn renaming_a_blob_over_an_existing_one_replaces_it() {
+        let dir = scratch("rename-over");
+        let (final_path, tmp) = (
+            dir.join("blob.zst"),
+            dir.join(".blob.zst.tmp"),
+        );
+        std::fs::write(&final_path, b"the older and longer blob").expect("seed destination");
+        std::fs::write(&tmp, b"NEW").expect("write tmp");
+
+        std::fs::rename(&tmp, &final_path).expect("rename onto an existing file");
+
+        assert_eq!(
+            std::fs::read(&final_path).expect("read"),
+            b"NEW",
+            "the destination must be the new blob and nothing else"
+        );
+        assert!(
+            !tmp.exists(),
+            "the tmp file must be gone after the rename publishes it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn chunk(payload: &[u8], offset: i64, prefix: u64) -> SophonChunk {
         let raw = zstd::encode_all(payload, 1).expect("encode");
