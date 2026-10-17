@@ -894,54 +894,95 @@ fn envelope_with_data(retcode: i64, message: &str, data: serde_json::Value) -> V
 }
 
 /// Answer one request.
+/// Serve requests on one connection until the peer closes it or asks to close.
+///
+/// **Keep-alive, because the real servers keep alive.** This used to handle
+/// exactly one request and return, and it answered `Connection: close`
+/// unconditionally — so every chunk blob in a capture cost a fresh TCP
+/// connection. That is not just unfaithful to the CDN, it made §3.2's
+/// concurrency question unanswerable: with ~12 ms per connect on loopback and
+/// almost no CPU, `--jobs 8` measured Windows' connect path, not the
+/// `RequestLog` mutex the question is about.
+///
+/// The client's pool was never the thing at fault — `Fetcher` builds one
+/// `reqwest::Client` and every clone shares it — so this was the mock refusing
+/// to let the pool be used.
+///
+/// A request body is still never read: this client sends none, and a body-carrying
+/// request on a reused connection would desynchronise the stream. The reader is
+/// only advanced to the blank line that ends the headers.
 fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line)? == 0 {
-        return Ok(());
-    }
-    // Drain the headers; this client always sends `Connection: close`-compatible
-    // requests and never negotiates a body it would not send.
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
-            break;
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line)? == 0 {
+            return Ok(()); // peer closed: the normal end of a pooled connection
+        }
+        if request_line.trim().is_empty() {
+            continue; // tolerate a stray CRLF between pipelined requests
+        }
+
+        // Drain the headers, noting `Connection:` so the reply can agree.
+        let mut client_says_close = false;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                return Ok(());
+            }
+            if line.trim().is_empty() {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("connection:") && lower.contains("close") {
+                client_says_close = true;
+            }
+        }
+
+        let target = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("/")
+            .to_string();
+        let (path, query) = match target.split_once('?') {
+            Some((p, q)) => (p.to_string(), q.to_string()),
+            None => (target.clone(), String::new()),
+        };
+        let tag = query_param(&query, "tag");
+        log.lock().expect("log").push(Recorded {
+            path: path.clone(),
+            query: query.clone(),
+            tag: tag.clone(),
+        });
+
+        // HTTP/1.1 keeps alive unless someone asks otherwise; HTTP/1.0 is the
+        // other way round. The mock is HTTP/1.1, and this client is 1.1.
+        let keep_alive = !client_says_close;
+
+        let outcome = match respond(table, &path, &query, tag.as_deref()) {
+            // A blob route's miss is the measured shape, not a generic one: the
+            // real CDN (`Server: AliyunOSS`) answers `404` with
+            // `application/xml` and a `NoSuchKey` envelope, and that is what
+            // `api/error_shapes.json` records and a replayer will replay. A
+            // `text/plain` stand-in would let the mock agree with itself about a
+            // detail the mock cannot know.
+            None if is_blob_route(&path) => {
+                write_response(&mut stream, 404, "application/xml", &no_such_key(&path), keep_alive)
+            }
+            None => write_response(
+                &mut stream,
+                404,
+                "text/plain",
+                format!("no route for {path}").as_bytes(),
+                keep_alive,
+            ),
+            Some(bytes) => write_response(&mut stream, 200, content_type(&path), &bytes, keep_alive),
+        };
+
+        outcome?;
+        if !keep_alive {
+            return Ok(());
         }
     }
-
-    let target = request_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/")
-        .to_string();
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p.to_string(), q.to_string()),
-        None => (target.clone(), String::new()),
-    };
-    let tag = query_param(&query, "tag");
-    log.lock().expect("log").push(Recorded {
-        path: path.clone(),
-        query: query.clone(),
-        tag: tag.clone(),
-    });
-
-    let Some(bytes) = respond(table, &path, &query, tag.as_deref()) else {
-        // A blob route's miss is the measured shape, not a generic one: the real
-        // CDN (`Server: AliyunOSS`) answers `404` with `application/xml` and a
-        // `NoSuchKey` envelope, and that is what `api/error_shapes.json` records
-        // and a replayer will replay. A `text/plain` stand-in would let the
-        // mock agree with itself about a detail the mock cannot know.
-        if is_blob_route(&path) {
-            return write_response(&mut stream, 404, "application/xml", &no_such_key(&path));
-        }
-        return write_response(
-            &mut stream,
-            404,
-            "text/plain",
-            format!("no route for {path}").as_bytes(),
-        );
-    };
-    write_response(&mut stream, 200, content_type(&path), &bytes)
 }
 
 /// Whether `path` belongs to the CDN's two blob namespaces rather than the JSON
@@ -1066,14 +1107,16 @@ fn write_response(
     status: u16,
     content_type: &str,
     body: &[u8],
+    keep_alive: bool,
 ) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         404 => "Not Found",
         _ => "Error",
     };
+    let connection = if keep_alive { "keep-alive" } else { "close" };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: {connection}\r\n\r\n",
         body.len()
     );
     stream.write_all(head.as_bytes())?;
