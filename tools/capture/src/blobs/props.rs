@@ -189,8 +189,16 @@ impl BlobProps {
         let md5_compressed = hash::md5_hex(raw);
         // A frame that will not decode leaves the two decode-dependent checks
         // false and records why, rather than taking the whole blob down with it.
-        let decoded = hash::zstd_decompress(raw, &what);
-        let md5_decompressed = decoded.as_ref().map(|d| hash::md5_hex(d)).ok();
+        //
+        // Streamed, not decompressed: the two numbers this needs are the
+        // decoded length and the decoded md5, and the largest measured chunk is
+        // 3 689 476 B — so a `Vec<u8>` here is ~30 MB of peak RSS at `--jobs 8`,
+        // alive at the same moment as the eight raw bodies, to compute two values
+        // and throw the rest away. `zstd_measure` is the same decode with a
+        // counter and a hasher where the buffer was.
+        let measured = hash::zstd_measure(raw, &what);
+        let decoded_size = measured.as_ref().ok().map(|m| m.len);
+        let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
         Ok(BlobProps {
             chunk_id: chunk.id.clone(),
             stored_path: None,
@@ -199,15 +207,15 @@ impl BlobProps {
             sha256_compressed: hash::sha256_hex(raw),
             md5_compressed: md5_compressed.clone(),
             md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
-            uncompressed_size: decoded.as_ref().map(|d| d.len() as u64).unwrap_or(0),
+            uncompressed_size: decoded_size.unwrap_or(0),
             unknown_field6: chunk.unknown_field6,
-            decode_error: decoded.as_ref().err().cloned(),
+            decode_error: measured.as_ref().err().cloned(),
             verified: Some(Verified {
                 raw_size_matches: raw.len() as i64 == chunk.compressed_size,
                 md5_compressed_matches: md5_compressed == chunk.compressed_md5,
                 md5_decompressed_matches: md5_decompressed.as_deref()
                     == Some(&chunk.uncompressed_md5),
-                decoded_size_matches: matches!(decoded.as_ref(), Ok(d) if d.len() as i64 == chunk.uncompressed_size),
+                decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
             }),
         })
     }

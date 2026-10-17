@@ -138,23 +138,116 @@ pub fn is_zstd(bytes: &[u8]) -> bool {
 /// Fails with a message that names the bytes it was handed, because "zstd error"
 /// on a 9 MB blob with no identifier is a useless error report.
 pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
-    zstd::decode_all(bytes).map_err(|e| {
-        format!(
-            "{what}: not a decodable zstd blob ({} bytes, magic {:02x?}{}): {e}",
-            bytes.len(),
-            &bytes[..bytes.len().min(4)],
-            if is_zstd(bytes) {
-                " has-zstd-magic"
-            } else {
-                " no-zstd-magic"
-            },
-        )
+    zstd::decode_all(bytes).map_err(|e| zstd_error(bytes, what, e))
+}
+
+fn zstd_error(bytes: &[u8], what: &str, e: impl std::fmt::Display) -> String {
+    format!(
+        "{what}: not a decodable zstd blob ({} bytes, magic {:02x?}{}): {e}",
+        bytes.len(),
+        &bytes[..bytes.len().min(4)],
+        if is_zstd(bytes) {
+            " has-zstd-magic"
+        } else {
+            " no-zstd-magic"
+        },
+    )
+}
+
+/// What a zstd decode said about the bytes it produced, without keeping them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Measure {
+    /// `len(decompressed)`.
+    pub len: u64,
+    /// `md5(decompressed)`, lowercase hex.
+    pub md5: String,
+}
+
+/// Measure a zstd blob's contents instead of materialising them.
+///
+/// [`zstd_decompress`] returns the frame because its callers assemble files and
+/// need every byte. Measuring a blob does not: `chunks/index.json` wants a
+/// length and a digest and nothing else, and the largest chunk in the reference
+/// bundle is 3 689 476 B — so holding those buffers is ~30 MB of peak RSS at
+/// `--jobs 8` on top of the eight raw bodies already in flight, for two numbers.
+///
+/// **Same answers, same errors.** This is `zstd_decompress` with the output
+/// buffer replaced by a hasher and a counter, and
+/// `a_streaming_measurement_agrees_with_decompressing_the_same_bytes` is what
+/// keeps that true rather than merely intended — including for a frame that
+/// fails to decode part way through, where both report the same error.
+pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
+    use std::io::Read as _;
+    let mut dec = zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
+    let mut hasher = md5::Context::new();
+    let mut len = 0_u64;
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let n = dec
+            .read(&mut buf)
+            .map_err(|e| zstd_error(bytes, what, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.consume(&buf[..n]);
+        len += n as u64;
+    }
+    Ok(Measure {
+        len,
+        md5: hex_bytes(&hasher.compute().0),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Streaming must answer exactly what decompressing answers.
+    ///
+    /// `zstd_measure` exists to save a `Vec<u8>` per chunk, and the only thing
+    /// standing between that and an artifact-visible change is that the two
+    /// paths agree. Measured over the shapes that actually differ: an empty
+    /// frame, a frame whose content length is not in the header, content that
+    /// crosses the 16 KiB read buffer, and a frame that fails part way through.
+    #[test]
+    fn a_streaming_measurement_agrees_with_decompressing_the_same_bytes() {
+        let cases: Vec<Vec<u8>> = vec![
+            zstd::encode_all(b"".as_slice(), 1).expect("empty"),
+            zstd::encode_all(b"x".as_slice(), 1).expect("one byte"),
+            // > 16 KiB, so the loop runs more than once and the buffer boundary
+            // falls in the middle of the hash.
+            zstd::encode_all(vec![0x5a_u8; 100_000].as_slice(), 1).expect("large"),
+            // Two frames back to back: a reader must concatenate, not stop at
+            // the first one.
+            [zstd::encode_all(b"first".as_slice(), 1).unwrap(),
+             zstd::encode_all(b"second".as_slice(), 1).unwrap()].concat(),
+        ];
+        for raw in &cases {
+            let body = zstd_decompress(raw, "x").expect("decodes");
+            let m = zstd_measure(raw, "x").expect("measures");
+            assert_eq!(m.len, body.len() as u64, "length");
+            assert_eq!(m.md5, md5_hex(&body), "digest");
+        }
+
+        // And on failure both refuse, with the same message.
+        let mut truncated = zstd::encode_all(vec![7_u8; 4096].as_slice(), 1).expect("encode");
+        truncated.truncate(truncated.len() / 2);
+        let a = zstd_decompress(&truncated, "blob X");
+        let b = zstd_measure(&truncated, "blob X");
+        assert!(a.is_err(), "a half frame does not decode");
+        assert_eq!(
+            a.unwrap_err(),
+            b.unwrap_err(),
+            "and the two paths name the same failure"
+        );
+
+        // Not a frame at all.
+        let plain = b"just bytes".to_vec();
+        assert_eq!(
+            zstd_decompress(&plain, "blob X").unwrap_err(),
+            zstd_measure(&plain, "blob X").unwrap_err()
+        );
+    }
 
     #[test]
     fn md5_and_sha256_match_the_published_vectors() {

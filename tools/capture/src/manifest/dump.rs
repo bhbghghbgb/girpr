@@ -154,29 +154,35 @@ pub fn write(
 }
 
 /// The whole decoded manifest, as the document schema names it.
+///
+/// **Borrows its entries.** This owned a `Vec<SophonChunkFile>` it cloned out
+/// of the capture only to serialise it once and drop it — a deep copy of the
+/// whole ~23 MB / 113 610-chunk graph, alive at the same moment as the ~27 MB
+/// pretty-printed body and the ~7 MB gzip buffer. Serialisation does not care
+/// whether the struct it walks is owned, so the clone bought nothing.
 #[derive(Debug, Serialize)]
-pub struct FullDecode {
+pub struct FullDecode<'a> {
     /// The bundle schema version.
     pub schema_version: u32,
     /// The tag this decode belongs to.
-    pub tag: String,
+    pub tag: &'a str,
     /// The build it was published under.
-    pub build_id: String,
+    pub build_id: &'a str,
     /// `game`, or an audio code.
-    pub matching_field: String,
+    pub matching_field: &'a str,
     /// Every entry, verbatim from the protobuf.
-    pub entries: Vec<SophonChunkFile>,
+    pub entries: &'a [SophonChunkFile],
 }
 
-impl FullDecode {
+impl<'a> FullDecode<'a> {
     /// Build it from a captured manifest.
-    pub fn from_captured(c: &CapturedManifest) -> Self {
+    pub fn from_captured(c: &'a CapturedManifest) -> Self {
         FullDecode {
             schema_version: crate::SCHEMA_VERSION,
-            tag: c.tag.clone(),
-            build_id: c.build_id.clone(),
-            matching_field: c.matching_field.clone(),
-            entries: c.entries.clone(),
+            tag: &c.tag,
+            build_id: &c.build_id,
+            matching_field: &c.matching_field,
+            entries: &c.entries,
         }
     }
 }
