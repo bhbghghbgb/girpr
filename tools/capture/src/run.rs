@@ -20,7 +20,7 @@ use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
 use crate::hyp::GetBuild;
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
-use crate::report::{OutputFormat, Record};
+use crate::report::{self, OutputFormat, Record};
 use crate::{assemble, blobs, emit, hyp, manifest, select};
 
 // The failure story moved to `crate::failure` so that the modules that own the
@@ -835,24 +835,13 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         "artifact written"
     );
     let documents = written.len();
-    let flat: Vec<&CapturedManifest> = manifests.iter().flatten().collect();
-    // Four sums and a max, in one walk. It was five walks of the same slice.
-    let mut manifest_bytes = 0_u64;
-    let mut manifest_entries = 0_u64;
-    let mut manifest_chunks = 0_u64;
-    let mut max_chunk = 0_u64;
-    for m in &flat {
-        manifest_bytes += m.meta.stored.bytes;
-        manifest_entries += m.meta.decoded.entries;
-        manifest_chunks += m.meta.decoded.total_chunks;
-        max_chunk = max_chunk.max(m.meta.decoded.max_chunk_compressed_bytes);
-    }
+    let manifests_summary = manifest_stats(&manifests);
     tracing::info!(
         dir = %dir.display(),
         records = log.len(),
         documents,
-        manifest_entries,
-        manifest_chunks,
+        manifest_entries = manifests_summary.entries,
+        manifest_chunks = manifests_summary.chunks,
         "manifests written"
     );
 
@@ -860,90 +849,110 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // The diff's numbers are the run's headline result, so they go on the data
     // plane and not only into the stderr narration: this is what a caller reads.
     let pool_stats = &diffs[0].pool;
-    let summary = Record::summary("capture")
-        .set("result", "ok")
-        .set("stage", "m8-artifact")
-        .set("biz", biz.as_str())
-        .set("old_tag", &old_tag)
-        .set("new_tag", &new_tag)
-        .set("package_id", &params.package_id)
-        .set("old_build_id", &versions.old.build_id)
-        .set("new_build_id", &versions.new.build_id)
-        .set("artifact", dir.as_path())
-        .set("api_documents", api_documents)
-        .set("selection_pool", fields.join(","))
-        .set("candidates_scored", pool.len() as u64)
-        .set("captures_admitted", selection.admitted.len() as u64)
-        .set("captures_over_budget", selection.rejected.len() as u64)
-        .set("forced_files_requested", plan.files.len() as u64)
-        .set(
-            "forced_files_skipped",
-            selection.forced_skipped.len() as u64,
-        )
-        .set("chunk_blobs_wanted", wants.len() as u64)
-        .set(
-            "chunk_blobs_stored",
-            index
+    let summary = report::capture_summary(&report::CaptureSummary {
+        result: "ok",
+        biz: biz.as_str(),
+        old_tag: &old_tag,
+        new_tag: &new_tag,
+        package_id: &params.package_id,
+        old_build_id: &versions.old.build_id,
+        new_build_id: &versions.new.build_id,
+        artifact: dir.as_path(),
+        api_documents,
+        selection_pool: &fields.join(","),
+        selection: report::SelectionStats {
+            candidates_scored: pool.len() as u64,
+            captures_admitted: selection.admitted.len() as u64,
+            captures_over_budget: selection.rejected.len() as u64,
+            forced_files_requested: plan.files.len() as u64,
+            forced_files_skipped: selection.forced_skipped.len() as u64,
+            capture_bytes_admitted: selection.bytes_admitted,
+            budget_unlimited: selection.budget.limit().is_none(),
+            budget_limit: selection.budget.limit().unwrap_or(0),
+            classes_satisfied: satisfied(&selection),
+            classes_unmet: selection.unmet().len() as u64,
+        },
+        chunks: report::ChunkStats {
+            wanted: wants.len() as u64,
+            stored: index
                 .blobs
                 .iter()
                 .filter(|b| b.props.stored_path.is_some())
                 .count() as u64,
-        )
-        .set("chunk_bytes_projected", projected)
-        .set(
-            "chunk_bytes_fetched",
-            index.blobs.iter().map(|b| b.props.bytes).sum::<u64>(),
-        )
-        .set("chunk_fetches_failed", fetch_errors.len() as u64)
-        .set("chunk_a6_failing", index.failing().len() as u64)
-        .set("patch_fetch_chunks", index.sets["patch_fetch"].len() as u64)
-        .set("patchmaps_written", assembled_ids.len() as u64)
-        .set("assembly_selfcheck_rows", assembly_rows)
-        .set("assembly_selfcheck_failures", assembly_failures as u64)
-        .set("patch_reuse_chunks", reused_total)
-        .set("patch_fetch_chunks_actually", fetched_total)
-        .set("patch_moved_chunks", moved_total)
-        .set("capture_bytes_admitted", selection.bytes_admitted)
-        .set("budget_unlimited", selection.budget.limit().is_none())
-        .set("budget_limit", selection.budget.limit().unwrap_or(0))
-        .set("classes_satisfied", satisfied(&selection))
-        .set("classes_unmet", selection.unmet().len() as u64)
-        .set("manifests_captured", flat.len() as u64)
-        .set("manifest_bytes", manifest_bytes)
-        .set("manifest_entries", manifest_entries)
-        .set("manifest_chunks", manifest_chunks)
-        .set("max_chunk_compressed_bytes", max_chunk)
-        .set("diff_common", agg.counts.common)
-        .set("diff_identical", agg.counts.identical)
-        .set("diff_changed", agg.counts.changed)
-        .set("diff_added", agg.counts.added)
-        .set("diff_removed", agg.counts.removed)
-        .set("diff_patch_bytes", agg.byte_counts.patch)
-        .set(
-            "reuse_md5_present_in_old",
-            pool_stats.new_chunks_md5_present_in_old_manifest,
-        )
-        .set(
-            "reuse_cross_file_only_chunks",
-            pool_stats.cross_file_only_chunks,
-        )
-        .set(
-            "reuse_cross_file_bytes_forgone",
-            pool_stats.cross_file_only_bytes_forgone,
-        )
-        .set("documents_written", documents as u64)
-        .set("requests", log.len() as u64)
-        .set("bytes_downloaded", log.bytes_in())
-        .set("tags_probed", probe.summary.requested as u64)
-        .set("tags_served", probe.summary.served as u64)
-        .set(
-            "tags_served_outside_diff_tags",
-            probe.summary.not_in_diff_tags_but_served as u64,
-        )
-        .set("legacy_endpoint_majors_behind", legacy_behind)
-        .set("exit_code", ExitCode::Ok.code());
+            bytes_projected: projected,
+            bytes_fetched: index.blobs.iter().map(|b| b.props.bytes).sum::<u64>(),
+            fetches_failed: fetch_errors.len() as u64,
+            a6_failing: index.failing().len() as u64,
+            patch_fetch_chunks: index.sets["patch_fetch"].len() as u64,
+        },
+        assembly: report::AssemblyStats {
+            patchmaps_written: assembled_ids.len() as u64,
+            selfcheck_rows: assembly_rows,
+            selfcheck_failures: assembly_failures as u64,
+            patch_reuse_chunks: reused_total,
+            patch_fetch_chunks: fetched_total,
+            patch_moved_chunks: moved_total,
+        },
+        manifests: manifests_summary,
+        diff: report::DiffStats {
+            common: agg.counts.common,
+            identical: agg.counts.identical,
+            changed: agg.counts.changed,
+            added: agg.counts.added,
+            removed: agg.counts.removed,
+            patch_bytes: agg.byte_counts.patch,
+        },
+        reuse: report::ReuseStats {
+            md5_present_in_old: pool_stats.new_chunks_md5_present_in_old_manifest,
+            cross_file_only_chunks: pool_stats.cross_file_only_chunks,
+            cross_file_bytes_forgone: pool_stats.cross_file_only_bytes_forgone,
+        },
+        http: report::HttpStats {
+            documents_written: documents as u64,
+            requests: log.len() as u64,
+            bytes_downloaded: log.bytes_in(),
+        },
+        probe: report::ProbeStats {
+            probed: probe.summary.requested as u64,
+            served: probe.summary.served as u64,
+            served_outside_diff_tags: probe.summary.not_in_diff_tags_but_served as u64,
+        },
+        legacy_endpoint_majors_behind: legacy_behind,
+        exit_code: ExitCode::Ok.code(),
+    });
 
     Ok((summary, ExitCode::Ok))
+}
+
+/// Five sums, a max and a count over every manifest the run wrote.
+///
+/// Moved out of `capture()` with the rest of the summary. It was a bare loop
+/// between two `tracing::info!` calls, and it is the only place these five
+/// numbers are computed - so a reader tracing `manifest_bytes` back to its
+/// source had to find it in the middle of the orchestrator rather than beside
+/// the key that reports it.
+///
+/// One walk, as before. It was five walks of the same slice when each number had
+/// its own `iter().flatten()` chain, which is what the old comment on the loop
+/// was correcting.
+fn manifest_stats(manifests: &[Vec<CapturedManifest>]) -> report::ManifestStats {
+    let mut stats = report::ManifestStats {
+        captured: 0,
+        bytes: 0,
+        entries: 0,
+        chunks: 0,
+        max_chunk_compressed_bytes: 0,
+    };
+    for m in manifests.iter().flatten() {
+        stats.captured += 1;
+        stats.bytes += m.meta.stored.bytes;
+        stats.entries += m.meta.decoded.entries;
+        stats.chunks += m.meta.decoded.total_chunks;
+        stats.max_chunk_compressed_bytes = stats
+            .max_chunk_compressed_bytes
+            .max(m.meta.decoded.max_chunk_compressed_bytes);
+    }
+    stats
 }
 
 /// The `matching_field`s whose manifests are fetched, `game` first.

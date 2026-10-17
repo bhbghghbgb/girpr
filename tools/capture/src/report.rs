@@ -273,10 +273,39 @@ impl Record {
         self
     }
 
+    /// Append many fields at once, **in the order given**.
+    ///
+    /// The same as a chain of [`Record::set`], and that is the point: it is how
+    /// `capture` builds its 56-key summary. The order is the order a reader sees
+    /// on the line, so taking an ordered iterable rather than a map is
+    /// deliberate - a `BTreeMap` would sort the keys and silently rewrite the
+    /// output.
+    ///
+    /// The alternative was leaving the chain in the orchestrator, where 56 calls
+    /// buried the actual control flow. The key list is still written out once,
+    /// here, where [`Val`] and the rest of the record's vocabulary live.
+    pub fn set_all<I>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = (&'static str, Val)>,
+    {
+        self.fields.extend(fields);
+        self
+    }
+
     /// Look up a field by name, for tests and for callers that want to assert
     /// on the value rather than the rendering.
     pub fn get(&self, key: &str) -> Option<&Val> {
         self.fields.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+    }
+
+    /// Every field name, **in the order they were appended**.
+    ///
+    /// [`Record::get`] answers "what is this field's value"; this answers "what
+    /// fields are on the line, and in what order", which is a different question
+    /// and one a caller parsing the output has to be able to ask. Duplicate
+    /// names appear as many times as they were set - see [`Record::set`].
+    pub fn keys(&self) -> impl Iterator<Item = &'static str> {
+        self.fields.iter().map(|(k, _)| *k)
     }
 
     /// The rendered text line: `SUMMARY event=capture tool=gircap …`.
@@ -417,6 +446,329 @@ fn push_json_value(out: &mut String, v: &Val) {
 /// a worker in later milestones; the lock is held for exactly one line and never
 /// across work.
 static STDOUT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Everything `gircap capture` puts on its data plane.
+///
+/// **The orchestrator's last job, moved here.** `capture()` used to build this
+/// line itself, with 56 chained [`Record::set`] calls between the close-out and
+/// its `Ok((summary, ExitCode::Ok))`. That put the run's entire reporting
+/// contract - every key name, every order - in the middle of the function that
+/// decides what a capture *does*, where a reader looking for either had to find
+/// the other first.
+///
+/// Grouped by what the numbers are about, not by where they came from. The
+/// diff, reuse and manifest groups come from three different walks over three
+/// different collections; putting them together is the point, because a reader
+/// asking "what did this capture measure" should not have to know that.
+pub struct CaptureSummary<'a> {
+    /// `result`, always `"ok"` - a failed run does not reach this.
+    pub result: &'a str,
+    /// `biz` as the flag spelled it.
+    pub biz: &'a str,
+    /// The resolved old tag.
+    pub old_tag: &'a str,
+    /// The resolved new tag.
+    pub new_tag: &'a str,
+    /// The `package_id` the version pair resolved to.
+    pub package_id: &'a str,
+    /// The old side's build id.
+    pub old_build_id: &'a str,
+    /// The new side's build id.
+    pub new_build_id: &'a str,
+    /// The artifact root.
+    pub artifact: &'a std::path::Path,
+    /// How many `api/` documents were written.
+    pub api_documents: u64,
+    /// The `matching_field`s that were scored, joined.
+    pub selection_pool: &'a str,
+    /// Everything about what was admitted and what was refused.
+    pub selection: SelectionStats,
+    /// Everything about chunk blobs.
+    pub chunks: ChunkStats,
+    /// Everything about patchmap assembly.
+    pub assembly: AssemblyStats,
+    /// Everything about the manifests that were written.
+    pub manifests: ManifestStats,
+    /// The headline diff result.
+    pub diff: DiffStats,
+    /// The cross-file reuse measurement.
+    pub reuse: ReuseStats,
+    /// The transport's own totals.
+    pub http: HttpStats,
+    /// The tag probe's totals.
+    pub probe: ProbeStats,
+    /// How many major versions behind the launcher is, or `0` if it answered.
+    pub legacy_endpoint_majors_behind: u64,
+    /// The process exit code.
+    pub exit_code: i32,
+}
+
+/// The selection's own numbers.
+pub struct SelectionStats {
+    /// Candidates the manifests offered.
+    pub candidates_scored: u64,
+    /// Captures the budget funded.
+    pub captures_admitted: u64,
+    /// Captures the budget refused.
+    pub captures_over_budget: u64,
+    /// `--files` paths the run was asked for.
+    pub forced_files_requested: u64,
+    /// Of those, the manifests do not carry.
+    pub forced_files_skipped: u64,
+    /// What admission charged.
+    pub capture_bytes_admitted: u64,
+    /// Whether `--budget` capped the run at all.
+    pub budget_unlimited: bool,
+    /// The cap, or `0` when there was none.
+    pub budget_limit: u64,
+    /// Required classes the selection met.
+    pub classes_satisfied: u64,
+    /// Required classes it did not.
+    pub classes_unmet: u64,
+}
+
+/// The chunk store's numbers.
+pub struct ChunkStats {
+    /// Chunks the tree asked for.
+    pub wanted: u64,
+    /// Of those, stored.
+    pub stored: u64,
+    /// The projected cost of the whole store.
+    pub bytes_projected: u64,
+    /// What the CDN actually sent for it.
+    pub bytes_fetched: u64,
+    /// Fetches that failed.
+    pub fetches_failed: u64,
+    /// Blobs failing A6.
+    pub a6_failing: u64,
+    /// Chunks the `patch_fetch` set names.
+    pub patch_fetch_chunks: u64,
+}
+
+/// The assembly loop's numbers.
+pub struct AssemblyStats {
+    /// Patchmaps written.
+    pub patchmaps_written: u64,
+    /// Selfcheck rows the assembly produced.
+    pub selfcheck_rows: u64,
+    /// Of those, the failures.
+    pub selfcheck_failures: u64,
+    /// Chunks reused from the old side.
+    pub patch_reuse_chunks: u64,
+    /// Chunks actually fetched to build a patchmap.
+    pub patch_fetch_chunks: u64,
+    /// Chunks moved by those patchmaps.
+    pub patch_moved_chunks: u64,
+}
+
+/// The written manifests' numbers, from one walk over all of them.
+pub struct ManifestStats {
+    /// How many manifests.
+    pub captured: u64,
+    /// Their stored bytes, summed.
+    pub bytes: u64,
+    /// Their entry counts, summed.
+    pub entries: u64,
+    /// Their chunk counts, summed.
+    pub chunks: u64,
+    /// The largest compressed chunk in any of them.
+    pub max_chunk_compressed_bytes: u64,
+}
+
+/// The diff's headline result.
+pub struct DiffStats {
+    /// Paths in both.
+    pub common: u64,
+    /// Of those, unchanged.
+    pub identical: u64,
+    /// Of those, changed.
+    pub changed: u64,
+    /// Only in the new.
+    pub added: u64,
+    /// Only in the old.
+    pub removed: u64,
+    /// Patch bytes across the pair.
+    pub patch_bytes: u64,
+}
+
+/// Cross-file reuse, from the diff's pool measurement.
+pub struct ReuseStats {
+    /// New chunks with an MD5 present somewhere in the old manifest.
+    pub md5_present_in_old: u64,
+    /// New chunks absent from their own old file.
+    pub cross_file_only_chunks: u64,
+    /// The bytes those would have saved.
+    pub cross_file_bytes_forgone: u64,
+}
+
+/// What the transport did.
+pub struct HttpStats {
+    /// Documents written.
+    pub documents_written: u64,
+    /// Requests issued.
+    pub requests: u64,
+    /// Bytes received.
+    pub bytes_downloaded: u64,
+}
+
+/// What the tag probe found.
+pub struct ProbeStats {
+    /// Tags the probe asked about.
+    pub probed: u64,
+    /// Tags the API served.
+    pub served: u64,
+    /// Of those, served despite not being in `diff_tags`.
+    pub served_outside_diff_tags: u64,
+}
+
+/// Build the `capture` summary record.
+///
+/// **The key list is the contract.** `girpr` and anything else reading this
+/// line parse these names in this order; a rename or a reorder is a breaking
+/// change, not a refactor. That is why this is one function with a flat,
+/// commented key list rather than something derived - a derived key set would be
+/// tidier right up until the day it silently renamed a field a caller depended
+/// on.
+///
+/// The order below is the order the numbers were historically appended in, not a
+/// grouping: it is preserved so that a diff of two summaries over the same run
+/// shows only what actually changed.
+pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
+    Record::summary("capture").set_all([
+        ("result", Val::from(s.result)),
+        ("stage", Val::from("m8-artifact")),
+        ("biz", Val::from(s.biz)),
+        ("old_tag", Val::from(s.old_tag)),
+        ("new_tag", Val::from(s.new_tag)),
+        ("package_id", Val::from(s.package_id)),
+        ("old_build_id", Val::from(s.old_build_id)),
+        ("new_build_id", Val::from(s.new_build_id)),
+        ("artifact", Val::from(s.artifact)),
+        ("api_documents", Val::from(s.api_documents)),
+        ("selection_pool", Val::from(s.selection_pool)),
+        // Selection.
+        (
+            "candidates_scored",
+            Val::from(s.selection.candidates_scored),
+        ),
+        (
+            "captures_admitted",
+            Val::from(s.selection.captures_admitted),
+        ),
+        (
+            "captures_over_budget",
+            Val::from(s.selection.captures_over_budget),
+        ),
+        (
+            "forced_files_requested",
+            Val::from(s.selection.forced_files_requested),
+        ),
+        (
+            "forced_files_skipped",
+            Val::from(s.selection.forced_files_skipped),
+        ),
+        // Chunks.
+        ("chunk_blobs_wanted", Val::from(s.chunks.wanted)),
+        ("chunk_blobs_stored", Val::from(s.chunks.stored)),
+        ("chunk_bytes_projected", Val::from(s.chunks.bytes_projected)),
+        ("chunk_bytes_fetched", Val::from(s.chunks.bytes_fetched)),
+        ("chunk_fetches_failed", Val::from(s.chunks.fetches_failed)),
+        ("chunk_a6_failing", Val::from(s.chunks.a6_failing)),
+        ("patch_fetch_chunks", Val::from(s.chunks.patch_fetch_chunks)),
+        // Assembly.
+        (
+            "patchmaps_written",
+            Val::from(s.assembly.patchmaps_written),
+        ),
+        (
+            "assembly_selfcheck_rows",
+            Val::from(s.assembly.selfcheck_rows),
+        ),
+        (
+            "assembly_selfcheck_failures",
+            Val::from(s.assembly.selfcheck_failures),
+        ),
+        (
+            "patch_reuse_chunks",
+            Val::from(s.assembly.patch_reuse_chunks),
+        ),
+        (
+            "patch_fetch_chunks_actually",
+            Val::from(s.assembly.patch_fetch_chunks),
+        ),
+        (
+            "patch_moved_chunks",
+            Val::from(s.assembly.patch_moved_chunks),
+        ),
+        // Selection, continued. These were interleaved with the chunk block in
+        // the original chain, and the order is preserved.
+        (
+            "capture_bytes_admitted",
+            Val::from(s.selection.capture_bytes_admitted),
+        ),
+        (
+            "budget_unlimited",
+            Val::from(s.selection.budget_unlimited),
+        ),
+        ("budget_limit", Val::from(s.selection.budget_limit)),
+        (
+            "classes_satisfied",
+            Val::from(s.selection.classes_satisfied),
+        ),
+        ("classes_unmet", Val::from(s.selection.classes_unmet)),
+        // Manifests.
+        ("manifests_captured", Val::from(s.manifests.captured)),
+        ("manifest_bytes", Val::from(s.manifests.bytes)),
+        ("manifest_entries", Val::from(s.manifests.entries)),
+        ("manifest_chunks", Val::from(s.manifests.chunks)),
+        (
+            "max_chunk_compressed_bytes",
+            Val::from(s.manifests.max_chunk_compressed_bytes),
+        ),
+        // The diff: the run's headline result.
+        ("diff_common", Val::from(s.diff.common)),
+        ("diff_identical", Val::from(s.diff.identical)),
+        ("diff_changed", Val::from(s.diff.changed)),
+        ("diff_added", Val::from(s.diff.added)),
+        ("diff_removed", Val::from(s.diff.removed)),
+        ("diff_patch_bytes", Val::from(s.diff.patch_bytes)),
+        // Reuse.
+        (
+            "reuse_md5_present_in_old",
+            Val::from(s.reuse.md5_present_in_old),
+        ),
+        (
+            "reuse_cross_file_only_chunks",
+            Val::from(s.reuse.cross_file_only_chunks),
+        ),
+        (
+            "reuse_cross_file_bytes_forgone",
+            Val::from(s.reuse.cross_file_bytes_forgone),
+        ),
+        // Close-out and transport.
+        (
+            "documents_written",
+            Val::from(s.http.documents_written),
+        ),
+        ("requests", Val::from(s.http.requests)),
+        (
+            "bytes_downloaded",
+            Val::from(s.http.bytes_downloaded),
+        ),
+        // The tag probe.
+        ("tags_probed", Val::from(s.probe.probed)),
+        ("tags_served", Val::from(s.probe.served)),
+        (
+            "tags_served_outside_diff_tags",
+            Val::from(s.probe.served_outside_diff_tags),
+        ),
+        (
+            "legacy_endpoint_majors_behind",
+            Val::from(s.legacy_endpoint_majors_behind),
+        ),
+        ("exit_code", Val::from(s.exit_code)),
+    ])
+}
 
 /// The one place in the crate that writes to stdout.
 ///
@@ -756,5 +1108,223 @@ mod tests {
         assert_eq!("json".parse(), Ok(OutputFormat::Json));
         assert!("xml".parse::<OutputFormat>().is_err());
         assert_eq!(OutputFormat::default(), OutputFormat::Text);
+    }
+
+    /// A `CaptureSummary` with every number zero and every string empty.
+    ///
+    /// The values do not matter here - this exists to make the *shape*
+    /// observable, so the key test below reads the same regardless of what a
+    /// run measured.
+    fn zeroed() -> CaptureSummary<'static> {
+        CaptureSummary {
+            result: "",
+            biz: "",
+            old_tag: "",
+            new_tag: "",
+            package_id: "",
+            old_build_id: "",
+            new_build_id: "",
+            artifact: std::path::Path::new(""),
+            api_documents: 0,
+            selection_pool: "",
+            selection: SelectionStats {
+                candidates_scored: 0,
+                captures_admitted: 0,
+                captures_over_budget: 0,
+                forced_files_requested: 0,
+                forced_files_skipped: 0,
+                capture_bytes_admitted: 0,
+                budget_unlimited: false,
+                budget_limit: 0,
+                classes_satisfied: 0,
+                classes_unmet: 0,
+            },
+            chunks: ChunkStats {
+                wanted: 0,
+                stored: 0,
+                bytes_projected: 0,
+                bytes_fetched: 0,
+                fetches_failed: 0,
+                a6_failing: 0,
+                patch_fetch_chunks: 0,
+            },
+            assembly: AssemblyStats {
+                patchmaps_written: 0,
+                selfcheck_rows: 0,
+                selfcheck_failures: 0,
+                patch_reuse_chunks: 0,
+                patch_fetch_chunks: 0,
+                patch_moved_chunks: 0,
+            },
+            manifests: ManifestStats {
+                captured: 0,
+                bytes: 0,
+                entries: 0,
+                chunks: 0,
+                max_chunk_compressed_bytes: 0,
+            },
+            diff: DiffStats {
+                common: 0,
+                identical: 0,
+                changed: 0,
+                added: 0,
+                removed: 0,
+                patch_bytes: 0,
+            },
+            reuse: ReuseStats {
+                md5_present_in_old: 0,
+                cross_file_only_chunks: 0,
+                cross_file_bytes_forgone: 0,
+            },
+            http: HttpStats {
+                documents_written: 0,
+                requests: 0,
+                bytes_downloaded: 0,
+            },
+            probe: ProbeStats {
+                probed: 0,
+                served: 0,
+                served_outside_diff_tags: 0,
+            },
+            legacy_endpoint_majors_behind: 0,
+            exit_code: 0,
+        }
+    }
+
+    #[test]
+    fn the_capture_summary_key_list_is_the_contract_and_does_not_drift() {
+        // `girpr` and anything else reading this line parse these names in this
+        // order. Moving the builder out of `capture()` is only safe if the line
+        // it produces is the line that was there before, so the key list is
+        // pinned here rather than left to the builder's own doc comment.
+        //
+        // The first three are [`Record::summary`]'s own preamble, not this
+        // function's - they are listed so that a change to *them* also fails
+        // here, since a reader sees one line and not two sources.
+        let got: Vec<&str> = capture_summary(&zeroed()).keys().collect();
+        let expected: Vec<&str> = vec![
+            "event",
+            "tool",
+            "version",
+            "result",
+            "stage",
+            "biz",
+            "old_tag",
+            "new_tag",
+            "package_id",
+            "old_build_id",
+            "new_build_id",
+            "artifact",
+            "api_documents",
+            "selection_pool",
+            "candidates_scored",
+            "captures_admitted",
+            "captures_over_budget",
+            "forced_files_requested",
+            "forced_files_skipped",
+            "chunk_blobs_wanted",
+            "chunk_blobs_stored",
+            "chunk_bytes_projected",
+            "chunk_bytes_fetched",
+            "chunk_fetches_failed",
+            "chunk_a6_failing",
+            "patch_fetch_chunks",
+            "patchmaps_written",
+            "assembly_selfcheck_rows",
+            "assembly_selfcheck_failures",
+            "patch_reuse_chunks",
+            "patch_fetch_chunks_actually",
+            "patch_moved_chunks",
+            "capture_bytes_admitted",
+            "budget_unlimited",
+            "budget_limit",
+            "classes_satisfied",
+            "classes_unmet",
+            "manifests_captured",
+            "manifest_bytes",
+            "manifest_entries",
+            "manifest_chunks",
+            "max_chunk_compressed_bytes",
+            "diff_common",
+            "diff_identical",
+            "diff_changed",
+            "diff_added",
+            "diff_removed",
+            "diff_patch_bytes",
+            "reuse_md5_present_in_old",
+            "reuse_cross_file_only_chunks",
+            "reuse_cross_file_bytes_forgone",
+            "documents_written",
+            "requests",
+            "bytes_downloaded",
+            "tags_probed",
+            "tags_served",
+            "tags_served_outside_diff_tags",
+            "legacy_endpoint_majors_behind",
+            "exit_code",
+        ];
+        if got != expected {
+            // Report the first divergence rather than two 56-element dumps.
+            let first = got
+                .iter()
+                .zip(expected.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(got.len().min(expected.len()));
+            panic!(
+                "capture summary key list changed at index {first}:\n  \
+                 now:  {:?}\n  was:  {:?}\n  ({} keys now, {} before)",
+                got.get(first),
+                expected.get(first),
+                got.len(),
+                expected.len()
+            );
+        }
+    }
+
+    #[test]
+    fn each_summary_group_reports_under_its_own_name_and_not_its_struct_name() {
+        // The trap in grouping the input: `assembly.selfcheck_rows` reads
+        // naturally as `assembly_selfcheck_rows`, and it does - but
+        // `chunks.patch_fetch_chunks` and `assembly.patch_fetch_chunks` are two
+        // *different* numbers under two different names, because they were when
+        // they were written by hand. Renaming either to make the grouping tidier
+        // would silently repoint a caller at the other one.
+        let r = capture_summary(&zeroed());
+        assert_eq!(r.get("patch_fetch_chunks"), Some(&Val::Int(0)));
+        assert_eq!(r.get("patch_fetch_chunks_actually"), Some(&Val::Int(0)));
+        assert_eq!(r.get("assembly_selfcheck_rows"), Some(&Val::Int(0)));
+        assert_eq!(r.get("assembly_selfcheck_failures"), Some(&Val::Int(0)));
+        // And neither is the bare struct-field spelling.
+        assert_eq!(r.get("patch_fetch"), None);
+        assert_eq!(r.get("selfcheck_rows"), None);
+    }
+
+    #[test]
+    fn set_all_appends_in_order_rather_than_sorting() {
+        // `set_all` takes an ordered iterable on purpose. Had it taken a map, a
+        // `BTreeMap` would have silently rewritten the reader-visible order -
+        // which is the one thing `set_all` exists to preserve.
+        let r = Record::summary("x")
+            .set_all([("z", Val::Int(1)), ("a", Val::Int(2)), ("m", Val::Int(3))]);
+        // `summary`'s own preamble comes first; the point is that `z, a, m`
+        // survive in that order rather than being sorted to `a, m, z`.
+        assert_eq!(
+            r.keys().collect::<Vec<_>>(),
+            vec!["event", "tool", "version", "z", "a", "m"]
+        );
+        assert!(r.to_text_line().ends_with("z=1 a=2 m=3"));
+    }
+
+    #[test]
+    fn set_all_appends_rather_than_replacing_like_set_does_not() {
+        // Duplicate names are kept, exactly as `set` keeps them. If `set_all`
+        // were implemented as a map insert, a summary would silently lose a
+        // field instead of showing two facts under one name.
+        let r = Record::summary("x").set_all([("n", Val::Int(1)), ("n", Val::Int(2))]);
+        assert_eq!(
+            r.keys().collect::<Vec<_>>(),
+            vec!["event", "tool", "version", "n", "n"]
+        );
+        assert!(r.to_text_line().ends_with("n=1 n=2"));
     }
 }
