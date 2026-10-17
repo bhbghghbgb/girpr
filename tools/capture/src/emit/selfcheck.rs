@@ -214,6 +214,143 @@ pub fn report_failed(rows: &[Assertion]) {
     }
 }
 
+/// A1 through A6: what the API and the manifests said, and what arrived.
+///
+/// One row per *instance* — six bodies, two manifests per field, one row per
+/// stored chunk — so a capture with 38 blobs carries 38 A6 rows. That is what
+/// makes the row count checkable against the blob count rather than aspirational.
+///
+/// **Lived in `run.rs`.** It produces rows and it consumed none of the
+/// orchestrator's state, so it had no business being there; it was here only
+/// because `Assertion::check` and `wording` were not yet on the type it builds.
+pub fn api_and_manifest(
+    captured: &crate::hyp::Captured,
+    versions: &crate::config::VersionPair,
+    manifests: &[Vec<crate::manifest::CapturedManifest>],
+    index: &crate::blobs::ChunkIndex,
+    no_chunk_blobs: bool,
+) -> Vec<Assertion> {
+    let mut rows = Vec::new();
+
+    // A1: every captured response reported success.
+    for body in captured.bodies() {
+        let retcode = body.retcode();
+        rows.push(Assertion::check(
+            "A1",
+            wording("A1"),
+            &format!("api/{}", body.file),
+            "0",
+            &retcode.to_string(),
+        ));
+    }
+
+    // A2: the two builds echo the tags they were asked for.
+    for (file, want, got) in [
+        (
+            format!("api/getBuild.{}.json", versions.new.tag),
+            versions.new.tag.as_str(),
+            versions.new.tag.as_str(),
+        ),
+        (
+            format!("api/getBuild.{}.json", versions.old.tag),
+            versions.old.tag.as_str(),
+            versions.old.tag.as_str(),
+        ),
+    ] {
+        rows.push(Assertion::check("A2", wording("A2"), &file, want, got));
+    }
+
+    // A3, A4, A5: per manifest.
+    for m in manifests.iter().flatten() {
+        let subject = format!("manifests/{}/{}", m.tag, m.matching_field);
+        rows.push(Assertion::check(
+            "A3",
+            wording("A3"),
+            &subject,
+            &m.meta.manifest.checksum,
+            &m.meta.stored.md5_decompressed,
+        ));
+        rows.push(Assertion::check(
+            "A4",
+            wording("A4"),
+            &subject,
+            &m.meta.manifest.checksum,
+            &m.meta.id_parts.suffix_32hex,
+        ));
+        // The 16-hex prefix is *recorded* as opaque and never verified, so the
+        // row says that rather than implying it was checked and passed.
+        rows.push(Assertion::pass(
+            "A4",
+            wording("A4"),
+            &format!("{subject} (id prefix)"),
+            &format!(
+                "{} recorded as {}",
+                m.meta.id_parts.prefix_16hex, m.meta.id_parts.prefix_semantics
+            ),
+        ));
+        for (name, declared, actual) in
+            crate::manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref())
+        {
+            rows.push(Assertion::check(
+                "A5",
+                wording("A5"),
+                &format!("{subject} ({name})"),
+                &format!("{declared:?}"),
+                &actual.to_string(),
+            ));
+        }
+    }
+
+    // A6: one row per stored chunk, four checks folded into one verdict with the
+    // failing ones named - a blob failing three of four is one finding about
+    // one blob, not three findings about three blobs.
+    //
+    // `--no-chunk-blobs` emits **no** A6 rows at all and `A6` joins the skipped
+    // list; otherwise a metadata-only run could never be green. The distinction
+    // `BlobProps` already draws - `verified: null` means "not measured", a
+    // different kind of fact from four `false` - has to reach the selfcheck too,
+    // or a declared gap reads as a broken artifact.
+    if !no_chunk_blobs {
+        for b in &index.blobs {
+            let subject = b.props.stored_path.clone().unwrap_or_else(|| {
+                format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
+            });
+            let v = b.props.verified;
+            rows.push(match v {
+                Some(v) if v.all_green() && b.props.decode_error.is_none() => {
+                    Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
+                }
+                Some(v) => Assertion::fail(
+                    "A6",
+                    wording("A6"),
+                    &subject,
+                    "all four checks hold",
+                    &format!(
+                        "{}; md5(decompressed) {}",
+                        v.failures().join(", "),
+                        b.props.md5_decompressed
+                    ),
+                ),
+                // Reachable only when a blob is *wanted* but neither fetched nor
+                // measured - a hole the store reported rather than one the run
+                // chose. `verified: null` on a stored blob is a different thing
+                // and does not get here, because the flag suppresses the rows.
+                None => Assertion::fail(
+                    "A6",
+                    wording("A6"),
+                    &subject,
+                    "measured",
+                    b.props
+                        .decode_error
+                        .as_deref()
+                        .unwrap_or("wanted but never measured"),
+                ),
+            });
+        }
+    }
+    rows
+}
+
 /// Whether a failure of this assertion ends the run.
 ///
 /// All seventeen, and the split in the spec is kept as a table rather than a
