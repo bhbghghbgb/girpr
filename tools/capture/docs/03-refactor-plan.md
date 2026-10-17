@@ -761,6 +761,59 @@ is invisible to it by construction. `capture_layout` covers the one field this
 refactor touched, but that is a per-field gate and nothing generalises it to the
 other fields, or to `MANIFEST.json` and `README.md`.
 
+### The re-capture band 3 owed
+
+§6's preamble says these items change what a **new** capture writes and that "a
+re-capture is part of the work". `7771323` is the one that moved a *document's
+content* rather than only a digest, so it is the one that made the stored bundles
+stop representing the tool. Done: **`20261017T123335Z`** is now the current
+reference, and all three bundles verify.
+
+| bundle | `stored_as` marked | status |
+|---|---|---|
+| `20261016T002107Z` | 42 | valid, historical |
+| `20261017T000730Z` | 42 | valid, historical |
+| **`20261017T123335Z`** | **48** (6 `api/`, 38 `chunk/`, 4 `manifest/`) | **current reference** |
+
+All three: `verify` exit 0, `checks_total=90 checks_passed=90 findings=0`, and
+`list --root artifacts` reports `bundles=3 bundles_passing=3`. The two older
+bundles are *kept*, not deleted: they verify because their digests are
+self-consistent, which is exactly why nothing noticed they had drifted, and
+`SCHEMA_VERSION` stays at `1` because every change was additive.
+
+Against `20261017T000730Z` the new capture is **91 of 97 byte-identical**, with
+only the six known-volatile documents differing — and every blob and every
+assembled file identical, which is the part that has to hold:
+
+    game/ 9/9   expected/ 7/7   patchmaps/ 8/8   chunks/ 39/39
+    diff/ 5/5   manifests/ 16/16
+
+`api/` is 7 of 9: the two that move are `requests.ndjson` and
+`error_shapes.json`, both volatile for the recorded reasons.
+
+**`artifacts/` is gitignored** (`.gitignore:3`), so promoting a bundle is a
+filesystem action and adds nothing to a commit. A reviewer sees this only as a
+diff to the numbers in this section.
+
+### One trap worth writing down
+
+PowerShell's `Copy-Item` **preserves `LastWriteTime`**. Restoring a mutated file
+with it therefore leaves the source file *older* than the binary cargo last built
+from the mutation, cargo considers the target fresh, and `cargo build --release`
+reports `Finished in 0.50s` without compiling anything.
+
+That happened here, and the symptom was a capture that looked fine — exit 0, 116
+selfcheck rows passing, `verify` 90/90 — while carrying **0** `api/` marks
+instead of 6. Every digest was correct, because the mutant was in
+`emit::write_api`, not in anything `verify` re-derives. Only the field-level
+comparison caught it.
+
+The lesson is the same one as the §5.5 row 8 gate: **a mutation check that does
+not confirm the binary was rebuilt proves nothing.** After restoring a file from
+a backup, force the rebuild — `(Get-Item f.rs).LastWriteTime = Get-Date` — or
+delete the binary. And when a capture's *content* disagrees with what the source
+says it should be, rebuild before investigating anything else.
+
 | item | where | change |
 |---|---|---|
 | `bytes_in` is **0 for every non-2xx** | `http/mod.rs:794-806` | the record is built, then `resp` is dropped **without its body being read** (`:808`; the read is on the success path at `:810`). A CDN 429/503 with a 4 KB envelope is transferred and counted as 0. The module doc (`http/mod.rs:20`) sells `bytes_in` as "the only way to price a manifest without re-downloading it", and it under-reports exactly the retried requests that cost the most. Well-formed runs are unaffected → band 2. *(The one-pass digest work in §5.4 pairs with this: hash the error body too.)* |
