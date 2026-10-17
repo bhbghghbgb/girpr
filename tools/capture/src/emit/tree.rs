@@ -78,8 +78,8 @@ impl Tree {
 
 /// Write `api/`, the manifest archives, `diff/` and `diff/candidates.json`.
 pub fn write(i: TreeInput<'_>) -> Result<Tree, Failure> {
-    let mut written =
-        super::write_api(i.dir, i.captured, i.probe, i.error_shapes).map_err(|e| write_err(i.dir, e))?;
+    let mut written = super::write_api(i.dir, i.captured, i.probe, i.error_shapes, i.log)
+        .map_err(|e| write_err(i.dir, e))?;
     // Counted from what the writer returned, never restated: a hand-written
     // count goes stale silently the moment a document is added, and nothing
     // fails when it does.

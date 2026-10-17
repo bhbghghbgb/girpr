@@ -83,7 +83,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // carries the `package_id` every `getBuild` URL is built from, so a caller
     // that fetched them out of order would request a URL with no package in it.
     let client = hyp::HypClient::new(endpoints.clone(), biz, &fetcher);
-    let captured = client
+    let mut captured = client
         .capture_all(plan.new_selector(), plan.old_selector(), plan.jobs)
         .await
         .map_err(|e| apierr("metadata capture", &e))?;
@@ -94,6 +94,15 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     captured
         .validate()
         .map_err(|e| assertion("validate the capture", &e))?;
+
+    // Each body now knows which request produced it, so that `emit::write_api`
+    // can mark that request's row in `requests.ndjson` with the path it wrote.
+    // Until this ran, `seq` was `0` on all six and `set_stored_as(0, ..)` found
+    // no row — so every `api` row recorded a null `stored_as` for a body that
+    // was on disk. Cheap here because the log is already in hand; it cannot be
+    // done later, because the log is written to `api/requests.ndjson` before the
+    // close-out and nothing rewrites it.
+    hyp::attach_seq(&log, &mut captured.bodies_mut());
 
     let versions = &captured.versions;
     let params = captured

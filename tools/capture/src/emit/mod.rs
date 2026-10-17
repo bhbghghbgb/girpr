@@ -50,16 +50,32 @@ pub fn write_requests_log(root: &Path, log: &RequestLog) -> std::io::Result<usiz
 /// it against a fresh request. `tag_probe.json` and `error_shapes.json` are the
 /// two generated documents: they are this tool's own measurements, not the API's
 /// words.
+/// Write the six `api/` bodies, the tag probe and the error shapes.
+///
+/// **`log` is what fills `stored_as` on the six bodies' rows.** Each body knows
+/// its request's sequence number (filled in by [`hyp::attach_seq`]), and the log
+/// resolves that number to the row it wrote. Without it the bundle records a
+/// null `stored_as` for six files that are demonstrably on disk — a reader
+/// asking "do I have this body" has to go and look.
+///
+/// The probe and shape documents are written here too, and are deliberately
+/// **not** marked. They come from the tag probe and the negative probes, whose
+/// rows are a different set of requests, and a null `stored_as` on a probe row
+/// is the honest answer: the probe ran, and its answer is a summary rather than
+/// a single stored body.
 pub fn write_api(
     root: &Path,
     captured: &Captured,
     probe: &TagProbe,
     shapes: &ErrorShapes,
+    log: &RequestLog,
 ) -> std::io::Result<Vec<String>> {
     let mut written = Vec::with_capacity(8);
     for body in captured.bodies() {
-        write_bytes(root, &format!("api/{}", body.file), &body.bytes)?;
-        written.push(format!("api/{}", body.file));
+        let rel = format!("api/{}", body.file);
+        write_bytes(root, &rel, &body.bytes)?;
+        log.set_stored_as(body.seq, &rel);
+        written.push(rel);
     }
     let probe_json = hyp::render_json(probe).map_err(std::io::Error::other)?;
     write_newline_doc(root, "api/tag_probe.json", probe_json.as_bytes())?;
@@ -396,7 +412,7 @@ mod tests {
     fn the_eight_api_documents_are_written_byte_exact() {
         let dir = std::env::temp_dir().join(format!("gircap-api-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let written = write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
 
         assert_eq!(
             written,
@@ -429,7 +445,7 @@ mod tests {
     fn the_error_shapes_document_is_returned_so_it_reaches_files_and_checksums() {
         let dir = std::env::temp_dir().join(format!("gircap-api-shapes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let written = write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         assert!(
             written.contains(&"api/error_shapes.json".to_string()),
             "not in the returned list, so it would not be checksummed: {written:?}"
@@ -441,7 +457,7 @@ mod tests {
     fn the_generated_probe_is_pretty_printed_and_valid_json() {
         let dir = std::env::temp_dir().join(format!("gircap-api-probe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/tag_probe.json")).unwrap();
         assert!(text.contains('\n'), "a document is not one long line");
         assert!(text.ends_with('\n'), "a document ends with a newline");
@@ -459,7 +475,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("gircap-api-shapes-json-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        write_api(&dir, &captured(), &probe(), &shapes()).unwrap();
+        write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/error_shapes.json")).unwrap();
         assert!(text.ends_with('\n'), "a document ends with a newline");
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();

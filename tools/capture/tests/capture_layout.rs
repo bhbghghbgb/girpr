@@ -902,6 +902,84 @@ fn requiring_an_unavailable_class_is_exit_four() {
     assert!(detail.contains("full_reuse_reordered"), "{detail}");
 }
 
+/// The six `api` rows in `requests.ndjson` carry the path their body was
+/// written to, and nothing else is marked.
+///
+/// **§6.1, verified defect #2.** All six `api` rows recorded a null `stored_as`
+/// for a body that was sitting on disk, while `chunk` was 38/38 and `manifest`
+/// 4/4. The cause was `CapturedBody::seq` hardcoded to `0` with the comment
+/// "filled in by the caller", and the only thing that could fill it in —
+/// `hyp::attach_seq` — had no production caller. `set_stored_as(0, ..)` found no
+/// row and recorded nothing.
+///
+/// Asserted as a set equality rather than by sequence number or URL shape,
+/// because both of those are incidental: the property that matters is that the
+/// marked rows are **exactly** the bodies on disk. The tag probe and the error
+/// shapes are written to `api/` too and are correctly left unmarked — they come
+/// from different requests, and their answer is a summary rather than a stored
+/// body — so counting files would be counting the wrong thing.
+#[test]
+fn the_six_api_rows_record_where_their_body_was_written() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("stored-as");
+    let r = capture(&mock, &scratch, &[]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("requests.ndjson");
+    let rows: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one json per line"))
+        .collect();
+
+    let mut marked: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r["stored_as"].as_str())
+        .filter(|p| p.starts_with("api/"))
+        .collect();
+    marked.sort_unstable();
+
+    // The bodies on disk, minus the two documents that are not bodies.
+    let mut on_disk: Vec<String> = std::fs::read_dir(bundle.join("api"))
+        .expect("api/")
+        .flatten()
+        .map(|e| format!("api/{}", e.file_name().to_string_lossy()))
+        .filter(|p| p.ends_with(".json"))
+        .filter(|p| {
+            !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json")
+        })
+        .collect();
+    on_disk.sort();
+
+    assert_eq!(
+        marked,
+        on_disk,
+        "the marked api rows must be exactly the bodies on disk, and each must exist"
+    );
+    assert_eq!(
+        marked.len(),
+        6,
+        "six metadata bodies are fetched; the count is the claim: {marked:?}"
+    );
+
+    // And the two summary documents stayed unmarked, which is the half that
+    // stops a later edit from marking everything under `api/`.
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    for row in &rows {
+        if let Some(p) = row["stored_as"].as_str() {
+            *counts.entry(p).or_default() += 1;
+        }
+    }
+    for (p, n) in &counts {
+        assert_eq!(*n, 1, "each stored path is recorded once, not per request: {p}");
+    }
+    assert!(
+        !marked.iter().any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
+        "a probe row is not a stored body: {marked:?}"
+    );
+}
+
 /// The launcher metadata is not a chunk, so `--no-chunk-blobs` still writes it.
 ///
 /// `emit::fixture::build`'s prelude call carries a long comment about a bug
