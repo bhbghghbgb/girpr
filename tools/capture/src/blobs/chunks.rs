@@ -494,6 +494,34 @@ mod tests {
         }
     }
 
+    /// §5.5 row 3: one `Want` per chunk id, and the store's tmp-file naming
+    /// assumes it.
+    ///
+    /// The `HoYoChannel.dll` fixture is the right one to assert it on: three old
+    /// ids, two new-only and one **shared between the two builds**, so a dedup
+    /// that stopped working would produce a duplicate id here rather than only in
+    /// a case nobody would think to test.
+    #[test]
+    fn every_want_carries_its_own_chunk_id() {
+        let wants = wants(&[hoyo()]);
+        let ids: Vec<&str> = wants.iter().map(|w| w.chunk.id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "wants() must return one Want per chunk id; got {} wants over {} ids: {ids:?}",
+            ids.len(),
+            sorted.len(),
+        );
+        assert_eq!(
+            ids.len(),
+            5,
+            "the fixture must produce the five distinct ids it is documented to, \
+             or this test is not about the case it claims"
+        );
+    }
     // ---------------------------------------------------------------- sets
 
     #[test]

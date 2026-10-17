@@ -340,7 +340,7 @@ impl Store {
                 .sources
                 .url(&src.tag, &want.chunk.id)
                 .map_err(|e| e.to_string())?;
-            match self_.stream_from(&fetcher, &url, &want).await {
+            match self_.stream_from(&fetcher, &url, &want, slot).await {
                 Ok((mut props, rel, seq)) => {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
@@ -420,10 +420,11 @@ impl Store {
         fetcher: &Fetcher,
         url: &str,
         want: &Want,
+        slot: usize,
     ) -> Result<(BlobProps, String, u64), String> {
         let id = want.chunk.id.clone();
         let rel = BlobProps::stored_path_for(&id);
-        let (final_path, tmp_path) = self.paths_for(&rel);
+        let (final_path, tmp_path) = self.paths_for(&rel, slot);
         self.ensure_blob_dir(&final_path)?;
         let chunk = want.chunk.clone();
 
@@ -475,11 +476,26 @@ impl Store {
     /// `renaming_a_blob_over_an_existing_one_replaces_it` in this module's tests.
     /// `std::fs::rename` replaces. Had it been believed, the "fix" would have been
     /// to delete the atomic step this function exists to provide.
-    fn paths_for(&self, rel: &str) -> (PathBuf, PathBuf) {
+    ///
+    /// **The tmp name carries the slot, not just the chunk id.** §5.5 row 3:
+    /// derived from the chunk id alone, two tasks that wanted the *same* id would
+    /// write one file interleaved and the first `rename` would publish a
+    /// half-written blob — silent corruption, with every digest in
+    /// `chunks/index.json` quietly describing the wrong bytes.
+    ///
+    /// Those two tasks cannot exist today: `chunks::wants` keys a `BTreeMap` on
+    /// `chunk.id`, so ids are unique by construction, and
+    /// `wants_have_unique_ids` is what keeps that true rather than merely
+    /// believed. The slot suffix is because that invariant lives in a *different
+    /// module* from the code that depends on it — so a change to the planner could
+    /// break the store silently, and this makes the store's correctness its own
+    /// property rather than an import. It costs nothing: the slot is already
+    /// threaded through `fill` → `one` to place the result.
+    fn paths_for(&self, rel: &str, slot: usize) -> (PathBuf, PathBuf) {
         let final_path = self.root.join(rel);
         let dir = final_path.parent().unwrap_or(&self.root).to_path_buf();
         let tmp = dir.join(format!(
-            ".{}.tmp",
+            ".{}.{slot}.tmp",
             final_path.file_name().unwrap_or_default().to_string_lossy()
         ));
         (final_path, tmp)
@@ -649,6 +665,43 @@ mod tests {
             !tmp.exists(),
             "the tmp file must be gone after the rename publishes it"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_wants_for_one_chunk_id_would_not_share_a_temp_file() {
+        // **§5.5 row 3, the store half.** The tmp path used to be derived from the
+        // chunk id alone, so two tasks wanting the same id would write one file
+        // interleaved and the first `rename` would publish a **half-written
+        // blob** — silent corruption, with every digest in `chunks/index.json`
+        // quietly describing the wrong bytes and nothing failing.
+        //
+        // Fed the *same* id twice on purpose, because that is the only input that
+        // distinguishes a slot-suffixed name from an id-derived one.
+        let dir = scratch("tmp-per-slot");
+        let store = Store::new(&dir, Sources::from_pairs([]));
+        let (a, at) = store.paths_for("chunks/blobs/dead_beef.zst", 0);
+        let (b, bt) = store.paths_for("chunks/blobs/dead_beef.zst", 1);
+
+        assert_eq!(
+            a, b,
+            "the published path is the blob's, and does not depend on the slot"
+        );
+        assert_ne!(
+            at, bt,
+            "two tasks writing the same blob must not share one tmp file"
+        );
+        assert!(
+            at.parent() == a.parent(),
+            "and the tmp file stays beside the blob it becomes, not somewhere else"
+        );
+        for t in [&at, &bt] {
+            let name = t.file_name().unwrap().to_string_lossy().to_string();
+            assert!(
+                name.starts_with('.') && name.ends_with(".tmp"),
+                "{name} must stay hidden and temporary"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
