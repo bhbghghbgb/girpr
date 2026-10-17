@@ -194,7 +194,31 @@ impl<'a> Endpoints<'a> {
     }
 
     /// Owned bases, for when an override is in play.
-    pub fn owned(hyp: String, sophon: String) -> Endpoints<'static> {
+///
+/// **This leaks, deliberately, and the leak is bounded by construction. §5.5 row
+/// 12.** The plan called the leak "bounded and intentional — but nothing says so",
+/// and it was right about the second half: there was no warning here at all, so
+/// the next person to find `Box::leak` in a codebase that otherwise avoids it would
+/// reasonably assume it was a bug and "fix" it — or copy the pattern.
+///
+/// The bound, stated so it can be checked:
+///
+/// - **production calls it once per run**, in `capture`, and only when
+///   `--hyp-base`/`--sophon-base` is in play; otherwise `Biz::bases()` returns
+///   borrowed `&'static` strings and this is not called at all;
+/// - **tests call it from fixture builders**, a handful of times per test.
+///
+/// What it would cost to be wrong: a loop. Each call leaks two short strings and
+/// never frees them, so a caller in a loop accumulates without bound and nothing
+/// would say so — which is the whole reason this paragraph exists.
+///
+/// **Not `Cow<'a, str>`.** That is the other fix the plan offers and it is the
+/// better shape — no leak at all, and the override could live in the `CapturePlan`
+/// it came from and be borrowed. It is also a change to every URL builder in the
+/// crate, for zero functional gain, on a seam that runs once per process. Worth
+/// doing if the shape ever needs to change; not worth doing to remove a leak that
+/// provably cannot accumulate.
+pub fn owned(hyp: String, sophon: String) -> Endpoints<'static> {
         Endpoints {
             hyp: Box::leak(hyp.into_boxed_str()),
             sophon: Box::leak(sophon.into_boxed_str()),
@@ -380,6 +404,32 @@ mod tests {
     use super::*;
 
     const GLOBAL: &str = "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api";
+
+    #[test]
+    fn owned_endpoints_are_the_borrowed_ones_and_leak_only_on_construction() {
+        // §5.5 row 12. `Endpoints::owned` is `Box::leak` on purpose and the doc
+        // now says so; this checks the part a doc cannot: that the leaked value is
+        // the one the caller passed, and that a second call is independent of the
+        // first rather than aliasing it.
+        //
+        // The aliasing case is the one that would actually be wrong. If `owned`
+        // returned a pointer into a shared buffer, or if the first call's strings
+        // were freed, the second would read something else — and since both are
+        // `&'static str` nothing would complain about the type.
+        let a = Endpoints::owned("https://a.example".to_string(), "https://b.example".to_string());
+        let b = Endpoints::owned("https://c.example".to_string(), "https://d.example".to_string());
+
+        assert_eq!((a.hyp, a.sophon), ("https://a.example", "https://b.example"));
+        assert_eq!((b.hyp, b.sophon), ("https://c.example", "https://d.example"));
+
+        // And the borrowed constructor agrees with the owned one for a real base,
+        // so the seam cannot quietly change which address a capture talks to.
+        let resolved = Biz::resolve(BizId::Hk4eGlobal);
+        let bases = resolved.bases();
+        assert_eq!(bases.hyp, GLOBAL);
+        let from_string = Endpoints::owned(GLOBAL.to_string(), bases.sophon.to_string());
+        assert_eq!(from_string.hyp, bases.hyp, "the override path must not rewrite the base");
+    }
 
     #[test]
     fn the_global_ids_are_the_measured_ones() {
