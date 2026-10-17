@@ -772,13 +772,31 @@ is invisible to it by construction. `capture_layout` covers the one field this
 refactor touched, but that is a per-field gate and nothing generalises it to the
 other fields, or to `MANIFEST.json` and `README.md`.
 
-**Partly closed since, and the limit is worth being exact about.**
+**Now closed for all five documents, and the remaining limit is exact.**
 `d745680` pins all 28 rows of `api/requests.ndjson` from a mock capture, so a
-uniform change to *that* document now fails a checked-in test instead of passing
-the gate. Three fields were confirmed by mutation to be caught (`bytes_in`,
+uniform change to *that* document fails a checked-in test instead of passing the
+gate. Three fields were confirmed by mutation to be caught (`bytes_in`,
 `stored_as`, `seq`) and one was confirmed **not** to be: `attempts` is 1 on every
-row of that fixture, so a *hidden* retry would still go unnoticed. The other four
-volatile documents are still ungated against uniform drift.
+row of that fixture, so a *hidden* retry still goes unnoticed.
+
+`43f66fa` closed the same gap in the other four. `MANIFEST.json`,
+`verify/checksums.json` and `README.md` are pinned by **document inventory** —
+every document path by name, blobs and assembled trees by count — plus
+`MANIFEST`'s scalar headers and `README`'s prose with digit runs blanked.
+`verify/selfcheck.json` is pinned by result, counts, assertion ids and the **exact
+wording** of every assertion, because `id` alone would pass if an assertion were
+silently narrowed: "every reused chunk's old-file slice MD5 matches" and "every
+reused chunk's MD5 matches" are both `A10`.
+
+Both mutants below were caught **only** by the new test — every other suite,
+`bundle_diff` included, passed with the mutant in the binary:
+
+    totals.files_captured +1                FAILS the pin, 574-2 pass elsewhere
+    A10's wording narrowed by three words    FAILS the pin, 574-2 pass elsewhere
+
+What is still unpinned, deliberately: any **digest** in these documents (A16 owns
+those, and they move for `requests.ndjson` and its three cascade rows by design),
+and `attempts` for the reason above.
 
 ### The re-capture band 3 owed
 
@@ -1227,10 +1245,14 @@ claimed:
 - `attempts` is 1 on every row of that fixture, so the pin catches a spurious
   retry and not a hidden one. It says "nothing was retried", not "retries are
   recorded". Closing that needs a mock route that fails once and then answers.
-- It pins the rows of `requests.ndjson` and nothing else. `MANIFEST.json`,
-  `README.md`, `verify/checksums.json` and `verify/selfcheck.json` are still only
-  compared between two runs of one binary, and a drift all four share is still
-  invisible. Generalising the pin to them is real work that this plan did not do.
+- It pins the rows of `requests.ndjson`. The other four volatile documents are
+  now pinned too (`43f66fa`) — `MANIFEST.json`, `verify/checksums.json` and
+  `README.md` by document inventory and scalar headers, `verify/selfcheck.json` by
+  result, counts, assertion ids and the exact wording of every assertion — so
+  uniform drift in all five is now a failing test rather than a silent one. What
+  is still unpinned is any *digest* in those documents, which is deliberate: A16
+  covers those, and they move for `requests.ndjson` and its three cascade rows by
+  design.
 - The serialisation point found above is localised to Windows filesystem
   metadata, and no change is proposed for it. The §5.5 row-2 `tmp/`-and-rename
   step is what makes `verify` able to trust a blob, so removing the file
