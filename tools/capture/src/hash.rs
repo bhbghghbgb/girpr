@@ -223,7 +223,7 @@ pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
 ///
 /// Kept public for the integration tests that read a stored `.gz` back, which is
 /// what M10's gzip-rule assertions are about. Production does not go through
-/// here to *write* anything — that is [`gzip`]'s story, and the note there
+/// here to *write* anything — that is `gzip`'s story, and the note there
 /// applies in reverse.
 pub fn gunzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;

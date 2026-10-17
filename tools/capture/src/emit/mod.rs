@@ -343,7 +343,7 @@ impl std::io::Write for Counter {
 
 /// How many bytes `value` occupies serialised pretty-printed, without building it.
 ///
-/// **The same bytes [`write_doc`] would have produced**, so the length this
+/// **The same bytes the buffered path produces**, so the length this
 /// returns is the length of the document that gets written and nothing else.
 /// `what` names the document in the error, because a serialisation failure
 /// halfway into a 27 MB decode with no subject is a bad error report.

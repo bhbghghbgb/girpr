@@ -122,7 +122,29 @@ impl ApiError {
         }
     }
 
-    /// The code every API failure maps to.
+    /// The default exit code for a failure that has not been classified yet.
+    ///
+    /// **This is not the tool's exit-code policy, and the old doc claiming it was
+    /// — "the code every API failure maps to" — was false.** §6.6 named two
+    /// reasons, and both hold:
+    ///
+    /// - [`ApiError::Shape`] covers roughly 55 conditions with nothing to do with
+    ///   the network: local invariants, writer errors, budget ceilings, assembly
+    ///   steps. A `2` is a network code, and it would be wrong for most of them.
+    /// - The same error value is legitimately reported as exit `2` or exit `3`
+    ///   depending on **where it happened**, which `ApiError` cannot express.
+    ///   [`crate::failure::apierr`] and [`crate::failure::assertion`] take the same
+    ///   `&ApiError` and differ only in the code they choose, because the run
+    ///   knows whether the request failed or the answer came back unusable.
+    ///
+    /// Production picks at the call site; this is what a caller uses when it has
+    /// not picked yet, and today only tests do. Splitting `ApiError` so the code
+    /// could travel with the error is a design change, deliberately not made.
+    ///
+    /// The real contract is pinned by
+    /// `failure::tests::every_failure_constructor_agrees_on_the_summary_shape`,
+    /// which feeds one `ApiError::Shape` to both constructors and requires two
+    /// different codes from it.
     pub const fn exit_code(&self) -> ExitCode {
         ExitCode::Network
     }
@@ -617,7 +639,7 @@ pub const ACCEPT: &str = "*/*";
 
 /// The `Accept-Encoding` the tool sends, and the value it records.
 ///
-/// **`identity`, deliberately.** See [`RequestRecord::default_req_headers`] for
+/// **`identity`, deliberately.** See `RequestRecord::default_req_headers` for
 /// why claiming `gzip` was wrong and why adopting it would be worse: reqwest's
 /// `gzip` feature is off, so naming it on the wire would buy compressed bodies
 /// this client cannot decompress.

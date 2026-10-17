@@ -360,7 +360,7 @@ type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
 /// `old_bytes`, once per common path.
 ///
 /// Public because [`score`] is, and a public function cannot take a private
-/// type. Nothing outside this module should build one: [`index_file`] is the
+/// type. Nothing outside this module should build one: `index_file` is the
 /// only way, and it is what guarantees the offset lists are sorted.
 pub struct OldFileIndex<'a> {
     /// Where each identity sits in the old file.
