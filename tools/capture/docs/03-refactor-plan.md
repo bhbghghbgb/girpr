@@ -648,6 +648,43 @@ only scheduling is.
 
 ### 5.5 Other band-2 hardening and behaviour changes
 
+**Status: all sixteen rows closed.** `e0c7f9a` (row 10) was the last open one.
+
+| row | outcome |
+|---|---|
+| 2, 3, 4, 5, 7, 11, 12, 14, 15, 16 | fixed, one commit each |
+| 8, 9 | fixed in `59a1c72`, but both were **partly already handled** - see the annotations on the rows and the commit message |
+| 10 | fixed in `e0c7f9a` (streamed ndjson; the clone-under-lock and the whole-document `String` are both gone) |
+| 1 | **already satisfied** when reached: `hash::md5_sha256` is one `DualDigest` pass inside `spawn_blocking` since §5.4 |
+| 6 | **decided, not outstanding**: `memoizing` exists and `verify` uses it; `capture`'s opt-out is recorded in the method's doc with the measurements behind it |
+
+Rows 2 and 3 are annotated in place where this plan was wrong, not corrected
+silently: Windows `fs::rename` *does* replace, so row 2's "re-capture would be
+impossible" was never true; and row 3's fix had to distinguish `kind` values,
+which would be breaking rather than additive. Row 16's `is_fatal` turned out to
+be consulted at `emit/closeout.rs:280` already, with a test that proves it.
+
+**Row 9's `bytes::Bytes` was declined.** All three benefits it promised were
+already gone before it was reached - the `to_vec()` died in §6.6.2, and neither
+`Fetched` nor `Observation` derives `Clone`, so there were no clones to make
+free. Changing the field types would touch every consumer to buy a refcount
+nothing uses.
+
+**What band 2 did not catch, and should have.** `api/requests.ndjson` is one of
+the six documents that always differ between runs (`ts`, `elapsed_ms`, CDN
+headers, `etag`), so the band-1 byte comparison reports it as "expected" whether
+it is right or wrong. When `7771323` filled in the six null `api/` rows' `stored_as`
+- a correct, declared band-3 fix - **both reference bundles silently became
+stale**: they carry 42 marked rows where the tool now writes 48. Nothing failed,
+because `stored_as` is a claim about where a body was written rather than a
+digest, and `verify` does not re-derive it.
+
+So the band-1 gate's "91 of 97, the same six" is weaker than it looks. For fields
+inside those six documents, only a field-level comparison catches a change - which
+is what `e0c7f9a`'s commit message records doing, by hand. A checked-in test that
+compared the non-volatile fields of `requests.ndjson` would have caught this
+automatically; that is the missing gate.
+
 | item | where | change |
 |---|---|---|
 | `bytes_in` is **0 for every non-2xx** | `http/mod.rs:794-806` | the record is built, then `resp` is dropped **without its body being read** (`:808`; the read is on the success path at `:810`). A CDN 429/503 with a 4 KB envelope is transferred and counted as 0. The module doc (`http/mod.rs:20`) sells `bytes_in` as "the only way to price a manifest without re-downloading it", and it under-reports exactly the retried requests that cost the most. Well-formed runs are unaffected → band 2. *(The one-pass digest work in §5.4 pairs with this: hash the error body too.)* |
