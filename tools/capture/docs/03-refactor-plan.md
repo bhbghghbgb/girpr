@@ -724,20 +724,42 @@ already gone before it was reached - the `to_vec()` died in §6.6.2, and neither
 free. Changing the field types would touch every consumer to buy a refcount
 nothing uses.
 
-**What band 2 did not catch, and should have.** `api/requests.ndjson` is one of
-the six documents that always differ between runs (`ts`, `elapsed_ms`, CDN
-headers, `etag`), so the band-1 byte comparison reports it as "expected" whether
-it is right or wrong. When `7771323` filled in the six null `api/` rows' `stored_as`
-- a correct, declared band-3 fix - **both reference bundles silently became
-stale**: they carry 42 marked rows where the tool now writes 48. Nothing failed,
-because `stored_as` is a claim about where a body was written rather than a
-digest, and `verify` does not re-derive it.
+**A stale reference bundle — and a gate claim in `e0c7f9a` that was wrong.**
+`api/requests.ndjson` is one of the six documents that always differ between runs
+(`ts`, `elapsed_ms`, CDN headers, `etag`), so the scratch band-1 comparison
+reports it as "expected" whether it is right or wrong. When `7771323` filled in
+the six null `api/` rows' `stored_as` — a correct, declared band-3 fix — **both
+reference bundles went stale**: they carry 42 marked rows where the tool now
+writes 48. Nothing failed, because `stored_as` is a claim about where a body was
+written rather than a digest, and `verify` does not re-derive it.
 
-So the band-1 gate's "91 of 97, the same six" is weaker than it looks. For fields
-inside those six documents, only a field-level comparison catches a change - which
-is what `e0c7f9a`'s commit message records doing, by hand. A checked-in test that
-compared the non-volatile fields of `requests.ndjson` would have caught this
-automatically; that is the missing gate.
+`e0c7f9a`'s commit message concluded from this that "the band-1 gate cannot
+detect a change to this file at all", and named a new checked-in field-level
+test as the missing gate. **Both halves of that are wrong**, and the correction
+is worth more than the claim was:
+
+- `tests/bundle_diff.rs` already normalises `ts` and `elapsed_ms` and compares
+  `api/requests.ndjson` **byte-exactly** against them blanked. Being in
+  `DERIVED_PATHS` only exempts the *cascade* documents that record this file's
+  digest; `normalize_doc` falls through to the plain `normalize` for the file
+  itself, so every other field — `stored_as` included — is compared.
+- And a checked-in gate already catches exactly the case that was thought
+  missing: `tests/capture_layout.rs`'s
+  `the_six_api_rows_record_where_their_body_was_written`, added with `7771323`.
+
+Verified rather than argued. Deleting `log.set_stored_as(body.seq, &rel)` from
+`emit::write_api` — the single line that fix turns on:
+
+    bundle_diff        8 passed   MUTANT SURVIVES
+    capture_layout     FAILED     left: []  right: [six api/*.json paths]
+
+So a gate does catch it, and names both sides of the failure. The residual gap is
+narrower than claimed: **`bundle_diff` cannot catch a *uniform* change to a file,
+because it compares two captures of the same binary against each other.** A drift
+that both runs share — which is exactly what `stored_as` becoming non-null was —
+is invisible to it by construction. `capture_layout` covers the one field this
+refactor touched, but that is a per-field gate and nothing generalises it to the
+other fields, or to `MANIFEST.json` and `README.md`.
 
 | item | where | change |
 |---|---|---|
