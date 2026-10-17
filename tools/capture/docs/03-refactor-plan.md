@@ -61,20 +61,25 @@ The numbers §8 asked for, taken on this machine after all bands landed.
     peak RSS during capture              151-154 MB   at every --jobs
     list --root artifacts                                    0.05 s
 
+Those `--jobs` figures are a **real** capture, which fetches 38 chunk blobs and so
+barely exercises concurrency. The curve that answers §3.2 needs a world 100x
+wider — 4 000 chunk blobs — and is in **§11**: 50.2 s at `--jobs 1` to 19.6 s at
+`--jobs 16`, 2.56x, with the mutex ruled out by mutation.
+
 The suite got **6.2x faster while carrying 119 more tests**, which was §3.8's
 whole point: it had to be cheap enough to run on every band-1 commit or the plan
 would be an afterthought. Its invariants all still hold — 0 `#[ignore]`, 0
 `thread::sleep`, 0 non-`.rs` fixture files, every capture on `127.0.0.1:0`.
 
-**§3.2's prediction is wrong, and the measurement is why §8 asked for it.**
-§3.2 says flat `--jobs` scaling "confirms the `RequestLog` mutex is the ceiling",
-and calls that "the single most informative measurement in the list". It is not
-flat: `--jobs 8` is 2.0x faster than `--jobs 1`, so the mutex is demonstrably
-*not* the binding constraint here. The likely reason is that this workload cannot
-express the contention — a capture fetches 38 chunk blobs and a handful of API
-documents, so there is very little concurrency to serialise on. **The §3.2 claim
-is untested rather than refuted**, and testing it properly needs a capture with
-thousands of concurrent chunk fetches, which this fixture is not.
+**§3.2's prediction is wrong.** §3.2 says flat `--jobs` scaling "confirms the
+`RequestLog` mutex is the ceiling", and §8 calls that "the single most
+informative measurement in the list". Scaling is not flat: on a synthetic world
+wide enough to test it — 4 000 chunk blobs, 100x a real capture — it is 2.56x at
+`--jobs 16`. Removing `set_stored_as` outright moves nothing, so the mutex is
+demonstrably not the ceiling and §3.2's "nothing else in the concurrency work
+matters until it is fixed" does not follow. There *is* a serialisation point
+underneath — per-blob latency grows 6x while throughput barely moves — and it is
+somewhere else. Full curve, method, and what has been ruled out: **§11**.
 
 `verify` at 4.1x is the clearest single win in the plan, and §8 predicted exactly
 where it would come from: "a 5-second verify on a warm page cache points at
@@ -1115,8 +1120,53 @@ Full gates at `c5c20e5`:
                                             exit 0, checks_total=90
                                             checks_passed=90 findings=0
 
-**What is not claimed.** §3.2's flat-scaling prediction is *refuted but untested
-at scale* — the fixture fetches 38 blobs and cannot express the contention. The
-residual gate gap in §5.5 (`bundle_diff` cannot see a drift both its own runs
-share) is real and is not closed by anything checked in.
+**§3.2's prediction is refuted, by mutation.** §8 called the `--jobs` curve
+"the single most informative measurement in the list", and §3.2 predicted that
+flat scaling "confirms the `RequestLog` mutex is the ceiling". Neither the
+fixture's 38 blobs nor a real capture can test that, so the question was taken to
+a synthetic world wide enough to mean something — one file of 2 000 wholly
+replaced chunks per side, which is **4 000 chunk blobs fetched** and 4 018
+requests, against the loopback mock, release build:
+
+| `--jobs` | wall | speedup | per-blob latency |
+|---|---|---|---|
+| 1 | 50.2 s | 1.00x | 12.6 ms |
+| 2 | 30.7 s | 1.64x | 15.4 ms |
+| 4 | 24.4 s | 2.06x | 24.4 ms |
+| 8 | 21.1 s | 2.38x | 42.2 ms |
+| 16 | 19.6 s | 2.56x | 78.4 ms |
+| 32 | 21.2 s | 2.37x | 169.4 ms |
+
+Scaling is **not** flat — 2.56x at 16 jobs — so the mutex is not the ceiling, and
+§3.2's "nothing else in the concurrency work matters until it is fixed" does not
+follow. Confirmed by mutation rather than inferred from the curve: making
+`RequestLog::set_stored_as` return immediately, taking the lock out of the hot
+path entirely, moves nothing —
+
+    --jobs 1   50.2 s  ->  49.9 s
+    --jobs 8   21.1 s  ->  23.4 s     (noise, if anything worse)
+
+That is the §3.2 fix having worked. The O(n²) walk `by_seq` replaced was the
+real cost; what remains under that lock is a `BTreeMap` lookup.
+
+**But there is a serialisation point, and it is not that one.** Per-blob latency
+grows ~6x from `--jobs 1` to `--jobs 16` while throughput barely moves, which is
+the signature of a contended shared resource rather than of per-item cost. Total
+CPU stayed under one of four cores throughout, so it is not CPU exhaustion and
+not connection setup either — the mock's keep-alive fix (`428fc8e`) bought 14% at
+`--jobs 8` and **nothing** at `--jobs 1`. Logging is not it (`RUST_LOG=off`
+changes nothing), and there is no `fsync` anywhere in the write path.
+
+**What remains open, stated as open.** The remaining serialisation is not
+localised. It is not the `RequestLog`, not the logger, not the mock's accept
+loop, and not connection setup — the remaining candidate is the blob write path
+(4 000 files created in a single `chunks/blobs/` directory, which on Windows is
+not free and does not parallelise), but that is a hypothesis, not a measurement,
+and this plan does not claim it. `Store::fill` is confirmed *not* to be the
+limit: it runs a `tokio::task::JoinSet` with exactly `jobs` tasks in flight.
+
+**What is not claimed.** The residual gate gap in §5.5 stands —
+`bundle_diff` compares two captures of the same binary, so a drift both its runs
+share is invisible to it by construction, and nothing checked in generalises
+`capture_layout`'s per-field gate.
 
