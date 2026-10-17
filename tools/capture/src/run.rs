@@ -676,7 +676,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     );
     written.extend(prelude);
     let assembly_failures = rows.iter().filter(|a| !a.ok).count();
-    report_failed_rows(&rows);
+    emit::selfcheck::report_failed(&rows);
     tracing::info!(
         rows = rows.len(),
         failures = assembly_failures,
@@ -724,7 +724,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &written,
         plan.no_chunk_blobs,
     ));
-    report_failed_rows(&rows);
+    emit::selfcheck::report_failed(&rows);
 
     let input = ManifestInput {
         started,
@@ -747,7 +747,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // A17 is about the matrix this document carries, so it is settled here and
     // appended to the rows the rest of the close-out will write.
     let (a17_ok, a17_detail) = manifest.a17();
-    rows.push(selfcheck_row(
+    rows.push(emit::selfcheck::Assertion::row(
         "A17",
         "MANIFEST.json matrix",
         "every class captured | covered_by | unavailable",
@@ -814,7 +814,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // A conditional that always fires is worse than none — it reads as "this
     // might converge in one pass", and the comment above the pair is what
     // actually guarantees it.
-    selfcheck.assertions.push(selfcheck_row(
+    selfcheck.assertions.push(emit::selfcheck::Assertion::row(
         "A16",
         "verify/checksums.json",
         "covers every file under the artifact root, and re-hashing matches",
@@ -1272,49 +1272,7 @@ fn selfcheck_slug(s: &Selfcheck) -> String {
 
 
 
-/// One selfcheck row, pass or fail.
-///
-/// `expected` is stated even on a pass, because `selfcheck.json` records what
-/// was being checked and a reader who has to infer it from the id has to go and
-/// look it up. A17 and A16 were each spelled out inline; they differ only in
-/// their subject and their expectation.
-fn selfcheck_row(
-    id: &'static str,
-    subject: &'static str,
-    expected: &'static str,
-    ok: bool,
-    detail: &str,
-) -> emit::selfcheck::Assertion {
-    if ok {
-        emit::selfcheck::Assertion::pass(id, emit::selfcheck::wording(id), subject, detail)
-    } else {
-        emit::selfcheck::Assertion::fail(
-            id,
-            emit::selfcheck::wording(id),
-            subject,
-            expected,
-            detail,
-        )
-    }
-}
 
-/// Log every selfcheck row that did not pass, with what it expected.
-///
-/// **The fuller of the two spellings this replaced.** One call site logged
-/// `detail` and omitted `expected`; the other logged both. The one that dropped
-/// a field was the strict subset, so keeping the fuller form means no log line
-/// anywhere in the crate is less informative than it used to be.
-fn report_failed_rows(rows: &[crate::emit::selfcheck::Assertion]) {
-    for a in rows.iter().filter(|a| !a.ok) {
-        tracing::error!(
-            assertion = a.id,
-            subject = %a.subject,
-            expected = %a.expected,
-            actual = %a.actual,
-            "selfcheck row failed"
-        );
-    }
-}
 
 
 

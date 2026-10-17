@@ -53,6 +53,31 @@ impl Assertion {
         }
     }
 
+    /// One selfcheck row, pass or fail, with the wording looked up from the id.
+    ///
+    /// `expected` is stated even on a pass, because `selfcheck.json` records
+    /// what was being checked and a reader who has to infer it from the id has
+    /// to go and look it up. A17 and A16 were each spelled out at their own call
+    /// sites; they differ only in their subject and their expectation, so the
+    /// difference was three lines that had to be kept in agreement by hand.
+    ///
+    /// **Lived in `run.rs`**, where every caller had to remember to pass
+    /// `wording(id)` rather than `id` — a mistake that would have compiled and
+    /// produced a row whose `assertion` text was the id.
+    pub fn row(
+        id: &'static str,
+        subject: &'static str,
+        expected: &'static str,
+        ok: bool,
+        detail: &str,
+    ) -> Assertion {
+        if ok {
+            Assertion::pass(id, wording(id), subject, detail)
+        } else {
+            Assertion::fail(id, wording(id), subject, expected, detail)
+        }
+    }
+
     /// A red row.
     pub fn fail(
         id: &'static str,
@@ -166,6 +191,27 @@ pub fn wording(id: &str) -> &'static str {
         .find(|(k, _)| *k == id)
         .map(|(_, w)| *w)
         .unwrap_or("an assertion this build does not describe")
+}
+
+/// Log every selfcheck row that did not pass, with what it expected.
+///
+/// **The fuller of the two spellings this replaced.** One call site logged
+/// `detail` and omitted `expected`; the other logged both. The one that dropped
+/// a field was the strict subset, so keeping the fuller form means no log line
+/// anywhere in the crate is less informative than it used to be.
+///
+/// Next to the rows rather than in the dispatcher, so a caller cannot add a
+/// red row and forget to say so.
+pub fn report_failed(rows: &[Assertion]) {
+    for a in rows.iter().filter(|a| !a.ok) {
+        tracing::error!(
+            assertion = a.id,
+            subject = %a.subject,
+            expected = %a.expected,
+            actual = %a.actual,
+            "selfcheck row failed"
+        );
+    }
 }
 
 /// Whether a failure of this assertion ends the run.
