@@ -772,6 +772,14 @@ is invisible to it by construction. `capture_layout` covers the one field this
 refactor touched, but that is a per-field gate and nothing generalises it to the
 other fields, or to `MANIFEST.json` and `README.md`.
 
+**Partly closed since, and the limit is worth being exact about.**
+`d745680` pins all 28 rows of `api/requests.ndjson` from a mock capture, so a
+uniform change to *that* document now fails a checked-in test instead of passing
+the gate. Three fields were confirmed by mutation to be caught (`bytes_in`,
+`stored_as`, `seq`) and one was confirmed **not** to be: `attempts` is 1 on every
+row of that fixture, so a *hidden* retry would still go unnoticed. The other four
+volatile documents are still ungated against uniform drift.
+
 ### The re-capture band 3 owed
 
 §6's preamble says these items change what a **new** capture writes and that "a
@@ -1165,8 +1173,19 @@ not free and does not parallelise), but that is a hypothesis, not a measurement,
 and this plan does not claim it. `Store::fill` is confirmed *not* to be the
 limit: it runs a `tokio::task::JoinSet` with exactly `jobs` tasks in flight.
 
-**What is not claimed.** The residual gate gap in §5.5 stands —
-`bundle_diff` compares two captures of the same binary, so a drift both its runs
-share is invisible to it by construction, and nothing checked in generalises
-`capture_layout`'s per-field gate.
+**What is not claimed.** The gate gap §5.5 named is now closed for
+`api/requests.ndjson` — `d745680` pins all 28 rows of a mock capture, so a
+change both runs share fails a test. Two things about it are deliberately *not*
+claimed:
+
+- `attempts` is 1 on every row of that fixture, so the pin catches a spurious
+  retry and not a hidden one. It says "nothing was retried", not "retries are
+  recorded". Closing that needs a mock route that fails once and then answers.
+- It pins the rows of `requests.ndjson` and nothing else. `MANIFEST.json`,
+  `README.md`, `verify/checksums.json` and `verify/selfcheck.json` are still only
+  compared between two runs of one binary, and a drift all four share is still
+  invisible. Generalising the pin to them is real work that this plan did not do.
+- The serialisation point found above is still unlocalised, and the remaining
+  candidate — 4 000 files created in one `chunks/blobs/` directory — is a
+  hypothesis. Nothing here claims it.
 
