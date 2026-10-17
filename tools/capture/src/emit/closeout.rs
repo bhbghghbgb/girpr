@@ -27,7 +27,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::failure::{Failure, apierr, write_err};
+use crate::failure::{Failure, apierr, assertion, write_err};
 use crate::http::ApiError;
 
 use super::index;
@@ -227,6 +227,18 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         "artifact written"
     );
 
+    // **After every write, deliberately.** A failed row is settled by checking
+    // the bundle against itself, so aborting before `checksums.json` landed
+    // would leave a tree where A16 had failed *because the close-out stopped*,
+    // and the operator would read a cascade as a cause. The bundle on disk is
+    // the evidence; exit 3 says it is not trustworthy, not that it was withheld.
+    if let Some(f) = fatal_failure(&selfcheck) {
+        return Err(assertion(
+            "the assertions this bundle makes about itself",
+            &ApiError::shape(&f.id, f_detail(f)),
+        ));
+    }
+
     Ok(Closed {
         manifest,
         checksums,
@@ -234,6 +246,31 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         assembly_rows,
         written,
     })
+}
+
+/// The first failing row that ends the run, if there is one.
+///
+/// **`is_fatal` is the decision, not a lookup with no effect.** The function was
+/// documented as deciding whether an assertion's failure ends the run and was
+/// called from nowhere, while [`close`] made that decision by hand — which meant
+/// the table could not be narrowed without changing nothing at all, and a
+/// reader had no way to tell a table that governed behaviour from a comment.
+///
+/// `None` here is the `exit 0` with `result: incomplete` case: a *skipped* id
+/// has no row and so cannot fail, and a run that skipped A6-A12 under
+/// `--no-chunk-blobs` is honest rather than broken.
+fn fatal_failure(s: &Selfcheck) -> Option<&Assertion> {
+    s.assertions
+        .iter()
+        .find(|a| !a.ok && super::selfcheck::is_fatal(a.id.as_str()))
+}
+
+/// The failure's own words, for the `ApiError` shape.
+fn f_detail(a: &Assertion) -> String {
+    format!(
+        "{} on {}: expected {}, got {}",
+        a.id, a.subject, a.expected, a.actual
+    )
 }
 
 #[cfg(test)]
@@ -521,6 +558,66 @@ mod tests {
             .collect();
         assert!(failing.is_empty(), "no row should fail: {failing:?}");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_row_ends_the_run_with_exit_3() {
+        // The behaviour change this commit makes. A bundle whose own rows did
+        // not hold used to be written and reported as a success: `result: "fail"`
+        // in the document, exit `0` from the process. A caller reading only the
+        // exit code was told the capture worked.
+        let s = Selfcheck::build(
+            vec![Assertion::row("A14", "game/", "nothing else", false, "a stray file")],
+            Vec::new(),
+            &[],
+        );
+        let f = fatal_failure(&s).expect("a failing row ends the run");
+        assert_eq!(f.id, "A14");
+        let d = f_detail(f);
+        for want in ["A14", "game/", "a stray file"] {
+            assert!(d.contains(want), "{want} missing from: {d}");
+        }
+    }
+
+    #[test]
+    fn a_row_whose_id_is_not_fatal_does_not_end_the_run() {
+        // **Proves `is_fatal` is consulted** rather than the code testing
+        // `!ok` and calling the table decoration. A18 and A20 are verify-only,
+        // so a capture can never produce them — which makes them the right probe
+        // here: if the table stopped being consulted and the code became
+        // `!a.ok`, this test fails.
+        let s = Selfcheck::build(
+            vec![Assertion::row("A18", "verify-only", "nothing", false, "did not hold")],
+            Vec::new(),
+            &[],
+        );
+        assert!(
+            fatal_failure(&s).is_none(),
+            "a non-fatal id must not end a capture"
+        );
+        assert!(!super::super::selfcheck::is_fatal("A18"));
+    }
+
+    #[test]
+    fn a_skipped_id_is_not_a_failed_row() {
+        // The `--no-chunk-blobs` case, and the reason exit 0 with
+        // `result: incomplete` is honest rather than broken: a skipped id has no
+        // row, so there is nothing to fail.
+        let asserted: Vec<Assertion> = ["A1", "A13"]
+            .iter()
+            .map(|id| Assertion::row(id, "s", "e", true, "a"))
+            .collect();
+        let s = Selfcheck::build(asserted, Vec::new(), &super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS);
+        assert!(fatal_failure(&s).is_none());
+        assert_eq!(s.result, super::super::selfcheck::Result_::Incomplete);
+    }
+
+    #[test]
+    fn a_clean_close_out_returns_ok() {
+        let root = scratch("clean");
+        seed(&root);
+        run(&root);
         let _ = std::fs::remove_dir_all(&root);
     }
 

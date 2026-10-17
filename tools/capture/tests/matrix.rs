@@ -268,6 +268,26 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// and `over_budget` is a fact about this run's flags. A bundle that reported
 /// `unavailable` here would be claiming the world cannot supply the file when
 /// the truth is that this run would not pay for it.
+///
+/// **The run now fails, and this test used to assert the opposite.** It ended
+/// with "a budget is a preference, not a failure" and `exit_code == 0`. A17's
+/// own doc has always said `over_budget` is *deliberately* not an acceptable
+/// matrix state — "a finding about the run rather than about the world" — so A17
+/// already failed here, and the only reason the process exited `0` is that
+/// nothing consulted A17's verdict. Now that a failed row ends the run, the
+/// process exit agrees with the bundle's own account of itself.
+///
+/// That is a change to what a budgeted capture *means* to a caller, and it is
+/// worth being explicit that it is one: `--max-download-bytes` is a supported
+/// flag, and a caller who sets it too low now gets exit 3 rather than exit 0
+/// with `result: fail`. Two documented positions disagreed — this test's line
+/// and A17's doc — and wiring `is_fatal` resolves it in A17's favour.
+///
+/// The cost is visible below: `budget_limit`, `captures_over_budget` and
+/// `capture_bytes_admitted` are summary keys, and a failing run emits a
+/// failure summary instead of the capture summary, so those three numbers are
+/// no longer on stdout at all. They were asserted here before. Nothing in the
+/// bundle records them either.
 #[test]
 fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // The budget is derived from a first, unlimited run rather than guessed: a
@@ -285,25 +305,26 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         World::five_classes(),
         &["--max-download-bytes", &half.to_string()],
     );
-    let s = &c.summary;
-    assert_eq!(s["budget_limit"], half.to_string(), "the limit is recorded");
-    assert_eq!(s["budget_unlimited"], "false");
-    let over = s["captures_over_budget"].parse::<u64>().expect("a count");
-    assert!(
-        over > 0,
-        "half of {total} refused nothing; the budget did not bind: {s:?}"
+    // The run fails, and says which assertion: A17, on the matrix.
+    assert_eq!(
+        c.summary["exit_code"], "3",
+        "a class the budget refused makes A17 fail, and a failed row ends the run"
     );
+    assert_eq!(c.summary["result"], "error");
     assert!(
-        s["capture_bytes_admitted"].parse::<u64>().unwrap() <= half,
-        "and admission did not exceed it"
+        c.summary["detail"].contains("A17"),
+        "the failure names the assertion: {:?}",
+        c.summary["detail"]
     );
+
+    // The matrix still records the distinction this test exists for. The bundle
+    // is written before the verdict, so the evidence survives the failure -
+    // which is the point of writing everything and *then* deciding.
     assert!(
         c.matrix().iter().any(|r| r["status"] == "over_budget"),
         "a refused candidate is recorded as over_budget, not unavailable: {:#?}",
         c.matrix()
     );
-    // The row names no capture_id, because none was admitted - so the check is
-    // that a `captured` row is the only kind that carries one.
     for r in c.matrix() {
         if r["status"] == "over_budget" {
             assert!(
@@ -322,8 +343,6 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
             );
         }
     }
-    // The run still succeeds: a budget is a preference, not a failure.
-    assert_eq!(c.summary["exit_code"], "0", "{:?}", c.summary["exit_code"]);
 }
 
 /// The diff the run computed, read back off disk, agrees with the rows.
