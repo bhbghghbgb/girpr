@@ -327,6 +327,21 @@ impl Sleep for RecordingSleep {
     }
 }
 
+/// The default ceiling on one response body: 64 MiB.
+///
+/// **Seven times the largest thing this tool fetches.** The reference bundle's
+/// biggest single response is the 7.1.0 `game` manifest archive at 9 007 187 B,
+/// and the biggest chunk blob is 2 162 366 B. The headroom is deliberate: a
+/// ceiling that a legitimate future tag could brush against would be a worse
+/// failure than the one it prevents, because it would turn a working capture into
+/// a non-working one.
+///
+/// The point of the ceiling is not this number. It is that there is a number: a
+/// broken or hostile origin that never stops sending used to be able to fill RAM
+/// until the process died, with no bound anywhere on the path. See
+/// [`Transport::max_response_bytes`].
+pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// How much concurrency and patience a fetcher has.
 #[derive(Debug, Clone, Copy)]
 pub struct Transport {
@@ -334,6 +349,21 @@ pub struct Transport {
     pub retries: u32,
     /// Per-request timeout.
     pub timeout: Duration,
+    /// The most bytes one response body may contribute, in total.
+    ///
+    /// **§5.5 row 11.** The client had only `timeout` and `user_agent`, and every
+    /// body read was unbounded, so an origin that kept sending was bounded by
+    /// nothing but the machine's memory. A timeout does not help: a server
+    /// streaming a gigabyte steadily for ten minutes never trips one.
+    ///
+    /// Checked in two places, because one is not enough: against the declared
+    /// `Content-Length` before a byte is read (so a server claiming 10 GiB is
+    /// refused immediately), and against the running total as bytes arrive (so a
+    /// server that lies about or omits the header is still stopped).
+    ///
+    /// Exceeding it is a [`ApiError::Shape`], so it is **not** retried: an origin
+    /// that sent too much will send too much again.
+    pub max_response_bytes: u64,
 }
 
 impl Transport {
@@ -343,6 +373,7 @@ impl Transport {
         Transport {
             retries: 1,
             timeout: Duration::from_secs(10),
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
     }
 }
@@ -702,6 +733,85 @@ fn body_failure(
         }
     }
 }
+/// Drain a response body into `sink`, refusing to exceed the transport's ceiling.
+///
+/// **The one place a body is read, for every destination.** §5.5 row 11. There
+/// were four unbounded reads — the buffered path, the file path, `observe`, and
+/// the drain of an *error* body — and a ceiling enforced in three of them would be
+/// a ceiling with a hole in it.
+///
+/// Two checks, because one is not enough:
+///
+/// - against `Content-Length` **before** reading, so an origin declaring 10 GiB is
+///   refused without transferring any of it;
+/// - against the running total as bytes arrive, for an origin that omits the
+///   header or understates it.
+///
+/// `sink` is generic rather than "either a `Vec` or a file" so all four callers
+/// share this, including the error-body drain, which writes to
+/// [`std::io::sink()`].
+async fn drain_capped<W: std::io::Write>(
+    mut resp: reqwest::Response,
+    sink: &mut W,
+    cap: u64,
+    url: &str,
+    attempts: u32,
+) -> Result<u64, ApiError> {
+
+    if let Some(declared) = resp.content_length()
+        && declared > cap
+    {
+        return Err(too_big(url, declared, cap));
+    }
+    let mut seen = 0_u64;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                seen += chunk.len() as u64;
+                if seen > cap {
+                    // The bytes are already gone, so this cannot stop the
+                    // transfer — the running total stops the *memory*, which is
+                    // what the ceiling is for.
+                    return Err(too_big(url, seen, cap));
+                }
+                std::io::Write::write_all(sink, &chunk)
+                    .map_err(|e| body_failure(url, attempts, false, e))?;
+            }
+            Ok(None) => return Ok(seen),
+            Err(e) => return Err(body_failure(url, attempts, true, e)),
+        }
+    }
+}
+
+/// Whether a body read failed because it could not be read, rather than because
+/// it was too large.
+///
+/// The distinction `observe` needs: unreadable means "there is no body", which is
+/// a shape worth recording; over the ceiling means "there is a body and it is
+/// larger than this tool will hold", which is a failure and not a shape.
+///
+/// A `Transport` is a read that failed. `body_failure` only produces those for
+/// `reading = true`, so this is a variant test rather than a message match.
+fn is_read_failure(e: &ApiError) -> bool {
+    matches!(e, ApiError::Transport { .. })
+}
+
+/// A body that was larger than the ceiling allows.
+///
+/// A `Shape` and not a `Transport`, so it is not retried: the network worked, the
+/// origin simply sent more than this tool will hold, and asking again produces the
+/// same answer at the same cost.
+fn too_big(url: &str, seen: u64, cap: u64) -> ApiError {
+    ApiError::shape(
+        url,
+        format!(
+            "the response body reached {seen} B, over the {cap} B ceiling \
+             (--max-response-bytes); raise it with --max-response-bytes if this \
+             origin is one you meant to trust"
+        ),
+    )
+}
+
 /// One response as observed, whatever its status.
 ///
 /// A [`Fetched`] is only ever a success; this is the other half — the shape a
@@ -800,6 +910,8 @@ pub struct Fetcher {
     /// the exception because it is per-request; that is the only thing
     /// [`RequestRecord::req_headers`] adds.
     base_req_headers: BTreeMap<String, String>,
+    /// The ceiling on one response body, from [Transport::max_response_bytes].
+    max_response_bytes: u64,
 }
 
 impl Fetcher {
@@ -917,6 +1029,7 @@ impl Fetcher {
             sleeper,
             log,
             base_req_headers: RequestRecord::default_req_headers(&ua, None),
+            max_response_bytes: transport.max_response_bytes,
         })
     }
 
@@ -970,8 +1083,31 @@ impl Fetcher {
         // A body that will not read is an empty body, not a failure: the status
         // and the content-type are the parts a consumer can rely on, and they
         // have already been captured by this point.
-        let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
-        let bytes_in = body.len() as u64;
+        //
+        // **But a body over the ceiling is a failure, and the two are different
+        // things.** §5.5 row 11: this was `resp.bytes()`, unbounded, and a hostile
+        // origin answering a *probe* — which is the one request an attacker can
+        // most cheaply provoke — could fill RAM with it. Unreadable means "there
+        // is no body to record"; over the ceiling means "this body exists and is
+        // larger than this tool will hold", and recording an empty shape for that
+        // would put a falsehood in `api/error_shapes.json`.
+        let mut body: Vec<u8> = Vec::new();
+        let bytes_in = match drain_capped(
+            resp,
+            &mut body,
+            self.max_response_bytes,
+            url,
+            1,
+        )
+        .await
+        {
+            Ok(n) => n,
+            Err(e) if is_read_failure(&e) => {
+                body = Vec::new();
+                0
+            }
+            Err(e) => return Err(e),
+        };
         let record = self.record(
             seq,
             kind,
@@ -1275,41 +1411,41 @@ impl Fetcher {
         // materialises it. The two differ only here — the status check above and
         // the record below are shared, which is the reason this is one function
         // with a parameter rather than two functions.
-        let mut bytes_in: u64 = 0;
+        let bytes_in: u64;
         let body: Option<Vec<u8>> = match dest {
-            Destination::Memory => match resp.bytes().await {
-                Ok(b) => {
-                    bytes_in = b.len() as u64;
-                    Some(b.to_vec())
-                }
-                Err(e) => {
-                    let err = ApiError::Transport {
-                        url: url.to_string(),
-                        attempts,
-                        detail: format!("reading the body: {e}"),
-                    };
+            Destination::Memory => {
+                // One record for both outcomes, as before — the failure and the
+                // size are both about the same request.
+                let fail = |err: ApiError| {
                     let record = self.record(
                         seq,
                         kind,
                         url,
                         range,
                         status,
-                        resp_headers,
+                        resp_headers.clone(),
                         &final_url,
                         redirected,
                         0,
                         attempts,
                         started,
                     );
-                    return Err((err, record));
+                    (err, record)
+                };
+                let mut buf: Vec<u8> = Vec::new();
+                match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
+                    Ok(n) => {
+                        bytes_in = n;
+                        Some(buf)
+                    }
+                    Err(e) => return Err(fail(e)),
                 }
-            },
+            }
             Destination::File(out) => {
                 // Discard whatever a failed attempt left before this one writes.
                 // Without this the digests cover both responses — see
                 // `HashingFile::restart`.
-                let fail = |reading: bool, detail: String| {
-                    let err = body_failure(url, attempts, reading, detail);
+                let fail = |err: ApiError| {
                     let record = self.record(
                         seq,
                         kind,
@@ -1329,21 +1465,11 @@ impl Fetcher {
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
                     // not truncate is a disk that will not write either.
-                    return Err(fail(false, format!("preparing the body file: {e}")));
+                    return Err(fail(body_failure(url, attempts, false, format!("preparing the body file: {e}"))));
                 }
-                let mut resp = resp;
-                loop {
-                    match resp.chunk().await {
-                        Ok(Some(chunk)) => {
-                            let n = chunk.len() as u64;
-                            if let Err(e) = std::io::Write::write_all(out, &chunk) {
-                                return Err(fail(false, e.to_string()));
-                            }
-                            bytes_in += n;
-                        }
-                        Ok(None) => break,
-                        Err(e) => return Err(fail(true, e.to_string())),
-                    }
+                match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
+                    Ok(n) => bytes_in = n,
+                    Err(e) => return Err(fail(e)),
                 }
                 None
             }
@@ -1782,6 +1908,7 @@ mod tests {
                         status,
                         body,
                         claim: None,
+                        omit_length: false,
                     })
                     .collect(),
                 extra_body,
@@ -1801,6 +1928,11 @@ mod tests {
             pub status: u16,
             pub body: &'static [u8],
             pub claim: Option<usize>,
+            /// Send **no** Content-Length, so the body is delimited by the
+            /// connection closing. The one shape a Content-Length pre-check
+            /// cannot see, and therefore the only way to test the running
+            /// total on its own.
+            pub omit_length: bool,
         }
 
         pub fn spawn_answers(answers: Vec<Answer>, extra_body: &'static str) -> Mock {
@@ -1815,7 +1947,7 @@ mod tests {
                         return;
                     };
                     h.fetch_add(1, Ordering::SeqCst);
-                    serve_one(stream, a.status, a.body, a.claim, extra_body, &r);
+                    serve_one(stream, a.status, a.body, a.claim, a.omit_length, extra_body, &r);
                 }
             });
             Mock {
@@ -1830,6 +1962,7 @@ mod tests {
             status: u16,
             body: &'static [u8],
             claim: Option<usize>,
+            omit_length: bool,
             extra_body: &'static str,
             requests: &Arc<Mutex<Vec<String>>>,
         ) {
@@ -1858,8 +1991,12 @@ mod tests {
             ));
 
             let head = format!(
-                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nETag: \"abc\"\r\nServer: MockOSS\r\n{extra_body}Connection: close\r\n\r\n",
-                claim.unwrap_or(body.len())
+                "HTTP/1.1 {status} X\r\n{}Content-Type: application/octet-stream\r\nETag: \"abc\"\r\nServer: MockOSS\r\n{extra_body}Connection: close\r\n\r\n",
+                if omit_length {
+                    String::new()
+                } else {
+                    format!("Content-Length: {}\r\n", claim.unwrap_or(body.len()))
+                }
             );
             let _ = stream.write_all(head.as_bytes());
             let _ = stream.write_all(body);
@@ -1874,10 +2011,16 @@ mod tests {
     use local_server::*;
 
     fn fetcher(retries: u32, sleeper: Arc<dyn Sleep>) -> Fetcher {
+        fetcher_with(retries, sleeper, DEFAULT_MAX_RESPONSE_BYTES)
+    }
+
+    /// [`fetcher`] with an explicit body ceiling, for the ceiling's own tests.
+    fn fetcher_with(retries: u32, sleeper: Arc<dyn Sleep>, max_response_bytes: u64) -> Fetcher {
         Fetcher::with_sleeper(
             Transport {
                 retries,
                 timeout: Duration::from_secs(5),
+                max_response_bytes,
             },
             RequestLog::new(),
             sleeper,
@@ -2157,7 +2300,181 @@ fn a_poisoned_request_log_still_takes_records() {
         d
     }
 
+    /// A body the mock will send, `n` bytes of it.
+    fn big_body(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
     #[tokio::test]
+    async fn observe_refuses_a_body_over_the_ceiling_rather_than_recording_an_empty_shape() {
+    // The probe path is the one a hostile origin can most cheaply provoke — it is
+    // a single unauthenticated GET — and its reads were unbounded. Over the
+    // ceiling it must **fail**, not record an empty shape: an empty shape in
+    // `api/error_shapes.json` would be a falsehood about what the origin did.
+    //
+    // Contrast with an *unreadable* body, which `observe` deliberately turns into
+    // an empty body rather than an error. That asymmetry is the point, so it is
+    // what the assertion pins.
+    let body = big_body(4096);
+    let mock = spawn(vec![(200, leak(&body))], "");
+    let f = fetcher_with(
+        1,
+        Arc::new(RecordingSleep::default()),
+        body.len() as u64 - 1,
+    );
+
+    let err = f
+        .observe(&url(&mock, "/shape"), Kind::Probe)
+        .await
+        .expect_err("over the ceiling is a failure, not a shape");
+    assert!(err.to_string().contains("ceiling"), "{err}");
+}
+
+#[tokio::test]
+    async fn a_body_over_the_ceiling_is_refused_rather_than_buffered() {
+        // **§5.5 row 11, the whole point of the ceiling.** The client had
+        // `timeout` and `user_agent` and nothing else, and every body read was
+        // unbounded — so a broken or hostile origin that kept sending filled RAM
+        // until the process died. A timeout does not help: a server streaming a
+        // gigabyte steadily for ten minutes never trips one.
+        let body = big_body(4096);
+        let mock = spawn(vec![(200, leak(&body)), (200, leak(&body))], "");
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            body.len() as u64 - 1,
+        );
+
+        let err = f
+            .get(&url(&mock, "/big"), Kind::Chunk, None)
+            .await
+            .expect_err("a body over the ceiling must not be buffered");
+        let text = err.to_string();
+        assert!(text.contains("ceiling"), "the message must name the ceiling: {text}");
+        assert!(text.contains("--max-response-bytes"), "and how to raise it: {text}");
+        // **Not retried.** An origin that sent too much will send too much again,
+        // and the mock had a second answer that must not have been consumed.
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            1,
+            "a `Shape` is not retried, so one attempt is all it gets"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_under_the_ceiling_is_untouched() {
+        // The other half, or the ceiling would be a tool that fetches nothing.
+        // Byte-for-byte equality, so this also pins that routing the buffered path
+        // through `drain_capped` did not alter what a caller receives.
+        let body = big_body(4096);
+        let mock = spawn(vec![(200, leak(&body))], "");
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            body.len() as u64,
+        );
+
+        let got = f
+            .get(&url(&mock, "/ok"), Kind::Chunk, None)
+            .await
+            .expect("a body exactly at the ceiling is allowed");
+        assert_eq!(got.body, body, "the bytes must be exactly what was served");
+        assert_eq!(got.body.len() as u64, body.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_ceiling_is_refused_without_reading_it() {
+        // The cheap half of the two checks: an origin that *says* it is sending
+        // 10 GiB is refused before a byte is transferred, rather than after this
+        // tool has spent the time and the bandwidth receiving it.
+        //
+        // Driven with `Content-Length` set to more than the body actually sent —
+        // which is what `local_server::Answer::claim` is for, and is also the
+        // shape of a lying origin.
+        let body = big_body(64);
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 200,
+                body: leak(&body),
+                claim: Some(body.len() * 1000),
+                omit_length: false,
+            }],
+            "",
+        );
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            body.len() as u64,
+        );
+
+        let err = f
+            .get(&url(&mock, "/lying"), Kind::Chunk, None)
+            .await
+            .expect_err("a declared length over the ceiling must be refused");
+        assert!(
+            err.to_string().contains("ceiling"),
+            "the message must name the ceiling: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_file_destination_is_capped_too() {
+        // A ceiling enforced in the buffered path and not the file path is a
+        // ceiling with a hole in it — and the file path is the one that fetches
+        // blobs, so it is the hole that matters.
+        let body = big_body(2048);
+        let mock = spawn(vec![(200, leak(&body))], "");
+        let dir = scratch("file-cap");
+        let path = dir.join("blob.bin");
+        let mut out = crate::hash::HashingFile::create(&path).expect("create");
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            16,
+        );
+
+        let err = f
+            .get_to_file(&url(&mock, "/big"), Kind::Chunk, &mut out)
+            .await
+            .expect_err("the file destination must be capped as well");
+        assert!(err.to_string().contains("ceiling"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_ceiling_is_stopped_even_with_no_content_length() {
+    // **The second check, on its own.** Found by mutation: with an accurate
+    // `Content-Length` the pre-check always fires first, so disabling the running
+    // total changed nothing — all 37 http tests passed. An origin that omits the
+    // header is the only shape the pre-check cannot see, and without the running
+    // total it is unbounded exactly as before this change.
+    let body = big_body(4096);
+    let mock = spawn_answers(
+        vec![Answer {
+            status: 200,
+            body: leak(&body),
+            claim: None,
+            omit_length: true,
+        }],
+        "",
+    );
+    let f = fetcher_with(
+        1,
+        Arc::new(RecordingSleep::default()),
+        body.len() as u64 - 1,
+    );
+
+    let err = f
+        .get(&url(&mock, "/no-length"), Kind::Chunk, None)
+        .await
+        .expect_err("with no Content-Length the running total is the only defence");
+    assert!(
+        err.to_string().contains("ceiling"),
+        "the message must name the ceiling: {err}"
+    );
+}
+
+#[tokio::test]
     async fn observe_records_a_server_error_once_and_never_retries() {
     // **§5.5 row 16, the half that can be pinned.** `kind: "probe"` covers two
     // paths with different retry behaviour: the tag probe goes through `get` and
@@ -2228,9 +2545,9 @@ fn a_poisoned_request_log_still_takes_records() {
         let payload = b"the blob, at last";
         let mock = spawn_answers(
             vec![
-                Answer { status: 429, body: envelope, claim: None },
-                Answer { status: 503, body: envelope, claim: None },
-                Answer { status: 200, body: leak(payload), claim: None },
+                Answer { status: 429, body: envelope, claim: None, omit_length: false },
+                Answer { status: 503, body: envelope, claim: None, omit_length: false },
+                Answer { status: 200, body: leak(payload), claim: None, omit_length: false },
             ],
             "",
         );
@@ -2322,11 +2639,13 @@ fn a_poisoned_request_log_still_takes_records() {
                     // and `body` is what goes on the wire, so they must differ.
                     body: leak(&first[..first.len() / 3]),
                     claim: Some(first.len()),
+                    omit_length: false,
                 },
                 Answer {
                     status: 200,
                     body: leak(&second),
                     claim: None,
+                    omit_length: false,
                 },
             ],
             "",

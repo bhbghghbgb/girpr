@@ -215,6 +215,12 @@ pub struct CapturePlan {
     pub retries: u32,
     /// Per-request timeout.
     pub timeout: std::time::Duration,
+    /// Ceiling on one response body.
+    ///
+    /// §5.5 row 11. Not the same as --max-download-bytes, which is a *budget*
+    /// over the files a run admits to fetch; this limits any single response,
+    /// whether or not the file was admitted.
+    pub max_response_bytes: u64,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
@@ -289,7 +295,12 @@ impl std::fmt::Display for AudioSelection {
 /// (no API yet), but everything that is wrong in the *request* is caught here, so
 /// a bad flag is rejected before a socket is opened rather than after.
 pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan> {
-    let transport = validate_transport(args.jobs, args.retries, args.timeout)?;
+    let transport = validate_transport(
+        args.jobs,
+        args.retries,
+        args.timeout,
+        args.max_response_bytes,
+    )?;
     let audio = validate_audio(&args.audio)?;
     validate_paths(&args.files, "--files")?;
     validate_probe_tags(&args.probe_tags)?;
@@ -351,6 +362,7 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         jobs: args.jobs,
         retries: transport.retries,
         timeout: transport.timeout,
+        max_response_bytes: transport.max_response_bytes,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
         argv,
@@ -381,6 +393,7 @@ fn validate_transport(
     jobs: usize,
     retries: u32,
     timeout_secs: u64,
+    max_response_bytes: u64,
 ) -> Result<crate::http::Transport> {
     if jobs == 0 {
         return Err(UsageError::new("--jobs must be at least 1"));
@@ -404,9 +417,17 @@ fn validate_transport(
     if timeout_secs == 0 {
         return Err(UsageError::new("--timeout must be at least 1 second"));
     }
+    if max_response_bytes == 0 {
+        // §5.5 row 11. The other three are checked here for the same reason, and a
+        // zero ceiling is the same kind of nonsense: it would refuse the very first
+        // byte of every response, which is a tool that cannot fetch anything rather
+        // than one with a limit.
+        return Err(UsageError::new("--max-response-bytes must be at least 1"));
+    }
     Ok(crate::http::Transport {
         retries,
         timeout: std::time::Duration::from_secs(timeout_secs),
+        max_response_bytes,
     })
 }
 
@@ -660,6 +681,7 @@ mod tests {
             jobs: 4,
             retries: 3,
             timeout: 60,
+            max_response_bytes: crate::http::DEFAULT_MAX_RESPONSE_BYTES,
             hyp_base: None,
             sophon_base: None,
             common: CommonArgs {

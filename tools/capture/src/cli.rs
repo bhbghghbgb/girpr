@@ -168,6 +168,13 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "S", default_value_t = 60)]
     pub timeout: u64,
 
+    /// Ceiling on one response body, in bytes. A body larger than this is
+    /// refused rather than buffered: an origin that keeps sending is bounded by
+    /// this and not by the machine's memory. Raise it if a legitimate manifest
+    /// archive ever approaches the default.
+    #[arg(long, value_name = "BYTES", default_value_t = crate::http::DEFAULT_MAX_RESPONSE_BYTES)]
+    pub max_response_bytes: u64,
+
     /// Override the HoYoPlay base. Testing seam: points every endpoint at a
     /// local server. Defaults to the production base for `--biz`.
     #[arg(long, value_name = "URL")]
