@@ -50,17 +50,6 @@ pub struct ManifestInput<'a> {
     pub index: &'a crate::blobs::ChunkIndex,
     /// Bytes the CDN sent.
     pub bytes_downloaded: u64,
-    /// The file listing, from the close-out's one full-tree digest pass.
-    ///
-    /// **An input, not a later patch.** `build_manifest` used to return
-    /// `files: Vec::new()` and `bytes_on_disk: 0`, and the caller filled both in
-    /// after the fact — so for the whole window between the two statements the
-    /// document said the bundle was empty. Its doc claimed "every field is
-    /// something the run already knew", which was false for exactly the two
-    /// fields that needed the tree walked. Passing them in costs nothing: the
-    /// walk has to happen after every other document is written either way, and
-    /// it does, just a few lines earlier than it did.
-    pub files: &'a [FileEntry],
     /// The command line.
     pub argv: &'a [String],
     /// Whether the run finished.
@@ -72,10 +61,17 @@ pub struct ManifestInput<'a> {
 /// Every field is something the run already knew; nothing here recomputes a
 /// measurement, so the document cannot disagree with the tree it describes.
 ///
-/// That claim used to be false for `files` and `totals.bytes_on_disk`, which
-/// were left at their empty defaults for the caller to overwrite. Both are now
-/// [`ManifestInput::files`], and `bytes_on_disk` is summed from them here.
-pub fn build_manifest(i: &ManifestInput<'_>) -> Result<Manifest, String> {
+/// `files` is a separate argument rather than a field of [`ManifestInput`]
+/// because it is the one input the caller cannot supply: it comes from the
+/// close-out's full-tree digest pass, which has to run after every other
+/// document exists. As a struct field it invited a caller to pass `&[]` and get
+/// a document that lied, which is exactly what happened.
+///
+/// It used to come back empty, with `totals.bytes_on_disk: 0`, and be overwritten
+/// by the caller afterwards. The claim this doc makes was false for precisely
+/// those two fields; both are now derived here, so the returned document is
+/// whole and there is no second step that can be skipped or reordered.
+pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
     let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
     let manifest_entries: BTreeMap<String, u64> = i
         .fields
@@ -174,10 +170,10 @@ pub fn build_manifest(i: &ManifestInput<'_>) -> Result<Manifest, String> {
                 .filter(|b| b.props.stored_path.is_some())
                 .count() as u64,
             bytes_downloaded: i.bytes_downloaded,
-            bytes_on_disk: i.files.iter().map(|f| f.bytes).sum(),
+            bytes_on_disk: files.iter().map(|f| f.bytes).sum(),
         },
         matrix,
-        files: i.files.to_vec(),
+        files: files.to_vec(),
         totals_by_set,
     })
 }
@@ -787,7 +783,7 @@ mod tests {
             }
         }
 
-        fn input<'a>(&'a self, files: &'a [FileEntry]) -> ManifestInput<'a> {
+        fn input(&self) -> ManifestInput<'_> {
             ManifestInput {
                 // A fixed instant, so `capture.id` and `captured_at` are the same
                 // on every run and can be asserted against literally.
@@ -805,7 +801,6 @@ mod tests {
                 selection: &self.selection,
                 index: &self.index,
                 bytes_downloaded: 4_096,
-                files,
                 argv: &self.argv,
                 complete: true,
             }
@@ -842,7 +837,7 @@ mod tests {
         // = 2 082, which a hardcoded total would not match by accident.
         let files = vec![entry("a/one.bin", 1), entry("b/two.bin", 2_048), entry("c", 33)];
 
-        let m = build_manifest(&f.input(&files)).expect("manifest");
+        let m = build_manifest(&f.input(), &files).expect("manifest");
 
         assert_eq!(
             m.files.len(),
@@ -870,7 +865,7 @@ mod tests {
         // were indistinguishable - both were `0` - which is exactly how the bug
         // hid behind a passing assertion.
         let f = Fixture::new();
-        let m = build_manifest(&f.input(&[])).expect("manifest");
+        let m = build_manifest(&f.input(), &[]).expect("manifest");
         assert!(
             m.files.is_empty(),
             "an empty listing must stay empty, not pick up rows"
@@ -889,11 +884,11 @@ mod tests {
         // `log.bytes_in()` say, this is the test that catches it: the listing
         // and the download total are deliberately different numbers here.
         let f = Fixture::new();
-        let one = build_manifest(&f.input(&[entry("a", 100)]))
+        let one = build_manifest(&f.input(), &[entry("a", 100)])
             .expect("manifest")
             .totals
             .bytes_on_disk;
-        let two = build_manifest(&f.input(&[entry("a", 101)]))
+        let two = build_manifest(&f.input(), &[entry("a", 101)])
             .expect("manifest")
             .totals
             .bytes_on_disk;

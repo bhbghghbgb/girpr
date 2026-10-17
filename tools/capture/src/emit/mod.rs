@@ -10,6 +10,7 @@
 //! run never leaves a half-written document that reads as a complete one.
 //! `verify/checksums.json` is what proves nothing is missing.
 
+pub mod closeout;
 pub mod gamedir;
 pub mod index;
 pub mod selfcheck;

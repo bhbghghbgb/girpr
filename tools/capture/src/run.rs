@@ -688,153 +688,43 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
 
     emit::write_requests_log(&dir, &log).map_err(|e| write_err(&dir, e))?;
 
-    // 7d. The closing documents.
+    // 7d. The closing documents, and A16.
     //
-    //     The order is load-bearing and is the only ordering that makes each
-    //     document complete: A13-A17 first, because they are about the tree that
-    //     now exists; then `selfcheck.json`, `MANIFEST.json` and `README.md`,
-    //     which are about each other; then `checksums.json` last, because it must
-    //     cover all of them.
-    //
-    //     A16 is the one that cannot be settled in that order — it asks whether
-    //     `checksums.json` covers everything, and `checksums.json` does not exist
-    //     yet. So it is checked after the first write and its row appended, which
-    //     means `selfcheck.json` and `checksums.json` are each written twice.
-    //     Two passes converge exactly: the second `checksums.json` is scanned
-    //     after the final `selfcheck.json`, so what it records is what is on
-    //     disk. A third pass would find nothing new, which is the proof it
-    //     converged.
-    rows.extend(emit::selfcheck::closing(
-        &dir,
-        &old_tag,
-        &scan_dir,
-        &selection,
-        &diffs,
-        &side_digests,
-        &written,
-        plan.no_chunk_blobs,
-    ));
-    emit::selfcheck::report_failed(&rows);
-
-    // `files[]` now that every other document exists, so it lists as much as it
-    // can. It cannot list itself, README or checksums - `checksums.json` is the
-    // complete list, and its doc comment says so.
-    //
-    // This is the close-out's **one** full-tree digest pass. It used to be a
-    // fourth one, in a private function that also re-implemented
-    // `Checksums::scan`'s walk and inlined its `encoding_of` - so a third
-    // encoding would have taught `MANIFEST.json` the wrong one while
-    // `checksums.json` learned the right one.
-    //
-    // It runs *before* `build_manifest` rather than after. Nothing between here
-    // and the call writes to the tree, so the pass sees the same bytes it always
-    // did - but the manifest is now built whole, instead of being handed back
-    // with an empty `files[]` for these next two lines to fill in.
-    let (listed, seeded) = emit::write_manifest_files(&dir).map_err(|e| write_err(&dir, e))?;
-
-    let input = emit::index::ManifestInput {
-        started,
-        biz: &biz,
-        endpoints: &endpoints,
-        versions,
-        diff_tags: &params.diff_tags,
-        audio: plan.audio.codes(),
-        fields: &fields,
-        gzip_threshold: plan.gzip_threshold,
-        diffs: &diffs,
+    //     Four documents and a fixpoint. `close` owns the order because no single
+    //     one of the writes can say when it is allowed: `checksums.json` must
+    //     cover `selfcheck.json`, and A16 - which asks whether it does - cannot be
+    //     answered until `checksums.json` exists. So the two are written twice and
+    //     the second pass is what lands. See `emit::closeout`.
+    let closed = emit::closeout::close(emit::closeout::CloseoutInput {
+        dir: &dir,
+        rows,
+        manifest: emit::index::ManifestInput {
+            started,
+            biz: &biz,
+            endpoints: &endpoints,
+            versions,
+            diff_tags: &params.diff_tags,
+            audio: plan.audio.codes(),
+            fields: &fields,
+            gzip_threshold: plan.gzip_threshold,
+            diffs: &diffs,
+            selection: &selection,
+            index: &index,
+            bytes_downloaded: log.bytes_in(),
+            argv: &plan.argv,
+            complete: true,
+        },
+        old_tag: &old_tag,
+        scan_dir: &scan_dir,
         selection: &selection,
-        index: &index,
-        bytes_downloaded: log.bytes_in(),
-        files: &listed,
-        argv: &plan.argv,
-        complete: true,
-    };
-    let manifest = emit::index::build_manifest(&input)
-        .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
-    // A17 is about the matrix this document carries, so it is settled here and
-    // appended to the rows the rest of the close-out will write.
-    let (a17_ok, a17_detail) = manifest.a17();
-    rows.push(emit::selfcheck::Assertion::row(
-        "A17",
-        "MANIFEST.json matrix",
-        "every class captured | covered_by | unavailable",
-        a17_ok,
-        &a17_detail,
-    ));
+        diffs: &diffs,
+        side_digests: &side_digests,
+        written,
+        no_chunk_blobs: plan.no_chunk_blobs,
+    })?;
+    let assembly_rows = closed.assembly_rows;
 
-    // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing to
-    // assemble and nothing to prove. A declared gap is `incomplete`, not `fail`.
-    let skipped: Vec<&str> = if plan.no_chunk_blobs {
-        vec!["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"]
-    } else {
-        Vec::new()
-    };
-    let matrix_rows: Vec<emit::selfcheck::MatrixRow> = manifest
-        .matrix
-        .iter()
-        .map(|m| emit::selfcheck::MatrixRow {
-            class: m.class.clone(),
-            status: m.status.clone(),
-            // One definition of "an acceptable state", not a second copy of the
-            // literal: the A17 row and the selfcheck's matrix row must not be
-            // able to disagree about what `ok` means.
-            ok: emit::selfcheck::MatrixRow::ok_status(&m.status),
-        })
-        .collect();
-
-    // Counted here because the vector is **moved** below. It used to be
-    // `rows.clone()`, so that one integer on the summary could read `rows.len()`
-    // afterwards — a deep copy of every assertion id, subject, expected and
-    // actual string, for one `usize`.
-    let assembly_rows = rows.len() as u64;
-    let mut selfcheck = emit::selfcheck::Selfcheck::build(rows, matrix_rows, &skipped);
-    emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
-    written.push(emit::write_manifest(&dir, &manifest).map_err(|e| write_err(&dir, e))?);
-    written.push(emit::write_readme(&dir, &manifest, &selfcheck).map_err(|e| write_err(&dir, e))?);
-    let (_, checksums) = emit::write_checksums_reusing(&dir, &seeded, &[]).map_err(|e| write_err(&dir, e))?;
-    // The independent half of A16: re-reads every listed file from disk and
-    // compares. This is deliberately **not** folded into the scan above — a
-    // re-hash that reuses the digests it is checking would be a tautology.
-    let (a16_ok, a16_detail) = checksums.a16(&dir);
-    written.push("verify/checksums.json".to_string());
-
-    // Second pass: record A16, then re-write the two documents it changed.
-    // The re-scan sees the final `selfcheck.json`, so the second
-    // `checksums.json` is the authoritative one.
-    //
-    // **Unconditional.** This used to be guarded by
-    // `if !selfcheck.by_id().contains_key("A16")`, which could never be false:
-    // `selfcheck` is built from `rows`, and A16 is pushed *inside* the guard.
-    // A conditional that always fires is worse than none — it reads as "this
-    // might converge in one pass", and the comment above the pair is what
-    // actually guarantees it.
-    selfcheck.assertions.push(emit::selfcheck::Assertion::row(
-        "A16",
-        "verify/checksums.json",
-        "covers every file under the artifact root, and re-hashing matches",
-        a16_ok,
-        &a16_detail,
-    ));
-    selfcheck =
-        emit::selfcheck::Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
-    emit::write_selfcheck(&dir, &selfcheck).map_err(|e| write_err(&dir, e))?;
-    // Only `selfcheck.json` moved since the scan above, so only it is re-digested.
-    emit::write_checksums_reusing(&dir, &checksums.entries, &["verify/selfcheck.json"])
-        .map_err(|e| write_err(&dir, e))?;
-
-    tracing::info!(
-        selfcheck = ?selfcheck.result,
-        total = selfcheck.counts.total,
-        passed = selfcheck.counts.passed,
-        failed = selfcheck.counts.failed,
-        a16_ok,
-        a16_detail,
-        files = manifest.files.len(),
-        checksummed = checksums.file_count,
-        bytes_on_disk = manifest.totals.bytes_on_disk,
-        "artifact written"
-    );
-    let documents = written.len();
+    let documents = closed.written.len();
     let manifests_summary = manifest_stats(&manifests);
     tracing::info!(
         dir = %dir.display(),
