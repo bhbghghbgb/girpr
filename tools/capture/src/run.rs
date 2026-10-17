@@ -214,61 +214,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // walk and two sorted `Vec<String>` per call.
     let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
 
-    // 6c. Score, classify, admit. Pure arithmetic over `diffs` — the only work
-    //     this adds to the run is the audio manifests fetched above.
-    let pool = select::candidates(&diffs);
-    let budget = match plan.max_download_bytes {
-        Some(n) => select::Budget::capped(n),
-        None => select::Budget::unlimited(),
-    };
-    let selection = select::select(&pool, plan.per_class.max(1) as usize, budget, &plan.files);
-    for a in &selection.admitted {
-        tracing::info!(
-            capture_id = %a.capture_id,
-            class = %a.primary_class,
-            matching_field = %a.matching_field,
-            cost = a.budget_cost,
-            path = %a.path,
-            "admitted"
-        );
-    }
-    for p in &selection.forced_skipped {
-        // Named individually: the count says something was missed and the path
-        // says what, and a caller who asked for five files needs both.
-        tracing::warn!(
-            path = %p,
-            "--files named a path neither manifest carries; nothing to capture for it"
-        );
-    }
-    for row in &selection.matrix {
-        if row.is_satisfied() {
-            continue;
-        }
-        tracing::warn!(
-            class = %row.class,
-            considered = row.candidates_considered,
-            reason = row.reason.as_deref().unwrap_or(""),
-            "class not satisfied"
-        );
-    }
-    for r in &selection.rejected {
-        tracing::info!(
-            capture_id = %r.capture_id,
-            class = %r.primary_class,
-            cost = r.budget_cost,
-            reason = %r.reason,
-            path = %r.path,
-            "wanted but not funded"
-        );
-    }
-    tracing::info!(
-        pool = pool.len(),
-        admitted = selection.admitted.len(),
-        rejected = selection.rejected.len(),
-        bytes = selection.bytes_admitted,
-        budget = %selection.budget.describe(),
-        "selection decided"
-    );
+    // 6c. Score, classify, admit. Pure arithmetic over `diffs` - the only work
+    //     this adds to the run is the audio manifests fetched above. The decision
+    //     and the account of it moved together into `select::decide`.
+    let decided = select::decide::decide(&diffs, plan.per_class, plan.max_download_bytes, &plan.files);
+    let (selection, candidates_scored) = (decided.selection, decided.pool_len);
 
     // 6d. `--require-class` is the only thing that turns an absent class into a
     //     failed run. Without it an over-budget class is recorded and the run
@@ -492,7 +442,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         api_documents,
         selection_pool: &fields.join(","),
         selection: report::SelectionStats {
-            candidates_scored: pool.len() as u64,
+            candidates_scored,
             captures_admitted: selection.admitted.len() as u64,
             captures_over_budget: selection.rejected.len() as u64,
             forced_files_requested: plan.files.len() as u64,
