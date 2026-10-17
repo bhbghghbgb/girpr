@@ -577,6 +577,26 @@ pub fn check_config_ini(
     }
 }
 
+/// The ids a `--no-chunk-blobs` run declares **skipped** rather than asserted.
+///
+/// **Derived, and stated here so the derivation is checkable.** A run that
+/// stores no chunk blobs cannot establish A6 (every stored chunk's digests
+/// reconcile) or A7-A12 (every capture assembles from stored chunks) or A19 (the
+/// two sides differ), so it records those as not-proven and exits `0` with
+/// `result: incomplete`.
+///
+/// It is the complement of what a `--no-chunk-blobs` run *does* assert — A1-A5,
+/// A13-A17 — within [`WORDING`], and that is exactly what [`Selfcheck::skipped`]
+/// computes from the rows. This constant used to be a bare `vec![]` at the
+/// call site with the derived method beside it and no connection between them:
+/// two sources of truth for one fact, where a change to `WORDING` would silently
+/// change what the document said without changing what the run recorded.
+///
+/// `skipped_were_declared_not_asserted` is the check. It builds a selfcheck the
+/// way a `--no-chunk-blobs` run does and requires the two to be identical.
+pub const SKIPPED_WITHOUT_CHUNK_BLOBS: [&str; 8] =
+    ["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"];
+
 /// Whether a failure of this assertion ends the run.
 ///
 /// All seventeen, and the split in the spec is kept as a table rather than a
@@ -736,6 +756,51 @@ impl Selfcheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_were_declared_not_asserted() {
+        // **The check §6.5 asks for.** `SKIPPED_WITHOUT_CHUNK_BLOBS` is what a
+        // `--no-chunk-blobs` run *records*; `Selfcheck::skipped()` is what the
+        // document *derives* from the rows. They were two sources of truth for
+        // one fact — a `vec![]` at the call site and a derived method beside it
+        // — so a change to `WORDING` would have moved what the document said
+        // without moving what the run recorded.
+        //
+        // Both directions, because either alone passes on a one-sided change: a
+        // constant that gained an id the rows still assert, and a `WORDING` that
+        // gained an id the constant never learned about.
+        let asserted: Vec<Assertion> = ["A1", "A2", "A3", "A4", "A5", "A13", "A14", "A15", "A16", "A17"]
+            .iter()
+            .map(|id| Assertion::row(id, "s", "e", true, "a"))
+            .collect();
+        let s = Selfcheck::build(asserted, Vec::new(), &SKIPPED_WITHOUT_CHUNK_BLOBS);
+
+        assert_eq!(
+            s.skipped(),
+            SKIPPED_WITHOUT_CHUNK_BLOBS.to_vec(),
+            "the declared skips and the derived skips must be the same set"
+        );
+        assert_eq!(
+            s.result,
+            Result_::Incomplete,
+            "and a declared gap is incomplete, never a pass"
+        );
+        assert_eq!(s.counts.failed, 0, "a skip is not a failure");
+    }
+
+    #[test]
+    fn a_full_run_declares_nothing_skipped() {
+        // The other direction: with every id asserted, the derived set is empty,
+        // so the flag's list must not be used when the flag is off. A constant
+        // applied unconditionally would make every complete run `incomplete`.
+        let asserted: Vec<Assertion> = WORDING
+            .iter()
+            .map(|(id, _)| Assertion::row(id, "s", "e", true, "a"))
+            .collect();
+        let s = Selfcheck::build(asserted, Vec::new(), &[]);
+        assert!(s.skipped().is_empty());
+        assert_eq!(s.result, Result_::Pass);
+    }
 
     fn row(id: &'static str, ok: bool) -> Assertion {
         if ok {

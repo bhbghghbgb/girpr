@@ -155,9 +155,11 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
 
     // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing
     // to assemble and nothing to prove. A declared gap is `incomplete`, not
-    // `fail`.
+    // `fail`. The list is `selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS` rather than a
+    // literal, and `skipped_were_declared_not_asserted` is what keeps it equal
+    // to what the document derives from the rows.
     let skipped: Vec<&str> = if i.no_chunk_blobs {
-        vec!["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"]
+        super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS.to_vec()
     } else {
         Vec::new()
     };
