@@ -53,12 +53,18 @@ at all.
 The numbers §8 asked for, taken on this machine after all bands landed.
 
     verify, 20261017T000730Z, warm cache    7.92 s  ->  1.86-2.01 s   (4.1x)
+    cargo test -p gircap                  151 s    ->  24.4 s          (6.2x)
     capture wall clock, --jobs 1                             33.5 s
                           --jobs 2                             36.9 s
                           --jobs 4                             24.8 s
                           --jobs 8                             16.4 s   (2.0x)
     peak RSS during capture              151-154 MB   at every --jobs
     list --root artifacts                                    0.05 s
+
+The suite got **6.2x faster while carrying 119 more tests**, which was §3.8's
+whole point: it had to be cheap enough to run on every band-1 commit or the plan
+would be an afterthought. Its invariants all still hold — 0 `#[ignore]`, 0
+`thread::sleep`, 0 non-`.rs` fixture files, every capture on `127.0.0.1:0`.
 
 **§3.2's prediction is wrong, and the measurement is why §8 asked for it.**
 §3.2 says flat `--jobs` scaling "confirms the `RequestLog` mutex is the ceiling",
@@ -1057,6 +1063,8 @@ is what makes a high-risk band-3 change acceptable at all.
 
 ---
 
+---
+
 ## 10. Looked at and deliberately left alone
 
 So nobody re-audits them.
@@ -1074,3 +1082,41 @@ So nobody re-audits them.
 | **Chunk-store keying** | `BTreeMap<String, Want>` keyed by `chunk.id` gives id-uniqueness *and* the deterministic order `docs/02-plan.md` demands (`chunks.rs:332-334`, satisfied by `into_values()` at `:405`). Shared chunks correctly merge into one `Want` with multiple `Source`s. Only `ChunkIndex::get` is wrong (§3.4). |
 | **The "re-derive, don't trust" philosophy** | `docs/00-spec.md §8`. Correct, and the reason `verify` is trustworthy. §3.4 is not an argument against it — it is against re-deriving the same blob twice *within one command*, after `check_blobs` already had it in hand. |
 | **`scan-and-verify` independence (A16)** | keep pass 3 independent of pass 2. That is what makes A16 an assertion rather than a tautology (`emit/index.rs:198-199`). §3.1 collapses 4 passes to 2, not 2 to 1. |
+
+---
+
+## 11. Completion audit
+
+Checked against the tree at `c5c20e5`, section by section, rather than from the
+commit log. Every row is a measurement or a grep, not a recollection.
+
+| § | requirement | evidence |
+|---|---|---|
+| 2.1-2.4 | band-0 sweep | no dead code left; `src/` grew by 10 files that are the §3.7 split, and `run.rs` 1,981 → 860 |
+| 3.1-3.6 | output-identical | 91 of 97 byte-identical on every real capture; `game/ 9/9 expected/ 7/7 patchmaps/ 8/8 chunks/ 39/39 diff/ 5/5 manifests/ 16/16` |
+| 3.7 | split `capture()` | 1,981 → 860 lines in `run.rs`; it is no longer the largest file in `src/` |
+| 3.8 | cheap enough to gate every commit | suite **151 s → 24.4 s** with 119 more tests; 0 `#[ignore]`, 0 sleeps, 0 non-`.rs` fixtures, all captures on `127.0.0.1:0` |
+| 4 | the gate itself | `tests/bundle_diff.rs`, 8 tests, two mock captures compared byte-wise |
+| 5.1-5.4 | band-2 hardening | landed, one commit each |
+| 5.5 | the 16-row table | closed — see the status table in §5.5 |
+| 6.1-6.6 | band-3 changes | landed; the re-capture §6 owes is promoted (`20261017T123335Z`) |
+| 7 | out of bounds | `SCHEMA_VERSION` is `1`; 0 non-comment mentions of `girpr` in `src/`; no `pedantic`, no `[profile]` tuning, no `rustfmt.toml`; A1-A20 unchanged (A99 is a pre-existing test fixture for an undescribed assertion, present in the baseline) |
+| 8 | measurements | taken and recorded in §0 |
+| 10 | left alone | `exit.rs` and `select/budget.rs` untouched; `biz.rs` gained only the `Box::leak` note §10 asked for; `report.rs`'s hand-rolled `to_json_line` and absence of `serde_json::Value` intact |
+
+Full gates at `c5c20e5`:
+
+    cargo clippy -p gircap --all-targets    clean
+    cargo test -p gircap                     571 passed, 0 failed
+    cargo test --release -p gircap --test bundle_diff        8 passed
+    cargo test --release -p gircap --test schema            14 passed
+    cargo test --release -p gircap --test capture_layout    24 passed
+    gircap verify, each of the three bundles under artifacts/
+                                            exit 0, checks_total=90
+                                            checks_passed=90 findings=0
+
+**What is not claimed.** §3.2's flat-scaling prediction is *refuted but untested
+at scale* — the fixture fetches 38 blobs and cannot express the contention. The
+residual gate gap in §5.5 (`bundle_diff` cannot see a drift both its own runs
+share) is real and is not closed by anything checked in.
+
