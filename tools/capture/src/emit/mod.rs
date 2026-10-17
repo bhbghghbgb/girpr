@@ -15,6 +15,7 @@ pub mod fixture;
 pub mod gamedir;
 pub mod index;
 pub mod selfcheck;
+pub mod tree;
 
 use std::path::{Path, PathBuf};
 

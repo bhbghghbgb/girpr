@@ -240,40 +240,28 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let wants = chunk_plan.wants;
     let projected = chunk_plan.projected;
 
-    // 7. The tree. All three writes happen even though the run is incomplete:
+    // 7. The tree. All four writes happen even though the run is incomplete:
     //    what was asked, what it cost, and what came back are the parts that
     //    stay useful, and the bytes are the evidence behind every number in the
-    //    summary.
+    //    summary. `manifests` is borrowed mutably because marking where each
+    //    archive landed is what makes the chunk store's URLs resolve.
     let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
-    let mut written =
-        emit::write_api(&dir, &captured, &probe, &error_shapes)
-            .map_err(|e| write_err(&dir, e))?;
-    // Counted from what the writer returned, never restated: a hand-written
-    // count goes stale silently the moment a document is added, and nothing
-    // fails when it does.
-    let api_documents = written.len() as u64;
-    for pair in &mut manifests {
-        for m in pair {
-            let stored = manifest::dump::write(&dir, m, plan.gzip_threshold, plan.manifest_detail)
-                .map_err(|e| write_err(&dir, e))?;
-            // `stored_as` is filled in here rather than by the writer: only now is it
-            // known where the archive ended up, and only the request log can say it.
-            manifest::mark_stored(&log, m, &stored[0].path);
-            written.extend(stored.into_iter().map(|s| s.path));
-        }
-    }
-    written.extend(
-        emit::write_diff(&dir, &agg, &diffs[0].pool, &diffs).map_err(|e| write_err(&dir, e))?,
-    );
-    written.extend(
-        emit::write_selection(
-            &dir,
-            &select::candidates_document(&diffs),
-            &selection,
-            plan.per_class.max(1) as usize,
-        )
-        .map_err(|e| write_err(&dir, e))?,
-    );
+    let tree = emit::tree::write(emit::tree::TreeInput {
+        dir: &dir,
+        captured: &captured,
+        probe: &probe,
+        error_shapes: &error_shapes,
+        manifests: &mut manifests,
+        log: &log,
+        gzip_threshold: plan.gzip_threshold,
+        manifest_detail: plan.manifest_detail,
+        agg: &agg,
+        diffs: &diffs,
+        selection: &selection,
+        per_class: plan.per_class.max(1) as usize,
+    })?;
+    let mut written = tree.written;
+    let api_documents = tree.api_documents;
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //
     //     The index is written either way. `--no-chunk-blobs` produces one with
