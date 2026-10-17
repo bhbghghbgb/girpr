@@ -245,9 +245,21 @@ impl FileResult {
 /// The patch flow's result, against the direct assembly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatchOutcome {
-    /// The bytes the patch flow produced.
-    pub bytes: Vec<u8>,
-    /// `md5` of those bytes.
+    /// `md5` of the bytes the patch flow produced.
+    ///
+    /// **Not the bytes themselves.** §5.5 row 7: this struct used to carry
+    /// `bytes: Vec<u8>` as well, and nothing outside [`assemble`] ever read them —
+    /// they existed so A9 could compare them against the direct assembly, and then
+    /// were held for the rest of the capture beside `old.bytes` and `new.bytes`,
+    /// which is where the plan's ~22 MB went.
+    ///
+    /// The comparison is still a **byte** comparison, and still happens where both
+    /// sides are alive; it is settled before these bytes are returned. So removing
+    /// the field does not turn A9 into a digest check — see
+    /// [`Assembled::selfcheck_rows`] for what the *artifact's* A9 row compares,
+    /// which is `md5` against `md5`, and `docs/00-spec.md:407` for what the spec
+    /// says A9 is. Those two are not the same claim, which is worth knowing and is
+    /// not this commit's business.
     pub md5: String,
     /// A9: byte-equal to the direct `materialize_new` assembly.
     pub equals_new: bool,
@@ -742,10 +754,16 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
 
     // The patch flow needs the old file's *bytes* to verify a REUSE against, so
     // it is assembled once here and handed in rather than rebuilt per chunk.
-    let (plan, patch) = match (new_entry, &old) {
+    //
+    // The flow's own bytes come back beside its outcome rather than inside it,
+    // because **they are needed for exactly one comparison and then never
+    // again** (§5.5 row 7). `PatchOutcome` used to carry them for the rest of the
+    // capture — held alongside `old.bytes` and `new.bytes`, ~68 MB of peak
+    // residency for a file the bundle then writes to disk and stops caring about.
+    let (plan, patch, patch_bytes) = match (new_entry, &old) {
         (Some(ne), Some(o)) => {
-            let (plan, outcome) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
-            (Some(plan), Some(outcome))
+            let (plan, outcome, bytes) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
+            (Some(plan), Some(outcome), Some(bytes))
         }
         // `added`: no old side, so there is nothing to *patch from* - but there
         // is still a plan, and every entry in it is FETCH. A consumer handed
@@ -754,28 +772,52 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
         // `expectations.download_bytes` fall back to a defaulted `0`, which is
         // not "unrecorded" but *false*: the one-chunk file in the M11 bundle
         // costs 114 357 B to repair and the artifact claimed zero.
-        (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None),
+        (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None, None),
         // `removed`: no new side, so there is no plan and no target.
-        (None, _) => (None, None),
+        (None, _) => (None, None, None),
     };
+
+    // A9 is a comparison between two results that only exist together, so it is
+    // settled here rather than inside the flow — and `patch_bytes` dies on the
+    // next line, so the ~22 MB is not resident while the bundle is written.
+    //
+    // **A byte comparison, not a digest comparison**, because
+    // `docs/00-spec.md:407` specifies A9 as byte equality and the plan warned
+    // that keeping only `md5` would weaken it. Both buffers are therefore
+    // necessarily alive for the compare; what this buys is that they are not
+    // alive afterwards.
+    //
+    // **Two things worth knowing about that verdict, found while doing this.**
+    //
+    // First, `equals_new` reaches production only through the `assembled` log
+    // line in `emit::fixture`. The *artifact's* A9 row is built by
+    // `selfcheck_rows` from `p.md5` against `n.md5` — a digest comparison. So the
+    // spec's byte-equality assertion and the bundle's A9 row are not the same
+    // claim; closing that gap is artifact-visible and is not made here.
+    //
+    // Second, that gap is why this change **cannot** be covered by a negative
+    // test. Every reachable disagreement also changes the digests, so the row goes
+    // red either way, and replacing this comparison with a constant `true` passes
+    // the entire suite — verified by mutation, twice.
+    // `a9_is_red_when_the_patch_flow_and_the_direct_assembly_disagree` pins the
+    // part that *is* reachable: that a disagreement is visible at all.
+    let mut patch = patch;
+    if let (Some(n), Some(p)) = (&new, &mut patch) {
+        p.equals_new = patch_bytes.as_ref().is_some_and(|b| b == &n.bytes);
+    }
+    drop(patch_bytes);
 
     // The plan is **moved**, not borrowed. It was `plan.as_deref()` plus a
     // `to_vec()` inside `build_map` — a deep copy of every entry's ids, URLs,
     // notes and sizes, ~300 allocations per capture — for a function that only
     // ever read it.
     let map = build_map(input, old.as_ref(), new.as_ref(), plan)?;
-    let mut out = Assembled {
+    Ok(Assembled {
         map,
         old,
         new,
         patch,
-    };
-    // A9 is a comparison between two results that only exist together, so it is
-    // settled here rather than inside the flow.
-    if let (Some(n), Some(p)) = (&out.new, &mut out.patch) {
-        p.equals_new = p.bytes == n.bytes;
-    }
-    Ok(out)
+    })
 }
 
 /// The patch flow proper.
@@ -785,7 +827,7 @@ fn patch_flow(
     old: &FileResult,
     old_tag: &str,
     new_tag: &str,
-) -> Result<(Vec<PlanEntry>, PatchOutcome), String> {
+) -> Result<(Vec<PlanEntry>, PatchOutcome, Vec<u8>), String> {
     let pair = input.pair;
     let Some(old_entry) = &pair.old else {
         return Err(format!("{}: no old entry to reuse from", pair.path));
@@ -923,7 +965,6 @@ fn patch_flow(
         plan,
         PatchOutcome {
             equals_new: false, // settled by `assemble`, which holds both sides
-            bytes: out,
             md5,
             reused,
             fetched,
@@ -931,6 +972,10 @@ fn patch_flow(
             reuse_failures,
             rewrites,
         },
+        // The bytes go back to `assemble` beside the outcome rather than inside
+        // it, so the caller can compare them against the direct assembly and drop
+        // them immediately. See `PatchOutcome`.
+        out,
     ))
 }
 
@@ -1333,6 +1378,49 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         assert!(o.layout.is_clean());
     }
 
+    #[test]
+    fn a9_is_red_when_the_patch_flow_and_the_direct_assembly_disagree() {
+        // **The negative case, which the suite did not have.** Every A9 test here
+        // asserts the *agreeing* case, so nothing checked that a disagreement is
+        // visible at all.
+        //
+        // **What this pins, precisely:** that the disagreement reaches the artifact
+        // as a red A9 row and a non-green run. It does **not** pin that the
+        // comparison is by bytes — see the note below, which is why that could not
+        // be done here.
+        let good = assemble_pair(&same_offset_pair()).expect("assembles");
+        assert!(good.all_green(), "the honest pair is green: {:?}", good.selfcheck_rows());
+
+        let mut bad = assemble_pair(&same_offset_pair()).expect("assembles");
+        // One byte different on the direct side, so its digest moves and stops
+        // matching the patch side's: exactly what a patch flow that assembled
+        // from stale offsets would produce. The patch side keeps the digest it was
+        // assembled with — giving it the *new* side's digest would be the bug.
+        let n = bad.new.as_mut().expect("a new side");
+        n.bytes[0] ^= 0xff;
+        n.md5 = hash::md5_hex(&n.bytes);
+        let p = bad.patch.as_mut().expect("a patch");
+        assert_eq!(
+            p.md5, good.new.as_ref().unwrap().md5,
+            "before the disagreement both sides agreed"
+        );
+        p.equals_new = false;
+        assert_ne!(p.md5, n.md5, "and now they must not");
+
+        let a9: Vec<_> = bad
+            .selfcheck_rows()
+            .into_iter()
+            .filter(|r| r.id == "A9")
+            .collect();
+        assert_eq!(a9.len(), 1, "there is exactly one A9 row: {a9:?}");
+        assert!(
+            !a9[0].ok,
+            "a patch flow that disagrees with the direct assembly must not pass: {:?}",
+            a9[0]
+        );
+        assert!(!bad.all_green(), "and the run must not be green");
+    }
+
     /// A9 — the one that matters. The patch flow is a completely different code
     /// path from the direct assembly, so byte-equality is evidence rather than a
     /// tautology.
@@ -1345,8 +1433,12 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             p.equals_new,
             "the patch flow and the direct assembly disagree"
         );
-        assert_eq!(p.bytes, n.bytes);
-        assert_eq!(p.md5, n.md5);
+        // `p.bytes` used to be asserted here directly. It is gone (§5.5 row 7), and this
+        // line is the reason the change is safe: `equals_new` **is** that byte
+        // comparison, settled inside `assemble` while both sides were alive. A
+        // digest comparison would not be — A9 is specified as byte equality — so
+        // `md5` agreeing is corroboration, never the claim.
+        assert_eq!(p.md5, n.md5, "and the recorded digests agree too");
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
     }
 

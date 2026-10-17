@@ -1338,8 +1338,22 @@ mod m7_assembly {
         let a = assemble_measured(&hoyo_pair());
         let p = a.patch.as_ref().unwrap();
         let n = a.new.as_ref().unwrap();
-        assert_eq!(p.bytes, n.bytes);
-        assert_eq!(p.bytes.len(), 2_340_264);
+        // `PatchOutcome::bytes` is gone (§5.5 row 7): the patch flow's output is
+        // compared against the direct assembly inside `assemble` and dropped
+        // immediately, so it is not available here. `equals_new` **is** that byte
+        // comparison — the assertion this test is about — and it is a byte
+        // comparison, not a digest one, which is why removing the bytes does not
+        // weaken A9.
+        assert!(
+            p.equals_new,
+            "A9: the patch flow and the direct assembly disagree on the measured pair"
+        );
+        // The measured length moves to the side that survives. It pinned the
+        // patch flow's output before; now it pins the direct assembly's, which is
+        // the side the bundle actually stores — a better place for the same
+        // number to be checked, and 2 340 264 B is what the reference bundle's
+        // `HoYoChannel.dll` is.
+        assert_eq!(n.bytes.len(), 2_340_264);
         assert_eq!(p.md5, n.md5);
         assert_eq!(
             n.md5, n.declared_md5,
