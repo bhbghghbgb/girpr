@@ -603,6 +603,91 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
+    /// Run `f` over `items`, at most `jobs` at a time, **in input order**.
+    ///
+    /// The pattern [`crate::blobs::Store::fill`] already uses: prime a
+    /// `JoinSet` with `jobs` entries and refill it as each completes. Four
+    /// callers had hand-written serial loops where only one of the requests had
+    /// a dependency on an earlier one, so a `--no-chunk-blobs` metadata run
+    /// spent six round trips where two would do, probed seven tags one after
+    /// another, and fetched four ~9 MB manifests strictly one at a time.
+    ///
+    /// **Results come back in input order, not completion order.** That is the
+    /// whole reason this is safe for anything that writes a document: a caller
+    /// that got completion order would produce different bytes depending on
+    /// which request happened to win the race. `RequestLog` numbers at issue
+    /// time, so `api/requests.ndjson` is already in `seq` order — but the
+    /// *documents* assembled from these results are not read back through the
+    /// log, and a metadata document whose fields moved would be a different
+    /// artifact.
+    ///
+    /// One failure does not abandon the rest: each item's `Err` stays in its own
+    /// slot, and a task that panics is recorded as an `Err` at that index. A
+    /// missing blob is better evidence than no bundle.
+    ///
+    /// `f` returns `(index, result)` and **never** an outer `Err`. The index has
+    /// to come back even when the work failed, or a failed task is
+    /// indistinguishable from one that died: `JoinSet` reports a panic but not
+    /// which task panicked, so the only way to find out afterwards is to see
+    /// which index never came home. An outer `Result` would throw the index away
+    /// exactly when it is most needed.
+    ///
+    /// `f` receives a clone of this fetcher rather than a borrow, because
+    /// `JoinSet::spawn` needs a `'static` future. Cloning is three `Arc`s and
+    /// two `BTreeMap`s, so N clones are N handles on one pool and one log rather
+    /// than N fetchers with N logs.
+    pub async fn map_concurrently<T, R, F, Fut>(
+        &self,
+        items: &[T],
+        jobs: usize,
+        f: F,
+    ) -> Vec<Result<R, String>>
+    where
+        T: Clone + Send + 'static,
+        R: Send + 'static,
+        F: Fn(Fetcher, usize, T) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = (usize, Result<R, String>)> + Send + 'static,
+    {
+        let n = items.len();
+        let mut out: Vec<Option<Result<R, String>>> = (0..n).map(|_| None).collect();
+        // Which items have been accounted for. A `JoinSet` will not say *which*
+        // task panicked, so a task that dies takes its slot with it and the
+        // index is recovered at the end from what never came back.
+        let mut returned: Vec<bool> = vec![false; n];
+        let mut set = tokio::task::JoinSet::new();
+        let mut next = 0_usize;
+
+        while next < n && set.len() < jobs.max(1) {
+            let i = next;
+            next += 1;
+            set.spawn(f(self.clone(), i, items[i].clone()));
+        }
+        while let Some(joined) = set.join_next().await {
+            if let Ok((i, r)) = joined {
+                returned[i] = true;
+                out[i] = Some(r);
+            }
+            if next < n {
+                let i = next;
+                next += 1;
+                set.spawn(f(self.clone(), i, items[i].clone()));
+            }
+        }
+
+        out.into_iter()
+            .enumerate()
+            .map(|(i, r)| {
+                r.unwrap_or_else(|| {
+                    Err(if returned[i] {
+                        format!("item {i} was dispatched but never returned")
+                    } else {
+                        "a request task panicked".to_string()
+                    })
+                })
+            })
+            .collect()
+    }
+
     /// Build a fetcher with the real clock.
     pub fn new(transport: Transport, log: RequestLog) -> Result<Self, ApiError> {
         Self::with_sleeper(transport, log, Arc::new(RealSleep))

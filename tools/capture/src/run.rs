@@ -124,7 +124,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // that fetched them out of order would request a URL with no package in it.
     let client = hyp::HypClient::new(endpoints.clone(), biz, &fetcher);
     let captured = client
-        .capture_all(plan.new_selector(), plan.old_selector())
+        .capture_all(plan.new_selector(), plan.old_selector(), plan.jobs)
         .await
         .map_err(|e| apierr("metadata capture", &e))?;
 
@@ -1986,3 +1986,4 @@ mod tests {
         assert!(line.contains("retcode%20-202"), "{line}");
     }
 }
+
