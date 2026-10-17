@@ -1091,6 +1091,41 @@ the field is additive.
 Step 2 is early on purpose: it is behaviour-free, it is the difference between a
 70 s and a 151 s gate, and there are twelve gate cycles ahead of it.
 
+### The consumer contract, exercised
+
+§7 lists "anything that breaks `girpr`'s `tests/artifact_bridge.rs`" as out of
+bounds, and describes that suite as "the consumer contract": it pins matrix↔patchmap
+agreement in **both** directions, patchmap arithmetic, `expected/` ground truth,
+and that every `download_bytes` matches its patchmap to the byte.
+
+Checking that nothing in §7 was *modified* is not the same as checking the
+contract still *holds*, and until now only the first had been done. Run by hand,
+as the suite intends:
+
+    GIRPR_ARTIFACT_BUNDLE=artifacts/hk4e_global/7.0.0__7.1.0/20261017T123335Z \
+      cargo test -p girpr --test artifact_bridge -- --ignored --nocapture --test-threads=1
+
+    18 passed, 0 failed      328 s
+
+against the bundle **this branch produced**. Then the same against
+`20261017T000730Z`, which predates §6.1 and still carries the six null `api/`
+`stored_as` rows:
+
+    18 passed, 0 failed      320 s
+
+Two things follow, and the second is the one worth having. The refactor did not
+break the consumer — which nothing in `gircap`'s own gates could have told me,
+because every one of them compares two runs of `gircap`. And §6's claim that
+`SCHEMA_VERSION` may stay at `1` because every change was additive is now
+**demonstrated rather than argued**: a bundle written before §6.1 is still fully
+readable by the consumer, and so is one written after it.
+
+Two notes for whoever runs this next. The suite needs **exactly one** bundle —
+naming a root with three in it fails all 15 tests at `locate_bundle` with "3
+bundles under ... this suite needs exactly one", which looks alarming and is not.
+And it is `#[ignore]`d for cost, at roughly 5.5 minutes per bundle, which is the
+right trade for a hand-run gate and the wrong one for every commit.
+
 ### The line-count prediction in this section was wrong
 
 The paragraph above says steps 0-12 "remove roughly **550 lines** outright".
@@ -1177,7 +1212,7 @@ test suite and this document, so those are the numbers re-measured below.
 | 5.1-5.4 | band-2 hardening | landed, one commit each |
 | 5.5 | the 16-row table | closed — see the status table in §5.5 |
 | 6.1-6.6 | band-3 changes | landed; the re-capture §6 owes is promoted (`20261017T123335Z`) |
-| 7 | out of bounds | **re-verified**: `SCHEMA_VERSION` is `1`; 0 non-comment mentions of `girpr` in `src/`; 0 hits for `pedantic`, `[profile]` or `opt-level`; no `rustfmt.toml`; A1-A20 unchanged, and `A99` is the same pre-existing test fixture for an undescribed assertion that is in the baseline too |
+| 7 | out of bounds | **re-verified, and now exercised rather than merely unmodified**: `SCHEMA_VERSION` is `1`; 0 non-comment mentions of `girpr` in `src/`; 0 hits for `pedantic`, `[profile]` or `opt-level`; no `rustfmt.toml`; A1-A20 unchanged, and `A99` is the same pre-existing test fixture for an undescribed assertion that is in the baseline too. And `girpr`'s `tests/artifact_bridge.rs` — the consumer contract — **passes 18/18 against this branch's own bundle** |
 | 8 | measurements | taken and recorded in §0 |
 | 10 | left alone | **re-verified**: `exit.rs` and `select/budget.rs` have zero diff against the baseline commit; `biz.rs` gained only the `Box::leak` note §10 asked for; `report.rs`'s hand-rolled `to_json_line` and absence of `serde_json::Value` intact |
 
