@@ -208,22 +208,43 @@ impl RetryPolicy {
     }
 }
 
+/// The future [`Sleep::sleep`] hands back.
+///
+/// **Boxed on purpose.** [`Fetcher`] holds an `Arc<dyn Sleep>`, and a trait
+/// method returning `impl Future` or declared `async fn` is not dyn-compatible.
+/// One `Box` per *retry backoff* is nothing beside the 55.5 s of waiting it may
+/// be standing in for. `'static` because neither implementor borrows `self`.
+pub type SleepFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+
 /// Something that can be waited on, so tests can count delays instead of
 /// spending them.
+///
+/// **Async on purpose.** This was `fn sleep(&self, d: Duration)` and the real
+/// implementation was [`std::thread::sleep`], called from inside
+/// [`Fetcher::get`] — an `async fn` whose tasks are spawned onto the runtime.
+/// So a retry backoff *blocked a tokio worker thread* rather than yielding it:
+/// with `--retries 10` the schedule is 0.5+1+2+4+8+10+10+10+10 = 55.5 s of
+/// thread-blocked time per failing request, and on a 4-core box at `--jobs 64`
+/// all four workers can be asleep at once with nothing able to make progress.
+///
+/// [`tokio::time::sleep`] yields the worker instead, so the requests that *are*
+/// in flight keep going while this one waits.
 pub trait Sleep: Send + Sync + fmt::Debug {
     /// Wait for `d`.
-    fn sleep(&self, d: Duration);
+    fn sleep(&self, d: Duration) -> SleepFuture;
 }
 
-/// Real wall-clock waiting.
+/// Real wall-clock waiting, without taking the worker with it.
 #[derive(Debug, Default)]
 pub struct RealSleep;
 
 impl Sleep for RealSleep {
-    fn sleep(&self, d: Duration) {
-        if !d.is_zero() {
-            std::thread::sleep(d);
-        }
+    fn sleep(&self, d: Duration) -> SleepFuture {
+        Box::pin(async move {
+            if !d.is_zero() {
+                tokio::time::sleep(d).await;
+            }
+        })
     }
 }
 
@@ -239,8 +260,13 @@ impl RecordingSleep {
 }
 
 impl Sleep for RecordingSleep {
-    fn sleep(&self, d: Duration) {
+    fn sleep(&self, d: Duration) -> SleepFuture {
+        // Recorded before the future is built rather than inside it: this
+        // sleeper never waits, so the only observable difference would be when
+        // the push happens, and doing it here keeps the future free of a
+        // borrow and therefore `'static`.
         self.0.lock().expect("sleep log is not poisoned").push(d);
+        Box::pin(async {})
     }
 }
 
@@ -698,7 +724,7 @@ impl Fetcher {
             let waiting = self.policy.delay_before(attempts);
             if !waiting.is_zero() {
                 tracing::debug!(url, ?waiting, attempts, "retry backoff");
-                self.sleeper.sleep(waiting);
+                self.sleeper.sleep(waiting).await;
             }
 
             match self.attempt(url, kind, range, attempts, started).await {
@@ -1346,6 +1372,31 @@ mod tests {
         let v = f.log().records();
         assert!(!v.is_empty(), "nothing was recorded");
         v.into_iter().next_back().expect("at least one row")
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_retry_yields_the_runtime_rather_than_blocking_it() {
+        // `#[tokio::test]` runs a current-thread runtime: one worker, and
+        // everything on it. `RealSleep` used to be `std::thread::sleep`, so a
+        // retry backoff held that worker for its whole duration — which is what
+        // made `--jobs 64` on a 4-core box stall with every worker asleep.
+        //
+        // The margin is deliberate and wide: blocked, this takes >= 300 ms;
+        // yielding, it takes ~30 ms. A timing assertion is only meaningful if
+        // the two outcomes are far apart rather than close.
+        let waiter = tokio::spawn(async {
+            RealSleep.sleep(Duration::from_millis(300)).await;
+        });
+        let started = Instant::now();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let elapsed = started.elapsed();
+        waiter.await.expect("the waiter finished");
+
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "a 30 ms sleep took {elapsed:?} while one task waited 300 ms: \
+             the waiter is holding the only worker"
+        );
     }
 
     #[tokio::test]
