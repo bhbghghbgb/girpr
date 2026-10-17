@@ -39,6 +39,24 @@ pub struct Failure {
     pub code: ExitCode,
     /// The one-line cause.
     pub detail: String,
+    /// A record to print **before** this failure's own summary.
+    ///
+    /// A run can fail late enough to have measured everything. A capture that
+    /// writes its bundle and then finds a row that did not hold knows how many
+    /// captures it admitted, what they cost and how many classes it satisfied —
+    /// and none of that is in `detail`, which is one line about one assertion.
+    ///
+    /// Without this the numbers are simply gone: a failing run printed a
+    /// failure summary in place of the capture summary, so `budget_limit`,
+    /// `captures_over_budget` and `capture_bytes_admitted` were on neither
+    /// stdout nor anywhere in the bundle. The bundle is the evidence about the
+    /// *artifact*; these are the numbers about the *run*, and a caller who set a
+    /// budget it could not afford wants them most precisely when it failed.
+    ///
+    /// Carried on the failure rather than emitted where it is built, because
+    /// the command does not know the output format - `--output` is resolved in
+    /// the shim, above every command.
+    pub preceded_by: Option<crate::report::Record>,
 }
 
 impl std::fmt::Display for Failure {
@@ -60,6 +78,7 @@ impl Failure {
         Failure {
             code: ExitCode::Usage,
             detail: message.to_string(),
+            preceded_by: None,
         }
     }
 
@@ -68,6 +87,7 @@ impl Failure {
         Failure {
             code: ExitCode::Network,
             detail: format!("{what}: {e}"),
+            preceded_by: None,
         }
     }
 
@@ -81,7 +101,17 @@ impl Failure {
         Failure {
             code: ExitCode::AssertionFailed,
             detail: format!("{what}: {e}"),
+            preceded_by: None,
         }
+    }
+
+    /// Attach a record to print before this failure's own summary.
+    ///
+    /// See [Failure::preceded_by]. A builder rather than a field so that the
+    /// common case - a failure with no run to report - is spelled once.
+    pub fn preceded_by(mut self, record: Record) -> Self {
+        self.preceded_by = Some(record);
+        self
     }
 
     /// The summary a caller sees for this failure.

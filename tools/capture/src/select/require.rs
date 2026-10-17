@@ -80,6 +80,7 @@ pub fn check(required: &[Class], selection: &Selection) -> Result<(), Failure> {
     Err(Failure {
         code: ExitCode::RequirementUnmet,
         detail: format!("--require-class not met: {detail}"),
+        preceded_by: None,
     })
 }
 

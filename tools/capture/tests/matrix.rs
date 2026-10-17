@@ -70,7 +70,27 @@ struct Captured {
     _scratch: Scratch,
     _mock: Mock,
     bundle: PathBuf,
+    /// The run's own record: the one carrying `stage=`.
     summary: std::collections::BTreeMap<String, String>,
+    /// The process exit code.
+    ///
+    /// Read from the process rather than the record. A run that fails its own
+    /// assertions now prints **two** `SUMMARY` lines — the run's numbers, then
+    /// the failure's — and the two disagree about `exit_code` by design: the run
+    /// did finish (`0`) and the bundle did not hold (`3`). Which is the code
+    /// depends on which line you ask.
+    code: i32,
+    /// The failure's record, when the run failed.
+    failure: std::collections::BTreeMap<String, String>,
+}
+
+fn parse_summary(line: &str) -> std::collections::BTreeMap<String, String> {
+    line.strip_prefix("SUMMARY ")
+        .unwrap_or("")
+        .split(' ')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
@@ -87,25 +107,34 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_code, stdout, stderr) = run(&borrowed);
-    let summary: std::collections::BTreeMap<String, String> = stdout
+    let (code, stdout, stderr) = run(&borrowed);
+    // A failing capture prints two records: the run's own numbers, then the
+    // failure's. The run's is the one carrying `stage=`, which the failure's
+    // never does — so the two are told apart by shape rather than by position,
+    // and a harness that assumed "the first SUMMARY is the one" would have read
+    // `exit_code=0` off a run that exited 3.
+    let records: Vec<&str> = stdout
         .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .map(|l| {
-            l.strip_prefix("SUMMARY ")
-                .unwrap()
-                .split(' ')
-                .filter_map(|kv| kv.split_once('='))
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        })
-        .unwrap_or_else(|| panic!("no SUMMARY:\n{stdout}\n{stderr}"));
+        .filter(|l| l.starts_with("SUMMARY "))
+        .collect();
+    let summary = records
+        .iter()
+        .find(|l| l.contains(" stage="))
+        .map(|l| parse_summary(l))
+        .unwrap_or_else(|| panic!("no capture SUMMARY:\n{stdout}\n{stderr}"));
+    let failure = records
+        .iter()
+        .find(|l| l.contains("artifact_trustworthy="))
+        .map(|l| parse_summary(l))
+        .unwrap_or_default();
     let bundle = find_bundle(&scratch.out());
     Captured {
         _scratch: scratch,
         _mock: mock,
         bundle,
         summary,
+        code,
+        failure,
     }
 }
 
@@ -307,15 +336,38 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     );
     // The run fails, and says which assertion: A17, on the matrix.
     assert_eq!(
-        c.summary["exit_code"], "3",
+        c.code, 3,
         "a class the budget refused makes A17 fail, and a failed row ends the run"
     );
-    assert_eq!(c.summary["result"], "error");
+    assert_eq!(c.failure["result"], "error");
+    assert_eq!(c.failure["exit_code"], "3");
     assert!(
-        c.summary["detail"].contains("A17"),
+        c.failure["detail"].contains("A17"),
         "the failure names the assertion: {:?}",
-        c.summary["detail"]
+        c.failure["detail"]
     );
+
+    // **And the run's own numbers survive the failure.** This is the reason the
+    // capture summary is printed before the failure's: a caller who set a budget
+    // it could not afford wants to know what it did afford most precisely when
+    // the run failed. These three assertions were dropped from this test when
+    // the exit code changed and are here again because the record is emitted.
+    assert_eq!(c.summary["budget_limit"], half.to_string(), "the limit is recorded");
+    assert_eq!(c.summary["budget_unlimited"], "false");
+    let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");
+    assert!(
+        over > 0,
+        "half of {total} refused nothing; the budget did not bind: {:?}",
+        c.summary
+    );
+    assert!(
+        c.summary["capture_bytes_admitted"].parse::<u64>().unwrap() <= half,
+        "and admission did not exceed it"
+    );
+    // The run's own record still calls itself a success: it is a record of what
+    // the run *did*, and the verdict is the other line. `exit_code=0` on this
+    // record means "the run completed", which it did.
+    assert_eq!(c.summary["result"], "ok");
 
     // The matrix still records the distinction this test exists for. The bundle
     // is written before the verdict, so the evidence survives the failure -

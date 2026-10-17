@@ -82,6 +82,19 @@ pub struct Closed {
     /// into [`Selfcheck::build`] and the count is the only part the caller still
     /// wants.
     pub assembly_rows: u64,
+    /// The failure this bundle's own rows earn, if any.
+    ///
+    /// **Returned rather than raised, deliberately.** By the time this is known
+    /// the bundle is complete and internally consistent, and the caller has not
+    /// yet built the run's summary - which is where the numbers about the *run*
+    /// live, as opposed to the numbers about the artifact that are in the
+    /// bundle. Raising here would discard the run's own account of itself at
+    /// exactly the moment it became interesting.
+    ///
+    /// So `close` reports and `capture` decides, after the summary exists: the
+    /// summary is attached to the failure and both are printed. See
+    /// [`crate::failure::Failure::preceded_by`].
+    pub fatal: Option<Failure>,
 }
 
 /// Write `selfcheck.json`, `MANIFEST.json`, `README.md` and `checksums.json`,
@@ -227,17 +240,18 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         "artifact written"
     );
 
-    // **After every write, deliberately.** A failed row is settled by checking
-    // the bundle against itself, so aborting before `checksums.json` landed
-    // would leave a tree where A16 had failed *because the close-out stopped*,
-    // and the operator would read a cascade as a cause. The bundle on disk is
-    // the evidence; exit 3 says it is not trustworthy, not that it was withheld.
-    if let Some(f) = fatal_failure(&selfcheck) {
-        return Err(assertion(
+    // **After every write, deliberately, and reported rather than raised.** A
+    // failed row is settled by checking the bundle against itself, so aborting
+    // before `checksums.json` landed would leave a tree where A16 had failed
+    // *because the close-out stopped*, and the operator would read a cascade as
+    // a cause. The bundle on disk is the evidence; exit 3 says it is not
+    // trustworthy, not that it was withheld.
+    let fatal = fatal_failure(&selfcheck).map(|f| {
+        assertion(
             "the assertions this bundle makes about itself",
             &ApiError::shape(&f.id, f_detail(f)),
-        ));
-    }
+        )
+    });
 
     Ok(Closed {
         manifest,
@@ -245,6 +259,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         selfcheck,
         assembly_rows,
         written,
+        fatal,
     })
 }
 

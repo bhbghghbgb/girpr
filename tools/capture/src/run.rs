@@ -352,6 +352,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // The diff's numbers are the run's headline result, so they go on the data
     // plane and not only into the stderr narration: this is what a caller reads.
     let pool_stats = &diffs[0].pool;
+    let exit_code = ExitCode::Ok.code();
     let summary = report::capture_summary(&report::CaptureSummary {
         result: "ok",
         biz: biz.as_str(),
@@ -421,10 +422,18 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             served_outside_diff_tags: probe.summary.not_in_diff_tags_but_served as u64,
         },
         legacy_endpoint_majors_behind: legacy_behind,
-        exit_code: ExitCode::Ok.code(),
+        exit_code,
     });
 
-    Ok((summary, ExitCode::Ok))
+    // The bundle is written, the summary is built, and only now is the verdict
+    // taken. A capture that fails its own assertions still gets to report how
+    // much it did and what it spent — and that report is carried on the failure
+    // rather than printed here, because `--output` is resolved in the shim above
+    // every command and this function has never known it.
+    match closed.fatal {
+        Some(f) => Err(f.preceded_by(summary)),
+        None => Ok((summary, ExitCode::Ok)),
+    }
 }
 
 /// Five sums, a max and a count over every manifest the run wrote.
