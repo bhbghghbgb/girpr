@@ -440,6 +440,8 @@ pub async fn capture(
             .chuncks
     };
     let decoded = decode_counts(&entries);
+    // One pass over the archive for both digests it records.
+    let stored_digests = hash::md5_sha256(&fetched.body);
 
     let meta = ManifestMeta {
         schema_version: crate::SCHEMA_VERSION,
@@ -470,8 +472,8 @@ pub async fn capture(
             path: String::new(),
             bytes: fetched.body.len() as u64,
             container: "zstd",
-            md5_compressed: hash::md5_hex(&fetched.body),
-            sha256_compressed: hash::sha256_hex(&fetched.body),
+            md5_compressed: stored_digests.md5,
+            sha256_compressed: stored_digests.sha256,
             md5_decompressed: md5_decompressed.clone(),
             bytes_decompressed: decompressed.len() as u64,
             encoding: Encoding::Identity,

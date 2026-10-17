@@ -245,12 +245,13 @@ pub fn note_reconciliation(m: &CapturedManifest) {
 
 /// The meta document's `stored` block, for a caller building one by hand.
 pub fn stored_block(path: &str, bytes: &[u8], decompressed_len: usize) -> Stored {
+    let d = hash::md5_sha256(bytes);
     Stored {
         path: path.to_string(),
-        bytes: bytes.len() as u64,
+        bytes: d.bytes,
         container: "zstd",
-        md5_compressed: hash::md5_hex(bytes),
-        sha256_compressed: hash::sha256_hex(bytes),
+        md5_compressed: d.md5,
+        sha256_compressed: d.sha256,
         md5_decompressed: String::new(),
         bytes_decompressed: decompressed_len as u64,
         encoding: Encoding::Identity,

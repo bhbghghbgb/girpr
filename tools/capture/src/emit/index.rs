@@ -40,29 +40,6 @@ pub struct FileEntry {
     pub encoding: crate::hash::Encoding,
 }
 
-/// A writer that feeds both digests from one pass over the bytes.
-///
-/// The alternative — hashing the file twice — reads every blob twice, which on a
-/// 90 MB artifact is the difference between a capture that feels instant and one
-/// that does not. `std::io::copy` does the block loop, so there is no hand-rolled
-/// buffer here to get the block boundaries wrong.
-struct Tee<'a> {
-    md5: &'a mut md5::Context,
-    sha: &'a mut sha2::Sha256,
-}
-
-impl std::io::Write for Tee<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.md5.consume(buf);
-        sha2::Digest::update(self.sha, buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 /// Digest one file, streaming so a 22 MB `.blk` does not have to be resident.
 ///
 /// **A gzipped document is digested as the document, not as the file that happens
@@ -77,30 +54,30 @@ impl std::io::Write for Tee<'_> {
 /// that wrote the digests, so both sides agreed on the wrong answer. The test
 /// that catches it is in `tests/schema.rs`, and it is the reason that file reads
 /// the bytes back off disk rather than trusting the document.
+///
+/// Both digests come from **one pass** — the alternative, hashing the file
+/// twice, reads every blob twice, which on a 90 MB artifact is the difference
+/// between a capture that feels instant and one that does not. The writer is
+/// [`hash::DualDigest`] rather than a `Tee` defined here: it used to be one, and
+/// the blob path re-derived the same thing because it could not reach this one.
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
     let mut file = std::fs::File::open(path)?;
-    let mut md5c = md5::Context::new();
-    let mut sha = <sha2::Sha256 as sha2::Digest>::new();
-    let bytes = {
-        let mut tee = Tee {
-            md5: &mut md5c,
-            sha: &mut sha,
-        };
-        match encoding {
-            crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut tee)?,
-            // Streamed rather than buffered, for the same reason as above: a
-            // full manifest decode is several megabytes.
-            crate::hash::Encoding::Gzip => {
-                let mut gz = flate2::read::GzDecoder::new(file);
-                std::io::copy(&mut gz, &mut tee)?
-            }
+    let mut d = hash::DualDigest::new();
+    match encoding {
+        crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut d)?,
+        // Streamed rather than buffered, for the same reason as above: a
+        // full manifest decode is several megabytes.
+        crate::hash::Encoding::Gzip => {
+            let mut gz = flate2::read::GzDecoder::new(file);
+            std::io::copy(&mut gz, &mut d)?
         }
     };
+    let d = d.finish();
     Ok(FileEntry {
         path: String::new(),
-        bytes,
-        md5: hash::hex_bytes(&md5c.compute().0),
-        sha256: hash::hex_bytes(&sha2::Digest::finalize(sha)),
+        bytes: d.bytes,
+        md5: d.md5,
+        sha256: d.sha256,
         encoding,
     })
 }

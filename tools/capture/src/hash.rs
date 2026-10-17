@@ -35,6 +35,102 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex_bytes(&Sha256::digest(bytes))
 }
 
+/// What one pass over some bytes says about them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Digests {
+    /// How many bytes were fed in.
+    pub bytes: u64,
+    /// Lowercase hex MD5.
+    pub md5: String,
+    /// Lowercase hex SHA-256.
+    pub sha256: String,
+}
+
+/// Both digests, from one pass over the bytes.
+///
+/// MD5 is the manifest and CDN language; SHA-256 is what `checksums.json`
+/// publishes. Nearly every buffer in this crate needs **both**, and the one-shot
+/// [`md5_hex`] / [`sha256_hex`] pair turns that into two passes over the same
+/// bytes — which for the raw blob path is ~27 MB of chunk bodies read twice per
+/// capture, and for a manifest archive another 9 MB.
+///
+/// It implements [`std::io::Write`] so [`std::io::copy`] drives it: there is no
+/// hand-rolled buffer here to get the block boundaries wrong, and it works
+/// identically whether the bytes arrive from a file, a gzip decoder or a zstd
+/// decoder.
+///
+/// **This used to live in `emit::index` as a private `Tee`**, which meant the
+/// blob path re-derived it, and the crate's own "the helpers live here rather
+/// than being re-derived four times" was not true.
+///
+/// Not [`Debug`]: `md5::Context` does not implement it, and a partial dump of a
+/// half-fed hash state is worse than none. [`Digests`] is the thing to print.
+pub struct DualDigest {
+    md5: md5::Context,
+    sha: sha2::Sha256,
+    len: u64,
+}
+
+impl DualDigest {
+    /// An empty pair, ready to be fed.
+    pub fn new() -> Self {
+        DualDigest {
+            md5: md5::Context::new(),
+            sha: <sha2::Sha256 as sha2::Digest>::new(),
+            len: 0,
+        }
+    }
+
+    /// How many bytes have gone in so far.
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    /// Whether nothing has gone in yet.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Finish, and take the digests.
+    pub fn finish(self) -> Digests {
+        Digests {
+            bytes: self.len,
+            md5: hex_bytes(&self.md5.compute().0),
+            sha256: hex_bytes(&sha2::Digest::finalize(self.sha)),
+        }
+    }
+}
+
+impl Default for DualDigest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::io::Write for DualDigest {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.md5.consume(buf);
+        sha2::Digest::update(&mut self.sha, buf);
+        self.len += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Both digests of a buffer already in memory, in one pass.
+///
+/// The convenience for the common case; [`DualDigest`] is for bytes that are
+/// still arriving.
+pub fn md5_sha256(bytes: &[u8]) -> Digests {
+    let mut d = DualDigest::new();
+    // Writing to an in-memory writer of ours cannot fail.
+    let _ = d.write_all(bytes);
+    d.finish()
+}
+
 const HEX_LOWER: [u8; 16] = *b"0123456789abcdef";
 const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
 
@@ -202,7 +298,42 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
 mod tests {
     use super::*;
 
-    /// Streaming must answer exactly what decompressing answers.
+    /// One pass must equal two, or every digest in the bundle moves.
+    ///
+    /// `DualDigest` replaced a `Tee` inside `emit::index` and three pairs of
+    /// one-shot calls, so this is the test standing between that refactor and a
+    /// silently different artifact. Checked over the lengths that matter —
+    /// empty, sub-block, block-exact, and well past it — and through
+    /// `std::io::copy` from a reader rather than a single `write_all`, because
+    /// the block boundaries are where a streaming digest goes wrong.
+    #[test]
+    fn one_pass_agrees_with_the_two_one_shots_it_replaced() {
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            vec![0_u8; 1],
+            vec![0x5a_u8; 8 * 1024],
+            vec![0x5a_u8; 32 * 1024 + 7],
+            vec![0xff_u8; 3_689_476],
+        ];
+        for bytes in &cases {
+            let d = md5_sha256(bytes);
+            assert_eq!(d.md5, md5_hex(bytes), "md5 of {} B", bytes.len());
+            assert_eq!(d.sha256, sha256_hex(bytes), "sha256 of {} B", bytes.len());
+            assert_eq!(d.bytes, bytes.len() as u64);
+
+            // And the streaming form, driven by io::copy.
+            let mut dual = DualDigest::new();
+            assert!(dual.is_empty());
+            std::io::copy(&mut bytes.as_slice(), &mut dual).expect("copy");
+            let streamed = dual.finish();
+            assert_eq!(streamed, d, "streamed == one-shot");
+            assert_eq!(streamed.bytes, bytes.len() as u64);
+        }
+        // Empty input is still a valid digest pair, not a special case.
+        assert_eq!(md5_sha256(&[]).md5, "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    /// Streaming a zstd decode must agree with decompressing the same bytes.
     ///
     /// `zstd_measure` exists to save a `Vec<u8>` per chunk, and the only thing
     /// standing between that and an artifact-visible change is that the two

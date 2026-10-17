@@ -340,11 +340,24 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             match fetcher.get(&url, Kind::Chunk, None).await {
                 Ok(fetched) => {
-                    let mut props = BlobProps::measure(&fetched.body, &want.chunk)
-                        .map_err(|e| e.to_string())?;
+                    let body = fetched.body;
+                    let chunk = want.chunk.clone();
+                    // Measuring a blob is a zstd decode and two digests — on the
+                    // largest chunk in the reference bundle, several megabytes of
+                    // synchronous CPU. Done inline this runs on a tokio worker,
+                    // so `--jobs 4` means four workers blocked at once and no
+                    // fetch can be issued until one finishes. `spawn_blocking`
+                    // moves it to the blocking pool and hands the bytes back, so
+                    // the buffer is moved rather than copied.
+                    let (mut props, body) = tokio::task::spawn_blocking(move || {
+                        let p = BlobProps::measure(&body, &chunk).map_err(|e| e.to_string())?;
+                        Ok::<_, String>((p, body))
+                    })
+                    .await
+                    .map_err(|e| format!("{}: measure task panicked: {e}", want.chunk.id))??;
                     let rel = BlobProps::stored_path_for(&want.chunk.id);
                     self_
-                        .write(&rel, &fetched.body)
+                        .write(&rel, &body)
                         .map_err(|e| format!("{}: write: {e}", want.chunk.id))?;
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.

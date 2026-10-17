@@ -474,20 +474,22 @@ fn describe_bytes(raw: &[u8]) -> String {
     if !hash::is_zstd(raw) {
         return format!("{} B, not a zstd frame", raw.len());
     }
-    match hash::zstd_decompress(raw, "stored blob") {
-        Ok(d) => format!(
+    // Both compressed digests in one pass, and the decoded pair streamed rather
+    // than materialised — `describe_bytes` exists to *describe*, so a multi-megabyte
+    // decoded buffer it then throws away was the wrong shape entirely.
+    let compressed = hash::md5_sha256(raw);
+    match hash::zstd_measure(raw, "stored blob") {
+        Ok(m) => format!(
             "{} B md5 {} sha256 {} -> {} B md5 {}",
-            raw.len(),
-            hash::md5_hex(raw),
-            hash::sha256_hex(raw),
-            d.len(),
-            hash::md5_hex(&d)
+            compressed.bytes,
+            compressed.md5,
+            compressed.sha256,
+            m.len,
+            m.md5
         ),
         Err(e) => format!(
             "{} B md5 {} sha256 {}, {e}",
-            raw.len(),
-            hash::md5_hex(raw),
-            hash::sha256_hex(raw)
+            compressed.bytes, compressed.md5, compressed.sha256
         ),
     }
 }
