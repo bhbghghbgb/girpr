@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::cli::ManifestDetail;
 use crate::hash::{self, Encoding};
 use crate::manifest::proto::SophonChunkFile;
-use crate::manifest::{CapturedManifest, ManifestMeta, Stored};
+use crate::manifest::{CapturedManifest, Stored};
 
 /// The artifact-relative path of a manifest's files.
 pub fn dir(tag: &str) -> String {
@@ -263,11 +263,15 @@ pub fn tag_dir(root: &Path, tag: &str) -> PathBuf {
     root.join(dir(tag))
 }
 
-/// The meta document as a `serde_json::Value`, for a test or a reader.
-pub fn meta_json(m: &ManifestMeta) -> serde_json::Value {
-    serde_json::to_value(m).expect("ManifestMeta is all owned data")
-}
-
+/// **Removed:** `meta_json`.
+///
+/// It had no callers — not the crate, not the tests, not the integration tests
+/// — and its entire body was `to_value(m).expect("ManifestMeta is all owned
+/// data")`, which §5.1 lists as a production panic. A function with no callers
+/// whose only content is a panic is not a function, and the plan's fix for it
+/// ("`io::Error::other`, which is strictly better in a write path") does not
+/// apply: this is not in a write path. What a caller actually reads is the
+/// written document.
 #[cfg(test)]
 mod tests {
     use super::*;

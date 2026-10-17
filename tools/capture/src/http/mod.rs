@@ -255,7 +255,15 @@ pub struct RecordingSleep(Mutex<Vec<Duration>>);
 impl RecordingSleep {
     /// Every delay requested so far.
     pub fn delays(&self) -> Vec<Duration> {
-        self.0.lock().expect("sleep log is not poisoned").clone()
+        self.lock().clone()
+    }
+
+    /// Take the lock, recovering from poisoning — the same reasoning as
+    /// [`RequestLog::lock`]. A recorded delay is evidence about a retry
+    /// schedule, and losing it to a panic is a worse outcome than reading a
+    /// half-pushed vector.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Duration>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -265,7 +273,7 @@ impl Sleep for RecordingSleep {
         // sleeper never waits, so the only observable difference would be when
         // the push happens, and doing it here keeps the future free of a
         // borrow and therefore `'static`.
-        self.0.lock().expect("sleep log is not poisoned").push(d);
+        self.lock().push(d);
         Box::pin(async {})
     }
 }
@@ -370,6 +378,30 @@ impl RequestRecord {
 #[derive(Debug, Clone, Default)]
 pub struct RequestLog(Arc<Mutex<LogState>>);
 
+impl RequestLog {
+    /// Take the lock, **recovering from poisoning**.
+    ///
+    /// This was `.lock().expect("request log is not poisoned")` at eight sites,
+    /// and poisoning is genuinely reachable rather than theoretical: the lock
+    /// sits inside the concurrent chunk fetcher, so one task panicking while it
+    /// holds this lock poisons it for every other task — and a poisoned lock
+    /// makes every subsequent `.expect` panic too, so one panic anywhere turns
+    /// into a run that cannot even record its own failure.
+    ///
+    /// The crate already *tolerates* panicking fetch tasks (`blobs::Store::one`
+    /// records "a chunk fetch task panicked" and carries on), so the two
+    /// policies contradicted each other: a task was allowed to panic, and the
+    /// log it poisoned was then allowed to take the whole run down.
+    ///
+    /// `PoisonError::into_inner` hands back the guard anyway, and a half-updated
+    /// log is still a perfectly good log for provenance — which is the only job
+    /// this has. `Record` and `reserve` are the only things that touch
+    /// `LogState`, and both are single field writes.
+    fn lock(&self) -> std::sync::MutexGuard<'_, LogState> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 #[derive(Debug, Default)]
 struct LogState {
     next_seq: u64,
@@ -405,14 +437,14 @@ impl RequestLog {
     /// `--jobs 8` would otherwise number its chunk fetches by which download
     /// happened to finish first, which is a function of the network.
     pub fn reserve(&self) -> u64 {
-        let mut s = self.0.lock().expect("request log is not poisoned");
+        let mut s = self.lock();
         s.next_seq += 1;
         s.next_seq
     }
 
     /// Append a record. Its `seq` is already assigned.
     pub fn push(&self, record: RequestRecord) {
-        let mut s = self.0.lock().expect("request log is not poisoned");
+        let mut s = self.lock();
         let at = s.records.len();
         let seq = record.seq;
         s.records.push(record);
@@ -422,9 +454,7 @@ impl RequestLog {
     /// Every record, in `seq` order.
     pub fn records(&self) -> Vec<RequestRecord> {
         let mut v = self
-            .0
             .lock()
-            .expect("request log is not poisoned")
             .records
             .clone();
         // Sorted here, not appended in order. `reserve()` assigns `seq` at issue
@@ -451,9 +481,7 @@ impl RequestLog {
 
     /// Total bytes received across the run.
     pub fn bytes_in(&self) -> u64 {
-        self.0
-            .lock()
-            .expect("request log is not poisoned")
+        self.lock()
             .records
             .iter()
             .map(|r| r.bytes_in)
@@ -462,9 +490,7 @@ impl RequestLog {
 
     /// How many requests were made.
     pub fn len(&self) -> usize {
-        self.0
-            .lock()
-            .expect("request log is not poisoned")
+        self.lock()
             .records
             .len()
     }
@@ -483,7 +509,7 @@ impl RequestLog {
     /// used to walk `records` under the lock; see [`LogState::by_seq`] for what
     /// that cost.
     pub fn set_stored_as(&self, seq: u64, path: impl Into<String>) {
-        let mut s = self.0.lock().expect("request log is not poisoned");
+        let mut s = self.lock();
         if let Some(&i) = s.by_seq.get(&seq) {
             s.records[i].stored_as = Some(path.into());
         }
@@ -1459,6 +1485,60 @@ mod tests {
         v.into_iter().next_back().expect("at least one row")
     }
 
+/// A panic in one fetch must not take the log — or the run — with it.
+///
+/// Poisoning was genuinely reachable, not theoretical: the log's lock sits
+/// inside the concurrent chunk fetcher, so one task panicking while it holds
+/// this lock poisons it for every other task. The old
+/// `.expect("request log is not poisoned")` at eight sites then made every
+/// later writer panic too, so a single panic anywhere turned into a run that
+/// could not even record its own failure — while `Store::one` was explicitly
+/// built to tolerate a panicking fetch task and carry on.
+#[test]
+fn a_poisoned_request_log_still_takes_records() {
+    let other = RequestLog::new();
+    let log = RequestLog::new();
+    assert_eq!(log.reserve(), 1, "issue order starts at 1");
+
+    // Poison it exactly the way a panicking fetch task would.
+    let panicker = log.clone();
+    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = panicker.0.lock().expect("held only in order to poison");
+        panic!("a fetch task died holding the log");
+    }));
+    assert!(died.is_err(), "the panic is the point");
+    assert!(log.0.is_poisoned(), "and it did poison the lock");
+
+    // Which is the whole claim: the next writer carries on.
+    let seq = log.reserve();
+    assert_eq!(seq, 2, "a poisoned log still numbers");
+    let r = RequestRecord {
+        seq,
+        ts: "2026-01-01T00:00:00.000Z".into(),
+        kind: Kind::Chunk,
+        method: "GET",
+        url: "https://example.invalid/x".into(),
+        range: None,
+        status: 200,
+        final_url: String::new(),
+        redirected: false,
+        elapsed_ms: 1,
+        req_headers: BTreeMap::new(),
+        resp_headers: BTreeMap::new(),
+        bytes_in: 0,
+        stored_as: None,
+        attempts: 1,
+    };
+    log.push(r);
+    log.set_stored_as(seq, "somewhere");
+    assert_eq!(log.len(), 1, "and still records");
+    assert_eq!(log.bytes_in(), 0);
+    let back = log.records();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].stored_as.as_deref(), Some("somewhere"));
+    // Poisoning is per-lock, not global: an unrelated log is unaffected.
+    assert_eq!(other.len(), 0);
+}
     #[tokio::test]
     async fn waiting_for_a_retry_yields_the_runtime_rather_than_blocking_it() {
         // `#[tokio::test]` runs a current-thread runtime: one worker, and

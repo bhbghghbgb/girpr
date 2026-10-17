@@ -97,7 +97,19 @@ pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             if e.is_dir() {
                 go(&e, root, out)?;
             } else if e.is_file() {
-                out.push(e.strip_prefix(root).expect("under the root").to_path_buf());
+                // Unreachable in practice — `read_dir` builds its entries by
+                // joining the rooted path it was given — and an `io::Error`
+                // anyway, matching every other function here. A `walk` that
+                // panics is a `walk` that cannot report a junction or a
+                // dangling symlink it did not expect.
+                let rel = e.strip_prefix(root).map_err(|_| {
+                    std::io::Error::other(format!(
+                        "{} is not under the artifact root {}",
+                        e.display(),
+                        root.display()
+                    ))
+                })?;
+                out.push(rel.to_path_buf());
             }
         }
         Ok(())

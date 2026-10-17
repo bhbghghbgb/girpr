@@ -414,22 +414,24 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         })
         .collect();
     if !missing.is_empty() {
+        // One pass, and the row is carried rather than looked up again. This
+        // was a second `.find()` plus `.expect("every required class has a
+        // matrix row")` — provably unreachable, since `missing` is built from
+        // the identical predicate over the identical slice, but it is a panic in
+        // a function that takes a user-supplied `--require-class`, and the
+        // redundancy bought nothing.
         let detail = missing
             .iter()
-            .map(|c| {
-                let row = selection
-                    .matrix
-                    .iter()
-                    .find(|r| r.class == *c)
-                    .expect("every required class has a matrix row");
-                format!(
+            .filter_map(|c| {
+                let row = selection.matrix.iter().find(|r| r.class == *c)?;
+                Some(format!(
                     "{c}: {:?}{}",
                     row.status,
                     row.reason
                         .as_deref()
                         .map(|r| format!(" ({r})"))
                         .unwrap_or_default()
-                )
+                ))
             })
             .collect::<Vec<_>>()
             .join("; ");
