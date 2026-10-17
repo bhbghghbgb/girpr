@@ -16,6 +16,7 @@
 //! | [`report`] | M0 | the stdout data plane; the only `println!` in the crate |
 //! | [`logging`] | M0 | stderr narration via `tracing`, plus `--log-file` |
 //! | [`config`] | M0 | the resolved run plan every command works from |
+//! | [`failure`] | M0 | [`Failure`] and the four ways a command can say it failed |
 //! | [`run`] | M0 | command dispatch: the four entry points |
 //! | [`biz`] | M1 | launcher/game ids, API bases, the channel tuple |
 //! | [`http`] | M1 | [`http::Fetcher`]: retries, timeout, UA, request log |
@@ -49,6 +50,7 @@ pub mod cli;
 pub mod config;
 pub mod emit;
 pub mod exit;
+pub mod failure;
 pub mod hash;
 pub mod http;
 pub mod hyp;
