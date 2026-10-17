@@ -695,7 +695,7 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
 
 /// A13, re-read from disk.
 ///
-/// **Delegates to [`crate::run::check_config_ini`]**, which the capture also
+/// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the capture also
 /// calls. This was a second copy of the same read → parse → compare, with
 /// different wording in every branch: it said `readable` where the capture says
 /// `game_version == <tag>`, and reported the value as `game_version == v` where
@@ -703,7 +703,7 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
 /// against the capture's recorded ones, two spellings means the check can
 /// disagree with the record it is supposed to be re-deriving.
 fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
-    vec![crate::run::check_config_ini(root, &manifest.versions.old.tag)]
+    vec![crate::emit::selfcheck::check_config_ini(root, &manifest.versions.old.tag)]
 }
 
 /// Does the recomputation agree with what the capture recorded?

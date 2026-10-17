@@ -351,6 +351,232 @@ pub fn api_and_manifest(
     rows
 }
 
+/// A13, A14 and A15: the assertions that are about the tree, not a blob.
+///
+/// **Lived in `run.rs`** as a 174-line function the orchestrator called once.
+/// It reads no orchestrator state, produces rows, and ended by returning one
+/// `Vec<Assertion>` for the caller to append -- so it belonged next to the
+/// `Assertion` it builds, with `check_config_ini` beside it.
+///
+#[allow(clippy::too_many_arguments)]
+pub fn closing(
+    dir: &std::path::Path,
+    old_tag: &str,
+    scan_dir: &str,
+    selection: &crate::select::Selection,
+    diffs: &[crate::manifest::diff::FieldDiff],
+    side_digests: &BTreeMap<String, (String, String)>,
+    written: &[String],
+    no_chunk_blobs: bool,
+) -> Vec<Assertion> {
+    let mut rows = Vec::new();
+
+    // A13: `game/config.ini` re-parses with `game_version == --old-tag`.
+    //
+    // Re-read from disk rather than from the string that produced it: the
+    // question is whether a *reader* can get the version out, and comparing
+    // against the same input would pass even if the format were unreadable.
+    rows.push(check_config_ini(dir, old_tag));
+
+    // A14: `game/` holds nothing but the tool-read config and the variant
+    // files. Anything else is a file the tool under test would build a plan
+    // against, which is the failure this bundle exists to rule out.
+    let captured: std::collections::BTreeSet<&str> =
+        selection.admitted.iter().map(|a| a.path.as_str()).collect();
+    let game_files: std::collections::BTreeSet<&str> = written
+        .iter()
+        .filter_map(|p| p.strip_prefix("game/"))
+        .collect();
+    let strays: Vec<&str> = game_files
+        .iter()
+        .copied()
+        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(p))
+        .collect();
+    rows.push(if strays.is_empty() {
+        Assertion::pass(
+            "A14",
+            wording("A14"),
+            "game/",
+            &format!(
+                "{} files, all of them config.ini, the scan file, or a captured path",
+                game_files.len()
+            ),
+        )
+    } else {
+        Assertion::fail(
+            "A14",
+            wording("A14"),
+            "game/",
+            "config.ini, the audio scan file, and captured paths only",
+            &format!("{} stray path(s): {}", strays.len(), strays.join(", ")),
+        )
+    });
+
+    // A19: the *converse* of A14 - every captured file differs between the two
+    // trees exactly when its class says it should.
+    //
+    // A14 asks "is `game/` free of paths the tool under test would plan
+    // against", which is one direction. It cannot see the other failure: a
+    // capture admitted for `partial_same_offset` whose two variant files came
+    // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
+    // side matches its own declared MD5), and be useless - the fixture would
+    // hold no evidence of the patch it was captured for. M11 found the gap by
+    // comparing the two trees by hand, which is the argument for checking it.
+    //
+    // A capture with only one side - `added` or `removed` - is skipped: its file
+    // is absent from one tree *by construction*, which is the whole point of the
+    // class rather than a disagreement.
+    // Skipped under `--no-chunk-blobs`, for the reason A6 is: there are no
+    // assembled sides to compare, so the check would pass vacuously and a green
+    // row would be a claim about nothing. Exactly the failure mode A6 had.
+    let mut agree: Vec<&str> = Vec::new();
+    let mut disagree: Vec<String> = Vec::new();
+    if !no_chunk_blobs {
+        for a in &selection.admitted {
+            let Some((old, new)) = side_digests.get(&a.capture_id) else {
+                continue;
+            };
+            if old.is_empty() || new.is_empty() {
+                // One-sided: absent from the other tree by design.
+                continue;
+            }
+            let differs = old != new;
+            let should_differ = !a.primary_class.is_identical();
+            if differs == should_differ {
+                agree.push(a.path.as_str());
+            } else {
+                disagree.push(format!(
+                    "{} ({}) {} but its class says it should {}",
+                    a.path,
+                    a.capture_id,
+                    if differs { "differs" } else { "is unchanged" },
+                    if should_differ {
+                        "differ"
+                    } else {
+                        "be unchanged"
+                    }
+                ));
+            }
+        }
+        rows.push(if disagree.is_empty() {
+            Assertion::pass(
+                "A19",
+                wording("A19"),
+                "game/ vs expected/",
+                &format!(
+                    "{} two-sided capture(s): each file differs exactly when its class says \
+                     it should",
+                    agree.len()
+                ),
+            )
+        } else {
+            Assertion::fail(
+                "A19",
+                wording("A19"),
+                "game/ vs expected/",
+                "each two-sided file differs exactly when its class says it should",
+                &format!("{} disagree: {}", disagree.len(), disagree.join("; ")),
+            )
+        });
+    }
+    // data it counted is caught rather than copied.
+    for f in diffs {
+        let recomputed_common = f
+            .rows
+            .iter()
+            .filter(|r| matches!(r.state, crate::manifest::diff::State::Identical | crate::manifest::diff::State::Changed))
+            .count() as u64;
+        let recomputed_identical = f
+            .rows
+            .iter()
+            .filter(|r| r.state == crate::manifest::diff::State::Identical)
+            .count() as u64;
+        let recomputed_added = f
+            .rows
+            .iter()
+            .filter(|r| r.state == crate::manifest::diff::State::Added)
+            .count() as u64;
+        let recomputed_removed = f
+            .rows
+            .iter()
+            .filter(|r| r.state == crate::manifest::diff::State::Removed)
+            .count() as u64;
+        let subject = format!("diff/{} counts", f.field);
+        for (name, recorded, actual) in [
+            ("common", f.counts.common, recomputed_common),
+            ("identical", f.counts.identical, recomputed_identical),
+            ("added", f.counts.added, recomputed_added),
+            ("removed", f.counts.removed, recomputed_removed),
+        ] {
+            rows.push(Assertion::check(
+                "A15",
+                wording("A15"),
+                &format!("{subject} ({name})"),
+                &recorded.to_string(),
+                &actual.to_string(),
+            ));
+        }
+    }
+
+    // `--no-chunk-blobs` contributes **no** A7-A12 rows. A declared gap is not a
+    // failure: it is declared the way the design declares everything else — by
+    // listing the ids in `skipped`, which is what makes `Selfcheck::build` answer
+    // `incomplete` rather than `fail`. A row that says "not asserted" and is marked
+    // `ok: false` tells a reader the bundle is broken when it is honestly
+    // incomplete.
+    if no_chunk_blobs {
+        tracing::debug!("--no-chunk-blobs: A7-A12 are declared skipped, not asserted");
+    }
+    rows
+}
+
+
+/// A13: read `game/config.ini` back and check the version a reader would find.
+///
+/// **One implementation, two callers.** `verify` ran its own copy — same file,
+/// same parse, same comparison, and *different wording* for every branch, which
+/// is the worst kind of duplication: the two can disagree about what a passing
+/// A13 looks like on paper while agreeing about whether it passes.
+///
+/// The capture's wording is the one kept, because `verify` compares its rows
+/// against the capture's recorded ones, and the recorded row is what a reader
+/// has already seen. `verify` no longer says `readable` where the capture says
+/// `game_version == <tag>`, nor `game_version == v` where the capture writes
+/// `game_version is v`.
+pub fn check_config_ini(
+    dir: &std::path::Path,
+    old_tag: &str,
+) -> Assertion {
+    const SUBJECT: &str = "game/config.ini";
+    let cfg = dir.join("game").join("config.ini");
+    let expected = format!("game_version == {old_tag}");
+    match std::fs::read_to_string(&cfg) {
+        Err(e) => Assertion::fail(
+            "A13",
+            wording("A13"),
+            SUBJECT,
+            &expected,
+            &format!("unreadable: {e}"),
+        ),
+        Ok(text) => match crate::emit::gamedir::parse_game_version(&text) {
+            Err(e) => Assertion::fail("A13", wording("A13"), SUBJECT, &expected, &e),
+            Ok(got) if got == old_tag => Assertion::pass(
+                "A13",
+                wording("A13"),
+                SUBJECT,
+                &format!("game_version is {got}"),
+            ),
+            Ok(got) => Assertion::fail(
+                "A13",
+                wording("A13"),
+                SUBJECT,
+                &expected,
+                &format!("game_version is {got}, the old tag is {old_tag}"),
+            ),
+        },
+    }
+}
+
 /// Whether a failure of this assertion ends the run.
 ///
 /// All seventeen, and the split in the spec is kept as a table rather than a
