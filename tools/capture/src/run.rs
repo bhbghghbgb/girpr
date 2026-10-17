@@ -217,7 +217,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
                 ));
             }
         };
-        verify_manifest(&m, tag, field)?;
+        manifest::verify(&m, tag, field)?;
         manifests[k / 2].push(m);
     }
 
@@ -992,53 +992,7 @@ fn satisfied(selection: &select::Selection) -> u64 {
     selection.matrix.iter().filter(|r| r.is_satisfied()).count() as u64
 }
 
-/// The two things a decoded manifest must satisfy before any byte of it is
-/// trusted: its decompressed MD5 matches the declared checksum, and the decoded
-/// counts reconcile against the declared stats.
-///
-/// Both are exit `3`. The bytes arrived intact or they did not, and either way
-/// nothing here is the network's fault — a checksum that fails is a fact about
-/// what was published, and the capture cannot be built on top of it.
-fn verify_manifest(m: &CapturedManifest, tag: &str, field: &str) -> Result<(), Failure> {
-    if !m.meta.verified.all_green() {
-        return Err(assertion(
-            &format!("verify the {tag} {field} manifest"),
-            &ApiError::shape(
-                tag,
-                format!(
-                    "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
-                    m.meta.verified.decompressed_md5_matches_checksum,
-                    m.meta.verified.checksum_matches_id_suffix
-                ),
-            ),
-        ));
-    }
-    let v = manifest::reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
-    if !v.is_empty() {
-        return Err(assertion(
-            &format!("reconcile the {tag} {field} manifest"),
-            &ApiError::shape(
-                tag,
-                v.iter()
-                    .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            ),
-        ));
-    }
-    manifest::dump::note_reconciliation(m);
-    if !m.meta.decoded.structure.clean() {
-        // Recorded, not fatal: spec §3.6 says a violation must still produce
-        // a capture with the selfcheck naming what broke. M8 makes it a row.
-        tracing::warn!(
-            tag,
-            field,
-            violations = ?m.meta.decoded.structure.violations(),
-            "manifest violates a structural invariant; recorded, not fatal"
-        );
-    }
-    Ok(())
-}
+
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
 ///

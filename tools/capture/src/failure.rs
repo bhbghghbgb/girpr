@@ -41,6 +41,18 @@ pub struct Failure {
     pub detail: String,
 }
 
+impl std::fmt::Display for Failure {
+    /// The one-line cause, on its own.
+    ///
+    /// The code is deliberately *not* in the output: `detail` is a field of a
+    /// `SUMMARY` line and is consumed there, so printing a `Failure` in a log or
+    /// an assertion message should not invent a second, differently-shaped
+    /// spelling of the same thing.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
 impl Failure {
     /// A failure discovered by validating the request. Still exit `1`: the
     /// request was wrong, and nothing about it was the network's fault.

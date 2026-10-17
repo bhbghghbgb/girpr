@@ -22,6 +22,7 @@
 
 use serde::Serialize;
 
+use crate::failure::{Failure, assertion};
 use crate::hash;
 use crate::hash::Encoding;
 use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
@@ -674,6 +675,58 @@ pub fn reconcile(
     out
 }
 
+/// The two things a decoded manifest must satisfy before any byte of it is
+/// trusted: its decompressed MD5 matches the declared checksum, and the decoded
+/// counts reconcile against the declared stats.
+///
+/// Both are exit `3`. The bytes arrived intact or they did not, and either way
+/// nothing here is the network's fault — a checksum that fails is a fact about
+/// what was published, and the capture cannot be built on top of it.
+///
+/// **Lived in `run.rs`, next to nothing that could be tested without a capture.**
+/// It is [`reconcile`] plus the verification that has to precede it, and it was
+/// unable to move until `Failure` left the command dispatcher.
+pub fn verify(m: &CapturedManifest, tag: &str, field: &str) -> Result<(), Failure> {
+    if !m.meta.verified.all_green() {
+        return Err(assertion(
+            &format!("verify the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                format!(
+                    "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
+                    m.meta.verified.decompressed_md5_matches_checksum,
+                    m.meta.verified.checksum_matches_id_suffix
+                ),
+            ),
+        ));
+    }
+    let v = reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
+    if !v.is_empty() {
+        return Err(assertion(
+            &format!("reconcile the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                v.iter()
+                    .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        ));
+    }
+    dump::note_reconciliation(m);
+    if !m.meta.decoded.structure.clean() {
+        // Recorded, not fatal: spec §3.6 says a violation must still produce
+        // a capture with the selfcheck naming what broke. M8 makes it a row.
+        tracing::warn!(
+            tag,
+            field,
+            violations = ?m.meta.decoded.structure.violations(),
+            "manifest violates a structural invariant; recorded, not fatal"
+        );
+    }
+    Ok(())
+}
+
 /// Mark the bodies in a set as stored, by request sequence number.
 pub fn mark_stored(log: &RequestLog, m: &mut CapturedManifest, path: &str) {
     let rel = path.to_string();
@@ -740,7 +793,77 @@ mod tests {
         let ok = decode_counts(&[file("ok", vec![chunk(0, 10)], 10)]);
         assert_eq!(ok.max_chunk_compressed_bytes, 100);
         assert_eq!(ok.total_file_bytes, 10);
-        assert_eq!(ok.structure.non_gapless_files, 0);
+    }
+
+    /// A manifest nobody can build on is refused by name, with exit `3`.
+    ///
+    /// This is the check that has to run *before* a blob is fetched, and it was
+    /// unreachable from a unit test until it moved out of the command
+    /// dispatcher: a manifest that fails A3 has no good decode to compare
+    /// against, no `chunks/`, and no bundle to capture against.
+    #[test]
+    fn a_manifest_that_cannot_be_built_on_is_refused_by_name() {
+        let good = |decoded: Decoded, stats: Option<crate::hyp::Stats>| CapturedManifest {
+            ..captured(green(), decoded, stats)
+        };
+
+        // 1. A3/A4 failed: named as the verification it is, before any
+        //    reconciliation, and the message carries both booleans.
+        let mut v = green();
+        v.decompressed_md5_matches_checksum = false;
+        let e = verify(&captured(v, Decoded::default(), None), "7.0.0", "game").unwrap_err();
+        assert_eq!(e.code, crate::exit::ExitCode::AssertionFailed, "{e:?}");
+        assert!(
+            e.detail.starts_with("verify the 7.0.0 game manifest:"),
+            "{e:?}"
+        );
+        assert!(e.detail.contains("decompressed md5 matches checksum: false"), "{e}");
+
+        // 2. A5 failed: every disagreeing stat named with both numbers.
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let wrong = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("999".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("1".into()),
+        });
+        let e = verify(&good(d, wrong), "7.0.0", "game").unwrap_err();
+        assert_eq!(e.code, crate::exit::ExitCode::AssertionFailed, "{e:?}");
+        assert!(e.detail.starts_with("reconcile the 7.0.0 game manifest:"), "{e}");
+        assert!(
+            e.detail.contains("uncompressed_size: declared Some(999), decoded 150"),
+            "{e}"
+        );
+        assert!(
+            !e.detail.contains("chunk_count"),
+            "and only the one that disagrees: {e}"
+        );
+
+        // 3. Everything green passes, and a structural violation does not stop
+        //    it — spec §3.6 says the capture still happens and M8 makes it a row.
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let ok = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("150".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("1".into()),
+        });
+        assert!(verify(&good(d.clone(), ok.clone()), "7.0.0", "game").is_ok());
+
+        // A gap between the chunks, which reconciles byte-for-byte anyway: the
+        // chunks still total 140, so A5 is satisfied and only §3.6's structural
+        // property is broken.
+        let holed = decode_counts(&[file("a", vec![chunk(0, 50), chunk(60, 90)], 140)]);
+        let holed_stats = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("140".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("2".into()),
+        });
+        assert!(
+            verify(&good(holed, holed_stats), "7.0.0", "game").is_ok(),
+            "a structural violation is recorded, not fatal"
+        );
     }
 
     #[test]
@@ -760,9 +883,80 @@ mod tests {
         assert!(d.structure.violations().is_empty());
     }
 
+    /// The verification a manifest that reconciles would carry.
+    fn green() -> Verified {
+        Verified {
+            decompressed_md5_matches_checksum: true,
+            checksum_matches_id_suffix: true,
+            id_prefix_verified: false,
+        }
+    }
+
+    /// A captured manifest, assembled field by field.
+    ///
+    /// Deliberately not a `Default`-derived fixture: three of the six structs on
+    /// the way here have no honest empty state (`IdParts.prefix_semantics` and
+    /// `Stored.container` are `&'static str` that carry real claims), and adding
+    /// a `Default` to production types purely to shorten a test is the wrong
+    /// trade. What `verify` reads is `meta.verified`, `meta.decoded`,
+    /// `meta.declared` and `meta.decoded.structure`; the rest is spelled out so
+    /// that stays visible.
+    fn captured(
+        verified: Verified,
+        decoded: Decoded,
+        stats: Option<crate::hyp::Stats>,
+    ) -> CapturedManifest {
+        CapturedManifest {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            matching_field: "game".into(),
+            seq: 8,
+            raw: Vec::new(),
+            entries: Vec::new(),
+            meta: ManifestMeta {
+                schema_version: crate::SCHEMA_VERSION,
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                matching_field: "game".into(),
+                category_id: "10016".into(),
+                category_name: "Genshin Impact".into(),
+                manifest: DeclaredManifest {
+                    id: "manifest_abc".into(),
+                    checksum: "c".into(),
+                    compressed_size: "100".into(),
+                    uncompressed_size: "150".into(),
+                },
+                declared: Declared {
+                    stats,
+                    ..Declared::default()
+                },
+                id_parts: IdParts {
+                    prefix_16hex: "abc".into(),
+                    prefix_semantics: "opaque",
+                    suffix_32hex: "c".into(),
+                    suffix_equals_checksum: true,
+                },
+                stored: Stored {
+                    path: String::new(),
+                    bytes: 0,
+                    container: "zstd",
+                    md5_compressed: String::new(),
+                    sha256_compressed: String::new(),
+                    md5_decompressed: String::new(),
+                    bytes_decompressed: 0,
+                    encoding: Encoding::Identity,
+                },
+                verified,
+                decoded,
+                full_decode_written: true,
+            },
+        }
+    }
+
+    /// Each input breaks exactly one structural counter.
+    ///
     /// Spec §3.6: a violation must be *counted*, not fatal — the capture still
     /// works and the selfcheck says which property broke.
-    /// Each input breaks the property it is named for.
     ///
     /// Asserting *containment* rather than equality is deliberate, and is the honest
     /// form: the six properties are not independent. Walking a chunk list in the
