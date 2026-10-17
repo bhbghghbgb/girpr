@@ -170,6 +170,13 @@ One object per HTTP request, in issue order.
 Header keys are lowercased; values are strings exactly as received. `kind` lets a
 reader ask "what did the manifest fetch cost?" without string-matching URLs.
 
+`kind` is a closed set — `api`, `manifest`, `chunk`, `probe` — and two of the
+probes' paths share `probe` while differing in retry behaviour. A `getBuild?tag=`
+tag probe goes through the retry policy and records a real `attempts`; the
+negative probes behind `api/error_shapes.json` are sent **once** and always record
+`attempts: 1`. On a healthy capture every probe row shows `1`, so the row alone
+does not say which path produced it; the URL does.
+
 `req_headers` is what the tool **sent**, not what it wishes it had sent. It used
 to record `accept-encoding: gzip` while the client was configured with no
 `accept-encoding` at all, so every row made a false claim about its own request.

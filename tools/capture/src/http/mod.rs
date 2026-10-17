@@ -63,11 +63,32 @@ pub enum Kind {
     /// `getBuild?tag=` tag probe, or a negative probe for `api/error_shapes.json`.
     /// Costs no blob bytes, only JSON — or, for the negative blob probes, only a
     /// `404`.
+    ///
+    /// **Two paths share this kind, and they differ in retry behaviour. §5.5 row
+    /// 16.** The tag probe goes through [`Fetcher::get`] and so through
+    /// [`RetryPolicy`]; the negative probes go through [`Fetcher::observe`], which
+    /// sends once and records `attempts: 1` unconditionally. A reader of
+    /// `api/requests.ndjson` therefore cannot tell them apart from the row alone,
+    /// and the `kind` was deliberately not split to fix that — see the note on
+    /// [`Kind`]'s wire spelling below.
     Probe,
 }
 
 impl Kind {
     /// The wire spelling.
+    ///
+    /// **This is a closed vocabulary and `docs/01-artifact-schema.md:153` says
+    /// so**, which is why §5.5 row 16 was answered with documentation rather than
+    /// distinct kinds. Splitting `probe` into `tag_probe` and `shape_probe` would
+    /// not be additive: it would *remove* the value `probe`, so any reader matching
+    /// on it — which is the natural way to ask "what did the metadata cost?" —
+    /// would silently start seeing nothing. Widening a closed vocabulary by
+    /// subtraction is a breaking change to a recorded field, which is a larger
+    /// decision than an unfalsifiable log row deserves.
+    ///
+    /// The distinction is recorded instead, on [`Kind::Probe`] and in the schema
+    /// doc, and the behaviour it describes is pinned by
+    /// `observe_records_a_server_error_once_and_never_retries`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Kind::Api => "api",
@@ -2137,6 +2158,39 @@ fn a_poisoned_request_log_still_takes_records() {
     }
 
     #[tokio::test]
+    async fn observe_records_a_server_error_once_and_never_retries() {
+    // **§5.5 row 16, the half that can be pinned.** `kind: "probe"` covers two
+    // paths with different retry behaviour: the tag probe goes through `get` and
+    // the retry policy, the negative probes go through `observe`, which sends once
+    // and records `attempts: 1` unconditionally.
+    //
+    // All 8 probe rows in the reference bundle have `attempts = 1`, so a reader
+    // cannot tell the two apart from the log — which is why that row is being
+    // documented rather than split. What *can* be pinned is the asymmetry the
+    // documentation now asserts, and this is it: a `500`, which the retry policy
+    // treats as retryable, is still recorded once by `observe`.
+    let mock = spawn(vec![(503, b"<Error><Code>Busy</Code></Error>"), (200, b"unused")], "");
+    let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+    let o = f
+        .observe(&url(&mock, "/shape"), Kind::Probe)
+        .await
+        .expect("a 5xx is data for a probe, not a failure");
+    assert_eq!(o.status, 503, "the status is recorded as received");
+    assert!(o.text().contains("Busy"), "and so is the body");
+    assert_eq!(
+        mock.hits.load(Ordering::SeqCst),
+        1,
+        "observe must not retry: the mock only had one answer for it to consume"
+    );
+
+    let rows: Vec<_> = f.log().records();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].attempts, 1, "`attempts: 1` is hardcoded, and is the claim");
+    assert_eq!(rows[0].kind, Kind::Probe);
+}
+
+#[tokio::test]
     async fn a_failed_request_counts_the_body_it_threw_away() {
         // **§5.5 row 1.** `bytes_in` was recorded as `0` for every non-2xx and the
         // response was dropped without its body being read. So a `429` carrying a
