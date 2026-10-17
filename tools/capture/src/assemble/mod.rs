@@ -573,6 +573,25 @@ impl<'i> ChunkSource<'i> {
     }
 }
 
+/// The largest file this tool will try to assemble, in bytes.
+///
+/// A file's `size` arrives straight off the wire as an `i64`, so a manifest can
+/// declare anything at all, including `i64::MAX`. The `.max(0)` this replaces
+/// guarded the *sign*, which is why it was there — but not the magnitude, so
+/// `size = 2^40` was a 1 TB allocation attempt. That is not a panic and so not
+/// catchable: it is an abort the tool cannot report and cannot recover from,
+/// which is the worst of the three outcomes.
+///
+/// 1 GiB is ~47x the largest file in the reference bundle (22 662 068 B), so no
+/// legitimate fixture comes near it, and past this line "this manifest is wrong"
+/// is a more useful answer than "this machine ran out of memory".
+///
+/// **One guard, both callers.** `assemble_side` and `materialize::rebuild` used
+/// to each carry their own `vec![0u8; size.max(0) as usize]`, so a hostile
+/// manifest reached the same abort by two routes. They share [`tile`], so this
+/// is checked once.
+pub const MAX_ASSEMBLY_BYTES: u64 = 1 << 30;
+
 /// Tile one file from its chunks, and say why it could not.
 ///
 /// **One implementation for both callers.** A capture tiles the manifest entry
@@ -629,7 +648,12 @@ pub fn tile<'a>(
             layout.violations.join("; ")
         ));
     }
-    let mut bytes = vec![0_u8; total.max(0) as usize];
+    if !(0..=MAX_ASSEMBLY_BYTES as i64).contains(&total) {
+        return Err(format!(
+            "{label}: declares {total} B, past the {MAX_ASSEMBLY_BYTES} B this tool will assemble"
+        ));
+    }
+    let mut bytes = vec![0_u8; total as usize];
     for (id, r) in ids.iter().zip(&layout.ranges) {
         let dst = bytes.get_mut(r.start as usize..r.end as usize).ok_or_else(|| {
             format!("{label}: chunk {id} range {r} is outside the {total} B file")
@@ -1114,7 +1138,56 @@ mod tests {
         );
     }
 
-    /// The range is checked *before* the chunk is decoded.
+    /// The range check is a refusal, not a panic.
+///
+/// `vec![0u8; size.max(0) as usize]` guarded the sign and nothing else, so a
+/// manifest declaring `size = 2^40` attempted a 1 TB allocation — an abort the
+/// tool cannot report and cannot recover from, because it is not a panic. The
+/// limit turns that into the tool's normal "this is a finding" answer.
+#[test]
+fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
+    let clean = Layout::of([(0, 10)], 10);
+    for (total, what) in [
+        (1_i64 << 40, "2^40 B"),
+        (i64::MAX, "i64::MAX B"),
+        (-1, "a negative size"),
+    ] {
+        let e = tile("7.0.0 a/b.dll", &clean, total, &["x"], |_| {
+            Ok(std::borrow::Cow::Borrowed(&b""[..]))
+        })
+        .unwrap_err();
+        assert!(
+            e.contains("past the 1073741824 B this tool will assemble"),
+            "{total} ({what}): {e}"
+        );
+        assert!(e.starts_with("7.0.0 a/b.dll: "), "and names the file: {e}");
+    }
+    // One byte over the limit is still over; exactly at it is allowed through to
+    // the ordinary allocation, which is what makes the boundary a stated rule
+    // rather than a round number.
+    let ok = tile(
+        "L",
+        &Layout::of([(0, 10)], 10),
+        MAX_ASSEMBLY_BYTES as i64,
+        &["x"],
+        |_| Ok(std::borrow::Cow::Borrowed(&b""[..])),
+    );
+    assert!(ok.is_err(), "a clean layout of that size still fails A11 first");
+
+    // And the real thing still goes through: the reference bundle's largest
+    // file is 22 662 068 B, which is 47x under the limit. Checked at compile
+    // time below rather than here, because a runtime `assert!` on two constants
+    // is a value the optimiser already knows.
+}
+
+/// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
+/// file in the reference bundle (`partial_moved_offset`), and 40x is slack
+/// well below the 1 GiB the limit is set at. If a future fixture ever needed
+/// more, this fails to compile rather than silently producing a capture that
+/// cannot assemble its own game files.
+const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
+
+/// The range is checked *before* the chunk is decoded.
     ///
     /// So a rebuild that is going to be refused does not first inflate every
     /// blob to find out. `materialize` used to do this the other way round.

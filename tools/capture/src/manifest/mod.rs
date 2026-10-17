@@ -561,7 +561,12 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             folders += 1;
         } else {
             files += 1;
-            total_file_bytes += e.size as u64;
+            // `.max(0) as u64`, which is the convention `diff.rs` already uses
+            // for every byte it sums. A negative `size` is a manifest claiming a
+            // file of -1 bytes, and `as u64` alone turns that into 18.4
+            // quintillion — which then lands in `total_file_bytes` in the
+            // artifact and in `reconcile` as a mismatch against the chunk sum.
+            total_file_bytes = total_file_bytes.saturating_add(e.size.max(0) as u64);
         }
         total_chunks += e.chunks.len() as u64;
 
@@ -574,8 +579,12 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         // accumulated rather than read off the cursor.
         let mut chunk_bytes = 0_i64;
         for (i, c) in e.chunks.iter().enumerate() {
-            if c.compressed_size as u64 > max_chunk {
-                max_chunk = c.compressed_size as u64;
+            // Same convention as `total_file_bytes` above, and the same reason:
+            // this is the number recorded as `max_chunk_compressed_bytes`, the
+            // field documented as what bounds the tool's whole-chunk buffering.
+            let compressed = c.compressed_size.max(0) as u64;
+            if compressed > max_chunk {
+                max_chunk = compressed;
             }
             if i > 0 && c.offset <= e.chunks[i - 1].offset {
                 ascending = false;
@@ -583,8 +592,21 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             if c.offset != cursor {
                 gapless = false;
             }
-            cursor = c.offset + c.uncompressed_size;
-            chunk_bytes += c.uncompressed_size;
+            // `checked_add`, because this counter is a *measurement* and must not
+            // panic on the thing it measures. A manifest declaring
+            // `offset = i64::MAX` overflowed here: an abort in debug and test
+            // builds — so `cargo test` itself would die — and a silent wrap in
+            // release, which reports a file as tiled when nothing was checked.
+            // An offset that cannot be added to is a file larger than any file,
+            // so the tiling is broken by definition.
+            cursor = match c.offset.checked_add(c.uncompressed_size) {
+                Some(next) => next,
+                None => {
+                    gapless = false;
+                    i64::MAX
+                }
+            };
+            chunk_bytes = chunk_bytes.saturating_add(c.uncompressed_size);
         }
         // A folder carries no bytes, so none of the byte-level properties apply
         // to it; counting one would report a violation on every folder entry and
@@ -683,6 +705,42 @@ mod tests {
             size,
             md5: "m".into(),
         }
+    }
+
+    /// A manifest is data, and every number in it came off the wire as an
+    /// `i64`. `decode_counts` must therefore *measure* a hostile one rather than
+    /// abort on it — it is the function that exists to tell a reader what a
+    /// manifest says, and it cannot do that by dying.
+    #[test]
+    fn a_manifest_whose_arithmetic_overflows_is_measured_not_fatal() {
+        // `offset = i64::MAX` then `offset + uncompressed_size` overflowed: an
+        // abort in debug and test builds, so this line alone could kill
+        // `cargo test`, and a silent wrap in release — which would report the
+        // file as tiled when nothing had been checked.
+        let entries = vec![file("huge", vec![chunk(i64::MAX, 4096)], 4096)];
+        let d = decode_counts(&entries);
+        assert_eq!(d.structure.non_gapless_files, 1, "an unaddable offset is not a tiling");
+        assert_eq!(d.total_chunks, 1, "and the entry is still counted");
+
+        // And the reverse: a huge declared size must not become 18.4 quintillion
+        // bytes in the artifact. `as u64` alone turned -1 into 2^64-1.
+        let negative = vec![file("neg", vec![], -1)];
+        let d = decode_counts(&negative);
+        assert_eq!(d.total_file_bytes, 0, "a file of -1 B contributes 0 B");
+
+        // Same for the field the doc calls "what bounds the tool's whole-chunk
+        // buffering" — a negative compressed size must not record as ~1.8e19.
+        let mut c = chunk(0, 10);
+        c.compressed_size = -1;
+        let d = decode_counts(&[file("neg", vec![c], 10)]);
+        assert_eq!(d.max_chunk_compressed_bytes, 0, "and -1 B is not the maximum");
+
+        // A positive measurement still works, which is the half of this that has
+        // to keep working.
+        let ok = decode_counts(&[file("ok", vec![chunk(0, 10)], 10)]);
+        assert_eq!(ok.max_chunk_compressed_bytes, 100);
+        assert_eq!(ok.total_file_bytes, 10);
+        assert_eq!(ok.structure.non_gapless_files, 0);
     }
 
     #[test]
