@@ -223,6 +223,44 @@ impl BlobProps {
         })
     }
 
+    /// The entry for a blob whose bytes arrived but are not a zstd frame.
+    ///
+    /// **This is the evidence, not a failure.** §6.3: [`BlobProps::measure`]
+    /// returns `Err` for a body that is not a zstd frame, and the caller used
+    /// `?` — so the bytes were **discarded**, the slot was backfilled with a row
+    /// reading "fetched but not stored", and the bundle claimed the fetch had
+    /// failed when it had succeeded. A truncated or mis-served response is
+    /// precisely the thing this tool exists to keep, and this module's stated
+    /// purpose says so.
+    ///
+    /// The row carries **more** than a discarded one would. The compressed
+    /// digests are computed because hashing the raw bytes does not need zstd, so
+    /// a reader gets the exact bytes, their digests, and the reason they will
+    /// not decode — rather than a hole and a sentence saying nothing arrived.
+    ///
+    /// `verified` is `None` rather than a set of `false`s: nothing was measured
+    /// against the manifest, and M9 reports `null` as "not measured", which is
+    /// the honest reading. The two digest-dependent checks genuinely cannot be
+    /// answered; a row of `false`s would claim they were answered and failed.
+    pub fn undecodable(raw: &[u8], chunk: &SophonChunk, why: String) -> BlobProps {
+        let compressed = hash::md5_sha256(raw);
+        BlobProps {
+            chunk_id: chunk.id.clone(),
+            stored_path: None,
+            bytes: raw.len() as u64,
+            container: "zstd".to_string(),
+            sha256_compressed: compressed.sha256,
+            md5_compressed: compressed.md5,
+            // The declared digest, not a computed one: the body cannot be
+            // decoded, so there is no decompressed body to compare against.
+            md5_decompressed: chunk.uncompressed_md5.clone(),
+            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
+            unknown_field6: chunk.unknown_field6,
+            verified: None,
+            decode_error: Some(why),
+        }
+    }
+
     /// The entry for a blob that was never fetched.
     ///
     /// `--no-chunk-blobs` produces these. The declared sizes come from the
@@ -312,6 +350,89 @@ impl BlobProps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body that is not a zstd frame, with the chunk that declares it.
+    ///
+    /// **The shape the CDN actually serves when a blob request goes wrong**: an
+    /// XML `NoSuchKey` document, byte for byte the body `api/error_shapes.json`
+    /// records for its own negative probes. My first attempt truncated a real
+    /// frame, which does *not* work — `is_zstd` checks four magic bytes, so a
+    /// truncated frame is still framed. The test that noticed that is
+    /// `a_body_that_is_not_a_zstd_frame_is_refused_by_measure`'s own guard.
+    fn mis_served_chunk() -> (SophonChunk, Vec<u8>) {
+        let payload = b"the quick brown fox jumps over the lazy dog".repeat(64);
+        let (chunk, _) = chunk_with(&payload);
+        let xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
+                   <Code>NoSuchKey</Code>\n  <Message>The specified key does not \
+                   exist.</Message>\n</Error>\n";
+        (chunk, xml.to_vec())
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_zstd_frame_is_refused_by_measure() {
+        // The condition §6.3 is about. `measure` must still refuse it — the
+        // caller decides what to do, and the caller's decision is the other
+        // test.
+        let (chunk, cut) = mis_served_chunk();
+        assert!(
+            !hash::is_zstd(&cut),
+            "the fixture must actually be unframed, or this tests nothing"
+        );
+        assert!(BlobProps::measure(&cut, &chunk).is_err());
+    }
+
+    #[test]
+    fn an_undecodable_body_keeps_its_bytes_digests_and_reason() {
+        // **§6.3's actual claim: the bytes are evidence, so they are kept.**
+        // Before this, a body like this propagated out of `measure` as an `Err`
+        // and was discarded; the slot was backfilled with a row saying "fetched
+        // but not stored" and the bundle claimed the fetch had failed.
+        let (chunk, cut) = mis_served_chunk();
+        let why = BlobProps::measure(&cut, &chunk).expect_err("unframed");
+        let p = BlobProps::undecodable(&cut, &chunk, why.to_string());
+
+        assert_eq!(
+            p.bytes,
+            cut.len() as u64,
+            "the row records how many bytes arrived, not zero"
+        );
+        assert_eq!(
+            p.md5_compressed,
+            hash::md5_hex(&cut),
+            "the compressed digest is computable without zstd, so it is recorded"
+        );
+        assert_eq!(p.sha256_compressed, hash::sha256_hex(&cut));
+        assert_eq!(
+            p.md5_decompressed, chunk.uncompressed_md5,
+            "and the declared digest is kept as declared - there is nothing to compare it against"
+        );
+        assert!(
+            p.decode_error.as_deref().unwrap_or_default().contains("not a zstd frame"),
+            "the row says why it will not decode: {:?}",
+            p.decode_error
+        );
+        assert!(
+            p.verified.is_none(),
+            "`verified: null` is 'not measured'; a row of `false`s would claim the \
+             checks were answered and failed"
+        );
+    }
+
+    #[test]
+    fn an_undecodable_body_is_distinguishable_from_one_that_never_arrived() {
+        // The two rows a reader must be able to tell apart: a blob whose bytes
+        // are on disk and will not decode, and a blob with no bytes at all.
+        let (chunk, cut) = mis_served_chunk();
+        let kept = BlobProps::undecodable(&cut, &chunk, "not a zstd frame".to_string());
+        let never = BlobProps::unmeasured(&chunk);
+        assert_ne!(kept.bytes, never.bytes);
+        assert!(kept.md5_compressed.len() == 32);
+        assert!(
+            never.md5_compressed.is_empty(),
+            "an absent digest is empty, not zeroed - a zeroed one is a claim"
+        );
+        assert!(never.decode_error.is_none());
+    }
 
     /// A chunk and the exact bytes that should satisfy it.
     ///

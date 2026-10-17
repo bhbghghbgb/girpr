@@ -352,7 +352,21 @@ impl Store {
                     // moves it to the blocking pool and hands the bytes back, so
                     // the buffer is moved rather than copied.
                     let (mut props, body) = tokio::task::spawn_blocking(move || {
-                        let p = BlobProps::measure(&body, &chunk).map_err(|e| e.to_string())?;
+                        // **An undecodable body is kept, not dropped.** §6.3: this
+                        // used to be `.map_err(..)?` inside the closure, so a body
+                        // that was not a zstd frame propagated out of `one` as an
+                        // `Err` — and the bytes this run had successfully fetched
+                        // were never written. `fill` then backfilled the slot with
+                        // a row reading "fetched but not stored", so the bundle
+                        // claimed the fetch had failed when it had succeeded, and
+                        // a truncated response — the evidence this tool exists to
+                        // keep — was thrown away.
+                        //
+                        // `measure` already handles a *decode* failure this way;
+                        // the only case it refuses is "not a zstd frame at all",
+                        // and that is the case worth keeping.
+                        let p = BlobProps::measure(&body, &chunk)
+                            .unwrap_or_else(|e| BlobProps::undecodable(&body, &chunk, e.to_string()));
                         Ok::<_, String>((p, body))
                     })
                     .await
@@ -384,14 +398,22 @@ impl Store {
         Err(last.unwrap_or_else(|| format!("{}: no source to fetch from", want.chunk.id)))
     }
 
-    /// The index entry for a want whose bytes never arrived.
+    /// The index entry for a want whose bytes never landed.
     ///
-    /// Not `BlobProps::unmeasured` — that is for `--no-chunk-blobs`, where
+    /// Not `BlobProps::unmeasured` - that is for `--no-chunk-blobs`, where
     /// nothing was *asked* for. Here something was asked for and did not come,
     /// and the difference is the whole point of the row.
+    ///
+    /// **"not stored", with no claim about fetching.** It used to read "fetched
+    /// but not stored", which is a statement about the *fetch* that three
+    /// different paths cannot support: a source that refused, a `write` that
+    /// failed, and a task that panicked mid-`measure`. The last one is not a
+    /// fetch failure at all. Each of those names itself in the run's error list
+    /// and in `fetch_fetches_failed` on the summary, so the row does not have to
+    /// guess.
     fn unfilled(&self, want: &Want) -> (IndexedBlob, Vec<Set>) {
         let mut props = BlobProps::unmeasured(&want.chunk);
-        props.decode_error = Some("fetched but not stored".to_string());
+        props.decode_error = Some("not stored".to_string());
         indexed_from(props, want)
     }
 
