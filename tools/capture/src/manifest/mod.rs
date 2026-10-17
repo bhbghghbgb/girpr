@@ -30,6 +30,7 @@ use crate::hyp::GetBuild;
 
 pub mod diff;
 pub mod dump;
+pub mod fetch;
 pub mod proto;
 
 pub use dump::StoredAs;

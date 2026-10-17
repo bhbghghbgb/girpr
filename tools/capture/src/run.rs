@@ -17,7 +17,6 @@ use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
-use crate::hyp::GetBuild;
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
@@ -142,74 +141,21 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     tracing::info!(probe = %probe.describe(), served = ?probe.served(), "tag probe complete");
 
     // 6. The manifests, both builds, for every selected `matching_field`.
-    //    `game` first because it is the field every later stage needs regardless
-    //    of which class a capture lands in; the audio codes follow because they
-    //    exist only to widen the *selection pool*, and a voice pack must never
-    //    outrank a game file on a cost tie (see [`select`]).
     //
-    //    `--no-chunk-blobs` does not skip this: a manifest is metadata, and the
-    //    flag is about chunk blobs. Skipping it would leave a bundle whose
-    //    `versions` block names builds it has no manifest for.
+    //     Fetched all at once, filed by the slot each request carries rather than
+    //     by the position it finished in. See `manifest::fetch` for why the order a
+    //     download completes in cannot be allowed to reach the bundle.
+    let fields = selection_fields(&plan);
     let old_build = captured
         .old_build()
         .map_err(|e| apierr("re-read the captured old build", &e))?;
     let new_build = captured
         .new_build()
         .map_err(|e| apierr("re-read the captured new build", &e))?;
-    let fields = selection_fields(&plan);
-    // Indexed [field][0=old, 1=new], so `manifests[f][t]` is the manifest a
-    // field contributes to the diff and nothing downstream has to remember the
-    // interleaving the fetch loop used.
-    //
-    // These are fetched **all at once**. The loop this replaces was
-    // `for field { for tag { capture().await } }`, which put a 9 MB download
-    // after a 2 MB download after a 9 MB download after a 2 MB download for no
-    // reason: nothing here depends on anything else here. On the reference
-    // bundle that is ~20 MB strictly in series.
-    //
-    // The order they are *verified and filed* in is unchanged and is still
-    // input order, because `map_concurrently` returns input order — so which
-    // download finished first cannot move anything in the bundle.
-    let wanted: Vec<(String, GetBuild, String)> = fields
-        .iter()
-        .flat_map(|field| {
-            [(&old_tag, &old_build), (&new_tag, &new_build)]
-                .into_iter()
-                .map(move |(tag, build)| {
-                    (
-                        field.to_string(),
-                        build.clone(),
-                        (*tag).to_string(),
-                    )
-                })
-        })
-        .collect();
-    let fetched = fetcher
-        .map_concurrently(&wanted, plan.jobs, |fetcher, i, (field, build, tag)| async move {
-            match manifest::capture(&fetcher, &build, &tag, &field).await {
-                Ok(m) => (i, Ok(m)),
-                Err(e) => (i, Err(e.to_string())),
-            }
-        })
-        .await;
-
-    let mut manifests: Vec<Vec<CapturedManifest>> =
-        (0..fields.len()).map(|_| Vec::with_capacity(2)).collect();
-    for (k, r) in fetched.into_iter().enumerate() {
-        let field = &fields[k / 2];
-        let tag = if k % 2 == 0 { &old_tag } else { &new_tag };
-        let m = match r {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(apierr(
-                    &format!("fetch the {tag} {field} manifest"),
-                    &ApiError::shape(tag, e),
-                ));
-            }
-        };
-        manifest::verify(&m, tag, field)?;
-        manifests[k / 2].push(m);
-    }
+    let manifest_wants =
+        manifest::fetch::wants(&fields, &old_tag, &new_tag, &old_build, &new_build);
+    let mut manifests =
+        manifest::fetch::fetch_all(&fetcher, &manifest_wants, fields.len(), plan.jobs).await?;
 
     // 6a. What the API does with a request it will not serve. Placed here rather
     //     than beside the tag probe because it needs the pair's blob prefixes, and
