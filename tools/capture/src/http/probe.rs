@@ -576,6 +576,19 @@ pub async fn probe_error_shapes(
 /// `key` is matched literally, brackets included: the measured spelling of
 /// `game_ids[]` keeps them, and matching on a decoded form would silently not
 /// find the parameter.
+///
+/// **The replacement value is percent-encoded, by [`crate::biz::enc`]. §5.5 row
+/// 14.** This used to splice `value` in raw, which made it a second URL grammar
+/// living beside [`crate::biz::push_pair`] — the one every real URL in this tool
+/// goes through. It agreed only because every value it is given is
+/// `"undefined"`: a value containing `&`, `=`, `+` or a space would have split
+/// the query into a different set of parameters and the probe would have asked
+/// the wrong question while still looking like a probe.
+///
+/// The key stays literal for the same reason it is matched literally: `push_pair`
+/// appends keys unencoded too, so the two now agree on both halves. Encoding is a
+/// no-op for the values actually used, so **no recorded URL changes** — see
+/// `a_value_needing_encoding_is_encoded_and_todays_is_not`.
 fn with_param(url: &str, key: &str, value: &str) -> String {
     let Some((base, query)) = url.split_once('?') else {
         return url.to_string();
@@ -585,7 +598,7 @@ fn with_param(url: &str, key: &str, value: &str) -> String {
         .split('&')
         .map(|p| {
             if p.starts_with(&prefix) {
-                format!("{prefix}{value}")
+                format!("{prefix}{}", crate::biz::enc(value))
             } else {
                 p.to_string()
             }
@@ -672,6 +685,55 @@ mod tests {
             shape(404).retryable,
             crate::http::RetryPolicy::should_retry_status(404)
         );
+    }
+
+    #[test]
+    fn a_value_needing_encoding_is_encoded_and_todays_is_not() {
+        // **§5.5 row 14.** `with_param` spliced its value in raw, making it a second
+        // URL grammar beside `biz::push_pair`, which percent-encodes. They agreed
+        // only because both probe values are the literal `"undefined"`.
+        //
+        // The second half of that claim is the one that matters for the artifact: if
+        // encoding changed today's URLs, this would be band 3 and not a refactor.
+        let good = "https://api.example/getBuild?branch=main&package_id=ScSYQBFhu9&tag=7.1.0";
+
+        // Unchanged: what the probes actually send today.
+        for today in ["undefined", "0", "ScSYQBFhu9", "en-us"] {
+            assert_eq!(
+                with_param(good, "package_id", today),
+                good.replace("ScSYQBFhu9", today),
+                "{today:?} must not be altered"
+            );
+        }
+
+        // Changed: a value that would otherwise reshape the query.
+        let nasty = with_param(good, "package_id", "a&tag=evil");
+        assert!(
+            nasty.contains("package_id=a%26tag%3Devil"),
+            "an ampersand in the value must not become another parameter: {nasty}"
+        );
+        assert_eq!(
+            nasty.matches('&').count(),
+            good.matches('&').count(),
+            "the query must keep exactly as many parameters as it had: {nasty}"
+        );
+        assert_eq!(
+            nasty.split('?').nth(1).unwrap().split('&').count(),
+            good.split('?').nth(1).unwrap().split('&').count(),
+            "and one value is still one parameter"
+        );
+
+        // The key is matched and kept literally, brackets and all — the measured
+        // spelling of `game_ids[]` must survive, and `push_pair` does the same.
+        let cfg = "https://api.example/getGameConfigs?game_ids[]=gopR6Cufr3&lang=en-us";
+        assert_eq!(
+            with_param(cfg, "game_ids[]", "undefined"),
+            "https://api.example/getGameConfigs?game_ids[]=undefined&lang=en-us",
+            "the bracketed key is matched literally and not encoded"
+        );
+
+        // And a URL with no query is returned untouched rather than gaining one.
+        assert_eq!(with_param("https://x.example/y", "k", "v"), "https://x.example/y");
     }
 
     #[test]
