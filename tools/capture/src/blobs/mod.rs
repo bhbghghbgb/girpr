@@ -340,44 +340,11 @@ impl Store {
                 .sources
                 .url(&src.tag, &want.chunk.id)
                 .map_err(|e| e.to_string())?;
-            match fetcher.get(&url, Kind::Chunk, None).await {
-                Ok(fetched) => {
-                    let body = fetched.body;
-                    let chunk = want.chunk.clone();
-                    // Measuring a blob is a zstd decode and two digests — on the
-                    // largest chunk in the reference bundle, several megabytes of
-                    // synchronous CPU. Done inline this runs on a tokio worker,
-                    // so `--jobs 4` means four workers blocked at once and no
-                    // fetch can be issued until one finishes. `spawn_blocking`
-                    // moves it to the blocking pool and hands the bytes back, so
-                    // the buffer is moved rather than copied.
-                    let (mut props, body) = tokio::task::spawn_blocking(move || {
-                        // **An undecodable body is kept, not dropped.** §6.3: this
-                        // used to be `.map_err(..)?` inside the closure, so a body
-                        // that was not a zstd frame propagated out of `one` as an
-                        // `Err` — and the bytes this run had successfully fetched
-                        // were never written. `fill` then backfilled the slot with
-                        // a row reading "fetched but not stored", so the bundle
-                        // claimed the fetch had failed when it had succeeded, and
-                        // a truncated response — the evidence this tool exists to
-                        // keep — was thrown away.
-                        //
-                        // `measure` already handles a *decode* failure this way;
-                        // the only case it refuses is "not a zstd frame at all",
-                        // and that is the case worth keeping.
-                        let p = BlobProps::measure(&body, &chunk)
-                            .unwrap_or_else(|e| BlobProps::undecodable(&body, &chunk, e.to_string()));
-                        Ok::<_, String>((p, body))
-                    })
-                    .await
-                    .map_err(|e| format!("{}: measure task panicked: {e}", want.chunk.id))??;
-                    let rel = BlobProps::stored_path_for(&want.chunk.id);
-                    self_
-                        .write(&rel, &body)
-                        .map_err(|e| format!("{}: write: {e}", want.chunk.id))?;
+            match self_.stream_from(&fetcher, &url, &want).await {
+                Ok((mut props, rel, seq)) => {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
-                    fetcher.log().set_stored_as(fetched.seq, rel.clone());
+                    fetcher.log().set_stored_as(seq, rel);
                     if !want.conflicts.is_empty() {
                         tracing::warn!(
                             chunk = %want.chunk.id,
@@ -417,30 +384,112 @@ impl Store {
         indexed_from(props, want)
     }
 
-    /// Write one blob, via `tmp/`, into `chunks/blobs/`.
-    fn write(&self, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
+    /// Fetch one chunk straight to disk, digest it on the way past, and measure it
+    /// from the file it landed in.
+    ///
+    /// §6.6.2. This replaces three things: the body was fetched into a `Vec<u8>`,
+    /// the whole thing was then measured, and only then written. The largest chunk
+    /// in the reference bundle is 3 689 476 B and `--jobs 8` keeps eight in flight,
+    /// so the body was resident for the whole fetch — and §5.4 had already removed
+    /// the *decoded* buffer, so this was the last copy.
+    ///
+    /// The order is deliberate and is why the digests can be trusted:
+    ///
+    /// 1. stream into `chunks/blobs/.<name>.tmp`, hashing as it writes — nothing
+    ///    is ever whole in memory;
+    /// 2. take the digests from the write itself;
+    /// 3. **rename** the tmp file into place, the atomic step, and the reason a
+    ///    reader never sees a half-written blob;
+    /// 4. measure **from the file**, through a 16 KB window, for the decompressed
+    ///    length and md5.
+    ///
+    /// Measuring happens after the rename so that a blob is on disk even if the
+    /// decode task is cancelled, and so a decode failure is recorded on a row whose
+    /// bytes a reader can actually check.
+    ///
+    /// **An undecodable body is kept, not dropped** (§6.3). The bytes are on disk
+    /// before they are ever measured, so a body that is not a zstd frame becomes a
+    /// row carrying its digests and the reason — rather than a hole, and rather
+    /// than a bundle claiming the fetch failed when it succeeded.
+    ///
+    /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
+    /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
+    /// worker and stop any further fetch being issued.
+    async fn stream_from(
+        &self,
+        fetcher: &Fetcher,
+        url: &str,
+        want: &Want,
+    ) -> Result<(BlobProps, String, u64), String> {
+        let id = want.chunk.id.clone();
+        let rel = BlobProps::stored_path_for(&id);
+        let (final_path, tmp_path) = self.paths_for(&rel);
+        self.ensure_blob_dir(&final_path)?;
+        let chunk = want.chunk.clone();
+
+        let mut out = crate::hash::HashingFile::create(&tmp_path)
+            .map_err(|e| format!("{id}: create {}: {e}", tmp_path.display()))?;
+        let seq = match fetcher.get_to_file(url, Kind::Chunk, &mut out).await {
+            Ok(s) => s.seq,
+            Err(e) => {
+                // The tmp file is left behind rather than removed: it is
+                // dot-prefixed inside `chunks/blobs/`, nothing reads it, and the
+                // next run truncates it. Deleting it here would be a second
+                // failure mode on the path that has already failed once.
+                return Err(format!("{id}: {e}"));
+            }
+        };
+        let digests = out.finish().map_err(|e| format!("{id}: flush: {e}"))?;
+
+        // The atomic step: until this, nothing outside this function looks at the
+        // path; after it, the blob is complete.
+        std::fs::rename(&tmp_path, &final_path).map_err(|e| {
+            format!(
+                "{id}: {} -> {}: {e}",
+                tmp_path.display(),
+                final_path.display()
+            )
+        })?;
+
+        let path = final_path;
+        let props = tokio::task::spawn_blocking(move || {
+            BlobProps::measure_file(&path, &chunk, digests)
+        })
+        .await
+        .map_err(|e| format!("{id}: measure task panicked: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+        Ok((props, rel, seq))
+    }
+
+    /// The final path for a blob, and the tmp path it is written under.
+    ///
+    /// **The tmp round-trip is kept.** §6.6.2 said this could delete it, and it
+    /// could — but a crash mid-write would then leave a truncated file at the
+    /// final path, where it is indistinguishable from a good blob to every reader,
+    /// including `verify`. One rename is not worth that.
+    fn paths_for(&self, rel: &str) -> (PathBuf, PathBuf) {
         let final_path = self.root.join(rel);
-        let dir = final_path.parent().unwrap_or(&self.root);
-        // Created once per store, not once per blob. Only ever one directory: the
-        // one `BlobProps::stored_path_for` names. An `Err` is *not* cached, so
-        // a transient failure does not skip the rest of the run.
-        if self.blob_dir.get().is_none() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", dir.display())))?;
-            let _ = self.blob_dir.set(());
-        }
+        let dir = final_path.parent().unwrap_or(&self.root).to_path_buf();
         let tmp = dir.join(format!(
             ".{}.tmp",
             final_path.file_name().unwrap_or_default().to_string_lossy()
         ));
-        std::fs::write(&tmp, bytes)?;
-        match std::fs::rename(&tmp, &final_path) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(e)
-            }
+        (final_path, tmp)
+    }
+
+    /// The one directory blobs live in, created once per store.
+    ///
+    /// Not cached on an `Err`, so a transient failure does not skip the rest of
+    /// the run.
+    fn ensure_blob_dir(&self, final_path: &Path) -> Result<(), String> {
+        if self.blob_dir.get().is_some() {
+            return Ok(());
         }
+        let dir = final_path.parent().unwrap_or(&self.root);
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let _ = self.blob_dir.set(());
+        Ok(())
     }
 }
 

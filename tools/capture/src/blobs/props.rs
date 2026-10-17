@@ -176,15 +176,7 @@ impl BlobProps {
     pub fn measure(raw: &[u8], chunk: &SophonChunk) -> Result<BlobProps, ApiError> {
         let what = format!("chunk {}", chunk.id);
         if !hash::is_zstd(raw) {
-            return Err(ApiError::shape(
-                "chunk",
-                format!(
-                    "{what}: not a zstd frame ({} bytes, magic {:02x?}); the build declared \
-                     compression=1",
-                    raw.len(),
-                    &raw[..raw.len().min(4)],
-                ),
-            ));
+            return Err(Self::not_a_frame(&what, raw));
         }
         let compressed = hash::md5_sha256(raw);
         // A frame that will not decode leaves the two decode-dependent checks
@@ -200,27 +192,71 @@ impl BlobProps {
         // And the compressed digests are one pass, not two: `md5_compressed` and
         // `sha256_compressed` cover the same buffer and the crate records both.
         let measured = hash::zstd_measure(raw, &what);
-        let decoded_size = measured.as_ref().ok().map(|m| m.len);
-        let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
-        Ok(BlobProps {
-            chunk_id: chunk.id.clone(),
-            stored_path: None,
-            bytes: compressed.bytes,
-            container: "zstd".to_string(),
-            sha256_compressed: compressed.sha256,
-            md5_compressed: compressed.md5.clone(),
-            md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
-            uncompressed_size: decoded_size.unwrap_or(0),
-            unknown_field6: chunk.unknown_field6,
-            decode_error: measured.as_ref().err().cloned(),
-            verified: Some(Verified {
-                raw_size_matches: raw.len() as i64 == chunk.compressed_size,
-                md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
-                md5_decompressed_matches: md5_decompressed.as_deref()
-                    == Some(&chunk.uncompressed_md5),
-                decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
-            }),
-        })
+        Ok(Self::assemble(compressed, measured, chunk))
+    }
+
+    /// [`BlobProps::measure`] for a blob already on disk, with its compressed
+    /// digests already computed.
+    ///
+    /// §6.6.2. The capture path streams a chunk to a file and digests it on the
+    /// way past, so by the time there is anything to measure the bytes have never
+    /// been in memory. `compressed` is what the *write* computed, which is the
+    /// same number [`BlobProps::measure`] would have computed over the same
+    /// bytes — `a_hashable_file_reports_the_digests_of_the_bytes_it_stored` is
+    /// what keeps that true rather than merely intended.
+    ///
+    /// Only the decode reads the file, and it reads it through a 16 KB window.
+    /// So the peak cost of measuring a blob is the cost of the network chunk that
+    /// produced it.
+    ///
+    /// The one refusal `measure` makes — "not a zstd frame" — is made here too,
+    /// from the file's first four bytes, and with the same message. Everything
+    /// else that can go wrong is a decode failure, which is recorded rather than
+    /// raised.
+    pub fn measure_file(
+        path: &std::path::Path,
+        chunk: &SophonChunk,
+        compressed: hash::Digests,
+    ) -> Result<BlobProps, ApiError> {
+        let what = format!("chunk {}", chunk.id);
+        let file = std::fs::File::open(path).map_err(|e| {
+            ApiError::shape("chunk", format!("{what}: reopening what was just written: {e}"))
+        })?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut head = [0_u8; 4];
+        use std::io::Read as _;
+        let n = reader
+            .read(&mut head)
+            .map_err(|e| ApiError::shape("chunk", format!("{what}: reading the magic: {e}")))?;
+        if !hash::is_zstd(&head[..n]) {
+            return Err(Self::not_a_frame(&what, &head[..n]));
+        }
+        // Rewind rather than chain the head back: `zstd_measure_from` reads its
+        // own four bytes to sniff with, so the file must start at zero.
+        use std::io::Seek as _;
+        reader.rewind().map_err(|e| {
+            ApiError::shape("chunk", format!("{what}: rewinding to decode: {e}"))
+        })?;
+        let measured = hash::zstd_measure_from(reader, &what);
+        Ok(Self::assemble(compressed, measured, chunk))
+    }
+
+    /// The one thing that is an error rather than a recorded decode failure.
+    ///
+    /// The build declared `compression: 1`, so unframed bytes are a protocol
+    /// violation rather than a digest mismatch, and there is nothing to measure.
+    /// One function so the buffered and file paths say the *same* thing — a blob
+    /// that is not a frame gets one error text whichever way it arrived.
+    fn not_a_frame(what: &str, seen: &[u8]) -> ApiError {
+        ApiError::shape(
+            "chunk",
+            format!(
+                "{what}: not a zstd frame ({} bytes, magic {:02x?}); the build declared \
+                 compression=1",
+                seen.len(),
+                &seen[..seen.len().min(4)],
+            ),
+        )
     }
 
     /// The entry for a blob whose bytes arrived but are not a zstd frame.
@@ -261,7 +297,40 @@ impl BlobProps {
         }
     }
 
-    /// The entry for a blob that was never fetched.
+    /// The row, from the two things that were measured.
+///
+/// **The tail shared by [`BlobProps::measure`] and [`BlobProps::measure_file`]**,
+/// and the reason they cannot disagree about a field: a decode that failed leaves
+/// the two decode-dependent checks false and records why, rather than taking the
+/// whole blob down with it.
+///
+/// `measured` being `Err` is a *recorded* state, not a propagated one, so the
+/// compressed digests and `bytes` still land in the row — they were computed over
+/// bytes that exist on disk.
+fn assemble(compressed: hash::Digests, measured: Result<hash::Measure, String>, chunk: &SophonChunk) -> BlobProps {
+    let decoded_size = measured.as_ref().ok().map(|m| m.len);
+    let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
+    BlobProps {
+        chunk_id: chunk.id.clone(),
+        stored_path: None,
+        bytes: compressed.bytes,
+        container: "zstd".to_string(),
+        sha256_compressed: compressed.sha256,
+        md5_compressed: compressed.md5.clone(),
+        md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
+        uncompressed_size: decoded_size.unwrap_or(0),
+        unknown_field6: chunk.unknown_field6,
+        decode_error: measured.as_ref().err().cloned(),
+        verified: Some(Verified {
+            raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
+            md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
+            md5_decompressed_matches: md5_decompressed.as_deref() == Some(&chunk.uncompressed_md5),
+            decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
+        }),
+    }
+}
+
+/// The entry for a blob that was never fetched.
     ///
     /// `--no-chunk-blobs` produces these. The declared sizes come from the
     /// manifest and the digests are **empty strings rather than zeros**,

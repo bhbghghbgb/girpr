@@ -370,7 +370,9 @@ pub struct Measure {
 /// buffer replaced by a hasher and a counter, and
 /// `a_streaming_measurement_agrees_with_decompressing_the_same_bytes` is what
 /// keeps that true rather than merely intended — including for a frame that
-/// fails to decode part way through, where both report the same error.
+/// fails to decode part way through, where both report the same error, **and that
+/// equality is asserted on the message text itself**. For a source that is not a
+/// buffer, [`zstd_measure_from`], whose error text is deliberately shorter.
 pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
     use std::io::Read as _;
     let mut dec = zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
@@ -391,6 +393,93 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
         len,
         md5: hex_bytes(&hasher.compute().0),
     })
+}
+
+/// [`zstd_measure`] over a reader rather than a buffer.
+///
+/// [`zstd_measure`] over a reader rather than a buffer.
+///
+/// §6.6.2, and the reason a chunk blob can be measured without being held: the
+/// file it was streamed into is the source, and this walks it with a 16 KB
+/// window instead of a 3.7 MB `Vec`.
+///
+/// **The same answers, and the same refusals — one deliberate difference in the
+/// error text.** [`zstd_error`] quotes the blob's total length, and a reader
+/// being consumed cannot supply that without reading all of it, which is the thing
+/// being avoided. So the message names what *is* known: the first four bytes, and
+/// whether they were a frame's magic. That is the part a reader of the error
+/// needs — it separates "the CDN answered with an XML error page" from "a zstd
+/// frame arrived and is corrupt".
+///
+/// **The loop below is duplicated from [`zstd_measure`] on purpose.** The first
+/// version of this had `zstd_measure` delegate here and passed a `total` down, to
+/// share it — which quietly downgraded the *slice* version's message too, and
+/// `a_streaming_measurement_agrees_with_decompressing_the_same_bytes` (§5.4)
+/// caught it, because that path is required to be byte-identical to
+/// [`zstd_decompress`]. Ten duplicated lines beat a shared function that makes
+/// one caller lie about what it knows.
+pub fn zstd_measure_from<R: std::io::Read>(mut reader: R, what: &str) -> Result<Measure, String> {
+    use std::io::Read as _;
+
+    // Exactly as many bytes as `is_zstd` looks at, and no more: the magic is at
+    // the front of a frame. Read before the decoder so the refusal can quote it —
+    // a consumed reader cannot be re-read.
+    let mut first = [0_u8; 4];
+    let n = read_upto(&mut reader, &mut first).map_err(|e| zstd_error_streamed(&[], what, e))?;
+    // `Copy`, so the error paths below can still name the head after the slice has
+    // been moved into the decoder.
+    let head: &[u8] = &first[..n];
+    if !is_zstd(head) {
+        return Err(zstd_error_streamed(head, what, "not a zstd frame"));
+    }
+
+    let mut dec = zstd::stream::read::Decoder::new(std::io::Cursor::new(head).chain(reader))
+        .map_err(|e| zstd_error_streamed(head, what, e))?;
+    let mut hasher = md5::Context::new();
+    let mut len = 0_u64;
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let n = dec
+            .read(&mut buf)
+            .map_err(|e| zstd_error_streamed(head, what, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.consume(&buf[..n]);
+        len += n as u64;
+    }
+    Ok(Measure {
+        len,
+        md5: hex_bytes(&hasher.compute().0),
+    })
+}
+
+/// Fill `buf` up to its length, or as far as the reader gets. How many arrived.
+fn read_upto<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    Ok(filled)
+}
+
+/// The reader's error text: the head, and whether the magic was there.
+///
+/// **Says less than [`zstd_error`] on purpose** — see [`zstd_measure_from`].
+fn zstd_error_streamed(head: &[u8], what: &str, e: impl std::fmt::Display) -> String {
+    format!(
+        "{what}: not a decodable zstd blob (first {} bytes, magic {:02x?}{}): {e}",
+        head.len(),
+        &head[..head.len().min(4)],
+        if is_zstd(head) {
+            " has-zstd-magic"
+        } else {
+            " no-zstd-magic"
+        },
+    )
 }
 
 #[cfg(test)]
@@ -633,6 +722,55 @@ mod tests {
         );
         assert_ne!(digests, md5_sha256(second));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
+        // **§6.6.2's second gate.** The blob path will measure from the file it
+        // was streamed into, so this has to be the same function with a different
+        // source — same length, same md5, and the same answer for a frame that
+        // is broken. Read back through a `Cursor` so the reader is genuinely a
+        // reader and not a slice in disguise.
+        use std::io::Cursor;
+
+        let payload = b"the quick brown fox jumps over the lazy dog, repeatedly and at length"
+            .repeat(400);
+        let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
+
+        let from_slice = zstd_measure(&frame, "blob").expect("slice");
+        let from_reader = zstd_measure_from(Cursor::new(&frame), "blob").expect("reader");
+        assert_eq!(from_slice, from_reader, "reader and slice must agree");
+        assert_eq!(from_reader.len, payload.len() as u64);
+        assert_eq!(from_reader.md5, crate::hash::md5_hex(&payload));
+
+        // A truncated frame fails the same way from both sides, and both say
+        // whether the magic was there.
+        let cut = &frame[..frame.len() / 2];
+        let e_slice = zstd_measure(cut, "blob").expect_err("slice rejects it");
+        let e_reader = zstd_measure_from(Cursor::new(cut), "blob").expect_err("reader rejects it");
+        for e in [&e_slice, &e_reader] {
+            assert!(e.contains("has-zstd-magic"), "{e}");
+            assert!(e.contains("blob"), "{e} must name the blob");
+        }
+
+        // Not a frame at all: the reader version must still be able to say the
+        // magic was missing, which is the reason `Sniffed` exists.
+        let xml = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let e_reader = zstd_measure_from(Cursor::new(xml), "blob").expect_err("reader rejects it");
+        assert!(e_reader.contains("no-zstd-magic"), "{e_reader}");
+    }
+
+    #[test]
+    fn measuring_a_reader_streams_rather_than_buffering() {
+        // The claim `zstd_measure_from` makes over the slice version: it must not
+        // materialise the decoded body. A source that hands out the same bytes
+        // forever would hang a buffering reader and starve a streaming one, so
+        // the bound below is what proves the loop stops at end of frame.
+        use std::io::Cursor;
+        let payload = vec![7_u8; 400_000];
+        let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
+        let m = zstd_measure_from(Cursor::new(&frame), "blob").expect("measure");
+        assert_eq!(m.len, payload.len() as u64);
     }
 
     /// One pass must equal two, or every digest in the bundle moves.
