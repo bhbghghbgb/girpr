@@ -1091,6 +1091,42 @@ the field is additive.
 Step 2 is early on purpose: it is behaviour-free, it is the difference between a
 70 s and a 151 s gate, and there are twelve gate cycles ahead of it.
 
+### The line-count prediction in this section was wrong
+
+The paragraph above says steps 0-12 "remove roughly **550 lines** outright".
+Measured over the whole branch, by the same script and method as §0's comparison:
+
+| | lines |
+|---|---|
+| baseline `884eeea`, all `.rs` | 27,435 |
+| predicted here | **−550** |
+| actual, `892beb9` | **+10,653** (+39%) |
+
+| | delta |
+|---|---|
+| `src/` production | +3,612 (of which +1,222 is non-comment code) |
+| in-module `#[cfg(test)]` | +4,350 |
+| `tests/` | +2,691 |
+
+So the crate is 11 000 lines larger, not 550 smaller, and **the prediction was not
+close**. Two things are worth separating, because they are not the same claim:
+
+- **The relocation half was right.** `run.rs` went 1,981 → 860, which is the
+  "~600 relocated into the modules that own them" claim, essentially exactly.
+- **The removal half was wrong in kind, not just in degree.** Nothing was removed
+  *from the crate*; it was removed from individual functions and replaced with a
+  named helper, a test, and a note saying why. §5.5 is the clearest case: rows 8,
+  9 and 10 were three "delete a copy" notes, and they cost more lines than they
+  saved because each one had to be made safe first — the capacity hint needed a
+  test at four different values, the lock scope needed a thread-and-`try_lock`
+  test, and the streamed write needed a mid-stream-failure test.
+
+Whether that is the right trade is a judgement, not a measurement, and this plan
+is not the place to make it silently. What is measurable: **the code that runs
+grew 1,222 lines, and the tests that justify it grew 7,041.** A reviewer weighing
+this branch should weigh those two numbers against the 4.1x on `verify` and the
+6.2x on the suite, not against "smaller".
+
 **One item per commit, each with its own gate result in the message.** The
 whole plan is only trustworthy if each step is independently revertable — that
 is what makes a high-risk band-3 change acceptable at all.
