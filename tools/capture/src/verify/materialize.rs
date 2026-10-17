@@ -115,26 +115,13 @@ pub fn rebuild(
     // `parts` is still needed for `declared_size`; `Layout::of` takes it by
     // value so the one-vector-holds-both property holds at the call site too.
     let layout = Layout::of(parts.iter().copied(), declared_size);
-    if !layout.is_clean() {
-        return Err(format!(
-            "{tag} {path} ({role}): does not satisfy A11 — {}",
-            layout.violations.join("; ")
-        ));
-    }
-    let mut bytes = vec![0_u8; declared_size.max(0) as usize];
-    for ((id, _), r) in chunks.iter().zip(&layout.ranges) {
-        let decoded = src.decoded(id)?;
-        if decoded.len() as i64 != r.len() {
-            return Err(format!(
-                "{tag} {path}: chunk {id} decoded to {} B but the index says its range is {r}",
-                decoded.len()
-            ));
-        }
-        let dst = bytes
-            .get_mut(r.start as usize..r.end as usize)
-            .ok_or_else(|| format!("{tag} {path}: range {r} is outside the file"))?;
-        dst.copy_from_slice(&decoded);
-    }
+    // The label is the only thing that distinguishes this rebuild from the
+    // capture's own: the tiling, and every message it can produce, is one
+    // function. See `assemble::tile`.
+    let label = format!("{tag} {path} ({role})");
+    let ids: Vec<&str> = chunks.iter().map(|(id, _)| id.as_str()).collect();
+    let bytes =
+        crate::assemble::tile(&label, &layout, declared_size, &ids, |id| src.decoded(id))?;
     Ok(Rebuilt {
         tag: tag.to_string(),
         path: path.to_string(),

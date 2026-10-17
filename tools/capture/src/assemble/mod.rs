@@ -500,6 +500,79 @@ impl ChunkSource {
     }
 }
 
+/// Tile one file from its chunks, and say why it could not.
+///
+/// **One implementation for both callers.** A capture tiles the manifest entry
+/// it was handed; `gircap materialize` tiles the references recorded in
+/// `chunks/index.json`. Same algorithm, same three ways to fail — and they were
+/// written out twice, in two phrasings, so a reader of one had to learn a second
+/// vocabulary to read the other.
+///
+/// ## What carries the difference: the label
+///
+/// The only thing that genuinely differs is *which side* is being rebuilt, and
+/// that belongs in the label rather than in three parallel sentence templates:
+///
+/// ```text
+/// 7.0.0 GenshinImpact_Data/Plugins/HoYoChannel.dll                (capture)
+/// 7.0.0 GenshinImpact_Data/Plugins/HoYoChannel.dll (materialize_old)  (materialize)
+/// ```
+///
+/// So the three messages are the same in both paths, and carry both meanings,
+/// because the words describe the *fact* rather than the caller:
+///
+/// | failure | one wording for both |
+/// |---|---|
+/// | the layout breaks A11 | `does not satisfy A11 — …` |
+/// | a chunk's range is not inside the file | `range {r} is outside the {total} B file` |
+/// | a chunk decoded to the wrong length | `decoded to {n} B but its range is {r}` |
+///
+/// "is outside the *N* B file" replaced two older phrasings: capture said the
+/// range "does not fit a *N* B **buffer**", which describes the tool's
+/// allocation rather than the fact; materialize said it "is outside the file",
+/// which is right but omits the size a reader would want. The new sentence is
+/// true of both and says more.
+///
+/// These strings are **failure diagnostics, not artifact bytes**: an assembly
+/// error aborts the capture before the bundle is finished, so nothing here
+/// reaches a written file. That is why changing them is a deliberate act rather
+/// than a band-3 concern.
+///
+/// The range is checked **before** the chunk is decoded, so a rebuild that is
+/// going to be refused does not first inflate every blob to find out. That was
+/// already capture's order; `materialize` used the other one, and the only
+/// observable difference is which message a file that is wrong in both ways at
+/// once reports.
+pub fn tile<'a>(
+    label: &str,
+    layout: &Layout,
+    total: i64,
+    ids: &[&str],
+    decoded: impl Fn(&str) -> Result<std::borrow::Cow<'a, [u8]>, String>,
+) -> Result<Vec<u8>, String> {
+    if !layout.is_clean() {
+        return Err(format!(
+            "{label}: does not satisfy A11 — {}",
+            layout.violations.join("; ")
+        ));
+    }
+    let mut bytes = vec![0_u8; total.max(0) as usize];
+    for (id, r) in ids.iter().zip(&layout.ranges) {
+        let dst = bytes.get_mut(r.start as usize..r.end as usize).ok_or_else(|| {
+            format!("{label}: chunk {id} range {r} is outside the {total} B file")
+        })?;
+        let d = decoded(id)?;
+        if d.len() as i64 != r.len() {
+            return Err(format!(
+                "{label}: chunk {id} decoded to {} B but its range is {r}",
+                d.len()
+            ));
+        }
+        dst.copy_from_slice(&d);
+    }
+    Ok(bytes)
+}
+
 /// Assemble one file's side from its retained chunks.
 ///
 /// The layout is checked *before* any byte is placed, so a manifest that
@@ -517,32 +590,9 @@ fn assemble_side(
             .map(|c| (c.offset, c.uncompressed_size)),
         entry.size,
     );
-    if !layout.is_clean() {
-        return Err(format!(
-            "{tag} {}: does not satisfy A11 — {}",
-            entry.file,
-            layout.violations.join("; ")
-        ));
-    }
-    let mut bytes = vec![0_u8; entry.size.max(0) as usize];
-    for (i, (c, r)) in entry.chunks.iter().zip(&layout.ranges).enumerate() {
-        let Some(dst) = bytes.get_mut(r.start as usize..r.end as usize) else {
-            return Err(format!(
-                "{tag} {}: chunk {i} range {r} does not fit a {} B buffer",
-                entry.file, entry.size
-            ));
-        };
-        let decoded = src.decoded(&c.id)?;
-        if decoded.len() as i64 != r.len() {
-            return Err(format!(
-                "{tag} {}: chunk {i} ({}) decoded to {} B but its range is {r}",
-                entry.file,
-                c.id,
-                decoded.len()
-            ));
-        }
-        dst.copy_from_slice(&decoded);
-    }
+    let ids: Vec<&str> = entry.chunks.iter().map(|c| c.id.as_str()).collect();
+    let label = format!("{tag} {}", entry.file);
+    let bytes = tile(&label, &layout, entry.size, &ids, |id| src.decoded(id))?;
     Ok(FileResult {
         tag: tag.to_string(),
         md5: hash::md5_hex(&bytes),
@@ -932,6 +982,83 @@ mod tests {
     use crate::blobs::chunks::{NewFile, OldFile};
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+
+    /// The three ways a rebuild can fail, in one wording.
+    ///
+    /// There were two sets of three — a capture's and `materialize`'s — and
+    /// **nothing asserted any of them**, so either could be reworded without a
+    /// test noticing, and they had already drifted apart. The label is the only
+    /// thing that differs between the two callers, and that is what these pin.
+    #[test]
+    fn a_failed_rebuild_says_which_file_which_range_and_which_size() {
+        use std::borrow::Cow;
+        let clean = Layout::of([(0, 10)], 10);
+
+        // 1. The layout itself breaks A11 — a gap between the chunks.
+        let holed = Layout::of([(0, 10), (20, 10)], 30);
+        let e = tile(
+            "7.0.0 a/b.dll",
+            &holed,
+            30,
+            &["x", "y"],
+            |_| Ok(Cow::Borrowed(&b""[..])),
+        )
+        .unwrap_err();
+        assert!(
+            e.starts_with("7.0.0 a/b.dll: does not satisfy A11 — "),
+            "{e}"
+        );
+        assert!(e.contains("a gap of 10 B between chunk 0"), "and says where: {e}");
+
+        // 2. A range outside the file. `total` is its own parameter, so a clean
+        //    layout can still describe a range the file cannot hold.
+        let e = tile(
+            "7.0.0 a/b.dll (materialize_old)",
+            &clean,
+            4,
+            &["x"],
+            |_| Ok(Cow::Borrowed(&b""[..])),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "7.0.0 a/b.dll (materialize_old): chunk x range [0, 10) is outside the 4 B file",
+            "the label is the only thing that says which caller this is"
+        );
+
+        // 3. A chunk that decoded to the wrong length.
+        let e = tile(
+            "7.0.0 a/b.dll",
+            &clean,
+            10,
+            &["x"],
+            |_| Ok(Cow::Borrowed(&b"short"[..])),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "7.0.0 a/b.dll: chunk x decoded to 5 B but its range is [0, 10)"
+        );
+    }
+
+    /// The range is checked *before* the chunk is decoded.
+    ///
+    /// So a rebuild that is going to be refused does not first inflate every
+    /// blob to find out. `materialize` used to do this the other way round.
+    #[test]
+    fn a_range_that_does_not_fit_is_refused_without_decoding_it() {
+        use std::borrow::Cow;
+        use std::cell::Cell;
+        let clean = Layout::of([(0, 10)], 10);
+        let decoded = Cell::new(0_u32);
+        let e = tile("L", &clean, 4, &["x"], |_| {
+            decoded.set(decoded.get() + 1);
+            Ok(Cow::Borrowed(&b""[..]))
+        })
+        .unwrap_err();
+        assert!(e.contains("outside the 4 B file"), "{e}");
+        assert_eq!(decoded.get(), 0, "nothing should have been decoded");
+    }
 
     /// Distinct payload bytes, so a test can never pass because two chunks were
     /// accidentally the same content.
