@@ -179,7 +179,21 @@ pub fn write_patchmap(
 /// Written even when nothing was stored — `--no-chunk-blobs` still produces the
 /// role lists, because knowing which chunks *would* have been needed is the part
 /// of the document that survives a metadata-only run.
+///
+/// **`patchmaps/` is created first, as part of writing this.** It used to be a
+/// `create_dir_all` in the orchestrator, one line above the call, which meant
+/// the directory's existence depended on a caller remembering an unrelated step.
+/// `--no-chunk-blobs` admits captures and then stores no blobs, so nothing is
+/// written there and the directory simply never appeared — which made `verify`
+/// refuse the bundle as unreadable (exit 1, "a bundle with no patchmaps has no
+/// captures to verify") rather than report the finding a reader actually wants,
+/// which is that the bundle cannot be materialized. An empty directory costs
+/// nothing and makes the layout uniform.
+///
+/// So the guarantee is now local: *if `chunks/index.json` exists, `patchmaps/`
+/// exists.* A caller cannot get a bundle with one and not the other.
 pub fn write_chunk_index(root: &Path, index: &crate::blobs::ChunkIndex) -> std::io::Result<String> {
+    std::fs::create_dir_all(root.join("patchmaps"))?;
     write_doc(root, "chunks/index.json", index)
 }
 

@@ -27,6 +27,7 @@
 //! re-deriving anything.
 
 pub mod chunks;
+pub mod fill;
 pub mod plan;
 pub mod props;
 

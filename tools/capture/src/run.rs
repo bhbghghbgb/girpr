@@ -262,40 +262,30 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     })?;
     let mut written = tree.written;
     let api_documents = tree.api_documents;
+
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //
     //     The index is written either way. `--no-chunk-blobs` produces one with
     //     every role list filled and no blobs, which is how a reader tells "this
     //     capture did not fetch" from "this capture had nothing to fetch".
+    //     `patchmaps/` is created by `write_chunk_index`, not here: a caller must
+    //     not be able to get a bundle with one and not the other.
     let store = blobs::Store::new(
         &dir,
         blobs::Sources::from_manifests(manifests.iter().flatten()),
     );
-    let (entries, fetch_errors) = if plan.no_chunk_blobs {
-        tracing::info!(
-            chunks = wants.len(),
-            projected_bytes = projected,
-            "--no-chunk-blobs: the index records the plan and stores nothing"
-        );
-        (blobs::Store::plan_only(&wants), Vec::new())
-    } else {
-        let (e, errs) = store.fill(&fetcher, &wants, plan.jobs).await;
-        for e in &errs {
-            tracing::error!(error = %e, "chunk fetch failed");
-        }
-        (e, errs)
-    };
-    let index = blobs::ChunkIndex::build(entries);
+    let filled = blobs::fill::fill_or_plan(
+        &store,
+        &fetcher,
+        &wants,
+        plan.jobs,
+        plan.no_chunk_blobs,
+        projected,
+    )
+    .await;
+    let fetch_errors = filled.errors;
+    let index = blobs::ChunkIndex::build(filled.entries);
     tracing::info!(detail = %blobs::describe(&wants, &index), "chunk store done");
-    // `patchmaps/` is created whether or not anything lands in it.
-    //
-    // `--no-chunk-blobs` admits captures and then stores no blobs, so there is
-    // nothing to write a map for, and the directory simply never appeared - which
-    // made `verify` refuse the bundle as unreadable (exit 1, "a bundle with no
-    // patchmaps has no captures to verify") rather than report the finding a
-    // reader actually wants, which is that the bundle cannot be materialized. An
-    // empty directory costs nothing and makes the layout uniform.
-    std::fs::create_dir_all(dir.join("patchmaps")).map_err(|e| write_err(&dir, e))?;
     written.push(emit::write_chunk_index(&dir, &index).map_err(|e| write_err(&dir, e))?);
 
     // 7c. The fixture: assemble every admitted capture and write both sides,
