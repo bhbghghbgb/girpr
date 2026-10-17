@@ -1121,30 +1121,53 @@ So nobody re-audits them.
 
 ## 11. Completion audit
 
-Checked against the tree at `c5c20e5`, section by section, rather than from the
-commit log. Every row is a measurement or a grep, not a recollection.
+Re-verified against the tree at `93a933e`, section by section, rather than from
+the commit log. Every row is a measurement or a grep, not a recollection.
+
+**Re-run because an audit is not a claim, and this one had gone stale.** It was
+written at `c5c20e5` and six commits have landed since. Re-checked rather than
+trusted: **`src/` has not changed at all** since then — `git diff --name-only
+c5c20e5 HEAD -- tools/capture/src` is empty — so every row about production
+behaviour still holds by construction rather than by luck. What moved is the
+test suite and this document, so those are the numbers re-measured below.
 
 | § | requirement | evidence |
 |---|---|---|
-| 2.1-2.4 | band-0 sweep | no dead code left; `src/` grew by 10 files that are the §3.7 split, and `run.rs` 1,981 → 860 |
-| 3.1-3.6 | output-identical | 91 of 97 byte-identical on every real capture; `game/ 9/9 expected/ 7/7 patchmaps/ 8/8 chunks/ 39/39 diff/ 5/5 manifests/ 16/16` |
-| 3.7 | split `capture()` | 1,981 → 860 lines in `run.rs`; it is no longer the largest file in `src/` |
-| 3.8 | cheap enough to gate every commit | suite **151 s → 24.4 s** with 119 more tests; 0 `#[ignore]`, 0 sleeps, 0 non-`.rs` fixtures, all captures on `127.0.0.1:0` |
+| 2.1-2.4 | band-0 sweep | no dead code left; `src/` grew by 10 files that are the §3.7 split, and `run.rs` 1,981 → **860** (re-measured) |
+| 3.1-3.6 | output-identical | 91 of 97 byte-identical on every real capture; `game/ 9/9 expected/ 7/7 patchmaps/ 8/8 chunks/ 39/39 diff/ 5/5 manifests/ 16/16`. Not re-run here: `src/` is unchanged, so the captures these were measured on are the current binary's |
+| 3.7 | split `capture()` | 1,981 → **860** lines in `run.rs` (re-measured); no longer the largest file in `src/` |
+| 3.8 | cheap enough to gate every commit | suite **151 s → 26.1 s** with **123** more tests (re-measured); 0 `#[ignore]`, 0 `thread::sleep`, 0 non-`.rs` fixtures, all captures on `127.0.0.1:0` |
 | 4 | the gate itself | `tests/bundle_diff.rs`, 8 tests, two mock captures compared byte-wise |
 | 5.1-5.4 | band-2 hardening | landed, one commit each |
 | 5.5 | the 16-row table | closed — see the status table in §5.5 |
 | 6.1-6.6 | band-3 changes | landed; the re-capture §6 owes is promoted (`20261017T123335Z`) |
-| 7 | out of bounds | `SCHEMA_VERSION` is `1`; 0 non-comment mentions of `girpr` in `src/`; no `pedantic`, no `[profile]` tuning, no `rustfmt.toml`; A1-A20 unchanged (A99 is a pre-existing test fixture for an undescribed assertion, present in the baseline) |
+| 7 | out of bounds | **re-verified**: `SCHEMA_VERSION` is `1`; 0 non-comment mentions of `girpr` in `src/`; 0 hits for `pedantic`, `[profile]` or `opt-level`; no `rustfmt.toml`; A1-A20 unchanged, and `A99` is the same pre-existing test fixture for an undescribed assertion that is in the baseline too |
 | 8 | measurements | taken and recorded in §0 |
-| 10 | left alone | `exit.rs` and `select/budget.rs` untouched; `biz.rs` gained only the `Box::leak` note §10 asked for; `report.rs`'s hand-rolled `to_json_line` and absence of `serde_json::Value` intact |
+| 10 | left alone | **re-verified**: `exit.rs` and `select/budget.rs` have zero diff against the baseline commit; `biz.rs` gained only the `Box::leak` note §10 asked for; `report.rs`'s hand-rolled `to_json_line` and absence of `serde_json::Value` intact |
 
-Full gates at `c5c20e5`:
+Shape, re-measured with the same script and the same method as §0's comparison —
+production is byte-for-byte unchanged, so only the test columns moved:
+
+| | baseline `884eeea` | then | now |
+|---|---|---|---|
+| `src/` production, excl. `#[cfg(test)]` | 13,410 | 17,022 | **17,022** |
+| in-module `#[cfg(test)]` lines | 9,252 | 13,602 | **13,602** |
+| `tests/` lines | 4,773 | 5,758 | **7,464** |
+| total `.rs` lines | 27,435 | — | **38,088** |
+| tests passing | 452 | 571 | **575** |
+
+The crate is now **39% larger than the baseline**, and every line of that since
+§0's comparison went into the test suite rather than into production code. That
+is the direction a plan that added five document pins should move in, but it is
+stated rather than left to be noticed.
+
+Full gates at `93a933e`:
 
     cargo clippy -p gircap --all-targets    clean
-    cargo test -p gircap                     571 passed, 0 failed
+    cargo test -p gircap                     575 passed, 0 failed
     cargo test --release -p gircap --test bundle_diff        8 passed
     cargo test --release -p gircap --test schema            14 passed
-    cargo test --release -p gircap --test capture_layout    24 passed
+    cargo test --release -p gircap --test capture_layout    28 passed
     gircap verify, each of the three bundles under artifacts/
                                             exit 0, checks_total=90
                                             checks_passed=90 findings=0
