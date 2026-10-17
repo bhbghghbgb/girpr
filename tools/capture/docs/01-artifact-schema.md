@@ -155,7 +155,8 @@ One object per HTTP request, in issue order.
   "range": null,                        // literal Range header sent, if any
   "status": 200, "final_url": "https://…", "redirected": false,
   "elapsed_ms": 418,
-  "req_headers":  { "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)", "accept-encoding": "gzip" },
+  "req_headers":  { "accept": "*/*", "accept-encoding": "identity",
+                    "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)" },
   "resp_headers": { "content-type": "application/octet-stream", "content-length": "9007187",
                     "etag": "\"313EA8…\"", "last-modified": "…", "accept-ranges": "bytes",
                     "content-md5": "MT6ox…", "server": "AliyunOSS", "x-cache": "Hit from cloudfront",
@@ -168,6 +169,14 @@ One object per HTTP request, in issue order.
 
 Header keys are lowercased; values are strings exactly as received. `kind` lets a
 reader ask "what did the manifest fetch cost?" without string-matching URLs.
+
+`req_headers` is what the tool **sent**, not what it wishes it had sent. It used
+to record `accept-encoding: gzip` while the client was configured with no
+`accept-encoding` at all, so every row made a false claim about its own request.
+`identity` is the honest value: the HTTP client has no decompression support
+enabled, and naming `gzip` on the wire would make the CDN answer with a
+compressed body the tool could not decode. The record and the client are now
+built from one list, so they cannot disagree again.
 
 ## 5. `api/tag_probe.json`
 

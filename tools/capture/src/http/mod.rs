@@ -337,17 +337,24 @@ pub struct RequestRecord {
 }
 
 impl RequestRecord {
-    /// Headers we always send, lowercased, for the record.
+    /// The headers every request carries, lowercased, for the record.
     ///
     /// Built once per `Fetcher` and cloned per record; see
-    /// [`Fetcher::base_req_headers`]. The `accept` and `accept-encoding` entries
-    /// here are **claims the bundle makes about the request**, and §6.2 is where
-    /// the tool stops claiming to send headers the client is not configured with.
+    /// [`Fetcher::base_req_headers`].
+    ///
+    /// **`accept-encoding` is `identity`, and that is the §6.2 finding.** It used
+    /// to read `gzip` here while the client was configured with no
+    /// `accept-encoding` at all — reqwest only sends one when its `gzip` feature
+    /// is on, and it is not. So the bundle claimed a header the tool never sent.
+    ///
+    /// Claiming `gzip` rather than fixing it would have been the worse of the
+    /// two. Adding the header *without* the feature is not a no-op: the CDN
+    /// would answer with a gzip body and reqwest, unable to decompress it, would
+    /// hand back the compressed bytes — and every manifest digest in the bundle
+    /// would be a digest of compressed JSON. So the record states what the wire
+    /// does, which is identity, and the client is configured to match.
     fn default_req_headers(user_agent: &str, range: Option<&str>) -> BTreeMap<String, String> {
-        let mut h = BTreeMap::new();
-        h.insert("accept".to_string(), "*/*".to_string());
-        h.insert("accept-encoding".to_string(), "gzip".to_string());
-        h.insert("user-agent".to_string(), user_agent.to_string());
+        let mut h = shared_req_headers(user_agent);
         if let Some(r) = range {
             h.insert("range".to_string(), r.to_string());
         }
@@ -605,6 +612,47 @@ impl Observation {
     }
 }
 
+/// The `Accept` the tool sends, and the value it records.
+pub const ACCEPT: &str = "*/*";
+
+/// The `Accept-Encoding` the tool sends, and the value it records.
+///
+/// **`identity`, deliberately.** See [`RequestRecord::default_req_headers`] for
+/// why claiming `gzip` was wrong and why adopting it would be worse: reqwest's
+/// `gzip` feature is off, so naming it on the wire would buy compressed bodies
+/// this client cannot decompress.
+pub const ACCEPT_ENCODING: &str = "identity";
+
+/// The headers every request carries, as the record spells them.
+///
+/// **One list, two consumers.** [`client_default_headers`] turns this into the
+/// `HeaderMap` the `reqwest` client is built with, so the record and the wire
+/// cannot drift — which is the whole of §6.2, since the defect was two lists
+/// that nobody compared.
+fn shared_req_headers(user_agent: &str) -> BTreeMap<String, String> {
+    let mut h = BTreeMap::new();
+    h.insert("accept".to_string(), ACCEPT.to_string());
+    h.insert("accept-encoding".to_string(), ACCEPT_ENCODING.to_string());
+    h.insert("user-agent".to_string(), user_agent.to_string());
+    h
+}
+
+/// [`shared_req_headers`] as a `HeaderMap`, for `ClientBuilder::default_headers`.
+///
+/// A name the builder rejects is a configuration error rather than a silently
+/// dropped header, which is the failure mode this exists to remove.
+fn client_default_headers(user_agent: &str) -> Result<reqwest::header::HeaderMap, ApiError> {
+    let mut map = reqwest::header::HeaderMap::new();
+    for (k, v) in shared_req_headers(user_agent) {
+        let name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
+            .map_err(|e| ApiError::shape("header name", e))?;
+        let value = reqwest::header::HeaderValue::from_str(&v)
+            .map_err(|e| ApiError::shape("header value", e))?;
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
 /// Issues requests, records them, and retries the ones worth retrying.
 ///
 /// Cloneable, and for one reason: M6 fetches chunk blobs concurrently. A clone
@@ -728,9 +776,14 @@ impl Fetcher {
         sleeper: Arc<dyn Sleep>,
     ) -> Result<Self, ApiError> {
         let ua = crate::logging::user_agent();
+        // `default_headers` from the same list the record is built from, so the
+        // bundle's claim about the request and the request itself cannot differ.
+        // `user_agent` is set separately below only because that is the builder
+        // call for it; it is the same value.
         let client = reqwest::Client::builder()
             .timeout(transport.timeout)
             .user_agent(ua.clone())
+            .default_headers(client_default_headers(&ua)?)
             .build()
             .map_err(|e| ApiError::shape("http client", e))?;
         Ok(Fetcher {
@@ -1114,6 +1167,64 @@ mod tests {
     use crate::cli::Biz as BizId;
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn the_record_claims_exactly_the_headers_the_client_is_configured_with() {
+        // **§6.2, and the defect in one assertion.** The record used to name
+        // `accept: */*` and `accept-encoding: gzip` while the `reqwest` client was
+        // built with neither — reqwest only sends an `accept-encoding` when its
+        // `gzip` feature is on, and it is not — so every row of
+        // `api/requests.ndjson` made a claim about the request that was false.
+        //
+        // The two are now built from one list, so this cannot drift by editing
+        // one of them. It is asserted rather than assumed because the whole
+        // defect was two lists that nobody compared.
+        let ua = "test-agent/1.0";
+        let recorded = RequestRecord::default_req_headers(ua, None);
+        let configured = client_default_headers(ua).expect("header map");
+
+        let mut from_client: BTreeMap<String, String> = BTreeMap::new();
+        for (name, value) in configured.iter() {
+            from_client.insert(
+                name.as_str().to_string(),
+                value.to_str().expect("ascii header").to_string(),
+            );
+        }
+        assert_eq!(
+            recorded, from_client,
+            "the bundle's claim about the request and the request must be the same"
+        );
+        assert!(recorded.contains_key("accept"), "accept is sent");
+        assert!(recorded.contains_key("user-agent"), "user-agent is sent");
+    }
+
+    #[test]
+    fn the_record_does_not_claim_a_compression_it_cannot_decode() {
+        // Naming `gzip` on the wire without reqwest's `gzip` feature is not a
+        // no-op: the CDN would answer compressed and reqwest, unable to
+        // decompress, would hand back the compressed bytes — so every manifest
+        // digest in the bundle would be a digest of compressed JSON. This is the
+        // half of §6.2 the plan flagged as "be ready to drop".
+        assert_eq!(
+            ACCEPT_ENCODING, "identity",
+            "the tool offers no compression, so it must not claim any"
+        );
+        let headers = RequestRecord::default_req_headers("ua", None);
+        assert_eq!(headers["accept-encoding"], "identity");
+    }
+
+    #[test]
+    fn a_range_is_recorded_and_is_not_part_of_the_shared_set() {
+        // `Range` is the one per-request header, so it is the one the shared
+        // list must not carry — a client-wide `Range` would make every request a
+        // byte range.
+        assert!(
+            !shared_req_headers("ua").contains_key("range"),
+            "a client-wide Range would break every request but the first"
+        );
+        let with = RequestRecord::default_req_headers("ua", Some("bytes=0-1023"));
+        assert_eq!(with["range"], "bytes=0-1023");
+    }
 
     // ---------------------------------------------------------------- URLs --
 
