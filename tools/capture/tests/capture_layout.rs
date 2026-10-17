@@ -596,6 +596,137 @@ fn the_bundle_has_the_shape_the_schema_documents() {
     );
 }
 
+/// The request log's rows, pinned.
+///
+/// **§5.5 rows 1 and 16 landed here.** `api/requests.ndjson` is one of the six
+/// documents that always differ run to run — `ts`, `elapsed_ms`, CDN headers,
+/// `etag` — so `tests/bundle_diff.rs` compares it with those blanked and nothing
+/// else compares it at all. That is sound for what it was built to do: two
+/// captures of the *same* binary cannot disagree about a change they both carry,
+/// so the gate catches nondeterminism and nothing else. A refactor that changes
+/// what a row *says* passes it, and both bundles under `artifacts/` drifted that
+/// way without anything failing.
+///
+/// So the row content is pinned here instead. Each line is
+///
+///     seq kind method path status bytes_in attempts stored_as range
+///
+/// with the loopback host and query-free URL prefix dropped, `ts`/`elapsed_ms`
+/// and both header maps left out, and the rows in `seq` order.
+///
+/// **The expectation is the specification.** It was dumped from a real capture
+/// and read back, not written from what the code appears to intend — which is
+/// the only way a pin like this catches a mistake rather than restating one.
+///
+/// What it catches, each confirmed by mutation rather than by argument:
+///
+/// - `bytes_in` on the seven `probe` rows. §5.5 row 1 found these were **0 for
+///   every non-2xx**, because the body was dropped unread. Zeroing them again
+///   fails here and nowhere else.
+/// - `stored_as` on the six `api` rows. §6.1 filled those in; the two bundles
+///   under `artifacts/` still carry 42 marked rows where the tool writes 48.
+/// - the `seq` column: dense, unique, from 1. Making `reserve()` return a
+///   constant fails here.
+///
+/// What it does **not** catch, stated because a pin that only lists wins is
+/// misleading: `attempts` is 1 on every row, because this fixture never
+/// retries. Forcing it to 1 survives. So a **spurious** retry is caught and a
+/// **hidden** one is not — the pin says "nothing was retried", not "retries are
+/// recorded". Closing that would need a route that fails once and then answers,
+/// which the mock does not have.
+///
+/// `--jobs 1` is pinned for determinism, the same reason `bundle_diff`'s module
+/// doc gives: `seq` is assigned at reserve time, so which request gets which
+/// `seq` is a function of the network unless there is one worker.
+#[test]
+fn the_request_log_rows_are_what_the_spec_says_they_are() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("rows");
+    let r = capture(&mock, &scratch, &["--jobs", "1"]);
+    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("api/requests.ndjson");
+
+    const EXPECTED: &[&str] = &[
+"1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
+"2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
+"3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
+"4 api GET /hyp/getGamePackages?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 103 1 api/getGamePackages.json -",
+"5 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.1.0 200 1344 1 api/getBuild.7.1.0.json -",
+"6 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.0.0 200 1344 1 api/getBuild.7.0.0.json -",
+"7 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=6.7.0 200 50 1 - -",
+"8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_abf47822fe1d2cab22e470e6a2b43a09 200 706 1 manifests/7.0.0/game.manifest.zst -",
+"9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_412a9dbff152a4f482b470a8c466a1e8 200 719 1 manifests/7.1.0/game.manifest.zst -",
+"10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
+"11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
+"12 probe GET /cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000 404 276 1 - -",
+"13 probe GET /cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000 404 273 1 - -",
+"14 probe GET /cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 404 273 1 - -",
+"15 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=null 200 50 1 - -",
+"16 probe GET /sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword 200 55 1 - -",
+"17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+"18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+"19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
+"20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
+"21 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+"22 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+"23 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+"24 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+"25 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+"26 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747 200 1033 1 chunks/blobs/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747.zst -",
+"27 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+"28 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
+    ];
+
+    let mut got: Vec<(u64, String)> = log
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).expect("one row per line");
+            (v["seq"].as_u64().expect("seq is a number"), row_key(&v))
+        })
+        .collect();
+    got.sort_by_key(|(s, _)| *s);
+    let got_keys: Vec<&str> = got.iter().map(|(_, k)| k.as_str()).collect();
+
+    assert_eq!(
+        got_keys,
+        EXPECTED,
+        "api/requests.ndjson changed. Left is the run, right is the pin.\n\
+         A changed `bytes_in`, `stored_as` or `attempts` is a real behaviour \
+         change and needs a band-3 note; a changed `seq` means the log is no \
+         longer dense, unique, or sorted."
+    );
+}
+
+/// One request row, reduced to what does not move between runs.
+///
+/// The host is dropped because it is an ephemeral loopback port, `range` and
+/// `stored_as` collapse to `-` when null rather than printing `None`, and the
+/// two header maps and both timestamps are left out entirely — they carry the
+/// CDN's per-response ids and the clock, and no assertion should depend on
+/// either.
+fn row_key(v: &serde_json::Value) -> String {
+    let url = v["url"].as_str().unwrap_or("-");
+    let path = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.find('/').map(|i| &rest[i..]))
+        .unwrap_or(url);
+    format!(
+        "{} {} {} {} {} {} {} {} {}",
+        v["seq"],
+        v["kind"].as_str().unwrap(),
+        v["method"].as_str().unwrap(),
+        path,
+        v["status"],
+        v["bytes_in"],
+        v["attempts"],
+        v["stored_as"].as_str().unwrap_or("-"),
+        v["range"].as_str().unwrap_or("-"),
+    )
+}
+
 /// The captured `api/` bodies are byte-exact, which is the whole reason they are
 /// stored rather than re-rendered.
 #[test]
