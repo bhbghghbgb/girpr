@@ -27,6 +27,7 @@
 pub mod budget;
 pub mod classes;
 pub mod decide;
+pub mod require;
 
 use serde::Serialize;
 

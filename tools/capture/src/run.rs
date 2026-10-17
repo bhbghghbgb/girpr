@@ -222,46 +222,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
 
     // 6d. `--require-class` is the only thing that turns an absent class into a
     //     failed run. Without it an over-budget class is recorded and the run
-    //     still exits 0 — the caller asked for a best effort and got one.
-    let required = required_classes(&plan)?;
-    let missing: Vec<select::Class> = required
-        .into_iter()
-        .filter(|c| {
-            selection
-                .matrix
-                .iter()
-                .find(|r| r.class == *c)
-                .is_some_and(|r| !r.is_satisfied())
-        })
-        .collect();
-    if !missing.is_empty() {
-        // One pass, and the row is carried rather than looked up again. This
-        // was a second `.find()` plus `.expect("every required class has a
-        // matrix row")` — provably unreachable, since `missing` is built from
-        // the identical predicate over the identical slice, but it is a panic in
-        // a function that takes a user-supplied `--require-class`, and the
-        // redundancy bought nothing.
-        let detail = missing
-            .iter()
-            .filter_map(|c| {
-                let row = selection.matrix.iter().find(|r| r.class == *c)?;
-                Some(format!(
-                    "{c}: {:?}{}",
-                    row.status,
-                    row.reason
-                        .as_deref()
-                        .map(|r| format!(" ({r})"))
-                        .unwrap_or_default()
-                ))
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        tracing::error!(classes = ?missing, "--require-class was not met");
-        return Err(Failure {
-            code: ExitCode::RequirementUnmet,
-            detail: format!("--require-class not met: {detail}"),
-        });
-    }
+    //     still exits 0 - the caller asked for a best effort and got one.
+    select::require::check(&required_classes(&plan)?, &selection)?;
 
     // 6e. The chunk store. Planned *before* any blob is fetched, so the cost the
     //     log announces is a real figure rather than an estimate, and A12 is
