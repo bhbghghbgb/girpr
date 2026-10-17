@@ -638,6 +638,299 @@ fn the_bundle_has_the_shape_the_schema_documents() {
 /// `--jobs 1` is pinned for determinism, the same reason `bundle_diff`'s module
 /// doc gives: `seq` is assigned at reserve time, so which request gets which
 /// `seq` is a function of the network unless there is one worker.
+/// Which part of a path inventory a row belongs to.
+///
+/// The pin below lists every **document** by name and counts the rest, because
+/// the documents are the bundle's fixed skeleton — a new one appearing or an old
+/// one going missing is a real change — while `chunks/blobs/` and the assembled
+/// trees are named after chunk ids and manifest paths that legitimately move.
+fn kind_of(path: &str) -> &'static str {
+    if path.starts_with("chunks/blobs/") {
+        "blob"
+    } else if path.starts_with("game/") {
+        "game"
+    } else if path.starts_with("expected/") {
+        "expected"
+    } else {
+        "document"
+    }
+}
+
+/// Split a path inventory into (documents sorted, counts by kind).
+fn split_inventory<'a>(paths: &[&'a str]) -> (Vec<&'a str>, BTreeMap<&'a str, usize>) {
+    let mut counts: BTreeMap<&'a str, usize> = BTreeMap::new();
+    let mut docs = Vec::new();
+    for p in paths {
+        let k = kind_of(p);
+        *counts.entry(k).or_default() += 1;
+        if k == "document" {
+            docs.push(*p);
+        }
+    }
+    docs.sort_unstable();
+    (docs, counts)
+}
+
+/// `MANIFEST.json`, `verify/checksums.json` and `README.md` say the same
+/// inventory, and `d745680` showed that pinning one document is not enough —
+/// these three are still only compared between two runs of the same binary.
+///
+/// What is pinned, and why each part:
+///
+/// - every **document** path, by name. This is the bundle's skeleton, and the
+///   realistic regressions are a document appearing, disappearing, or being
+///   renamed — all of which a count would hide.
+/// - the **count** of blobs, `game/` and `expected/` rows, which move with the
+///   world rather than with the tool, and are pinned as counts deliberately.
+/// - the scalar header fields of `MANIFEST.json`: `schema_version`, `tool`, the
+///   non-URL half of `biz`, `field`, `audio`, `gzip_threshold`,
+///   `selection_pool`, `versions`' key set, `capture.complete`, and the two
+///   `totals` that count things rather than bytes.
+/// - `README.md` with **every digit run blanked**, so the prose is pinned and
+///   the sizes are not.
+///
+/// Deliberately **not** pinned, because they are the volatile cascade:
+/// `capture.id`, `capture.captured_at`, `capture.tool_argv`, `capture.host_os`,
+/// `biz.hyp_base`, `biz.sophon_base`, `totals.bytes_downloaded`,
+/// `totals.bytes_on_disk`, and every `files[]`/`entries[]` digest. A16 covers
+/// those digests, and `bundle_diff` covers the ones that move.
+#[test]
+fn the_inventory_documents_describe_the_same_bundle() {
+    let (_m, _s, _r, bundle) = capture_ok("inv");
+    let read = |p: &str| -> String { std::fs::read_to_string(bundle.join(p)).expect(p) };
+    let json = |p: &str| -> serde_json::Value { serde_json::from_str(&read(p)).expect(p) };
+
+    const MANIFEST_DOCUMENTS: &[&str] = &[
+        "api/error_shapes.json",
+        "api/getBuild.7.0.0.json",
+        "api/getBuild.7.1.0.json",
+        "api/getGameBranches.json",
+        "api/getGameConfigs.json",
+        "api/getGameDeprecatedFileConfigs.json",
+        "api/getGamePackages.json",
+        "api/requests.ndjson",
+        "api/tag_probe.json",
+        "chunks/index.json",
+        "diff/candidates.json",
+        "diff/matrix.json",
+        "diff/paths.diff.json",
+        "diff/paths.tsv",
+        "diff/reuse_pool.json",
+        "manifests/7.0.0/en-us.manifest.json",
+        "manifests/7.0.0/en-us.manifest.meta.json",
+        "manifests/7.0.0/en-us.manifest.zst",
+        "manifests/7.0.0/en-us.paths.tsv",
+        "manifests/7.0.0/game.manifest.json",
+        "manifests/7.0.0/game.manifest.meta.json",
+        "manifests/7.0.0/game.manifest.zst",
+        "manifests/7.0.0/game.paths.tsv",
+        "manifests/7.1.0/en-us.manifest.json",
+        "manifests/7.1.0/en-us.manifest.meta.json",
+        "manifests/7.1.0/en-us.manifest.zst",
+        "manifests/7.1.0/en-us.paths.tsv",
+        "manifests/7.1.0/game.manifest.json",
+        "manifests/7.1.0/game.manifest.meta.json",
+        "manifests/7.1.0/game.manifest.zst",
+        "manifests/7.1.0/game.paths.tsv",
+        "patchmaps/added.json",
+        "patchmaps/identical.json",
+        "patchmaps/partial_same_offset.json",
+        "patchmaps/removed.json",
+        "patchmaps/zero_reuse_multi.json",
+    ];
+    const CHECKSUM_DOCUMENTS: &[&str] = &[
+        "MANIFEST.json",
+        "README.md",
+        "api/error_shapes.json",
+        "api/getBuild.7.0.0.json",
+        "api/getBuild.7.1.0.json",
+        "api/getGameBranches.json",
+        "api/getGameConfigs.json",
+        "api/getGameDeprecatedFileConfigs.json",
+        "api/getGamePackages.json",
+        "api/requests.ndjson",
+        "api/tag_probe.json",
+        "chunks/index.json",
+        "diff/candidates.json",
+        "diff/matrix.json",
+        "diff/paths.diff.json",
+        "diff/paths.tsv",
+        "diff/reuse_pool.json",
+        "manifests/7.0.0/en-us.manifest.json",
+        "manifests/7.0.0/en-us.manifest.meta.json",
+        "manifests/7.0.0/en-us.manifest.zst",
+        "manifests/7.0.0/en-us.paths.tsv",
+        "manifests/7.0.0/game.manifest.json",
+        "manifests/7.0.0/game.manifest.meta.json",
+        "manifests/7.0.0/game.manifest.zst",
+        "manifests/7.0.0/game.paths.tsv",
+        "manifests/7.1.0/en-us.manifest.json",
+        "manifests/7.1.0/en-us.manifest.meta.json",
+        "manifests/7.1.0/en-us.manifest.zst",
+        "manifests/7.1.0/en-us.paths.tsv",
+        "manifests/7.1.0/game.manifest.json",
+        "manifests/7.1.0/game.manifest.meta.json",
+        "manifests/7.1.0/game.manifest.zst",
+        "manifests/7.1.0/game.paths.tsv",
+        "patchmaps/added.json",
+        "patchmaps/identical.json",
+        "patchmaps/partial_same_offset.json",
+        "patchmaps/removed.json",
+        "patchmaps/zero_reuse_multi.json",
+        "verify/selfcheck.json",
+    ];
+
+    let m = json("MANIFEST.json");
+    assert_eq!(m["schema_version"], 1);
+    assert_eq!(m["tool"]["name"], "gircap");
+    // The bases name this run's ephemeral loopback port; the identity does not.
+    assert_eq!(m["biz"]["id"], "hk4e_global");
+    assert_eq!(m["biz"]["channel"], "1");
+    assert_eq!(m["biz"]["sub_channel"], "0");
+    assert_eq!(m["biz"]["game_id"], "gopR6Cufr3");
+    assert_eq!(m["biz"]["launcher_id"], "VYTpXlbWo8");
+    assert_eq!(m["biz"]["cps"], "hyp_hoyoverse");
+    assert_eq!(m["field"], "game");
+    assert_eq!(m["audio"], serde_json::json!(["en-us"]));
+    assert_eq!(m["gzip_threshold"], 1_048_576);
+    assert_eq!(m["selection_pool"]["fields"], serde_json::json!(["game", "en-us"]));
+    assert_eq!(m["selection_pool"]["manifest_entries"], serde_json::json!({"en-us": 1, "game": 4}));
+    assert_eq!(m["capture"]["complete"], true);
+    let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
+    assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
+    assert_eq!(m["totals"]["files_captured"], 5);
+    assert_eq!(m["totals"]["chunks_blobs"], 10);
+
+    let mpaths: Vec<&str> = m["files"].as_array().unwrap().iter()
+        .map(|f| f["path"].as_str().expect("a path")).collect();
+    let (mdocs, mcounts) = split_inventory(&mpaths);
+    assert_eq!(mdocs, MANIFEST_DOCUMENTS, "MANIFEST.json documents[] changed");
+    assert_eq!(mcounts.get("blob"), Some(&10), "MANIFEST.json blob rows");
+    assert_eq!(mcounts.get("game"), Some(&5), "MANIFEST.json game rows");
+    assert_eq!(mcounts.get("expected"), Some(&3), "MANIFEST.json expected rows");
+
+    let c = json("verify/checksums.json");
+    assert_eq!(c["algorithm"], "sha256");
+    let epaths: Vec<&str> = c["entries"].as_array().unwrap().iter()
+        .map(|f| f["path"].as_str().expect("a path")).collect();
+    assert_eq!(c["file_count"], epaths.len());
+    let (cdocs, ccounts) = split_inventory(&epaths);
+    assert_eq!(cdocs, CHECKSUM_DOCUMENTS, "checksums.json documents[] changed");
+    assert_eq!(ccounts.get("blob"), Some(&10), "checksums.json blob rows");
+
+    // A16's claim, restated against the projection: every file `MANIFEST.json`
+    // lists is also checksummed, plus the three documents that cannot list
+    // themselves.
+    for p in &mpaths {
+        assert!(epaths.contains(p), "checksums.json does not cover {p}");
+    }
+
+    // README, with every digit run collapsed to `#`. The prose is the pin; the
+    // sizes are the cascade.
+    let mut skel = String::new();
+    let mut prev = false;
+    for ch in read("README.md").chars() {
+        let d = ch.is_ascii_digit();
+        skel.push(if d { if prev { ' ' } else { '#' } } else { ch });
+        prev = d;
+    }
+    const README_SKELETON: &[&str] = &[
+        "# gircap artifact",
+        "- **tool** gircap #.#.#",
+        "- **region** `hk#e_global`",
+        "- **captured** #   -# -# T# :# :# Z (`#       T#     Z`, windows)",
+        "**complete**: `#.#.#` (`sMOCKold# `) → `#.#.#` (`sMOCKnew# `)",
+        "selfcheck: **Pass** — #  of #  assertions passed",
+        "## Matrix",
+        "| class | status | capture | path | field | bytes |",
+        "|---|---|---|---|---|---|",
+        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
+        "| `zero_reuse_single` | unavailable | - | `-` | - | - |",
+        "| `zero_reuse_multi` | captured | zero_reuse_multi | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
+        "| `partial_same_offset` | captured | partial_same_offset | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
+        "| `partial_moved_offset` | unavailable | - | `-` | - | - |",
+        "| `partial_size_changed` | unavailable | - | `-` | - | - |",
+        "| `added` | captured | added | `GenshinImpact_Data/Plugins/libNew.dll` | game | - |",
+        "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #    |",
+        "| `full_reuse_reordered` | unavailable | - | `-` | - | - |",
+        "## Totals",
+        "- # files captured, #  chunk blobs stored",
+        "- #     B downloaded, #     B on disk",
+        "- selection pool: `game`, `en-us`",
+        "- `materialize_new`: # chunks",
+        "- `materialize_old`: # chunks",
+        "- `patch_fetch`: # chunks",
+        "## Re-verifying",
+        "```",
+        "gircap verify <this directory>",
+        "```",
+        "Offline: no network, no writes. Exit # if every assertion still holds.",
+    ];
+    let lines: Vec<&str> = skel.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, README_SKELETON, "README.md prose changed");
+}
+
+/// `verify/selfcheck.json` is the tool's own verdict on itself, and it is the one
+/// document a reader is most likely to trust, so its shape is pinned: the
+/// result, the counts, and the exact wording of every assertion it makes.
+///
+/// The wording is the point. `id` alone would pass if an assertion were
+/// silently narrowed — "every reused chunk's old-file slice MD5 matches" and
+/// "some reused chunk's MD5 matches" are both `A10`, and only the text tells
+/// them apart. §5.5 row 16 (`is_fatal`) is the same idea from the other side.
+#[test]
+fn the_selfcheck_document_asserts_what_it_always_asserted() {
+    let (_m, _s, _r, bundle) = capture_ok("sc");
+    let s: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bundle.join("verify/selfcheck.json")).unwrap())
+            .expect("verify/selfcheck.json");
+
+    assert_eq!(s["result"], "pass");
+    assert_eq!(s["counts"]["failed"], 0);
+    assert_eq!(s["counts"]["total"], s["counts"]["passed"]);
+
+    let rows = s["assertions"].as_array().expect("assertions[]");
+    let mut ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().expect("id")).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids,
+        vec!["A1", "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17", "A19",
+             "A2", "A3", "A4", "A6", "A7", "A8", "A9"],
+        "the set of assertions a capture makes changed; A5, A18 and A20 are \
+         verify-only or absent by design and must stay that way"
+    );
+
+    let mut worded: Vec<String> = rows
+        .iter()
+        .map(|r| format!("{} {}", r["id"].as_str().unwrap(), r["assertion"].as_str().unwrap()))
+        .collect();
+    worded.sort();
+    worded.dedup();
+    const ASSERTIONS: &[&str] = &[
+        "A1 every API response captured has retcode == 0",
+        "A10 every reused chunk's old-file slice MD5 == uncompressed_md5",
+        "A11 chunk offsets gapless from 0, ascending, sum(uncompressed_size) == size",
+        "A12 patch_fetch disjoint from the reuse set, and a subset of materialize_new",
+        "A13 game/config.ini re-parses with game_version == --old-tag",
+        "A14 game/ contains no path outside expected/'s manifest set + the tool-read config files",
+        "A15 diff/ counts equal the recomputed set differences",
+        "A16 checksums.json covers every file written under the artifact root, and re-hashing matches",
+        "A17 each required matrix class is captured | covered_by | unavailable - never absent",
+        "A19 each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
+        "A2 getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
+        "A3 manifest blob md5(decompressed) == manifest.checksum",
+        "A4 manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque",
+        "A6 len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+        "A7 assemble(materialize_old) has md5 == old entry.md5",
+        "A8 assemble(materialize_new) has md5 == new entry.md5",
+        "A9 assemble(REUSE-from-old union patch_fetch) byte-equals assemble(materialize_new)",
+    ];
+    let got: Vec<&str> = worded.iter().map(String::as_str).collect();
+    assert_eq!(got, ASSERTIONS, "an assertion's wording changed");
+}
+/// The captured `api/` bodies are byte-exact, which is the whole reason they are
+/// stored rather than re-rendered.
 #[test]
 fn the_request_log_rows_are_what_the_spec_says_they_are() {
     let mock = Mock::start(World::five_classes());
