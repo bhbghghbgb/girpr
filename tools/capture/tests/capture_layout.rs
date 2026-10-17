@@ -992,6 +992,77 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
     );
 }
 
+/// A retried request is recorded as retried.
+///
+/// `d745680`'s pin has `attempts` at 1 on all 28 rows, because the mock answers
+/// consistently — which meant the field said "nothing was retried" and could not
+/// tell a retry that was recorded from one that was dropped. Forcing `attempts`
+/// to 1 survived that mutation, and this is the test that would kill it.
+///
+/// `Mock::fail_once_for` arms one path to answer `503` exactly once. A `5xx` is
+/// what `RetryPolicy` retries, so the first attempt fails, the second succeeds,
+/// and the request log must say `2` — with the blob still landing, because a retry
+/// that recorded itself but lost the body would be the worse bug.
+#[test]
+fn a_retried_request_is_recorded_as_retried() {
+    // Armed on **one chunk id**, not on `/chunk/`. The negative probes request
+    // `/cdn/<build>/chunk/0000000000000000_...`, so a bare `/chunk/` needle hits
+    // a *probe* first — and `observe` does not retry, which is how the first
+    // version of this test passed with 28 rows and nothing retried. The id below
+    // is the same blob the row pin already names, so it is the same construction
+    // either way.
+    let armed = "/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e";
+    let mock = Mock::start(World::five_classes()).fail_once_for(armed);
+    let scratch = Scratch::new("retry");
+    let r = capture(&mock, &scratch, &["--jobs", "1"]);
+    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("api/requests.ndjson");
+    let rows: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one row per line"))
+        .collect();
+
+    let retried: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|r| r["attempts"].as_u64().unwrap_or(0) > 1)
+        .collect();
+    let statuses: std::collections::BTreeSet<String> =
+        rows.iter().map(|r| r["status"].to_string()).collect();
+    assert_eq!(
+        retried.len(),
+        1,
+        "exactly one request should have been retried. rows={} statuses={:?} \
+         chunk_requests={}",
+        rows.len(),
+        statuses,
+        mock.requests().iter().filter(|r| r.path.contains("/chunk/")).count()
+    );
+
+    let row = retried[0];
+    assert_eq!(row["attempts"], 2, "one failure then one success is two attempts");
+    assert_eq!(row["status"], 200, "the retried request succeeded in the end");
+    assert_eq!(row["kind"], "chunk", "the armed route was a chunk route");
+
+    // And the body it retried for is actually in the bundle. A retry that
+    // recorded itself but dropped the bytes would pass every assertion above.
+    let stored = row["stored_as"].as_str().expect("a retried chunk is stored");
+    assert!(
+        bundle.join(stored).is_file(),
+        "the retried chunk's body is missing: {stored}"
+    );
+
+    // Every other row is still a single attempt, so the retry was not smeared
+    // across the log by an off-by-one in the counter.
+    let singles = rows
+        .iter()
+        .filter(|r| r["attempts"].as_u64() == Some(1))
+        .count();
+    assert_eq!(singles, rows.len() - 1);
+}
+
 /// One request row, reduced to what does not move between runs.
 ///
 /// The host is dropped because it is an ephemeral loopback port, `range` and

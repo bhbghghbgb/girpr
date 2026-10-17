@@ -410,6 +410,10 @@ pub struct Mock {
     base: String,
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Vec<Recorded>>>,
+    /// Kept so `fail_once_for` can arm a route after the listener is already
+    /// bound. Shared with the serving threads, which is why the map inside is
+    /// behind its own lock.
+    table: Arc<Table>,
 }
 
 impl Mock {
@@ -427,13 +431,14 @@ impl Mock {
 
         let thread_stop = Arc::clone(&stop);
         let thread_log = Arc::clone(&log);
+        let thread_table = Arc::clone(&table);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if thread_stop.load(Ordering::Relaxed) {
                     break;
                 }
                 let Ok(stream) = stream else { continue };
-                let table = Arc::clone(&table);
+                let table = Arc::clone(&thread_table);
                 let log = Arc::clone(&thread_log);
                 std::thread::spawn(move || {
                     let _ = serve(stream, &table, &log);
@@ -441,7 +446,28 @@ impl Mock {
             }
         });
 
-        Mock { base, stop, log }
+        Mock { base, stop, log, table }
+    }
+
+    /// Answer the next request whose path contains `needle` with `503`, once.
+    ///
+    /// A `5xx` is what `RetryPolicy` retries, so this is the shape that exercises
+    /// the retry loop end to end: the first attempt fails, the second succeeds,
+    /// and the request log must say so in `attempts`. Call it before `start` has
+    /// served anything, which is immediately after construction.
+    ///
+    /// Takes and returns `Self` so it chains:
+    /// `Mock::start(world).fail_once_for("/chunk/")`.
+    pub fn fail_once_for(self, needle: &str) -> Mock {
+        let mut f = self
+            .table
+            .flaky
+            .lock()
+            .expect("the flaky table is not poisoned");
+        let slot = f.entry(needle.to_string()).or_insert(0);
+        *slot = 1;
+        drop(f);
+        self
     }
 
     /// `http://127.0.0.1:<port>`.
@@ -495,6 +521,19 @@ struct Table {
     game_id: String,
     /// The `package_id` this mock answers for; anything else is `-201`.
     package_id: String,
+    /// Paths that should fail before they succeed: a substring of the request
+    /// path, and how many more `503`s it still owes.
+    ///
+    /// **Mutable, because "fail once then succeed" is the only way to observe a
+    /// retry.** Every other fixture here answers consistently — which is right
+    /// for what those tests measure, and which is why `attempts` was `1` on every
+    /// row of the pinned request log. A bug that *dropped* a retry was therefore
+    /// indistinguishable from one that never happened.
+    ///
+    /// Interior mutability because the table is shared as `Arc<Table>` across a
+    /// thread per connection, and whichever connection serves the request is the
+    /// one that has to decrement the count.
+    flaky: Mutex<BTreeMap<String, usize>>,
 }
 
 /// Every `matching_field` any build publishes, in a stable order.
@@ -867,6 +906,8 @@ fn build_table(world: &World, base: &str) -> Table {
         chunks,
         game_id: GAME.to_string(),
         package_id,
+        // Empty until a test arms a route with `Mock::fail_once_for`.
+        flaky: Mutex::new(BTreeMap::new()),
     }
 }
 
@@ -958,6 +999,19 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
         // other way round. The mock is HTTP/1.1, and this client is 1.1.
         let keep_alive = !client_says_close;
 
+        // An armed route answers `503` until its count runs out, which is what
+        // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
+        // request succeeds on the second attempt and the row must say `2`.
+        if table.take_flaky_failure(&path).is_some() {
+            return write_response(
+                &mut stream,
+                503,
+                "text/plain",
+                b"armed to fail once",
+                keep_alive,
+            );
+        }
+
         let outcome = match respond(table, &path, &query, tag.as_deref()) {
             // A blob route's miss is the measured shape, not a generic one: the
             // real CDN (`Server: AliyunOSS`) answers `404` with
@@ -989,6 +1043,32 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
 /// APIs. `api/` and the `get*` endpoints are the JSON side.
 fn is_blob_route(path: &str) -> bool {
     !path.contains("getBuild") && !path.contains("getGame")
+}
+
+impl Table {
+    /// Consume one armed failure for `path`, if any route matches it.
+    ///
+    /// Longest needle first, so arming `/chunk/` does not lose to a narrower
+    /// `/chunk/abc` armed for the same path — the more specific answer is the
+    /// one the test meant.
+    fn take_flaky_failure(&self, path: &str) -> Option<usize> {
+        let mut f = self.flaky.lock().expect("the flaky table is not poisoned");
+        let mut best: Option<(usize, String)> = None;
+        for needle in f.keys() {
+            if path.contains(needle.as_str())
+                && best.as_ref().is_none_or(|(len, _)| needle.len() > *len)
+            {
+                best = Some((needle.len(), needle.clone()));
+            }
+        }
+        let (_, needle) = best?;
+        let slot = f.get_mut(&needle)?;
+        if *slot == 0 {
+            return None;
+        }
+        *slot -= 1;
+        Some(*slot)
+    }
 }
 
 /// The AliyunOSS `NoSuchKey` envelope, with the fields that are volatile per
