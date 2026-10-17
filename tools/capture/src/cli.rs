@@ -115,7 +115,10 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "TAG")]
     pub old_tag: Option<String>,
 
-    /// How many files to admit per matrix class.
+    /// How many files to admit per matrix class. Floored at 1: asking for zero
+    /// is not a request for an empty bundle, it is a request to capture nothing
+    /// while still charging admission for it. Use `--files` to restrict what is
+    /// fetched, or `--max-download-bytes` to cap the cost.
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub per_class: u32,
 

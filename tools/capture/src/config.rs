@@ -181,12 +181,22 @@ pub struct CapturePlan {
     pub new_tag: Option<String>,
     /// `--old-tag`, with the `diff_tags[0]` default *not yet* resolved.
     pub old_tag: Option<String>,
-    /// Files admitted per matrix class.
+    /// Files admitted per matrix class. **At least 1** — the floor is applied in
+    /// [`capture_plan`], so a consumer may read this without defending against
+    /// zero.
     pub per_class: u32,
     /// Summed-cost ceiling over admitted files.
     pub max_download_bytes: Option<u64>,
     /// Classes whose absence must fail the run.
-    pub require_class: Vec<String>,
+    ///
+    /// **Parsed, not raw.** §5.5 row 5: this was `Vec<String>` and the strings
+    /// were parsed in `run.rs` after the capture had run, so a misspelt class was
+    /// reported once a full bundle's worth of work had been spent on it.
+    ///
+    /// **Empty still means "all required"**, and is *not* defaulted here — the set
+    /// of required classes is the matrix's ordering, which exists in M5 and not
+    /// here.
+    pub require_class: Vec<crate::select::Class>,
     /// Explicit paths, bypassing matrix selection.
     pub files: Vec<String>,
     /// Selected audio: either codes or the `none` sentinel, never both.
@@ -305,13 +315,33 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         out: args.out.clone(),
         new_tag: args.new_tag.clone(),
         old_tag: args.old_tag.clone(),
-        per_class: args.per_class,
+        // **The floor is applied here, once.** §5.5 row 4: `--per-class 0` used to
+        // be clamped by each consumer that read it — `select::decide` and
+        // `emit::tree` each did `per_class.max(1)` — so the value was a
+        // convention rather than a property, and a third consumer would have had
+        // to remember it. It is now the plan's value.
+        //
+        // **Still a floor, not a usage error**, which is the code's existing
+        // position and the one §5.5's "validate once in capture_plan" does not
+        // require changing: asking for zero captures of a class is not a request
+        // for an empty bundle, it is a request to capture nothing while still
+        // charging admission for it. `select::decide` keeps its own floor as
+        // defence, because it is a pure function called directly by tests with
+        // whatever they like.
+        per_class: args.per_class.max(1),
         max_download_bytes: args.max_download_bytes,
         // An empty `--require-class` means "all required"; the set of required
-        // classes is fixed by the matrix, so resolving it here would duplicate
+        // classes is fixed by the matrix, so *defaulting* it here would duplicate
         // the matrix's ordering. It stays a `Vec` and is defaulted in M5, where
         // the matrix it refers to exists.
-        require_class: args.require_class.clone(),
+        //
+        // The entries are **parsed** here even so — that is §5.5 row 5, and it has
+        // nothing to do with the empty case. A typo used to be reported only after
+        // both manifests per field, the diff and the whole selection had run, so
+        // `--require-class identicalo` cost a full capture to learn it was
+        // misspelled, against the stated intent at `capture_plan` that everything
+        // is validated before a socket opens.
+        require_class: parse_classes(&args.require_class)?,
         files: args.files.clone(),
         audio,
         manifest_detail: args.manifest_detail,
@@ -333,6 +363,20 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
 /// `http::Transport` is per-fetcher patience, and the concurrency a capture may
 /// use is the caller's business — the chunk fetcher reads `plan.jobs` where it
 /// builds its own queue.
+/// Parse every `--require-class` value, naming the flag and the bad one.
+///
+/// §5.5 row 5. Was a `map` in `run.rs` over the raw strings, called after the
+/// manifests, the diff and the selection — so a typo was discovered after a full
+/// capture, and named without the flag that carried it.
+fn parse_classes(raw: &[String]) -> Result<Vec<crate::select::Class>> {
+    raw.iter()
+        .map(|c| {
+            crate::select::Class::parse(c)
+                .map_err(|e| UsageError::new(format!("--require-class {c:?}: {e}")))
+        })
+        .collect()
+}
+
 fn validate_transport(
     jobs: usize,
     retries: u32,
@@ -630,6 +674,78 @@ mod tests {
 
     fn plan(mutate: impl FnOnce(&mut CaptureArgs)) -> Result<CapturePlan> {
         capture_plan(&args_with(mutate), vec!["gircap".into(), "capture".into()])
+    }
+
+    #[test]
+    fn a_zero_per_class_is_floored_once_in_the_plan() {
+        // **§5.5 row 4.** The floor used to be applied by each consumer that read
+        // the field — `select::decide` and `emit::tree` each did
+        // `per_class.max(1)` — so it was a convention two places had to remember
+        // rather than a property of the plan.
+        //
+        // Asserted on the *plan*, which is the point: a consumer reading
+        // `plan.per_class` now gets a value that is already floored, and cannot
+        // disagree with the other consumer about what `--per-class 0` means.
+        let p = plan(|a| a.per_class = 0).expect("zero is floored, not rejected");
+        assert_eq!(p.per_class, 1, "the plan must carry the floor, not the request");
+
+        // And it is the *same* reading for every other value, so nothing else
+        // moved.
+        for n in [1_u32, 2, 7] {
+            let p = plan(|a| a.per_class = n).expect("valid");
+            assert_eq!(p.per_class, n, "{n} must pass through untouched");
+        }
+    }
+
+    #[test]
+    fn a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched() {
+        // **§5.5 row 5.** `--require-class identicalo` used to be reported only
+        // after both manifests per field, the diff and the whole selection had
+        // run — a full capture's work to learn a word was misspelt, against the
+        // stated intent at `capture_plan` that everything is validated before a
+        // socket opens.
+        //
+        // The test is in `config.rs` rather than in `run.rs` for exactly that
+        // reason: reaching it at all proves the check happens during planning.
+        let err = plan(|a| a.require_class = vec!["identico".into()])
+            .expect_err("an unknown class must not produce a plan");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--require-class"),
+            "the message must name the flag: {msg}"
+        );
+        assert!(
+            msg.contains("identico"),
+            "the message must name the value the user typed: {msg}"
+        );
+        assert!(
+            msg.contains("identical"),
+            "and the valid set, so the typo can be corrected without --help: {msg}"
+        );
+    }
+
+    #[test]
+    fn every_valid_require_class_survives_planning_and_keeps_its_order() {
+        // The other half of row 5: parsing early must not change what the plan
+        // carries. Empty stays empty — "all required" is defaulted in M5, where
+        // the matrix's ordering exists, and not here.
+        let p = plan(|a| a.require_class = vec![]).expect("empty is valid");
+        assert!(
+            p.require_class.is_empty(),
+            "an empty --require-class must stay empty here, not be defaulted"
+        );
+
+        let all: Vec<String> = crate::select::Class::ALL
+            .iter()
+            .map(|c| c.id().to_string())
+            .collect();
+        let p = plan(|a| a.require_class = all.clone()).expect("every class is valid");
+        assert_eq!(p.require_class.len(), all.len());
+        assert_eq!(
+            p.require_class.iter().map(|c| c.id()).collect::<Vec<_>>(),
+            all.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            "the order the user gave must be the order the plan carries"
+        );
     }
 
     #[test]

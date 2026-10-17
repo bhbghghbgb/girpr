@@ -214,7 +214,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // 6d. `--require-class` is the only thing that turns an absent class into a
     //     failed run. Without it an over-budget class is recorded and the run
     //     still exits 0 - the caller asked for a best effort and got one.
-    select::require::check(&required_classes(&plan)?, &selection)?;
+    select::require::check(&plan.require_class, &selection)?;
 
     // 6e. The chunk store. Planned *before* any blob is fetched, so the cost the
     //     log announces is a real figure rather than an estimate, and A12 is
@@ -249,7 +249,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         agg: &agg,
         diffs: &diffs,
         selection: &selection,
-        per_class: plan.per_class.max(1) as usize,
+        per_class: plan.per_class as usize,
     })?;
     let mut written = tree.written;
     let api_documents = tree.api_documents;
@@ -486,29 +486,6 @@ fn selection_fields(plan: &CapturePlan) -> Vec<String> {
     let mut fields = vec![manifest::MANIFEST_FIELD.to_string()];
     fields.extend(plan.audio.codes().iter().cloned());
     fields
-}
-
-/// The classes whose absence must fail the run.
-///
-/// **Empty by default, and that is the correct default rather than a missing
-/// one.** `--require-class` is opt-in, so a class is only fatal when the caller
-/// named it. Requiring all nine by default would make *every* run of a pair
-/// like 7.0.0 → 7.1.0 exit `4`, because that pair genuinely has no
-/// `full_reuse_reordered` file — a fact about the world, recorded as
-/// `status: unavailable`, not a failure of the tool.
-///
-/// The distinction the exit code turns on:
-///
-/// - **unavailable** — no path in the pool satisfies the class. A statement
-///   about the manifests. Recorded, exit `0`.
-/// - **over budget** — a candidate existed and `--max-download-bytes` would not
-///   pay for it. A statement about *this run's* configuration. Recorded,
-///   exit `0` unless the caller named the class.
-fn required_classes(plan: &CapturePlan) -> Result<Vec<select::Class>, Failure> {
-    plan.require_class
-        .iter()
-        .map(|c| select::Class::parse(c).map_err(|e| usage("--require-class", &e)))
-        .collect()
 }
 
 /// How many classes the matrix answers, captured or covered.

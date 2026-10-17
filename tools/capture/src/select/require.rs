@@ -62,6 +62,24 @@ fn line(row: &MatrixRow) -> String {
 /// The message names each unmet class with its status **and** its reason, so the
 /// operator does not have to go and find out which of four unmet classes was the
 /// one the budget could not afford.
+///
+/// **Empty is the correct default rather than a missing one.** `--require-class`
+/// is opt-in, so a class is only fatal when the caller named it. Requiring all
+/// nine by default would make *every* run of a pair like 7.0.0 → 7.1.0 exit `4`,
+/// because that pair genuinely has no `full_reuse_reordered` file — a fact about
+/// the world, recorded as `status: unavailable`, not a failure of the tool.
+///
+/// The distinction the exit code turns on:
+///
+/// - **unavailable** — no path in the pool satisfies the class. A statement
+///   about the manifests. Recorded, exit `0`.
+/// - **over budget** — a candidate existed and `--max-download-bytes` would not
+///   pay for it. A statement about *this run's* configuration. Recorded,
+///   exit `0` unless the caller named the class.
+///
+/// The list arrives already parsed (§5.5 row 5): it used to be `Vec<String>` and
+/// was parsed here in `run.rs`, which is after the manifests, the diff and the
+/// whole selection — so a misspelt class cost a complete capture to report.
 pub fn check(required: &[Class], selection: &Selection) -> Result<(), Failure> {
     if required.is_empty() {
         return Ok(());
