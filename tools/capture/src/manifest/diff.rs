@@ -638,6 +638,47 @@ pub fn field_rank(field: &str) -> (u8, &str) {
 /// The one `matching_field` that is the game itself rather than a voice pack.
 pub const GAME_FIELD: &str = "game";
 
+/// Diff every field's manifest pair, and report each one.
+///
+/// **Pairs are split through [`super::fetch::pair_sides`], not indexed.** The
+/// loop this replaces was `diff_field(&pair[0], &pair[1])` — a bare index that
+/// panics on a short pair, next to a comment explaining that position 0 is the
+/// old build. The check now lives with the contract that gives the position its
+/// meaning, and every call site gets it.
+///
+/// The narration travels with the computation for the same reason it did in
+/// `select::decide`: the counts in the log and the counts in `FieldDiff` are one
+/// fact, and a reader who finds one should not have to go looking for the other.
+pub fn diff_all(
+    fields: &[String],
+    manifests: &[Vec<CapturedManifest>],
+) -> Result<Vec<FieldDiff>, crate::failure::Failure> {
+    use crate::failure::assertion;
+    use crate::http::ApiError;
+
+    let mut diffs = Vec::with_capacity(fields.len());
+    for (field, pair) in fields.iter().zip(manifests) {
+        let (old, new) = super::fetch::pair_sides(pair, field)?;
+        let fd = diff_field(old, new)
+            .map_err(|m| assertion("diff the manifests", &ApiError::shape(field, m)))?;
+        tracing::info!(
+            field = %fd.field,
+            common = fd.counts.common,
+            identical = fd.counts.identical,
+            changed = fd.counts.changed(),
+            added = fd.counts.added,
+            removed = fd.counts.removed,
+            pool_chunks = fd.pool.new_chunks_total,
+            pool_md5_hits = fd.pool.new_chunks_md5_present_in_old_manifest,
+            cross_file_only = fd.pool.cross_file_only_chunks,
+            cross_file_bytes = fd.pool.cross_file_only_bytes_forgone,
+            "diff computed"
+        );
+        diffs.push(fd);
+    }
+    Ok(diffs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

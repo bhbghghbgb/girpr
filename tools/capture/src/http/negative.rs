@@ -53,32 +53,6 @@ pub fn game_pair<'a>(
         })
 }
 
-/// Split a manifest pair into `(old, new)`.
-///
-/// Separate from [`game_pair`] so the "both builds present" rule is a function
-/// over any type and can be tested without constructing a `CapturedManifest` —
-/// which takes forty lines and would make this the one rule in the module with
-/// no test.
-///
-/// The positional contract comes from `manifest::fetch::fetch_all`, which
-/// documents `[0]` as the old build and `[1]` as the new one.
-pub fn pair_sides<'a, T>(pair: &'a [T], what: &str) -> Result<(&'a T, &'a T), Failure> {
-    match (pair.first(), pair.get(1)) {
-        (Some(old), Some(new)) => Ok((old, new)),
-        _ => Err(apierr(
-            "the negative probes",
-            &ApiError::shape(
-                what,
-                format!(
-                    "the pair has {} entr{}; the negative probes need both builds",
-                    pair.len(),
-                    if pair.len() == 1 { "y" } else { "ies" }
-                ),
-            ),
-        )),
-    }
-}
-
 /// Every chunk id a manifest declares, in manifest order.
 pub fn chunk_ids(m: &CapturedManifest) -> impl Iterator<Item = &str> {
     m.entries
@@ -162,19 +136,6 @@ mod tests {
             new_only_chunk_id(["shared", "only_in_new"], ["shared"]).is_err(),
             "with the pair swapped there is no id exclusive to the second build"
         );
-    }
-
-    #[test]
-    fn pair_sides_needs_both_builds_and_says_which_is_missing() {
-        assert!(pair_sides::<u8>(&[], "x").is_err());
-        let e = pair_sides(&[1_u8], "the game pair").expect_err("one side only");
-        assert!(
-            e.detail.contains("1 entry"),
-            "a one-sided pair should read as one entry, not as a count error: {}",
-            e.detail
-        );
-        assert_eq!(*pair_sides(&[1_u8, 2], "x").expect("both sides").0, 1);
-        assert_eq!(*pair_sides(&[1_u8, 2], "x").expect("both sides").1, 2);
     }
 
     #[test]

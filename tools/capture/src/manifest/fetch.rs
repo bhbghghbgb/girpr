@@ -77,6 +77,36 @@ pub fn wants(
     out
 }
 
+/// Split a manifest pair into `(old, new)`.
+///
+/// **One implementation, and the reason the index is checked here rather than at
+/// each call site.** The positional contract comes from [`fetch_all`], which
+/// documents `[0]` as the old build and `[1]` as the new one. Three call sites
+/// indexed that pair directly - the negative probes, the diff loop, and
+/// `Sources::from_manifests` - each with a bare `pair[0]` that would panic on a
+/// short pair, and each carrying its own copy of the reasoning about why
+/// position means anything.
+///
+/// Generic over `T` so the rule is testable without constructing a
+/// `CapturedManifest`, which takes forty lines and would otherwise leave this
+/// the one invariant in the fetch path with no test.
+pub fn pair_sides<'a, T>(pair: &'a [T], what: &str) -> Result<(&'a T, &'a T), Failure> {
+    match (pair.first(), pair.get(1)) {
+        (Some(old), Some(new)) => Ok((old, new)),
+        _ => Err(apierr(
+            "the manifest pair",
+            &ApiError::shape(
+                what,
+                format!(
+                    "the pair has {} entr{}; both builds are needed",
+                    pair.len(),
+                    if pair.len() == 1 { "y" } else { "ies" }
+                ),
+            ),
+        )),
+    }
+}
+
 /// Fetch and verify every manifest in `wants`, all at once.
 ///
 /// **All at once, and filed in input order.** The loop this replaces was
@@ -215,5 +245,35 @@ mod tests {
             &build("n", "7.1.0"),
         );
         assert_eq!(w.iter().map(|x| x.field).collect::<Vec<_>>(), vec![0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn pair_sides_needs_both_builds_and_says_which_is_missing() {
+        // The check that replaced three bare `pair[0]` / `pair[1]` indexings.
+        // It has to refuse a short pair *and* explain itself, because the
+        // alternative was a panic with no message at all.
+        assert!(pair_sides::<u8>(&[], "x").is_err());
+        let e = pair_sides(&[1_u8], "the game pair").expect_err("one side only");
+        assert!(
+            e.detail.contains("1 entry"),
+            "a one-sided pair should read as one entry: {}",
+            e.detail
+        );
+        assert!(
+            e.detail.contains("the game pair"),
+            "and name the field that is short: {}",
+            e.detail
+        );
+        let (old, new) = pair_sides(&[1_u8, 2], "x").expect("both sides");
+        assert_eq!((*old, *new), (1, 2), "position 0 is old, 1 is new");
+    }
+
+    #[test]
+    fn pair_sides_reads_an_over_long_pair_as_the_first_two() {
+        // A third entry would mean `fetch_all` filed a want twice. Taking the
+        // first two is the only sane reading, and the count is in the error
+        // message if it ever matters.
+        let (old, new) = pair_sides(&[1_u8, 2, 3], "x").expect("first two");
+        assert_eq!((*old, *new), (1, 2));
     }
 }

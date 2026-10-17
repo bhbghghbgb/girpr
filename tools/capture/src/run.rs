@@ -15,7 +15,7 @@ use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
-use crate::http::{ApiError, Fetcher, RequestLog, Transport, negative, probe};
+use crate::http::{Fetcher, RequestLog, Transport, negative, probe};
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
@@ -164,7 +164,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     which chunk id - because both are pure and both were previously only
     //     reachable by running a capture against the live API.
     let game_pair = negative::game_pair(&fields, &manifests)?;
-    let (old_game, new_game) = negative::pair_sides(game_pair, "the game manifest pair")?;
+    let (old_game, new_game) = manifest::fetch::pair_sides(game_pair, "the game manifest pair")?;
     let new_only_chunk_id = negative::new_only_chunk_id(
         negative::chunk_ids(old_game),
         negative::chunk_ids(new_game),
@@ -188,25 +188,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     tracing::info!(shapes = %error_shapes.describe(), "error shapes recorded");
 
     // 6b. A diff per field, then the pool built across all of them.
-    let mut diffs = Vec::with_capacity(fields.len());
-    for (field, pair) in fields.iter().zip(&manifests) {
-        let fd = diff::diff_field(&pair[0], &pair[1])
-            .map_err(|m| assertion("diff the manifests", &ApiError::shape(field, m)))?;
-        tracing::info!(
-            field = %fd.field,
-            common = fd.counts.common,
-            identical = fd.counts.identical,
-            changed = fd.counts.changed(),
-            added = fd.counts.added,
-            removed = fd.counts.removed,
-            pool_chunks = fd.pool.new_chunks_total,
-            pool_md5_hits = fd.pool.new_chunks_md5_present_in_old_manifest,
-            cross_file_only = fd.pool.cross_file_only_chunks,
-            cross_file_bytes = fd.pool.cross_file_only_bytes_forgone,
-            "diff computed"
-        );
-        diffs.push(fd);
-    }
+    let diffs = diff::diff_all(&fields, &manifests)?;
 
     // The aggregate is computed **once**, here, and used twice: it is both the
     // `diff/paths.diff.json` body and the headline numbers on the summary. It
@@ -795,6 +777,7 @@ fn selfcheck_slug(s: &Selfcheck) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::ApiError;
     use crate::report::Val;
 
     /// An assertion on captured API state is exit 3, and says why: neither the
