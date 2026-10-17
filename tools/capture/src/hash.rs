@@ -23,6 +23,7 @@
 //! which zlib happened to build it.
 
 use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 /// Hex MD5 of `bytes`, lowercase.
 pub fn md5_hex(bytes: &[u8]) -> String {
@@ -129,6 +130,89 @@ pub fn md5_sha256(bytes: &[u8]) -> Digests {
     // Writing to an in-memory writer of ours cannot fail.
     let _ = d.write_all(bytes);
     d.finish()
+}
+
+/// A file that digests every byte written to it, on the way past.
+///
+/// §6.6.2. A chunk blob used to be fetched into a `Vec<u8>` and only then written,
+/// so the body was resident twice — once in memory, once on disk — and the
+/// largest chunk in the reference bundle is 3 689 476 B. At `--jobs 8` that is up
+/// to ~30 MB of blobs held whole for the length of their fetch.
+///
+/// This writes as it reads and hashes what passes through. The digests are the
+/// same numbers over the same bytes, and no caller ever holds the body: peak
+/// memory is one network chunk.
+///
+/// **Writes the file before it hashes the buffer.** A partial `write` returns
+/// `Err` and then hashes nothing, so the digest never counts bytes that did not
+/// land. Order only matters because [`Self::restart`] is the other way to lose
+/// them.
+pub struct HashingFile {
+    path: PathBuf,
+    file: std::fs::File,
+    digests: DualDigest,
+}
+
+impl HashingFile {
+    /// Create or truncate `path` and start hashing into it.
+    pub fn create(path: impl Into<PathBuf>) -> std::io::Result<Self> {
+        let path = path.into();
+        let file = std::fs::File::create(&path)?;
+        Ok(HashingFile {
+            path,
+            file,
+            digests: DualDigest::new(),
+        })
+    }
+
+    /// The file being written, for the `rename` that follows.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Throw away everything written so far and start again from empty.
+    ///
+    /// **Every retry must call this, and the reason is not tidy.** A failed
+    /// attempt has already written part of its body into the file. Without a
+    /// restart the next attempt's bytes land *after* those, and the digests then
+    /// cover the concatenation of two responses — a value that looks plausible,
+    /// differs from either body, and would be recorded as the blob's md5.
+    ///
+    /// Three things guard it, because none of them would otherwise notice:
+    /// `chunks/index.json`'s A6 checks would catch the md5, but only *after* the
+    /// bundle is written, and only if the bytes differ from the manifest's; and
+    /// `the_digests_of_a_retried_blob_cover_only_the_body_that_landed` is the
+    /// test that fails at the point of the bug.
+    pub fn restart(&mut self) -> std::io::Result<()> {
+        self.file.set_len(0)?;
+        use std::io::Seek as _;
+        self.file.rewind()?;
+        self.digests = DualDigest::new();
+        Ok(())
+    }
+
+    /// Flush and take the digests of everything written.
+    ///
+    /// Consumes the handle because the digests cannot be read out of a
+    /// [`DualDigest`] without ending it. The path survives on `self.path`, so the
+    /// caller can reopen the file for the decode that follows.
+    pub fn finish(mut self) -> std::io::Result<Digests> {
+        std::io::Write::flush(&mut self.file)?;
+        Ok(self.digests.finish())
+    }
+}
+
+impl std::io::Write for HashingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write_all(buf)?;
+        // Cannot fail, and not `?`'d: the digests are in memory by construction.
+        let _ = self.digests.write_all(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
 }
 
 const HEX_LOWER: [u8; 16] = *b"0123456789abcdef";
@@ -425,6 +509,130 @@ mod tests {
         }
         assert_eq!(sink, gzip(&payload).expect("one-shot"));
         assert_eq!(gunzip(&sink).expect("dropped stream still decodes"), payload);
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("gircap-hash-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    /// Blob-shaped bytes: binary, with repeats, long enough to span many
+    /// network-chunk-sized writes.
+    fn blob_bytes() -> Vec<u8> {
+        let mut v = Vec::new();
+        for i in 0..8_000u32 {
+            v.push((i.wrapping_mul(2_654_435_761) >> 13) as u8);
+            v.push((i >> 5) as u8);
+            v.extend_from_slice(b"\x28\xb5\x2f\xfd chunk payload repeated ");
+        }
+        v
+    }
+
+    #[test]
+    fn a_hashable_file_reports_the_digests_of_the_bytes_it_stored() {
+        // **§6.6.2's gate, in one pass.** The whole point of streaming is that the
+        // digests are computed *while* writing rather than after, so the numbers
+        // must be the ones `md5_sha256` gives for the same bytes. Fed in
+        // deliberately uneven chunks — 1, 7, 4096, and the remainder — because a
+        // writer that hashed whole buffers would pass a single-chunk test and
+        // fail a real one.
+        let dir = tmp("hashing-file");
+        let path = dir.join("blob.bin");
+        let bytes = blob_bytes();
+        let mut hf = HashingFile::create(&path).expect("create");
+        for part in bytes.chunks(4093) {
+            hf.write_all(part).expect("write");
+        }
+        let streamed = hf.finish().expect("finish");
+
+        assert_eq!(streamed, md5_sha256(&bytes), "streamed digests differ");
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            bytes,
+            "the file must hold exactly what was digested"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restart_discards_the_bytes_and_the_digests_of_the_failed_attempt() {
+        // **The property that makes retrying safe.** A first attempt that fails
+        // half way has already written those bytes. Without a restart the second
+        // attempt appends after them, and the digests then describe the
+        // concatenation — a value that is wrong, plausible, and undetectable
+        // downstream except as an A6 failure long afterwards.
+        //
+        // **Both orderings, and the second is the one that bites.** A retry that
+        // is *longer* than the attempt it replaces needs no truncation at all:
+        // writing from position 0 simply overwrites the stale bytes and extends.
+        // It is a *shorter* retry that leaves a tail of the old body behind, so
+        // a test with only the first ordering passes against a `restart` that
+        // does nothing at all. Verified: dropping the `set_len(0)` from
+        // `restart` left this test green until the `for (first, second)` pair
+        // below was added.
+        for (first, second) in [
+            (
+                b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".as_slice(),
+                blob_bytes().as_slice(),
+            ),
+            // A truncated large blob retried into a shorter one: the real shape,
+            // and the one that leaves a stale tail without the truncate.
+            (blob_bytes().as_slice(), b"the shorter body".as_slice()),
+        ] {
+            let dir = tmp("hashing-restart");
+            let path = dir.join("blob.bin");
+
+            let mut hf = HashingFile::create(&path).expect("create");
+            hf.write_all(first).expect("write the aborted attempt");
+            hf.restart().expect("restart");
+            hf.write_all(second).expect("write the retried attempt");
+            let digests = hf.finish().expect("finish");
+
+            assert_eq!(
+                digests,
+                md5_sha256(second),
+                "the digests must cover only the body that landed"
+            );
+            assert_eq!(
+                std::fs::read(&path).expect("read back"),
+                second,
+                "the file must hold only the body that landed, with no stale tail"
+            );
+            assert_ne!(
+                digests,
+                md5_sha256(&[first, second].concat()),
+                "if these are equal the test is not testing the concatenation"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_restart_without_one_leaves_the_failed_bytes_in_the_digest() {
+        // The bug itself, pinned so the property above is not satisfied by
+        // accident. This is what `restart` exists to prevent, written out as a
+        // passing test of the *absence* of the fix so a future refactor cannot
+        // make `restart` look optional.
+        let dir = tmp("hashing-no-restart");
+        let path = dir.join("blob.bin");
+        let first = b"partial";
+        let second = b"and then the rest";
+
+        let mut hf = HashingFile::create(&path).expect("create");
+        hf.write_all(first).expect("write");
+        // No `restart`.
+        hf.write_all(second).expect("write");
+        let digests = hf.finish().expect("finish");
+
+        assert_eq!(
+            digests,
+            md5_sha256(&[first.as_slice(), second.as_slice()].concat()),
+            "without a restart the digests cover both attempts"
+        );
+        assert_ne!(digests, md5_sha256(second));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// One pass must equal two, or every digest in the bundle moves.

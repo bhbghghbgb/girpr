@@ -599,6 +599,83 @@ pub struct Fetched {
     pub status: u16,
 }
 
+/// Where a fetched body is put.
+///
+/// §6.6.2. This exists so the retry loop, the status check and the request record
+/// are written **once**. The first draft of this change had a second loop for
+/// the file case, which is 30 lines that look identical until a retry policy is
+/// edited in one of them.
+pub enum Destination<'a> {
+    /// Collected into a `Vec`, for the callers that parse the body: the API
+    /// documents, the manifest archives, the probes. Small — the largest is a
+    /// ~9 MB archive — and genuinely needed in memory.
+    Memory,
+    /// Written to this file and digested on the way past, so the body is never
+    /// resident. Chunk blobs: the largest in the reference bundle is 3 689 476 B,
+    /// and `--jobs 8` keeps eight of them in flight.
+    File(&'a mut crate::hash::HashingFile),
+}
+
+/// A body that was streamed to disk: what the caller needs without the bytes.
+///
+/// The mirror of [`Fetched`], which carries the bytes and not the digests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Streamed {
+    /// This request's sequence number, for `set_stored_as`.
+    pub seq: u64,
+    /// The status as received.
+    pub status: u16,
+    /// How many bytes arrived — the length of the body, which is also the length
+    /// of the file.
+    pub bytes_in: u64,
+}
+
+/// What one successful [`Fetcher::run`] produced.
+///
+/// `body` is `None` exactly when the body went to a file. `bytes_in` is read off
+/// the request record rather than recomputed, so it is the same number
+/// `api/requests.ndjson` carries.
+struct Run {
+    body: Option<Vec<u8>>,
+    seq: u64,
+    status: u16,
+    bytes_in: u64,
+}
+
+/// Classify a failure that happened while the body was being moved.
+///
+/// **Reading and writing are different faults and get different variants.** A
+/// read that fails is the network's fault: retryable, and often right to retry.
+/// A write that fails is the disk's, and retrying it would spend the whole budget
+/// discovering that a full disk stays full — so it is a [`ApiError::Shape`], which
+/// the policy stops on.
+///
+/// This was a branch inside the pump, and then a test that needed a genuinely
+/// full disk to reach it. Extracted so the decision can be read in one place and
+/// tested without contriving a filesystem failure.
+fn body_failure(
+    url: &str,
+    attempts: u32,
+    reading: bool,
+    detail: impl fmt::Display,
+) -> ApiError {
+    let detail = format!(
+        "{} the body: {detail}",
+        if reading { "reading" } else { "writing" }
+    );
+    if reading {
+        ApiError::Transport {
+            url: url.to_string(),
+            attempts,
+            detail,
+        }
+    } else {
+        ApiError::Shape {
+            subject: url.to_string(),
+            detail,
+        }
+    }
+}
 /// One response as observed, whatever its status.
 ///
 /// A [`Fetched`] is only ever a success; this is the other half — the shape a
@@ -902,6 +979,72 @@ impl Fetcher {
         kind: Kind,
         range: Option<&str>,
     ) -> Result<Fetched, ApiError> {
+        let run = self.run(url, kind, range, Destination::Memory).await?;
+        // `run` is total over its destinations: `Memory` always yields the body
+        // and `File` never does. This arm is unreachable by construction, and is
+        // an `Err` rather than `unreachable!` so that no production path in this
+        // tool can panic (§5.1).
+        let Some(body) = run.body else {
+            return Err(ApiError::shape(
+                url,
+                "internal: buffered fetch returned no body",
+            ));
+        };
+        Ok(Fetched {
+            body,
+            seq: run.seq,
+            status: run.status,
+        })
+    }
+
+    /// Fetch one URL straight into `out`, never holding the body in memory.
+    ///
+    /// §6.6.2. The digests and the byte count come from the write itself, so they
+    /// are the same numbers the buffered path produces over the same bytes — see
+    /// `hash::tests::a_hashable_file_reports_the_digests_of_the_bytes_it_stored`.
+    ///
+    /// **The caller must not rename or read `out` until this returns `Ok`**, and
+    /// must call [`crate::hash::HashingFile::finish`] for the digests: a partial
+    /// body is on disk while this is still running, which is what lets a retry
+    /// discard it.
+    ///
+    /// Retries behave as they always did, with one addition that is not optional:
+    /// a failed attempt's bytes are discarded before the next one starts, or the
+    /// digests would cover both responses. See
+    /// `HashingFile::restart` and the test named in its doc.
+    ///
+    /// A **write** failure is reported as [`ApiError::Shape`] and so is not
+    /// retried, while a **read** failure is [`ApiError::Transport`] and is. That
+    /// asymmetry is the point: a full disk is not fixed by waiting half a second,
+    /// and reporting it as a network failure would spend the whole retry budget
+    /// discovering that.
+    pub async fn get_to_file(
+        &self,
+        url: &str,
+        kind: Kind,
+        out: &mut crate::hash::HashingFile,
+    ) -> Result<Streamed, ApiError> {
+        let run = self.run(url, kind, None, Destination::File(out)).await?;
+        debug_assert!(
+            run.body.is_none(),
+            "the file destination streams rather than collecting"
+        );
+        Ok(Streamed {
+            seq: run.seq,
+            status: run.status,
+            bytes_in: run.bytes_in,
+        })
+    }
+
+
+/// The retry loop, the status check and the record — for both destinations.
+    async fn run(
+        &self,
+        url: &str,
+        kind: Kind,
+        range: Option<&str>,
+        mut dest: Destination<'_>,
+    ) -> Result<Run, ApiError> {
         let started = Instant::now();
         let mut attempts: u32 = 0;
         let mut last: Option<ApiError> = None;
@@ -914,18 +1057,22 @@ impl Fetcher {
                 self.sleeper.sleep(waiting).await;
             }
 
-            match self.attempt(url, kind, range, attempts, started).await {
+            match self.attempt(url, kind, range, attempts, started, &mut dest).await {
                 Ok((body, record)) => {
-                    // Only the sequence number is read off `record` once it is
-                    // logged -- by `blobs` and `manifest`, to call
-                    // `set_stored_as` -- so the log is the owner and this
+                    // Only the sequence number and the byte count are read off
+                    // `record` once it is logged -- by `blobs` and `manifest`, to
+                    // call `set_stored_as` -- so the log is the owner and this
                     // returns a borrow-free view instead of a second deep copy
                     // of a record carrying two `BTreeMap`s, a `String` URL and
                     // up to ~2 KB of response headers. Once per chunk.
-                    let seq = record.seq;
-                    let status = record.status;
+                    let run = Run {
+                        body,
+                        seq: record.seq,
+                        status: record.status,
+                        bytes_in: record.bytes_in,
+                    };
                     self.log.push(record);
-                    return Ok(Fetched { body, seq, status });
+                    return Ok(run);
                 }
                 Err((err, record)) => {
                     // The failed attempt is logged too: a run that hit a CDN
@@ -1006,7 +1153,8 @@ impl Fetcher {
         range: Option<&str>,
         attempts: u32,
         started: Instant,
-    ) -> Result<(Vec<u8>, RequestRecord), (ApiError, RequestRecord)> {
+        dest: &mut Destination<'_>,
+    ) -> Result<(Option<Vec<u8>>, RequestRecord), (ApiError, RequestRecord)> {
         let seq = self.log.reserve();
         let mut req = self.client.get(url);
         if let Some(r) = range {
@@ -1071,46 +1219,99 @@ impl Fetcher {
             return Err((err, record));
         }
 
-        match resp.bytes().await {
-            Ok(b) => {
-                let bytes_in = b.len() as u64;
-                let record = self.record(
-                    seq,
-                    kind,
-                    url,
-                    range,
-                    status,
-                    resp_headers,
-                    &final_url,
-                    redirected,
-                    bytes_in,
-                    attempts,
-                    started,
-                );
-                Ok((b.to_vec(), record))
-            }
-            Err(e) => {
-                let err = ApiError::Transport {
-                    url: url.to_string(),
-                    attempts,
-                    detail: format!("reading the body: {e}"),
+        // **The body, and where it goes.** `Memory` collects the whole thing as
+        // before; `File` pumps it into the destination chunk by chunk and never
+        // materialises it. The two differ only here — the status check above and
+        // the record below are shared, which is the reason this is one function
+        // with a parameter rather than two functions.
+        let mut bytes_in: u64 = 0;
+        let body: Option<Vec<u8>> = match dest {
+            Destination::Memory => match resp.bytes().await {
+                Ok(b) => {
+                    bytes_in = b.len() as u64;
+                    Some(b.to_vec())
+                }
+                Err(e) => {
+                    let err = ApiError::Transport {
+                        url: url.to_string(),
+                        attempts,
+                        detail: format!("reading the body: {e}"),
+                    };
+                    let record = self.record(
+                        seq,
+                        kind,
+                        url,
+                        range,
+                        status,
+                        resp_headers,
+                        &final_url,
+                        redirected,
+                        0,
+                        attempts,
+                        started,
+                    );
+                    return Err((err, record));
+                }
+            },
+            Destination::File(out) => {
+                // Discard whatever a failed attempt left before this one writes.
+                // Without this the digests cover both responses — see
+                // `HashingFile::restart`.
+                let fail = |reading: bool, detail: String| {
+                    let err = body_failure(url, attempts, reading, detail);
+                    let record = self.record(
+                        seq,
+                        kind,
+                        url,
+                        range,
+                        status,
+                        resp_headers.clone(),
+                        &final_url,
+                        redirected,
+                        0,
+                        attempts,
+                        started,
+                    );
+                    (err, record)
                 };
-                let record = self.record(
-                    seq,
-                    kind,
-                    url,
-                    range,
-                    status,
-                    resp_headers,
-                    &final_url,
-                    redirected,
-                    0,
-                    attempts,
-                    started,
-                );
-                Err((err, record))
+
+                if let Err(e) = out.restart() {
+                    // Not retryable, and not a transport failure: a disk that will
+                    // not truncate is a disk that will not write either.
+                    return Err(fail(false, format!("preparing the body file: {e}")));
+                }
+                let mut resp = resp;
+                loop {
+                    match resp.chunk().await {
+                        Ok(Some(chunk)) => {
+                            let n = chunk.len() as u64;
+                            if let Err(e) = std::io::Write::write_all(out, &chunk) {
+                                return Err(fail(false, e.to_string()));
+                            }
+                            bytes_in += n;
+                        }
+                        Ok(None) => break,
+                        Err(e) => return Err(fail(true, e.to_string())),
+                    }
+                }
+                None
             }
-        }
+        };
+
+        let record = self.record(
+            seq,
+            kind,
+            url,
+            range,
+            status,
+            resp_headers,
+            &final_url,
+            redirected,
+            bytes_in,
+            attempts,
+            started,
+        );
+        Ok((body, record))
     }
 
     /// Assemble a row. Every path through [`Fetcher::attempt`] builds one, which
@@ -1523,18 +1724,47 @@ mod tests {
         }
 
         pub fn spawn(statuses: Vec<(u16, &'static [u8])>, extra_body: &'static str) -> Mock {
+            spawn_answers(
+                statuses
+                    .into_iter()
+                    .map(|(status, body)| Answer {
+                        status,
+                        body,
+                        claim: None,
+                    })
+                    .collect(),
+                extra_body,
+            )
+        }
+
+        /// One scripted answer, and how much of it to actually deliver.
+        ///
+        /// `claim` is the `Content-Length` the server announces. Setting it
+        /// larger than `body.len()` makes the server promise more than it sends
+        /// and then hang up — **a truncated response**, which is the one failure
+        /// a real CDN produces and the only way to exercise the retry path from
+        /// *mid-body*. Every other mock failure happens before a single body byte
+        /// is written, so it never reaches the code that has to cope with a
+        /// partial write.
+        pub struct Answer {
+            pub status: u16,
+            pub body: &'static [u8],
+            pub claim: Option<usize>,
+        }
+
+        pub fn spawn_answers(answers: Vec<Answer>, extra_body: &'static str) -> Mock {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
             let port = listener.local_addr().unwrap().port();
             let hits = Arc::new(AtomicU32::new(0));
             let requests = Arc::new(Mutex::new(Vec::new()));
             let (h, r) = (hits.clone(), requests.clone());
             std::thread::spawn(move || {
-                for (status, body) in statuses {
+                for a in answers {
                     let Ok((stream, _)) = listener.accept() else {
                         return;
                     };
                     h.fetch_add(1, Ordering::SeqCst);
-                    serve_one(stream, status, body, extra_body, &r);
+                    serve_one(stream, a.status, a.body, a.claim, extra_body, &r);
                 }
             });
             Mock {
@@ -1548,6 +1778,7 @@ mod tests {
             mut stream: TcpStream,
             status: u16,
             body: &'static [u8],
+            claim: Option<usize>,
             extra_body: &'static str,
             requests: &Arc<Mutex<Vec<String>>>,
         ) {
@@ -1577,7 +1808,7 @@ mod tests {
 
             let head = format!(
                 "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nETag: \"abc\"\r\nServer: MockOSS\r\n{extra_body}Connection: close\r\n\r\n",
-                body.len()
+                claim.unwrap_or(body.len())
             );
             let _ = stream.write_all(head.as_bytes());
             let _ = stream.write_all(body);
@@ -1847,6 +2078,168 @@ fn a_poisoned_request_log_still_takes_records() {
             records.iter().map(|r| r.status).collect::<Vec<_>>()
         );
         assert!(err.url().unwrap().contains(&format!("127.0.0.1:{port}")));
+    }
+
+    /// A body to stream: big enough to arrive in several chunks, binary enough to
+    /// catch a text-mode accident, and with a zstd magic at the front so it is a
+    /// plausible blob rather than an arbitrary blob.
+    fn streamable_body() -> Vec<u8> {
+        let mut v = b"\x28\xb5\x2f\xfd".to_vec();
+        for i in 0..60_000u32 {
+            v.push((i.wrapping_mul(31) >> 7) as u8);
+            v.extend_from_slice(b"payload ");
+        }
+        v
+    }
+
+    /// The mock serves &'static [u8] from its own thread, so a generated body has
+    /// to outlive the test. Leaking is the honest way to say so in a test; a
+    /// Cow would borrow instead and not compile.
+    fn leak(v: &[u8]) -> &'static [u8] {
+        Box::leak(v.to_vec().into_boxed_slice())
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("gircap-stream-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    #[tokio::test]
+    async fn a_streamed_fetch_writes_the_body_and_reports_the_digests_of_those_bytes() {
+        // **§6.6.2's gate, at the layer the change touches.** The buffered path is
+        // the reference: this asserts the streamed path produced the same bytes on
+        // disk and the same digests and the same `bytes_in`, so nothing
+        // downstream — `chunks/index.json`'s md5, A6's four checks, the size in
+        // `MANIFEST.json` — can tell the two apart.
+        let body = streamable_body();
+        // Two mocks, because the server answers exactly as many requests as it
+        // was given answers and this test makes two.
+        let buffered_mock = spawn(vec![(200, leak(&body))], "");
+        let streamed_mock = spawn(vec![(200, leak(&body))], "");
+        let dir = scratch("same-as-buffered");
+        let f = fetcher(1, Arc::new(RecordingSleep::default()));
+
+        let buffered = f
+            .get(&url(&buffered_mock, "/blob"), Kind::Chunk, None)
+            .await
+            .expect("buffered");
+
+        let path = dir.join("streamed.bin");
+        let mut out = crate::hash::HashingFile::create(&path).expect("create");
+        let streamed = f
+            .get_to_file(&url(&streamed_mock, "/blob"), Kind::Chunk, &mut out)
+            .await
+            .expect("streamed");
+        let digests = out.finish().expect("finish");
+
+        let on_disk = std::fs::read(&path).expect("read back");
+        assert_eq!(on_disk.len(), body.len(), "length moved");
+        assert!(on_disk == body, "the bytes on disk are not the bytes served");
+        assert_eq!(streamed.bytes_in, buffered.body.len() as u64);
+        assert_eq!(streamed.status, buffered.status);
+        assert_eq!(digests, crate::hash::md5_sha256(&body));
+        assert_eq!(digests.bytes, body.len() as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_digests_of_a_retried_blob_cover_only_the_body_that_landed() {
+        // **The failure this change had to get right, and the one the reference
+        // bundle cannot check.** A healthy capture never retries, so the 91-of-97
+        // gate says nothing about what happens when a body is truncated half way
+        // through and the next attempt succeeds.
+        //
+        // The first answer under-delivers: it promises a length and sends less,
+        // so the client has *already written part of it* when the read fails. The
+        // digests must then describe the second answer alone — not the
+        // concatenation, and not a prefix of the first.
+        let first = streamable_body();
+        let second = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec();
+        let mock = spawn_answers(
+            vec![
+                Answer {
+                    status: 200,
+                    // Announce the whole length, send a third of it, then hang
+                    // up — a truncated response. `claim` is what the header says
+                    // and `body` is what goes on the wire, so they must differ.
+                    body: leak(&first[..first.len() / 3]),
+                    claim: Some(first.len()),
+                },
+                Answer {
+                    status: 200,
+                    body: leak(&second),
+                    claim: None,
+                },
+            ],
+            "",
+        );
+        let dir = scratch("retry-digests");
+        let path = dir.join("blob.bin");
+        let mut out = crate::hash::HashingFile::create(&path).expect("create");
+
+        // Two attempts allowed, and a sleeper that does not sleep: the backoff is
+        // not what is under test and a real one would cost a second per retry.
+        let f = fetcher(2, Arc::new(RecordingSleep::default()));
+        let got = f
+            .get_to_file(&url(&mock, "/blob"), Kind::Chunk, &mut out)
+            .await
+            .expect("the retry should succeed");
+        let digests = out.finish().expect("finish");
+
+        assert_eq!(mock.hits.load(Ordering::SeqCst), 2, "it should have retried");
+        assert_eq!(digests, crate::hash::md5_sha256(&second), "digests must be the second body");
+        assert_eq!(digests.bytes, second.len() as u64);
+        assert_eq!(got.bytes_in, second.len() as u64);
+
+        let on_disk = std::fs::read(&path).expect("read back");
+        assert_eq!(
+            on_disk.len(),
+            second.len(),
+            "the file must not still hold the tail of the truncated attempt"
+        );
+        assert!(on_disk == second, "the file holds the wrong bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_write_failure_is_not_retried_as_if_it_were_the_network() {
+        // A disk that will not take the bytes must stop the run, not spend the
+        // retry budget rediscovering that a full disk stays full. Reported as a
+        // `Transport` it would be retried, because a transport failure is
+        // retryable by policy.
+        //
+        // **Tested at the classifier rather than through a real full disk.** A
+        // portable way to make one is not available, and the decision is a
+        // two-line branch: what matters is that the two causes land on different
+        // variants, and that the policy then treats them differently.
+        let read = body_failure("http://x/blob", 2, true, "connection reset");
+        assert!(
+            matches!(read, ApiError::Transport { .. }),
+            "a read failure is the network's fault and must be retryable, got {read:?}"
+        );
+
+        let write = body_failure("http://x/blob", 2, false, "no space left on device");
+        assert!(
+            matches!(write, ApiError::Shape { .. }),
+            "a write failure is the disk's fault and must not be retried, got {write:?}"
+        );
+
+        // The two halves of the claim: the policy keys off the variant, and the
+        // variants differ. (A `Transport` retries; a `Shape` does not — see
+        // `run`.)
+        let retryable = |e: &ApiError| match e {
+            ApiError::Transport { .. } => true,
+            ApiError::Shape { .. } => false,
+            ApiError::Status { .. } => true,
+        };
+        assert!(retryable(&read));
+        assert!(!retryable(&write));
+        assert!(
+            write.to_string().contains("no space left on device"),
+            "the local cause must survive into the message a reader sees: {write}"
+        );
     }
 
     #[tokio::test]
