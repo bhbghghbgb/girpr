@@ -21,6 +21,60 @@ Measured on this checkout (`capture/refactor`, commit `884eeea`), 2026-10-17.
 Re-measure before trusting any number; they are here so a reviewer can check
 the reasoning, not so they can skip it.
 
+### After, for comparison
+
+Taken at `16886c8`, **every number below measured by the same script over both
+trees** — `Measure-Object -Line` silently skips blank lines, so mixing it with
+`.Count` makes the two columns incomparable and produces nonsense (it first
+reported production lines exceeding total lines).
+
+| | baseline `884eeea` | now `16886c8` | delta |
+|---|---|---|---|
+| `src/` production lines, excl. `#[cfg(test)]` mods | 13,410 | 17,022 | **+3,612** |
+| of which non-blank, non-comment | 8,823 | 10,045 | **+1,222** |
+| comment + blank share of production | 34% | 41% | +7 pp |
+| in-module `#[cfg(test)]` lines | 9,252 | 13,602 | +4,350 |
+| `tests/` lines | 4,773 | 5,758 | +985 |
+| `src/` files | 32 | 42 | +10 |
+| tests passing | 452 | **571** | +119 |
+| clippy `--all-targets` | clean | **clean** | — |
+
+**This refactor made the crate bigger, not smaller: +8,947 lines, +33%.** Two
+thirds of the production growth is comments and blank lines, and the code itself
+grew 1,222 lines. Any claim in this plan that a change "removes lines" should be
+read as "removes them from one function", not from the crate — several items
+added a named helper, a test and a note explaining why, and the note is usually
+the bigger half. The one structural change is real though: **`src/run.rs` went
+from 1,981 lines to 860**, and the largest file in `src/` is no longer `run.rs`
+at all.
+
+### What moved, measured
+
+The numbers §8 asked for, taken on this machine after all bands landed.
+
+    verify, 20261017T000730Z, warm cache    7.92 s  ->  1.86-2.01 s   (4.1x)
+    capture wall clock, --jobs 1                             33.5 s
+                          --jobs 2                             36.9 s
+                          --jobs 4                             24.8 s
+                          --jobs 8                             16.4 s   (2.0x)
+    peak RSS during capture              151-154 MB   at every --jobs
+    list --root artifacts                                    0.05 s
+
+**§3.2's prediction is wrong, and the measurement is why §8 asked for it.**
+§3.2 says flat `--jobs` scaling "confirms the `RequestLog` mutex is the ceiling",
+and calls that "the single most informative measurement in the list". It is not
+flat: `--jobs 8` is 2.0x faster than `--jobs 1`, so the mutex is demonstrably
+*not* the binding constraint here. The likely reason is that this workload cannot
+express the contention — a capture fetches 38 chunk blobs and a handful of API
+documents, so there is very little concurrency to serialise on. **The §3.2 claim
+is untested rather than refuted**, and testing it properly needs a capture with
+thousands of concurrent chunk fetches, which this fixture is not.
+
+`verify` at 4.1x is the clearest single win in the plan, and §8 predicted exactly
+where it would come from: "a 5-second verify on a warm page cache points at
+hashing and decompressing, not at the disk". §3.4 (the verifier re-reading what
+it just read) and §5.4 (one-pass digests, `spawn_blocking`) are both that fix.
+
 ### Shape
 
 | | |
