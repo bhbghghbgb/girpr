@@ -320,9 +320,21 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
         "the empty node is recorded, so the claim is checkable: {branches}"
     );
 
-    // The retry policy is stated in the artifact, not only in the fetcher.
+    // The retry policy is stated in the artifact, not only in the fetcher — and
+    // "stated" now means *derived*. This used to assert `retryable == false` for
+    // every row, which passed against a hardcoded constant and would have kept
+    // passing if the policy changed. Asserting the policy *relation* is the
+    // claim the field's doc makes: if the fetcher would retry this status, the
+    // document says so, whatever the answer is today.
     for r in rows {
-        assert_eq!(r["retryable"], false, "{} is not retryable: {r}", r["id"]);
+        let status = r["status"].as_u64().expect("every shape records a status");
+        let expected =
+            gircap::http::RetryPolicy::should_retry_status(u16::try_from(status).unwrap());
+        assert_eq!(
+            r["retryable"], expected,
+            "{} (status {status}) must record what the retry policy says: {r}",
+            r["id"]
+        );
     }
 }
 

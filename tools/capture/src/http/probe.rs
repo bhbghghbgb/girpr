@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::biz::BranchParams;
-use crate::http::{ApiError, Fetcher, Kind};
+use crate::http::{ApiError, Fetcher, Kind, Observation};
 
 /// The probe report: `api/tag_probe.json`.
 #[derive(Debug, Clone, Serialize)]
@@ -341,14 +341,72 @@ pub struct ErrorShape {
     /// The JSON envelopes carry none — `retcode` and `message` are stable — so
     /// their list is empty and a replayer can be byte-exact.
     pub volatile_fields: Vec<String>,
-    /// Always `false`.
+    /// What the retry policy says about this status.
     ///
-    /// This is the retry policy stated in the artifact, so the fact
-    /// [`crate::http::RetryPolicy::should_retry_status`] encodes is readable by
-    /// whoever consumes the bundle rather than only by whoever wrote the fetcher. It
-    /// is a field and not a constant because a future origin that started answering
-    /// `429` here would make it true, and the document should say so.
+    /// **Derived from [`crate::http::RetryPolicy::should_retry_status`], which is
+    /// the point.** This field used to be a hardcoded `false` whose doc claimed it
+    /// *was* the retry policy "stated in the artifact" — a claim that was true only
+    /// by luck, because every probe answers `200` or `404` and neither is in the
+    /// retry set. §5.5 row 15. A reader scanning the document for "what does a
+    /// bad request look like" got a constant, not a statement, and a future origin
+    /// answering `429` here would have made the document wrong without anything
+    /// failing.
+    ///
+    /// **It states the policy, not what this run did.** The probe path uses
+    /// [`crate::http::Fetcher::observe`], which never retries, so a `true` here
+    /// means "the fetcher would have retried this" and not "this was retried". The
+    /// two are the same question only while probes are single-attempt, which is
+    /// what `observe` is for.
     pub retryable: bool,
+}
+
+/// One row of `api/error_shapes.json`, from one observation.
+///
+/// **A function, because the row is a claim about policy and policy must be
+/// testable.** This was built inline in a closure inside
+/// [`probe_error_shapes`], which meant [`ErrorShape::retryable`] — the one field
+/// that states what the retry policy would do — could only be checked against the
+/// statuses the mock happens to answer. Those are `200` and `404`, neither of
+/// which is in the retry set, so the `true` branch had no test at all: a
+/// hardcoded `false` and a correct derivation were indistinguishable.
+///
+/// Extracted so `retryable_follows_the_policy_on_both_sides` can hand it a `429`.
+fn shape_from(
+    id: &str,
+    family: Family,
+    request: String,
+    url: String,
+    error: bool,
+    o: &Observation,
+) -> ErrorShape {
+    ErrorShape {
+        id: id.to_string(),
+        family,
+        request,
+        url,
+        status: o.status,
+        content_type: o.content_type.clone(),
+        retcode: o.retcode(),
+        error,
+        body: o.text(),
+        volatile_fields: if family == Family::Blob {
+            vec![
+                "RequestId".to_string(),
+                "HostId".to_string(),
+                "Key".to_string(),
+                // `Key` echoes the requested path, so the body's
+                // length is a function of the URL rather than of the
+                // shape.
+                "body length (follows Key)".to_string(),
+            ]
+        } else {
+            Vec::new()
+        },
+        // Derived, not asserted. See `ErrorShape::retryable`: this states what
+        // `RetryPolicy` would do with the status, so a reader does not have to
+        // reimplement the policy to know whether a shape is worth retrying.
+        retryable: crate::http::RetryPolicy::should_retry_status(o.status),
+    }
 }
 
 impl ErrorShapes {
@@ -499,35 +557,7 @@ pub async fn probe_error_shapes(
                 Ok(o) => o,
                 Err(e) => return (i, Err(e.to_string())),
             };
-            let retcode = o.retcode();
-            (
-                i,
-                Ok(ErrorShape {
-                    id: id.to_string(),
-                    family,
-                    request,
-                    url,
-                    status: o.status,
-                    content_type: o.content_type.clone(),
-                    retcode,
-                    error,
-                    body: o.text(),
-                    volatile_fields: if family == Family::Blob {
-                        vec![
-                            "RequestId".to_string(),
-                            "HostId".to_string(),
-                            "Key".to_string(),
-                            // `Key` echoes the requested path, so the body's
-                            // length is a function of the URL rather than of the
-                            // shape.
-                            "body length (follows Key)".to_string(),
-                        ]
-                    } else {
-                        Vec::new()
-                    },
-                    retryable: false,
-                }),
-            )
+            (i, Ok(shape_from(id, family, request, url, error, &o)))
         })
         .await;
     let mut shapes = Vec::with_capacity(wanted.len());
@@ -589,6 +619,90 @@ mod tests {
             &["6.6.0".into(), "7.1.0".into()],
         );
         assert_eq!(got, vec!["7.1.0", "7.0.0", "6.7.0", "6.6.0"]);
+    }
+
+    #[test]
+    fn retryable_follows_the_policy_on_both_sides() {
+        // **§5.5 row 15.** `ErrorShape::retryable` was a hardcoded `false` whose doc
+        // claimed it *was* the retry policy. It was true only by luck: every probe
+        // answers `200` or `404` and neither is in the retry set, so a correct
+        // derivation and a constant were indistinguishable from anything a capture
+        // can produce.
+        //
+        // Both branches, driven through the real `shape_from`. The `true` side is
+        // the one that matters and the one no capture reaches: it needs a status
+        // that *is* retryable, which means an origin that throttles a probe.
+        let obs = |status: u16| Observation {
+            status,
+            content_type: Some("application/json".into()),
+            body: br#"{"retcode":-1,"message":"slow down"}"#.to_vec(),
+        };
+        let shape = |status: u16| {
+            shape_from(
+                "probe",
+                Family::Json,
+                "a request".into(),
+                "http://example.invalid/x".into(),
+                true,
+                &obs(status),
+            )
+        };
+
+        // The policy's own answer, on both sides of it.
+        for status in [408_u16, 429, 500, 503, 599] {
+            assert!(
+                shape(status).retryable,
+                "{status} is in the retry set, so the document must say so"
+            );
+        }
+        for status in [200_u16, 400, 403, 404, 410] {
+            assert!(
+                !shape(status).retryable,
+                "{status} is not in the retry set, so the document must not claim it is"
+            );
+        }
+
+        // And the field tracks the function rather than agreeing with it by
+        // chance: a status the policy grows later is reflected with no edit here.
+        assert_eq!(
+            shape(429).retryable,
+            crate::http::RetryPolicy::should_retry_status(429)
+        );
+        assert_eq!(
+            shape(404).retryable,
+            crate::http::RetryPolicy::should_retry_status(404)
+        );
+    }
+
+    #[test]
+    fn a_shape_carries_the_observation_it_was_built_from() {
+        // The extraction must not have lost a field. Everything a reader of
+        // `api/error_shapes.json` relies on is spelled out here.
+        let o = Observation {
+            status: 404,
+            content_type: Some("application/xml".into()),
+            body: b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+        };
+        let s = shape_from(
+            "blob_missing",
+            Family::Blob,
+            "a chunk that is not there".into(),
+            "http://example.invalid/blob".into(),
+            true,
+            &o,
+        );
+        assert_eq!(s.id, "blob_missing");
+        assert_eq!(s.family, Family::Blob);
+        assert_eq!(s.status, 404);
+        assert_eq!(s.content_type.as_deref(), Some("application/xml"));
+        assert!(s.error);
+        assert!(s.body.contains("NoSuchKey"), "the body is byte-exact: {}", s.body);
+        assert_eq!(
+            s.volatile_fields,
+            vec!["RequestId", "HostId", "Key", "body length (follows Key)"],
+            "the blob envelope's volatile names, because `Key` follows the path"
+        );
+        assert!(s.retcode.is_none(), "an XML envelope has no retcode");
     }
 
     /// The measured shape of the finding: `diff_tags` is a patch-support list and
