@@ -19,6 +19,11 @@
 //! | `resp_headers` | `etag`, `content-md5`, `x-cache` are how the CDN's claims get checked |
 //! | `bytes_in` | the only way to price a manifest without re-downloading it |
 //!
+//! `bytes_in` counts **every** body received, including the body of a failed
+//! request. A throttled run that was retried three times paid for four responses
+//! and a summary that said `0` for three of them would be a cost figure that
+//! flatters itself exactly when the cost was highest.
+//!
 //! ## Retries
 //!
 //! Retried: connection and timeout errors, `408`, `429`, and any `5xx`.
@@ -1198,6 +1203,31 @@ impl Fetcher {
         // `2xx`, which includes `206` — a `Range` response is a success, not a
         // partial failure.
         if !resp.status().is_success() {
+            // **The body of a failure is counted, not ignored.** §5.5 row 1: this
+            // used to record `bytes_in: 0` and drop the response, so a CDN
+            // `429`/`503` carrying a few KB of XML envelope was paid for on the
+            // wire and reported as free. `bytes_in` is sold in this module's doc
+            // as "the only way to price a manifest without re-downloading it", and
+            // it under-reported *precisely the retried requests that cost the
+            // most* — so a throttled run's cost figures were optimistic by the
+            // amount the throttle cost.
+            //
+            // **Streamed and discarded**, not read into a buffer: the content is
+            // useless, only the length is not. Draining also lets the connection
+            // go back to the pool, which dropping a response mid-body would not.
+            //
+            // A body that fails to read mid-way counts what arrived, like every
+            // other count here: reporting `0` for bytes that demonstrably crossed
+            // the network is the defect being fixed.
+            let mut resp = resp;
+            let mut bytes_in: u64 = 0;
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(c)) => bytes_in += c.len() as u64,
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,
@@ -1212,7 +1242,7 @@ impl Fetcher {
                 resp_headers,
                 &final_url,
                 redirected,
-                0,
+                bytes_in,
                 attempts,
                 started,
             );
@@ -2104,6 +2134,78 @@ fn a_poisoned_request_log_still_takes_records() {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).expect("scratch dir");
         d
+    }
+
+    #[tokio::test]
+    async fn a_failed_request_counts_the_body_it_threw_away() {
+        // **§5.5 row 1.** `bytes_in` was recorded as `0` for every non-2xx and the
+        // response was dropped without its body being read. So a `429` carrying a
+        // few KB of XML envelope was transferred and reported as free — and the
+        // requests it under-reported are the retried ones, which is to say the
+        // expensive ones.
+        let envelope = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
+                         <Code>TooManyRequests</Code>\n  <Message>Slow down.</Message>\n\
+                         </Error>\n";
+        let mock = spawn(vec![(429, envelope)], "");
+        let f = fetcher(1, Arc::new(RecordingSleep::default()));
+
+        let err = f
+            .get(&url(&mock, "/blob"), Kind::Chunk, None)
+            .await
+            .expect_err("429 is not a success");
+        assert!(matches!(err, ApiError::Status { status: 429, .. }), "{err:?}");
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1, "the failure must still be recorded");
+        assert_eq!(
+            rows[0].bytes_in,
+            envelope.len() as u64,
+            "bytes_in must count the body that arrived, not report the failure as free"
+        );
+        assert_eq!(rows[0].status, 429);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_request_is_priced_at_every_attempt_it_cost() {
+        // The shape the module doc promises: a run that was throttled and retried
+        // paid for every response it received, and the summary's total has to say
+        // so. Two `429`s and a `200` is a run that cost three bodies.
+        let envelope = b"<Error><Code>TooManyRequests</Code></Error>";
+        let payload = b"the blob, at last";
+        let mock = spawn_answers(
+            vec![
+                Answer { status: 429, body: envelope, claim: None },
+                Answer { status: 503, body: envelope, claim: None },
+                Answer { status: 200, body: leak(payload), claim: None },
+            ],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let got = f
+            .get(&url(&mock, "/blob"), Kind::Chunk, None)
+            .await
+            .expect("the third attempt succeeds");
+
+        assert_eq!(got.body, payload, "the successful body is the third one");
+        assert_eq!(mock.hits.load(Ordering::SeqCst), 3, "it retried twice");
+
+        // Every attempt is logged — a run that recovered from a throttle must
+        // show the 429s, or `attempts` is a claim nobody can check.
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 3, "all three attempts are recorded");
+        let failed: u64 = rows[..2].iter().map(|r| r.bytes_in).sum();
+        assert_eq!(
+            failed,
+            envelope.len() as u64 * 2,
+            "both throttled responses must be priced, not reported as free"
+        );
+        assert_eq!(rows[2].bytes_in, payload.len() as u64);
+        assert_eq!(
+            f.log().bytes_in(),
+            envelope.len() as u64 * 2 + payload.len() as u64,
+            "the run's total is every body it received"
+        );
     }
 
     #[tokio::test]
