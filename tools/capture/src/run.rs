@@ -9,7 +9,6 @@
 //! dispatcher. `run::usage` and `run::failure_summary` still resolve; moving a
 //! type is not a reason to touch every call site.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::biz::{Biz, Endpoints};
@@ -317,64 +316,17 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // 6e. The chunk store. Planned *before* any blob is fetched, so the cost the
     //     log announces is a real figure rather than an estimate, and A12 is
     //     checked on the plan instead of after the bytes have been paid for.
-    let mut by_tag: BTreeMap<String, &manifest::CapturedManifest> = BTreeMap::new();
-    for (field, pair) in fields.iter().zip(&manifests) {
-        if *field != manifest::MANIFEST_FIELD {
-            // Only the `game` manifests are loaded into memory; the audio ones
-            // exist to widen the *pool*, and a selected path is always scored
-            // against game first (M5's tie-break). If a path ever comes only
-            // from an audio field, that is a bug there, and here it surfaces as
-            // a one-sided pair rather than a wrong download.
-            continue;
-        }
-        for m in pair {
-            by_tag.insert(m.tag.clone(), m);
-        }
-    }
-    let pairs = blobs::file_pairs(&selection, &by_tag, &old_tag, &new_tag);
-    let wants = blobs::chunks::wants(&pairs);
-    for (a, p) in selection.admitted.iter().zip(&pairs) {
-        let r = blobs::chunks::retention(p);
-        if !r.a12_holds() {
-            return Err(assertion(
-                &format!("plan the chunk sets for {}", a.path),
-                &ApiError::shape("A12", r.a12_failure().unwrap_or("unknown")),
-            ));
-        }
-        tracing::info!(
-            capture_id = %a.capture_id,
-            path = %a.path,
-            old_chunks = r.ids(blobs::chunks::Set::MaterializeOld).len(),
-            new_chunks = r.ids(blobs::chunks::Set::MaterializeNew).len(),
-            patch_fetch = r.ids(blobs::chunks::Set::PatchFetch).len(),
-            reuse = r.reuse.len(),
-            "retention planned"
-        );
-    }
-    let projected = blobs::projected_download(&wants);
-    tracing::info!(
-        chunks = wants.len(),
-        projected_bytes = projected,
-        max_download_bytes = plan.max_download_bytes.unwrap_or(0),
-        distinct_files = selection.admitted.len(),
-        "chunk store planned"
-    );
-    if let Some(cap) = plan.max_download_bytes {
-        // The budget is charged against `total_cost` in M5; this is a *second*,
-        // independent ceiling over the bytes actually on the wire. Both hold.
-        if projected > cap {
-            return Err(assertion(
-                "fetch the chunk blobs",
-                &ApiError::shape(
-                    "max-download-bytes",
-                    format!(
-                        "the admitted captures need {projected} B of chunk blobs and the \
-                         ceiling is {cap} B; lower --per-class or raise the ceiling"
-                    ),
-                ),
-            ));
-        }
-    }
+    let chunk_plan = blobs::plan::plan(
+        &fields,
+        &manifests,
+        &selection,
+        &old_tag,
+        &new_tag,
+        plan.max_download_bytes,
+    )?;
+    let pairs = chunk_plan.pairs;
+    let wants = chunk_plan.wants;
+    let projected = chunk_plan.projected;
 
     // 7. The tree. All three writes happen even though the run is incomplete:
     //    what was asked, what it cost, and what came back are the parts that

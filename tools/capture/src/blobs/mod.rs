@@ -27,6 +27,7 @@
 //! re-deriving anything.
 
 pub mod chunks;
+pub mod plan;
 pub mod props;
 
 use std::collections::BTreeMap;
