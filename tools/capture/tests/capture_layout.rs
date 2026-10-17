@@ -902,11 +902,75 @@ fn requiring_an_unavailable_class_is_exit_four() {
     assert!(detail.contains("full_reuse_reordered"), "{detail}");
 }
 
+/// The launcher metadata is not a chunk, so `--no-chunk-blobs` still writes it.
+///
+/// `emit::fixture::build`'s prelude call carries a long comment about a bug
+/// this pins: putting `config.ini` and the scan file behind the flag left a
+/// metadata-only bundle with no `game/` at all, and A13 - "the config re-parses
+/// with `game_version == --old-tag`" - failed on a tree that simply had no
+/// config in it. A missing file reported as a broken assertion is the worst of
+/// the two: it says the tool is wrong when the tool did exactly what it was
+/// asked.
+///
+/// The neighbouring test proves nothing goes *red*; this proves the row went
+/// *green for the right reason* - because there was a file to read.
+#[test]
+fn no_chunk_blobs_still_writes_the_launcher_metadata() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("nobloobs-prelude");
+    let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let config = bundle.join("game").join("config.ini");
+    assert!(
+        config.is_file(),
+        "the flag suppresses chunk blobs, not launcher metadata: no {}",
+        config.display()
+    );
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(
+        text.contains("game_version="),
+        "a config with no version cannot satisfy A13: {text}"
+    );
+
+    // The scan file lands under the path the *launcher* named, which is the
+    // point of reading `audio_pkg_scan_dir` rather than hardcoding one. The
+    // path is the file: the launcher gives a directory and the tool writes the
+    // code list to it, which is why this is not `Persistent/AudioScan.txt`.
+    let scan = bundle
+        .join("game")
+        .join("GenshinImpact_Data")
+        .join("Persistent");
+    assert!(
+        scan.is_file(),
+        "the audio scan file goes where getGameConfigs said, under that exact \
+         name: no {}",
+        scan.display()
+    );
+
+    // And A13 evaluated that file rather than reporting it missing.
+    let doc: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("verify").join("selfcheck.json")).unwrap(),
+    )
+    .unwrap();
+    let a13 = doc["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "A13")
+        .expect("an A13 row");
+    assert_eq!(
+        a13["ok"],
+        serde_json::Value::Bool(true),
+        "A13 must pass on a tree that has a config to read: {a13}"
+    );
+}
+
 /// `--no-chunk-blobs` stores no blobs, and the result is `incomplete` rather
 /// than `pass`: a skip is not a success.
 #[test]
-fn no_chunk_blobs_is_incomplete_not_pass() {
-    let mock = Mock::start(World::five_classes());
+fn no_chunk_blobs_is_incomplete_not_pass() {    let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);

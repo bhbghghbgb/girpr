@@ -21,7 +21,7 @@ use crate::hyp::GetBuild;
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
-use crate::{assemble, blobs, emit, hyp, manifest, select};
+use crate::{blobs, emit, hyp, manifest, select};
 
 // The failure story moved to `crate::failure` so that the modules that own the
 // work can name it. Re-exported because `main.rs` and the integration tests
@@ -535,156 +535,34 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     std::fs::create_dir_all(dir.join("patchmaps")).map_err(|e| write_err(&dir, e))?;
     written.push(emit::write_chunk_index(&dir, &index).map_err(|e| write_err(&dir, e))?);
 
-    // 7c. Assembly. Old, new, and the patch flow, from the blobs just stored.
+    // 7c. The fixture: assemble every admitted capture and write both sides,
+    //     plus the launcher metadata that is not a chunk at all.
+    //
     //     A7-A12 are asserted here rather than left to M9, because a capture that
     //     cannot rebuild its own files has nothing worth keeping and the operator
     //     should find out at capture time.
-    //
-    //     `game/` and `expected/` are written one capture at a time, as each
-    //     assembles, so the fixture is never fully resident: the whole thing is
-    //     the largest object this tool ever holds.
-    let chunk_source = assemble::ChunkSource::from_index(&dir, &index);
-    // Where the game puts the audio scan file. Never hardcoded: it is the
-    // launcher's path, and the fixture has to write it where the tool under
-    // test looks for it.
-    let scan_dir = captured
-        .configs
-        .data::<hyp::GameConfigs>()
-        .map_err(|e| apierr("parse getGameConfigs", &e))?
-        .audio_pkg_scan_dir()
-        .map_err(|e| apierr("read getGameConfigs.audio_pkg_scan_dir", &e))?
-        .to_string();
-    let mut rows: Vec<emit::selfcheck::Assertion> =
-        emit::selfcheck::api_and_manifest(&captured, versions, &manifests, &index, plan.no_chunk_blobs);
-    let mut assembled_ids: Vec<String> = Vec::new();
-    // (old md5, new md5) per capture, for A19. The digests, not the bytes:
-    // A19 only asks whether the two sides differ, and holding the assembled
-    // files here would keep a whole patch resident twice.
-    let mut side_digests: BTreeMap<String, (String, String)> = BTreeMap::new();
-    let mut prelude: Vec<String> = Vec::new();
-    let (mut reused_total, mut fetched_total, mut moved_total) = (0_u64, 0_u64, 0_u64);
-    if !plan.no_chunk_blobs {
-        for (a, pair) in selection.admitted.iter().zip(&pairs) {
-            let mut classes = vec![a.primary_class];
-            classes.extend(a.also_satisfies.iter().copied());
-            classes.sort();
-            classes.dedup();
-            let got = assemble::assemble(&assemble::AssemblyInput {
-                pair,
-                matching_field: a.matching_field.as_str(),
-                classes: &classes,
-                sources: store.sources(),
-                chunks: &chunk_source,
-            });
-            match got {
-                Ok(out) => {
-                    let p = out.patch.as_ref();
-                    tracing::info!(
-                        capture_id = %a.capture_id,
-                        path = %a.path,
-                        old_md5_ok = out.old.as_ref().is_none_or(|o| o.md5_matches()),
-                        new_md5_ok = out.new.as_ref().is_none_or(|n| n.md5_matches()),
-                        a9 = p.is_none_or(|p| p.equals_new),
-                        reuse = p.map(|p| p.reused).unwrap_or(0),
-                        fetch = p.map(|p| p.fetched).unwrap_or(0),
-                        moved = p.map(|p| p.moved).unwrap_or(0),
-                        download_bytes = out.map.totals.map(|t| t.download_bytes).unwrap_or(0),
-                        "assembled"
-                    );
-                    if let Some(p) = &out.patch {
-                        reused_total += p.reused as u64;
-                        fetched_total += p.fetched as u64;
-                        moved_total += p.moved as u64;
-                    }
-                    // The assembler already produces selfcheck rows — both sides
-                    // of each comparison, with the spec's wording — so they are
-                    // carried through rather than re-derived here.
-                    rows.extend(out.selfcheck_rows());
-                    assembled_ids.push(a.capture_id.clone());
-                    side_digests.insert(
-                        a.capture_id.clone(),
-                        (
-                            out.old.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
-                            out.new.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
-                        ),
-                    );
-                    written.push(
-                        emit::write_patchmap(&dir, &a.capture_id, &out.map)
-                            .map_err(|e| write_err(&dir, e))?,
-                    );
-                    // `game/` is the fixture, `expected/` the ground truth. A
-                    // `removed` capture contributes only to the first.
-                    if let Some(o) = &out.old {
-                        written.push(
-                            emit::gamedir::write_variant(
-                                &dir,
-                                "game",
-                                &emit::gamedir::VariantFile {
-                                    rel_path: &a.path,
-                                    bytes: &o.bytes,
-                                    capture_id: &a.capture_id,
-                                },
-                            )
-                            .map_err(|e| write_err(&dir, e))?,
-                        );
-                    }
-                    if let Some(n) = &out.new {
-                        written.push(
-                            emit::gamedir::write_variant(
-                                &dir,
-                                "expected",
-                                &emit::gamedir::VariantFile {
-                                    rel_path: &a.path,
-                                    bytes: &n.bytes,
-                                    capture_id: &a.capture_id,
-                                },
-                            )
-                            .map_err(|e| write_err(&dir, e))?,
-                        );
-                    }
-                }
-                Err(e) => {
-                    return Err(assertion(
-                        &format!("assemble {}", a.path),
-                        &ApiError::shape("assemble", e),
-                    ));
-                }
-            }
-        }
-    }
-    // `write_prelude` always runs, including under `--no-chunk-blobs`.
-    //
-    // `config.ini` and the audio scan file are derived from `getGameConfigs` and
-    // the `--audio` flag, not from a single chunk. Putting them behind the
-    // flag made a metadata-only bundle have no `game/` at all, so A13 - "the
-    // config re-parses with `game_version == --old-tag`" - failed on a tree that
-    // simply had no config in it, and reported a missing file as a broken
-    // assertion. The flag suppresses *chunk blobs*, not the launcher metadata.
-    prelude.extend(
-        emit::gamedir::write_prelude(&dir, &biz, &old_tag, &scan_dir, plan.audio.codes())
-            .map_err(|e| write_err(&dir, e))?,
-    );
-    written.extend(prelude);
-    let assembly_failures = rows.iter().filter(|a| !a.ok).count();
-    emit::selfcheck::report_failed(&rows);
-    tracing::info!(
-        rows = rows.len(),
-        failures = assembly_failures,
-        patchmaps = assembled_ids.len(),
-        "assembly assertions complete"
-    );
-    if assembly_failures > 0 {
-        return Err(assertion(
-            "assemble the admitted captures",
-            &ApiError::shape(
-                "A7-A12",
-                format!(
-                    "{assembly_failures} of {} selfcheck rows failed",
-                    rows.len()
-                ),
-            ),
-        ));
-    }
+    let fixture = emit::fixture::build(emit::fixture::FixtureInput {
+        dir: &dir,
+        captured: &captured,
+        versions,
+        manifests: &manifests,
+        index: &index,
+        admitted: &selection.admitted,
+        pairs: &pairs,
+        store: &store,
+        biz: &biz,
+        old_tag: &old_tag,
+        audio: plan.audio.codes(),
+        no_chunk_blobs: plan.no_chunk_blobs,
+    })?;
+    let scan_dir = fixture.scan_dir;
+    let rows = fixture.rows;
+    let assembled_ids = fixture.assembled_ids;
+    let side_digests = fixture.side_digests;
+    let (reused_total, fetched_total, moved_total) =
+        (fixture.reused, fixture.fetched, fixture.moved);
+    let assembly_failures = fixture.failures;
+    written.extend(fixture.written);
 
     emit::write_requests_log(&dir, &log).map_err(|e| write_err(&dir, e))?;
 

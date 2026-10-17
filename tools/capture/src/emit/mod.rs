@@ -11,6 +11,7 @@
 //! `verify/checksums.json` is what proves nothing is missing.
 
 pub mod closeout;
+pub mod fixture;
 pub mod gamedir;
 pub mod index;
 pub mod selfcheck;
