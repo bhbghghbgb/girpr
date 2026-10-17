@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::biz::{Biz, Endpoints};
-use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, VersionPair, artifact_dir};
+use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
 use crate::http::{ApiError, Fetcher, RequestLog, Transport, probe};
@@ -30,16 +30,6 @@ use crate::{assemble, blobs, emit, hyp, manifest, select};
 pub use crate::failure::{
     Failure, Outcome, apierr, assertion, failure_summary, failure_summary_detail, usage, write_err,
 };
-
-/// The `matching_field` every run scores first, and the one every later stage
-/// needs whatever class a capture lands in.
-///
-/// `game` is the one mandatory field: `--audio` widens the *selection pool* but
-/// never makes the game field optional. Naming it here rather than inlining it
-/// at the call site gives the rule "game is never optional" one address.
-const MANIFEST_FIELD: &str = "game";
-
-
 
 /// `gircap capture` — fetch from the live APIs and write a bundle.
 ///
@@ -232,7 +222,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let game_pair = fields
         .iter()
         .zip(&manifests)
-        .find(|(field, _)| field.as_str() == MANIFEST_FIELD)
+        .find(|(field, _)| field.as_str() == manifest::MANIFEST_FIELD)
         .map(|(_, pair)| pair)
         .ok_or_else(|| {
             apierr(
@@ -418,7 +408,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     checked on the plan instead of after the bytes have been paid for.
     let mut by_tag: BTreeMap<String, &manifest::CapturedManifest> = BTreeMap::new();
     for (field, pair) in fields.iter().zip(&manifests) {
-        if *field != MANIFEST_FIELD {
+        if *field != manifest::MANIFEST_FIELD {
             // Only the `game` manifests are loaded into memory; the audio ones
             // exist to widen the *pool*, and a selected path is always scored
             // against game first (M5's tie-break). If a path ever comes only
@@ -726,7 +716,23 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     ));
     emit::selfcheck::report_failed(&rows);
 
-    let input = ManifestInput {
+    // `files[]` now that every other document exists, so it lists as much as it
+    // can. It cannot list itself, README or checksums - `checksums.json` is the
+    // complete list, and its doc comment says so.
+    //
+    // This is the close-out's **one** full-tree digest pass. It used to be a
+    // fourth one, in a private function that also re-implemented
+    // `Checksums::scan`'s walk and inlined its `encoding_of` - so a third
+    // encoding would have taught `MANIFEST.json` the wrong one while
+    // `checksums.json` learned the right one.
+    //
+    // It runs *before* `build_manifest` rather than after. Nothing between here
+    // and the call writes to the tree, so the pass sees the same bytes it always
+    // did - but the manifest is now built whole, instead of being handed back
+    // with an empty `files[]` for these next two lines to fill in.
+    let (listed, seeded) = emit::write_manifest_files(&dir).map_err(|e| write_err(&dir, e))?;
+
+    let input = emit::index::ManifestInput {
         started,
         biz: &biz,
         endpoints: &endpoints,
@@ -739,10 +745,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         selection: &selection,
         index: &index,
         bytes_downloaded: log.bytes_in(),
+        files: &listed,
         argv: &plan.argv,
         complete: true,
     };
-    let mut manifest = build_manifest(&input)
+    let manifest = emit::index::build_manifest(&input)
         .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
     // A17 is about the matrix this document carries, so it is settled here and
     // appended to the rows the rest of the close-out will write.
@@ -754,19 +761,6 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         a17_ok,
         &a17_detail,
     ));
-
-    // `files[]` now that every other document exists, so it lists as much as it
-    // can. It cannot list itself, README or checksums — `checksums.json` is the
-    // complete list, and its doc comment says so.
-    //
-    // This is the close-out's **one** full-tree digest pass. It used to be a
-    // fourth one, in a private function that also re-implemented
-    // `Checksums::scan`'s walk and inlined its `encoding_of` — so a third
-    // encoding would have taught `MANIFEST.json` the wrong one while
-    // `checksums.json` learned the right one.
-    let (listed, seeded) = emit::write_manifest_files(&dir).map_err(|e| write_err(&dir, e))?;
-    manifest.files = listed;
-    manifest.totals.bytes_on_disk = manifest.files.iter().map(|f| f.bytes).sum::<u64>();
 
     // A6 joins A7-A12 here: with no blobs there is nothing to measure, nothing to
     // assemble and nothing to prove. A declared gap is `incomplete`, not `fail`.
@@ -959,7 +953,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
 /// game file covers for less. The audio codes are appended in the order the
 /// caller named them so two runs with the same flags score in the same order.
 fn selection_fields(plan: &CapturePlan) -> Vec<String> {
-    let mut fields = vec![MANIFEST_FIELD.to_string()];
+    let mut fields = vec![manifest::MANIFEST_FIELD.to_string()];
     fields.extend(plan.audio.codes().iter().cloned());
     fields
 }
@@ -991,8 +985,6 @@ fn required_classes(plan: &CapturePlan) -> Result<Vec<select::Class>, Failure> {
 fn satisfied(selection: &select::Selection) -> u64 {
     selection.matrix.iter().filter(|r| r.is_satisfied()).count() as u64
 }
-
-
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
 ///
@@ -1268,155 +1260,6 @@ fn selfcheck_slug(s: &Selfcheck) -> String {
         .unwrap_or_else(|_| "?".into())
         .trim_matches('"')
         .to_string()
-}
-
-
-
-
-
-
-
-/// Everything `build_manifest` needs, as one argument.
-struct ManifestInput<'a> {
-    /// When the run started, for `capture.captured_at`.
-    pub started: chrono::DateTime<chrono::Utc>,
-    /// The region.
-    pub biz: &'a Biz,
-    /// The bases actually used, which may be `--hyp-base` overrides.
-    pub endpoints: &'a Endpoints<'a>,
-    /// The resolved pair.
-    pub versions: &'a VersionPair,
-    /// `main.diff_tags` as served.
-    pub diff_tags: &'a [String],
-    /// Audio codes written into the scan file.
-    pub audio: &'a [String],
-    /// The fields that were scored.
-    pub fields: &'a [String],
-    /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
-    pub gzip_threshold: u64,
-    /// The diffs, in the same order as `fields`.
-    pub diffs: &'a [diff::FieldDiff],
-    /// The selection.
-    pub selection: &'a select::Selection,
-    /// The chunk index.
-    pub index: &'a blobs::ChunkIndex,
-    /// Bytes the CDN sent.
-    pub bytes_downloaded: u64,
-    /// The command line.
-    pub argv: &'a [String],
-    /// Whether the run finished.
-    pub complete: bool,
-}
-
-/// Build `MANIFEST.json`.
-///
-/// Every field is something the run already knew; nothing here recomputes a
-/// measurement, so the document cannot disagree with the tree it describes.
-fn build_manifest(i: &ManifestInput<'_>) -> Result<emit::index::Manifest, String> {
-    let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
-    let manifest_entries: BTreeMap<String, u64> = i
-        .fields
-        .iter()
-        .zip(i.diffs)
-        .map(|(f, d)| {
-            // `common + added`: the paths that exist on the new side, which is
-            // exactly the candidate set this field contributed. A `removed` path
-            // is not a candidate — there is nothing to capture on the new side.
-            (f.clone(), d.counts.common + d.counts.added)
-        })
-        .collect();
-    let matrix: Vec<emit::index::ManifestMatrixRow> = i
-        .selection
-        .matrix
-        .iter()
-        .map(|row| {
-            let admission = row
-                .capture_id
-                .as_ref()
-                .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
-            emit::index::ManifestMatrixRow {
-                class: row.class.id().to_string(),
-                status: row.status.id().to_string(),
-                capture_id: row.capture_id.clone(),
-                path: row.path.clone(),
-                matching_field: admission.map(|a| a.matching_field.clone()),
-                covered_by: row.covered_by.clone(),
-                also_satisfies: admission.filter(|a| !a.also_satisfies.is_empty()).map(|a| {
-                    a.also_satisfies
-                        .iter()
-                        .map(|c| c.id().to_string())
-                        .collect()
-                }),
-                reason: row.reason.clone(),
-                candidates_considered: Some(row.candidates_considered),
-            }
-        })
-        .collect();
-    let totals_by_set: BTreeMap<String, u64> = i
-        .index
-        .sets
-        .iter()
-        .map(|(k, v)| (k.clone(), v.len() as u64))
-        .collect();
-    Ok(emit::index::Manifest {
-        schema_version: crate::SCHEMA_VERSION,
-        tool: emit::index::Tool {
-            name: "gircap".to_string(),
-            version: crate::VERSION.to_string(),
-        },
-        capture: emit::index::Capture {
-            id,
-            captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            host_os: std::env::consts::OS.to_string(),
-            tool_argv: i.argv.to_vec(),
-            complete: i.complete,
-        },
-        biz: emit::index::Biz_ {
-            id: i.biz.as_str().to_string(),
-            launcher_id: i.biz.launcher_id.to_string(),
-            game_id: i.biz.game_id.to_string(),
-            channel: i.biz.channel.to_string(),
-            sub_channel: i.biz.sub_channel.to_string(),
-            cps: i.biz.cps.to_string(),
-            hyp_base: i.endpoints.hyp.to_string(),
-            sophon_base: i.endpoints.sophon.to_string(),
-        },
-        versions: emit::index::Versions {
-            new: emit::index::Build {
-                tag: i.versions.new.tag.clone(),
-                build_id: i.versions.new.build_id.clone(),
-                source: i.versions.new.source.clone(),
-            },
-            old: emit::index::Build {
-                tag: i.versions.old.tag.clone(),
-                build_id: i.versions.old.build_id.clone(),
-                source: i.versions.old.source.clone(),
-            },
-            diff_tags: i.diff_tags.to_vec(),
-        },
-        field: MANIFEST_FIELD.to_string(),
-        audio: i.audio.to_vec(),
-        gzip_threshold: i.gzip_threshold,
-        selection_pool: emit::index::SelectionPool {
-            fields: i.fields.to_vec(),
-            manifest_entries,
-            note: "--audio widens this pool; captures may come from any listed field".to_string(),
-        },
-        totals: emit::index::Totals {
-            files_captured: i.selection.admitted.len() as u64,
-            chunks_blobs: i
-                .index
-                .blobs
-                .iter()
-                .filter(|b| b.props.stored_path.is_some())
-                .count() as u64,
-            bytes_downloaded: i.bytes_downloaded,
-            bytes_on_disk: 0,
-        },
-        matrix,
-        files: Vec::new(),
-        totals_by_set,
-    })
 }
 
 #[cfg(test)]

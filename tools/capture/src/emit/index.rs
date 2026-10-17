@@ -24,8 +24,167 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash;
 
+/// Everything `build_manifest` needs, as one argument.
+pub struct ManifestInput<'a> {
+    /// When the run started, for `capture.captured_at`.
+    pub started: chrono::DateTime<chrono::Utc>,
+    /// The region.
+    pub biz: &'a crate::biz::Biz,
+    /// The bases actually used, which may be `--hyp-base` overrides.
+    pub endpoints: &'a crate::biz::Endpoints<'a>,
+    /// The resolved pair.
+    pub versions: &'a crate::config::VersionPair,
+    /// `main.diff_tags` as served.
+    pub diff_tags: &'a [String],
+    /// Audio codes written into the scan file.
+    pub audio: &'a [String],
+    /// The fields that were scored.
+    pub fields: &'a [String],
+    /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
+    pub gzip_threshold: u64,
+    /// The diffs, in the same order as `fields`.
+    pub diffs: &'a [crate::manifest::diff::FieldDiff],
+    /// The selection.
+    pub selection: &'a crate::select::Selection,
+    /// The chunk index.
+    pub index: &'a crate::blobs::ChunkIndex,
+    /// Bytes the CDN sent.
+    pub bytes_downloaded: u64,
+    /// The file listing, from the close-out's one full-tree digest pass.
+    ///
+    /// **An input, not a later patch.** `build_manifest` used to return
+    /// `files: Vec::new()` and `bytes_on_disk: 0`, and the caller filled both in
+    /// after the fact — so for the whole window between the two statements the
+    /// document said the bundle was empty. Its doc claimed "every field is
+    /// something the run already knew", which was false for exactly the two
+    /// fields that needed the tree walked. Passing them in costs nothing: the
+    /// walk has to happen after every other document is written either way, and
+    /// it does, just a few lines earlier than it did.
+    pub files: &'a [FileEntry],
+    /// The command line.
+    pub argv: &'a [String],
+    /// Whether the run finished.
+    pub complete: bool,
+}
+
+/// Build `MANIFEST.json`.
+///
+/// Every field is something the run already knew; nothing here recomputes a
+/// measurement, so the document cannot disagree with the tree it describes.
+///
+/// That claim used to be false for `files` and `totals.bytes_on_disk`, which
+/// were left at their empty defaults for the caller to overwrite. Both are now
+/// [`ManifestInput::files`], and `bytes_on_disk` is summed from them here.
+pub fn build_manifest(i: &ManifestInput<'_>) -> Result<Manifest, String> {
+    let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
+    let manifest_entries: BTreeMap<String, u64> = i
+        .fields
+        .iter()
+        .zip(i.diffs)
+        .map(|(f, d)| {
+            // `common + added`: the paths that exist on the new side, which is
+            // exactly the candidate set this field contributed. A `removed` path
+            // is not a candidate — there is nothing to capture on the new side.
+            (f.clone(), d.counts.common + d.counts.added)
+        })
+        .collect();
+    let matrix: Vec<ManifestMatrixRow> = i
+        .selection
+        .matrix
+        .iter()
+        .map(|row| {
+            let admission = row
+                .capture_id
+                .as_ref()
+                .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
+            ManifestMatrixRow {
+                class: row.class.id().to_string(),
+                status: row.status.id().to_string(),
+                capture_id: row.capture_id.clone(),
+                path: row.path.clone(),
+                matching_field: admission.map(|a| a.matching_field.clone()),
+                covered_by: row.covered_by.clone(),
+                also_satisfies: admission.filter(|a| !a.also_satisfies.is_empty()).map(|a| {
+                    a.also_satisfies
+                        .iter()
+                        .map(|c| c.id().to_string())
+                        .collect()
+                }),
+                reason: row.reason.clone(),
+                candidates_considered: Some(row.candidates_considered),
+            }
+        })
+        .collect();
+    let totals_by_set: BTreeMap<String, u64> = i
+        .index
+        .sets
+        .iter()
+        .map(|(k, v)| (k.clone(), v.len() as u64))
+        .collect();
+    Ok(Manifest {
+        schema_version: crate::SCHEMA_VERSION,
+        tool: Tool {
+            name: "gircap".to_string(),
+            version: crate::VERSION.to_string(),
+        },
+        capture: Capture {
+            id,
+            captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            host_os: std::env::consts::OS.to_string(),
+            tool_argv: i.argv.to_vec(),
+            complete: i.complete,
+        },
+        biz: Biz_ {
+            id: i.biz.as_str().to_string(),
+            launcher_id: i.biz.launcher_id.to_string(),
+            game_id: i.biz.game_id.to_string(),
+            channel: i.biz.channel.to_string(),
+            sub_channel: i.biz.sub_channel.to_string(),
+            cps: i.biz.cps.to_string(),
+            hyp_base: i.endpoints.hyp.to_string(),
+            sophon_base: i.endpoints.sophon.to_string(),
+        },
+        versions: Versions {
+            new: Build {
+                tag: i.versions.new.tag.clone(),
+                build_id: i.versions.new.build_id.clone(),
+                source: i.versions.new.source.clone(),
+            },
+            old: Build {
+                tag: i.versions.old.tag.clone(),
+                build_id: i.versions.old.build_id.clone(),
+                source: i.versions.old.source.clone(),
+            },
+            diff_tags: i.diff_tags.to_vec(),
+        },
+        field: crate::manifest::MANIFEST_FIELD.to_string(),
+        audio: i.audio.to_vec(),
+        gzip_threshold: i.gzip_threshold,
+        selection_pool: SelectionPool {
+            fields: i.fields.to_vec(),
+            manifest_entries,
+            note: "--audio widens this pool; captures may come from any listed field".to_string(),
+        },
+        totals: Totals {
+            files_captured: i.selection.admitted.len() as u64,
+            chunks_blobs: i
+                .index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count() as u64,
+            bytes_downloaded: i.bytes_downloaded,
+            bytes_on_disk: i.files.iter().map(|f| f.bytes).sum(),
+        },
+        matrix,
+        files: i.files.to_vec(),
+        totals_by_set,
+    })
+}
+
 /// One file under the artifact root, as both index documents record it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+
 pub struct FileEntry {
     /// Artifact-relative, `/`-separated.
     pub path: String,
@@ -547,6 +706,203 @@ mod tests {
             sha256: hash::sha256_hex(b"body"),
             encoding: encoding_of(rel_path),
         }
+    }
+
+    /// Everything a `ManifestInput` borrows, owned, so a test can build one
+    /// without a lifetime puzzle.
+    ///
+    /// Spelled out field by field rather than derived, on purpose: a fixture
+    /// assembled from `Default` would quietly follow every default a future edit
+    /// introduces, and the point of these tests is to pin the document's shape
+    /// rather than let it drift.
+    struct Fixture {
+        versions: crate::config::VersionPair,
+        selection: crate::select::Selection,
+        index: crate::blobs::ChunkIndex,
+        biz: crate::biz::Biz,
+        endpoints: crate::biz::Endpoints<'static>,
+        diff_tags: Vec<String>,
+        audio: Vec<String>,
+        fields: Vec<String>,
+        argv: Vec<String>,
+        diffs: Vec<crate::manifest::diff::FieldDiff>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Fixture {
+                versions: crate::config::VersionPair {
+                    old: crate::config::VersionRef {
+                        tag: "7.0.0".to_string(),
+                        build_id: "oldbuild".to_string(),
+                        source: "diff_tags[0]".to_string(),
+                    },
+                    new: crate::config::VersionRef {
+                        tag: "7.1.0".to_string(),
+                        build_id: "newbuild".to_string(),
+                        source: "main.tag".to_string(),
+                    },
+                    diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
+                },
+                selection: crate::select::Selection {
+                    admitted: Vec::new(),
+                    rejected: Vec::new(),
+                    forced_skipped: Vec::new(),
+                    matrix: Vec::new(),
+                    bytes_admitted: 0,
+                    budget: crate::select::Budget::capped(10_000),
+                },
+                index: crate::blobs::ChunkIndex {
+                    schema_version: crate::SCHEMA_VERSION,
+                    blobs: Vec::new(),
+                    sets: BTreeMap::new(),
+                },
+                biz: crate::biz::Biz::resolve(crate::cli::Biz::Hk4eGlobal),
+                endpoints: crate::biz::Endpoints::owned(
+                    "https://hyp.example".to_string(),
+                    "https://sophon.example".to_string(),
+                ),
+                // Two tags as served, neither of them either half of the pair, so
+                // the document cannot source `diff_tags` out of `versions`.
+                diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
+                audio: vec!["audio_1".to_string()],
+                fields: vec!["game".to_string()],
+                argv: vec!["gircap".to_string(), "capture".to_string()],
+                // `common + added` is what `selection_pool.manifest_entries`
+                // records, so a fixture with real counts is what pins that
+                // arithmetic. Zeros would pass either way and so would say
+                // nothing about it.
+                diffs: vec![crate::manifest::diff::FieldDiff {
+                    field: "game".to_string(),
+                    counts: crate::manifest::diff::FieldCounts {
+                        common: 40,
+                        identical: 25,
+                        added: 3,
+                        removed: 7,
+                    },
+                    scores: Vec::new(),
+                    rows: Vec::new(),
+                    pool: crate::manifest::diff::ReusePool::default(),
+                }],
+            }
+        }
+
+        fn input<'a>(&'a self, files: &'a [FileEntry]) -> ManifestInput<'a> {
+            ManifestInput {
+                // A fixed instant, so `capture.id` and `captured_at` are the same
+                // on every run and can be asserted against literally.
+                started: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+                    .expect("fixture instant")
+                    .with_timezone(&chrono::Utc),
+                biz: &self.biz,
+                endpoints: &self.endpoints,
+                versions: &self.versions,
+                diff_tags: &self.diff_tags,
+                audio: &self.audio,
+                fields: &self.fields,
+                gzip_threshold: 1024,
+                diffs: &self.diffs,
+                selection: &self.selection,
+                index: &self.index,
+                bytes_downloaded: 4_096,
+                files,
+                argv: &self.argv,
+                complete: true,
+            }
+        }
+    }
+
+    fn entry(path: &str, bytes: u64) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            bytes,
+            md5: "0".repeat(32),
+            sha256: "0".repeat(64),
+            encoding: hash::Encoding::Identity,
+        }
+    }
+
+    #[test]
+    fn the_manifest_is_whole_when_build_manifest_returns_it() {
+        // **The invariant that `files: Vec::new()` broke.** `build_manifest` used
+        // to hand back a document with an empty `files[]` and
+        // `bytes_on_disk: 0`, leaving the caller to overwrite both afterwards.
+        // For that window the document claimed the bundle held no files at all,
+        // and its own doc comment claimed every field was a measurement the run
+        // already had - false for precisely the two fields that needed the tree
+        // walked.
+        //
+        // So the assertion is deliberately not "the caller filled it in", which
+        // is the only thing the old shape could be tested for at all. It is that
+        // the returned document is *already* correct, leaving no second step
+        // that could be forgotten, skipped, or reordered past something that
+        // reads the document.
+        let f = Fixture::new();
+        // Uneven, and deliberately not summing to a round number: 1 + 2 048 + 33
+        // = 2 082, which a hardcoded total would not match by accident.
+        let files = vec![entry("a/one.bin", 1), entry("b/two.bin", 2_048), entry("c", 33)];
+
+        let m = build_manifest(&f.input(&files)).expect("manifest");
+
+        assert_eq!(
+            m.files.len(),
+            files.len(),
+            "files[] came back empty or short: the document is not whole on return"
+        );
+        for (got, want) in m.files.iter().zip(files.iter()) {
+            assert_eq!(got.path, want.path);
+            assert_eq!(got.bytes, want.bytes);
+        }
+        // Summed from the listing rather than carried beside it, so the two
+        // cannot disagree about how big the bundle is.
+        assert_eq!(m.totals.bytes_on_disk, 2_082);
+        assert_eq!(
+            m.totals.bytes_on_disk,
+            m.files.iter().map(|f| f.bytes).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn an_empty_listing_yields_a_zero_total_rather_than_an_unset_one() {
+        // The other half of the same invariant. A run that admitted nothing still
+        // produces a document; the question is whether "no files" reads as "zero
+        // bytes" or as "not counted yet". Under the old two-phase shape those two
+        // were indistinguishable - both were `0` - which is exactly how the bug
+        // hid behind a passing assertion.
+        let f = Fixture::new();
+        let m = build_manifest(&f.input(&[])).expect("manifest");
+        assert!(
+            m.files.is_empty(),
+            "an empty listing must stay empty, not pick up rows"
+        );
+        assert_eq!(m.totals.bytes_on_disk, 0);
+        assert_eq!(
+            m.totals.bytes_downloaded, 4_096,
+            "the download total is a separate measurement and must survive"
+        );
+    }
+
+    #[test]
+    fn one_byte_of_the_listing_moves_the_total_by_exactly_one_byte() {
+        // Pins that the total is a *sum* - not a constant, and not a count. If a
+        // future edit sourced it from somewhere else, the chunk index or
+        // `log.bytes_in()` say, this is the test that catches it: the listing
+        // and the download total are deliberately different numbers here.
+        let f = Fixture::new();
+        let one = build_manifest(&f.input(&[entry("a", 100)]))
+            .expect("manifest")
+            .totals
+            .bytes_on_disk;
+        let two = build_manifest(&f.input(&[entry("a", 101)]))
+            .expect("manifest")
+            .totals
+            .bytes_on_disk;
+        assert_eq!(one, 100);
+        assert_eq!(two, 101);
+        assert_ne!(
+            one, 4_096,
+            "the fixture's byte total must not coincide with bytes_downloaded"
+        );
     }
 }
 

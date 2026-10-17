@@ -675,6 +675,19 @@ pub fn reconcile(
     out
 }
 
+/// The `matching_field` every run scores first, and the one every later stage
+/// needs whatever class a capture lands in.
+///
+/// `game` is the one mandatory field: `--audio` widens the *selection pool* but
+/// never makes the game field optional. Naming it here rather than inlining it
+/// at each call site gives the rule "game is never optional" one address, and
+/// `build_manifest` — which stamps the name into `MANIFEST.json -> field` — needs
+/// the same value the capture selected on.
+///
+/// It lived in `run.rs`, where `build_manifest` could reach it because it was
+/// there too.
+pub const MANIFEST_FIELD: &str = "game";
+
 /// The two things a decoded manifest must satisfy before any byte of it is
 /// trusted: its decompressed MD5 matches the declared checksum, and the decoded
 /// counts reconcile against the declared stats.
