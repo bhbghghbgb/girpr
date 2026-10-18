@@ -28,7 +28,9 @@ the chunks the artifact says it must fetch.
 |---|---|
 | [`docs/00-spec.md`](docs/00-spec.md) | what it captures, from where, and the invariants it asserts |
 | [`docs/01-artifact-schema.md`](docs/01-artifact-schema.md) | the bundle's byte layout and every field of every document |
-| [`docs/02-plan.md`](docs/02-plan.md) | module tree, build order, tests, risks |
+| [`docs/02-plan.md`](docs/02-plan.md) | the crate's shape, its test strategy and its risks |
+| [`docs/03-design-notes.md`](docs/03-design-notes.md) | why the awkward parts are the way they are |
+| [`docs/04-bundle-differ.md`](docs/04-bundle-differ.md) | the cross-commit bundle comparison, and what it can and cannot see |
 
 Start with the spec.
 
@@ -40,8 +42,8 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈129 MiB for `hk4e_global` 7.0.0 → 7.1.0, of which
-`manifests/` is ≈43 MB and `chunks/` ≈28 MB) and regenerable, so they belong on
+bundles are large (≈129 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`manifests/` is ≈41 MiB and `chunks/` ≈26 MiB) and regenerable, so they belong on
 disk, not in history. **This is the project location**: anything a test or
 another tool is expected to rely on lives here.
 
@@ -77,23 +79,28 @@ difference between a five-second loop and a two-minute one.
   to be kept.
 
 **Compatibility.** Every document carries `"schema_version": 1`, and a reader
-should reject an unknown one rather than guess. Additive changes leave bundles
-readable — `verify` reports what it cannot re-derive instead of refusing the
-bundle — so a bundle you already paid for does not become unreadable because the
-tool gained a document. A bundle whose `schema_version` has moved on, or whose
-selfcheck does not pass, is not a fixture: re-capture it.
+should reject an unknown one rather than guess. A bundle whose documents all
+validate is a bundle every reader can use — which is why a **new field** is
+additive and a **new document** is not: adding either leaves `schema_version` at
+`1`, but a new document becomes required and the bundles that predate it are
+stale by definition. `verify` reports what it cannot re-derive instead of
+refusing, so a bundle whose `selfcheck` disagrees is a finding rather than an
+unreadable tree; a bundle *missing a required document* is refused, because a
+fixture that half-answers a question is worse than one that does not answer it.
+A bundle whose `schema_version` has moved on, or whose selfcheck does not pass,
+is not a fixture: re-capture it.
 
 ## Status
 
-Built through milestone **M13**. A live `capture` writes the `api/` documents
-byte-exact — including `api/tag_probe.json` and `api/error_shapes.json`, the two
-generated measurements — fetches and verifies the `game` manifest for both
-builds, diffs them, and assembles a **complete artifact**:
+Complete. A live `capture` writes the `api/` documents byte-exact — including
+`api/tag_probe.json` and `api/error_shapes.json`, the two generated
+measurements — fetches and verifies the `game` manifest for both builds, diffs
+them, and assembles a **complete artifact**:
 
 | | shipped |
 |---|---|
 | `api/` | six response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `requests.ndjson` |
-| `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json` |
+| `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json`, `matrix.json` |
 | `chunks/` | the three retention sets, every blob, `index.json` with `build_id` on each reference |
 | `game/` / `expected/` | the fixture and the ground truth, per capture |
 | `patchmaps/` | one per capture: where every chunk's bytes come from |
@@ -101,27 +108,31 @@ builds, diffs them, and assembles a **complete artifact**:
 | commands | `capture`, `verify`, `materialize`, `list` |
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
-Both reference bundles — `hk4e_global` 7.0.0 → 7.1.0 — **verify 90/90, exit
-`0`**. The end-to-end check is **automated**: the bundle is replayed
-over loopback and the real `girpr` binary is run against it, once per capture,
-by `girpr`'s `tests/artifact_bridge.rs`. All eight captures exit `0` and every
-`download_bytes` matches its patchmap to the byte (§8.1.1).
+The three reference bundles under `artifacts/hk4e_global/7.0.0__7.1.0/` — the
+newest, `20261017T123335Z`, is the one the tool writes today — **verify 90/90,
+exit `0`**.
+
+The end-to-end check is **automated but expensive**: the bundle is replayed over
+loopback and the real `girpr` binary is run against it, once per capture, by
+`girpr`'s `tests/artifact_bridge.rs`. It needs exactly one bundle and is
+`#[ignore]`d for cost, so it is run by hand:
 
 ```powershell
-# in the girpr package. Expensive (~2 min) and run by hand only when a
-# repair-spec change is suspected; needs a bundle and FAILS without one.
-cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+# in the girpr package. Needs one bundle and FAILS without one.
+$env:GIRPR_ARTIFACT_BUNDLE = "<path to one bundle>"
+cargo test -p girpr --test artifact_bridge -- --ignored --nocapture --test-threads=1
 ```
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
 the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, and the
-consumer never
-regenerates or repairs a bundle — it reads `patchmaps/`, `expected/` and `game/`,
-and runs `gircap verify` as its precondition.
+consumer never regenerates or repairs a bundle — it reads `patchmaps/`,
+`expected/` and `game/`, and runs `gircap verify` as its precondition.
 
-The build order lives in `docs/02-plan.md` §3 and each module's own header
-says which milestone it lands in.
+The crate's shape, its test strategy and its risks are in `docs/02-plan.md`;
+`docs/03-design-notes.md` holds the reasoning behind the parts that look
+surprising, and `docs/04-bundle-differ.md` is the instrument for comparing two
+commits' bundles.
 
 ```powershell
 # artifacts/hk4e_global/<old>__<new>/<id>/{api,manifests,diff,chunks,game,expected,patchmaps,verify}/

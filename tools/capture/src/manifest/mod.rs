@@ -22,6 +22,7 @@
 
 use serde::Serialize;
 
+use crate::failure::{Failure, assertion};
 use crate::hash;
 use crate::hash::Encoding;
 use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
@@ -29,6 +30,7 @@ use crate::hyp::GetBuild;
 
 pub mod diff;
 pub mod dump;
+pub mod fetch;
 pub mod proto;
 
 pub use dump::StoredAs;
@@ -440,6 +442,8 @@ pub async fn capture(
             .chuncks
     };
     let decoded = decode_counts(&entries);
+    // One pass over the archive for both digests it records.
+    let stored_digests = hash::md5_sha256(&fetched.body);
 
     let meta = ManifestMeta {
         schema_version: crate::SCHEMA_VERSION,
@@ -470,8 +474,8 @@ pub async fn capture(
             path: String::new(),
             bytes: fetched.body.len() as u64,
             container: "zstd",
-            md5_compressed: hash::md5_hex(&fetched.body),
-            sha256_compressed: hash::sha256_hex(&fetched.body),
+            md5_compressed: stored_digests.md5,
+            sha256_compressed: stored_digests.sha256,
             md5_decompressed: md5_decompressed.clone(),
             bytes_decompressed: decompressed.len() as u64,
             encoding: Encoding::Identity,
@@ -496,7 +500,7 @@ pub async fn capture(
         tag: tag.to_string(),
         build_id: build.build_id.clone(),
         matching_field: matching_field.to_string(),
-        seq: fetched.seq(),
+        seq: fetched.seq,
         raw: fetched.body,
         entries,
         meta,
@@ -522,10 +526,24 @@ fn render_size(v: Option<&crate::hyp::IntOrStr>) -> String {
 }
 
 /// Count the decode: totals, the largest chunk, and the six structural counters.
+///
+/// **One pass, and an O(1) duplicate test.** Every number this returns is
+/// accumulated in the loop below. It used to re-walk the same entries five more
+/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`, and
+/// to call `chunk_bytes()` for a sixth — a sum the chunk loop had already
+/// computed as its `cursor`, whenever the chunks happened to tile. And the
+/// duplicate check was `Vec::contains`, which is 2 744² / 2 ≈ 3.8 M string
+/// comparisons for the `game` field alone, on a value this module's own `diff`
+/// says must never be quadratic.
 pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
     let mut s = Structure::default();
-    let mut seen: Vec<&str> = Vec::with_capacity(entries.len());
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(entries.len());
     let mut max_chunk = 0_u64;
+    let mut files = 0_u64;
+    let mut folders = 0_u64;
+    let mut total_chunks = 0_u64;
+    let mut total_file_bytes = 0_u64;
 
     for e in entries {
         if e.file.is_empty() {
@@ -537,18 +555,38 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         if !e.file.is_ascii() {
             s.non_ascii_paths += 1;
         }
-        if seen.contains(&e.file.as_str()) {
+        if !seen.insert(e.file.as_str()) {
             s.duplicate_paths += 1;
-        } else {
-            seen.push(&e.file);
         }
+
+        if e.is_folder {
+            folders += 1;
+        } else {
+            files += 1;
+            // `.max(0) as u64`, which is the convention `diff.rs` already uses
+            // for every byte it sums. A negative `size` is a manifest claiming a
+            // file of -1 bytes, and `as u64` alone turns that into 18.4
+            // quintillion — which then lands in `total_file_bytes` in the
+            // artifact and in `reconcile` as a mismatch against the chunk sum.
+            total_file_bytes = total_file_bytes.saturating_add(e.size.max(0) as u64);
+        }
+        total_chunks += e.chunks.len() as u64;
 
         let mut ascending = true;
         let mut gapless = true;
         let mut cursor = 0_i64;
+        // `Σ uncompressed_size`, which is what `chunk_bytes()` recomputed on a
+        // second walk. For a gapless file it is also `cursor`, so the two agree;
+        // for a gapful one only this sum is meaningful, which is why it is
+        // accumulated rather than read off the cursor.
+        let mut chunk_bytes = 0_i64;
         for (i, c) in e.chunks.iter().enumerate() {
-            if c.compressed_size as u64 > max_chunk {
-                max_chunk = c.compressed_size as u64;
+            // Same convention as `total_file_bytes` above, and the same reason:
+            // this is the number recorded as `max_chunk_compressed_bytes`, the
+            // field documented as what bounds the tool's whole-chunk buffering.
+            let compressed = c.compressed_size.max(0) as u64;
+            if compressed > max_chunk {
+                max_chunk = compressed;
             }
             if i > 0 && c.offset <= e.chunks[i - 1].offset {
                 ascending = false;
@@ -556,7 +594,21 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             if c.offset != cursor {
                 gapless = false;
             }
-            cursor = c.offset + c.uncompressed_size;
+            // `checked_add`, because this counter is a *measurement* and must not
+            // panic on the thing it measures. A manifest declaring
+            // `offset = i64::MAX` overflowed here: an abort in debug and test
+            // builds — so `cargo test` itself would die — and a silent wrap in
+            // release, which reports a file as tiled when nothing was checked.
+            // An offset that cannot be added to is a file larger than any file,
+            // so the tiling is broken by definition.
+            cursor = match c.offset.checked_add(c.uncompressed_size) {
+                Some(next) => next,
+                None => {
+                    gapless = false;
+                    i64::MAX
+                }
+            };
+            chunk_bytes = chunk_bytes.saturating_add(c.uncompressed_size);
         }
         // A folder carries no bytes, so none of the byte-level properties apply
         // to it; counting one would report a violation on every folder entry and
@@ -577,22 +629,18 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         if !gapless {
             s.non_gapless_files += 1;
         }
-        if e.chunk_bytes() != e.size {
+        if chunk_bytes != e.size {
             s.size_mismatch_files += 1;
         }
     }
 
     Decoded {
         entries: entries.len() as u64,
-        files: entries.iter().filter(|e| !e.is_folder).count() as u64,
-        folders: entries.iter().filter(|e| e.is_folder).count() as u64,
-        total_chunks: entries.iter().map(|e| e.chunks.len() as u64).sum(),
+        files,
+        folders,
+        total_chunks,
         max_chunk_compressed_bytes: max_chunk,
-        total_file_bytes: entries
-            .iter()
-            .filter(|e| !e.is_folder)
-            .map(|e| e.size as u64)
-            .sum(),
+        total_file_bytes,
         structure: s,
     }
 }
@@ -628,6 +676,71 @@ pub fn reconcile(
     out
 }
 
+/// The `matching_field` every run scores first, and the one every later stage
+/// needs whatever class a capture lands in.
+///
+/// `game` is the one mandatory field: `--audio` widens the *selection pool* but
+/// never makes the game field optional. Naming it here rather than inlining it
+/// at each call site gives the rule "game is never optional" one address, and
+/// `build_manifest` — which stamps the name into `MANIFEST.json -> field` — needs
+/// the same value the capture selected on.
+///
+/// It lived in `run.rs`, where `build_manifest` could reach it because it was
+/// there too.
+pub const MANIFEST_FIELD: &str = "game";
+
+/// The two things a decoded manifest must satisfy before any byte of it is
+/// trusted: its decompressed MD5 matches the declared checksum, and the decoded
+/// counts reconcile against the declared stats.
+///
+/// Both are exit `3`. The bytes arrived intact or they did not, and either way
+/// nothing here is the network's fault — a checksum that fails is a fact about
+/// what was published, and the capture cannot be built on top of it.
+///
+/// **Lived in `run.rs`, next to nothing that could be tested without a capture.**
+/// It is [`reconcile`] plus the verification that has to precede it, and it was
+/// unable to move until `Failure` left the command dispatcher.
+pub fn verify(m: &CapturedManifest, tag: &str, field: &str) -> Result<(), Failure> {
+    if !m.meta.verified.all_green() {
+        return Err(assertion(
+            &format!("verify the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                format!(
+                    "decompressed md5 matches checksum: {}, checksum matches id suffix: {}",
+                    m.meta.verified.decompressed_md5_matches_checksum,
+                    m.meta.verified.checksum_matches_id_suffix
+                ),
+            ),
+        ));
+    }
+    let v = reconcile(&m.meta.decoded, m.meta.declared.stats.as_ref());
+    if !v.is_empty() {
+        return Err(assertion(
+            &format!("reconcile the {tag} {field} manifest"),
+            &ApiError::shape(
+                tag,
+                v.iter()
+                    .map(|(n, d, a)| format!("{n}: declared {d:?}, decoded {a}"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        ));
+    }
+    dump::note_reconciliation(m);
+    if !m.meta.decoded.structure.clean() {
+        // Recorded, not fatal: spec §3.6 says a violation must still produce
+        // a capture with the selfcheck naming what broke. M8 makes it a row.
+        tracing::warn!(
+            tag,
+            field,
+            violations = ?m.meta.decoded.structure.violations(),
+            "manifest violates a structural invariant; recorded, not fatal"
+        );
+    }
+    Ok(())
+}
+
 /// Mark the bodies in a set as stored, by request sequence number.
 pub fn mark_stored(log: &RequestLog, m: &mut CapturedManifest, path: &str) {
     let rel = path.to_string();
@@ -661,6 +774,112 @@ mod tests {
         }
     }
 
+    /// A manifest is data, and every number in it came off the wire as an
+    /// `i64`. `decode_counts` must therefore *measure* a hostile one rather than
+    /// abort on it — it is the function that exists to tell a reader what a
+    /// manifest says, and it cannot do that by dying.
+    #[test]
+    fn a_manifest_whose_arithmetic_overflows_is_measured_not_fatal() {
+        // `offset = i64::MAX` then `offset + uncompressed_size` overflowed: an
+        // abort in debug and test builds, so this line alone could kill
+        // `cargo test`, and a silent wrap in release — which would report the
+        // file as tiled when nothing had been checked.
+        let entries = vec![file("huge", vec![chunk(i64::MAX, 4096)], 4096)];
+        let d = decode_counts(&entries);
+        assert_eq!(d.structure.non_gapless_files, 1, "an unaddable offset is not a tiling");
+        assert_eq!(d.total_chunks, 1, "and the entry is still counted");
+
+        // And the reverse: a huge declared size must not become 18.4 quintillion
+        // bytes in the artifact. `as u64` alone turned -1 into 2^64-1.
+        let negative = vec![file("neg", vec![], -1)];
+        let d = decode_counts(&negative);
+        assert_eq!(d.total_file_bytes, 0, "a file of -1 B contributes 0 B");
+
+        // Same for the field the doc calls "what bounds the tool's whole-chunk
+        // buffering" — a negative compressed size must not record as ~1.8e19.
+        let mut c = chunk(0, 10);
+        c.compressed_size = -1;
+        let d = decode_counts(&[file("neg", vec![c], 10)]);
+        assert_eq!(d.max_chunk_compressed_bytes, 0, "and -1 B is not the maximum");
+
+        // A positive measurement still works, which is the half of this that has
+        // to keep working.
+        let ok = decode_counts(&[file("ok", vec![chunk(0, 10)], 10)]);
+        assert_eq!(ok.max_chunk_compressed_bytes, 100);
+        assert_eq!(ok.total_file_bytes, 10);
+    }
+
+    /// A manifest nobody can build on is refused by name, with exit `3`.
+    ///
+    /// This is the check that has to run *before* a blob is fetched, and it was
+    /// unreachable from a unit test until it moved out of the command
+    /// dispatcher: a manifest that fails A3 has no good decode to compare
+    /// against, no `chunks/`, and no bundle to capture against.
+    #[test]
+    fn a_manifest_that_cannot_be_built_on_is_refused_by_name() {
+        let good = |decoded: Decoded, stats: Option<crate::hyp::Stats>| CapturedManifest {
+            ..captured(green(), decoded, stats)
+        };
+
+        // 1. A3/A4 failed: named as the verification it is, before any
+        //    reconciliation, and the message carries both booleans.
+        let mut v = green();
+        v.decompressed_md5_matches_checksum = false;
+        let e = verify(&captured(v, Decoded::default(), None), "7.0.0", "game").unwrap_err();
+        assert_eq!(e.code, crate::exit::ExitCode::AssertionFailed, "{e:?}");
+        assert!(
+            e.detail.starts_with("verify the 7.0.0 game manifest:"),
+            "{e:?}"
+        );
+        assert!(e.detail.contains("decompressed md5 matches checksum: false"), "{e}");
+
+        // 2. A5 failed: every disagreeing stat named with both numbers.
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let wrong = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("999".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("1".into()),
+        });
+        let e = verify(&good(d, wrong), "7.0.0", "game").unwrap_err();
+        assert_eq!(e.code, crate::exit::ExitCode::AssertionFailed, "{e:?}");
+        assert!(e.detail.starts_with("reconcile the 7.0.0 game manifest:"), "{e}");
+        assert!(
+            e.detail.contains("uncompressed_size: declared Some(999), decoded 150"),
+            "{e}"
+        );
+        assert!(
+            !e.detail.contains("chunk_count"),
+            "and only the one that disagrees: {e}"
+        );
+
+        // 3. Everything green passes, and a structural violation does not stop
+        //    it — spec §3.6 says the capture still happens and M8 makes it a row.
+        let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
+        let ok = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("150".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("1".into()),
+        });
+        assert!(verify(&good(d.clone(), ok.clone()), "7.0.0", "game").is_ok());
+
+        // A gap between the chunks, which reconciles byte-for-byte anyway: the
+        // chunks still total 140, so A5 is satisfied and only §3.6's structural
+        // property is broken.
+        let holed = decode_counts(&[file("a", vec![chunk(0, 50), chunk(60, 90)], 140)]);
+        let holed_stats = Some(crate::hyp::Stats {
+            compressed_size: Some("100".into()),
+            uncompressed_size: Some("140".into()),
+            file_count: Some("1".into()),
+            chunk_count: Some("2".into()),
+        });
+        assert!(
+            verify(&good(holed, holed_stats), "7.0.0", "game").is_ok(),
+            "a structural violation is recorded, not fatal"
+        );
+    }
+
     #[test]
     fn a_clean_manifest_reports_every_structure_counter_zero() {
         let entries = vec![
@@ -678,9 +897,80 @@ mod tests {
         assert!(d.structure.violations().is_empty());
     }
 
+    /// The verification a manifest that reconciles would carry.
+    fn green() -> Verified {
+        Verified {
+            decompressed_md5_matches_checksum: true,
+            checksum_matches_id_suffix: true,
+            id_prefix_verified: false,
+        }
+    }
+
+    /// A captured manifest, assembled field by field.
+    ///
+    /// Deliberately not a `Default`-derived fixture: three of the six structs on
+    /// the way here have no honest empty state (`IdParts.prefix_semantics` and
+    /// `Stored.container` are `&'static str` that carry real claims), and adding
+    /// a `Default` to production types purely to shorten a test is the wrong
+    /// trade. What `verify` reads is `meta.verified`, `meta.decoded`,
+    /// `meta.declared` and `meta.decoded.structure`; the rest is spelled out so
+    /// that stays visible.
+    fn captured(
+        verified: Verified,
+        decoded: Decoded,
+        stats: Option<crate::hyp::Stats>,
+    ) -> CapturedManifest {
+        CapturedManifest {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            matching_field: "game".into(),
+            seq: 8,
+            raw: Vec::new(),
+            entries: Vec::new(),
+            meta: ManifestMeta {
+                schema_version: crate::SCHEMA_VERSION,
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                matching_field: "game".into(),
+                category_id: "10016".into(),
+                category_name: "Genshin Impact".into(),
+                manifest: DeclaredManifest {
+                    id: "manifest_abc".into(),
+                    checksum: "c".into(),
+                    compressed_size: "100".into(),
+                    uncompressed_size: "150".into(),
+                },
+                declared: Declared {
+                    stats,
+                    ..Declared::default()
+                },
+                id_parts: IdParts {
+                    prefix_16hex: "abc".into(),
+                    prefix_semantics: "opaque",
+                    suffix_32hex: "c".into(),
+                    suffix_equals_checksum: true,
+                },
+                stored: Stored {
+                    path: String::new(),
+                    bytes: 0,
+                    container: "zstd",
+                    md5_compressed: String::new(),
+                    sha256_compressed: String::new(),
+                    md5_decompressed: String::new(),
+                    bytes_decompressed: 0,
+                    encoding: Encoding::Identity,
+                },
+                verified,
+                decoded,
+                full_decode_written: true,
+            },
+        }
+    }
+
+    /// Each input breaks exactly one structural counter.
+    ///
     /// Spec §3.6: a violation must be *counted*, not fatal — the capture still
     /// works and the selfcheck says which property broke.
-    /// Each input breaks the property it is named for.
     ///
     /// Asserting *containment* rather than equality is deliberate, and is the honest
     /// form: the six properties are not independent. Walking a chunk list in the

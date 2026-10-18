@@ -1,4 +1,4 @@
-//! M10, end to end: a real `gircap capture` against a local mock, and then the
+//! End to end: a real `gircap capture` against a local mock, and then the
 //! whole offline half on what it wrote.
 //!
 //! **No test here can reach the network**, and that is enforced by construction
@@ -40,7 +40,7 @@ struct Scratch {
 impl Scratch {
     fn new(name: &str) -> Scratch {
         let path = std::env::temp_dir().join(format!(
-            "gircap-m10-{name}-{}-{:?}",
+            "gircap-layout-{name}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -173,9 +173,9 @@ fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
     (mock, scratch, r, bundle)
 }
 
-// ------------------------------------------------------- M10's acceptance
+// ----------------------------------------------------------------- acceptance
 
-/// M10: a captured artifact has **zero failed selfcheck rows**.
+/// A captured artifact has **zero failed selfcheck rows**.
 ///
 /// The one sentence the milestone's acceptance is written as, and the only
 /// assertion here that would be false about a real regression.
@@ -199,7 +199,7 @@ fn a_capture_leaves_no_failed_selfcheck_rows() {
     );
 }
 
-/// M10: `cargo test -p gircap` green and no network. The "no network" half is
+/// `cargo test -p gircap` green and no network. The "no network" half is
 /// the structural one: every request the capture made went to `127.0.0.1`.
 #[test]
 fn every_request_the_capture_made_went_to_the_mock() {
@@ -214,12 +214,12 @@ fn every_request_the_capture_made_went_to_the_mock() {
             "a request the mock does not own: {r:?}"
         );
     }
-    // The four HoYoPlay endpoints, in the order the capture issues them.
+    // **Only the ordering that is real.** Only `getGameBranches` carries the
+    // `package_id` that `getBuild` needs, so `branches < builds` is the invariant;
+    // anything asserting which of two *concurrent* requests the mock happened to
+    // accept first would be a test of the mock. The four HoYoPlay endpoints are
+    // issued together, because none of them depends on another.
     let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
-    let configs = order
-        .iter()
-        .position(|p| p.ends_with("/getGameConfigs"))
-        .expect("getGameConfigs");
     let branches = order
         .iter()
         .position(|p| p.ends_with("/getGameBranches"))
@@ -228,7 +228,6 @@ fn every_request_the_capture_made_went_to_the_mock() {
         .iter()
         .position(|p| p.ends_with("/getBuild"))
         .expect("getBuild");
-    assert!(configs < branches, "getGameConfigs before getGameBranches");
     assert!(
         branches < builds,
         "the branch that carries package_id is fetched before getBuild"
@@ -319,9 +318,21 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
         "the empty node is recorded, so the claim is checkable: {branches}"
     );
 
-    // The retry policy is stated in the artifact, not only in the fetcher.
+    // The retry policy is stated in the artifact, not only in the fetcher — and
+    // "stated" means *derived*. Asserting `retryable == false` for every row would
+    // pass against a hardcoded constant and would keep passing if the policy
+    // changed. Asserting the policy *relation* is the claim the field's doc
+    // makes: if the fetcher would retry this status, the document says so,
+    // whatever the answer is today.
     for r in rows {
-        assert_eq!(r["retryable"], false, "{} is not retryable: {r}", r["id"]);
+        let status = r["status"].as_u64().expect("every shape records a status");
+        let expected =
+            gircap::http::RetryPolicy::should_retry_status(u16::try_from(status).unwrap());
+        assert_eq!(
+            r["retryable"], expected,
+            "{} (status {status}) must record what the retry policy says: {r}",
+            r["id"]
+        );
     }
 }
 
@@ -371,23 +382,68 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
     );
 }
 
-/// A bundle without `api/error_shapes.json` is still a valid bundle: the file
-/// is additive, and `verify` must not have started requiring it.
+/// A bundle without `api/error_shapes.json` does not open.
+///
+/// The document used to be additive: "a bundle captured before it existed has no
+/// `api/error_shapes.json`, and that is still a valid bundle". That let a bundle
+/// drop the tool's only measurement of what the API does with a request it will
+/// not serve, and still verify clean — so "this bundle can tell you how the API
+/// fails" was true of some bundles and not others, with nothing in the bundle to
+/// tell a reader which is which.
+///
+/// The exit code is `1`, not `3`. "This directory is not a readable bundle" is
+/// already `1` for every other reason — no `MANIFEST.json`, a truncated index —
+/// and that mapping is pinned by `cli_contract`; a missing required document is
+/// the same complaint. What matters here is that it is refused at all, and that
+/// the refusal names the file rather than leaving the operator to guess between
+/// five candidates.
 #[test]
-fn a_bundle_without_the_error_shapes_document_still_verifies() {
+fn a_bundle_without_the_error_shapes_document_does_not_verify() {
     let (_m, _s, r, bundle) = capture_ok("noshapes");
     assert_eq!(r.code, 0);
     let file = bundle.join("api/error_shapes.json");
     assert!(file.is_file(), "the capture wrote it");
     std::fs::remove_file(&file).unwrap();
 
-    // The index still lists it, which is what a real pre-change bundle's does not.
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
     assert_ne!(
-        v.code, 2,
-        "verify must not demand the document: it is not in the required set\n{}{}",
+        v.code, 0,
+        "a bundle without its error shapes must not verify clean:\n{}{}",
         v.stdout, v.stderr
     );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("error_shapes.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
+}
+
+/// And the same for `materialize`, which reads the bundle through the same door.
+///
+/// Without this the requirement would be `verify`-only, and the other two
+/// commands would happily rebuild and re-list a bundle that `verify` refuses —
+/// which is the shape of an inconsistency a reader meets as a bug in `verify`.
+#[test]
+fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required() {
+    let (_m, _s, r, bundle) = capture_ok("noshapes2");
+    assert_eq!(r.code, 0);
+    std::fs::remove_file(bundle.join("api/error_shapes.json")).unwrap();
+    let dir = bundle.to_string_lossy().to_string();
+
+    for cmd in [vec!["verify", "--artifact", &dir], vec!["materialize", "--artifact", &dir]] {
+        let out = run(&cmd);
+        assert_ne!(
+            out.code, 0,
+            "{} must refuse a bundle with no error shapes:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+        assert!(
+            format!("{}{}", out.stdout, out.stderr).contains("error_shapes.json"),
+            "{} must name the document:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+    }
 }
 
 /// Every chunk id the negative probes asked for, read from the document that
@@ -583,6 +639,516 @@ fn the_bundle_has_the_shape_the_schema_documents() {
     );
 }
 
+/// The request log's rows, pinned.
+///
+/// `api/requests.ndjson` is one of the six documents that always differ run to
+/// run — `ts`, `elapsed_ms`, CDN headers, `etag` — so `tests/bundle_diff.rs`
+/// compares it with those blanked and nothing else compares it at all. That is
+/// sound for what it was built to do: two captures of the *same* binary cannot
+/// disagree about a change they both carry, so the gate catches nondeterminism
+/// and nothing else. A change to what a row *says* passes it, so the row content
+/// is pinned here instead.
+///
+/// Each line is
+///
+///     seq kind method path status bytes_in attempts stored_as range
+///
+/// with the loopback host and query-free URL prefix dropped, `ts`/`elapsed_ms`
+/// and both header maps left out, and the rows in `seq` order.
+///
+/// **The expectation is the specification.** It was dumped from a real capture
+/// and read back, not written from what the code appears to intend — which is
+/// the only way a pin like this catches a mistake rather than restating one.
+///
+/// What it catches, each confirmed by mutation rather than by argument:
+///
+/// - `bytes_in` on the seven `probe` rows, which are the only non-2xx rows this
+///   fixture produces. They must carry the real body length: zeroing them fails
+///   here and nowhere else.
+/// - `stored_as` on the six `api` rows. Zeroing them again fails here, and
+///   nothing in `verify` would, because `stored_as` is a claim about where a body
+///   was written rather than a digest it could re-derive.
+/// - the `seq` column: dense, unique, from 1. Making `reserve()` return a
+///   constant fails here.
+///
+/// What it does **not** catch, stated because a pin that only lists wins is
+/// misleading: `attempts` is 1 on every row, because this fixture never
+/// retries. Forcing it to 1 survives. So a **spurious** retry is caught and a
+/// **hidden** one is not — the pin says "nothing was retried", not "retries are
+/// recorded". `a_retry_is_recorded_as_retried` covers the other half, with a mock
+/// route that answers `503` exactly once.
+///
+/// `--jobs 1` is pinned for determinism, the same reason `bundle_diff`'s module
+/// doc gives: `seq` is assigned at reserve time, so which request gets which
+/// `seq` is a function of the network unless there is one worker.
+/// Which part of a path inventory a row belongs to.
+///
+/// The pin below lists every **document** by name and counts the rest, because
+/// the documents are the bundle's fixed skeleton — a new one appearing or an old
+/// one going missing is a real change — while `chunks/blobs/` and the assembled
+/// trees are named after chunk ids and manifest paths that legitimately move.
+fn kind_of(path: &str) -> &'static str {
+    if path.starts_with("chunks/blobs/") {
+        "blob"
+    } else if path.starts_with("game/") {
+        "game"
+    } else if path.starts_with("expected/") {
+        "expected"
+    } else {
+        "document"
+    }
+}
+
+/// Split a path inventory into (documents sorted, counts by kind).
+fn split_inventory<'a>(paths: &[&'a str]) -> (Vec<&'a str>, BTreeMap<&'a str, usize>) {
+    let mut counts: BTreeMap<&'a str, usize> = BTreeMap::new();
+    let mut docs = Vec::new();
+    for p in paths {
+        let k = kind_of(p);
+        *counts.entry(k).or_default() += 1;
+        if k == "document" {
+            docs.push(*p);
+        }
+    }
+    docs.sort_unstable();
+    (docs, counts)
+}
+
+/// `MANIFEST.json`, `verify/checksums.json` and `README.md` say the same
+/// inventory, and `d745680` showed that pinning one document is not enough —
+/// these three are still only compared between two runs of the same binary.
+///
+/// What is pinned, and why each part:
+///
+/// - every **document** path, by name. This is the bundle's skeleton, and the
+///   realistic regressions are a document appearing, disappearing, or being
+///   renamed — all of which a count would hide.
+/// - the **count** of blobs, `game/` and `expected/` rows, which move with the
+///   world rather than with the tool, and are pinned as counts deliberately.
+/// - the scalar header fields of `MANIFEST.json`: `schema_version`, `tool`, the
+///   non-URL half of `biz`, `field`, `audio`, `gzip_threshold`,
+///   `selection_pool`, `versions`' key set, `capture.complete`, and the two
+///   `totals` that count things rather than bytes.
+/// - `README.md` with **every digit run blanked**, so the prose is pinned and
+///   the sizes are not.
+///
+/// Deliberately **not** pinned, because they are the volatile cascade:
+/// `capture.id`, `capture.captured_at`, `capture.tool_argv`, `capture.host_os`,
+/// `biz.hyp_base`, `biz.sophon_base`, `totals.bytes_downloaded`,
+/// `totals.bytes_on_disk`, and every `files[]`/`entries[]` digest. A16 covers
+/// those digests, and `bundle_diff` covers the ones that move.
+#[test]
+fn the_inventory_documents_describe_the_same_bundle() {
+    let (_m, _s, _r, bundle) = capture_ok("inv");
+    let read = |p: &str| -> String { std::fs::read_to_string(bundle.join(p)).expect(p) };
+    let json = |p: &str| -> serde_json::Value { serde_json::from_str(&read(p)).expect(p) };
+
+    const MANIFEST_DOCUMENTS: &[&str] = &[
+        "api/error_shapes.json",
+        "api/getBuild.7.0.0.json",
+        "api/getBuild.7.1.0.json",
+        "api/getGameBranches.json",
+        "api/getGameConfigs.json",
+        "api/getGameDeprecatedFileConfigs.json",
+        "api/getGamePackages.json",
+        "api/requests.ndjson",
+        "api/tag_probe.json",
+        "chunks/index.json",
+        "diff/candidates.json",
+        "diff/matrix.json",
+        "diff/paths.diff.json",
+        "diff/paths.tsv",
+        "diff/reuse_pool.json",
+        "manifests/7.0.0/en-us.manifest.json",
+        "manifests/7.0.0/en-us.manifest.meta.json",
+        "manifests/7.0.0/en-us.manifest.zst",
+        "manifests/7.0.0/en-us.paths.tsv",
+        "manifests/7.0.0/game.manifest.json",
+        "manifests/7.0.0/game.manifest.meta.json",
+        "manifests/7.0.0/game.manifest.zst",
+        "manifests/7.0.0/game.paths.tsv",
+        "manifests/7.1.0/en-us.manifest.json",
+        "manifests/7.1.0/en-us.manifest.meta.json",
+        "manifests/7.1.0/en-us.manifest.zst",
+        "manifests/7.1.0/en-us.paths.tsv",
+        "manifests/7.1.0/game.manifest.json",
+        "manifests/7.1.0/game.manifest.meta.json",
+        "manifests/7.1.0/game.manifest.zst",
+        "manifests/7.1.0/game.paths.tsv",
+        "patchmaps/added.json",
+        "patchmaps/identical.json",
+        "patchmaps/partial_same_offset.json",
+        "patchmaps/removed.json",
+        "patchmaps/zero_reuse_multi.json",
+    ];
+    const CHECKSUM_DOCUMENTS: &[&str] = &[
+        "MANIFEST.json",
+        "README.md",
+        "api/error_shapes.json",
+        "api/getBuild.7.0.0.json",
+        "api/getBuild.7.1.0.json",
+        "api/getGameBranches.json",
+        "api/getGameConfigs.json",
+        "api/getGameDeprecatedFileConfigs.json",
+        "api/getGamePackages.json",
+        "api/requests.ndjson",
+        "api/tag_probe.json",
+        "chunks/index.json",
+        "diff/candidates.json",
+        "diff/matrix.json",
+        "diff/paths.diff.json",
+        "diff/paths.tsv",
+        "diff/reuse_pool.json",
+        "manifests/7.0.0/en-us.manifest.json",
+        "manifests/7.0.0/en-us.manifest.meta.json",
+        "manifests/7.0.0/en-us.manifest.zst",
+        "manifests/7.0.0/en-us.paths.tsv",
+        "manifests/7.0.0/game.manifest.json",
+        "manifests/7.0.0/game.manifest.meta.json",
+        "manifests/7.0.0/game.manifest.zst",
+        "manifests/7.0.0/game.paths.tsv",
+        "manifests/7.1.0/en-us.manifest.json",
+        "manifests/7.1.0/en-us.manifest.meta.json",
+        "manifests/7.1.0/en-us.manifest.zst",
+        "manifests/7.1.0/en-us.paths.tsv",
+        "manifests/7.1.0/game.manifest.json",
+        "manifests/7.1.0/game.manifest.meta.json",
+        "manifests/7.1.0/game.manifest.zst",
+        "manifests/7.1.0/game.paths.tsv",
+        "patchmaps/added.json",
+        "patchmaps/identical.json",
+        "patchmaps/partial_same_offset.json",
+        "patchmaps/removed.json",
+        "patchmaps/zero_reuse_multi.json",
+        "verify/selfcheck.json",
+    ];
+
+    let m = json("MANIFEST.json");
+    assert_eq!(m["schema_version"], 1);
+    assert_eq!(m["tool"]["name"], "gircap");
+    // The bases name this run's ephemeral loopback port; the identity does not.
+    assert_eq!(m["biz"]["id"], "hk4e_global");
+    assert_eq!(m["biz"]["channel"], "1");
+    assert_eq!(m["biz"]["sub_channel"], "0");
+    assert_eq!(m["biz"]["game_id"], "gopR6Cufr3");
+    assert_eq!(m["biz"]["launcher_id"], "VYTpXlbWo8");
+    assert_eq!(m["biz"]["cps"], "hyp_hoyoverse");
+    assert_eq!(m["field"], "game");
+    assert_eq!(m["audio"], serde_json::json!(["en-us"]));
+    assert_eq!(m["gzip_threshold"], 1_048_576);
+    assert_eq!(m["selection_pool"]["fields"], serde_json::json!(["game", "en-us"]));
+    assert_eq!(m["selection_pool"]["manifest_entries"], serde_json::json!({"en-us": 1, "game": 4}));
+    assert_eq!(m["capture"]["complete"], true);
+    let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
+    assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
+    assert_eq!(m["totals"]["files_captured"], 5);
+    assert_eq!(m["totals"]["chunks_blobs"], 10);
+
+    let mpaths: Vec<&str> = m["files"].as_array().unwrap().iter()
+        .map(|f| f["path"].as_str().expect("a path")).collect();
+    let (mdocs, mcounts) = split_inventory(&mpaths);
+    assert_eq!(mdocs, MANIFEST_DOCUMENTS, "MANIFEST.json documents[] changed");
+    assert_eq!(mcounts.get("blob"), Some(&10), "MANIFEST.json blob rows");
+    assert_eq!(mcounts.get("game"), Some(&5), "MANIFEST.json game rows");
+    assert_eq!(mcounts.get("expected"), Some(&3), "MANIFEST.json expected rows");
+
+    let c = json("verify/checksums.json");
+    assert_eq!(c["algorithm"], "sha256");
+    let epaths: Vec<&str> = c["entries"].as_array().unwrap().iter()
+        .map(|f| f["path"].as_str().expect("a path")).collect();
+    assert_eq!(c["file_count"], epaths.len());
+    let (cdocs, ccounts) = split_inventory(&epaths);
+    assert_eq!(cdocs, CHECKSUM_DOCUMENTS, "checksums.json documents[] changed");
+    assert_eq!(ccounts.get("blob"), Some(&10), "checksums.json blob rows");
+
+    // A16's claim, restated against the projection: every file `MANIFEST.json`
+    // lists is also checksummed, plus the three documents that cannot list
+    // themselves.
+    for p in &mpaths {
+        assert!(epaths.contains(p), "checksums.json does not cover {p}");
+    }
+
+    // README, with every digit run collapsed to `#`. The prose is the pin; the
+    // sizes are the cascade.
+    let mut skel = String::new();
+    let mut prev = false;
+    for ch in read("README.md").chars() {
+        let d = ch.is_ascii_digit();
+        skel.push(if d { if prev { ' ' } else { '#' } } else { ch });
+        prev = d;
+    }
+    const README_SKELETON: &[&str] = &[
+        "# gircap artifact",
+        "- **tool** gircap #.#.#",
+        "- **region** `hk#e_global`",
+        "- **captured** #   -# -# T# :# :# Z (`#       T#     Z`, windows)",
+        "**complete**: `#.#.#` (`sMOCKold# `) → `#.#.#` (`sMOCKnew# `)",
+        "selfcheck: **Pass** — #  of #  assertions passed",
+        "## Matrix",
+        "| class | status | capture | path | field | bytes |",
+        "|---|---|---|---|---|---|",
+        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
+        "| `zero_reuse_single` | unavailable | - | `-` | - | - |",
+        "| `zero_reuse_multi` | captured | zero_reuse_multi | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
+        "| `partial_same_offset` | captured | partial_same_offset | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
+        "| `partial_moved_offset` | unavailable | - | `-` | - | - |",
+        "| `partial_size_changed` | unavailable | - | `-` | - | - |",
+        "| `added` | captured | added | `GenshinImpact_Data/Plugins/libNew.dll` | game | - |",
+        "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #    |",
+        "| `full_reuse_reordered` | unavailable | - | `-` | - | - |",
+        "## Totals",
+        "- # files captured, #  chunk blobs stored",
+        "- #     B downloaded, #     B on disk",
+        "- selection pool: `game`, `en-us`",
+        "- `materialize_new`: # chunks",
+        "- `materialize_old`: # chunks",
+        "- `patch_fetch`: # chunks",
+        "## Re-verifying",
+        "```",
+        "gircap verify --artifact <this directory>",
+        "```",
+        "Offline: no network, no writes. Exit # if every assertion still holds.",
+    ];
+    let lines: Vec<&str> = skel.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, README_SKELETON, "README.md prose changed");
+
+    // The skeleton's counts are blanked, so the *agreement* between the two
+    // documents has to be checked on the raw bytes. A generated file that
+    // disagrees with the document it renders is worse than no file: it is the
+    // one a reader opens first, and it was wrong by exactly the assertion the
+    // close-out adds after rendering.
+    let sc = json("verify/selfcheck.json");
+    let (total, passed) = (
+        sc["counts"]["total"].as_u64().expect("counts.total"),
+        sc["counts"]["passed"].as_u64().expect("counts.passed"),
+    );
+    assert!(
+        read("README.md").contains(&format!("{passed} of {total} assertions passed")),
+        "README.md's counts disagree with verify/selfcheck.json's"
+    );
+}
+
+/// `verify/selfcheck.json` is the tool's own verdict on itself, and it is the one
+/// document a reader is most likely to trust, so its shape is pinned: the
+/// result, the counts, and the exact wording of every assertion it makes.
+///
+/// The wording is the point. `id` alone would pass if an assertion were
+/// silently narrowed — "every reused chunk's old-file slice MD5 matches" and
+/// "some reused chunk's MD5 matches" are both `A10`, and only the text tells
+/// them apart.
+#[test]
+fn the_selfcheck_document_asserts_what_it_always_asserted() {
+    let (_m, _s, _r, bundle) = capture_ok("sc");
+    let s: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(bundle.join("verify/selfcheck.json")).unwrap())
+            .expect("verify/selfcheck.json");
+
+    assert_eq!(s["result"], "pass");
+    assert_eq!(s["counts"]["failed"], 0);
+    assert_eq!(s["counts"]["total"], s["counts"]["passed"]);
+
+    let rows = s["assertions"].as_array().expect("assertions[]");
+    let mut ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().expect("id")).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids,
+        vec!["A1", "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17", "A19",
+             "A2", "A3", "A4", "A6", "A7", "A8", "A9"],
+        "the set of assertions a capture makes changed; A5, A18 and A20 are \
+         verify-only or absent by design and must stay that way"
+    );
+
+    let mut worded: Vec<String> = rows
+        .iter()
+        .map(|r| format!("{} {}", r["id"].as_str().unwrap(), r["assertion"].as_str().unwrap()))
+        .collect();
+    worded.sort();
+    worded.dedup();
+    const ASSERTIONS: &[&str] = &[
+        "A1 every API response captured has retcode == 0",
+        "A10 every reused chunk's old-file slice MD5 == uncompressed_md5",
+        "A11 chunk offsets gapless from 0, ascending, sum(uncompressed_size) == size",
+        "A12 patch_fetch disjoint from the reuse set, and a subset of materialize_new",
+        "A13 game/config.ini re-parses with game_version == --old-tag",
+        "A14 game/ contains no path outside expected/'s manifest set + the tool-read config files",
+        "A15 diff/ counts equal the recomputed set differences",
+        "A16 checksums.json covers every file written under the artifact root, and re-hashing matches",
+        "A17 each required matrix class is captured | covered_by | unavailable - never absent",
+        "A19 each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
+        "A2 getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
+        "A3 manifest blob md5(decompressed) == manifest.checksum",
+        "A4 manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque",
+        "A6 len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+        "A7 assemble(materialize_old) has md5 == old entry.md5",
+        "A8 assemble(materialize_new) has md5 == new entry.md5",
+        "A9 assemble(REUSE-from-old union patch_fetch) byte-equals assemble(materialize_new)",
+    ];
+    let got: Vec<&str> = worded.iter().map(String::as_str).collect();
+    assert_eq!(got, ASSERTIONS, "an assertion's wording changed");
+}
+/// The captured `api/` bodies are byte-exact, which is the whole reason they are
+/// stored rather than re-rendered.
+#[test]
+fn the_request_log_rows_are_what_the_spec_says_they_are() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("rows");
+    let r = capture(&mock, &scratch, &["--jobs", "1"]);
+    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("api/requests.ndjson");
+
+    const EXPECTED: &[&str] = &[
+"1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
+"2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
+"3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
+"4 api GET /hyp/getGamePackages?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 103 1 api/getGamePackages.json -",
+"5 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.1.0 200 1344 1 api/getBuild.7.1.0.json -",
+"6 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.0.0 200 1344 1 api/getBuild.7.0.0.json -",
+"7 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=6.7.0 200 50 1 - -",
+"8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_abf47822fe1d2cab22e470e6a2b43a09 200 706 1 manifests/7.0.0/game.manifest.zst -",
+"9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_412a9dbff152a4f482b470a8c466a1e8 200 719 1 manifests/7.1.0/game.manifest.zst -",
+"10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
+"11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
+"12 probe GET /cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000 404 276 1 - -",
+"13 probe GET /cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000 404 273 1 - -",
+"14 probe GET /cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 404 273 1 - -",
+"15 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=null 200 50 1 - -",
+"16 probe GET /sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword 200 55 1 - -",
+"17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+"18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+"19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
+"20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
+"21 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+"22 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+"23 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+"24 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+"25 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+"26 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747 200 1033 1 chunks/blobs/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747.zst -",
+"27 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+"28 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
+    ];
+
+    let mut got: Vec<(u64, String)> = log
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).expect("one row per line");
+            (v["seq"].as_u64().expect("seq is a number"), row_key(&v))
+        })
+        .collect();
+    got.sort_by_key(|(s, _)| *s);
+    let got_keys: Vec<&str> = got.iter().map(|(_, k)| k.as_str()).collect();
+
+    assert_eq!(
+        got_keys,
+        EXPECTED,
+        "api/requests.ndjson changed. Left is the run, right is the pin.\n\
+         A changed `bytes_in`, `stored_as` or `attempts` is a real behaviour \
+         change and needs a band-3 note; a changed `seq` means the log is no \
+         longer dense, unique, or sorted."
+    );
+}
+
+/// A retried request is recorded as retried.
+///
+/// `d745680`'s pin has `attempts` at 1 on all 28 rows, because the mock answers
+/// consistently — which meant the field said "nothing was retried" and could not
+/// tell a retry that was recorded from one that was dropped. Forcing `attempts`
+/// to 1 survived that mutation, and this is the test that would kill it.
+///
+/// `Mock::fail_once_for` arms one path to answer `503` exactly once. A `5xx` is
+/// what `RetryPolicy` retries, so the first attempt fails, the second succeeds,
+/// and the request log must say `2` — with the blob still landing, because a retry
+/// that recorded itself but lost the body would be the worse bug.
+#[test]
+fn a_retried_request_is_recorded_as_retried() {
+    // Armed on **one chunk id**, not on `/chunk/`. The negative probes request
+    // `/cdn/<build>/chunk/0000000000000000_...`, so a bare `/chunk/` needle hits
+    // a *probe* first — and `observe` does not retry, which is how the first
+    // version of this test passed with 28 rows and nothing retried. The id below
+    // is the same blob the row pin already names, so it is the same construction
+    // either way.
+    let armed = "/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e";
+    let mock = Mock::start(World::five_classes()).fail_once_for(armed);
+    let scratch = Scratch::new("retry");
+    let r = capture(&mock, &scratch, &["--jobs", "1"]);
+    assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("api/requests.ndjson");
+    let rows: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one row per line"))
+        .collect();
+
+    let retried: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|r| r["attempts"].as_u64().unwrap_or(0) > 1)
+        .collect();
+    let statuses: std::collections::BTreeSet<String> =
+        rows.iter().map(|r| r["status"].to_string()).collect();
+    assert_eq!(
+        retried.len(),
+        1,
+        "exactly one request should have been retried. rows={} statuses={:?} \
+         chunk_requests={}",
+        rows.len(),
+        statuses,
+        mock.requests().iter().filter(|r| r.path.contains("/chunk/")).count()
+    );
+
+    let row = retried[0];
+    assert_eq!(row["attempts"], 2, "one failure then one success is two attempts");
+    assert_eq!(row["status"], 200, "the retried request succeeded in the end");
+    assert_eq!(row["kind"], "chunk", "the armed route was a chunk route");
+
+    // And the body it retried for is actually in the bundle. A retry that
+    // recorded itself but dropped the bytes would pass every assertion above.
+    let stored = row["stored_as"].as_str().expect("a retried chunk is stored");
+    assert!(
+        bundle.join(stored).is_file(),
+        "the retried chunk's body is missing: {stored}"
+    );
+
+    // Every other row is still a single attempt, so the retry was not smeared
+    // across the log by an off-by-one in the counter.
+    let singles = rows
+        .iter()
+        .filter(|r| r["attempts"].as_u64() == Some(1))
+        .count();
+    assert_eq!(singles, rows.len() - 1);
+}
+
+/// One request row, reduced to what does not move between runs.
+///
+/// The host is dropped because it is an ephemeral loopback port, `range` and
+/// `stored_as` collapse to `-` when null rather than printing `None`, and the
+/// two header maps and both timestamps are left out entirely — they carry the
+/// CDN's per-response ids and the clock, and no assertion should depend on
+/// either.
+fn row_key(v: &serde_json::Value) -> String {
+    let url = v["url"].as_str().unwrap_or("-");
+    let path = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.find('/').map(|i| &rest[i..]))
+        .unwrap_or(url);
+    format!(
+        "{} {} {} {} {} {} {} {} {}",
+        v["seq"],
+        v["kind"].as_str().unwrap(),
+        v["method"].as_str().unwrap(),
+        path,
+        v["status"],
+        v["bytes_in"],
+        v["attempts"],
+        v["stored_as"].as_str().unwrap_or("-"),
+        v["range"].as_str().unwrap_or("-"),
+    )
+}
+
 /// The captured `api/` bodies are byte-exact, which is the whole reason they are
 /// stored rather than re-rendered.
 #[test]
@@ -629,7 +1195,7 @@ fn ureq_get(url: &str) -> Vec<u8> {
     all[split + 4..].to_vec()
 }
 
-/// M10: **no test touches the network.** Proven, not asserted.
+/// **No test touches the network.** Proven, not asserted.
 ///
 /// The claim is checkable from the artifact itself: `api/requests.ndjson` records
 /// the URL of every request the run made, including the manifest and chunk CDN
@@ -704,7 +1270,7 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
 
 // ------------------------------------------- the offline half, on this bundle
 
-/// M10's real payload: what the capture wrote is good enough to verify and to
+/// The real payload: what the capture wrote is good enough to verify and to
 /// rebuild, with no network involved in either step.
 #[test]
 fn the_captured_bundle_verifies_offline() {
@@ -837,7 +1403,7 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
     }
 }
 
-/// `--audio` widens the pool, which is M5's whole claim and the only reason the
+/// `--audio` widens the pool, which is its whole claim and the only reason the
 /// flag exists.
 ///
 /// The default is `en-us`, so the widening is asserted as a *difference*: with
@@ -901,11 +1467,152 @@ fn requiring_an_unavailable_class_is_exit_four() {
     assert!(detail.contains("full_reuse_reordered"), "{detail}");
 }
 
+/// The six `api` rows in `requests.ndjson` carry the path their body was
+/// written to, and nothing else is marked.
+///
+/// **The property that is easy to lose.** A null `stored_as` here means the row
+/// is a claim about where a body went, and a null claim on a body that is
+/// sitting on disk under `api/` is a falsehood in the one field a reader would
+/// use the log for. Nothing in `verify` re-derives it — it is not a digest — so
+/// only a field-level check catches it.
+///
+/// Asserted as a set equality rather than by sequence number or URL shape,
+/// because both of those are incidental: the property that matters is that the
+/// marked rows are **exactly** the bodies on disk. The tag probe and the error
+/// shapes are written to `api/` too and are correctly left unmarked — they come
+/// from different requests, and their answer is a summary rather than a stored
+/// body — so counting files would be counting the wrong thing.
+#[test]
+fn the_six_api_rows_record_where_their_body_was_written() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("stored-as");
+    let r = capture(&mock, &scratch, &[]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let log = std::fs::read_to_string(bundle.join("api").join("requests.ndjson"))
+        .expect("requests.ndjson");
+    let rows: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one json per line"))
+        .collect();
+
+    let mut marked: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r["stored_as"].as_str())
+        .filter(|p| p.starts_with("api/"))
+        .collect();
+    marked.sort_unstable();
+
+    // The bodies on disk, minus the two documents that are not bodies.
+    let mut on_disk: Vec<String> = std::fs::read_dir(bundle.join("api"))
+        .expect("api/")
+        .flatten()
+        .map(|e| format!("api/{}", e.file_name().to_string_lossy()))
+        .filter(|p| p.ends_with(".json"))
+        .filter(|p| {
+            !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json")
+        })
+        .collect();
+    on_disk.sort();
+
+    assert_eq!(
+        marked,
+        on_disk,
+        "the marked api rows must be exactly the bodies on disk, and each must exist"
+    );
+    assert_eq!(
+        marked.len(),
+        6,
+        "six metadata bodies are fetched; the count is the claim: {marked:?}"
+    );
+
+    // And the two summary documents stayed unmarked, which is the half that
+    // stops a later edit from marking everything under `api/`.
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    for row in &rows {
+        if let Some(p) = row["stored_as"].as_str() {
+            *counts.entry(p).or_default() += 1;
+        }
+    }
+    for (p, n) in &counts {
+        assert_eq!(*n, 1, "each stored path is recorded once, not per request: {p}");
+    }
+    assert!(
+        !marked.iter().any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
+        "a probe row is not a stored body: {marked:?}"
+    );
+}
+
+/// The launcher metadata is not a chunk, so `--no-chunk-blobs` still writes it.
+///
+/// `emit::fixture::build`'s prelude call carries a long comment about a bug
+/// this pins: putting `config.ini` and the scan file behind the flag left a
+/// metadata-only bundle with no `game/` at all, and A13 - "the config re-parses
+/// with `game_version == --old-tag`" - failed on a tree that simply had no
+/// config in it. A missing file reported as a broken assertion is the worst of
+/// the two: it says the tool is wrong when the tool did exactly what it was
+/// asked.
+///
+/// The neighbouring test proves nothing goes *red*; this proves the row went
+/// *green for the right reason* - because there was a file to read.
+#[test]
+fn no_chunk_blobs_still_writes_the_launcher_metadata() {
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("nobloobs-prelude");
+    let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    let config = bundle.join("game").join("config.ini");
+    assert!(
+        config.is_file(),
+        "the flag suppresses chunk blobs, not launcher metadata: no {}",
+        config.display()
+    );
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(
+        text.contains("game_version="),
+        "a config with no version cannot satisfy A13: {text}"
+    );
+
+    // The scan file lands under the path the *launcher* named, which is the
+    // point of reading `audio_pkg_scan_dir` rather than hardcoding one. The
+    // path is the file: the launcher gives a directory and the tool writes the
+    // code list to it, which is why this is not `Persistent/AudioScan.txt`.
+    let scan = bundle
+        .join("game")
+        .join("GenshinImpact_Data")
+        .join("Persistent");
+    assert!(
+        scan.is_file(),
+        "the audio scan file goes where getGameConfigs said, under that exact \
+         name: no {}",
+        scan.display()
+    );
+
+    // And A13 evaluated that file rather than reporting it missing.
+    let doc: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(bundle.join("verify").join("selfcheck.json")).unwrap(),
+    )
+    .unwrap();
+    let a13 = doc["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "A13")
+        .expect("an A13 row");
+    assert_eq!(
+        a13["ok"],
+        serde_json::Value::Bool(true),
+        "A13 must pass on a tree that has a config to read: {a13}"
+    );
+}
+
 /// `--no-chunk-blobs` stores no blobs, and the result is `incomplete` rather
 /// than `pass`: a skip is not a success.
 #[test]
-fn no_chunk_blobs_is_incomplete_not_pass() {
-    let mock = Mock::start(World::five_classes());
+fn no_chunk_blobs_is_incomplete_not_pass() {    let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);

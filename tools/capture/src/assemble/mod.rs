@@ -1,6 +1,6 @@
 //! Building a file out of chunks.
 //!
-//! **M7.** Three assemblies, and the third is the point: `old` from
+//! Three assemblies, and the third is the point: `old` from
 //! `materialize_old`, `new` from `materialize_new`, and the *patch flow* -
 //! REUSE a local slice after verifying it by MD5, FETCH otherwise - which must
 //! then byte-equal the direct `new` assembly. The first two prove the artifact
@@ -12,10 +12,11 @@ pub mod ranges;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::blobs::chunks::{FilePair, Set};
+use crate::blobs::chunks::FilePair;
 use crate::blobs::{ChunkIndex, Sources};
 use crate::hash;
 use crate::manifest::proto::SophonChunkFile;
@@ -29,27 +30,25 @@ use ranges::{Layout, Range};
 /// generic on every function below; the union reads the same and keeps
 /// [`ChunkSource::decoded`] the one place that decides how a chunk is obtained.
 #[derive(Debug, Clone)]
-pub struct ChunkSource {
-    inner: Inner,
+pub struct ChunkSource<'i> {
+    inner: Inner<'i>,
 }
 
 #[derive(Debug, Clone)]
-enum Inner {
+enum Inner<'i> {
     /// Read `chunks/blobs/<id>.zst` and decompress it.
     Disk {
         root: PathBuf,
-        index: BTreeMap<String, IndexEntry>,
+        /// Borrowed, not copied. A `BTreeMap` of every chunk's id, stored path
+        /// and md5 built at construction would be a second copy of the index's
+        /// whole id space for the life of the source.
+        index: &'i ChunkIndex,
+        /// One cell per stored blob, filled on first decode, when
+        /// [`ChunkSource::memoizing`] asked for it.
+        cache: Option<BTreeMap<String, OnceLock<Vec<u8>>>>,
     },
     /// Already-decoded bytes, keyed by chunk id.
     Memory(BTreeMap<String, Vec<u8>>),
-}
-
-/// The one fact the disk mode needs from the index: where a blob is, and what it
-/// decoded to.
-#[derive(Debug, Clone)]
-struct IndexEntry {
-    stored_path: String,
-    md5_decompressed: String,
 }
 
 /// One chunk's contribution to an assembled file.
@@ -75,6 +74,20 @@ pub struct PlanEntry {
     pub uncompressed_md5: String,
     /// Anything a reader would otherwise have to guess.
     pub note: Option<String>,
+}
+
+impl PlanEntry {
+    /// Whether this chunk's bytes come from a **different offset** in the old
+    /// file than where they land in the new one.
+    ///
+    /// One definition for the `partial_moved_offset` class, the `Totals::moved`
+    /// count and the per-entry note. It was spelled out three times, and the
+    /// three had to agree or the note would contradict the count.
+    pub fn is_moved(&self) -> bool {
+        self.source_range
+            .as_ref()
+            .is_some_and(|s| s.start != self.target_range.start)
+    }
 }
 
 /// A local range in the old file.
@@ -231,9 +244,18 @@ impl FileResult {
 /// The patch flow's result, against the direct assembly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatchOutcome {
-    /// The bytes the patch flow produced.
-    pub bytes: Vec<u8>,
-    /// `md5` of those bytes.
+    /// `md5` of the bytes the patch flow produced.
+    ///
+    /// **Not the bytes themselves.** Holding them here would keep a third copy of
+    /// a ~22 MB file alive beside `old.bytes` and `new.bytes` for the rest of the
+    /// capture, and nothing outside [`assemble`] ever read them.
+    ///
+    /// The comparison is still a **byte** comparison, and still happens where both
+    /// sides are alive; it is settled before these bytes are returned. So this does
+    /// not turn A9 into a digest-only check — see
+    /// [`Assembled::selfcheck_rows`] for what the *artifact's* A9 row compares,
+    /// which is `md5` against `md5`, and `docs/00-spec.md` §6 for what the spec
+    /// says A9 is. Those two are not the same claim, which is worth knowing.
     pub md5: String,
     /// A9: byte-equal to the direct `materialize_new` assembly.
     pub equals_new: bool,
@@ -256,7 +278,7 @@ impl PatchOutcome {
     }
 }
 
-/// Everything M7 produces for one capture.
+/// Everything this module produces for one capture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assembled {
     /// The map that describes the patch.
@@ -354,9 +376,9 @@ impl Assembled {
         self.selfcheck_rows().iter().all(|a| a.ok)
     }
 
-    /// A12, recomputed from the plan rather than read from M6.
+    /// A12, recomputed from the plan rather than read from the chunk store.
     ///
-    /// Recomputed on purpose: M6 checks it over the *planned* sets and this
+    /// Recomputed on purpose: the store checks it over the *planned* sets and this
     /// checks it over the *written* map. If the two ever disagree the map is what
     /// a consumer would follow, so the map is what has to be right.
     pub fn a12_holds(&self) -> bool {
@@ -401,34 +423,79 @@ fn layout_rows(tag: &str, layout: &Layout) -> Vec<crate::emit::selfcheck::Assert
         .collect()
 }
 
-impl ChunkSource {
+impl<'i> ChunkSource<'i> {
     /// A source that reads the bundle's stored blobs.
-    pub fn from_index(root: &std::path::Path, index: &ChunkIndex) -> ChunkSource {
-        let index = index
-            .blobs
-            .iter()
-            .filter_map(|b| {
-                b.props.stored_path.as_deref().map(|p| {
-                    (
-                        b.props.chunk_id.clone(),
-                        IndexEntry {
-                            stored_path: p.to_string(),
-                            md5_decompressed: b.props.md5_decompressed.clone(),
-                        },
-                    )
-                })
-            })
-            .collect();
+    ///
+    /// Nothing is copied out of `index` and nothing is cached: the two expensive
+    /// choices this type makes are the caller's, and both are documented on
+    /// [`ChunkSource::decoded`].
+    pub fn from_index(root: &std::path::Path, index: &'i ChunkIndex) -> ChunkSource<'i> {
         ChunkSource {
             inner: Inner::Disk {
                 root: root.to_path_buf(),
                 index,
+                cache: None,
             },
         }
     }
 
+    /// Keep every chunk this source decodes, so one referenced N times is read
+    /// and decompressed once.
+    ///
+    /// **Verify asks for this; capture does not**, and the reason is the same
+    /// fact seen from two ends.
+    ///
+    /// A capture assembles each file once per side and the repeats are close
+    /// together in time, so the page cache serves them; remembering the bytes
+    /// instead would hold the whole fixture resident, which is the one thing
+    /// capture is careful not to do.
+    ///
+    /// A `verify` is the opposite. It rebuilds every capture the index knows
+    /// about, and a blob that two captures share — which is most of them, since
+    /// sharing is the point of a blob store — is read and decompressed once per
+    /// reference. Measured on the reference bundle (`gircap verify`, 38 blobs,
+    /// 66 references):
+    ///
+    /// | | today | memoised |
+    /// |---|---|---|
+    /// | blob bytes read | 78,747,429 B across 104 opens | 27,612,723 B across 38 |
+    /// | bytes decompressed | 70,010,206 B | 39,559,611 B |
+    /// | peak resident | — | +39,559,611 B of decoded blobs |
+    ///
+    /// That last row is the price, and it is the reason this is opt-in: it is a
+    /// real increase in peak memory in exchange for less than half the I/O.
+    /// `verify` already holds every rebuilt file at once by design, so the
+    /// addition is in the same order as what it already spends.
+    ///
+    /// The cells are sized from the index rather than grown on demand, so a
+    /// chunk nobody asks for costs a `OnceLock`, not a decode.
+    pub fn memoizing(mut self) -> Self {
+        if let Inner::Disk { index, cache, .. } = &self.inner
+            && cache.is_none()
+        {
+            let cells = index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .map(|b| (b.props.chunk_id.clone(), OnceLock::new()))
+                .collect();
+            let Inner::Disk {
+                root, index, ..
+            } = std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
+            else {
+                unreachable!("just matched on Disk")
+            };
+            self.inner = Inner::Disk {
+                root,
+                index,
+                cache: Some(cells),
+            };
+        }
+        self
+    }
+
     /// A source backed by already-decoded bytes.
-    pub fn from_memory(map: BTreeMap<String, Vec<u8>>) -> ChunkSource {
+    pub fn from_memory(map: BTreeMap<String, Vec<u8>>) -> ChunkSource<'i> {
         ChunkSource {
             inner: Inner::Memory(map),
         }
@@ -437,37 +504,74 @@ impl ChunkSource {
     /// The decoded bytes of one chunk.
     ///
     /// Borrowed in memory mode and decompressed on demand from disk otherwise.
-    /// Nothing is cached across calls: the three assemblies of a 22 MB file
-    /// would otherwise hold three copies of it, and the later reads are close
-    /// enough in time for the page cache to have them anyway.
+    /// Caching is [`ChunkSource::memoizing`]'s business; this says "nothing is
+    /// cached across calls", because for capture that is the right default — the
+    /// three assemblies of a 22 MB file would otherwise hold three copies of
+    /// it.
+    ///
+    /// The md5 the index claims is checked here and not merely recorded, every
+    /// time: a store that read a corrupted blob without noticing would make
+    /// `verify` impossible, and the whole point of this milestone is that
+    /// `verify` can trust what it reads. A memoised source checks it on the
+    /// decode that fills the cell, which is still every blob it ever returns.
     pub fn decoded(&self, chunk_id: &str) -> Result<Cow<'_, [u8]>, String> {
         match &self.inner {
             Inner::Memory(m) => m
                 .get(chunk_id)
                 .map(|v| Cow::Borrowed(v.as_slice()))
                 .ok_or_else(|| format!("chunk {chunk_id} is not in the source")),
-            Inner::Disk { root, index } => {
-                let e = index
+            Inner::Disk { root, index, cache } => {
+                let cell = cache.as_ref().and_then(|c| c.get(chunk_id));
+                if let Some(held) = cell.and_then(OnceLock::get) {
+                    return Ok(Cow::Borrowed(held.as_slice()));
+                }
+                let b = index
                     .get(chunk_id)
+                    .ok_or_else(|| format!("chunk {chunk_id} is not in the index"))?;
+                let rel = b
+                    .props
+                    .stored_path
+                    .as_deref()
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
-                let path = root.join(&e.stored_path);
-                let raw =
-                    std::fs::read(&path).map_err(|io| format!("read {}: {io}", path.display()))?;
-                let out = hash::zstd_decompress(&raw, &format!("chunk {chunk_id}"))?;
-                // The index is a claim; this is the check. A store that read a
-                // corrupted blob without noticing would make M9's `verify`
-                // impossible, and the whole point of this milestone is that M9
-                // can trust what it reads.
-                if !e.md5_decompressed.is_empty() {
+                let path = root.join(rel);
+                // **Decoded from the file, not from a `Vec` of it.** Reading the
+                // whole blob first would keep the compressed bytes alive for the
+                // whole decode beside the decompressed ones; decoding straight
+                // through a buffered reader drops the compressed copy entirely, so
+                // peak is the output plus one read window.
+                //
+                // The capacity comes from the index, which carries the declared
+                // decompressed length, so the output buffer is allocated once
+                // rather than grown by doubling across ~20 reallocations.
+                let file = std::fs::File::open(&path)
+                    .map_err(|io| format!("open {}: {io}", path.display()))?;
+                let out = hash::zstd_decompress_from(
+                    std::io::BufReader::with_capacity(64 * 1024, file),
+                    &format!("chunk {chunk_id}"),
+                    Some(b.props.uncompressed_size),
+                )?;
+                if !b.props.md5_decompressed.is_empty() {
                     let got = hash::md5_hex(&out);
-                    if got != e.md5_decompressed {
+                    if got != b.props.md5_decompressed {
                         return Err(format!(
-                            "chunk {chunk_id}: {} decodes to md5 {got}, the index says {}",
-                            e.stored_path, e.md5_decompressed
+                            "chunk {chunk_id}: {rel} decodes to md5 {got}, the index says {}",
+                            b.props.md5_decompressed
                         ));
                     }
                 }
-                Ok(Cow::Owned(out))
+                match cell {
+                    // `set` either stores the value or finds the cell already
+                    // full, and both leave it populated, so handing back a
+                    // borrow is sound either way — and saves copying the decode
+                    // a second time into the caller's buffer.
+                    Some(cell) => {
+                        let _ = cell.set(out);
+                        Ok(Cow::Borrowed(
+                            cell.get().expect("a set cell is full").as_slice(),
+                        ))
+                    }
+                    None => Ok(Cow::Owned(out)),
+                }
             }
         }
     }
@@ -476,7 +580,11 @@ impl ChunkSource {
     pub fn len(&self) -> usize {
         match &self.inner {
             Inner::Memory(m) => m.len(),
-            Inner::Disk { index, .. } => index.len(),
+            Inner::Disk { index, .. } => index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count(),
         }
     }
 
@@ -484,6 +592,103 @@ impl ChunkSource {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// The largest file this tool will try to assemble, in bytes.
+///
+/// A file's `size` arrives straight off the wire as an `i64`, so a manifest can
+/// declare anything at all, including `i64::MAX`. The `.max(0)` this replaces
+/// guarded the *sign*, which is why it was there — but not the magnitude, so
+/// `size = 2^40` was a 1 TB allocation attempt. That is not a panic and so not
+/// catchable: it is an abort the tool cannot report and cannot recover from,
+/// which is the worst of the three outcomes.
+///
+/// 1 GiB is ~47x the largest file in the reference bundle (22 662 068 B), so no
+/// legitimate fixture comes near it, and past this line "this manifest is wrong"
+/// is a more useful answer than "this machine ran out of memory".
+///
+/// **One guard, both callers.** `assemble_side` and `materialize::rebuild` used
+/// to each carry their own `vec![0u8; size.max(0) as usize]`, so a hostile
+/// manifest reached the same abort by two routes. They share [`tile`], so this
+/// is checked once.
+pub const MAX_ASSEMBLY_BYTES: u64 = 1 << 30;
+
+/// Tile one file from its chunks, and say why it could not.
+///
+/// **One implementation for both callers.** A capture tiles the manifest entry
+/// it was handed; `gircap materialize` tiles the references recorded in
+/// `chunks/index.json`. Same algorithm, same three ways to fail — and they were
+/// written out twice, in two phrasings, so a reader of one had to learn a second
+/// vocabulary to read the other.
+///
+/// ## What carries the difference: the label
+///
+/// The only thing that genuinely differs is *which side* is being rebuilt, and
+/// that belongs in the label rather than in three parallel sentence templates:
+///
+/// ```text
+/// 7.0.0 GenshinImpact_Data/Plugins/HoYoChannel.dll                (capture)
+/// 7.0.0 GenshinImpact_Data/Plugins/HoYoChannel.dll (materialize_old)  (materialize)
+/// ```
+///
+/// So the three messages are the same in both paths, and carry both meanings,
+/// because the words describe the *fact* rather than the caller:
+///
+/// | failure | one wording for both |
+/// |---|---|
+/// | the layout breaks A11 | `does not satisfy A11 — …` |
+/// | a chunk's range is not inside the file | `range {r} is outside the {total} B file` |
+/// | a chunk decoded to the wrong length | `decoded to {n} B but its range is {r}` |
+///
+/// "is outside the *N* B file" replaced two older phrasings: capture said the
+/// range "does not fit a *N* B **buffer**", which describes the tool's
+/// allocation rather than the fact; materialize said it "is outside the file",
+/// which is right but omits the size a reader would want. The new sentence is
+/// true of both and says more.
+///
+/// These strings are **failure diagnostics, not artifact bytes**: an assembly
+/// error aborts the capture before the bundle is finished, so nothing here
+/// reaches a written file. That is why changing them is a deliberate act rather
+/// than a band-3 concern.
+///
+/// The range is checked **before** the chunk is decoded, so a rebuild that is
+/// going to be refused does not first inflate every blob to find out. That was
+/// already capture's order; `materialize` used the other one, and the only
+/// observable difference is which message a file that is wrong in both ways at
+/// once reports.
+pub fn tile<'a>(
+    label: &str,
+    layout: &Layout,
+    total: i64,
+    ids: &[&str],
+    decoded: impl Fn(&str) -> Result<std::borrow::Cow<'a, [u8]>, String>,
+) -> Result<Vec<u8>, String> {
+    if !layout.is_clean() {
+        return Err(format!(
+            "{label}: does not satisfy A11 — {}",
+            layout.violations.join("; ")
+        ));
+    }
+    if !(0..=MAX_ASSEMBLY_BYTES as i64).contains(&total) {
+        return Err(format!(
+            "{label}: declares {total} B, past the {MAX_ASSEMBLY_BYTES} B this tool will assemble"
+        ));
+    }
+    let mut bytes = vec![0_u8; total as usize];
+    for (id, r) in ids.iter().zip(&layout.ranges) {
+        let dst = bytes.get_mut(r.start as usize..r.end as usize).ok_or_else(|| {
+            format!("{label}: chunk {id} range {r} is outside the {total} B file")
+        })?;
+        let d = decoded(id)?;
+        if d.len() as i64 != r.len() {
+            return Err(format!(
+                "{label}: chunk {id} decoded to {} B but its range is {r}",
+                d.len()
+            ));
+        }
+        dst.copy_from_slice(&d);
+    }
+    Ok(bytes)
 }
 
 /// Assemble one file's side from its retained chunks.
@@ -496,38 +701,16 @@ fn assemble_side(
     tag: &str,
     src: &ChunkSource,
 ) -> Result<FileResult, String> {
-    let parts: Vec<(i64, i64)> = entry
-        .chunks
-        .iter()
-        .map(|c| (c.offset, c.uncompressed_size))
-        .collect();
-    let layout = Layout::of(&parts, entry.size);
-    if !layout.is_clean() {
-        return Err(format!(
-            "{tag} {}: does not satisfy A11 — {}",
-            entry.file,
-            layout.violations.join("; ")
-        ));
-    }
-    let mut bytes = vec![0_u8; entry.size.max(0) as usize];
-    for (i, (c, r)) in entry.chunks.iter().zip(&layout.ranges).enumerate() {
-        let Some(dst) = bytes.get_mut(r.start as usize..r.end as usize) else {
-            return Err(format!(
-                "{tag} {}: chunk {i} range {r} does not fit a {} B buffer",
-                entry.file, entry.size
-            ));
-        };
-        let decoded = src.decoded(&c.id)?;
-        if decoded.len() as i64 != r.len() {
-            return Err(format!(
-                "{tag} {}: chunk {i} ({}) decoded to {} B but its range is {r}",
-                entry.file,
-                c.id,
-                decoded.len()
-            ));
-        }
-        dst.copy_from_slice(&decoded);
-    }
+    let layout = Layout::of(
+        entry
+            .chunks
+            .iter()
+            .map(|c| (c.offset, c.uncompressed_size)),
+        entry.size,
+    );
+    let ids: Vec<&str> = entry.chunks.iter().map(|c| c.id.as_str()).collect();
+    let label = format!("{tag} {}", entry.file);
+    let bytes = tile(&label, &layout, entry.size, &ids, |id| src.decoded(id))?;
     Ok(FileResult {
         tag: tag.to_string(),
         md5: hash::md5_hex(&bytes),
@@ -542,7 +725,7 @@ fn assemble_side(
 ///
 /// Six parameters is past the point where a reader can hold them in their head,
 /// and three of them are always the same three things.
-pub struct AssemblyInput<'a> {
+pub struct AssemblyInput<'a, 'i> {
     /// The pair to assemble.
     pub pair: &'a FilePair,
     /// The `matching_field` to stamp on the map.
@@ -552,10 +735,10 @@ pub struct AssemblyInput<'a> {
     /// Where chunks are fetched from, for the `url` of a FETCH entry.
     pub sources: &'a Sources,
     /// Where decoded bytes come from.
-    pub chunks: &'a ChunkSource,
+    pub chunks: &'a ChunkSource<'i>,
 }
 
-/// Assemble one file pair and return everything M7 produces.
+/// Assemble one file pair and return everything this module produces.
 ///
 /// The flow, per new-side chunk, in the order the spec states it:
 ///
@@ -564,7 +747,7 @@ pub struct AssemblyInput<'a> {
 /// 2. Verify the local slice against the declared decompressed MD5 (A10).
 /// 3. If that fails, FETCH instead — and say so, because a silently downgraded
 ///    REUSE is indistinguishable from one that was never a candidate.
-pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
+pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     let pair = input.pair;
     let old_entry = pair.old.as_ref().map(|o| &o.entry);
     let new_entry = pair.new.as_ref().map(|n| &n.entry);
@@ -580,46 +763,77 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Result<Assembled, String> {
 
     // The patch flow needs the old file's *bytes* to verify a REUSE against, so
     // it is assembled once here and handed in rather than rebuilt per chunk.
-    let (plan, patch) = match (new_entry, &old) {
+    //
+    // The flow's own bytes come back beside its outcome rather than inside it,
+    // because **they are needed for exactly one comparison and then never
+    // again**. Keeping them on the outcome would hold them for the rest of the
+    // capture — alongside `old.bytes` and `new.bytes`, ~68 MB of peak residency
+    // for a file the bundle then writes to disk and stops caring about.
+    let (plan, patch, patch_bytes) = match (new_entry, &old) {
         (Some(ne), Some(o)) => {
-            let (plan, outcome) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
-            (Some(plan), Some(outcome))
+            let (plan, outcome, bytes) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
+            (Some(plan), Some(outcome), Some(bytes))
         }
         // `added`: no old side, so there is nothing to *patch from* - but there
         // is still a plan, and every entry in it is FETCH. A consumer handed
-        // this path has to download every new-side chunk, and `plan: null` /
-        // `totals: null` told it nothing about that. Leaving them null made
+        // this path has to download every new-side chunk, so `plan: null` /
+        // `totals: null` would tell it nothing about that. Leaving them null makes
         // `expectations.download_bytes` fall back to a defaulted `0`, which is
-        // not "unrecorded" but *false*: the one-chunk file in the M11 bundle
-        // costs 114 357 B to repair and the artifact claimed zero.
-        (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None),
+        // not "unrecorded" but *false*: the one-chunk `added` file costs
+        // 114 357 B to repair and the artifact would claim zero.
+        (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None, None),
         // `removed`: no new side, so there is no plan and no target.
-        (None, _) => (None, None),
+        (None, _) => (None, None, None),
     };
 
-    let map = build_map(input, old.as_ref(), new.as_ref(), plan.as_deref())?;
-    let mut out = Assembled {
+    // A9 is a comparison between two results that only exist together, so it is
+    // settled here rather than inside the flow — and `patch_bytes` dies on the
+    // next line, so the ~22 MB is not resident while the bundle is written.
+    //
+    // **A byte comparison, not a digest comparison**, because `docs/00-spec.md` §6
+    // specifies A9 as byte equality. Both buffers are therefore necessarily alive
+    // for the compare; what this buys is that they are not alive afterwards.
+    //
+    // **Two things worth knowing about that verdict.**
+    //
+    // First, `equals_new` reaches production only through the `assembled` log
+    // line in `emit::fixture`. The *artifact's* A9 row is built by
+    // `selfcheck_rows` from `p.md5` against `n.md5` — a digest comparison. So the
+    // spec's byte-equality assertion and the bundle's A9 row are not the same
+    // claim; closing that gap is artifact-visible and is not done here.
+    //
+    // Second, that gap is why this **cannot** be covered by a negative test. Every
+    // reachable disagreement also changes the digests, so the row goes red either
+    // way, and replacing this comparison with a constant `true` passes the entire
+    // suite — verified by mutation, twice.
+    // `a9_is_red_when_the_patch_flow_and_the_direct_assembly_disagree` pins the
+    // part that *is* reachable: that a disagreement is visible at all.
+    let mut patch = patch;
+    if let (Some(n), Some(p)) = (&new, &mut patch) {
+        p.equals_new = patch_bytes.as_ref().is_some_and(|b| b == &n.bytes);
+    }
+    drop(patch_bytes);
+
+    // The plan is **moved**, not borrowed: `build_map` only ever reads it, and a
+    // `to_vec()` on the way in would deep-copy every entry's ids, URLs, notes and
+    // sizes — ~300 allocations per capture — to hand it a copy nobody mutates.
+    let map = build_map(input, old.as_ref(), new.as_ref(), plan)?;
+    Ok(Assembled {
         map,
         old,
         new,
         patch,
-    };
-    // A9 is a comparison between two results that only exist together, so it is
-    // settled here rather than inside the flow.
-    if let (Some(n), Some(p)) = (&out.new, &mut out.patch) {
-        p.equals_new = p.bytes == n.bytes;
-    }
-    Ok(out)
+    })
 }
 
 /// The patch flow proper.
 fn patch_flow(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     new_entry: &SophonChunkFile,
     old: &FileResult,
     old_tag: &str,
     new_tag: &str,
-) -> Result<(Vec<PlanEntry>, PatchOutcome), String> {
+) -> Result<(Vec<PlanEntry>, PatchOutcome, Vec<u8>), String> {
     let pair = input.pair;
     let Some(old_entry) = &pair.old else {
         return Err(format!("{}: no old entry to reuse from", pair.path));
@@ -757,7 +971,6 @@ fn patch_flow(
         plan,
         PatchOutcome {
             equals_new: false, // settled by `assemble`, which holds both sides
-            bytes: out,
             md5,
             reused,
             fetched,
@@ -765,6 +978,10 @@ fn patch_flow(
             reuse_failures,
             rewrites,
         },
+        // The bytes go back to `assemble` beside the outcome rather than inside
+        // it, so the caller can compare them against the direct assembly and drop
+        // them immediately. See `PatchOutcome`.
+        out,
     ))
 }
 
@@ -777,7 +994,7 @@ fn patch_flow(
 /// `note` says why, so a reader who expected a `source_range` is not left
 /// guessing whether the field was forgotten.
 fn fetch_all_plan(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     new_entry: &SophonChunkFile,
     new_tag: &str,
 ) -> Result<Vec<PlanEntry>, String> {
@@ -801,10 +1018,10 @@ fn fetch_all_plan(
 }
 
 fn build_map(
-    input: &AssemblyInput<'_>,
+    input: &AssemblyInput<'_, '_>,
     old: Option<&FileResult>,
     new: Option<&FileResult>,
-    plan: Option<&[PlanEntry]>,
+    plan: Option<Vec<PlanEntry>>,
 ) -> Result<PatchMap, String> {
     let side = |r: &FileResult| Side {
         tag: r.tag.clone(),
@@ -812,26 +1029,36 @@ fn build_map(
         md5: r.declared_md5.clone(),
         nchunks: r.nchunks,
     };
-    let totals = plan.map(|p| Totals {
-        chunks: p.len(),
-        reuse: p.iter().filter(|e| e.decision == Decision::Reuse).count(),
-        fetch: p.iter().filter(|e| e.decision == Decision::Fetch).count(),
-        moved: p
-            .iter()
-            .filter(|e| {
-                e.source_range
-                    .as_ref()
-                    .is_some_and(|s| s.start != e.target_range.start)
-            })
-            .count(),
-        download_bytes: p
-            .iter()
-            .filter(|e| e.decision == Decision::Fetch)
-            .map(|e| e.compressed_size)
-            .sum(),
-        materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
-        materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
-    });
+    let totals = // One pass for all four numbers. Five passes, each re-walking the
+        // plan and each calling `is_moved()` or comparing `decision` again, is
+        // five times the work for five numbers that a single walk produces.
+        plan.as_ref().map(|p| {
+            let mut reuse = 0_usize;
+            let mut fetch = 0_usize;
+            let mut moved = 0_usize;
+            let mut download_bytes = 0_i64;
+            for e in p {
+                match e.decision {
+                    Decision::Reuse => reuse += 1,
+                    Decision::Fetch => {
+                        fetch += 1;
+                        download_bytes += e.compressed_size;
+                    }
+                }
+                if e.is_moved() {
+                    moved += 1;
+                }
+            }
+            Totals {
+                chunks: p.len(),
+                reuse,
+                fetch,
+                moved,
+                download_bytes,
+                materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
+                materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
+            }
+        });
     // `plan` is `Some` for every capture that has a new side, so `totals` is too.
     // Checked rather than defaulted: a `download_bytes` of `0` on a capture that
     // does have a plan would be a false claim, and one with no plan would be
@@ -853,11 +1080,16 @@ fn build_map(
     // and saying so is better than claiming a result that does not exist.
     let expectations = match new {
         Some(n) => Expectations {
-            result_path: Some(format!("expected/{}", input.pair.path)),
+            result_path: Some(format!(
+                "{}/{}",
+                crate::emit::EXPECTED_TREE,
+                input.pair.path
+            )),
             result_md5: Some(n.declared_md5.clone()),
             absent_after: false,
             download_bytes: totals.map_or(0, |t| t.download_bytes),
             must_not_fetch: plan
+                .as_ref()
                 .map(|p| {
                     p.iter()
                         .filter(|e| e.decision == Decision::Reuse)
@@ -886,26 +1118,10 @@ fn build_map(
         classes: input.classes.to_vec(),
         old: old.map(side),
         new: new.map(side),
-        plan: plan.map(<[PlanEntry]>::to_vec),
+        plan,
         totals,
         expectations,
     })
-}
-
-/// The roles a pair's chunks are retained for, for the run log.
-pub fn roles_of(pair: &FilePair) -> (usize, usize) {
-    (
-        pair.old.as_ref().map(|o| o.entry.chunks.len()).unwrap_or(0),
-        pair.new.as_ref().map(|n| n.entry.chunks.len()).unwrap_or(0),
-    )
-}
-
-/// The `Set`s a pair's plan touches, which is what M6's A12 was about.
-pub fn sets_of(pair: &FilePair) -> Vec<Set> {
-    crate::blobs::chunks::retention(pair)
-        .sets
-        .into_keys()
-        .collect()
 }
 
 #[cfg(test)]
@@ -915,6 +1131,132 @@ mod tests {
     use crate::blobs::chunks::{NewFile, OldFile};
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+
+    /// The three ways a rebuild can fail, in one wording.
+    ///
+    /// There were two sets of three — a capture's and `materialize`'s — and
+    /// **nothing asserted any of them**, so either could be reworded without a
+    /// test noticing, and they had already drifted apart. The label is the only
+    /// thing that differs between the two callers, and that is what these pin.
+    #[test]
+    fn a_failed_rebuild_says_which_file_which_range_and_which_size() {
+        use std::borrow::Cow;
+        let clean = Layout::of([(0, 10)], 10);
+
+        // 1. The layout itself breaks A11 — a gap between the chunks.
+        let holed = Layout::of([(0, 10), (20, 10)], 30);
+        let e = tile(
+            "7.0.0 a/b.dll",
+            &holed,
+            30,
+            &["x", "y"],
+            |_| Ok(Cow::Borrowed(&b""[..])),
+        )
+        .unwrap_err();
+        assert!(
+            e.starts_with("7.0.0 a/b.dll: does not satisfy A11 — "),
+            "{e}"
+        );
+        assert!(e.contains("a gap of 10 B between chunk 0"), "and says where: {e}");
+
+        // 2. A range outside the file. `total` is its own parameter, so a clean
+        //    layout can still describe a range the file cannot hold.
+        let e = tile(
+            "7.0.0 a/b.dll (materialize_old)",
+            &clean,
+            4,
+            &["x"],
+            |_| Ok(Cow::Borrowed(&b""[..])),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "7.0.0 a/b.dll (materialize_old): chunk x range [0, 10) is outside the 4 B file",
+            "the label is the only thing that says which caller this is"
+        );
+
+        // 3. A chunk that decoded to the wrong length.
+        let e = tile(
+            "7.0.0 a/b.dll",
+            &clean,
+            10,
+            &["x"],
+            |_| Ok(Cow::Borrowed(&b"short"[..])),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e,
+            "7.0.0 a/b.dll: chunk x decoded to 5 B but its range is [0, 10)"
+        );
+    }
+
+    /// The range check is a refusal, not a panic.
+///
+/// `vec![0u8; size.max(0) as usize]` guarded the sign and nothing else, so a
+/// manifest declaring `size = 2^40` attempted a 1 TB allocation — an abort the
+/// tool cannot report and cannot recover from, because it is not a panic. The
+/// limit turns that into the tool's normal "this is a finding" answer.
+#[test]
+fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
+    let clean = Layout::of([(0, 10)], 10);
+    for (total, what) in [
+        (1_i64 << 40, "2^40 B"),
+        (i64::MAX, "i64::MAX B"),
+        (-1, "a negative size"),
+    ] {
+        let e = tile("7.0.0 a/b.dll", &clean, total, &["x"], |_| {
+            Ok(std::borrow::Cow::Borrowed(&b""[..]))
+        })
+        .unwrap_err();
+        assert!(
+            e.contains("past the 1073741824 B this tool will assemble"),
+            "{total} ({what}): {e}"
+        );
+        assert!(e.starts_with("7.0.0 a/b.dll: "), "and names the file: {e}");
+    }
+    // One byte over the limit is still over; exactly at it is allowed through to
+    // the ordinary allocation, which is what makes the boundary a stated rule
+    // rather than a round number.
+    let ok = tile(
+        "L",
+        &Layout::of([(0, 10)], 10),
+        MAX_ASSEMBLY_BYTES as i64,
+        &["x"],
+        |_| Ok(std::borrow::Cow::Borrowed(&b""[..])),
+    );
+    assert!(ok.is_err(), "a clean layout of that size still fails A11 first");
+
+    // And the real thing still goes through: the reference bundle's largest
+    // file is 22 662 068 B, which is 47x under the limit. Checked at compile
+    // time below rather than here, because a runtime `assert!` on two constants
+    // is a value the optimiser already knows.
+}
+
+/// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
+/// file in the reference bundle (`partial_moved_offset`), and 40x is slack
+/// well below the 1 GiB the limit is set at. If a future fixture ever needed
+/// more, this fails to compile rather than silently producing a capture that
+/// cannot assemble its own game files.
+const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
+
+/// The range is checked *before* the chunk is decoded.
+///
+/// So a rebuild that is going to be refused does not first inflate every
+/// blob to find out.
+    #[test]
+    fn a_range_that_does_not_fit_is_refused_without_decoding_it() {
+        use std::borrow::Cow;
+        use std::cell::Cell;
+        let clean = Layout::of([(0, 10)], 10);
+        let decoded = Cell::new(0_u32);
+        let e = tile("L", &clean, 4, &["x"], |_| {
+            decoded.set(decoded.get() + 1);
+            Ok(Cow::Borrowed(&b""[..]))
+        })
+        .unwrap_err();
+        assert!(e.contains("outside the 4 B file"), "{e}");
+        assert_eq!(decoded.get(), 0, "nothing should have been decoded");
+    }
 
     /// Distinct payload bytes, so a test can never pass because two chunks were
     /// accidentally the same content.
@@ -1043,6 +1385,49 @@ mod tests {
         assert!(o.layout.is_clean());
     }
 
+    #[test]
+    fn a9_is_red_when_the_patch_flow_and_the_direct_assembly_disagree() {
+        // **The negative case, which the suite did not have.** Every A9 test here
+        // asserts the *agreeing* case, so nothing checked that a disagreement is
+        // visible at all.
+        //
+        // **What this pins, precisely:** that the disagreement reaches the artifact
+        // as a red A9 row and a non-green run. It does **not** pin that the
+        // comparison is by bytes — see the note below, which is why that could not
+        // be done here.
+        let good = assemble_pair(&same_offset_pair()).expect("assembles");
+        assert!(good.all_green(), "the honest pair is green: {:?}", good.selfcheck_rows());
+
+        let mut bad = assemble_pair(&same_offset_pair()).expect("assembles");
+        // One byte different on the direct side, so its digest moves and stops
+        // matching the patch side's: exactly what a patch flow that assembled
+        // from stale offsets would produce. The patch side keeps the digest it was
+        // assembled with — giving it the *new* side's digest would be the bug.
+        let n = bad.new.as_mut().expect("a new side");
+        n.bytes[0] ^= 0xff;
+        n.md5 = hash::md5_hex(&n.bytes);
+        let p = bad.patch.as_mut().expect("a patch");
+        assert_eq!(
+            p.md5, good.new.as_ref().unwrap().md5,
+            "before the disagreement both sides agreed"
+        );
+        p.equals_new = false;
+        assert_ne!(p.md5, n.md5, "and now they must not");
+
+        let a9: Vec<_> = bad
+            .selfcheck_rows()
+            .into_iter()
+            .filter(|r| r.id == "A9")
+            .collect();
+        assert_eq!(a9.len(), 1, "there is exactly one A9 row: {a9:?}");
+        assert!(
+            !a9[0].ok,
+            "a patch flow that disagrees with the direct assembly must not pass: {:?}",
+            a9[0]
+        );
+        assert!(!bad.all_green(), "and the run must not be green");
+    }
+
     /// A9 — the one that matters. The patch flow is a completely different code
     /// path from the direct assembly, so byte-equality is evidence rather than a
     /// tautology.
@@ -1055,8 +1440,11 @@ mod tests {
             p.equals_new,
             "the patch flow and the direct assembly disagree"
         );
-        assert_eq!(p.bytes, n.bytes);
-        assert_eq!(p.md5, n.md5);
+        // `equals_new` **is** the byte comparison, settled inside `assemble` while
+        // both sides were alive and then dropped. A digest comparison would not
+        // be — A9 is specified as byte equality — so `md5` agreeing is
+        // corroboration, never the claim.
+        assert_eq!(p.md5, n.md5, "and the recorded digests agree too");
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
     }
 
@@ -1132,14 +1520,7 @@ mod tests {
         assert_eq!(p.fetched, 1, "chunk 4 is new content");
         assert_eq!(p.moved, 1, "only chunk 3 changed offset");
         let plan = a.map.plan.as_ref().unwrap();
-        let moved = plan
-            .iter()
-            .find(|e| {
-                e.source_range
-                    .as_ref()
-                    .is_some_and(|s| s.start != e.target_range.start)
-            })
-            .expect("a moved entry");
+        let moved = plan.iter().find(|e| e.is_moved()).expect("a moved entry");
         assert_eq!(moved.target_range.start, 64);
         assert_eq!(
             moved.source_range.as_ref().unwrap().start,

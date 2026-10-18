@@ -65,7 +65,17 @@ async fn main() {
 
     let (summary, code) = match outcome {
         Ok(outcome) => outcome,
-        Err(f) => (f.summary(event), f.code),
+        Err(mut f) => {
+            // A run that failed *after* measuring still has numbers worth
+            // printing, and they were built before the failure was known. They
+            // go out first, so stdout reads chronologically and the failure
+            // summary is still last — which is what a harness tailing the line
+            // for `exit_code` expects.
+            if let Some(pre) = f.preceded_by.take() {
+                pre.emit(common.output);
+            }
+            (f.summary(event), f.code)
+        }
     };
     summary.emit(common.output);
 

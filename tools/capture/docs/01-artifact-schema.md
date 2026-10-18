@@ -7,12 +7,22 @@ unknown `schema_version` rather than guess. JSON is UTF-8, LF, 2-space indent,
 keys in the order written here. `*.ndjson` is newline-delimited, one object per
 line, no enclosing array, so it streams.
 
+**Required, not additive.** `verify` and `materialize` refuse a bundle that is
+missing any document below. That is a deliberate choice: a bundle is a *fixture*
+other work depends on, so a field that some bundles carry and others do not is a
+trap for whoever reads it next. Where a field is genuinely optional within a
+document, it is marked below and is optional *everywhere*.
+
 **Compression rule.** A document is gzipped (`*.json.gz`) only when its
 uncompressed body exceeds `--gzip-threshold` (default 1 MiB). The decision is
 recorded in `MANIFEST.json → files[].encoding`, so a reader never has to guess.
-Today exactly one document trips it: the full decoded manifest. Every gzipped
-document ships a plain-text sidecar (`*.tsv`) so an agent can `grep` it without
-decompressing.
+In a real capture exactly the four full decoded `game` and `en-us` manifests trip
+it; every gzipped document ships a plain-text sidecar (`*.tsv`) so an agent can
+`grep` it without decompressing.
+
+The worked values throughout are from the reference capture of `hk4e_global`
+7.0.0 → 7.1.0: 97 files, 8 captures, 38 chunk blobs, 56 request rows, 116
+selfcheck rows, `result: "pass"`.
 
 ---
 
@@ -36,14 +46,16 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── <field>.manifest.zst                  # raw blob, byte-exact
 │   ├── <field>.manifest.meta.json
 │   ├── <field>.manifest.json.gz              # full decode (or .json if small)
-│   └── <field>.paths.tsv                     # always plain; path \t size \t md5 \t nchunks
+│   └── <field>.paths.tsv                     # always plain; path \t size \t md5 \t nchunks \t is_folder
 ├── diff/
 │   ├── paths.diff.json
-│   ├── paths.tsv                             # path \t state \t old_size \t new_size \t cost
+│   ├── matrix.json                            # one row per matrix class
+│   ├── paths.tsv                             # field \t path \t state \t old_size \t new_size \t reused \t moved \t patch_bytes \t total_cost
 │   ├── candidates.json
 │   └── reuse_pool.json
 ├── game/                                     # ★ the fixture
 │   ├── config.ini
+│   ├── GenshinImpact_Data/Persistent/audio_lang_14
 │   └── <capture paths, OLD-version bytes>
 ├── expected/                                 # ★ ground truth
 │   └── <capture paths, NEW-version bytes>
@@ -60,9 +72,18 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `partial_same_offset`,
 `partial_moved_offset+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
-Nothing under `chunks/` or `manifests/` is ever deleted by the tool. Any
-temporary file it creates is written into `tmp/` and moved into place, and is
-removed only on success — `verify/checksums.json` proves nothing is missing.
+Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
+
+**Atomicity is not uniform, and this is deliberate.** Chunk blobs are the only
+artifacts written through a `tmp/` file that is then renamed into place, and a
+blob's `stored_path` points at a name that does not exist until the rename
+happens. That step is what lets `verify` trust a blob: a crash mid-write would
+otherwise leave a truncated file at the final path, which nothing could tell from
+a good one. The metadata documents, the assembled `game/` and `expected/` files
+and `manifests/*` are written with a plain create-and-write: each is small enough
+that a torn write is a small, reproducible failure, and routing them through the
+same dance would only hide *which* step failed. A reader must therefore not
+assume any document in a bundle was renamed into position.
 
 ---
 
@@ -73,10 +94,10 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   "schema_version": 1,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
-    "id": "20261014T101500Z",
-    "captured_at": "2026-10-14T10:15:00Z",
+    "id": "20261017T123335Z",
+    "captured_at": "2026-10-17T12:33:35Z",
     "host_os": "windows",
-    "tool_argv": ["capture", "--biz", "hk4e_global", …],
+    "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
     "complete": true            // false only if interrupted; selfcheck then explains why
   },
   "biz":      { "id": "hk4e_global", "launcher_id": "VYTpXlbWo8", "game_id": "gopR6Cufr3",
@@ -89,7 +110,7 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   },
   "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
-  "gzip_threshold": 1048576,             // --gzip-threshold this run used (M10; defaults on read)
+  "gzip_threshold": 1048576,             // --gzip-threshold this run used
   "selection_pool": {                    // matching_fields scored and diffed
     "fields": ["game", "en-us"],
     "manifest_entries": { "game": 2744, "en-us": 177 },
@@ -97,34 +118,57 @@ removed only on success — `verify/checksums.json` proves nothing is missing.
   },
   "totals": {
     "files_captured": 8,
-    "chunks_blobs": 41,
-    "bytes_downloaded": 96041377,
-    "bytes_on_disk": 98812044
+    "chunks_blobs": 38,
+    "bytes_downloaded": 47592933,
+    "bytes_on_disk": 208239065
   },
-  "matrix": [                            // one row per required class, in admission order
+  "matrix": [                            // one row per class, in admission order
     { "class": "identical", "status": "captured", "capture_id": "identical",
       "path": "GenshinImpact_Data/Resources/browser_assets", "matching_field": "game",
       "also_satisfies": [] },
-    { "class": "partial_same_offset", "status": "captured", "capture_id": "partial_same_offset",
-      "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll", "matching_field": "game",
-      "also_satisfies": ["partial_same_offset"] },
     { "class": "partial_size_changed", "status": "covered_by",
       "covered_by": "partial_same_offset",
       "reason": "cheapest candidate already captured for a cheaper class" },
     { "class": "full_reuse_reordered", "status": "unavailable",
       "reason": "no path in any selected field has reused==nchunks && md5 differs",
-      "candidates_considered": 2839 }
+      "candidates_considered": 2837 }
   ],
   "files": [                             // every file under the artifact root
     { "path": "game/GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "bytes": 2340264, "md5": "1e21…", "sha256": "…", "encoding": "identity" }
   ],
-  "totals_by_set": { "materialize_old": 27, "materialize_new": 31, "patch_fetch": 14 }
+  "totals_by_set": { "materialize_old": 29, "materialize_new": 28, "patch_fetch": 9 }
 }
 ```
 
 `matrix[].status` ∈ `captured` | `covered_by` | `over_budget` | `unavailable`.
-A class is never simply absent (assertion A17).
+A class is never simply absent (assertion A17). The row's optional keys
+(`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
+`reason`, `candidates_considered`) are omitted rather than written `null`.
+
+`files[]` lists every file that existed **before the close-out began** — the
+fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
+documents the close-out itself writes are absent, because the list is taken
+before they are written: `MANIFEST.json` (it is being written), `README.md` and
+`verify/selfcheck.json` (both render the manifest), and `verify/checksums.json`
+(its own). A document that hashes itself has no fixed point, and here the
+dependency runs both ways.
+
+`verify/checksums.json` is the complete inventory: `file_count: 96` for a 97-file
+bundle, and it covers all four.
+
+`totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
+the **decompressed** length — the same rule as §15. It is therefore larger than
+what `du` reports (≈199 MB against ≈129 MB on disk for the reference bundle);
+that is the correct answer, because it is the number a reader would need to hold
+the document in memory.
+
+`gzip_threshold` is **required**, like every other field in this document. It
+used to default on read, so a bundle with no recorded threshold would read back
+as having used the flag's default — a claim about a run nobody wrote down, on the
+one field whose purpose is to say why one document is gzipped and the next is
+not. A field that defaults to a constant is worse than one that is required,
+because the default is indistinguishable from the real value.
 
 ---
 
@@ -139,27 +183,59 @@ rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5
 
 ## 4. `api/requests.ndjson`
 
-One object per HTTP request, in issue order.
+One object per HTTP request, in `seq` order. In the reference capture: 56 rows —
+6 `api`, 4 `manifest`, 38 `chunk`, 8 `probe`.
 
 ```jsonc
-{ "seq": 3, "ts": "2026-10-14T10:15:02.117Z", "kind": "manifest",   // api|manifest|chunk|probe
-  "method": "GET", "url": "https://…/manifest_671e…",
+{ "seq": 1, "ts": "2026-10-17T12:33:35.971Z", "kind": "api",     // api|manifest|chunk|probe
+  "method": "GET", "url": "https://sg-hyp-api.hoyoverse.com/hyp/hyp-connect/api/getGameConfigs?…",
   "range": null,                        // literal Range header sent, if any
   "status": 200, "final_url": "https://…", "redirected": false,
-  "elapsed_ms": 418,
-  "req_headers":  { "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)", "accept-encoding": "gzip" },
-  "resp_headers": { "content-type": "application/octet-stream", "content-length": "9007187",
-                    "etag": "\"313EA8…\"", "last-modified": "…", "accept-ranges": "bytes",
-                    "content-md5": "MT6ox…", "server": "AliyunOSS", "x-cache": "Hit from cloudfront",
-                    "via": "1.1 c4fb…cloudfront.net (CloudFront)", "x-amz-cf-pop": "SGN50-P1",
-                    "age": "1712968" },
-  "bytes_in": 9007187,
-  "stored_as": "manifests/7.1.0/game.manifest.zst",
+  "elapsed_ms": 338,
+  "req_headers":  { "accept": "*/*", "accept-encoding": "identity",
+                    "user-agent": "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)" },
+  "resp_headers": { "connection": "keep-alive", "content-length": "1529",
+                    "content-type": "application/json",
+                    "date": "Sat, 17 Oct 2026 12:33:29 GMT", "vary": "Accept-Encoding",
+                    "via": "1.1 …cloudfront.net (CloudFront)",
+                    "x-cache": "Miss from cloudfront", "x-amz-cf-pop": "HKG61-P1", … },
+  "bytes_in": 1529,
+  "stored_as": "api/getGameConfigs.json",
   "attempts": 1 }
 ```
 
 Header keys are lowercased; values are strings exactly as received. `kind` lets a
 reader ask "what did the manifest fetch cost?" without string-matching URLs.
+
+`kind` is a closed set — `api`, `manifest`, `chunk`, `probe` — and two of the
+probes' paths share `probe` while differing in retry behaviour. A `getBuild?tag=`
+tag probe goes through the retry policy and records a real `attempts`; the
+negative probes behind `api/error_shapes.json` are sent **once** and always record
+`attempts: 1`. On a healthy capture every probe row shows `1`, so the row alone
+does not say which path produced it; the URL does. The set is deliberately not
+widened to distinguish them: `kind` is a published vocabulary and a reader
+matching on `probe` must not be broken by it.
+
+`req_headers` is what the tool **sent**, not what it wishes it had sent, and the
+record and the client are built from one list so they cannot disagree.
+`accept-encoding` is `identity` because that is the honest value: the HTTP client
+has no decompression support enabled, and naming `gzip` on the wire would make the
+CDN answer with a compressed body the tool could not decode — every manifest
+digest in the bundle would become a digest of compressed JSON.
+
+`bytes_in` is the number of body bytes the run actually transferred, **on every
+row including the non-2xx ones**. It is the only way to price a request without
+re-downloading it, so a throttled or errored attempt is counted like any other.
+
+`stored_as` is the path, relative to the artifact root, the body was written to,
+or `null` when it was not kept. Per kind:
+
+| kind | `stored_as` |
+|---|---|
+| `api` | `api/<endpoint>.json` — the body was written |
+| `manifest` | `manifests/<tag>/<field>.manifest.zst` |
+| `chunk` | `chunks/blobs/<chunk_id>.zst` |
+| `probe` | `null` — a probe response is deliberately not stored, and that is what makes it a probe |
 
 ## 5. `api/tag_probe.json`
 
@@ -167,24 +243,26 @@ Which tags the API actually serves, with no blob downloads.
 
 ```jsonc
 { "schema_version": 1,
-  "requested": ["7.1.0", "7.0.0", "6.7.0", "6.6.0", "5.5.0"],
+  "requested": ["7.1.0", "7.0.0", "6.7.0"],
   "results": [
-    { "tag": "6.6.0", "in_diff_tags": false, "http": 200, "retcode": 0,
-      "build_id": "L7CJe4FP1z71", "tag_echoed": "6.6.0", "served": true },
+    { "tag": "7.0.0", "in_diff_tags": true, "http": 200, "retcode": 0,
+      "build_id": "3XnPviMfoILi", "tag_echoed": "7.0.0", "served": true },
     { "tag": "0.0.1", "in_diff_tags": false, "http": 200, "retcode": -202,
       "build_id": null, "tag_echoed": null, "served": false }
   ],
-  "summary": { "requested": 5, "served": 5, "not_in_diff_tags_but_served": 2 } }
+  "summary": { "requested": 3, "served": 3, "not_in_diff_tags_but_served": 1 } }
 ```
 
 `served` is the load-bearing fact: `diff_tags` is a patch-support list, not a
-retention list (spec §3.4).
+retention list (spec §3.4), so a capture may pin a pair the API still serves but
+`diff_tags` no longer names.
 
 ---
 
 ## 5a. `api/error_shapes.json`
 
 What the API does with a request it will **not** serve, with no blob downloads.
+Seven shapes on every capture.
 
 The two route families disagree about what failure looks like, and a consumer
 that replays a bundle has to reproduce both. Without this document it would have
@@ -226,12 +304,23 @@ a bundle recorded only successes contains no not-found evidence at all.
 | `error` | whether the origin treats this as a failure — see below |
 | `body` | byte-exact |
 | `volatile_fields` | names that change per request, so the body **cannot** be replayed byte-for-byte |
-| `retryable` | always `false`: the retry policy, stated in the artifact |
+| `retryable` | **derived from the tool's own retry policy**: "would the fetcher have retried this status?" |
+
+The seven ids are `blob_missing`, `chunk_missing`, `blob_wrong_build`,
+`getbuild_unknown_tag`, `getbuild_bad_package`, `getgameconfigs_bad_game_id`,
+`getgamebranches_bad_game_id`.
+
+`retryable` states the **policy**, not what this run did: the negative probes go
+out through `Fetcher::observe`, which never retries, so a `true` here means "the
+fetcher would have retried this" and not "this was retried". On a healthy
+capture every row is `false`, because every recorded shape answers `200` or
+`404` and neither is in the retry set — a `429` or `503` is what separates a
+stated policy from a constant.
 
 **`error: false` is not a bug.** `getGameBranches` answers an unknown game id
 with `retcode 0` and an empty `game_branches`. That is a **success with nothing
 in it**, not a failure, and it is recorded here precisely so a reader cannot
-infer a failure from the shape of the other two rows.
+infer a failure from the shape of the other rows.
 
 **Replaying.** `girpr` calls `.error_for_status()` and never reads the body, so
 **`status` and `content_type` are the contract**; the body is fidelity, for a
@@ -240,10 +329,15 @@ mean a replayer must synthesize `RequestId`, `HostId` and `Key` — and therefor
 the body length — and nothing else. The JSON rows have no volatile fields, so
 they replay exactly.
 
-**Back-compat.** The document is additive: a bundle captured before it existed
-has no `api/error_shapes.json`, and that is still a valid bundle. A consumer
-that wants the not-found behaviour and finds no such file must skip those
-assertions and say so.
+**The document is required.** `verify` and `materialize` refuse a bundle without
+it, because a bundle recorded only successes contains no not-found evidence at
+all: a consumer that wanted to replay one would have to invent what a `404` looks
+like, and its "the API 404s things" would be unfounded. Making the document
+optional would have meant "this bundle can tell you how the API fails" is true of
+some bundles and not others, with nothing in the bundle to say which.
+
+It is read back through the same type that wrote it, so a document that is
+present and unusable fails at open, by name, rather than at some later consumer.
 
 ---
 
@@ -254,13 +348,16 @@ Everything known about one archive blob.
 ```jsonc
 { "schema_version": 1,
   "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu", "matching_field": "game",
-  "category_id": "10016", "category_name": "game",
+  "category_id": "10016", "category_name": "…",   // the API's own name for the category
   "manifest": { "id": "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d",
                 "checksum": "8d4dfb34d2ee2cf64aae45a9b1ecf58d",
                 "compressed_size": 9007187, "uncompressed_size": 16827424 },
   "declared": {                                  // fields the API sends that most clients drop
     "stats": { "file_count": 2744, "chunk_count": 113610,
                "compressed_size": 128310073410, "uncompressed_size": 131981846376 },
+    "deduplicated_stats": { "file_count": 2744, "chunk_count": 113441,
+                            "compressed_size": 128174445744,
+                            "uncompressed_size": 131776619976 },
     "chunk_download":   { "url_prefix": "…", "url_suffix": "", "compression": 1,
                           "encryption": 0, "password": "" },
     "manifest_download":{ "url_prefix": "…", "url_suffix": "", "compression": 1,
@@ -281,21 +378,33 @@ Everything known about one archive blob.
                 "id_prefix_verified": false },
   "decoded": { "entries": 2744, "files": 2744, "folders": 0,
                "total_chunks": 113610, "max_chunk_compressed_bytes": 3689476,
+               "total_file_bytes": 131981846376,
                "structure": { "duplicate_paths": 0, "empty_paths": 0,
                               "backslash_paths": 0, "non_ascii_paths": 0,
                               "unsorted_chunk_offsets": 0, "non_gapless_files": 0,
-                              "size_mismatch_files": 0 } }
+                              "size_mismatch_files": 0 } },
+  "full_decode_written": true
 }
 ```
 
 `verified.id_prefix_verified` is **always false** and is expected to be. The
-16-hex prefix is not a hash of any observable input (spec §3.7); the field
-exists so the artifact states that finding rather than implying the prefix went
+16-hex prefix is not a hash of any observable input (spec §3.7); the field exists
+so the artifact states that finding rather than implying the prefix went
 unchecked.
+
+`decoded.structure` counts the six structural properties of spec §3.6. They are
+recorded, never fatal: a violation still produces a capture, and A11 goes red on
+the file that broke.
+
+`deduplicated_stats` is the API's own second, de-duplicated view of the same
+numbers, kept because it is the field a client would otherwise drop; `gircap`
+asserts nothing against it.
 
 ## 7. `manifests/<tag>/<field>.manifest.json.gz` — full decode
 
 The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
+`full_decode_written` in `meta.json` says whether this document was produced
+(`false` under `--manifest-detail paths-only`).
 
 ```jsonc
 {
@@ -314,6 +423,12 @@ The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
 }
 ```
 
+The document is written **streamed through the gzip encoder**, not built as one
+string and compressed afterwards, because the full `game` decode is the largest
+thing the tool holds. The compressed bytes are identical either way, which is
+why `verify/checksums.json` records the *decompressed* digest and a `.gz`
+document's identity does not depend on how it was produced.
+
 `unknown_field6` is the wire's tag 6. Its meaning is unknown; it is preserved
 because the upstream schema carries it and dropping it would make this dump a
 lossy transform. *(measured)* it is stable across the two builds for the same
@@ -326,7 +441,7 @@ Always plain text, tab-separated, header line, `\n` endings:
 
 ```
 path	size	md5	nchunks	is_folder
-GenshinImpact_Data/Plugins/HoYoChannel.dll	2340264	d992a789…	3	false
+GenshinImpact.exe	444260776	f69da59bdc366df20bd2b598700e9370	325	false
 ```
 
 This is the sidecar that makes the gzipped JSON greppable without decompression.
@@ -339,35 +454,47 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 { "schema_version": 1,
   "old_tag": "7.0.0", "new_tag": "7.1.0",
   "fields": ["game", "en-us"],
-  "counts": { "common": 2662, "identical": 1592, "changed": 1070,
-              "added": 82, "removed": 11, "folders": 0 },
-  "byte_counts": { "added": 954110883, "removed": 215743102 },
-  "added":   ["GenshinImpact_Data/Plugins/libHttpClient.GDK.dll", …],
-  "removed": ["GenshinImpact_Data/…/00664172.blk", …],
-  "by_field": { "game": { "common": 2662, "identical": 1592, "added": 82, "removed": 11 },
-                "en-us": { "common": 0, "identical": 0, "added": 0, "removed": 0 } } }
+  "counts": { "common": 2837, "identical": 1733, "changed": 1104,
+              "added": 84, "removed": 11, "folders": 0 },
+  "byte_counts": { "added": 6172743354, "removed": 263761287, "patch": 14173762284 },
+  "added":   ["game:GenshinImpact_Data/Plugins/libHttpClient.GDK.dll", …],
+  "removed": ["game:GenshinImpact_Data/…/00664172.blk", …],
+  "by_field": { "game": { "common": 2662, "identical": 1592, "changed": 1070,
+                          "added": 82, "removed": 11 },
+                "en-us": { "common": 175, "identical": 141, "changed": 34,
+                           "added": 2, "removed": 0 } },
+  "new_chunks_reusable_at_all": 110850 }
 ```
 
 Counts at the top level are aggregated over `fields`; `by_field` is the
-breakdown, and every `added`/`removed` entry is prefixed with its field so a
-path from two pools cannot collide. The `game` row is the **measured** one for
-7.0.0→7.1.0; the `en-us` row is a placeholder — the value depends on which
-audio languages `--audio` selected.
+breakdown, and every `added`/`removed` entry is prefixed with its field so a path
+from two pools cannot collide. The `game` row is the **measured** one for
+7.0.0→7.1.0; the `en-us` row depends on which audio languages `--audio` selected.
 
-`diff/paths.tsv` is the flat per-path form (`path \t state \t old_size \t
-new_size \t reused \t moved \t patch_bytes \t total_cost`), sorted by `path`.
+`new_chunks_reusable_at_all` is how many of the new manifest's chunks have an MD5
+present **anywhere** in the old manifest — the number the same-file-only reuse
+simplification in §10 of the spec gives up (see `reuse_pool.json`).
+
+`diff/paths.tsv` is the flat per-path form and leads with the `field`, because the
+same relative path can appear in more than one pool:
+
+```
+field	path	state	old_size	new_size	reused	moved	patch_bytes	total_cost
+game	GenshinImpact.exe	changed	430973352	444260776	0	0	179241379	353260299
+```
 
 ## 10. `diff/candidates.json`
 
-The scoring table, for every common path (not just the winners) unless
-`--max-candidate-rows` trims it. Lets a later run ask "why did it pick that?"
+The scoring table, for **every** common path, not just the winners — 2 837 rows
+for the reference pool. Lets a later run ask "why did it pick that?"
 
 ```jsonc
 { "schema_version": 1,
-  "columns": ["path","old_size","new_size","nchunks","reused","moved","same_md5",
-              "old_bytes","new_bytes","patch_bytes","total_cost","classes"],
+  "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
+              "same_md5","old_bytes","new_bytes","patch_bytes","total_cost","classes","rank"],
   "rows": [
-    { "path": "…/HoYoChannel.dll", "old_size": 2340264, "new_size": 2340264,
+    { "path": "…/HoYoChannel.dll", "matching_field": "game",
+      "old_size": 2340264, "new_size": 2340264,
       "nchunks": 3, "reused": 1, "moved": 0, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
       "total_cost": 1826067, "classes": ["partial_same_offset"], "rank": 1 }
@@ -375,6 +502,11 @@ The scoring table, for every common path (not just the winners) unless
 ```
 
 Column-oriented so a reader can sort without re-parsing objects.
+
+`matching_field` names the pool the path was scored from (`game`, or an audio
+code). It is a row column because the same relative path can appear in more than
+one pool, and without it a reader summing `total_cost` across rows would double
+count. `rank` is 1-based, in `total_cost` order.
 
 ## 11. `diff/reuse_pool.json`
 
@@ -396,30 +528,29 @@ simplification in the main tool; `gircap` never acts on it.
 ## 12. `chunks/index.json` and `chunks/blobs/`
 
 One blob per distinct `chunk_id`, byte-exact (zstd as served), stored once even
-when several files or both builds reference it.
+when several files or both builds reference it. 38 blobs for the reference
+capture.
 
 ```jsonc
 { "schema_version": 1,
   "blobs": [
-    { "chunk_id": "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b",
-      "stored_path": "chunks/blobs/f5dc3ca1f3a0ba3d_291a7719….zst",
-      "bytes": 638614, "container": "zstd",
-      "md5_compressed": "79f1d31986dae0e09f05fcad6320205d",
-      "md5_decompressed": "291a7719a4a23664d37825a41fad3c5b",
-      "sha256_compressed": "…",
-      "uncompressed_size": 1626019,
-      "unknown_field6": 5814299429820432384,
-      "verified": { "md5_compressed_matches": true, "md5_decompressed_matches": true,
-                    "size_matches": true },
+    { "chunk_id": "096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4",
+      "stored_path": "chunks/blobs/096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4.zst",
+      "bytes": 519810, "container": "zstd",
+      "md5_compressed": "a6b9a872edc05505899c7c60bcdbf406",
+      "md5_decompressed": "60215d50041d92c36dab0fa5dd7609b4",
+      "sha256_compressed": "5694eef1b3f2104f98ca509168f90608a16b7a4db8e0229d4463b32d01f346cf",
+      "uncompressed_size": 519785,
+      "unknown_field6": 4233562806722494464,
+      "verified": { "raw_size_matches": true, "md5_compressed_matches": true,
+                    "md5_decompressed_matches": true, "decoded_size_matches": true },
+      "decode_error": null,
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
-          "capture_id": "partial_same_offset",
-          "path": "…/HoYoChannel.dll", "role": "materialize_old", "offset": 690719 },
-        { "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
-          "capture_id": "partial_same_offset",
-          "path": "…/HoYoChannel.dll", "role": "materialize_new", "offset": 690719 }
+          "capture_id": "partial_moved_offset",
+          "path": "…/blocks/00/09801749.blk", "role": "materialize_old", "offset": 5502333 }
       ],
-      "sets": ["materialize_old", "materialize_new"] }
+      "sets": ["materialize_old"] }
   ],
   "sets": {
     "materialize_old": [ … chunk ids … ], "materialize_new": [ … ],
@@ -429,6 +560,39 @@ when several files or both builds reference it.
 
 `role` ∈ `materialize_old` | `materialize_new` | `patch_fetch`. `patch_fetch` is
 always a subset of `materialize_new` for the same file (assertion A12).
+
+### `verified` — four keys, not three
+
+`verified` carries the **four** A6 checks, and the names are precise:
+
+| key | claim |
+|---|---|
+| `raw_size_matches` | `len(raw) == compressed_size` — the blob arrived whole |
+| `md5_compressed_matches` | `md5(raw) == compressed_md5` — it arrived *intact*, not merely complete |
+| `md5_decompressed_matches` | `md5(zstd(raw)) == uncompressed_md5` — it is the chunk the manifest named |
+| `decoded_size_matches` | `len(decoded) == uncompressed_size` |
+
+There is **no `size_matches` key**; the two size claims are named separately
+because they are separate facts about different byte counts (the frame's length
+as served, and the length after decoding).
+
+### `decode_error` — a fetched blob is evidence, not a failure
+
+`decode_error` is `null` whenever the blob measured cleanly, and otherwise
+carries the real reason: the byte count, the first magic bytes actually seen, and
+the compression the build declared. **The blob is still written and still listed.**
+A truncated or mis-served response is the evidence this tool exists to keep, so it
+is recorded with its bytes and a truthful `decode_error` rather than discarded and
+backfilled with a "the fetch failed" story — with the two decode-dependent
+`verified` keys `false` and the two that need no decode still decided.
+
+It is `Option<String>`, so a reader must treat it as optional: a blob that was
+never fetched at all has a null `stored_path`, a null-ish row body and no
+`verified` verdict.
+
+A `stored_path` that is `null` has three causes that cannot all be described the
+same way — a source that refused, a write that failed, and a fetch task that
+panicked mid-measure — and the row records which.
 
 ### `build_id` — part of the chunk's address
 
@@ -441,17 +605,11 @@ map to different build ids over time, so a consumer that has to build a chunk UR
 or decide whether an observed request was namespaced correctly, cannot derive it
 from the tag.
 
-`build_id` is **additive and optional**. A reference in a bundle captured before
-this field existed has no `build_id`, and that document still reads; the fallback
-is `MANIFEST.json` → `versions.{old,new}.build_id` matched on `tag`, which is
-where the value came from in the first place. A consumer that wants the build id
-must handle both.
-
-`referenced_by` is also the **only** thing `gircap materialize` consults: the
-chunk list of a side is rebuilt from `referenced_by`'s `offset`s and each
-blob's `uncompressed_size`, and the retained manifests are not read at all.
-That is deliberate - a rebuild that consulted the manifests would only prove they
-are still readable, whereas rebuilding from the closure set proves the thing the
+`referenced_by` is the **only** thing `gircap materialize` consults: the chunk
+list of a side is rebuilt from `referenced_by`'s `offset`s and each blob's
+`uncompressed_size`, and the retained manifests are not read at all. That is
+deliberate — a rebuild that consulted the manifests would only prove they are
+still readable, whereas rebuilding from the closure set proves the thing the
 bundle actually claims, which is that the blobs alone are enough. A bundle whose
 manifests survived but whose index is incomplete fails here, and should.
 
@@ -477,13 +635,14 @@ Per target chunk: where its bytes come from.
       "chunk_id":      "ddb31a9fd85346c4_de1cfe6927dacbc58d2d55a0b45ea0f3",
       "url":           "https://…/chunks/…/sMXGW2ll3Fuu/ddb31a9f…",
       "compressed_size": 259795, "uncompressed_size": 690719,
-      "uncompressed_md5": "de1cfe69…", "compressed_md5": "06ba73bb…" },
+      "uncompressed_md5": "de1cfe69…", "note": null },
     { "i": 1,
       "decision": "REUSE",
       "target_range":  { "start": 690719,  "end": 2316738 },
       "source_range":  { "start": 690719,  "end": 2316738, "file_tag": "7.0.0" },
       "chunk_id":      "f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b",
-      "url":           "https://…/chunks/…/sMXGW2ll3Fuu/f5dc3ca1…",
+      "url":           null,
+      "compressed_size": 638614, "uncompressed_size": 1626019,
       "uncompressed_md5": "291a7719…",
       "note": "byte-identical to the old chunk at the same offset" },
     { "i": 2,
@@ -491,15 +650,17 @@ Per target chunk: where its bytes come from.
       "target_range":  { "start": 2316738, "end": 2340264 },
       "source_range":  null,
       "chunk_id":      "340ca86ee8ac9be0_87434f1bc3431f2c443dc5311d543308",
-      "url":           "https://…", "compressed_size": 14631, "uncompressed_size": 23526,
-      "uncompressed_md5": "87434f1b…" }
+      "url":           "https://…/chunks/…/sMXGW2ll3Fuu/340ca86e…",
+      "compressed_size": 14631, "uncompressed_size": 23526,
+      "uncompressed_md5": "87434f1b…", "note": null }
   ],
   "totals": { "chunks": 3, "reuse": 1, "fetch": 2, "moved": 0,
-              "download_bytes": 274426, "materialize_old_bytes": 913027,
-              "materialize_new_bytes": 913040 },
+              "download_bytes": 274426,
+              "materialize_old_bytes": 2340264, "materialize_new_bytes": 2340264 },
   "expectations": {
     "result_path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
     "result_md5": "d992a789…",
+    "absent_after": false,
     "download_bytes": 274426,
     "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"]
   }
@@ -513,25 +674,38 @@ that chunk has a broken reuse path, and it is nameable from the artifact alone.
 before copying. `moved` in `totals` counts entries where `source_range.start !=
 target_range.start`.
 
+A REUSE carries `url: null` — the bytes are already local, so there is nothing to
+fetch — and a FETCH carries `note: null` for the same reason: each field is
+present and says nothing only where it genuinely has nothing to say.
+`materialize_old_bytes` and `materialize_new_bytes` are the **whole-file** sizes
+each side assembles to, not the compressed chunk sums; `download_bytes` is the
+only figure here that is priced per chunk.
+
+A REUSE is decided *after* the slice has been verified by MD5, so a failed REUSE
+becomes a FETCH. That downgrade is recorded on the entry (`note`) and in the
+outcome (`rewrites`): a silent downgrade is indistinguishable from one that was
+never a candidate, and the two demand opposite debugging.
+
 ### 13.1 The one-sided classes
 
 `old` and `new` are the two sides; `plan`, `totals` and `expectations` describe
 producing the **new** one. That makes the one-sided cases asymmetric, and both are
 spelled out here because getting them wrong makes the artifact lie.
 
-**`added`** - no `old`, but `plan`, `totals` and `expectations` are all present.
+**`added`** — no `old`, but `plan`, `totals` and `expectations` are all present.
 Every `plan` entry is `FETCH` with `source_range: null` and a `note` saying why,
 because there is nothing to slice from. `totals` reads `reuse: 0`,
-`fetch: nchunks`, `moved: 0`, and `download_bytes` is the whole file's compressed
-size - the file has to be fetched in full.
+`fetch: nchunks`, `moved: 0`, `materialize_old_bytes: 0`, and `download_bytes`
+is the whole file's compressed size — the file has to be fetched in full. The
+writer **refuses** to emit a capture that has a new side and no plan.
 
-**`removed`** - no `new`, and therefore no `plan` and no `totals`: there is no
+**`removed`** — no `new`, and therefore no `plan` and no `totals`: there is no
 target to plan for and nothing to cost. `expectations` **is** present, in its own
 shape:
 
 ```jsonc
 { "capture_id": "removed",
-  "old": { "tag": "7.0.0", "size": 1731133, "md5": "6c220a33.", "nchunks": 2 },
+  "old": { "tag": "7.0.0", "size": 1731133, "md5": "6c220a33…", "nchunks": 2 },
   "new": null, "plan": null, "totals": null,
   "expectations": {
     "result_path": null,
@@ -549,16 +723,17 @@ is known and a consumer should be able to compare against it.
 ### 13.2 `download_bytes` is always a number
 
 `expectations.download_bytes` is the sum of `compressed_size` over the plan's
-`FETCH` entries - what a correct patch costs. It is **never** null and never
+`FETCH` entries — what a correct patch costs. It is **never** null and never
 defaulted. This is stated as a rule because getting it wrong is not a cosmetic
 bug: `null` where a figure exists reads as *unrecorded* and `0` reads as a claim.
 An `added` capture whose file actually costs 114 357 B to download, written as
 `plan: null` / `totals: null` / `download_bytes: 0`, makes a consumer that
 asserts `SUMMARY download_bytes == expectations.download_bytes` compare 114 357
-against 0 and call a perfectly correct run a failure.
+against 0 and call a perfectly correct run a failure. Assertion A20 exists to stop
+the rule being quietly dropped.
 
 Absent data has to be absent. Where a figure genuinely does not exist, the field
-that would hold it is `null` - which is why `result_path` and `result_md5` can be
+that would hold it is `null` — which is why `result_path` and `result_md5` can be
 null while `download_bytes` cannot.
 
 `expectations` is required on every capture. A patchmap a consumer cannot assert
@@ -576,7 +751,8 @@ file at `getGameConfigs.audio_pkg_scan_dir`.
 
 Both trees are covered by `MANIFEST.json → files[]` and
 `verify/checksums.json`. A consumer can `diff -r` `game/` against `expected/`
-and every differing file is exactly one that needs patching.
+and every differing file is exactly one that needs patching — except `identical`,
+whose two sides are deliberately byte-identical.
 
 > **Consuming `game/` with the main tool needs `girpr --include`.** Run against
 > this directory unscoped, the main tool builds its plan from the whole live
@@ -595,31 +771,48 @@ and every differing file is exactly one that needs patching.
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "bytes": 2340264,
       "md5": "d992a78915ebc0cc31b86d10b05c14e4f",
-      "sha256": "…", "encoding": "identity" }
+      "sha256": "…", "encoding": "identity" },
+    { "path": "manifests/7.1.0/game.manifest.json.gz",
+      "bytes": 40996047,
+      "md5": "8c718562f39f91f7e399b02de591f3bd",
+      "sha256": "…", "encoding": "gzip" }
   ],
-  "file_count": 96, "total_bytes": 98812044 }
+  "file_count": 96, "total_bytes": 208307799 }
 ```
+
+This is the **complete** inventory of the bundle: every file except
+`checksums.json` itself. `file_count` is therefore one less than the number of
+files on disk, and a bundle whose count disagrees with its tree fails A16.
 
 **`encoding: gzip` means the digest is of the _decompressed_ body**, and `bytes`
 is the decompressed length too. That is the only way a reader can check the
 document rather than the container, and it means a digest does not change if the
-file is recompressed. It also means verifying a `.gz` entry means decompressing it
-first — which is what `gircap verify` does, and why A16 would fail if the rule and
-the implementation disagreed.
+file is recompressed or produced by a different compressor. It also means
+verifying a `.gz` entry means decompressing it first — which is what `gircap
+verify` does, and why A16 would fail if the rule and the implementation
+disagreed.
 
-> **Changed in M10.** Before it, `checksums.json` and `MANIFEST.json → files[]`
-> digested the *stored* bytes for `.gz` entries while `Encoding::Gzip`'s own
-> documentation promised the decompressed ones. Nothing caught it because A16
-> re-hashes with the same function that wrote the digests, so both sides agreed on
-> the wrong answer. A bundle written by that build fails A16 on re-verification,
-> naming each affected file — which is the honest answer, not a regression.
-> Re-capture for a consistent bundle.
+A16 is deliberately **two independent passes**: one that writes the digests and
+one that re-reads the tree and compares. A single pass would make the assertion a
+tautology. Because `checksums.json` must cover `selfcheck.json` — and `README.md`,
+which renders it — and `selfcheck.json` must carry the A16 row, the close-out
+writes those documents twice and the second scan is the one recorded. Two passes
+converge exactly: the second `checksums.json` is scanned after the final
+`selfcheck.json` and `README.md`, and neither of those sizes depends on a digest,
+so a third pass would find nothing new.
+
+**A16's row states a file count and not a byte total.** That is forced, not
+chosen: the row lives inside `selfcheck.json`, which is one of the files
+`total_bytes` sums, so the last version of that number to be written is the one in
+`checksums.json` — and any total in the row describes an earlier, smaller tree.
+The count is safe, because no file appears or disappears between the two passes.
+
 ## 16. `verify/selfcheck.json`
 
 ```jsonc
 { "schema_version": 1,
   "result": "pass",                                  // pass | fail | incomplete
-  "counts": { "total": 71, "passed": 71, "failed": 0 },
+  "counts": { "total": 116, "passed": 116, "failed": 0 },
   "assertions": [
     { "id": "A6", "assertion": "chunk decompressed md5 matches",
       "subject": "chunks/blobs/340ca86e….zst",
@@ -631,18 +824,32 @@ the implementation disagreed.
 }
 ```
 
-One row per assertion **instance**, not per assertion kind — 71 chunks produce 71
-A6 rows. `ok:false` rows are never dropped; a failing capture leaves them in
-place so the failure is inspectable rather than summarized away.
+One row per assertion **instance**, not per assertion kind — 38 stored chunks
+produce 38 A6 rows, so `counts.total` is much larger than the number of ids. In
+the reference capture it is 116: A1 6, A2 2, A3 4, A4 8, A6 38, A7 7, A8 7,
+A9 6, A10 4, A11 14, A12 7, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1.
+`ok:false` rows are never dropped; a failing capture leaves them in place so the
+failure is inspectable rather than summarized away.
 
-A capture's `selfcheck.json` never contains an `A18` row: A18 is a statement
-about the bundle rather than about the run, so only `gircap verify` can assert
-it. A reader who sees an `A18` row in this file has been handed a `verify`
-report, not a capture's own account of itself — which is exactly why it carries
-an id outside the seventeen rather than being folded into A7/A8.
+`assertion` carries the assertion's wording, so a reader looking at a failed
+bundle does not have to open another file to find out what A11 means. The
+wording table is pinned by a test: `id` alone would pass if an assertion were
+silently narrowed, and "every reused chunk's old-file slice MD5 matches" and
+"every reused chunk's MD5 matches" are both `A10`.
+
+A skipped row is recorded too, and is **not** a failure: `ok` is absent and the
+row is listed under `skipped`. A `--no-chunk-blobs` capture skips A6–A12 and A19,
+reports `result: "incomplete"`, and exits `0`.
+
+A capture's `selfcheck.json` never contains an `A18` **or** an `A20` row: both
+are statements about the bundle rather than about the run, so only
+`gircap verify` can assert them. A reader who sees either id in this file has
+been handed a `verify` report, not a capture's own account of itself.
 
 ## 17. `README.md`
 
 A rendering of `MANIFEST.json` and `selfcheck.json`: versions, the matrix table
-with paths and sizes, the totals, and how to re-verify (`gircap verify`). It is
-generated, carries no facts of its own, and is safe to delete.
+with paths and sizes, the totals, any failed assertion, and how to re-verify.
+It is generated from the **final** `selfcheck.json` — after the A16 row is
+recorded — so its counts agree with the document it renders, and it carries no
+facts of its own. It is safe to delete.

@@ -55,35 +55,64 @@ impl Verified {
     /// MD5 of this blob does not match what the manifest said", which is the
     /// difference between a bisectable report and a shrug.
     pub fn failures(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        if !self.raw_size_matches {
-            out.push("len(raw blob) == compressed_size");
-        }
-        if !self.md5_compressed_matches {
-            out.push("md5(raw blob) == compressed_md5");
-        }
-        if !self.md5_decompressed_matches {
-            out.push("md5(zstd(raw blob)) == uncompressed_md5");
-        }
-        if !self.decoded_size_matches {
-            out.push("len(decoded) == uncompressed_size");
-        }
-        out
+        self.failures_iter().collect()
+    }
+
+    /// Whether any of the four failed.
+    ///
+    /// For callers that only need the yes/no. `failures()` allocates a `Vec` to
+    /// say the same thing, and it is called from inside a `filter` over every
+    /// blob in the store — so the answer was being built and dropped once per
+    /// blob per format.
+    pub const fn any_failure(&self) -> bool {
+        !self.raw_size_matches
+            || !self.md5_compressed_matches
+            || !self.md5_decompressed_matches
+            || !self.decoded_size_matches
+    }
+
+    /// Which of the four did not hold, in the spec's order.
+    ///
+    /// The primitive: [`Verified::failures`] collects it and `Display` walks it
+    /// without collecting, so rendering a blob does not allocate on the two paths
+    /// that matter — all green, and exactly one failure.
+    pub fn failures_iter(&self) -> impl Iterator<Item = &'static str> {
+        [
+            (!self.raw_size_matches).then_some("len(raw blob) == compressed_size"),
+            (!self.md5_compressed_matches).then_some("md5(raw blob) == compressed_md5"),
+            (!self.md5_decompressed_matches).then_some("md5(zstd(raw blob)) == uncompressed_md5"),
+            (!self.decoded_size_matches).then_some("len(decoded) == uncompressed_size"),
+        ]
+        .into_iter()
+        .flatten()
     }
 }
 
 impl std::fmt::Display for Verified {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.failures().as_slice() {
-            [] => f.write_str("all four A6 checks hold"),
-            [only] => write!(f, "{only} does not hold"),
-            many => write!(
-                f,
-                "{} of the four A6 checks do not hold: {}",
-                many.len(),
-                many.join(", ")
-            ),
-        }
+        // Walked rather than collected: a `Display` that allocates a `Vec` to
+        // decide between "none", "one" and "many" pays for the rare case on
+        // every render, and this renders once per A6 row.
+        //
+        // `next()` is peeked, not destructured: consuming the second failure
+        // into a `_` pattern would drop it from the "many" branch.
+        let mut it = self.failures_iter();
+        let Some(first) = it.next() else {
+            return f.write_str("all four A6 checks hold");
+        };
+        let Some(second) = it.next() else {
+            return write!(f, "{first} does not hold");
+        };
+        let rest: Vec<&str> = std::iter::once(first)
+            .chain(std::iter::once(second))
+            .chain(it)
+            .collect();
+        write!(
+            f,
+            "{} of the four A6 checks do not hold: {}",
+            rest.len(),
+            rest.join(", ")
+        )
     }
 }
 
@@ -147,43 +176,159 @@ impl BlobProps {
     pub fn measure(raw: &[u8], chunk: &SophonChunk) -> Result<BlobProps, ApiError> {
         let what = format!("chunk {}", chunk.id);
         if !hash::is_zstd(raw) {
-            return Err(ApiError::shape(
-                "chunk",
-                format!(
-                    "{what}: not a zstd frame ({} bytes, magic {:02x?}); the build declared \
-                     compression=1",
-                    raw.len(),
-                    &raw[..raw.len().min(4)],
-                ),
-            ));
+            return Err(Self::not_a_frame(&what, raw));
         }
-        let md5_compressed = hash::md5_hex(raw);
+        let compressed = hash::md5_sha256(raw);
         // A frame that will not decode leaves the two decode-dependent checks
         // false and records why, rather than taking the whole blob down with it.
-        let decoded = hash::zstd_decompress(raw, &what);
-        let md5_decompressed = decoded.as_ref().map(|d| hash::md5_hex(d)).ok();
-        Ok(BlobProps {
+        //
+        // Streamed, not decompressed: the two numbers this needs are the
+        // decoded length and the decoded md5, and the largest measured chunk is
+        // 3 689 476 B — so a `Vec<u8>` here is ~30 MB of peak RSS at `--jobs 8`,
+        // alive at the same moment as the eight raw bodies, to compute two values
+        // and throw the rest away. `zstd_measure` is the same decode with a
+        // counter and a hasher where the buffer was.
+        //
+        // And the compressed digests are one pass, not two: `md5_compressed` and
+        // `sha256_compressed` cover the same buffer and the crate records both.
+        let measured = hash::zstd_measure(raw, &what);
+        Ok(Self::assemble(compressed, measured, chunk))
+    }
+
+    /// [`BlobProps::measure`] for a blob already on disk, with its compressed
+    /// digests already computed.
+    ///
+    /// The capture path streams a chunk to a file and digests it on the way past,
+    /// so by the time there is anything to measure the bytes have never been in
+    /// memory. `compressed` is what the *write* computed, which is the same number
+    /// [`BlobProps::measure`] would have computed over the same bytes —
+    /// `a_hashable_file_reports_the_digests_of_the_bytes_it_stored` is what keeps
+    /// that true rather than merely intended.
+    ///
+    /// Only the decode reads the file, and it reads it through a 16 KB window.
+    /// So the peak cost of measuring a blob is the cost of the network chunk that
+    /// produced it.
+    ///
+    /// The one refusal `measure` makes — "not a zstd frame" — is made here too,
+    /// from the file's first four bytes, and with the same message. Everything
+    /// else that can go wrong is a decode failure, which is recorded rather than
+    /// raised.
+    pub fn measure_file(
+        path: &std::path::Path,
+        chunk: &SophonChunk,
+        compressed: hash::Digests,
+    ) -> Result<BlobProps, ApiError> {
+        let what = format!("chunk {}", chunk.id);
+        let file = std::fs::File::open(path).map_err(|e| {
+            ApiError::shape("chunk", format!("{what}: reopening what was just written: {e}"))
+        })?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut head = [0_u8; 4];
+        use std::io::Read as _;
+        let n = reader
+            .read(&mut head)
+            .map_err(|e| ApiError::shape("chunk", format!("{what}: reading the magic: {e}")))?;
+        if !hash::is_zstd(&head[..n]) {
+            return Err(Self::not_a_frame(&what, &head[..n]));
+        }
+        // Rewind rather than chain the head back: `zstd_measure_from` reads its
+        // own four bytes to sniff with, so the file must start at zero.
+        use std::io::Seek as _;
+        reader.rewind().map_err(|e| {
+            ApiError::shape("chunk", format!("{what}: rewinding to decode: {e}"))
+        })?;
+        let measured = hash::zstd_measure_from(reader, &what);
+        Ok(Self::assemble(compressed, measured, chunk))
+    }
+
+    /// The one thing that is an error rather than a recorded decode failure.
+    ///
+    /// The build declared `compression: 1`, so unframed bytes are a protocol
+    /// violation rather than a digest mismatch, and there is nothing to measure.
+    /// One function so the buffered and file paths say the *same* thing — a blob
+    /// that is not a frame gets one error text whichever way it arrived.
+    fn not_a_frame(what: &str, seen: &[u8]) -> ApiError {
+        ApiError::shape(
+            "chunk",
+            format!(
+                "{what}: not a zstd frame ({} bytes, magic {:02x?}); the build declared \
+                 compression=1",
+                seen.len(),
+                &seen[..seen.len().min(4)],
+            ),
+        )
+    }
+
+    /// The entry for a blob whose bytes arrived but are not a zstd frame.
+    ///
+    /// **This is the evidence, not a failure.** [`BlobProps::measure`] refuses a
+    /// body that is not a zstd frame, and a refusal must not become a hole: the
+    /// bytes are already on disk, so they are kept and the row says why they will
+    /// not decode. A truncated or mis-served response is precisely the thing this
+    /// tool exists to keep, and this module's stated purpose says so.
+    ///
+    /// The row carries **more** than a discarded one would. The compressed
+    /// digests are computed because hashing the raw bytes does not need zstd, so
+    /// a reader gets the exact bytes, their digests, and the reason they will
+    /// not decode — rather than a hole and a sentence saying nothing arrived.
+    ///
+    /// `verified` is `None` rather than a set of `false`s: nothing was measured
+    /// against the manifest, and `verify` reports `null` as "not measured", which is
+    /// the honest reading. The two digest-dependent checks genuinely cannot be
+    /// answered; a row of `false`s would claim they were answered and failed.
+    pub fn undecodable(raw: &[u8], chunk: &SophonChunk, why: String) -> BlobProps {
+        let compressed = hash::md5_sha256(raw);
+        BlobProps {
             chunk_id: chunk.id.clone(),
             stored_path: None,
             bytes: raw.len() as u64,
             container: "zstd".to_string(),
-            sha256_compressed: hash::sha256_hex(raw),
-            md5_compressed: md5_compressed.clone(),
-            md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
-            uncompressed_size: decoded.as_ref().map(|d| d.len() as u64).unwrap_or(0),
+            sha256_compressed: compressed.sha256,
+            md5_compressed: compressed.md5,
+            // The declared digest, not a computed one: the body cannot be
+            // decoded, so there is no decompressed body to compare against.
+            md5_decompressed: chunk.uncompressed_md5.clone(),
+            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
             unknown_field6: chunk.unknown_field6,
-            decode_error: decoded.as_ref().err().cloned(),
-            verified: Some(Verified {
-                raw_size_matches: raw.len() as i64 == chunk.compressed_size,
-                md5_compressed_matches: md5_compressed == chunk.compressed_md5,
-                md5_decompressed_matches: md5_decompressed.as_deref()
-                    == Some(&chunk.uncompressed_md5),
-                decoded_size_matches: matches!(decoded.as_ref(), Ok(d) if d.len() as i64 == chunk.uncompressed_size),
-            }),
-        })
+            verified: None,
+            decode_error: Some(why),
+        }
     }
 
-    /// The entry for a blob that was never fetched.
+    /// The row, from the two things that were measured.
+///
+/// **The tail shared by [`BlobProps::measure`] and [`BlobProps::measure_file`]**,
+/// and the reason they cannot disagree about a field: a decode that failed leaves
+/// the two decode-dependent checks false and records why, rather than taking the
+/// whole blob down with it.
+///
+/// `measured` being `Err` is a *recorded* state, not a propagated one, so the
+/// compressed digests and `bytes` still land in the row — they were computed over
+/// bytes that exist on disk.
+fn assemble(compressed: hash::Digests, measured: Result<hash::Measure, String>, chunk: &SophonChunk) -> BlobProps {
+    let decoded_size = measured.as_ref().ok().map(|m| m.len);
+    let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
+    BlobProps {
+        chunk_id: chunk.id.clone(),
+        stored_path: None,
+        bytes: compressed.bytes,
+        container: "zstd".to_string(),
+        sha256_compressed: compressed.sha256,
+        md5_compressed: compressed.md5.clone(),
+        md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
+        uncompressed_size: decoded_size.unwrap_or(0),
+        unknown_field6: chunk.unknown_field6,
+        decode_error: measured.as_ref().err().cloned(),
+        verified: Some(Verified {
+            raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
+            md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
+            md5_decompressed_matches: md5_decompressed.as_deref() == Some(&chunk.uncompressed_md5),
+            decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
+        }),
+    }
+}
+
+/// The entry for a blob that was never fetched.
     ///
     /// `--no-chunk-blobs` produces these. The declared sizes come from the
     /// manifest and the digests are **empty strings rather than zeros**,
@@ -214,6 +359,15 @@ impl BlobProps {
     /// blob failing three of four is three findings.
     pub fn failures(&self) -> Vec<&'static str> {
         self.verified.map(|v| v.failures()).unwrap_or_default()
+    }
+
+    /// Whether this blob contributes any A6 row.
+    ///
+    /// See [`Verified::any_failure`]: this exists so the call site inside
+    /// `Store::index`'s `filter` does not build a `Vec` per blob to ask a
+    /// yes/no question.
+    pub fn any_failure(&self) -> bool {
+        self.verified.is_some_and(|v| v.any_failure())
     }
 
     /// Whether this blob can be assembled from.
@@ -263,6 +417,87 @@ impl BlobProps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body that is not a zstd frame, with the chunk that declares it.
+    ///
+    /// **The shape the CDN actually serves when a blob request goes wrong**: an
+    /// XML `NoSuchKey` document, byte for byte the body `api/error_shapes.json`
+    /// records for its own negative probes. My first attempt truncated a real
+    /// frame, which does *not* work — `is_zstd` checks four magic bytes, so a
+    /// truncated frame is still framed. The test that noticed that is
+    /// `a_body_that_is_not_a_zstd_frame_is_refused_by_measure`'s own guard.
+    fn mis_served_chunk() -> (SophonChunk, Vec<u8>) {
+        let payload = b"the quick brown fox jumps over the lazy dog".repeat(64);
+        let (chunk, _) = chunk_with(&payload);
+        let xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
+                   <Code>NoSuchKey</Code>\n  <Message>The specified key does not \
+                   exist.</Message>\n</Error>\n";
+        (chunk, xml.to_vec())
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_zstd_frame_is_refused_by_measure() {
+        // `measure` must refuse an unframed body — the caller decides what to do
+        // with the refusal, and the caller's decision is the other test.
+        let (chunk, cut) = mis_served_chunk();
+        assert!(
+            !hash::is_zstd(&cut),
+            "the fixture must actually be unframed, or this tests nothing"
+        );
+        assert!(BlobProps::measure(&cut, &chunk).is_err());
+    }
+
+    #[test]
+    fn an_undecodable_body_keeps_its_bytes_digests_and_reason() {
+        // The bytes are evidence, so they are kept: a body like this propagates
+        // out of `measure` as an `Err`, and the row must carry the bytes, their
+        // digests and the real reason rather than a "the fetch failed" story.
+        let (chunk, cut) = mis_served_chunk();
+        let why = BlobProps::measure(&cut, &chunk).expect_err("unframed");
+        let p = BlobProps::undecodable(&cut, &chunk, why.to_string());
+
+        assert_eq!(
+            p.bytes,
+            cut.len() as u64,
+            "the row records how many bytes arrived, not zero"
+        );
+        assert_eq!(
+            p.md5_compressed,
+            hash::md5_hex(&cut),
+            "the compressed digest is computable without zstd, so it is recorded"
+        );
+        assert_eq!(p.sha256_compressed, hash::sha256_hex(&cut));
+        assert_eq!(
+            p.md5_decompressed, chunk.uncompressed_md5,
+            "and the declared digest is kept as declared - there is nothing to compare it against"
+        );
+        assert!(
+            p.decode_error.as_deref().unwrap_or_default().contains("not a zstd frame"),
+            "the row says why it will not decode: {:?}",
+            p.decode_error
+        );
+        assert!(
+            p.verified.is_none(),
+            "`verified: null` is 'not measured'; a row of `false`s would claim the \
+             checks were answered and failed"
+        );
+    }
+
+    #[test]
+    fn an_undecodable_body_is_distinguishable_from_one_that_never_arrived() {
+        // The two rows a reader must be able to tell apart: a blob whose bytes
+        // are on disk and will not decode, and a blob with no bytes at all.
+        let (chunk, cut) = mis_served_chunk();
+        let kept = BlobProps::undecodable(&cut, &chunk, "not a zstd frame".to_string());
+        let never = BlobProps::unmeasured(&chunk);
+        assert_ne!(kept.bytes, never.bytes);
+        assert!(kept.md5_compressed.len() == 32);
+        assert!(
+            never.md5_compressed.is_empty(),
+            "an absent digest is empty, not zeroed - a zeroed one is a claim"
+        );
+        assert!(never.decode_error.is_none());
+    }
 
     /// A chunk and the exact bytes that should satisfy it.
     ///

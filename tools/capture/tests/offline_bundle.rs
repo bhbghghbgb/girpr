@@ -1,4 +1,4 @@
-//! M9, end to end and entirely offline: build a bundle on disk, then `verify`
+//! End to end and entirely offline: build a bundle on disk, then `verify`
 //! it, `materialize` it, and `list` it.
 //!
 //! No test here touches the network. The fixture is written with the crate's own
@@ -261,6 +261,15 @@ impl Bundle {
             write_json(&root.join(format!("patchmaps/{id}.json")), m);
         }
 
+        // `api/error_shapes.json`. **Required**, and this fixture had to grow it:
+        // it was building a bundle that no capture could produce, and `verify`
+        // said so. A hand-built fixture that is easier than the real thing will
+        // always find a way to be easier.
+        write_json(
+            &root.join("api/error_shapes.json"),
+            &error_shapes(),
+        );
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -406,6 +415,34 @@ fn build(tag: &str, id: &str) -> gircap::emit::index::Build {
     }
 }
 
+/// The one required document this fixture has no measurement behind.
+///
+/// It is synthesised rather than probed, because probing needs a live API and
+/// this fixture is the point of being offline. What it has to be is **valid** —
+/// the same type `capture` writes, with the field shapes a reader relies on —
+/// because the requirement under test is "the document is there and readable",
+/// not "the numbers are right". The numbers are `capture_layout`'s job, against
+/// a real probe.
+fn error_shapes() -> gircap::http::probe::ErrorShapes {
+    use gircap::http::probe::ErrorShape;
+    gircap::http::probe::ErrorShapes {
+        schema_version: gircap::SCHEMA_VERSION,
+        shapes: vec![ErrorShape {
+            id: "chunk_missing".into(),
+            family: gircap::http::probe::Family::Blob,
+            request: "a chunk id the build does not have".into(),
+            url: "https://cdn.example/chunks/0000000000000000_0".into(),
+            status: 404,
+            content_type: Some("application/xml".into()),
+            retcode: None,
+            error: true,
+            body: "<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".into(),
+            volatile_fields: vec!["RequestId".into(), "HostId".into(), "Key".into()],
+            retryable: false,
+        }],
+    }
+}
+
 /// The region, resolved the way `capture` resolves it from `--biz hk4e_global`.
 fn biz() -> gircap::biz::Biz {
     gircap::biz::Biz::resolve(gircap::cli::Biz::Hk4eGlobal)
@@ -436,9 +473,9 @@ fn reverify(root: &Path) -> gircap::verify::Report {
     gircap::verify::reverify(b)
 }
 
-// ---------------------------------------------------------------- M9's accept
+// --------------------------------------------------------------- acceptance
 
-/// M9: `verify` on a good artifact exits 0.
+/// `verify` on a good artifact exits 0.
 #[test]
 fn verify_passes_a_good_bundle() {
     let b = Bundle::build("good");
@@ -463,7 +500,7 @@ fn verify_passes_a_good_bundle() {
     assert!(!r.findings.is_empty() || r.findings.is_empty());
 }
 
-/// M9: after corrupting one byte of one chunk blob, `verify` reports `3` and
+/// After corrupting one byte of one chunk blob, `verify` reports `3` and
 /// names the blob and the assertion.
 #[test]
 fn verify_reports_a_damaged_blob_by_name() {
@@ -511,7 +548,7 @@ fn verify_reports_a_deleted_blob_by_name() {
     assert!(r.closure.is_some(), "and the closure failed too");
 }
 
-/// M9: `materialize` rebuilds both files from `chunks/` and matches `game/` and
+/// `materialize` rebuilds both files from `chunks/` and matches `game/` and
 /// `expected/`.
 #[test]
 fn materialize_rebuilds_both_files_byte_for_byte() {
@@ -541,7 +578,6 @@ fn materialize_defaults_beside_the_bundle() {
     let plan = gircap::config::MaterializePlan {
         artifact: b.root.clone(),
         out: None,
-        output: gircap::report::OutputFormat::Text,
     };
     let (summary, code) = block_on(gircap::run::materialize(plan)).expect("materialize runs");
     assert_eq!(code, gircap::exit::ExitCode::Ok, "{:?}", summary);
@@ -616,6 +652,11 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     round_trip::<ChunkIndex>(&b.root.join("chunks/index.json"));
     round_trip::<Checksums>(&b.root.join("verify/checksums.json"));
     round_trip::<Selfcheck>(&b.root.join("verify/selfcheck.json"));
+    // `error_shapes.json` is here because it is now **required** — `verify`
+    // reads it through the type that wrote it, so a `Serialize`-only struct would
+    // have been a compile error rather than a discovery. The round-trip is what
+    // says the two halves still agree on the wire format.
+    round_trip::<gircap::http::probe::ErrorShapes>(&b.root.join("api/error_shapes.json"));
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 
@@ -666,8 +707,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     // itself: a second implementation of the same wrong thing is not a check.
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
     let direct = materialize::rebuild(
-        &b.root,
-        &index,
+        &materialize::ChunksByFile::build(&index),
         &gircap::assemble::ChunkSource::from_index(&b.root, &index),
         OLD_TAG,
         CAPTURE,

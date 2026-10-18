@@ -26,7 +26,6 @@
 use std::path::Path;
 
 use crate::biz::Biz;
-use crate::hash;
 
 /// The `[General]` block `config.ini` carries.
 ///
@@ -164,15 +163,6 @@ pub struct Written {
     pub expected: Vec<String>,
 }
 
-impl Written {
-    /// Every path this wrote, both trees.
-    pub fn all(&self) -> Vec<String> {
-        let mut v = self.game.clone();
-        v.extend(self.expected.iter().cloned());
-        v
-    }
-}
-
 /// Write `config.ini` and the audio scan file, the two entries that are not
 /// variant files.
 ///
@@ -193,8 +183,8 @@ pub fn write_prelude(
     // finished.
     let scan = audio_scan_file(audio).map_err(std::io::Error::other)?;
     Ok(vec![
-        write_bytes(root, "game/config.ini", config_ini(biz, old_tag).as_bytes())?,
-        write_bytes(root, &format!("game/{scan_dir}"), scan.as_bytes())?,
+        super::write_rel(root, "game/config.ini", config_ini(biz, old_tag).as_bytes())?,
+        super::write_rel(root, &format!("game/{scan_dir}"), scan.as_bytes())?,
     ])
 }
 
@@ -208,7 +198,7 @@ pub fn write_variant(root: &Path, tree: &str, file: &VariantFile<'_>) -> std::io
         tree,
         "variant file written"
     );
-    write_bytes(root, &rel, file.bytes)
+    super::write_rel(root, &rel, file.bytes)
 }
 
 /// Write `game/` and `expected/` in one call.
@@ -231,26 +221,14 @@ pub fn write_gamedir(
         expected: Vec::new(),
     };
     for f in old_files {
-        w.game.push(write_variant(root, "game", f)?);
+        w.game
+            .push(write_variant(root, super::GAME_TREE, f)?);
     }
     for f in new_files {
-        w.expected.push(write_variant(root, "expected", f)?);
+        w.expected
+            .push(write_variant(root, super::EXPECTED_TREE, f)?);
     }
     Ok(w)
-}
-
-/// The MD5 of a `config.ini` body, for the manifest's `files[]`.
-pub fn config_ini_md5(biz: &Biz, old_tag: &str) -> String {
-    hash::md5_hex(config_ini(biz, old_tag).as_bytes())
-}
-
-fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
-    let path = root.join(rel);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, bytes)?;
-    Ok(rel.to_string())
 }
 
 #[cfg(test)]
@@ -425,11 +403,8 @@ mod tests {
     }
 
     #[test]
-    fn the_config_ini_digest_is_of_the_bytes_that_are_written() {
+    fn the_config_ini_body_names_the_biz_and_the_old_tag() {
         let ini = config_ini(&global(), "7.0.0");
-        assert_eq!(
-            config_ini_md5(&global(), "7.0.0"),
-            hash::md5_hex(ini.as_bytes())
-        );
+        assert!(ini.contains("7.0.0"), "{ini}");
     }
 }

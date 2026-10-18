@@ -89,14 +89,6 @@ impl Range {
         next.start - self.end
     }
 
-    /// As a `std` range, for slicing. `None` when inverted or empty.
-    pub fn as_std(self) -> Option<std::ops::Range<usize>> {
-        if self.start < 0 || self.is_inverted() {
-            return None;
-        }
-        Some(self.start as usize..self.end as usize)
-    }
-
     /// The slice of `bytes` this range names, if it names a valid one.
     pub fn slice<'a>(&self, bytes: &'a [u8]) -> Option<&'a [u8]> {
         if self.is_inverted() || self.start < 0 {
@@ -133,8 +125,20 @@ impl Layout {
     ///
     /// The checks are exactly A11: offsets ascending and gapless from 0, and
     /// `Σ uncompressed_size == size`.
-    pub fn of(parts: &[(i64, i64)], declared_size: i64) -> Layout {
-        let ranges: Vec<Range> = parts.iter().map(|&(o, l)| Range::at(o, l)).collect();
+    ///
+    /// Takes an iterator of `(offset, length)` rather than a slice, so a caller
+    /// can stream its chunks straight in. It used to take `&[(i64, i64)]`, which
+    /// meant every caller built a `Vec` of tuples only for this to convert it
+    /// into a `Vec<Range>` and drop the first one — two vectors where one would
+    /// do, for every file assembled.
+    pub fn of(
+        parts: impl IntoIterator<Item = (i64, i64)>,
+        declared_size: i64,
+    ) -> Layout {
+        let ranges: Vec<Range> = parts
+            .into_iter()
+            .map(|(o, l)| Range::at(o, l))
+            .collect();
         let total: i64 = ranges.iter().map(Range::len).sum();
         let mut violations = Vec::new();
 
@@ -194,13 +198,6 @@ impl Layout {
     pub fn is_clean(&self) -> bool {
         self.violations.is_empty()
     }
-
-    /// The ranges in ascending offset order.
-    pub fn sorted(&self) -> Vec<Range> {
-        let mut r = self.ranges.clone();
-        r.sort();
-        r
-    }
 }
 
 #[cfg(test)]
@@ -252,7 +249,6 @@ mod tests {
         // different but not contradictory.
         assert!(r.is_empty());
         assert_eq!(r.len(), -6);
-        assert_eq!(r.as_std(), None, "cannot be sliced");
         assert_eq!(r.slice(b"0123456789"), None);
     }
 
@@ -272,7 +268,7 @@ mod tests {
     /// A11, the happy path: three chunks that tile a 300 B file from 0.
     #[test]
     fn a_gapless_ascending_layout_is_clean() {
-        let l = Layout::of(&[(0, 100), (100, 100), (200, 100)], 300);
+        let l = Layout::of([(0, 100), (100, 100), (200, 100)], 300);
         assert!(l.is_clean(), "{:?}", l.violations);
         assert_eq!(l.total, 300);
         assert_eq!(l.ranges.len(), 3);
@@ -287,7 +283,7 @@ mod tests {
         // The declared size matches the sum of the chunk lengths, so the gap is
         // the *only* violation and the message can be about the gap alone. A11
         // counts `Σ uncompressed_size`, not `last chunk's end`.
-        let l = Layout::of(&[(0, 100), (150, 100)], 200);
+        let l = Layout::of([(0, 100), (150, 100)], 200);
         assert!(!l.is_clean());
         assert_eq!(l.violations.len(), 1, "{:?}", l.violations);
         assert!(
@@ -303,7 +299,7 @@ mod tests {
     /// first would leave the second undiscovered until it was fixed.
     #[test]
     fn two_independent_violations_are_both_reported() {
-        let l = Layout::of(&[(0, 100), (150, 100)], 999);
+        let l = Layout::of([(0, 100), (150, 100)], 999);
         assert_eq!(l.violations.len(), 2, "{:?}", l.violations);
         assert!(l.violations[0].contains("gap of 50 B"));
         assert!(l.violations[1].contains("total 200 B"));
@@ -311,7 +307,7 @@ mod tests {
 
     #[test]
     fn an_overlap_is_named_as_an_overlap_and_not_as_a_negative_gap() {
-        let l = Layout::of(&[(0, 100), (80, 100)], 200);
+        let l = Layout::of([(0, 100), (80, 100)], 200);
         assert_eq!(l.violations.len(), 1, "{:?}", l.violations);
         assert!(
             l.violations[0].contains("20-overlap bytes") || l.violations[0].contains("overlap"),
@@ -323,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_layout_that_does_not_start_at_zero_is_named_first() {
-        let l = Layout::of(&[(10, 100), (110, 100)], 210);
+        let l = Layout::of([(10, 100), (110, 100)], 210);
         assert!(
             l.violations[0].contains("first chunk starts at 10"),
             "{:?}",
@@ -333,7 +329,7 @@ mod tests {
 
     #[test]
     fn a_total_that_disagrees_with_the_declared_size_is_its_own_violation() {
-        let l = Layout::of(&[(0, 100), (100, 100)], 999);
+        let l = Layout::of([(0, 100), (100, 100)], 999);
         assert_eq!(l.violations.len(), 1, "{:?}", l.violations);
         assert!(
             l.violations[0].contains("total 200 B"),
@@ -351,7 +347,7 @@ mod tests {
     /// the difference has to show up.
     #[test]
     fn out_of_order_chunks_are_reported_but_still_usable() {
-        let l = Layout::of(&[(200, 100), (0, 100), (100, 100)], 300);
+        let l = Layout::of([(200, 100), (0, 100), (100, 100)], 300);
         assert!(!l.is_clean());
         assert!(
             l.violations
@@ -360,15 +356,19 @@ mod tests {
             "{:?}",
             l.violations
         );
-        // And the ranges are still there, sorted, because assembly needs them.
-        let s = l.sorted();
+        // And the ranges are still there, in offset order, because assembly needs them.
+        let s: Vec<Range> = {
+            let mut s = l.ranges.clone();
+            s.sort();
+            s
+        };
         assert_eq!(s[0], Range::at(0, 100));
         assert_eq!(s[2], Range::at(200, 100));
     }
 
     #[test]
     fn a_zero_length_chunk_is_reported_rather_than_silently_allowed() {
-        let l = Layout::of(&[(0, 100), (100, 0), (100, 100)], 200);
+        let l = Layout::of([(0, 100), (100, 0), (100, 100)], 200);
         assert!(
             l.violations.iter().any(|v| v.contains("zero-length")),
             "{:?}",
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn an_empty_file_is_clean_and_empty() {
-        let l = Layout::of(&[], 0);
+        let l = Layout::of([], 0);
         assert!(l.is_clean());
         assert!(l.ranges.is_empty());
         assert_eq!(l.total, 0);

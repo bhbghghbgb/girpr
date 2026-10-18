@@ -6,9 +6,8 @@
 //! The split is what lets a test build a plan without a command line, and what
 //! keeps one rule from being applied twice under two spellings.
 //!
-//! This milestone lands the vocabulary and the flag-level validation. The parts
-//! that need an API answer — the version pair, the branch's `package_id` and
-//! `password` — arrive with [`crate::hyp`] in M2, because a plan whose `old_tag`
+//! What needs an API answer — the version pair, the branch's `package_id` and
+//! `password` — arrives with [`crate::hyp`], because a plan whose `old_tag`
 //! came from `diff_tags[0]` cannot be built without one.
 
 use std::path::{Path, PathBuf};
@@ -16,7 +15,6 @@ use std::path::{Path, PathBuf};
 use crate::cli::{
     Biz, CaptureArgs, ManifestDetail, MaterializeArgs, Result, UsageError, VerifyArgs,
 };
-use crate::report::OutputFormat;
 
 /// The audio language selected when `--audio` is not passed.
 ///
@@ -28,13 +26,6 @@ pub const DEFAULT_AUDIO: &str = "en-us";
 
 /// The `--audio` spelling that means "game only, no voice packs".
 pub const AUDIO_NONE: &str = "none";
-
-/// The gzip threshold applied when `--gzip-threshold` is not passed.
-pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
-
-/// A `--no-chunk-blobs` run.
-pub const METADATA_ONLY_NOTE: &str =
-    "metadata-only run: assertions A7-A10 are not provable without chunk blobs";
 
 /// How `--new-tag` chose a tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,12 +180,22 @@ pub struct CapturePlan {
     pub new_tag: Option<String>,
     /// `--old-tag`, with the `diff_tags[0]` default *not yet* resolved.
     pub old_tag: Option<String>,
-    /// Files admitted per matrix class.
+    /// Files admitted per matrix class. **At least 1** — the floor is applied in
+    /// [`capture_plan`], so a consumer may read this without defending against
+    /// zero.
     pub per_class: u32,
     /// Summed-cost ceiling over admitted files.
     pub max_download_bytes: Option<u64>,
     /// Classes whose absence must fail the run.
-    pub require_class: Vec<String>,
+    ///
+    /// **Parsed, not raw, and not defaulted.** Both matter and they are separate
+    /// decisions. Parsing happens here so that `--require-class identicalo` is a
+    /// usage error before a socket opens, naming the flag and the bad value.
+    /// Defaulting does *not* happen here, because the set of required classes is
+    /// the matrix's own ordering and duplicating it here would be a second source
+    /// of truth for one fact. An empty list therefore means "nothing is required",
+    /// and `select::require` is where an unmet class becomes exit `4`.
+    pub require_class: Vec<crate::select::Class>,
     /// Explicit paths, bypassing matrix selection.
     pub files: Vec<String>,
     /// Selected audio: either codes or the `none` sentinel, never both.
@@ -213,12 +214,16 @@ pub struct CapturePlan {
     pub retries: u32,
     /// Per-request timeout.
     pub timeout: std::time::Duration,
+    /// Ceiling on one response body.
+    ///
+    /// Not the same as `--max-download-bytes`, which is a *budget* over the files
+    /// a run admits to fetch; this limits any single response, whether or not the
+    /// file was admitted.
+    pub max_response_bytes: u64,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
     pub sophon_base: Option<String>,
-    /// stdout rendering.
-    pub output: OutputFormat,
     /// The argv as given, recorded in the artifact so a bundle says how it was made.
     pub argv: Vec<String>,
 }
@@ -272,11 +277,6 @@ impl AudioSelection {
             AudioSelection::None => &[],
         }
     }
-
-    /// Whether a voice pack is written into the fixture.
-    pub fn is_some(&self) -> bool {
-        matches!(self, AudioSelection::Codes(_))
-    }
 }
 
 impl std::fmt::Display for AudioSelection {
@@ -288,38 +288,18 @@ impl std::fmt::Display for AudioSelection {
     }
 }
 
-/// The concurrency a capture is allowed to use, validated once.
-#[derive(Debug, Clone, Copy)]
-pub struct Transport {
-    /// Concurrent chunk downloads.
-    pub jobs: usize,
-    /// Attempts per request, including the first.
-    pub retries: u32,
-    /// Per-request timeout.
-    pub timeout: std::time::Duration,
-}
-
-impl Transport {
-    /// A transport that performs exactly one attempt and never waits.
-    ///
-    /// For tests driving a local mock, where a retry would turn a fast failure
-    /// into a slow one and hide the cause.
-    pub const fn immediate() -> Self {
-        Transport {
-            jobs: 1,
-            retries: 1,
-            timeout: std::time::Duration::from_secs(10),
-        }
-    }
-}
-
 /// Validate a flag-level request into a [`CapturePlan`].
 ///
-/// This is the whole of M0's share of the work: it cannot resolve a version pair
-/// (no API yet), but everything that is wrong in the *request* is caught here, so
-/// a bad flag is rejected before a socket is opened rather than after.
+/// This cannot resolve a version pair — that needs an API answer — but everything
+/// that is wrong in the *request* is caught here, so a bad flag is rejected
+/// before a socket is opened rather than after.
 pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan> {
-    let transport = validate_transport(args.jobs, args.retries, args.timeout)?;
+    let transport = validate_transport(
+        args.jobs,
+        args.retries,
+        args.timeout,
+        args.max_response_bytes,
+    )?;
     let audio = validate_audio(&args.audio)?;
     validate_paths(&args.files, "--files")?;
     validate_probe_tags(&args.probe_tags)?;
@@ -345,35 +325,58 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         out: args.out.clone(),
         new_tag: args.new_tag.clone(),
         old_tag: args.old_tag.clone(),
-        per_class: args.per_class,
+        // **The floor is applied here, once**, so it is a property of the plan
+        // rather than a convention each consumer has to remember.
+        //
+        // **Still a floor, not a usage error**: asking for zero captures of a
+        // class is not a request for an empty bundle, it is a request to capture
+        // nothing while still charging admission for it. `select::decide` keeps its
+        // own floor as defence, because it is a pure function called directly by
+        // tests with whatever they like.
+        per_class: args.per_class.max(1),
         max_download_bytes: args.max_download_bytes,
-        // An empty `--require-class` means "all required"; the set of required
-        // classes is fixed by the matrix, so resolving it here would duplicate
-        // the matrix's ordering. It stays a `Vec` and is defaulted in M5, where
-        // the matrix it refers to exists.
-        require_class: args.require_class.clone(),
+        // Parsed here, even though the empty case is not defaulted: a typo must be
+        // a usage error before any network work, not a finding discovered after
+        // both manifests per field, the diff and the whole selection have run.
+        require_class: parse_classes(&args.require_class)?,
         files: args.files.clone(),
         audio,
         manifest_detail: args.manifest_detail,
         gzip_threshold: args.gzip_threshold,
         probe_tags: args.probe_tags.clone(),
         no_chunk_blobs: args.no_chunk_blobs,
-        jobs: transport.jobs,
+        jobs: args.jobs,
         retries: transport.retries,
         timeout: transport.timeout,
+        max_response_bytes: transport.max_response_bytes,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
         argv,
     })
 }
 
+/// Parse every `--require-class` value, naming the flag and the bad one.
+fn parse_classes(raw: &[String]) -> Result<Vec<crate::select::Class>> {
+    raw.iter()
+        .map(|c| {
+            crate::select::Class::parse(c)
+                .map_err(|e| UsageError::new(format!("--require-class {c:?}: {e}")))
+        })
+        .collect()
+}
+
 /// Validate the transport flags together, naming the one at fault.
-fn validate_transport(jobs: usize, retries: u32, timeout_secs: u64) -> Result<Transport> {
+///
+/// `--jobs` is range-checked here but is **not** part of the returned value:
+/// `http::Transport` is per-fetcher patience, and the concurrency a capture may
+/// use is the caller's business — the chunk fetcher reads `plan.jobs` where it
+/// builds its own queue.
+fn validate_transport(
+    jobs: usize,
+    retries: u32,
+    timeout_secs: u64,
+    max_response_bytes: u64,
+) -> Result<crate::http::Transport> {
     if jobs == 0 {
         return Err(UsageError::new("--jobs must be at least 1"));
     }
@@ -396,10 +399,17 @@ fn validate_transport(jobs: usize, retries: u32, timeout_secs: u64) -> Result<Tr
     if timeout_secs == 0 {
         return Err(UsageError::new("--timeout must be at least 1 second"));
     }
-    Ok(Transport {
-        jobs,
+    if max_response_bytes == 0 {
+        // The other three are checked here for the same reason, and a zero ceiling
+        // is the same kind of nonsense: it would refuse the very first byte of every
+        // response, which is a tool that cannot fetch anything rather than one with
+        // a limit.
+        return Err(UsageError::new("--max-response-bytes must be at least 1"));
+    }
+    Ok(crate::http::Transport {
         retries,
         timeout: std::time::Duration::from_secs(timeout_secs),
+        max_response_bytes,
     })
 }
 
@@ -535,8 +545,6 @@ fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
 pub struct VerifyPlan {
     /// The bundle to re-check.
     pub artifact: PathBuf,
-    /// stdout rendering.
-    pub output: OutputFormat,
 }
 
 /// `gircap materialize` resolved and checked.
@@ -546,19 +554,12 @@ pub struct MaterializePlan {
     pub artifact: PathBuf,
     /// Where to write, if not beside the bundle.
     pub out: Option<PathBuf>,
-    /// stdout rendering.
-    pub output: OutputFormat,
 }
 
 /// Resolve `gircap verify`'s arguments.
 pub fn verify_plan(args: &VerifyArgs) -> Result<VerifyPlan> {
     Ok(VerifyPlan {
         artifact: args.artifact.clone(),
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
     })
 }
 
@@ -577,11 +578,6 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
     Ok(MaterializePlan {
         artifact: args.artifact.clone(),
         out,
-        output: args
-            .common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
     })
 }
 
@@ -661,12 +657,13 @@ mod tests {
             files: Vec::new(),
             audio: vec![DEFAULT_AUDIO.to_string()],
             manifest_detail: ManifestDetail::Full,
-            gzip_threshold: DEFAULT_GZIP_THRESHOLD,
+            gzip_threshold: crate::cli::DEFAULT_GZIP_THRESHOLD,
             probe_tags: Vec::new(),
             no_chunk_blobs: false,
             jobs: 4,
             retries: 3,
             timeout: 60,
+            max_response_bytes: crate::http::DEFAULT_MAX_RESPONSE_BYTES,
             hyp_base: None,
             sophon_base: None,
             common: CommonArgs {
@@ -684,6 +681,71 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_per_class_is_floored_once_in_the_plan() {
+        // The floor belongs to the plan, not to each consumer: `select::decide`
+        // and `emit::tree` both read this field, and a convention two places have
+        // to remember is not a property of anything.
+        //
+        // Asserted on the *plan*, which is the point: a consumer reading
+        // `plan.per_class` now gets a value that is already floored, and cannot
+        // disagree with the other consumer about what `--per-class 0` means.
+        let p = plan(|a| a.per_class = 0).expect("zero is floored, not rejected");
+        assert_eq!(p.per_class, 1, "the plan must carry the floor, not the request");
+
+        // And it is the *same* reading for every other value, so nothing else
+        // moved.
+        for n in [1_u32, 2, 7] {
+            let p = plan(|a| a.per_class = n).expect("valid");
+            assert_eq!(p.per_class, n, "{n} must pass through untouched");
+        }
+    }
+
+    #[test]
+    fn a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched() {
+        // A misspelt class must be a usage error before a socket opens: the
+        // test is in `config.rs` rather than in `run.rs` for exactly that reason,
+        // because reaching it at all proves the check happens during planning.
+        let err = plan(|a| a.require_class = vec!["identico".into()])
+            .expect_err("an unknown class must not produce a plan");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--require-class"),
+            "the message must name the flag: {msg}"
+        );
+        assert!(
+            msg.contains("identico"),
+            "the message must name the value the user typed: {msg}"
+        );
+        assert!(
+            msg.contains("identical"),
+            "and the valid set, so the typo can be corrected without --help: {msg}"
+        );
+    }
+
+    #[test]
+    fn every_valid_require_class_survives_planning_and_keeps_its_order() {
+        // Parsing early must not change what the plan carries. Empty stays empty:
+        // the required set is the matrix's ordering, not a default of this flag.
+        let p = plan(|a| a.require_class = vec![]).expect("empty is valid");
+        assert!(
+            p.require_class.is_empty(),
+            "an empty --require-class must stay empty here, not be defaulted"
+        );
+
+        let all: Vec<String> = crate::select::Class::ALL
+            .iter()
+            .map(|c| c.id().to_string())
+            .collect();
+        let p = plan(|a| a.require_class = all.clone()).expect("every class is valid");
+        assert_eq!(p.require_class.len(), all.len());
+        assert_eq!(
+            p.require_class.iter().map(|c| c.id()).collect::<Vec<_>>(),
+            all.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            "the order the user gave must be the order the plan carries"
+        );
+    }
+
+    #[test]
     fn the_default_request_resolves_to_a_usable_plan() {
         let p = plan(|_| {}).expect("defaults are valid");
         assert_eq!(p.biz, Biz::Hk4eGlobal);
@@ -693,7 +755,7 @@ mod tests {
         assert_eq!(p.timeout, std::time::Duration::from_secs(60));
         assert_eq!(p.per_class, 1);
         assert!(!p.no_chunk_blobs);
-        assert_eq!(p.gzip_threshold, DEFAULT_GZIP_THRESHOLD);
+        assert_eq!(p.gzip_threshold, crate::cli::DEFAULT_GZIP_THRESHOLD);
         assert_eq!(p.argv, vec!["gircap".to_string(), "capture".to_string()]);
     }
 
@@ -710,7 +772,6 @@ mod tests {
     fn audio_none_is_its_own_selection_and_mixes_with_nothing() {
         let p = plan(|a| a.audio = vec!["none".into()]).unwrap();
         assert_eq!(p.audio, AudioSelection::None);
-        assert!(!p.audio.is_some());
         assert!(p.audio.codes().is_empty());
         assert_eq!(p.audio.to_string(), "none");
 
@@ -824,7 +885,6 @@ mod tests {
     fn metadata_only_is_a_flag_value_not_an_implicit_rejection() {
         let p = plan(|a| a.no_chunk_blobs = true).unwrap();
         assert!(p.no_chunk_blobs);
-        assert!(METADATA_ONLY_NOTE.contains("A7-A10"));
     }
 
     #[test]
@@ -840,7 +900,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(v.artifact, PathBuf::from("a"));
-        assert_eq!(v.output, OutputFormat::Json);
 
         let m = materialize_plan(&MaterializeArgs {
             artifact: PathBuf::from("a"),

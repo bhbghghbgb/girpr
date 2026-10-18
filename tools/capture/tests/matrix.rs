@@ -1,4 +1,4 @@
-//! M10: the matrix, end to end — class predicates, greedy admission, and the
+//! The matrix, end to end - class predicates, greedy admission, and the
 //! budget — against the same mock the rest of the suite uses.
 //!
 //! `tests/measured_fixture.rs` already pins these predicates against the frozen
@@ -70,7 +70,27 @@ struct Captured {
     _scratch: Scratch,
     _mock: Mock,
     bundle: PathBuf,
+    /// The run's own record: the one carrying `stage=`.
     summary: std::collections::BTreeMap<String, String>,
+    /// The process exit code.
+    ///
+    /// Read from the process rather than the record. A run that fails its own
+    /// assertions now prints **two** `SUMMARY` lines — the run's numbers, then
+    /// the failure's — and the two disagree about `exit_code` by design: the run
+    /// did finish (`0`) and the bundle did not hold (`3`). Which is the code
+    /// depends on which line you ask.
+    code: i32,
+    /// The failure's record, when the run failed.
+    failure: std::collections::BTreeMap<String, String>,
+}
+
+fn parse_summary(line: &str) -> std::collections::BTreeMap<String, String> {
+    line.strip_prefix("SUMMARY ")
+        .unwrap_or("")
+        .split(' ')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
@@ -87,25 +107,34 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_code, stdout, stderr) = run(&borrowed);
-    let summary: std::collections::BTreeMap<String, String> = stdout
+    let (code, stdout, stderr) = run(&borrowed);
+    // A failing capture prints two records: the run's own numbers, then the
+    // failure's. The run's is the one carrying `stage=artifact`, which the
+    // failure's never does — so the two are told apart by shape rather than by
+    // position, and a harness that assumed "the first SUMMARY is the one" would
+    // have read `exit_code=0` off a run that exited 3.
+    let records: Vec<&str> = stdout
         .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .map(|l| {
-            l.strip_prefix("SUMMARY ")
-                .unwrap()
-                .split(' ')
-                .filter_map(|kv| kv.split_once('='))
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        })
-        .unwrap_or_else(|| panic!("no SUMMARY:\n{stdout}\n{stderr}"));
+        .filter(|l| l.starts_with("SUMMARY "))
+        .collect();
+    let summary = records
+        .iter()
+        .find(|l| l.contains(" stage="))
+        .map(|l| parse_summary(l))
+        .unwrap_or_else(|| panic!("no capture SUMMARY:\n{stdout}\n{stderr}"));
+    let failure = records
+        .iter()
+        .find(|l| l.contains("artifact_trustworthy="))
+        .map(|l| parse_summary(l))
+        .unwrap_or_default();
     let bundle = find_bundle(&scratch.out());
     Captured {
         _scratch: scratch,
         _mock: mock,
         bundle,
         summary,
+        code,
+        failure,
     }
 }
 
@@ -268,6 +297,21 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// and `over_budget` is a fact about this run's flags. A bundle that reported
 /// `unavailable` here would be claiming the world cannot supply the file when
 /// the truth is that this run would not pay for it.
+///
+/// **The run ends `3`, not `0`.** A17's own doc has always said `over_budget` is
+/// *deliberately* not an acceptable matrix state — "a finding about the run
+/// rather than about the world" — so A17 fails here, and a failed row ends the
+/// run. The process exit agrees with the bundle's own account of itself.
+///
+/// That is a change to what a budgeted capture *means* to a caller, and it is
+/// worth being explicit that it is one: `--max-download-bytes` is a supported
+/// flag, and a caller who sets it too low now gets exit 3 rather than exit 0
+/// with `result: fail`.
+///
+/// The run's own numbers are still on stdout, because the capture summary is
+/// emitted *before* the failure's: a caller who set a budget it could not afford
+/// wants to know what it did afford most precisely when the run failed. The
+/// bundle records the matrix either way — it is written before the verdict.
 #[test]
 fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // The budget is derived from a first, unlimited run rather than guessed: a
@@ -285,35 +329,66 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         World::five_classes(),
         &["--max-download-bytes", &half.to_string()],
     );
-    let s = &c.summary;
-    assert_eq!(s["budget_limit"], half.to_string(), "the limit is recorded");
-    assert_eq!(s["budget_unlimited"], "false");
-    let over = s["captures_over_budget"].parse::<u64>().expect("a count");
+    // The run fails, and says which assertion: A17, on the matrix.
+    assert_eq!(
+        c.code, 3,
+        "a class the budget refused makes A17 fail, and a failed row ends the run"
+    );
+    assert_eq!(c.failure["result"], "error");
+    assert_eq!(c.failure["exit_code"], "3");
+    assert!(
+        c.failure["detail"].contains("A17"),
+        "the failure names the assertion: {:?}",
+        c.failure["detail"]
+    );
+
+    // **And the run's own numbers survive the failure.** This is the reason the
+    // capture summary is printed before the failure's: a caller who set a budget
+    // it could not afford wants to know what it did afford most precisely when
+    // the run failed.
+    assert_eq!(c.summary["budget_limit"], half.to_string(), "the limit is recorded");
+    assert_eq!(c.summary["budget_unlimited"], "false");
+    let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");
     assert!(
         over > 0,
-        "half of {total} refused nothing; the budget did not bind: {s:?}"
+        "half of {total} refused nothing; the budget did not bind: {:?}",
+        c.summary
     );
     assert!(
-        s["capture_bytes_admitted"].parse::<u64>().unwrap() <= half,
+        c.summary["capture_bytes_admitted"].parse::<u64>().unwrap() <= half,
         "and admission did not exceed it"
     );
+    // The run's own record still calls itself a success: it is a record of what
+    // the run *did*, and the verdict is the other line. `exit_code=0` on this
+    // record means "the run completed", which it did.
+    assert_eq!(c.summary["result"], "ok");
+
+    // The matrix still records the distinction this test exists for. The bundle
+    // is written before the verdict, so the evidence survives the failure -
+    // which is the point of writing everything and *then* deciding.
     assert!(
         c.matrix().iter().any(|r| r["status"] == "over_budget"),
         "a refused candidate is recorded as over_budget, not unavailable: {:#?}",
         c.matrix()
     );
-    // The row names no capture_id, because none was admitted - so the check is
-    // that a `captured` row is the only kind that carries one.
     for r in c.matrix() {
         if r["status"] == "over_budget" {
             assert!(
                 r["capture_id"].is_null(),
                 "{r} is over budget yet names a capture"
             );
+            // The wording is an artifact string. The default capture is
+            // unlimited, so `tests/bundle_diff.rs` never reaches it; this is the
+            // only place that does, which makes it the only place that can hold
+            // it still.
+            let reason = r["reason"].as_str().expect("over_budget names itself");
+            assert!(
+                reason.starts_with("the cheapest candidate costs ")
+                    && reason.ends_with(" B and the budget could not fund it"),
+                "{reason:?}"
+            );
         }
     }
-    // The run still succeeds: a budget is a preference, not a failure.
-    assert_eq!(c.summary["exit_code"], "0", "{:?}", c.summary["exit_code"]);
 }
 
 /// The diff the run computed, read back off disk, agrees with the rows.

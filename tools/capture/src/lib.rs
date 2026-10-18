@@ -8,24 +8,25 @@
 //!
 //! ## Module map
 //!
-//! | module | milestone | owns |
-//! |---|---|---|
-//! | [`cli`] | M0 | the clap surface, verbatim |
-//! | [`exit`] | M0 | [`ExitCode`] and the exit-code table |
-//! | [`hash`] | M3 | digests and the gzip rule, shared by M3/M6/M7/M8 |
-//! | [`report`] | M0 | the stdout data plane; the only `println!` in the crate |
-//! | [`logging`] | M0 | stderr narration via `tracing`, plus `--log-file` |
-//! | [`config`] | M0 | the resolved run plan every command works from |
-//! | [`run`] | M0 | command dispatch: the four entry points |
-//! | [`biz`] | M1 | launcher/game ids, API bases, the channel tuple |
-//! | [`http`] | M1 | [`http::Fetcher`]: retries, timeout, UA, request log |
-//! | [`hyp`] | M2 | the four HoYoPlay endpoints + Sophon `getBuild` |
-//! | [`manifest`] | M3-M4 | fetch → zstd → verify → decode → dump → diff |
-//! | [`select`] | M5 | scoring, variant classes, budget admission |
-//! | [`blobs`] | M6 | the content-addressed chunk store and the three sets |
-//! | [`assemble`] | M7 | building a file from chunks: old, new, and patch flow |
-//! | [`emit`] | M8 | the artifact writer |
-//! | [`verify`] | M9 | the offline `verify` / `materialize` / `list` commands |
+//! | module | owns |
+//! |---|---|
+//! | [`cli`] | the clap surface, verbatim |
+//! | [`exit`] | [`ExitCode`] and the exit-code table |
+//! | [`hash`] | digests, one-pass and one-shot; the gzip rule; zstd helpers |
+//! | [`report`] | the stdout data plane; the only `println!` in the crate |
+//! | [`logging`] | stderr narration via `tracing`, plus `--log-file` |
+//! | [`config`] | the resolved run plan every command works from |
+//! | [`failure`] | [`Failure`] and the four ways a command can say it failed |
+//! | [`run`] | command dispatch: the four entry points |
+//! | [`biz`] | launcher/game ids, API bases, the channel tuple |
+//! | [`http`] | [`http::Fetcher`]: retries, timeout, headers, request log |
+//! | [`hyp`] | the four HoYoPlay endpoints + Sophon `getBuild` |
+//! | [`manifest`] | fetch → zstd → verify → decode → dump → diff |
+//! | [`select`] | scoring, variant classes, budget admission |
+//! | [`blobs`] | the content-addressed chunk store and the three sets |
+//! | [`assemble`] | building a file from chunks: old, new, and patch flow |
+//! | [`emit`] | the artifact writer |
+//! | [`verify`] | the offline `verify` / `materialize` / `list` commands |
 //!
 //! ## Two channels
 //!
@@ -49,6 +50,7 @@ pub mod cli;
 pub mod config;
 pub mod emit;
 pub mod exit;
+pub mod failure;
 pub mod hash;
 pub mod http;
 pub mod hyp;
@@ -63,7 +65,7 @@ pub use exit::ExitCode;
 
 /// The version this tool reports in `MANIFEST.json` and in its `User-Agent`.
 ///
-/// Kept in step with `Cargo.toml` by the M0 acceptance grep rather than by a
+/// Kept in step with `Cargo.toml` by reading it at build time rather than by a
 /// build script, so a reader of the artifact can always find the same string the
 /// tool emits.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

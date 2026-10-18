@@ -1,21 +1,22 @@
 //! The path diff, the reuse pool, and the `getBuild.stats` reconciliation.
 //!
-//! **M4.** This is the module that makes the artifact a *measurement* rather
+//! This is the module that makes the artifact a *measurement* rather
 //! than a dump. Four things live here, and they are deliberately kept apart:
 //!
 //! 1. **Set difference over paths** — common / identical / changed / added /
 //!    removed. Cheap, and the only thing a reader needs to know whether a
 //!    version pair was interesting at all.
 //! 2. **Per-path scoring** — `reused`, `moved`, `patch_bytes`, `total_cost`.
-//!    §5 defines these; M4 computes them and M5 *selects* on them.
+//!    Spec §5 defines these; this module computes them and `select` *acts* on
+//!    them.
 //! 3. **The reuse pool** — how much same-file-only reuse forgoes. This is a
 //!    measurement of a deliberate simplification in the tool under test, and
 //!    nothing here acts on it.
 //! 4. **Two identities, deliberately different.** Scoring compares chunks by
 //!    `(uncompressed_md5, uncompressed_size)` — MD5 alone is not enough,
 //!    because a truncated chunk can share one. The reuse-pool headline number is
-//!    defined in §10 as *"an MD5 present somewhere in the old manifest"* and is
-//!    counted that way, so it measures what the document says it measures.
+//!    defined in spec §10 as *"an MD5 present somewhere in the old manifest"* and
+//!    is counted that way, so it measures what the document says it measures.
 //!
 //! ## What "moved" means, and why it is not a bug
 //!
@@ -62,9 +63,14 @@ impl State {
 ///
 /// Keyed by both because MD5 alone cannot distinguish a truncated chunk from a
 /// whole one, and a patch that reused a truncated chunk would be silently wrong.
-type ChunkKey = (String, i64);
+///
+/// **Borrowed, not owned.** This was `(String, i64)` built by an `into_key()`
+/// helper, so every chunk lookup allocated a `String` for a key that already
+/// existed inside the manifest — roughly 454 000 of them for a `game` field
+/// diff. `(&str, i64)` is already `Hash + Eq`, so the helper is gone.
+type ChunkKey<'a> = (&'a str, i64);
 
-/// One common path's score (§5).
+/// One common path's score (spec §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathScore {
     /// Manifest-relative path.
@@ -202,7 +208,7 @@ impl PathDiff {
     }
 }
 
-/// `diff/reuse_pool.json` — the cost of same-file-only reuse (§10).
+/// `diff/reuse_pool.json` — the cost of same-file-only reuse (spec §10).
 ///
 /// Recorded because it bounds a deliberate simplification in the tool under test.
 /// `gircap` never acts on any of it.
@@ -212,7 +218,7 @@ pub struct ReusePool {
     pub new_chunks_total: u64,
     /// How many of them have an MD5 present *somewhere* in the old manifest.
     ///
-    /// MD5-only, because that is what the number in §10 measures. §5's scoring
+    /// MD5-only, because that is what the number in §10 measures. spec §5's scoring
     /// uses `(md5, size)`; the two differ, and mixing them up would make this
     /// number unreproducible against the document it comes from.
     pub new_chunks_md5_present_in_old_manifest: u64,
@@ -235,7 +241,7 @@ impl ReusePool {
         this quantifies its cost";
 }
 
-/// Everything M4 derives from one pair of captured manifests.
+/// Everything this module derives from one pair of captured manifests.
 #[derive(Debug, Clone)]
 pub struct FieldDiff {
     /// The `matching_field` this pair came from.
@@ -268,14 +274,14 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     // Building them separately and then scanning for the entry inside the loop
     // would be O(n²) over ~2 700 paths — enough to be visible in a capture's
     // wall clock, and for no benefit.
-    let old_by_path: HashMap<&str, (&SophonChunkFile, HashMap<ChunkKey, Vec<i64>>)> = old
+    let old_by_path: HashMap<&str, (&SophonChunkFile, OldFileIndex<'_>)> = old
         .entries
         .iter()
         .map(|e| (e.file.as_str(), (e, index_file(e))))
         .collect();
 
-    // Old manifest-wide MD5 → set of paths holding it, for the reuse pool.
-    let old_md5_paths: HashMap<&str, HashSet<&str>> = build_md5_path_index(&old.entries);
+    // Old manifest-wide set of MD5s that appear anywhere, for the reuse pool.
+    let old_md5_paths: HashSet<&str> = build_md5_path_index(&old.entries);
 
     let new_paths: HashSet<&str> = new.entries.iter().map(|e| e.file.as_str()).collect();
 
@@ -333,7 +339,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     scores.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let pool = reuse_pool(old, new, &old_md5_paths);
+    let pool = reuse_pool(new, &old_by_path, &old_md5_paths);
 
     Ok(FieldDiff {
         field,
@@ -344,47 +350,68 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     })
 }
 
-/// `(key) -> [offsets]` for one file's chunks.
-fn index_file(e: &SophonChunkFile) -> HashMap<ChunkKey, Vec<i64>> {
-    let mut m: HashMap<ChunkKey, Vec<i64>> = HashMap::with_capacity(e.chunks.len());
-    for c in &e.chunks {
-        m.entry(c.identity().into_key()).or_default().push(c.offset);
-    }
-    m
-}
+/// Where each identity sits in one old file.
+type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
 
-trait KeyExt {
-    fn into_key(self) -> ChunkKey;
-}
-
-impl KeyExt for (&str, i64) {
-    fn into_key(self) -> ChunkKey {
-        (self.0.to_string(), self.1)
-    }
-}
-
-/// `uncompressed_md5 -> the old paths whose chunks carry it`.
+/// One old file's chunk index, plus the sum `score` would otherwise walk its
+/// chunks again to compute.
 ///
-/// MD5-only and one path per hash rather than one per chunk: the question this
-/// answers is "could this content come from *anywhere*", and a content hash
-/// appearing 400 times in one file is still one file.
-fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashMap<&str, HashSet<&str>> {
-    let mut m: HashMap<&str, HashSet<&str>> = HashMap::new();
+/// The byte total is folded into the index build because that walk is already
+/// happening: a second pass over the old file's chunks for `old_bytes`, once per
+/// common path, is 113 610 walks of a 2 744-entry loop for one number.
+///
+/// Public because [`score`] is, and a public function cannot take a private
+/// type. Nothing outside this module should build one: `index_file` is the
+/// only way, and it is what guarantees the offset lists are sorted.
+pub struct OldFileIndex<'a> {
+    /// Where each identity sits in the old file.
+    offsets: FileIndex<'a>,
+    /// `Σ compressed_size` over the old file's chunks.
+    compressed_bytes: u64,
+}
+
+/// `(key) -> [offsets]` for one file's chunks, and its compressed byte total.
+///
+/// The offset lists are **sorted**, because the only thing done with them is a
+/// membership test and a linear `Vec::contains` is O(n) per chunk — quadratic
+/// in the chunks of one file, for a file with 400 of them.
+fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
+    let mut offsets: FileIndex<'_> = HashMap::with_capacity(e.chunks.len());
+    let mut compressed_bytes = 0_u64;
+    for c in &e.chunks {
+        offsets.entry(c.identity()).or_default().push(c.offset);
+        compressed_bytes += c.compressed_size.max(0) as u64;
+    }
+    for v in offsets.values_mut() {
+        v.sort_unstable();
+    }
+    OldFileIndex {
+        offsets,
+        compressed_bytes,
+    }
+}
+
+/// Old manifest-wide set of MD5s that appear anywhere.
+///
+/// A `HashSet`, not a `HashMap<&str, HashSet<&str>>`. The map's values were
+/// built for 113 610 old chunks and then never read — the one consumer asks
+/// `contains_key`, so every one of those inner sets was allocated to be
+/// discarded.
+fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
+    let mut m: HashSet<&str> = HashSet::with_capacity(entries.len());
     for e in entries {
         for c in &e.chunks {
-            m.entry(c.uncompressed_md5.as_str())
-                .or_default()
-                .insert(e.file.as_str());
+            m.insert(c.uncompressed_md5.as_str());
         }
     }
     m
 }
 
-/// Score one common path (§5).
+/// Score one common path (spec §5).
 pub fn score(
     new: &SophonChunkFile,
     old: &SophonChunkFile,
-    old_index: &HashMap<ChunkKey, Vec<i64>>,
+    old_index: &OldFileIndex<'_>,
 ) -> PathScore {
     let mut reused = 0_u64;
     let mut moved = 0_u64;
@@ -392,21 +419,20 @@ pub fn score(
     let mut new_bytes = 0_u64;
     for c in &new.chunks {
         new_bytes += c.compressed_size.max(0) as u64;
-        match old_index.get(&c.identity().into_key()) {
+        match old_index.offsets.get(&c.identity()) {
             Some(offsets) => {
                 reused += 1;
-                if !offsets.contains(&c.offset) {
+                // Binary search: `offsets` is sorted by `index_file`.
+                if offsets.binary_search(&c.offset).is_err() {
                     moved += 1;
                 }
             }
             None => patch_bytes += c.compressed_size.max(0) as u64,
         }
     }
-    let old_bytes = old
-        .chunks
-        .iter()
-        .map(|c| c.compressed_size.max(0) as u64)
-        .sum();
+    // Taken from the index build rather than walked again. `old` is still named
+    // for the fields below.
+    let old_bytes = old_index.compressed_bytes;
     PathScore {
         path: new.file.clone(),
         old_size: old.size,
@@ -423,17 +449,16 @@ pub fn score(
 }
 
 /// Measure what same-file-only reuse forgoes.
-fn reuse_pool(
-    old: &CapturedManifest,
+///
+/// `old_by_path` is borrowed rather than rebuilt. Constructing the same
+/// `HashMap<&str, FileIndex>` — 113 610 inserts — from the same inputs, in the
+/// same call, a few lines after `diff_field` had already built it is about 40% of
+/// this module's runtime, spent twice.
+fn reuse_pool<'a>(
     new: &CapturedManifest,
-    old_md5_paths: &HashMap<&str, HashSet<&str>>,
+    old_by_path: &HashMap<&'a str, (&'a SophonChunkFile, OldFileIndex<'a>)>,
+    old_md5_paths: &HashSet<&'a str>,
 ) -> ReusePool {
-    let old_by_path: HashMap<&str, HashMap<ChunkKey, Vec<i64>>> = old
-        .entries
-        .iter()
-        .map(|e| (e.file.as_str(), index_file(e)))
-        .collect();
-
     let mut pool = ReusePool {
         new_chunks_total: 0,
         new_chunks_md5_present_in_old_manifest: 0,
@@ -444,17 +469,17 @@ fn reuse_pool(
     };
 
     for e in &new.entries {
-        let file_index = old_by_path.get(e.file.as_str());
+        let file_index = old_by_path.get(e.file.as_str()).map(|(_, idx)| idx);
         let mut file_has_cross = false;
         for c in &e.chunks {
             pool.new_chunks_total += 1;
-            let in_manifest = old_md5_paths.contains_key(c.uncompressed_md5.as_str());
+            let in_manifest = old_md5_paths.contains(c.uncompressed_md5.as_str());
             if in_manifest {
                 pool.new_chunks_md5_present_in_old_manifest += 1;
             }
             // Reachable from this same file?
             let in_same_file =
-                file_index.is_some_and(|idx| idx.contains_key(&c.identity().into_key()));
+                file_index.is_some_and(|idx| idx.offsets.contains_key(&c.identity()));
             if in_manifest && !in_same_file {
                 pool.cross_file_only_chunks += 1;
                 pool.cross_file_only_bytes_forgone += c.compressed_size.max(0) as u64;
@@ -531,9 +556,26 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
 /// One row per path in either manifest: `path`, `state`, `old_size`, `new_size`,
 /// `reused`, `moved`, `patch_bytes`, `total_cost`. Plain text always, header
 /// line, LF endings — this is the file a reader greps.
+/// The two `paths.tsv` writers are **not** duplicates, despite the name.
+///
+/// This one is `diff/paths.tsv` — `field path state old_size … total_cost`,
+/// one row per common and one-sided path across every scored field.
+/// [`crate::manifest::dump::paths_tsv`] is the per-manifest sidecar,
+/// `path size md5 nchunks is_folder`, one row per manifest entry. Same format,
+/// different documents; a reader greps them for different things and merging
+/// them would lose a column.
+///
+/// What they do share is a weakness: **neither escapes a tab**, so one path
+/// containing a tab corrupts both identically. Real manifests carry none, and
+/// escaping would change bytes that shipped bundles already contain, so it is
+/// left as a recorded property rather than a fix.
 pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
-    let header = "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
-    let mut s = String::from(header);
+    const HEADER: &str =
+        "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
+    // Sized from the header and the row count rather than `String::from`,
+    // which starts at zero and reallocates as a 2 744-row table lands.
+    let mut s = String::with_capacity(HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>());
+    s.push_str(HEADER);
     for f in diffs {
         for row in &f.rows {
             s.push_str(&f.field);
@@ -544,17 +586,14 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
             s.push('\t');
             match &row.score {
                 Some(sc) => {
-                    s.push_str(&sc.old_size.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.new_size.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.reused.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.moved.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.patch_bytes.to_string());
-                    s.push('\t');
-                    s.push_str(&sc.total_cost.to_string());
+                    use std::fmt::Write as _;
+                    // Seven `to_string()` calls per row, each a fresh
+                    // allocation, for numbers that go straight back out.
+                    let _ = write!(
+                        s,
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        sc.old_size, sc.new_size, sc.reused, sc.moved, sc.patch_bytes, sc.total_cost
+                    );
                 }
                 None => s.push_str("\t\t0\t0\t0\t0"),
             }
@@ -564,7 +603,7 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
     s
 }
 
-/// The cheapest scores, already ordered for §5's tie-break.
+/// The cheapest scores, already ordered for spec spec §5's tie-break.
 ///
 /// Order: `total_cost`, then the field — `game` **before** the audio fields —
 /// then `moved` desc, then `reused` desc, then `path` asc. Fully deterministic:
@@ -599,6 +638,47 @@ pub fn field_rank(field: &str) -> (u8, &str) {
 
 /// The one `matching_field` that is the game itself rather than a voice pack.
 pub const GAME_FIELD: &str = "game";
+
+/// Diff every field's manifest pair, and report each one.
+///
+/// **Pairs are split through [`super::fetch::pair_sides`], not indexed.** The
+/// loop this replaces was `diff_field(&pair[0], &pair[1])` — a bare index that
+/// panics on a short pair, next to a comment explaining that position 0 is the
+/// old build. The check now lives with the contract that gives the position its
+/// meaning, and every call site gets it.
+///
+/// The narration travels with the computation for the same reason it did in
+/// `select::decide`: the counts in the log and the counts in `FieldDiff` are one
+/// fact, and a reader who finds one should not have to go looking for the other.
+pub fn diff_all(
+    fields: &[String],
+    manifests: &[Vec<CapturedManifest>],
+) -> Result<Vec<FieldDiff>, crate::failure::Failure> {
+    use crate::failure::assertion;
+    use crate::http::ApiError;
+
+    let mut diffs = Vec::with_capacity(fields.len());
+    for (field, pair) in fields.iter().zip(manifests) {
+        let (old, new) = super::fetch::pair_sides(pair, field)?;
+        let fd = diff_field(old, new)
+            .map_err(|m| assertion("diff the manifests", &ApiError::shape(field, m)))?;
+        tracing::info!(
+            field = %fd.field,
+            common = fd.counts.common,
+            identical = fd.counts.identical,
+            changed = fd.counts.changed(),
+            added = fd.counts.added,
+            removed = fd.counts.removed,
+            pool_chunks = fd.pool.new_chunks_total,
+            pool_md5_hits = fd.pool.new_chunks_md5_present_in_old_manifest,
+            cross_file_only = fd.pool.cross_file_only_chunks,
+            cross_file_bytes = fd.pool.cross_file_only_bytes_forgone,
+            "diff computed"
+        );
+        diffs.push(fd);
+    }
+    Ok(diffs)
+}
 
 #[cfg(test)]
 mod tests {
@@ -731,7 +811,7 @@ mod tests {
         );
     }
 
-    /// §5's formulas, computed by hand on the fixture above.
+    /// spec §5's formulas, computed by hand on the fixture above.
     #[test]
     fn reuse_moved_and_the_two_byte_totals_follow_section_five() {
         let d = three_state_pair();
@@ -930,7 +1010,7 @@ mod tests {
 
     // ------------------------------------------------------------- ordering
 
-    /// §5's tie-break chain, asserted on inputs designed to collide at each
+    /// spec spec §5's tie-break chain, asserted on inputs designed to collide at each
     /// step. Determinism is the property: the same pair must always admit the
     /// same files.
     #[test]
@@ -980,7 +1060,7 @@ mod tests {
     }
 
     /// `en-us` sorts before `game` alphabetically, so a plain `field asc` would
-    /// put a voice pack ahead of a game file on a cost tie — the opposite of §5.
+    /// put a voice pack ahead of a game file on a cost tie — the opposite of spec §5.
     #[test]
     fn game_ranks_before_the_audio_fields_not_alphabetically() {
         assert!(field_rank(GAME_FIELD) < field_rank("en-us"));

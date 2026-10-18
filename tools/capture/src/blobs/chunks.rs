@@ -69,10 +69,16 @@ impl std::fmt::Display for Set {
 }
 
 /// What a chunk's identity is for reuse purposes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Identity {
+///
+/// **Borrows its digest.** This owned a `String` that was cloned once per
+/// *comparison*: `retention` asked "is this new chunk's identity in this old
+/// file" and allocated 32 bytes to ask it, once per new chunk, for a set
+/// membership test that needed no allocation at all. `(&str, i64)` is already
+/// `Hash + Eq`, so this is a view over the manifest and nothing copies.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Identity<'a> {
     /// The content digest.
-    pub uncompressed_md5: String,
+    pub uncompressed_md5: &'a str,
     /// The decoded length.
     ///
     /// Carried alongside the digest because it is what makes the pair a
@@ -82,11 +88,11 @@ pub struct Identity {
     pub uncompressed_size: i64,
 }
 
-impl Identity {
+impl<'a> Identity<'a> {
     /// The identity of a manifest chunk.
-    pub fn of(c: &SophonChunk) -> Identity {
+    pub fn of(c: &'a SophonChunk) -> Identity<'a> {
         Identity {
-            uncompressed_md5: c.uncompressed_md5.clone(),
+            uncompressed_md5: c.uncompressed_md5.as_str(),
             uncompressed_size: c.uncompressed_size,
         }
     }
@@ -256,24 +262,31 @@ impl Retention {
     /// Checked here rather than only in the selfcheck because it is a property
     /// of the *plan*, and a plan that violated it would produce an artifact
     /// whose parts are right and whose conclusion is wrong.
+    ///
+    /// **Delegates to [`Retention::a12_failure`]**, which was the same two
+    /// conditions written out again in a different order. Two spellings of one
+    /// rule is how a plan that violates one half of A12 gets reported as
+    /// satisfying the other.
     pub fn a12_holds(&self) -> bool {
-        let new = self.ids(Set::MaterializeNew);
-        let fetch = self.ids(Set::PatchFetch);
-        fetch.iter().all(|id| new.contains(id)) && !fetch.iter().any(|id| self.reuse.contains(id))
+        self.a12_failure().is_none()
     }
 
     /// Which half of A12 failed, if either.
+    ///
+    /// One set over `materialize_new`, built once: both conditions are
+    /// membership tests against it, and the naive form is O(new²) per file.
     pub fn a12_failure(&self) -> Option<&'static str> {
-        let new = self.ids(Set::MaterializeNew);
-        if self.ids(Set::PatchFetch).iter().any(|id| !new.contains(id)) {
-            return Some("patch_fetch is not a subset of materialize_new");
-        }
-        if self
-            .ids(Set::PatchFetch)
-            .iter()
-            .any(|id| self.reuse.contains(id))
-        {
-            return Some("patch_fetch overlaps the reuse set");
+        let new: std::collections::HashSet<&str> =
+            self.ids(Set::MaterializeNew).iter().map(String::as_str).collect();
+        let reuse: std::collections::HashSet<&str> =
+            self.reuse.iter().map(String::as_str).collect();
+        for id in self.ids(Set::PatchFetch) {
+            if !new.contains(id.as_str()) {
+                return Some("patch_fetch is not a subset of materialize_new");
+            }
+            if reuse.contains(id.as_str()) {
+                return Some("patch_fetch overlaps the reuse set");
+            }
         }
         None
     }
@@ -286,7 +299,11 @@ impl Retention {
 /// The subtraction is deliberately *not* by `chunk.id`: see the module docs.
 pub fn retention(pair: &FilePair) -> Retention {
     let mut r = Retention::default();
-    let old_identities: Vec<Identity> = pair
+    // A set, not a `Vec` with `contains`. The question is "is this new chunk's
+    // identity in this old file", asked once per new chunk against every old
+    // chunk — quadratic in a file's chunk count, which is where the measured
+    // `HoYoChannel.dll` reaches three and a real `.blk` reaches hundreds.
+    let old_identities: std::collections::HashSet<Identity<'_>> = pair
         .old
         .as_ref()
         .map(|o| o.entry.chunks.iter().map(Identity::of).collect())
@@ -392,9 +409,14 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
         }
         if let Some(n) = &pair.new {
             let r = retention(pair);
+            // A set, not `r.reuse.contains(&c.id)` per chunk: that was a linear
+            // scan with a 49-byte string compare, once per new chunk — quadratic
+            // per file. `reuse` stays a `Vec` because its order is recorded.
+            let reusable: std::collections::HashSet<&str> =
+                r.reuse.iter().map(String::as_str).collect();
             for c in &n.entry.chunks {
                 push(&n.tag, &n.build_id, c, Set::MaterializeNew);
-                if !r.reuse.contains(&c.id) {
+                if !reusable.contains(c.id.as_str()) {
                     push(&n.tag, &n.build_id, c, Set::PatchFetch);
                 }
             }
@@ -472,6 +494,33 @@ mod tests {
         }
     }
 
+    /// One `Want` per chunk id — which the store's tmp-file naming assumes.
+    ///
+    /// The `HoYoChannel.dll` fixture is the right one to assert it on: three old
+    /// ids, two new-only and one **shared between the two builds**, so a dedup
+    /// that stopped working would produce a duplicate id here rather than only in
+    /// a case nobody would think to test.
+    #[test]
+    fn every_want_carries_its_own_chunk_id() {
+        let wants = wants(&[hoyo()]);
+        let ids: Vec<&str> = wants.iter().map(|w| w.chunk.id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "wants() must return one Want per chunk id; got {} wants over {} ids: {ids:?}",
+            ids.len(),
+            sorted.len(),
+        );
+        assert_eq!(
+            ids.len(),
+            5,
+            "the fixture must produce the five distinct ids it is documented to, \
+             or this test is not about the case it claims"
+        );
+    }
     // ---------------------------------------------------------------- sets
 
     #[test]

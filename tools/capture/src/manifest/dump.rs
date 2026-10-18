@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::cli::ManifestDetail;
 use crate::hash::{self, Encoding};
 use crate::manifest::proto::SophonChunkFile;
-use crate::manifest::{CapturedManifest, ManifestMeta, Stored};
+use crate::manifest::{CapturedManifest, Stored};
 
 /// The artifact-relative path of a manifest's files.
 pub fn dir(tag: &str) -> String {
@@ -80,7 +80,7 @@ pub fn write(
     let mut out = Vec::with_capacity(4);
 
     // 1. The archive, byte-exact.
-    let archive = write_file(root, &archive_rel(&tag, &field), &captured.raw)?;
+    let archive = crate::emit::write_rel(root, &archive_rel(&tag, &field), &captured.raw)?;
     captured.meta.stored.path = archive.clone();
     out.push(StoredAs {
         path: archive,
@@ -97,10 +97,15 @@ pub fn write(
     //    files[].encoding` says which one is on disk.
     if detail == ManifestDetail::Full {
         let full = FullDecode::from_captured(captured);
-        let body = serde_json::to_string_pretty(&full)
-            .map_err(|e| std::io::Error::other(format!("serialise the decode: {e}")))?;
-        let gzipped = hash::should_gzip(body.len(), gzip_threshold);
-        let uncompressed_bytes = body.len() as u64;
+        // **Measured, then written.** Two things need the length — the
+        // `--gzip-threshold` rule and `files[].uncompressed_bytes` — and the
+        // file's *name* depends on the answer, so the length has to exist before
+        // the write starts. Hence the counting pass: a second walk over the decode
+        // that allocates nothing, in exchange for not holding a ~27 MB `String`
+        // plus its ~7 MB compressed copy alive at once for every manifest.
+        let uncompressed_bytes =
+            crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
+        let gzipped = hash::should_gzip(uncompressed_bytes, gzip_threshold);
         let (rel, encoding) = if gzipped {
             (
                 format!("{}.json.gz", full_prefix(&tag, &field)),
@@ -112,16 +117,11 @@ pub fn write(
                 Encoding::Identity,
             )
         };
-        let payload = if gzipped {
-            hash::gzip(body.as_bytes())?
-        } else {
-            body.into_bytes()
-        };
-        write_file(root, &rel, &payload)?;
+        crate::emit::write_json_gz(root, &rel, &full, gzipped)?;
         out.push(StoredAs {
             path: rel,
             encoding,
-            uncompressed_bytes,
+            uncompressed_bytes: uncompressed_bytes as u64,
         });
     }
 
@@ -129,7 +129,7 @@ pub fn write(
     //    it is the thing a reader greps when the decode beside it is `.gz`, and
     //    under `paths-only` it is the *only* per-path document there is.
     let tsv = paths_tsv(&captured.entries);
-    write_file(root, &paths_rel(&tag, &field), tsv.as_bytes())?;
+    crate::emit::write_rel(root, &paths_rel(&tag, &field), tsv.as_bytes())?;
     out.push(StoredAs {
         path: paths_rel(&tag, &field),
         encoding: Encoding::Identity,
@@ -141,11 +141,9 @@ pub fn write(
     captured.meta.full_decode_written = detail == ManifestDetail::Full;
     let meta = serde_json::to_string_pretty(&captured.meta)
         .map_err(|e| std::io::Error::other(format!("serialise the manifest meta: {e}")))?;
-    write_file(
-        root,
-        &meta_rel(&tag, &field),
-        format!("{meta}\n").as_bytes(),
-    )?;
+    // The newline is written as a second `write_all` rather than by
+    // `format!("{meta}\n")`, which copied the whole document to append a byte.
+    crate::emit::write_newline_doc(root, &meta_rel(&tag, &field), meta.as_bytes())?;
     out.push(StoredAs {
         path: meta_rel(&tag, &field),
         encoding: Encoding::Identity,
@@ -156,29 +154,35 @@ pub fn write(
 }
 
 /// The whole decoded manifest, as the document schema names it.
+///
+/// **Borrows its entries.** This owned a `Vec<SophonChunkFile>` it cloned out
+/// of the capture only to serialise it once and drop it — a deep copy of the
+/// whole ~23 MB / 113 610-chunk graph, alive at the same moment as the ~27 MB
+/// pretty-printed body and the ~7 MB gzip buffer. Serialisation does not care
+/// whether the struct it walks is owned, so the clone bought nothing.
 #[derive(Debug, Serialize)]
-pub struct FullDecode {
+pub struct FullDecode<'a> {
     /// The bundle schema version.
     pub schema_version: u32,
     /// The tag this decode belongs to.
-    pub tag: String,
+    pub tag: &'a str,
     /// The build it was published under.
-    pub build_id: String,
+    pub build_id: &'a str,
     /// `game`, or an audio code.
-    pub matching_field: String,
+    pub matching_field: &'a str,
     /// Every entry, verbatim from the protobuf.
-    pub entries: Vec<SophonChunkFile>,
+    pub entries: &'a [SophonChunkFile],
 }
 
-impl FullDecode {
+impl<'a> FullDecode<'a> {
     /// Build it from a captured manifest.
-    pub fn from_captured(c: &CapturedManifest) -> Self {
+    pub fn from_captured(c: &'a CapturedManifest) -> Self {
         FullDecode {
             schema_version: crate::SCHEMA_VERSION,
-            tag: c.tag.clone(),
-            build_id: c.build_id.clone(),
-            matching_field: c.matching_field.clone(),
-            entries: c.entries.clone(),
+            tag: &c.tag,
+            build_id: &c.build_id,
+            matching_field: &c.matching_field,
+            entries: &c.entries,
         }
     }
 }
@@ -190,43 +194,31 @@ impl FullDecode {
 /// reordering — decode order is an implementation detail of the archive, and a
 /// reader comparing two versions is comparing *paths*.
 pub fn paths_tsv(entries: &[SophonChunkFile]) -> String {
-    let mut rows: Vec<(String, i64, String, usize, bool)> = entries
-        .iter()
-        .map(|e| {
-            (
-                e.file.clone(),
-                e.size,
-                e.md5.clone(),
-                e.chunks.len(),
-                e.is_folder,
-            )
-        })
-        .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut s = String::with_capacity(rows.len() * 96 + 48);
-    s.push_str("path\tsize\tmd5\tnchunks\tis_folder\n");
-    for (p, size, md5, n, folder) in rows {
-        s.push_str(&p);
-        s.push('\t');
-        s.push_str(&size.to_string());
-        s.push('\t');
-        s.push_str(&md5);
-        s.push('\t');
-        s.push_str(&n.to_string());
-        s.push('\t');
-        s.push_str(if folder { "true" } else { "false" });
+    const HEADER: &str = "path\tsize\tmd5\tnchunks\tis_folder\n";
+    // Sorted references, no tuples: this built a `Vec<(String, i64, String,
+    // usize, bool)>` with two `String` clones per entry, sorted that, and only
+    // then rendered. Zero clones and one allocation to start with.
+    let mut paths: Vec<&str> = entries.iter().map(|e| e.file.as_str()).collect();
+    paths.sort_unstable();
+    let by_path: std::collections::HashMap<&str, &SophonChunkFile> =
+        entries.iter().map(|e| (e.file.as_str(), e)).collect();
+    let mut s = String::with_capacity(HEADER.len() + paths.len() * 96);
+    s.push_str(HEADER);
+    for p in paths {
+        let e = by_path[p];
+        use std::fmt::Write as _;
+        let _ = write!(
+            s,
+            "{}\t{}\t{}\t{}\t{}",
+            e.file,
+            e.size,
+            e.md5,
+            e.chunks.len(),
+            if e.is_folder { "true" } else { "false" }
+        );
         s.push('\n');
     }
     s
-}
-
-fn write_file(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<String> {
-    let path = root.join(rel);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(&path, bytes)?;
-    Ok(rel.to_string())
 }
 
 /// Reconcile a decode against `getBuild.stats` and log the verdict.
@@ -253,12 +245,13 @@ pub fn note_reconciliation(m: &CapturedManifest) {
 
 /// The meta document's `stored` block, for a caller building one by hand.
 pub fn stored_block(path: &str, bytes: &[u8], decompressed_len: usize) -> Stored {
+    let d = hash::md5_sha256(bytes);
     Stored {
         path: path.to_string(),
-        bytes: bytes.len() as u64,
+        bytes: d.bytes,
         container: "zstd",
-        md5_compressed: hash::md5_hex(bytes),
-        sha256_compressed: hash::sha256_hex(bytes),
+        md5_compressed: d.md5,
+        sha256_compressed: d.sha256,
         md5_decompressed: String::new(),
         bytes_decompressed: decompressed_len as u64,
         encoding: Encoding::Identity,
@@ -268,11 +261,6 @@ pub fn stored_block(path: &str, bytes: &[u8], decompressed_len: usize) -> Stored
 /// Where the manifests of one tag live.
 pub fn tag_dir(root: &Path, tag: &str) -> PathBuf {
     root.join(dir(tag))
-}
-
-/// The meta document as a `serde_json::Value`, for a test or a reader.
-pub fn meta_json(m: &ManifestMeta) -> serde_json::Value {
-    serde_json::to_value(m).expect("ManifestMeta is all owned data")
 }
 
 #[cfg(test)]

@@ -24,8 +24,163 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash;
 
+/// Everything `build_manifest` needs, as one argument.
+pub struct ManifestInput<'a> {
+    /// When the run started, for `capture.captured_at`.
+    pub started: chrono::DateTime<chrono::Utc>,
+    /// The region.
+    pub biz: &'a crate::biz::Biz,
+    /// The bases actually used, which may be `--hyp-base` overrides.
+    pub endpoints: &'a crate::biz::Endpoints<'a>,
+    /// The resolved pair.
+    pub versions: &'a crate::config::VersionPair,
+    /// `main.diff_tags` as served.
+    pub diff_tags: &'a [String],
+    /// Audio codes written into the scan file.
+    pub audio: &'a [String],
+    /// The fields that were scored.
+    pub fields: &'a [String],
+    /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
+    pub gzip_threshold: u64,
+    /// The diffs, in the same order as `fields`.
+    pub diffs: &'a [crate::manifest::diff::FieldDiff],
+    /// The selection.
+    pub selection: &'a crate::select::Selection,
+    /// The chunk index.
+    pub index: &'a crate::blobs::ChunkIndex,
+    /// Bytes the CDN sent.
+    pub bytes_downloaded: u64,
+    /// The command line.
+    pub argv: &'a [String],
+    /// Whether the run finished.
+    pub complete: bool,
+}
+
+/// Build `MANIFEST.json`.
+///
+/// Every field is something the run already knew; nothing here recomputes a
+/// measurement, so the document cannot disagree with the tree it describes.
+///
+/// `files` is a separate argument rather than a field of [`ManifestInput`]
+/// because it is the one input the caller cannot supply: it comes from the
+/// close-out's full-tree digest pass, which has to run after every other
+/// document exists. As a struct field it invited a caller to pass `&[]` and get
+/// a document that lied, which is exactly what happened.
+///
+/// It used to come back empty, with `totals.bytes_on_disk: 0`, and be overwritten
+/// by the caller afterwards. The claim this doc makes was false for precisely
+/// those two fields; both are now derived here, so the returned document is
+/// whole and there is no second step that can be skipped or reordered.
+pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
+    let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
+    let manifest_entries: BTreeMap<String, u64> = i
+        .fields
+        .iter()
+        .zip(i.diffs)
+        .map(|(f, d)| {
+            // `common + added`: the paths that exist on the new side, which is
+            // exactly the candidate set this field contributed. A `removed` path
+            // is not a candidate — there is nothing to capture on the new side.
+            (f.clone(), d.counts.common + d.counts.added)
+        })
+        .collect();
+    let matrix: Vec<ManifestMatrixRow> = i
+        .selection
+        .matrix
+        .iter()
+        .map(|row| {
+            let admission = row
+                .capture_id
+                .as_ref()
+                .and_then(|cid| i.selection.admitted.iter().find(|a| &a.capture_id == cid));
+            ManifestMatrixRow {
+                class: row.class.id().to_string(),
+                status: row.status.id().to_string(),
+                capture_id: row.capture_id.clone(),
+                path: row.path.clone(),
+                matching_field: admission.map(|a| a.matching_field.clone()),
+                covered_by: row.covered_by.clone(),
+                also_satisfies: admission.filter(|a| !a.also_satisfies.is_empty()).map(|a| {
+                    a.also_satisfies
+                        .iter()
+                        .map(|c| c.id().to_string())
+                        .collect()
+                }),
+                reason: row.reason.clone(),
+                candidates_considered: Some(row.candidates_considered),
+            }
+        })
+        .collect();
+    let totals_by_set: BTreeMap<String, u64> = i
+        .index
+        .sets
+        .iter()
+        .map(|(k, v)| (k.clone(), v.len() as u64))
+        .collect();
+    Ok(Manifest {
+        schema_version: crate::SCHEMA_VERSION,
+        tool: Tool {
+            name: "gircap".to_string(),
+            version: crate::VERSION.to_string(),
+        },
+        capture: Capture {
+            id,
+            captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            host_os: std::env::consts::OS.to_string(),
+            tool_argv: i.argv.to_vec(),
+            complete: i.complete,
+        },
+        biz: Biz_ {
+            id: i.biz.as_str().to_string(),
+            launcher_id: i.biz.launcher_id.to_string(),
+            game_id: i.biz.game_id.to_string(),
+            channel: i.biz.channel.to_string(),
+            sub_channel: i.biz.sub_channel.to_string(),
+            cps: i.biz.cps.to_string(),
+            hyp_base: i.endpoints.hyp.to_string(),
+            sophon_base: i.endpoints.sophon.to_string(),
+        },
+        versions: Versions {
+            new: Build {
+                tag: i.versions.new.tag.clone(),
+                build_id: i.versions.new.build_id.clone(),
+                source: i.versions.new.source.clone(),
+            },
+            old: Build {
+                tag: i.versions.old.tag.clone(),
+                build_id: i.versions.old.build_id.clone(),
+                source: i.versions.old.source.clone(),
+            },
+            diff_tags: i.diff_tags.to_vec(),
+        },
+        field: crate::manifest::MANIFEST_FIELD.to_string(),
+        audio: i.audio.to_vec(),
+        gzip_threshold: i.gzip_threshold,
+        selection_pool: SelectionPool {
+            fields: i.fields.to_vec(),
+            manifest_entries,
+            note: "--audio widens this pool; captures may come from any listed field".to_string(),
+        },
+        totals: Totals {
+            files_captured: i.selection.admitted.len() as u64,
+            chunks_blobs: i
+                .index
+                .blobs
+                .iter()
+                .filter(|b| b.props.stored_path.is_some())
+                .count() as u64,
+            bytes_downloaded: i.bytes_downloaded,
+            bytes_on_disk: files.iter().map(|f| f.bytes).sum(),
+        },
+        matrix,
+        files: files.to_vec(),
+        totals_by_set,
+    })
+}
+
 /// One file under the artifact root, as both index documents record it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+
 pub struct FileEntry {
     /// Artifact-relative, `/`-separated.
     pub path: String,
@@ -38,29 +193,6 @@ pub struct FileEntry {
     /// `identity` or `gzip`. Recorded rather than inferred from the name, so a
     /// reader never has to guess which digest covers which bytes.
     pub encoding: crate::hash::Encoding,
-}
-
-/// A writer that feeds both digests from one pass over the bytes.
-///
-/// The alternative — hashing the file twice — reads every blob twice, which on a
-/// 90 MB artifact is the difference between a capture that feels instant and one
-/// that does not. `std::io::copy` does the block loop, so there is no hand-rolled
-/// buffer here to get the block boundaries wrong.
-struct Tee<'a> {
-    md5: &'a mut md5::Context,
-    sha: &'a mut sha2::Sha256,
-}
-
-impl std::io::Write for Tee<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.md5.consume(buf);
-        sha2::Digest::update(self.sha, buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Digest one file, streaming so a 22 MB `.blk` does not have to be resident.
@@ -77,31 +209,30 @@ impl std::io::Write for Tee<'_> {
 /// that wrote the digests, so both sides agreed on the wrong answer. The test
 /// that catches it is in `tests/schema.rs`, and it is the reason that file reads
 /// the bytes back off disk rather than trusting the document.
+///
+/// Both digests come from **one pass** — the alternative, hashing the file
+/// twice, reads every blob twice, which on a 90 MB artifact is the difference
+/// between a capture that feels instant and one that does not. The writer is
+/// [`hash::DualDigest`] rather than a `Tee` defined here: it used to be one, and
+/// the blob path re-derived the same thing because it could not reach this one.
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
     let mut file = std::fs::File::open(path)?;
-    let mut md5c = md5::Context::new();
-    let mut sha = <sha2::Sha256 as sha2::Digest>::new();
-    let bytes = {
-        let mut tee = Tee {
-            md5: &mut md5c,
-            sha: &mut sha,
-        };
-        match encoding {
-            crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut tee)?,
-            // Streamed rather than buffered, for the same reason as above: a
-            // full manifest decode is several megabytes.
-            crate::hash::Encoding::Gzip => {
-                let mut gz = flate2::read::GzDecoder::new(file);
-                std::io::copy(&mut gz, &mut tee)?
-            }
+    let mut d = hash::DualDigest::new();
+    match encoding {
+        crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut d)?,
+        // Streamed rather than buffered, for the same reason as above: a
+        // full manifest decode is several megabytes.
+        crate::hash::Encoding::Gzip => {
+            let mut gz = flate2::read::GzDecoder::new(file);
+            std::io::copy(&mut gz, &mut d)?
         }
     };
-    let to_hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+    let d = d.finish();
     Ok(FileEntry {
         path: String::new(),
-        bytes,
-        md5: to_hex(&md5c.compute().0),
-        sha256: to_hex(&sha2::Digest::finalize(sha)),
+        bytes: d.bytes,
+        md5: d.md5,
+        sha256: d.sha256,
         encoding,
     })
 }
@@ -121,7 +252,19 @@ pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             if e.is_dir() {
                 go(&e, root, out)?;
             } else if e.is_file() {
-                out.push(e.strip_prefix(root).expect("under the root").to_path_buf());
+                // Unreachable in practice — `read_dir` builds its entries by
+                // joining the rooted path it was given — and an `io::Error`
+                // anyway, matching every other function here. A `walk` that
+                // panics is a `walk` that cannot report a junction or a
+                // dangling symlink it did not expect.
+                let rel = e.strip_prefix(root).map_err(|_| {
+                    std::io::Error::other(format!(
+                        "{} is not under the artifact root {}",
+                        e.display(),
+                        root.display()
+                    ))
+                })?;
+                out.push(rel.to_path_buf());
             }
         }
         Ok(())
@@ -167,11 +310,51 @@ impl Checksums {
     /// no fixed point, so the one file that cannot be in the list is the one that
     /// is the list.
     pub fn scan(root: &Path) -> std::io::Result<Checksums> {
+        Checksums::scan_reusing(root, &[], &[])
+    }
+
+    /// Digest everything under `root`, except `checksums.json`, **reusing**
+    /// `known`'s digests for the paths it already covers.
+    ///
+    /// This is how a capture close-out goes from four full-tree digest passes to
+    /// two. It walks the tree every time — that is a `read_dir`, not a hash —
+    /// and only reads and digests a file when it is not in `known`, or when it
+    /// is named in `rewritten`.
+    ///
+    /// ## The contract, and why it is safe
+    ///
+    /// A digest is reused for a path `p` only when `p ∈ known`, `p ∉ rewritten`,
+    /// and no `p` was written since `known` was taken. Every call site below
+    /// meets that by construction: the writes between one call and the next are
+    /// the ones it passes in `rewritten`.
+    ///
+    /// Nothing is assumed about files that *appear* — a path on disk that is not
+    /// in `known` is simply digested, because the walk is what decides membership,
+    /// not the caller's list. What the caller must get right is `rewritten`:
+    /// **naming a file that changed but is not listed would produce a document
+    /// that claims a digest for bytes that are no longer there.**
+    ///
+    /// `A16` is unaffected and remains the reason this is safe to do at all:
+    /// [`Checksums::a16`] re-reads and re-digests every listed file from disk and
+    /// compares, so a wrong reuse here is *caught* rather than published.
+    pub fn scan_reusing(
+        root: &Path,
+        known: &[FileEntry],
+        rewritten: &[&str],
+    ) -> std::io::Result<Checksums> {
         const SELF: &str = "verify/checksums.json";
+        let known: std::collections::BTreeMap<&str, &FileEntry> =
+            known.iter().map(|e| (e.path.as_str(), e)).collect();
         let mut entries = Vec::new();
         for p in walk(root)? {
             let r = rel(root, &p);
             if r == SELF {
+                continue;
+            }
+            if !rewritten.contains(&r.as_str())
+                && let Some(e) = known.get(r.as_str())
+            {
+                entries.push((*e).clone());
                 continue;
             }
             let mut e = digest_file(&root.join(&p), encoding_of(&r))?;
@@ -188,27 +371,28 @@ impl Checksums {
         })
     }
 
-    /// The entry for a path, if the document lists it.
-    pub fn get(&self, path: &str) -> Option<&FileEntry> {
-        self.entries.iter().find(|e| e.path == path)
-    }
-
     /// A16: every file under the root is listed, and re-hashing matches.
     ///
     /// Both halves, because a list that omits a file is a silent gap while a list
     /// whose digests are stale is a lie, and only checking one leaves the other.
     ///
-    /// The first finding only. A capture wants one row and stops there; M9's
+    /// The first finding only. A capture wants one row and stops there;
     /// `verify` wants them all and calls [`Checksums::findings`] instead.
+    ///
+    /// **The passing detail names the file count and not the byte total**, and
+    /// that is forced rather than chosen. This row is recorded *inside*
+    /// `selfcheck.json`, which is one of the files `total_bytes` sums — so the
+    /// last version of that number to be written is the one in `checksums.json`,
+    /// and any total written here is by construction a total from an earlier,
+    /// smaller tree. `file_count` is safe because no file appears or disappears
+    /// between the two passes; a byte count is not. The total is one field read
+    /// away in the document it describes.
     pub fn a16(&self, root: &Path) -> (bool, String) {
         match self.findings(root).into_iter().next() {
             Some(f) => (false, f),
             None => (
                 true,
-                format!(
-                    "{} files, {} B, every digest re-hashed and matched",
-                    self.file_count, self.total_bytes
-                ),
+                format!("{} files, every digest re-hashed and matched", self.file_count),
             ),
         }
     }
@@ -284,17 +468,6 @@ fn encoding_of(rel_path: &str) -> crate::hash::Encoding {
 
 /// The artifact schema's per-file entry, reused for `MANIFEST.json → files[]`.
 pub type ManifestFile = FileEntry;
-
-/// A convenience for hashing a small in-memory body as if it were a file.
-pub fn digest_bytes(rel_path: &str, bytes: &[u8]) -> FileEntry {
-    FileEntry {
-        path: rel_path.to_string(),
-        bytes: bytes.len() as u64,
-        md5: hash::md5_hex(bytes),
-        sha256: hash::sha256_hex(bytes),
-        encoding: encoding_of(rel_path),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -373,10 +546,10 @@ mod tests {
         );
         assert_eq!(c.algorithm, "sha256");
         assert_eq!(c.schema_version, crate::SCHEMA_VERSION);
-        assert!(c.get("verify/selfcheck.json").is_some());
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A16 is green on an untouched tree.
     #[test]
     fn a16_is_green_on_an_untouched_tree() {
         let root = scratch("a16ok");
@@ -387,6 +560,72 @@ mod tests {
         let (ok, detail) = c.a16(&root);
         assert!(ok, "{detail}");
         assert!(detail.contains("re-hashed"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Reusing a digest must produce **exactly** what re-hashing would have.
+    ///
+    /// This is the whole safety argument for `scan_reusing`, and it is only true
+    /// if the caller names every file it rewrote. Three cases, because the ways
+    /// it can go wrong are different: nothing changed, the named file changed,
+    /// and a file appeared that the seed never saw.
+    #[test]
+    fn reusing_digests_gives_the_same_document_as_hashing_everything() {
+        let root = scratch("reuse");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"aaaa").unwrap();
+        std::fs::write(root.join("keep.bin"), b"keep").unwrap();
+
+        // Nothing changed: `rewritten` empty.
+        let seeded = Checksums::scan(&root).unwrap();
+        let reused = Checksums::scan_reusing(&root, &seeded.entries, &[]).unwrap();
+        assert_eq!(reused, Checksums::scan(&root).unwrap());
+
+        // The named file changed. This is the close-out's second
+        // `selfcheck.json`, and the only reuse that is ever done.
+        std::fs::write(root.join("a.bin"), b"aaaaaa").unwrap();
+        let reused = Checksums::scan_reusing(&root, &seeded.entries, &["a.bin"]).unwrap();
+        let fresh = Checksums::scan(&root).unwrap();
+        assert_eq!(reused, fresh, "the rewritten file's digest must be fresh");
+        assert_ne!(
+            reused.entries,
+            seeded.entries,
+            "and it really did change"
+        );
+
+        // A file appeared that the seed never saw: the walk decides membership,
+        // not the caller's list, so it is digested rather than missed. The seed
+        // is taken from the *current* tree — reusing the stale one would be the
+        // wrong-`rewritten` mistake, which the next test covers.
+        let current = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("surprise.bin"), b"new").unwrap();
+        let reused = Checksums::scan_reusing(&root, &current.entries, &[]).unwrap();
+        assert_eq!(reused, Checksums::scan(&root).unwrap());
+        assert!(
+            reused.entries.iter().any(|e| e.path == "surprise.bin"),
+            "a new file must be digested, not dropped"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a *wrong* `rewritten` list costs, and what catches it.
+    ///
+    /// This is the failure mode `scan_reusing` makes possible: a file changed
+    /// and the caller forgot to name it, so the stale digest is published. It
+    /// must still be caught, because A16 re-reads from disk.
+    #[test]
+    fn a_stale_reuse_is_still_caught_by_a16() {
+        let root = scratch("stalereuse");
+        std::fs::write(root.join("a.bin"), b"aaaa").unwrap();
+        let seeded = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"aaaaaa").unwrap();
+
+        // The mistake: reusing `a.bin`'s digest after changing it.
+        let wrong = Checksums::scan_reusing(&root, &seeded.entries, &[]).unwrap();
+        assert_eq!(wrong, seeded, "nothing was re-digested, so it is stale");
+        let (ok, detail) = wrong.a16(&root);
+        assert!(!ok, "and A16 must still see it");
+        assert!(detail.contains("a.bin"), "{detail}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -424,7 +663,13 @@ mod tests {
         let root = scratch("a16ghost");
         std::fs::write(root.join("a.bin"), b"a").unwrap();
         let mut c = Checksums::scan(&root).unwrap();
-        c.entries.push(digest_bytes("never-written.bin", b"x"));
+        c.entries.push(FileEntry {
+            path: "never-written.bin".into(),
+            bytes: 1,
+            md5: hash::md5_hex(b"x"),
+            sha256: hash::sha256_hex(b"x"),
+            encoding: crate::hash::Encoding::Identity,
+        });
         c.file_count = c.entries.len() as u64;
         let (ok, detail) = c.a16(&root);
         assert!(!ok);
@@ -449,23 +694,221 @@ mod tests {
         assert_eq!(encoding_of("a.bin"), crate::hash::Encoding::Identity);
         assert_eq!(encoding_of("a.json.gz"), crate::hash::Encoding::Gzip);
         assert_eq!(encoding_of("a.json"), crate::hash::Encoding::Identity);
-        let e = digest_bytes("x.json.gz", b"body");
+        let e = &c_of("x.json.gz");
         assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
-        assert_eq!(serde_json::to_value(&e).unwrap()["encoding"], "gzip");
+        assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "gzip");
+    }
+
+    /// A synthetic entry, for the assertions that need a file that was never written.
+    fn c_of(rel_path: &str) -> FileEntry {
+        FileEntry {
+            path: rel_path.to_string(),
+            bytes: 4,
+            md5: hash::md5_hex(b"body"),
+            sha256: hash::sha256_hex(b"body"),
+            encoding: encoding_of(rel_path),
+        }
+    }
+
+    /// Everything a `ManifestInput` borrows, owned, so a test can build one
+    /// without a lifetime puzzle.
+    ///
+    /// Spelled out field by field rather than derived, on purpose: a fixture
+    /// assembled from `Default` would quietly follow every default a future edit
+    /// introduces, and the point of these tests is to pin the document's shape
+    /// rather than let it drift.
+    struct Fixture {
+        versions: crate::config::VersionPair,
+        selection: crate::select::Selection,
+        index: crate::blobs::ChunkIndex,
+        biz: crate::biz::Biz,
+        endpoints: crate::biz::Endpoints<'static>,
+        diff_tags: Vec<String>,
+        audio: Vec<String>,
+        fields: Vec<String>,
+        argv: Vec<String>,
+        diffs: Vec<crate::manifest::diff::FieldDiff>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Fixture {
+                versions: crate::config::VersionPair {
+                    old: crate::config::VersionRef {
+                        tag: "7.0.0".to_string(),
+                        build_id: "oldbuild".to_string(),
+                        source: "diff_tags[0]".to_string(),
+                    },
+                    new: crate::config::VersionRef {
+                        tag: "7.1.0".to_string(),
+                        build_id: "newbuild".to_string(),
+                        source: "main.tag".to_string(),
+                    },
+                    diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
+                },
+                selection: crate::select::Selection {
+                    admitted: Vec::new(),
+                    rejected: Vec::new(),
+                    forced_skipped: Vec::new(),
+                    matrix: Vec::new(),
+                    bytes_admitted: 0,
+                    budget: crate::select::Budget::capped(10_000),
+                },
+                index: crate::blobs::ChunkIndex {
+                    schema_version: crate::SCHEMA_VERSION,
+                    blobs: Vec::new(),
+                    sets: BTreeMap::new(),
+                },
+                biz: crate::biz::Biz::resolve(crate::cli::Biz::Hk4eGlobal),
+                endpoints: crate::biz::Endpoints::owned(
+                    "https://hyp.example".to_string(),
+                    "https://sophon.example".to_string(),
+                ),
+                // Two tags as served, neither of them either half of the pair, so
+                // the document cannot source `diff_tags` out of `versions`.
+                diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
+                audio: vec!["audio_1".to_string()],
+                fields: vec!["game".to_string()],
+                argv: vec!["gircap".to_string(), "capture".to_string()],
+                // `common + added` is what `selection_pool.manifest_entries`
+                // records, so a fixture with real counts is what pins that
+                // arithmetic. Zeros would pass either way and so would say
+                // nothing about it.
+                diffs: vec![crate::manifest::diff::FieldDiff {
+                    field: "game".to_string(),
+                    counts: crate::manifest::diff::FieldCounts {
+                        common: 40,
+                        identical: 25,
+                        added: 3,
+                        removed: 7,
+                    },
+                    scores: Vec::new(),
+                    rows: Vec::new(),
+                    pool: crate::manifest::diff::ReusePool::default(),
+                }],
+            }
+        }
+
+        fn input(&self) -> ManifestInput<'_> {
+            ManifestInput {
+                // A fixed instant, so `capture.id` and `captured_at` are the same
+                // on every run and can be asserted against literally.
+                started: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+                    .expect("fixture instant")
+                    .with_timezone(&chrono::Utc),
+                biz: &self.biz,
+                endpoints: &self.endpoints,
+                versions: &self.versions,
+                diff_tags: &self.diff_tags,
+                audio: &self.audio,
+                fields: &self.fields,
+                gzip_threshold: 1024,
+                diffs: &self.diffs,
+                selection: &self.selection,
+                index: &self.index,
+                bytes_downloaded: 4_096,
+                argv: &self.argv,
+                complete: true,
+            }
+        }
+    }
+
+    fn entry(path: &str, bytes: u64) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            bytes,
+            md5: "0".repeat(32),
+            sha256: "0".repeat(64),
+            encoding: hash::Encoding::Identity,
+        }
+    }
+
+    #[test]
+    fn the_manifest_is_whole_when_build_manifest_returns_it() {
+        // **The invariant that `files: Vec::new()` broke.** `build_manifest` used
+        // to hand back a document with an empty `files[]` and
+        // `bytes_on_disk: 0`, leaving the caller to overwrite both afterwards.
+        // For that window the document claimed the bundle held no files at all,
+        // and its own doc comment claimed every field was a measurement the run
+        // already had - false for precisely the two fields that needed the tree
+        // walked.
+        //
+        // So the assertion is deliberately not "the caller filled it in", which
+        // is the only thing the old shape could be tested for at all. It is that
+        // the returned document is *already* correct, leaving no second step
+        // that could be forgotten, skipped, or reordered past something that
+        // reads the document.
+        let f = Fixture::new();
+        // Uneven, and deliberately not summing to a round number: 1 + 2 048 + 33
+        // = 2 082, which a hardcoded total would not match by accident.
+        let files = vec![entry("a/one.bin", 1), entry("b/two.bin", 2_048), entry("c", 33)];
+
+        let m = build_manifest(&f.input(), &files).expect("manifest");
+
+        assert_eq!(
+            m.files.len(),
+            files.len(),
+            "files[] came back empty or short: the document is not whole on return"
+        );
+        for (got, want) in m.files.iter().zip(files.iter()) {
+            assert_eq!(got.path, want.path);
+            assert_eq!(got.bytes, want.bytes);
+        }
+        // Summed from the listing rather than carried beside it, so the two
+        // cannot disagree about how big the bundle is.
+        assert_eq!(m.totals.bytes_on_disk, 2_082);
+        assert_eq!(
+            m.totals.bytes_on_disk,
+            m.files.iter().map(|f| f.bytes).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn an_empty_listing_yields_a_zero_total_rather_than_an_unset_one() {
+        // The other half of the same invariant. A run that admitted nothing still
+        // produces a document; the question is whether "no files" reads as "zero
+        // bytes" or as "not counted yet". Under the old two-phase shape those two
+        // were indistinguishable - both were `0` - which is exactly how the bug
+        // hid behind a passing assertion.
+        let f = Fixture::new();
+        let m = build_manifest(&f.input(), &[]).expect("manifest");
+        assert!(
+            m.files.is_empty(),
+            "an empty listing must stay empty, not pick up rows"
+        );
+        assert_eq!(m.totals.bytes_on_disk, 0);
+        assert_eq!(
+            m.totals.bytes_downloaded, 4_096,
+            "the download total is a separate measurement and must survive"
+        );
+    }
+
+    #[test]
+    fn one_byte_of_the_listing_moves_the_total_by_exactly_one_byte() {
+        // Pins that the total is a *sum* - not a constant, and not a count. If a
+        // future edit sourced it from somewhere else, the chunk index or
+        // `log.bytes_in()` say, this is the test that catches it: the listing
+        // and the download total are deliberately different numbers here.
+        let f = Fixture::new();
+        let one = build_manifest(&f.input(), &[entry("a", 100)])
+            .expect("manifest")
+            .totals
+            .bytes_on_disk;
+        let two = build_manifest(&f.input(), &[entry("a", 101)])
+            .expect("manifest")
+            .totals
+            .bytes_on_disk;
+        assert_eq!(one, 100);
+        assert_eq!(two, 101);
+        assert_ne!(
+            one, 4_096,
+            "the fixture's byte total must not coincide with bytes_downloaded"
+        );
     }
 }
 
 /// `MANIFEST.json` — the bundle's own index.
 ///
-/// The value `Manifest::gzip_threshold` falls back to when a bundle written
-/// before the field existed is read back.
-///
-/// The flag's own default, so the number a reader is shown is the number that
-/// run actually used.
-fn default_gzip_threshold() -> u64 {
-    crate::cli::DEFAULT_GZIP_THRESHOLD
-}
-
 /// Every field here is something the run already knew. The document exists so a
 /// reader can answer "what is this, what does it cover, and is it complete"
 /// without parsing `api/` and `diff/`, and so `README.md` has one source to
@@ -495,11 +938,12 @@ pub struct Manifest {
     /// and without it a re-run with different flags would produce a different
     /// tree with no recorded reason.
     ///
-    /// **Defaults on read** rather than being required. It was added after the
-    /// first bundles were written and `schema_version` is still `1`, so making
-    /// it mandatory would have turned a backwards-compatible addition into
-    /// `verify` refusing a bundle that is internally perfect.
-    #[serde(default = "default_gzip_threshold")]
+    /// **Required.** It was added after the first bundles were written and
+    /// defaulted on read so that `schema_version` could stay `1` — which meant a
+    /// bundle with no `gzip_threshold` read back as having used the *default*,
+    /// which is a claim about a run nobody recorded. A bundle that predates the
+    /// field is stale by definition; say so by refusing it rather than by
+    /// inventing its number.
     pub gzip_threshold: u64,
     /// The fields that were scored and diffed.
     pub selection_pool: SelectionPool,
@@ -727,7 +1171,12 @@ impl Manifest {
             }
         }
 
-        s.push_str("\n## Re-verifying\n\n```\ngircap verify <this directory>\n```\n\n");
+        // The flag is spelled, because a reader who types the sentence above it
+        // verbatim gets a usage error: `--artifact` is how `verify` is told
+        // which directory it is verifying.
+        s.push_str(
+            "\n## Re-verifying\n\n```\ngircap verify --artifact <this directory>\n```\n\n",
+        );
         s.push_str("Offline: no network, no writes. Exit 0 if every assertion still holds.\n");
         s
     }

@@ -1,10 +1,10 @@
 //! `getBuild?tag=` probing: which version tags the API will actually serve, and
 //! what the API does with a request it will not serve.
 //!
-//! **M1.** `diff_tags` is a patch-support list, not a retention list. Measured
+//! `diff_tags` is a patch-support list, not a retention list. Measured
 //! 2026-10-14: `6.6.0` and `5.5.0` are absent from `diff_tags` and both served.
 //! The difference decides whether an old-version file is reconstructible at all
-//! today, without the legacy zip path — and it is the one measurement in this
+//! today, without the legacy zip path - and it is the one measurement in this
 //! tool that changes a *design conclusion* rather than a number in a table.
 //!
 //! A probe costs one small JSON request per tag and downloads no blob, so it is
@@ -25,10 +25,12 @@
 //! (`getGameBranches` with an unknown game id answers `retcode 0` with an empty
 //! node), which is the specific mistake this document exists to prevent.
 
-use serde::Serialize;
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 use crate::biz::BranchParams;
-use crate::http::{ApiError, Fetcher, Kind};
+use crate::http::{ApiError, Fetcher, Kind, Observation};
 
 /// The probe report: `api/tag_probe.json`.
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +123,13 @@ impl TagProbe {
 /// because a row that was not fetched and a row that was filled in are
 /// indistinguishable to a reader — which is correct, since both are the same
 /// fact.
+/// What one tag's `getBuild` probe found.
+///
+/// Five values with five names. A tuple would be read positionally at the one
+/// site that builds it and the one site that consumes it, and nothing would say
+/// which `Option<String>` is the build id and which is the echoed tag.
+type Answered = (u16, i64, Option<String>, Option<String>, bool);
+
 pub async fn probe_tags(
     fetcher: &Fetcher,
     sophon_base: &str,
@@ -128,32 +137,32 @@ pub async fn probe_tags(
     tags: &[String],
     diff_tags: &[String],
     known: &[(String, String)],
+    jobs: usize,
 ) -> Result<TagProbe, ApiError> {
-    let mut results = Vec::with_capacity(tags.len());
-    for tag in tags {
-        if let Some((_, build_id)) = known.iter().find(|(t, _)| t == tag) {
-            results.push(TagProbeRow {
-                tag: tag.clone(),
-                in_diff_tags: in_diff_tags(diff_tags, tag),
-                http: 200,
-                retcode: 0,
-                build_id: Some(build_id.clone()),
-                tag_echoed: Some(tag.clone()),
-                served: true,
-                // Recorded so a reader can tell a reused answer from a fetched
-                // one. It changes no number in the document.
-                already_fetched: true,
-            });
-            continue;
-        }
-        let url = params.get_build_url(sophon_base, Some(tag));
-        // `Kind::Probe` so a reader can ask "what did the metadata cost?" without
-        // matching on URLs; no blob is fetched either way.
-        let (http, retcode, build_id, tag_echoed, served) =
+    // Tags already answered by the pair's own `getBuild` cost nothing, and the
+    // rest used to be fetched strictly one after another. They do not depend on
+    // each other, so they go together; `diff_tags` is unbounded by contract and
+    // the real run asks about seven.
+    //
+    // The document is still assembled in `tags` order, which is what
+    // `requested` and every reader's row order assume. Which probe answered
+    // first is not allowed to be observable.
+    let wanted: Vec<(usize, String)> = tags
+        .iter()
+        .enumerate()
+        .filter(|(_, tag)| !known.iter().any(|(t, _)| t == *tag))
+        .map(|(i, tag)| (i, params.get_build_url(sophon_base, Some(tag))))
+        .collect();
+    let fetched = fetcher
+        .map_concurrently(&wanted, jobs, |fetcher, i, (_i, url)| async move {
+            // `Kind::Probe` so a reader can ask "what did the metadata cost?"
+            // without matching on URLs; no blob is fetched either way.
             match fetcher.get(&url, Kind::Probe, None).await {
                 Ok(f) => {
-                    let v: serde_json::Value =
-                        serde_json::from_slice(&f.body).map_err(|e| ApiError::shape(&url, e))?;
+                    let v: serde_json::Value = match serde_json::from_slice(&f.body) {
+                        Ok(v) => v,
+                        Err(e) => return (i, Err(ApiError::shape(&url, e).to_string())),
+                    };
                     let rc = v.get("retcode").and_then(|r| r.as_i64()).unwrap_or(-1);
                     let bid = v
                         .pointer("/data/build_id")
@@ -164,23 +173,68 @@ pub async fn probe_tags(
                         .and_then(|t| t.as_str())
                         .map(str::to_string);
                     let served = rc == 0 && bid.is_some();
-                    (f.record.status, rc, bid, echo, served)
+                    (i, Ok((f.status, rc, bid, echo, served)))
                 }
                 // A transport failure is a failure of the probe, not of the
                 // tag: a tag that does not exist arrives as a `200` carrying
                 // `retcode -202`, so anything landing here means the network
                 // broke mid-probe and the row would be a guess.
-                Err(e) => return Err(e),
-            };
+                Err(e) => (i, Err(e.to_string())),
+            }
+        })
+        .await;
+    // Input order, so `fetched[k]` answers `wanted[k]` — and an error is
+    // reported against its own tag rather than against whichever probe happened
+    // to fail first.
+    let mut answered: BTreeMap<usize, Answered> = BTreeMap::new();
+    for (r, (i, _url)) in fetched.into_iter().zip(&wanted) {
+        match r {
+            Ok(answer) => {
+                answered.insert(*i, answer);
+            }
+            Err(e) => {
+                return Err(ApiError::shape(&tags[*i], e));
+            }
+        }
+    }
+
+    let mut results = Vec::with_capacity(tags.len());
+    for (i, tag) in tags.iter().enumerate() {
+        if let Some((http, retcode, build_id, tag_echoed, served)) = answered.remove(&i) {
+            results.push(TagProbeRow {
+                tag: tag.clone(),
+                in_diff_tags: in_diff_tags(diff_tags, tag),
+                http,
+                retcode,
+                build_id,
+                tag_echoed,
+                served,
+                already_fetched: false,
+            });
+            continue;
+        }
+        // Reused rather than re-requested: a probe costs one JSON request per
+        // tag, the pair is always in the list, and re-asking it would be the
+        // single largest avoidable cost in a metadata-only run. The document
+        // still answers the full question, because a row that was not fetched
+        // and a row that was filled in are indistinguishable to a reader —
+        // which is correct, since both are the same fact.
+        let build_id = known
+            .iter()
+            .find(|(t, _)| t == tag)
+            .map(|(_, b)| b.clone())
+            .unwrap_or_default();
         results.push(TagProbeRow {
             tag: tag.clone(),
             in_diff_tags: in_diff_tags(diff_tags, tag),
-            http,
-            retcode,
-            build_id,
-            tag_echoed,
-            served,
-            already_fetched: false,
+            http: 200,
+            retcode: 0,
+            build_id: Some(build_id),
+            tag_echoed: Some(tag.clone()),
+            served: true,
+            // Recorded so a reader can tell a reused answer from a fetched
+            // one. It changes no number in the document.
+            already_fetched: true,
         });
     }
 
@@ -226,7 +280,7 @@ pub fn compose_tags(pair: &[String], diff_tags: &[String], extra: &[String]) -> 
 ///
 /// The two families are the reason this document exists, so the family is a field
 /// rather than something a reader infers from the status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Family {
     /// `autopatchhk.yuanshen.com` and friends: a missing object is a `404` with an
@@ -243,7 +297,11 @@ pub enum Family {
 /// recorded verbatim. Nothing here is synthesized: a replayer reading this
 /// document can reproduce the status, the content-type and the body without
 /// having to guess any of the three.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` because the document is **required**, not optional: `verify`
+/// reads it back through this type, so a bundle whose shapes are not the shape
+/// this tool writes fails to open rather than failing later and somewhere else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorShapes {
     /// The bundle schema version.
     pub schema_version: u32,
@@ -252,7 +310,7 @@ pub struct ErrorShapes {
 }
 
 /// One measured negative response.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorShape {
     /// Stable identifier, e.g. `blob_missing`. A consumer asserts on this, never
     /// on the URL, which carries a build id and changes every capture.
@@ -287,14 +345,71 @@ pub struct ErrorShape {
     /// The JSON envelopes carry none — `retcode` and `message` are stable — so
     /// their list is empty and a replayer can be byte-exact.
     pub volatile_fields: Vec<String>,
-    /// Always `false`.
+    /// What the retry policy says about this status.
     ///
-    /// This is the retry policy stated in the artifact, so the fact
-    /// [`crate::http::RetryPolicy::should_retry_status`] encodes is readable by
-    /// whoever consumes the bundle rather than only by whoever wrote the fetcher. It
-    /// is a field and not a constant because a future origin that started answering
-    /// `429` here would make it true, and the document should say so.
+    /// **Derived from [`crate::http::RetryPolicy::should_retry_status`], which is
+    /// the point.** A reader scanning the document for "what does a bad request
+    /// look like, and would we try again" must be reading the policy rather than a
+    /// constant — every probe answers `200` or `404` and neither is in the retry
+    /// set, so a hardcoded `false` would be indistinguishable from a correct
+    /// derivation on every input this tool can produce, and wrong the moment an
+    /// origin throttled with a `429`.
+    ///
+    /// **It states the policy, not what this run did.** The probe path uses
+    /// [`crate::http::Fetcher::observe`], which never retries, so a `true` here
+    /// means "the fetcher would have retried this" and not "this was retried". The
+    /// two are the same question only while probes are single-attempt, which is
+    /// what `observe` is for.
     pub retryable: bool,
+}
+
+/// One row of `api/error_shapes.json`, from one observation.
+///
+/// **A function, because the row is a claim about policy and policy must be
+/// testable.** This was built inline in a closure inside
+/// [`probe_error_shapes`], which meant [`ErrorShape::retryable`] — the one field
+/// that states what the retry policy would do — could only be checked against the
+/// statuses the mock happens to answer. Those are `200` and `404`, neither of
+/// which is in the retry set, so the `true` branch had no test at all: a
+/// hardcoded `false` and a correct derivation were indistinguishable.
+///
+/// Extracted so `retryable_follows_the_policy_on_both_sides` can hand it a `429`.
+fn shape_from(
+    id: &str,
+    family: Family,
+    request: String,
+    url: String,
+    error: bool,
+    o: &Observation,
+) -> ErrorShape {
+    ErrorShape {
+        id: id.to_string(),
+        family,
+        request,
+        url,
+        status: o.status,
+        content_type: o.content_type.clone(),
+        retcode: o.retcode(),
+        error,
+        body: o.text(),
+        volatile_fields: if family == Family::Blob {
+            vec![
+                "RequestId".to_string(),
+                "HostId".to_string(),
+                "Key".to_string(),
+                // `Key` echoes the requested path, so the body's
+                // length is a function of the URL rather than of the
+                // shape.
+                "body length (follows Key)".to_string(),
+            ]
+        } else {
+            Vec::new()
+        },
+        // Derived, not asserted. See `ErrorShape::retryable`: this states what
+        // `RetryPolicy` would do with the status, so a reader does not have to
+        // reimplement the policy to know whether a shape is worth retrying.
+        retryable: crate::http::RetryPolicy::should_retry_status(o.status),
+    }
 }
 
 impl ErrorShapes {
@@ -357,6 +472,7 @@ pub async fn probe_error_shapes(
     biz: &crate::biz::Biz,
     params: &BranchParams,
     probes: &ErrorProbes<'_>,
+    jobs: usize,
 ) -> Result<ErrorShapes, ApiError> {
     // Same shape, three ways: the request this tool would have made, with
     // exactly one thing wrong. Built from the good URL rather than assembled by
@@ -435,34 +551,21 @@ pub async fn probe_error_shapes(
         ),
     ];
 
+    // A probe that never reached the origin is not a shape, so the failure
+    // propagates — and it propagates against its own URL, because input order
+    // means `observed[k]` is `wanted[k]`'s and no other.
+    let observed = fetcher
+        .map_concurrently(&wanted, jobs, |fetcher, i, (id, family, request, url, error)| async move {
+            let o = match fetcher.observe(&url, Kind::Probe).await {
+                Ok(o) => o,
+                Err(e) => return (i, Err(e.to_string())),
+            };
+            (i, Ok(shape_from(id, family, request, url, error, &o)))
+        })
+        .await;
     let mut shapes = Vec::with_capacity(wanted.len());
-    for (id, family, request, url, error) in wanted {
-        let o = fetcher.observe(&url, Kind::Probe).await?;
-        let retcode = o.retcode();
-        shapes.push(ErrorShape {
-            id: id.to_string(),
-            family,
-            request,
-            url,
-            status: o.status,
-            content_type: o.content_type.clone(),
-            retcode,
-            error,
-            body: o.text(),
-            volatile_fields: if family == Family::Blob {
-                vec![
-                    "RequestId".to_string(),
-                    "HostId".to_string(),
-                    "Key".to_string(),
-                    // `Key` echoes the requested path, so the body's length is a
-                    // function of the URL rather than of the shape.
-                    "body length (follows Key)".to_string(),
-                ]
-            } else {
-                Vec::new()
-            },
-            retryable: false,
-        });
+    for (r, w) in observed.into_iter().zip(&wanted) {
+        shapes.push(r.map_err(|e| ApiError::shape(&w.3, e))?);
     }
 
     Ok(ErrorShapes {
@@ -476,6 +579,19 @@ pub async fn probe_error_shapes(
 /// `key` is matched literally, brackets included: the measured spelling of
 /// `game_ids[]` keeps them, and matching on a decoded form would silently not
 /// find the parameter.
+///
+/// **The replacement value is percent-encoded, by [`crate::biz::enc`].** Splicing
+/// `value` in raw would make this a second URL grammar living beside
+/// [`crate::biz::push_pair`] — the one every real URL in this tool goes through.
+/// The two would agree only while every value stays `"undefined"`: a value
+/// containing `&`, `=`, `+` or a space would split the query into a different set
+/// of parameters and the probe would ask the wrong question while still looking
+/// like a probe.
+///
+/// The key stays literal for the same reason it is matched literally: `push_pair`
+/// appends keys unencoded too, so the two now agree on both halves. Encoding is a
+/// no-op for the values actually used, so **no recorded URL changes** — see
+/// `a_value_needing_encoding_is_encoded_and_todays_is_not`.
 fn with_param(url: &str, key: &str, value: &str) -> String {
     let Some((base, query)) = url.split_once('?') else {
         return url.to_string();
@@ -485,7 +601,7 @@ fn with_param(url: &str, key: &str, value: &str) -> String {
         .split('&')
         .map(|p| {
             if p.starts_with(&prefix) {
-                format!("{prefix}{value}")
+                format!("{prefix}{}", crate::biz::enc(value))
             } else {
                 p.to_string()
             }
@@ -519,6 +635,131 @@ mod tests {
             &["6.6.0".into(), "7.1.0".into()],
         );
         assert_eq!(got, vec!["7.1.0", "7.0.0", "6.7.0", "6.6.0"]);
+    }
+
+    #[test]
+    fn retryable_follows_the_policy_on_both_sides() {
+        // Both branches, driven through the real `shape_from`. The `true` side is
+        // the one that matters and the one no healthy capture reaches: it needs a
+        // status that *is* retryable, which means an origin that throttles a
+        // probe.
+        let obs = |status: u16| Observation {
+            status,
+            content_type: Some("application/json".into()),
+            body: br#"{"retcode":-1,"message":"slow down"}"#.to_vec(),
+        };
+        let shape = |status: u16| {
+            shape_from(
+                "probe",
+                Family::Json,
+                "a request".into(),
+                "http://example.invalid/x".into(),
+                true,
+                &obs(status),
+            )
+        };
+
+        // The policy's own answer, on both sides of it.
+        for status in [408_u16, 429, 500, 503, 599] {
+            assert!(
+                shape(status).retryable,
+                "{status} is in the retry set, so the document must say so"
+            );
+        }
+        for status in [200_u16, 400, 403, 404, 410] {
+            assert!(
+                !shape(status).retryable,
+                "{status} is not in the retry set, so the document must not claim it is"
+            );
+        }
+
+        // And the field tracks the function rather than agreeing with it by
+        // chance: a status the policy grows later is reflected with no edit here.
+        assert_eq!(
+            shape(429).retryable,
+            crate::http::RetryPolicy::should_retry_status(429)
+        );
+        assert_eq!(
+            shape(404).retryable,
+            crate::http::RetryPolicy::should_retry_status(404)
+        );
+    }
+
+    #[test]
+    fn a_value_needing_encoding_is_encoded_and_todays_is_not() {
+        // The second half of the claim is the one that matters for the artifact:
+        // if encoding changed the URLs the probes send today, every recorded
+        // `error_shapes.json` URL would be a fiction.
+        let good = "https://api.example/getBuild?branch=main&package_id=ScSYQBFhu9&tag=7.1.0";
+
+        // Unchanged: what the probes actually send today.
+        for today in ["undefined", "0", "ScSYQBFhu9", "en-us"] {
+            assert_eq!(
+                with_param(good, "package_id", today),
+                good.replace("ScSYQBFhu9", today),
+                "{today:?} must not be altered"
+            );
+        }
+
+        // Changed: a value that would otherwise reshape the query.
+        let nasty = with_param(good, "package_id", "a&tag=evil");
+        assert!(
+            nasty.contains("package_id=a%26tag%3Devil"),
+            "an ampersand in the value must not become another parameter: {nasty}"
+        );
+        assert_eq!(
+            nasty.matches('&').count(),
+            good.matches('&').count(),
+            "the query must keep exactly as many parameters as it had: {nasty}"
+        );
+        assert_eq!(
+            nasty.split('?').nth(1).unwrap().split('&').count(),
+            good.split('?').nth(1).unwrap().split('&').count(),
+            "and one value is still one parameter"
+        );
+
+        // The key is matched and kept literally, brackets and all — the measured
+        // spelling of `game_ids[]` must survive, and `push_pair` does the same.
+        let cfg = "https://api.example/getGameConfigs?game_ids[]=gopR6Cufr3&lang=en-us";
+        assert_eq!(
+            with_param(cfg, "game_ids[]", "undefined"),
+            "https://api.example/getGameConfigs?game_ids[]=undefined&lang=en-us",
+            "the bracketed key is matched literally and not encoded"
+        );
+
+        // And a URL with no query is returned untouched rather than gaining one.
+        assert_eq!(with_param("https://x.example/y", "k", "v"), "https://x.example/y");
+    }
+
+    #[test]
+    fn a_shape_carries_the_observation_it_was_built_from() {
+        // The extraction must not have lost a field. Everything a reader of
+        // `api/error_shapes.json` relies on is spelled out here.
+        let o = Observation {
+            status: 404,
+            content_type: Some("application/xml".into()),
+            body: b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+        };
+        let s = shape_from(
+            "blob_missing",
+            Family::Blob,
+            "a chunk that is not there".into(),
+            "http://example.invalid/blob".into(),
+            true,
+            &o,
+        );
+        assert_eq!(s.id, "blob_missing");
+        assert_eq!(s.family, Family::Blob);
+        assert_eq!(s.status, 404);
+        assert_eq!(s.content_type.as_deref(), Some("application/xml"));
+        assert!(s.error);
+        assert!(s.body.contains("NoSuchKey"), "the body is byte-exact: {}", s.body);
+        assert_eq!(
+            s.volatile_fields,
+            vec!["RequestId", "HostId", "Key", "body length (follows Key)"],
+            "the blob envelope's volatile names, because `Key` follows the path"
+        );
+        assert!(s.retcode.is_none(), "an XML envelope has no retcode");
     }
 
     /// The measured shape of the finding: `diff_tags` is a patch-support list and
@@ -679,6 +920,7 @@ mod tests {
             &["7.1.0".into(), "0.0.1".into()],
             &["7.0.0".into()],
             &[],
+            4,
         )
         .await
         .expect("a -202 is an answer, not a failure");
@@ -726,6 +968,7 @@ mod tests {
             &["7.1.0".into(), "6.7.0".into()],
             &["7.0.0".into()],
             &[("7.1.0".into(), "sMXGW2ll3Fuu".into())],
+            4,
         )
         .await
         .unwrap();
@@ -769,6 +1012,7 @@ mod tests {
             &["t".into()],
             &[],
             &[],
+            4,
         )
         .await
         .unwrap();

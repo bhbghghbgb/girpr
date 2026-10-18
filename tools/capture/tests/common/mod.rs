@@ -1,6 +1,6 @@
 //! A local mock of the whole API surface, built by the test.
 //!
-//! **M10.** No dependency, no fixture file, and nothing borrowed from the
+//! No dependency, no fixture file, and nothing borrowed from the
 //! repair binary's own mock: the synthetic manifests, the chunk bodies, the
 //! `getBuild` bodies and the four HoYoPlay bodies are all *constructed here*,
 //! from a [`World`] the test writes. That is the point — a fixture file checked
@@ -29,7 +29,7 @@
 //!
 //! All three live on `127.0.0.1` with an ephemeral port, so **no test can reach
 //! the network even by accident** — there is nothing else to reach. That is the
-//! property M10 is asserting, so it is enforced by construction rather than by
+//! property the suite asserts, so it is enforced by construction rather than by
 //! remembering to pass `--hyp-base`.
 
 #![allow(dead_code)]
@@ -410,6 +410,10 @@ pub struct Mock {
     base: String,
     stop: Arc<AtomicBool>,
     log: Arc<Mutex<Vec<Recorded>>>,
+    /// Kept so `fail_once_for` can arm a route after the listener is already
+    /// bound. Shared with the serving threads, which is why the map inside is
+    /// behind its own lock.
+    table: Arc<Table>,
 }
 
 impl Mock {
@@ -427,13 +431,14 @@ impl Mock {
 
         let thread_stop = Arc::clone(&stop);
         let thread_log = Arc::clone(&log);
+        let thread_table = Arc::clone(&table);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if thread_stop.load(Ordering::Relaxed) {
                     break;
                 }
                 let Ok(stream) = stream else { continue };
-                let table = Arc::clone(&table);
+                let table = Arc::clone(&thread_table);
                 let log = Arc::clone(&thread_log);
                 std::thread::spawn(move || {
                     let _ = serve(stream, &table, &log);
@@ -441,7 +446,28 @@ impl Mock {
             }
         });
 
-        Mock { base, stop, log }
+        Mock { base, stop, log, table }
+    }
+
+    /// Answer the next request whose path contains `needle` with `503`, once.
+    ///
+    /// A `5xx` is what `RetryPolicy` retries, so this is the shape that exercises
+    /// the retry loop end to end: the first attempt fails, the second succeeds,
+    /// and the request log must say so in `attempts`. Call it before `start` has
+    /// served anything, which is immediately after construction.
+    ///
+    /// Takes and returns `Self` so it chains:
+    /// `Mock::start(world).fail_once_for("/chunk/")`.
+    pub fn fail_once_for(self, needle: &str) -> Mock {
+        let mut f = self
+            .table
+            .flaky
+            .lock()
+            .expect("the flaky table is not poisoned");
+        let slot = f.entry(needle.to_string()).or_insert(0);
+        *slot = 1;
+        drop(f);
+        self
     }
 
     /// `http://127.0.0.1:<port>`.
@@ -495,6 +521,19 @@ struct Table {
     game_id: String,
     /// The `package_id` this mock answers for; anything else is `-201`.
     package_id: String,
+    /// Paths that should fail before they succeed: a substring of the request
+    /// path, and how many more `503`s it still owes.
+    ///
+    /// **Mutable, because "fail once then succeed" is the only way to observe a
+    /// retry.** Every other fixture here answers consistently — which is right
+    /// for what those tests measure, and which is why `attempts` was `1` on every
+    /// row of the pinned request log. A bug that *dropped* a retry was therefore
+    /// indistinguishable from one that never happened.
+    ///
+    /// Interior mutability because the table is shared as `Arc<Table>` across a
+    /// thread per connection, and whichever connection serves the request is the
+    /// one that has to decrement the count.
+    flaky: Mutex<BTreeMap<String, usize>>,
 }
 
 /// Every `matching_field` any build publishes, in a stable order.
@@ -867,6 +906,8 @@ fn build_table(world: &World, base: &str) -> Table {
         chunks,
         game_id: GAME.to_string(),
         package_id,
+        // Empty until a test arms a route with `Mock::fail_once_for`.
+        flaky: Mutex::new(BTreeMap::new()),
     }
 }
 
@@ -893,61 +934,137 @@ fn envelope_with_data(retcode: i64, message: &str, data: serde_json::Value) -> V
     .expect("render json")
 }
 
-/// Answer one request.
+/// Serve requests on one connection until the peer closes it or asks to close.
+///
+/// **Keep-alive, because the real servers keep alive.** Answering one request
+/// per connection and `Connection: close` unconditionally costs a fresh TCP
+/// connection per chunk blob, which is not just unfaithful to the CDN — it
+/// measures Windows' connect path rather than anything about the fetcher.
+///
+/// The client's pool is never the thing at fault: `Fetcher` builds one
+/// `reqwest::Client` and every clone shares it, so a mock that refuses to let
+/// the pool be used is the only way to see this.
+///
+/// A request body is still never read: this client sends none, and a body-carrying
+/// request on a reused connection would desynchronise the stream. The reader is
+/// only advanced to the blank line that ends the headers.
 fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line)? == 0 {
-        return Ok(());
-    }
-    // Drain the headers; this client always sends `Connection: close`-compatible
-    // requests and never negotiates a body it would not send.
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
-            break;
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line)? == 0 {
+            return Ok(()); // peer closed: the normal end of a pooled connection
+        }
+        if request_line.trim().is_empty() {
+            continue; // tolerate a stray CRLF between pipelined requests
+        }
+
+        // Drain the headers, noting `Connection:` so the reply can agree.
+        let mut client_says_close = false;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                return Ok(());
+            }
+            if line.trim().is_empty() {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("connection:") && lower.contains("close") {
+                client_says_close = true;
+            }
+        }
+
+        let target = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("/")
+            .to_string();
+        let (path, query) = match target.split_once('?') {
+            Some((p, q)) => (p.to_string(), q.to_string()),
+            None => (target.clone(), String::new()),
+        };
+        let tag = query_param(&query, "tag");
+        log.lock().expect("log").push(Recorded {
+            path: path.clone(),
+            query: query.clone(),
+            tag: tag.clone(),
+        });
+
+        // HTTP/1.1 keeps alive unless someone asks otherwise; HTTP/1.0 is the
+        // other way round. The mock is HTTP/1.1, and this client is 1.1.
+        let keep_alive = !client_says_close;
+
+        // An armed route answers `503` until its count runs out, which is what
+        // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
+        // request succeeds on the second attempt and the row must say `2`.
+        if table.take_flaky_failure(&path).is_some() {
+            return write_response(
+                &mut stream,
+                503,
+                "text/plain",
+                b"armed to fail once",
+                keep_alive,
+            );
+        }
+
+        let outcome = match respond(table, &path, &query, tag.as_deref()) {
+            // A blob route's miss is the measured shape, not a generic one: the
+            // real CDN (`Server: AliyunOSS`) answers `404` with
+            // `application/xml` and a `NoSuchKey` envelope, and that is what
+            // `api/error_shapes.json` records and a replayer will replay. A
+            // `text/plain` stand-in would let the mock agree with itself about a
+            // detail the mock cannot know.
+            None if is_blob_route(&path) => {
+                write_response(&mut stream, 404, "application/xml", &no_such_key(&path), keep_alive)
+            }
+            None => write_response(
+                &mut stream,
+                404,
+                "text/plain",
+                format!("no route for {path}").as_bytes(),
+                keep_alive,
+            ),
+            Some(bytes) => write_response(&mut stream, 200, content_type(&path), &bytes, keep_alive),
+        };
+
+        outcome?;
+        if !keep_alive {
+            return Ok(());
         }
     }
-
-    let target = request_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/")
-        .to_string();
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p.to_string(), q.to_string()),
-        None => (target.clone(), String::new()),
-    };
-    let tag = query_param(&query, "tag");
-    log.lock().expect("log").push(Recorded {
-        path: path.clone(),
-        query: query.clone(),
-        tag: tag.clone(),
-    });
-
-    let Some(bytes) = respond(table, &path, &query, tag.as_deref()) else {
-        // A blob route's miss is the measured shape, not a generic one: the real
-        // CDN (`Server: AliyunOSS`) answers `404` with `application/xml` and a
-        // `NoSuchKey` envelope, and that is what `api/error_shapes.json` records
-        // and a replayer will replay. A `text/plain` stand-in would let the
-        // mock agree with itself about a detail the mock cannot know.
-        if is_blob_route(&path) {
-            return write_response(&mut stream, 404, "application/xml", &no_such_key(&path));
-        }
-        return write_response(
-            &mut stream,
-            404,
-            "text/plain",
-            format!("no route for {path}").as_bytes(),
-        );
-    };
-    write_response(&mut stream, 200, content_type(&path), &bytes)
 }
 
 /// Whether `path` belongs to the CDN's two blob namespaces rather than the JSON
 /// APIs. `api/` and the `get*` endpoints are the JSON side.
 fn is_blob_route(path: &str) -> bool {
     !path.contains("getBuild") && !path.contains("getGame")
+}
+
+impl Table {
+    /// Consume one armed failure for `path`, if any route matches it.
+    ///
+    /// Longest needle first, so arming `/chunk/` does not lose to a narrower
+    /// `/chunk/abc` armed for the same path — the more specific answer is the
+    /// one the test meant.
+    fn take_flaky_failure(&self, path: &str) -> Option<usize> {
+        let mut f = self.flaky.lock().expect("the flaky table is not poisoned");
+        let mut best: Option<(usize, String)> = None;
+        for needle in f.keys() {
+            if path.contains(needle.as_str())
+                && best.as_ref().is_none_or(|(len, _)| needle.len() > *len)
+            {
+                best = Some((needle.len(), needle.clone()));
+            }
+        }
+        let (_, needle) = best?;
+        let slot = f.get_mut(&needle)?;
+        if *slot == 0 {
+            return None;
+        }
+        *slot -= 1;
+        Some(*slot)
+    }
 }
 
 /// The AliyunOSS `NoSuchKey` envelope, with the fields that are volatile per
@@ -1066,14 +1183,16 @@ fn write_response(
     status: u16,
     content_type: &str,
     body: &[u8],
+    keep_alive: bool,
 ) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         404 => "Not Found",
         _ => "Error",
     };
+    let connection = if keep_alive { "keep-alive" } else { "close" };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: {connection}\r\n\r\n",
         body.len()
     );
     stream.write_all(head.as_bytes())?;

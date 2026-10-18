@@ -82,11 +82,18 @@ pub struct CommonArgs {
 
 /// `--gzip-threshold`'s default, in bytes.
 ///
-/// A named constant rather than a literal in two places: the flag's default and
-/// [`crate::emit::index::Manifest::gzip_threshold`]'s *read* default have to be
-/// the same number, and a bundle written before that field existed used exactly
-/// this.
+/// A named constant rather than a literal at the flag and at the assertion that
+/// reads it back: the number a capture records must be the number the flag
+/// defaults to, and those are two different places in two different files.
 pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
+
+/// The `--audio` default: one launchable-install language, which is also a
+/// deliberate widening of the selection pool.
+///
+/// A capture that selected no audio would have one fewer manifest to score the
+/// matrix against, and every audio class would rest on nothing but the `game`
+/// field's own candidates.
+pub use crate::config::DEFAULT_AUDIO;
 
 /// `gircap capture`.
 #[derive(Debug, Clone, ClapArgs)]
@@ -107,7 +114,10 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "TAG")]
     pub old_tag: Option<String>,
 
-    /// How many files to admit per matrix class.
+    /// How many files to admit per matrix class. Floored at 1: asking for zero
+    /// is not a request for an empty bundle, it is a request to capture nothing
+    /// while still charging admission for it. Use `--files` to restrict what is
+    /// fetched, or `--max-download-bytes` to cap the cost.
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub per_class: u32,
 
@@ -126,7 +136,7 @@ pub struct CaptureArgs {
 
     /// Audio languages. `none` writes an empty scan file. Each code also adds a
     /// manifest to the selection pool.
-    #[arg(long = "audio", value_name = "CODE", default_value = "en-us")]
+    #[arg(long = "audio", value_name = "CODE", default_value = DEFAULT_AUDIO)]
     pub audio: Vec<String>,
 
     /// How much of each manifest to keep. `paths-only` skips the full decode dump.
@@ -156,6 +166,13 @@ pub struct CaptureArgs {
     /// Per-request timeout, seconds.
     #[arg(long, value_name = "S", default_value_t = 60)]
     pub timeout: u64,
+
+    /// Ceiling on one response body, in bytes. A body larger than this is
+    /// refused rather than buffered: an origin that keeps sending is bounded by
+    /// this and not by the machine's memory. Raise it if a legitimate manifest
+    /// archive ever approaches the default.
+    #[arg(long, value_name = "BYTES", default_value_t = crate::http::DEFAULT_MAX_RESPONSE_BYTES)]
+    pub max_response_bytes: u64,
 
     /// Override the HoYoPlay base. Testing seam: points every endpoint at a
     /// local server. Defaults to the production base for `--biz`.
@@ -308,7 +325,7 @@ pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
             .output
             .parse::<OutputFormat>()
             .map_err(UsageError::new)?,
-        log_file: crate::logging::resolve_log_path(common.log_file.as_deref()),
+        log_file: common.log_file.clone(),
     })
 }
 

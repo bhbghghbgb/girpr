@@ -22,7 +22,6 @@
 use crate::biz::{Biz, BranchParams, Endpoints, HypEndpoint};
 use crate::config::{NewTagSelector, OldTagSelector, VersionPair};
 use crate::http::{ApiError, Fetcher, Kind, RequestLog};
-use crate::report::OutputFormat;
 
 pub mod types;
 
@@ -116,6 +115,23 @@ impl Captured {
             &self.packages,
             &self.build_new,
             &self.build_old,
+        ]
+    }
+
+    /// Every body, mutable, in the order they were fetched.
+    ///
+    /// Exists so [`attach_seq`] can be called without a caller naming six field
+    /// names and risking one of them being missed. The order matches
+    /// [`Captured::bodies`] because the only caller that cares — the log
+    /// lookup — matches on the endpoint inside the URL, not on position.
+    pub fn bodies_mut(&mut self) -> [&mut CapturedBody; 6] {
+        [
+            &mut self.configs,
+            &mut self.branches,
+            &mut self.deprecated,
+            &mut self.packages,
+            &mut self.build_new,
+            &mut self.build_old,
         ]
     }
 
@@ -261,30 +277,108 @@ impl<'a> HypClient<'a> {
 
     /// Fetch all six bodies and resolve the version pair.
     ///
-    /// The order is load-bearing and is the reason this is one function rather
-    /// than six: `getGameBranches` supplies the `package_id` and `password` that
-    /// every `getBuild` URL needs, so the tag selectors can only be resolved
-    /// after it, and a caller that got the order wrong would build a URL with no
-    /// package in it.
+    /// **Six bodies, two round trips.** This was six consecutive `.await`s,
+    /// which is the entire network cost of a `--no-chunk-blobs` metadata run.
+    /// The dependency is narrower than the sequence implied: four of the six
+    /// URLs depend only on `biz` and the capture language, so all four go at
+    /// once, and of the remaining two — `getBuild` for each tag — neither
+    /// depends on the other.
+    ///
+    /// Only `getGameBranches` is a real dependency, because it supplies the
+    /// `package_id` and `password` that every `getBuild` URL needs. That is
+    /// also the reason this is one function rather than six: a caller that
+    /// issued a `getBuild` before it would build a URL with no package in it,
+    /// and that is now the *only* ordering that matters.
+    ///
+    /// `jobs` bounds each wave. It is the capture's own `--jobs`, because there
+    /// is no other number here that means anything to an operator.
     pub async fn capture_all(
         &self,
         new: NewTagSelector<'_>,
         old: OldTagSelector<'_>,
+        jobs: usize,
     ) -> Result<Captured, ApiError> {
-        let configs = self.endpoint(HypEndpoint::GameConfigs).await?;
-        let branches = self.endpoint(HypEndpoint::GameBranches).await?;
+        // The four bodies whose URL needs nothing but `biz`. Also the answer key:
+        // `map_concurrently` returns input order, so the reads below are
+        // positional and each one is named by the `PLAIN` entry above it.
+        const PLAIN: [&str; 4] = [
+            "getGameConfigs",
+            "getGameBranches",
+            "getGameDeprecatedFileConfigs",
+            "getGamePackages",
+        ];
+        const PLAIN_ENDPOINTS: [HypEndpoint; 4] = [
+            HypEndpoint::GameConfigs,
+            HypEndpoint::GameBranches,
+            HypEndpoint::GameDeprecatedFileConfigs,
+            HypEndpoint::GamePackages,
+        ];
+        let plain: Vec<(String, &'static str)> = PLAIN
+            .iter()
+            .zip(PLAIN_ENDPOINTS)
+            .map(|(path, e)| (self.endpoints.hyp_url(&self.biz, e, CAPTURE_LANGUAGE), *path))
+            .collect();
+
+        let mut got = self
+            .fetcher
+            .map_concurrently(&plain, jobs, |fetcher, i, (url, path)| async move {
+                let fetched = fetcher.get_json(&url, Kind::Api).await;
+                tracing::debug!(endpoint = path, file = format!("{path}.json"), "captured");
+                let bytes = match fetched {
+                    Ok((bytes, _value)) => bytes,
+                    Err(e) => return (i, Err(e.to_string())),
+                };
+                let body = CapturedBody {
+                    endpoint: path,
+                    file: format!("{path}.json"),
+                    seq: 0, // filled in by the caller from the request log
+                    bytes,
+                };
+                (i, Ok(body))
+            })
+            .await
+            .into_iter();
+
+        let err = |what: &str, e: String| ApiError::shape(what, e);
+        let configs = got.next().expect("four bodies").map_err(|e| err("getGameConfigs", e))?;
+        let branches = got.next().expect("four bodies").map_err(|e| err("getGameBranches", e))?;
+        let deprecated = got.next().expect("four bodies").map_err(|e| err("getGameDeprecatedFileConfigs", e))?;
+        let packages = got.next().expect("four bodies").map_err(|e| err("getGamePackages", e))?;
+
         let params = BranchParams::from_branches(&branches.bytes)?;
 
         let mut versions = VersionPair::select(&params, new, old)
             .map_err(|m| ApiError::shape("version pair", m))?;
 
-        let deprecated = self
-            .endpoint(HypEndpoint::GameDeprecatedFileConfigs)
-            .await?;
-        let packages = self.endpoint(HypEndpoint::GamePackages).await?;
-
-        let build_new = self.get_build(&params, &versions.new.tag).await?;
-        let build_old = self.get_build(&params, &versions.old.tag).await?;
+        // The two `getBuild`s depend on `params` and on nothing each other. Their URLs
+        // are built here rather than inside the task, because the task is
+        // `'static` and `params` is neither.
+        let tags = [versions.new.tag.clone(), versions.old.tag.clone()];
+        let build_urls: Vec<String> = tags
+            .iter()
+            .map(|t| self.endpoints.get_build_url(&params, Some(t)))
+            .collect();
+        let mut got = self
+            .fetcher
+            .map_concurrently(&build_urls, jobs, |fetcher, i, url| async move {
+                match fetcher.get_json(&url, Kind::Api).await {
+                    Ok((bytes, _v)) => (i, Ok(bytes)),
+                    Err(e) => (i, Err(e.to_string())),
+                }
+            })
+            .await
+            .into_iter();
+        let body = |tag: &str, r: Result<Vec<u8>, String>| -> Result<CapturedBody, ApiError> {
+            r.map(|bytes| CapturedBody {
+                endpoint: "getBuild",
+                file: format!("getBuild.{tag}.json"),
+                seq: 0,
+                bytes,
+            })
+            .map_err(|e| ApiError::shape("getBuild", e))
+        };
+        let build_new = body(&tags[0], got.next().expect("two builds"))?;
+        let build_old = body(&tags[1], got.next().expect("two builds"))?;
 
         versions.attach_build_ids(
             &build_new.data::<GetBuild>()?.build_id,
@@ -303,22 +397,45 @@ impl<'a> HypClient<'a> {
     }
 }
 
-/// Attach each body's request sequence number, so the request log's `stored_as`
-/// can be filled in once the files are on disk.
+/// Fill in each body's request sequence number from the log.
 ///
 /// Done after the fact and by lookup rather than threaded through, because the
 /// sequence number is the fetcher's business and the capture's is to know where
-/// its bytes ended up.
+/// its bytes ended up. Without this, [`CapturedBody::seq`]'s "filled in by the
+/// caller" would be a promise nobody keeps: all six bodies would sit at `0`,
+/// `log.set_stored_as(0, ..)` would find nothing to mark, and every `api` row in
+/// `requests.ndjson` would record a null `stored_as` for a body sitting on disk
+/// under `api/`. The manifest rows are correct either way, because
+/// `manifest::mark_stored` receives a real `seq` from the fetch.
 pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
     let records = log.records();
     for b in bodies.iter_mut() {
         // The endpoint name appears in the URL path, with or without a trailing
         // slash and with or without a query after it. Matched on the last
         // successful row so a retried request contributes one body, not two.
-        let hit = records
-            .iter()
-            .rev()
-            .find(|r| r.url.contains(b.endpoint) && r.status == 200);
+        //
+        // **The tag has to be part of the match, or the two `getBuild` bodies
+        // claim the same row.** `getBuild.7.0.0.json` and `getBuild.7.1.0.json`
+        // both want a row whose URL contains `getBuild`, and there is a third —
+        // the tag probe's `getBuild` for a tag the API does not serve, which
+        // also answers HTTP 200 with a `retcode` in the body. So a
+        // name-only match reversed over the log gives *both* build bodies the
+        // probe's sequence number, the second `set_stored_as` overwrites the
+        // first, and the bundle ends up with five of six bodies marked and a
+        // probe row marked instead of a build row.
+        //
+        // The tag comes from the body's own file name, which the fetch built as
+        // `getBuild.<tag>.json`, and the URL carries it as `?tag=<tag>`. Matching
+        // both is what makes the assignment one-to-one.
+        let tag = b
+            .file
+            .strip_prefix(&format!("{}.", b.endpoint))
+            .and_then(|rest| rest.strip_suffix(".json"));
+        let hit = records.iter().rev().find(|r| {
+            r.url.contains(b.endpoint)
+                && r.status == 200
+                && tag.is_none_or(|t| r.url.contains(&format!("tag={t}")))
+        });
         b.seq = hit.map(|r| r.seq).unwrap_or(0);
     }
 }
@@ -328,10 +445,113 @@ pub fn render_json(value: &impl serde::Serialize) -> Result<String, ApiError> {
     serde_json::to_string_pretty(value).map_err(|e| ApiError::shape("serialize", e))
 }
 
-/// The `--output` spelling a capture's generated documents use, so a text run and
-/// a json run produce the same tree.
-pub fn document_format(output: OutputFormat) -> OutputFormat {
-    output
+#[cfg(test)]
+mod attach_seq_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use crate::http::RequestRecord;
+
+    fn body(endpoint: &'static str, file: &str) -> CapturedBody {
+        CapturedBody {
+            endpoint,
+            file: file.to_string(),
+            seq: 0,
+            bytes: Vec::new(),
+        }
+    }
+
+    /// One row per request, in the order the log recorded them.
+    ///
+    /// The record is spelled out field by field. A `Default`-derived one would
+    /// follow every default a future edit adds, and this test is about *which
+    /// row each body claims* — a fixture that could drift is a fixture that
+    /// stops testing that.
+    fn log_with(urls: &[&str]) -> RequestLog {
+        let log = RequestLog::new();
+        for (i, u) in urls.iter().enumerate() {
+            log.push(RequestRecord {
+                seq: i as u64 + 1,
+                ts: "2026-01-02T03:04:05.000Z".to_string(),
+                kind: crate::http::Kind::Api,
+                method: "GET",
+                url: (*u).to_string(),
+                range: None,
+                status: 200,
+                final_url: (*u).to_string(),
+                redirected: false,
+                elapsed_ms: 1,
+                req_headers: BTreeMap::new(),
+                resp_headers: BTreeMap::new(),
+                bytes_in: 0,
+                stored_as: None,
+                attempts: 1,
+            });
+        }
+        log
+    }
+
+    #[test]
+    fn two_bodies_for_one_endpoint_get_different_rows() {
+        // The near-miss this function exists to avoid. `getBuild` is fetched
+        // twice - once per build - and both bodies want a row whose URL contains
+        // `getBuild`. Matching on the name alone and reversing over the log gives
+        // both the *last* matching row, so one body overwrites the other and the
+        // bundle records five of six.
+        let log = log_with(&[
+            "https://h/api/getGameConfigs?x=1",
+            "https://s/api/getBuild?tag=7.1.0",
+            "https://s/api/getBuild?tag=7.0.0",
+        ]);
+        let mut b = [
+            body("getGameConfigs", "getGameConfigs.json"),
+            body("getBuild", "getBuild.7.1.0.json"),
+            body("getBuild", "getBuild.7.0.0.json"),
+        ];
+        let mut view: Vec<&mut CapturedBody> = b.iter_mut().collect();
+        attach_seq(&log, &mut view);
+
+        assert_eq!(b[0].seq, 1, "the only getGameConfigs row");
+        assert_eq!(b[1].seq, 2, "the 7.1.0 build, not the later 7.0.0 one");
+        assert_eq!(b[2].seq, 3);
+        assert_ne!(
+            b[1].seq, b[2].seq,
+            "two bodies sharing one row is the bug this guards"
+        );
+    }
+
+    #[test]
+    fn a_body_never_takes_a_row_from_a_tag_it_did_not_ask_for() {
+        // The tag probe asks for a tag the API does not serve. It answers HTTP
+        // 200 with a `retcode` in the body, so `status == 200` does not exclude
+        // it - and it is the *last* `getBuild` row in the log.
+        let log = log_with(&[
+            "https://s/api/getBuild?tag=7.1.0",
+            "https://s/api/getBuild?tag=7.0.0",
+            "https://s/api/getBuild?tag=6.7.0",
+        ]);
+        let mut b = [
+            body("getBuild", "getBuild.7.1.0.json"),
+            body("getBuild", "getBuild.7.0.0.json"),
+        ];
+        let mut view: Vec<&mut CapturedBody> = b.iter_mut().collect();
+        attach_seq(&log, &mut view);
+        assert_eq!((b[0].seq, b[1].seq), (1, 2), "neither body takes the probe's row");
+    }
+
+    #[test]
+    fn a_body_with_no_matching_row_keeps_seq_zero() {
+        // Zero is what `set_stored_as(0, ..)` looks up and does not find, so a
+        // miss is visibly a miss rather than silently marking some other row.
+        let log = log_with(&["https://h/api/getGameConfigs?x=1"]);
+        let mut b = [body("getGameConfigs", "getGameConfigs.json")];
+        let mut view: Vec<&mut CapturedBody> = b.iter_mut().collect();
+        let mut c = body("getBuild", "getBuild.7.1.0.json");
+        let mut view2: Vec<&mut CapturedBody> = std::iter::once(&mut c).collect();
+        attach_seq(&log, &mut view);
+        attach_seq(&log, &mut view2);
+        assert_eq!(b[0].seq, 1);
+        assert_eq!(c.seq, 0, "no getBuild row exists, so the body stays at zero");
+    }
 }
 
 #[cfg(test)]
@@ -576,7 +796,7 @@ mod tests {
             &fetcher,
         );
         let captured = client
-            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag)
+            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag, 4)
             .await
             .expect("all six answered");
 
@@ -626,7 +846,7 @@ mod tests {
             &fetcher,
         );
         client
-            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag)
+            .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag, 4)
             .await
             .unwrap();
         let seen = mock.seen.lock().unwrap().clone();
@@ -650,25 +870,29 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
-            for i in 0..6 {
+            for _ in 0..6 {
                 let Ok((stream, _)) = listener.accept() else {
                     return;
                 };
-                let body = if i == 5 {
-                    // The first getBuild is for the pair's new tag and succeeds;
-                    // the second, for the unservable old tag, is the one that
-                    // answers HTTP 200 and then says no.
-                    r#"{"data":null,"message":"not found","retcode":-202}"#.to_string()
-                } else if i == 4 {
-                    build_body("7.1.0", "n")
-                } else if i == 3 {
-                    r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()
-                } else if i == 2 {
-                    r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()
-                } else if i == 1 {
+                // Keyed on the request line rather than on the accept index:
+                // `capture_all` issues four requests and then two, so an
+                // answer queue keyed on arrival order is a serial test of a
+                // concurrent client, and it fails for a reason that has
+                // nothing to do with the unservable tag it is checking.
+                let request_line = read_request_line(&stream);
+                let body = if request_line.contains("getGameBranches") {
                     branch_body()
-                } else {
+                } else if request_line.contains("getGameConfigs") {
                     r#"{"retcode":0,"data":{"launch_configs":[]}}"#.into()
+                } else if request_line.contains("GameDeprecatedFileConfigs") {
+                    r#"{"retcode":0,"data":{"deprecated_file_configs":[]}}"#.into()
+                } else if request_line.contains("getGamePackages") {
+                    r#"{"retcode":0,"data":{"game_packages":[]}}"#.into()
+                } else if request_line.contains("tag=0.0.1") {
+                    // The unservable old tag answers HTTP 200 and then says no.
+                    r#"{"data":null,"message":"not found","retcode":-202}"#.to_string()
+                } else {
+                    build_body("7.1.0", "n")
                 };
                 serve_raw(stream, &body);
             }
@@ -685,6 +909,7 @@ mod tests {
             .capture_all(
                 NewTagSelector::BranchHead,
                 OldTagSelector::Explicit("0.0.1"),
+                4,
             )
             .await
             .expect_err("an unservable old tag is fatal");
@@ -693,14 +918,33 @@ mod tests {
         assert!(e.to_string().contains("-202"), "{e}");
     }
 
-    fn serve_raw(mut stream: TcpStream, body: &str) {
+    /// Read a connection's request line and headers, returning the request line.
+    ///
+    /// Separate from [`serve_raw`] so a mock can decide **what** to answer
+    /// before it answers it. The headers are consumed here, so `serve_raw`'s
+    /// skip loop then hits end-of-stream and falls straight through.
+    fn read_request_line(stream: &TcpStream) -> String {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
         loop {
             let mut h = String::new();
             if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
                 break;
             }
+            if request_line.is_empty() {
+                request_line = h.trim_end().to_string();
+            }
         }
+        request_line
+    }
+
+    /// Answer one connection with `body`, without reading it first.
+    ///
+    /// Deliberately does not consume the request. A caller that dispatches on the
+    /// request line calls `read_request_line` itself; reading here as well would
+    /// block, because the client has already sent its request and is now waiting
+    /// for this response.
+    fn serve_raw(mut stream: TcpStream, body: &str) {
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()

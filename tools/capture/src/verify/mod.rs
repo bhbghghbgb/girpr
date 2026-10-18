@@ -52,6 +52,7 @@ use crate::blobs::ChunkIndex;
 use crate::emit::index::{Checksums, Manifest};
 use crate::emit::selfcheck::{Assertion, Selfcheck};
 use crate::hash;
+use crate::http::probe::ErrorShapes;
 
 /// A18's wording, kept in one place because `verify` and the docs both quote it.
 pub const A18: &str =
@@ -102,6 +103,10 @@ pub struct Bundle {
     pub checksums: Checksums,
     /// `verify/selfcheck.json` - the capture's own account of itself.
     pub recorded: Selfcheck,
+    /// `api/error_shapes.json` - what the API did with the requests it would not
+    /// serve. Required: a bundle without it cannot answer a question every
+    /// consumer of the bundle eventually has to ask.
+    pub error_shapes: ErrorShapes,
 }
 
 impl Bundle {
@@ -110,6 +115,18 @@ impl Bundle {
     /// `MANIFEST.json` first, because the rest are located relative to the schema
     /// version it declares and a directory without one is not a bundle. Saying
     /// "no MANIFEST.json here" beats five separate "no such file" errors.
+    ///
+    /// **`api/error_shapes.json` is required, not additive.** A bundle recorded
+    /// only successes contains no not-found evidence at all, so a consumer that
+    /// wants to replay one would have to invent what a `404` looks like — and its
+    /// claim would be unfounded. Treating the document as optional let a bundle
+    /// drop the tool's only measurement of that and still verify clean, which
+    /// makes "this bundle can tell you how the API fails" true of some bundles
+    /// and not others with nothing to tell the reader which is which.
+    ///
+    /// It is read back through [`crate::http::probe::ErrorShapes`], the type that
+    /// wrote it, so a document that is present and unusable fails here, by name,
+    /// rather than at some consumer that happened to parse it.
     pub fn open(root: &Path) -> Result<Bundle, String> {
         if !root.is_dir() {
             return Err(format!(
@@ -122,6 +139,7 @@ impl Bundle {
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
+        let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
         let patchmaps = read_patchmaps(root)?;
         Ok(Bundle {
             root: root.to_path_buf(),
@@ -130,6 +148,7 @@ impl Bundle {
             patchmaps,
             checksums,
             recorded,
+            error_shapes,
         })
     }
 
@@ -137,7 +156,8 @@ impl Bundle {
     pub fn describe(&self) -> String {
         let v = &self.manifest.versions;
         format!(
-            "{} {} {} ({}) -> {} ({}) - {} blobs, {} patchmaps, recorded {} rows {} failed",
+            "{} {} {} ({}) -> {} ({}) - {} blobs, {} patchmaps, {} error shapes, \
+             recorded {} rows {} failed",
             self.manifest.biz.id,
             v.old.tag,
             v.old.build_id,
@@ -146,6 +166,7 @@ impl Bundle {
             v.new.build_id,
             self.index.blobs.len(),
             self.patchmaps.len(),
+            self.error_shapes.shapes.len(),
             self.recorded.counts.total,
             self.recorded.counts.failed,
         )
@@ -206,7 +227,10 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 /// The rebuilt bytes are kept rather than dropped, because [`materialize`] is the
 /// same rebuild with somewhere to put them, and rebuilding twice on a 135 MB
 /// bundle costs a minute of the operator's time for nothing.
-#[derive(Debug, Clone)]
+///
+/// Deliberately **not** [`Clone`]: `rebuilt` is the whole fixture, so a derived
+/// `Clone` is a ~135 MB copy waiting for the caller that wanted a second opinion.
+#[derive(Debug)]
 pub struct Report {
     /// The bundle it came from.
     pub bundle: Bundle,
@@ -288,27 +312,6 @@ impl Report {
             .flatten()
             .map(|s| s.bytes.len() as u64)
             .sum()
-    }
-
-    /// The re-derived rows as a `Selfcheck`, for `--output json`.
-    ///
-    /// The matrix is carried through from the manifest rather than recomputed:
-    /// A17 re-derives *that* the matrix is complete, and a document that answered
-    /// that by rebuilding the matrix from scratch would be a second, worse copy of
-    /// the capture's own selection logic.
-    pub fn to_selfcheck(&self) -> Selfcheck {
-        let matrix = self
-            .bundle
-            .manifest
-            .matrix
-            .iter()
-            .map(|m| crate::emit::selfcheck::MatrixRow {
-                class: m.class.clone(),
-                status: m.status.clone(),
-                ok: crate::emit::selfcheck::MatrixRow::ok_status(&m.status),
-            })
-            .collect();
-        Selfcheck::build(self.rows.clone(), matrix, &[])
     }
 }
 
@@ -492,20 +495,22 @@ fn describe_bytes(raw: &[u8]) -> String {
     if !hash::is_zstd(raw) {
         return format!("{} B, not a zstd frame", raw.len());
     }
-    match hash::zstd_decompress(raw, "stored blob") {
-        Ok(d) => format!(
+    // Both compressed digests in one pass, and the decoded pair streamed rather
+    // than materialised — `describe_bytes` exists to *describe*, so a multi-megabyte
+    // decoded buffer it then throws away was the wrong shape entirely.
+    let compressed = hash::md5_sha256(raw);
+    match hash::zstd_measure(raw, "stored blob") {
+        Ok(m) => format!(
             "{} B md5 {} sha256 {} -> {} B md5 {}",
-            raw.len(),
-            hash::md5_hex(raw),
-            hash::sha256_hex(raw),
-            d.len(),
-            hash::md5_hex(&d)
+            compressed.bytes,
+            compressed.md5,
+            compressed.sha256,
+            m.len,
+            m.md5
         ),
         Err(e) => format!(
             "{} B md5 {} sha256 {}, {e}",
-            raw.len(),
-            hash::md5_hex(raw),
-            hash::sha256_hex(raw)
+            compressed.bytes, compressed.md5, compressed.sha256
         ),
     }
 }
@@ -711,48 +716,15 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
 
 /// A13, re-read from disk.
 ///
-/// The same check the capture made, for the same reason: a parsed version
-/// compared against a configured tag only means something if the parse went
-/// through the file a reader would read.
+/// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the capture also
+/// calls. This was a second copy of the same read → parse → compare, with
+/// different wording in every branch: it said `readable` where the capture says
+/// `game_version == <tag>`, and reported the value as `game_version == v` where
+/// the capture writes `game_version is v`. Since `verify` cross-checks its rows
+/// against the capture's recorded ones, two spellings means the check can
+/// disagree with the record it is supposed to be re-deriving.
 fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
-    use crate::emit::selfcheck::wording;
-    let old_tag = manifest.versions.old.tag.as_str();
-    let cfg = root.join("game").join("config.ini");
-    let subject = "game/config.ini";
-    let text = match std::fs::read_to_string(&cfg) {
-        Ok(t) => t,
-        Err(e) => {
-            return vec![Assertion::fail(
-                "A13",
-                wording("A13"),
-                subject,
-                "readable",
-                &format!("{e}"),
-            )];
-        }
-    };
-    vec![match crate::emit::gamedir::parse_game_version(&text) {
-        Ok(v) if v == old_tag => Assertion::pass(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {v}"),
-        ),
-        Ok(v) => Assertion::fail(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {old_tag}"),
-            &format!("game_version == {v}"),
-        ),
-        Err(e) => Assertion::fail(
-            "A13",
-            wording("A13"),
-            subject,
-            &format!("game_version == {old_tag}"),
-            &e,
-        ),
-    }]
+    vec![crate::emit::selfcheck::check_config_ini(root, &manifest.versions.old.tag)]
 }
 
 /// Does the recomputation agree with what the capture recorded?

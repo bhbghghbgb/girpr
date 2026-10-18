@@ -27,10 +27,13 @@
 //! re-deriving anything.
 
 pub mod chunks;
+pub mod fill;
+pub mod plan;
 pub mod props;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +51,26 @@ pub struct ChunkIndex {
     pub blobs: Vec<IndexedBlob>,
     /// The three role lists, each a list of chunk ids.
     pub sets: BTreeMap<String, Vec<String>>,
+}
+
+/// The index row for a `Want`, given the measurement of its bytes.
+///
+/// **One constructor, three call sites.** A stored blob, a blob that was
+/// `--no-chunk-blobs`-planned, and a blob whose fetch came back empty all built
+/// the same struct with the same two clones, in three places. The rule that a
+/// row's `referenced_by` and `sets` are *the want's* is exactly the kind of
+/// thing that has to be said once: `chunks/index.json` is derived data, and a
+/// row whose `sets` disagreed with its `referenced_by` is the failure mode the
+/// `ChunkIndex::build` doc comment is about.
+fn indexed_from(props: BlobProps, want: &Want) -> (IndexedBlob, Vec<Set>) {
+    (
+        IndexedBlob {
+            props,
+            referenced_by: want.references.clone(),
+            sets: want.sets.clone(),
+        },
+        want.sets.clone(),
+    )
 }
 
 /// One blob as `chunks/index.json` lists it: the measurement plus who wanted it.
@@ -69,36 +92,62 @@ impl ChunkIndex {
     /// *meant* to agree and are written by different code is how an index comes
     /// to claim a blob is in `patch_fetch` while no reference says so.
     pub fn build(entries: Vec<(IndexedBlob, Vec<Set>)>) -> ChunkIndex {
-        let mut sets: BTreeMap<String, Vec<String>> = Set::ALL
+        // Keyed by `&str` and looked up by `&str`, so a blob's id is *borrowed*
+        // while it is filed rather than cloned once per role it belongs to. The
+        // three role lists are pre-seeded below, so the lookup never allocates a
+        // key either; it only grows a `Vec`.
+        //
+        // Two passes: the first borrows, the second consumes. That is strictly
+        // less work than the one pass it replaces, which cloned every blob in
+        // order to move it into `blobs` a few lines later.
+        let mut sets: BTreeMap<&str, Vec<&str>> = Set::ALL
             .iter()
-            .map(|s| (s.id().to_string(), Vec::new()))
+            .map(|s| (s.id(), Vec::new()))
             .collect();
-        let mut blobs = Vec::with_capacity(entries.len());
-        for (blob, roles) in entries {
-            for role in &roles {
-                sets.entry(role.id().to_string())
+        for (blob, roles) in &entries {
+            for role in roles {
+                sets.entry(role.id())
                     .or_default()
-                    .push(blob.props.chunk_id.clone());
+                    .push(&blob.props.chunk_id);
             }
-            blobs.push(blob);
         }
+        // Owned before `entries` is consumed, so the borrow of the ids ends.
+        let sets: BTreeMap<String, Vec<String>> = sets
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.into_iter().map(str::to_string).collect()))
+            .collect();
         ChunkIndex {
             schema_version: crate::SCHEMA_VERSION,
-            blobs,
+            blobs: entries.into_iter().map(|(blob, _)| blob).collect(),
             sets,
         }
     }
 
     /// The blob entry for an id.
+    ///
+    /// `blobs` is documented as ordered by id and [`ChunkIndex::build`] produces
+    /// it that way, so this is a binary search over 38 entries rather than a
+    /// scan of all of them.
+    ///
+    /// A bundle is a file someone can edit, though, and `blobs` is a `pub`
+    /// field — so an index that is *not* sorted must not silently turn "found"
+    /// into "not found". The fallback scan is what keeps the lookup correct for
+    /// any order; it costs one pass, and only on the way to an error.
     pub fn get(&self, chunk_id: &str) -> Option<&IndexedBlob> {
-        self.blobs.iter().find(|b| b.props.chunk_id == chunk_id)
+        match self
+            .blobs
+            .binary_search_by_key(&chunk_id, |b| b.props.chunk_id.as_str())
+        {
+            Ok(i) => self.blobs.get(i),
+            Err(_) => self.blobs.iter().find(|b| b.props.chunk_id == chunk_id),
+        }
     }
 
     /// Every blob that failed at least one A6 check.
     pub fn failing(&self) -> Vec<&IndexedBlob> {
         self.blobs
             .iter()
-            .filter(|b| !b.props.failures().is_empty() || b.props.decode_error.is_some())
+            .filter(|b| b.props.any_failure() || b.props.decode_error.is_some())
             .collect()
     }
 }
@@ -153,6 +202,17 @@ impl Sources {
 pub struct Store {
     root: PathBuf,
     sources: Sources,
+    /// `chunks/blobs/` has been created for this store.
+    ///
+    /// Every blob lands in that one directory and `write` runs once per blob
+    /// from concurrent tasks, so without this a capture pays a `create_dir_all`
+    /// — a stat chain, several of them on Windows — per blob to learn a fact
+    /// that cannot change mid-run. Only success is cached: an `Err` is retried
+    /// on the next blob, which is both harmless and the behaviour a caller
+    /// would want if the cause were transient.
+    ///
+    /// `Clone` shares it, which is what makes it correct across tasks.
+    blob_dir: Arc<std::sync::OnceLock<()>>,
 }
 
 impl Store {
@@ -170,6 +230,7 @@ impl Store {
         Store {
             root: root.to_path_buf(),
             sources,
+            blob_dir: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -256,16 +317,7 @@ impl Store {
     pub fn plan_only(wants: &[Want]) -> Vec<(IndexedBlob, Vec<Set>)> {
         wants
             .iter()
-            .map(|w| {
-                (
-                    IndexedBlob {
-                        props: BlobProps::unmeasured(&w.chunk),
-                        referenced_by: w.references.clone(),
-                        sets: w.sets.clone(),
-                    },
-                    w.sets.clone(),
-                )
-            })
+            .map(|w| indexed_from(BlobProps::unmeasured(&w.chunk), w))
             .collect()
     }
 
@@ -288,17 +340,11 @@ impl Store {
                 .sources
                 .url(&src.tag, &want.chunk.id)
                 .map_err(|e| e.to_string())?;
-            match fetcher.get(&url, Kind::Chunk, None).await {
-                Ok(fetched) => {
-                    let mut props = BlobProps::measure(&fetched.body, &want.chunk)
-                        .map_err(|e| e.to_string())?;
-                    let rel = BlobProps::stored_path_for(&want.chunk.id);
-                    self_
-                        .write(&rel, &fetched.body)
-                        .map_err(|e| format!("{}: write: {e}", want.chunk.id))?;
+            match self_.stream_from(&fetcher, &url, &want, slot).await {
+                Ok((mut props, rel, seq)) => {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
-                    fetcher.log().set_stored_as(fetched.seq(), rel.clone());
+                    fetcher.log().set_stored_as(seq, rel);
                     if !want.conflicts.is_empty() {
                         tracing::warn!(
                             chunk = %want.chunk.id,
@@ -307,17 +353,8 @@ impl Store {
                              measured against the first",
                         );
                     }
-                    return Ok((
-                        slot,
-                        (
-                            IndexedBlob {
-                                props,
-                                referenced_by: want.references,
-                                sets: want.sets.clone(),
-                            },
-                            want.sets,
-                        ),
-                    ));
+                    // The two fields are moved rather than cloned: this is the last use of `want`.
+                    return Ok((slot, indexed_from(props, &want)));
                 }
                 Err(e) => {
                     tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e, "chunk fetch failed");
@@ -328,41 +365,147 @@ impl Store {
         Err(last.unwrap_or_else(|| format!("{}: no source to fetch from", want.chunk.id)))
     }
 
-    /// The index entry for a want whose bytes never arrived.
+    /// The index entry for a want whose bytes never landed.
     ///
-    /// Not `BlobProps::unmeasured` — that is for `--no-chunk-blobs`, where
+    /// Not `BlobProps::unmeasured` - that is for `--no-chunk-blobs`, where
     /// nothing was *asked* for. Here something was asked for and did not come,
     /// and the difference is the whole point of the row.
+    ///
+    /// **"not stored", with no claim about fetching.** It used to read "fetched
+    /// but not stored", which is a statement about the *fetch* that three
+    /// different paths cannot support: a source that refused, a `write` that
+    /// failed, and a task that panicked mid-`measure`. The last one is not a
+    /// fetch failure at all. Each of those names itself in the run's error list
+    /// and in `fetch_fetches_failed` on the summary, so the row does not have to
+    /// guess.
     fn unfilled(&self, want: &Want) -> (IndexedBlob, Vec<Set>) {
         let mut props = BlobProps::unmeasured(&want.chunk);
-        props.decode_error = Some("fetched but not stored".to_string());
-        (
-            IndexedBlob {
-                props,
-                referenced_by: want.references.clone(),
-                sets: want.sets.clone(),
-            },
-            want.sets.clone(),
-        )
+        props.decode_error = Some("not stored".to_string());
+        indexed_from(props, want)
     }
 
-    /// Write one blob, via `tmp/`, into `chunks/blobs/`.
-    fn write(&self, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
+    /// Fetch one chunk straight to disk, digest it on the way past, and measure it
+    /// from the file it landed in.
+    ///
+    /// The largest chunk in the reference bundle is 3 689 476 B and `--jobs 8`
+    /// keeps eight in flight, so a body held whole for the length of its fetch is
+    /// up to ~30 MB of resident chunks.
+    ///
+    /// The order is deliberate and is why the digests can be trusted:
+    ///
+    /// 1. stream into `chunks/blobs/.<name>.tmp`, hashing as it writes — nothing
+    ///    is ever whole in memory;
+    /// 2. take the digests from the write itself;
+    /// 3. **rename** the tmp file into place, the atomic step, and the reason a
+    ///    reader never sees a half-written blob;
+    /// 4. measure **from the file**, through a 16 KB window, for the decompressed
+    ///    length and md5.
+    ///
+    /// Measuring happens after the rename so that a blob is on disk even if the
+    /// decode task is cancelled, and so a decode failure is recorded on a row whose
+    /// bytes a reader can actually check.
+    ///
+    /// **An undecodable body is kept, not dropped.** The bytes are on disk before
+    /// they are ever measured, so a body that is not a zstd frame becomes a row
+    /// carrying its digests and the reason — rather than a hole, and rather than a
+    /// bundle claiming the fetch failed when it succeeded.
+    ///
+    /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
+    /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
+    /// worker and stop any further fetch being issued.
+    async fn stream_from(
+        &self,
+        fetcher: &Fetcher,
+        url: &str,
+        want: &Want,
+        slot: usize,
+    ) -> Result<(BlobProps, String, u64), String> {
+        let id = want.chunk.id.clone();
+        let rel = BlobProps::stored_path_for(&id);
+        let (final_path, tmp_path) = self.paths_for(&rel, slot);
+        self.ensure_blob_dir(&final_path)?;
+        let chunk = want.chunk.clone();
+
+        let mut out = crate::hash::HashingFile::create(&tmp_path)
+            .map_err(|e| format!("{id}: create {}: {e}", tmp_path.display()))?;
+        let seq = match fetcher.get_to_file(url, Kind::Chunk, &mut out).await {
+            Ok(s) => s.seq,
+            Err(e) => {
+                // The tmp file is left behind rather than removed: it is
+                // dot-prefixed inside `chunks/blobs/`, nothing reads it, and the
+                // next run truncates it. Deleting it here would be a second
+                // failure mode on the path that has already failed once.
+                return Err(format!("{id}: {e}"));
+            }
+        };
+        let digests = out.finish().map_err(|e| format!("{id}: flush: {e}"))?;
+
+        // The atomic step: until this, nothing outside this function looks at the
+        // path; after it, the blob is complete.
+        std::fs::rename(&tmp_path, &final_path).map_err(|e| {
+            format!(
+                "{id}: {} -> {}: {e}",
+                tmp_path.display(),
+                final_path.display()
+            )
+        })?;
+
+        let path = final_path;
+        let props = tokio::task::spawn_blocking(move || {
+            BlobProps::measure_file(&path, &chunk, digests)
+        })
+        .await
+        .map_err(|e| format!("{id}: measure task panicked: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+        Ok((props, rel, seq))
+    }
+
+    /// The final path for a blob, and the tmp path it is written under.
+    ///
+    /// **The tmp round-trip is not removable.** A crash mid-write would otherwise
+    /// leave a truncated file at the final path, where it is indistinguishable from
+    /// a good blob to every reader, including `verify`. One rename is not worth
+    /// that — and on Windows `std::fs::rename` *does* replace an existing
+    /// destination (`renaming_a_blob_over_an_existing_one_replaces_it` in this
+    /// module's tests), so the step is not redundant with anything.
+    ///
+    /// **The tmp name carries the slot, not just the chunk id.** Derived from the
+    /// chunk id alone, two tasks that wanted the *same* id would write one file
+    /// interleaved and the first `rename` would publish a half-written blob —
+    /// silent corruption, with every digest in `chunks/index.json` quietly
+    /// describing the wrong bytes.
+    ///
+    /// Those two tasks cannot exist today: `chunks::wants` keys a `BTreeMap` on
+    /// `chunk.id`, so ids are unique by construction, and
+    /// `wants_have_unique_ids` is what keeps that true rather than merely
+    /// believed. The slot suffix is because that invariant lives in a *different
+    /// module* from the code that depends on it — so a change to the planner could
+    /// break the store silently, and this makes the store's correctness its own
+    /// property rather than an import. It costs nothing: the slot is already
+    /// threaded through `fill` → `one` to place the result.
+    fn paths_for(&self, rel: &str, slot: usize) -> (PathBuf, PathBuf) {
         let final_path = self.root.join(rel);
-        let dir = final_path.parent().expect("a blob path has a parent");
-        std::fs::create_dir_all(dir)?;
+        let dir = final_path.parent().unwrap_or(&self.root).to_path_buf();
         let tmp = dir.join(format!(
-            ".{}.tmp",
+            ".{}.{slot}.tmp",
             final_path.file_name().unwrap_or_default().to_string_lossy()
         ));
-        std::fs::write(&tmp, bytes)?;
-        match std::fs::rename(&tmp, &final_path) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(e)
-            }
+        (final_path, tmp)
+    }
+
+    /// The one directory blobs live in, created once per store.
+    ///
+    /// Not cached on an `Err`, so a transient failure does not skip the rest of
+    /// the run.
+    fn ensure_blob_dir(&self, final_path: &Path) -> Result<(), String> {
+        if self.blob_dir.get().is_some() {
+            return Ok(());
         }
+        let dir = final_path.parent().unwrap_or(&self.root);
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let _ = self.blob_dir.set(());
+        Ok(())
     }
 }
 
@@ -382,26 +525,47 @@ pub fn file_pairs(
     old_tag: &str,
     new_tag: &str,
 ) -> Vec<FilePair> {
+    // One index per manifest, built once.
+    //
+    // This used to `entries.iter().find(|e| e.file == a.path)` **per admitted
+    // path, per side**: O(admitted × paths), twice. Over the measured pair that
+    // is a few thousand 2 744-element string scans to build eight pairs — the
+    // single largest waste in the selection→store hand-off. `diff` builds the
+    // same map and throws it away, so the shape was already known; here it is
+    // built where it is used, which costs one walk rather than A×n.
+    let index = |tag: &str| -> Option<BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>> {
+        let m = manifests.get(tag)?;
+        Some(m.entries.iter().map(|e| (e.file.as_str(), e)).collect())
+    };
+    let old_by_path = index(old_tag);
+    let new_by_path = index(new_tag);
+    let build_id = |tag: &str| -> &str {
+        manifests.get(tag).map(|m| m.build_id.as_str()).unwrap_or_default()
+    };
+    let old_build_id = build_id(old_tag);
+    let new_build_id = build_id(new_tag);
+
     selection
         .admitted
         .iter()
         .map(|a| {
-            let find = |tag: &str| -> Option<(&crate::manifest::proto::SophonChunkFile, &str)> {
-                let m = manifests.get(tag)?;
-                let entry = m.entries.iter().find(|e| e.file == a.path)?;
-                Some((entry, m.build_id.as_str()))
-            };
+            let old_entry = old_by_path
+                .as_ref()
+                .and_then(|m| m.get(a.path.as_str()).copied());
+            let new_entry = new_by_path
+                .as_ref()
+                .and_then(|m| m.get(a.path.as_str()).copied());
             FilePair {
                 capture_id: a.capture_id.clone(),
                 path: a.path.clone(),
-                old: find(old_tag).map(|(e, build_id)| chunks::OldFile {
+                old: old_entry.map(|e| chunks::OldFile {
                     tag: old_tag.to_string(),
-                    build_id: build_id.to_string(),
+                    build_id: old_build_id.to_string(),
                     entry: e.clone(),
                 }),
-                new: find(new_tag).map(|(e, build_id)| chunks::NewFile {
+                new: new_entry.map(|e| chunks::NewFile {
                     tag: new_tag.to_string(),
-                    build_id: build_id.to_string(),
+                    build_id: new_build_id.to_string(),
                     entry: e.clone(),
                 }),
             }
@@ -456,6 +620,80 @@ mod tests {
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("gircap-blobs-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    /// `fs::rename` **does** replace an existing destination on Windows: it calls
+    /// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`. This is checked rather
+    /// than assumed, because "rename fails when the target exists" is a common
+    /// belief and acting on it here would mean deleting the atomic step the code
+    /// needs. The destination is deliberately *longer* than the source, so a
+    /// copy-not-replace implementation would leave a tail behind and be caught.
+    #[test]
+    fn renaming_a_blob_over_an_existing_one_replaces_it() {
+        let dir = scratch("rename-over");
+        let (final_path, tmp) = (
+            dir.join("blob.zst"),
+            dir.join(".blob.zst.tmp"),
+        );
+        std::fs::write(&final_path, b"the older and longer blob").expect("seed destination");
+        std::fs::write(&tmp, b"NEW").expect("write tmp");
+
+        std::fs::rename(&tmp, &final_path).expect("rename onto an existing file");
+
+        assert_eq!(
+            std::fs::read(&final_path).expect("read"),
+            b"NEW",
+            "the destination must be the new blob and nothing else"
+        );
+        assert!(
+            !tmp.exists(),
+            "the tmp file must be gone after the rename publishes it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_wants_for_one_chunk_id_would_not_share_a_temp_file() {
+        // The store half of the tmp-naming invariant: derived from the chunk id
+        // alone, two tasks wanting the same id would write one file interleaved
+        // and the first `rename` would publish a **half-written blob** — silent
+        // corruption, with every digest in `chunks/index.json` quietly describing
+        // the wrong bytes and nothing failing.
+        //
+        // Fed the *same* id twice on purpose, because that is the only input that
+        // distinguishes a slot-suffixed name from an id-derived one.
+        let dir = scratch("tmp-per-slot");
+        let store = Store::new(&dir, Sources::from_pairs([]));
+        let (a, at) = store.paths_for("chunks/blobs/dead_beef.zst", 0);
+        let (b, bt) = store.paths_for("chunks/blobs/dead_beef.zst", 1);
+
+        assert_eq!(
+            a, b,
+            "the published path is the blob's, and does not depend on the slot"
+        );
+        assert_ne!(
+            at, bt,
+            "two tasks writing the same blob must not share one tmp file"
+        );
+        assert!(
+            at.parent() == a.parent(),
+            "and the tmp file stays beside the blob it becomes, not somewhere else"
+        );
+        for t in [&at, &bt] {
+            let name = t.file_name().unwrap().to_string_lossy().to_string();
+            assert!(
+                name.starts_with('.') && name.ends_with(".tmp"),
+                "{name} must stay hidden and temporary"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn chunk(payload: &[u8], offset: i64, prefix: u64) -> SophonChunk {
         let raw = zstd::encode_all(payload, 1).expect("encode");
         SophonChunk {
@@ -478,6 +716,60 @@ mod tests {
             size,
             md5: "ff".repeat(16),
         }
+    }
+
+    /// `blobs` is documented as ordered by id, which is what makes the lookup a
+    /// binary search. A bundle is a file someone can edit and `blobs` is a `pub`
+    /// field, so the lookup has to stay correct for an index that is *not*
+    /// sorted — otherwise a hand-edited bundle turns "found" into "not found",
+    /// and the failure reads like a missing blob rather than a corrupt index.
+    #[test]
+    fn a_blob_is_found_whether_or_not_the_index_is_sorted() {
+        let ids = ["aaa", "mmm", "zzz"];
+        let blob = |id: &str| IndexedBlob {
+            props: BlobProps {
+                chunk_id: id.to_string(),
+                stored_path: None,
+                bytes: 0,
+                container: String::new(),
+                md5_compressed: String::new(),
+                md5_decompressed: String::new(),
+                sha256_compressed: String::new(),
+                uncompressed_size: 0,
+                unknown_field6: 0,
+                verified: None,
+                decode_error: None,
+            },
+            referenced_by: Vec::new(),
+            sets: Vec::new(),
+        };
+        let build = |order: &[&str]| {
+            let entries: Vec<(IndexedBlob, Vec<Set>)> = order
+                .iter()
+                .map(|id| (blob(id), vec![Set::MaterializeOld]))
+                .collect();
+            ChunkIndex::build(entries)
+        };
+        let sorted = build(&ids);
+        let reversed = build(&ids.iter().rev().copied().collect::<Vec<_>>());
+        assert_eq!(
+            sorted.blobs.iter().map(|b| &b.props.chunk_id).collect::<Vec<_>>(),
+            ids,
+            "build orders by id, which is what the lookup assumes"
+        );
+        for id in ids {
+            assert_eq!(
+                sorted.get(id).map(|b| b.props.chunk_id.as_str()),
+                Some(id),
+                "found in a sorted index"
+            );
+            assert_eq!(
+                reversed.get(id).map(|b| b.props.chunk_id.as_str()),
+                Some(id),
+                "and still found in one that is not sorted"
+            );
+        }
+        assert!(reversed.get("no-such-blob").is_none());
     }
 
     fn pair() -> FilePair {

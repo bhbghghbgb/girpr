@@ -1,9 +1,9 @@
 //! The measured 7.0.0 → 7.1.0 numbers, as a frozen fixture.
 //!
-//! **M4.** `docs/00-spec.md` §4.1 and §10 record what a capture of
-//! `hk4e_global` at that pair looks like. This test pins those numbers against a
-//! *stored* fixture rather than eyeballing a live run, so a future version
-//! drifting away from them shows up as a named test failure.
+//! `docs/00-spec.md` §4.1 and §10 record what a capture of `hk4e_global` at that
+//! pair looks like. This test pins those numbers against a *stored* fixture
+//! rather than eyeballing a live run, so a future version drifting away from them
+//! shows up as a named test failure.
 //!
 //! Two things are deliberate:
 //!
@@ -433,8 +433,8 @@ fn the_flat_tsv_carries_every_row_of_both_sides() {
     );
 }
 
-/// Everything below here is M5: the matrix the spec's §4.1 table records, the
-/// greedy admission built on it, and the budget that funds some of it.
+/// The matrix the spec's §4.1 table records, the greedy admission built on it,
+/// and the budget that funds some of it.
 ///
 /// Nothing in this module touches the network, so "score only, fetch nothing"
 /// is not a mode — it is the whole file.
@@ -550,9 +550,11 @@ mod m5_matrix {
             "no file in this pair answers two classes, so nothing is `also_satisfies`"
         );
         assert!(
-            s.admitted
-                .iter()
-                .all(|a| a.primary_class_satisfies_shape(&pool)),
+            s.admitted.iter().all(|a| {
+                pool.iter()
+                    .find(|c| c.candidate.path == a.path)
+                    .is_some_and(|c| a.primary_class.matches(c.candidate.shape))
+            }),
             "every admission's file really does answer the class it was picked for"
         );
         assert_eq!(
@@ -734,13 +736,12 @@ mod m5_matrix {
         );
     }
 
-    /// The scoring document is written from the same pool the admission used, so
+    /// The scoring document is written from the same diff the admission used, so
     /// it can be checked against the answer without re-deriving anything.
     #[test]
     fn the_candidates_document_lists_every_path_once_with_its_classes() {
         let diffs = [game()];
-        let pool = select::candidates(&diffs);
-        let doc = select::candidates_document(&diffs, &pool);
+        let doc = select::candidates_document(&diffs);
         let rows = doc["rows"].as_array().expect("rows");
         // Common paths only: a one-sided row has no score to report.
         assert_eq!(rows.len(), diffs[0].counts.common as usize);
@@ -866,7 +867,7 @@ mod m5_matrix {
         );
     }
 }
-/// M6: the chunk store, over the same frozen pair.
+/// The chunk store, over the same frozen pair.
 ///
 /// The chunk ids below are the **real** ones the live 7.0.0 -> 7.1.0 capture
 /// produced, because the shared-chunk case is the whole point and a synthetic id
@@ -977,8 +978,8 @@ mod m6_chunk_store {
         }
     }
 
-    /// The M6 acceptance, as a test: three old ids plus two new-only ids is
-    /// **five** distinct chunk ids, and the shared one is fetched once.
+    /// Three old ids plus two new-only ids is **five** distinct chunk ids, and
+    /// the shared one is fetched once.
     #[test]
     fn the_measured_pair_needs_five_distinct_chunks() {
         let r = chunks::retention(&hoyo_pair());
@@ -1099,7 +1100,7 @@ mod m6_chunk_store {
     }
 
     /// The five stored paths are exactly `chunks/blobs/<id>.zst`, which is what
-    /// M7 and M9 will read back.
+    /// Assembly and `verify` will read back.
     #[test]
     fn every_blob_has_the_path_m7_and_m9_will_read() {
         for w in chunks::wants(&[hoyo_pair()]) {
@@ -1119,7 +1120,7 @@ mod m6_chunk_store {
     }
 }
 
-/// M7: assembly over the same frozen pair.
+/// Assembly over the same frozen pair.
 ///
 /// The id *prefixes*, offsets and sizes below are the real ones the live
 /// 7.0.0 -> 7.1.0 capture produced; the content behind them is synthetic,
@@ -1337,8 +1338,21 @@ mod m7_assembly {
         let a = assemble_measured(&hoyo_pair());
         let p = a.patch.as_ref().unwrap();
         let n = a.new.as_ref().unwrap();
-        assert_eq!(p.bytes, n.bytes);
-        assert_eq!(p.bytes.len(), 2_340_264);
+        // The patch flow's output is compared against the direct assembly inside
+        // `assemble` and dropped immediately, so it is not available here.
+        // `equals_new` **is** that byte comparison — the assertion this test is
+        // about — and it is a byte comparison, not a digest one, which is why
+        // holding only `md5` on the outcome does not weaken A9.
+        assert!(
+            p.equals_new,
+            "A9: the patch flow and the direct assembly disagree on the measured pair"
+        );
+        // The measured length moves to the side that survives. It pinned the
+        // patch flow's output before; now it pins the direct assembly's, which is
+        // the side the bundle actually stores — a better place for the same
+        // number to be checked, and 2 340 264 B is what the reference bundle's
+        // `HoYoChannel.dll` is.
+        assert_eq!(n.bytes.len(), 2_340_264);
         assert_eq!(p.md5, n.md5);
         assert_eq!(
             n.md5, n.declared_md5,
