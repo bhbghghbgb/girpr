@@ -140,10 +140,16 @@ A class is never simply absent (assertion A17). The row's optional keys
 (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
-`files[]` covers every file in the bundle **except `MANIFEST.json` itself and
-`verify/checksums.json`**, which between them cover everything; a document that
-hashes itself has no fixed point. `verify/checksums.json` is the complete list
-(`file_count: 96` for a 97-file bundle).
+`files[]` lists every file that existed **before the close-out began** — the
+fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
+documents the close-out itself writes are absent, because the list is taken
+before they are written: `MANIFEST.json` (it is being written), `README.md` and
+`verify/selfcheck.json` (both render the manifest), and `verify/checksums.json`
+(its own). A document that hashes itself has no fixed point, and here the
+dependency runs both ways.
+
+`verify/checksums.json` is the complete inventory: `file_count: 96` for a 97-file
+bundle, and it covers all four.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
@@ -774,10 +780,18 @@ disagreed.
 
 A16 is deliberately **two independent passes**: one that writes the digests and
 one that re-reads the tree and compares. A single pass would make the assertion a
-tautology. Because `checksums.json` must cover `selfcheck.json` and
-`selfcheck.json` must carry the A16 row, the close-out writes both documents
-twice and the second scan is the one recorded — which converges exactly, since a
-third would find nothing new.
+tautology. Because `checksums.json` must cover `selfcheck.json` — and `README.md`,
+which renders it — and `selfcheck.json` must carry the A16 row, the close-out
+writes those documents twice and the second scan is the one recorded. Two passes
+converge exactly: the second `checksums.json` is scanned after the final
+`selfcheck.json` and `README.md`, and neither of those sizes depends on a digest,
+so a third pass would find nothing new.
+
+**A16's row states a file count and not a byte total.** That is forced, not
+chosen: the row lives inside `selfcheck.json`, which is one of the files
+`total_bytes` sums, so the last version of that number to be written is the one in
+`checksums.json` — and any total in the row describes an earlier, smaller tree.
+The count is safe, because no file appears or disappears between the two passes.
 
 ## 16. `verify/selfcheck.json`
 
@@ -821,5 +835,7 @@ been handed a `verify` report, not a capture's own account of itself.
 ## 17. `README.md`
 
 A rendering of `MANIFEST.json` and `selfcheck.json`: versions, the matrix table
-with paths and sizes, the totals, and how to re-verify (`gircap verify`). It is
-generated and carries no facts of its own, and it is safe to delete.
+with paths and sizes, the totals, any failed assertion, and how to re-verify.
+It is generated from the **final** `selfcheck.json` — after the A16 row is
+recorded — so its counts agree with the document it renders, and it carries no
+facts of its own. It is safe to delete.

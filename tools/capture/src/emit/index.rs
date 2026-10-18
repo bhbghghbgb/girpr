@@ -376,17 +376,23 @@ impl Checksums {
     /// Both halves, because a list that omits a file is a silent gap while a list
     /// whose digests are stale is a lie, and only checking one leaves the other.
     ///
-    /// The first finding only. A capture wants one row and stops there; M9's
+    /// The first finding only. A capture wants one row and stops there;
     /// `verify` wants them all and calls [`Checksums::findings`] instead.
+    ///
+    /// **The passing detail names the file count and not the byte total**, and
+    /// that is forced rather than chosen. This row is recorded *inside*
+    /// `selfcheck.json`, which is one of the files `total_bytes` sums — so the
+    /// last version of that number to be written is the one in `checksums.json`,
+    /// and any total written here is by construction a total from an earlier,
+    /// smaller tree. `file_count` is safe because no file appears or disappears
+    /// between the two passes; a byte count is not. The total is one field read
+    /// away in the document it describes.
     pub fn a16(&self, root: &Path) -> (bool, String) {
         match self.findings(root).into_iter().next() {
             Some(f) => (false, f),
             None => (
                 true,
-                format!(
-                    "{} files, {} B, every digest re-hashed and matched",
-                    self.file_count, self.total_bytes
-                ),
+                format!("{} files, every digest re-hashed and matched", self.file_count),
             ),
         }
     }
@@ -1173,7 +1179,12 @@ impl Manifest {
             }
         }
 
-        s.push_str("\n## Re-verifying\n\n```\ngircap verify <this directory>\n```\n\n");
+        // The flag is spelled, because a reader who types the sentence above it
+        // verbatim gets a usage error: `--artifact` is how `verify` is told
+        // which directory it is verifying.
+        s.push_str(
+            "\n## Re-verifying\n\n```\ngircap verify --artifact <this directory>\n```\n\n",
+        );
         s.push_str("Offline: no network, no writes. Exit 0 if every assertion still holds.\n");
         s
     }

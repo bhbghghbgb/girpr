@@ -38,20 +38,25 @@ a reformatted `MANIFEST.json` still fails.
 
 Not assumed — **discovered**, by capturing twice from one binary and diffing
 *without* normalisation first. The raw diff of two captures of one binary is
-exactly five documents:
+exactly four documents:
 
 ```
   api/requests.ndjson            ts, elapsed_ms
   MANIFEST.json                  argv's --out; its own digest row; bytes_on_disk
   README.md                      "N B on disk"
-  verify/checksums.json          digests of the four above; total_bytes
-  verify/selfcheck.json          A16's "N files, M B"
+  verify/checksums.json          digests of the three above; total_bytes
 ```
 
 which is the cascade, exactly as `tests/bundle_diff.rs` documents it. After
-scrubbing those five, two captures of one binary are identical — which is the
+scrubbing those four, two captures of one binary are identical — which is the
 check that the normalisation is not vacuous, and it is re-run for **every** commit
 probed (see §5).
+
+`verify/selfcheck.json` is **not** in the list. It used to be, blanking A16's
+"N files, M B" totals — and that exemption was hiding a number rather than
+removing one, because A16's byte total described the *previous* pass rather than
+the tree it was written into. A16 no longer states a byte total, so nothing in
+that document moves between two captures of one binary and it is compared in full.
 
 | token | where it appears |
 |---|---|
@@ -108,12 +113,11 @@ blanked rather than compared:
 | `MANIFEST.json` | the `files[]` digest triple of each volatile path; `bytes_on_disk` |
 | `README.md` | the `N` in "… B on disk" |
 | `verify/checksums.json` | the same rows; `total_bytes` |
-| `verify/selfcheck.json` | the `M` in A16's "N files, M B" |
 
-Every other byte in those four documents is still compared. That is deliberate:
-the crate's per-document pins catch drift *within* one binary, this catches drift
-*across* commits, and the two mechanisms are complementary — neither replaces the
-other.
+Every other byte in those three documents is still compared, and every byte of
+every other document. The crate's per-document pins catch drift *within* one
+binary and this catches drift *across* commits; the two mechanisms are
+complementary — neither replaces the other.
 
 The exemption list **must match something**, or the differ fails rather than
 quietly comparing nothing (`--strict`).

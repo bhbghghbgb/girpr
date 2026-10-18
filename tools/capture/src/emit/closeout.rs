@@ -111,11 +111,11 @@ pub struct Closed {
 /// **A16 is the one that cannot be settled in that order.** It asks whether
 /// `checksums.json` covers everything, and `checksums.json` does not exist yet.
 /// So it is checked after the first write and its row appended, which means
-/// `selfcheck.json` and `checksums.json` are each written twice. Two passes
-/// converge exactly: the second `checksums.json` is scanned after the final
-/// `selfcheck.json`, so what it records is what is on disk. A third pass would
-/// find nothing new, which is the proof it converged — and
-/// `two_passes_converge` is that proof, as a test.
+/// `selfcheck.json`, `README.md` and `checksums.json` are each written twice.
+/// Two passes converge exactly: the second `checksums.json` is scanned after the
+/// final `selfcheck.json` and `README.md`, so what it records is what is on
+/// disk. A third pass would find nothing new, which is the proof it converged —
+/// and `two_passes_converge` is that proof, as a test.
 ///
 /// The second pass is **unconditional.** It used to be guarded by
 /// `if !selfcheck.by_id().contains_key("A16")`, which could never be false:
@@ -209,9 +209,14 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     let (a16_ok, a16_detail) = checksums.a16(i.dir);
     written.push("verify/checksums.json".to_string());
 
-    // Second pass: record A16, then re-write the two documents it changed.
-    // The re-scan sees the final `selfcheck.json`, so the second
-    // `checksums.json` is the authoritative one.
+    // Second pass: record A16, then re-write the two documents it changed — and
+    // **only** those two, because they are the only two the A16 row moves.
+    //
+    // `README.md` is one of them because it renders the selfcheck's own counts,
+    // and writing it before the A16 row exists put "115 of 115" in a bundle whose
+    // `selfcheck.json` said 116. Its final size does not depend on anything the
+    // second scan measures — the counts are a row tally, not a byte total — so
+    // the fixpoint below is still exact rather than converging in practice.
     selfcheck.assertions.push(Assertion::row(
         "A16",
         "verify/checksums.json",
@@ -221,11 +226,13 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     ));
     selfcheck = Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
     super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
-    // Only `selfcheck.json` moved since the scan above, so only it is
-    // re-digested.
-    let (_, checksums) =
-        super::write_checksums_reusing(i.dir, &checksums.entries, &["verify/selfcheck.json"])
-            .map_err(|e| write_err(i.dir, e))?;
+    super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?;
+    let (_, checksums) = super::write_checksums_reusing(
+        i.dir,
+        &checksums.entries,
+        &["verify/selfcheck.json", "README.md"],
+    )
+    .map_err(|e| write_err(i.dir, e))?;
 
     tracing::info!(
         selfcheck = ?selfcheck.result,
@@ -419,6 +426,57 @@ mod tests {
     }
 
     #[test]
+    fn the_generated_readme_agrees_with_the_selfcheck_it_renders() {
+        // **The defect this is here for.** `README.md` is a rendering of
+        // `selfcheck.json`, and it was written *before* A16 was appended — so a
+        // bundle said "115 of 115 assertions passed" in one document and `116`
+        // in the other. A generated file that disagrees with its source is worse
+        // than no file, because it is the one a reader opens first.
+        //
+        // Read both off disk, not off the returned struct: the pair that
+        // disagreed was the bytes written, and a test that compared the two
+        // in-memory values would have passed throughout.
+        let root = scratch("readme-counts");
+        seed(&root);
+        let closed = run(&root);
+
+        let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("verify/selfcheck.json")).unwrap())
+                .unwrap();
+
+        let counts = &on_disk["counts"];
+        let total = counts["total"].as_u64().expect("counts.total");
+        let passed = counts["passed"].as_u64().expect("counts.passed");
+        assert_eq!(
+            closed.selfcheck.counts.total, total,
+            "the returned struct and the document already disagree"
+        );
+        assert!(
+            readme.contains(&format!("{passed} of {total} assertions passed")),
+            "README.md must carry the document's own counts:\n{readme}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_generated_readme_names_the_flag_that_verifies_the_bundle() {
+        // The re-verify instruction is the one line in a bundle that a reader is
+        // most likely to type verbatim, and it was naming a positional argument
+        // that does not exist. `gircap verify <dir>` exits 1.
+        let root = scratch("readme-flag");
+        seed(&root);
+        run(&root);
+        let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+        assert!(
+            readme.contains("gircap verify --artifact <this directory>"),
+            "the re-verify line must be runnable as written:\n{readme}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn two_passes_converge_and_the_pass_the_comment_claims_would_change_nothing() {
         // **The claim this module exists to make checkable.** `close`'s doc says
         // two passes converge exactly and that a third would find nothing new.
@@ -486,6 +544,23 @@ mod tests {
             a16.iter().map(|a| a.actual.as_str()).collect::<Vec<_>>()
         );
         assert!(a16[0].ok, "A16 should pass on a tree nobody tampered with");
+
+        // And its detail must not name a byte total. The row lives inside
+        // `selfcheck.json`, which `total_bytes` sums, so any total written here
+        // describes an earlier and smaller tree — the reference bundle said
+        // "208307441 B" where `checksums.json` said "208307799 B". The count is
+        // safe because no file appears or disappears between the passes.
+        assert!(
+            !a16[0].actual.contains(" B,"),
+            "A16 must not restate a byte total it cannot know: {:?}",
+            a16[0].actual
+        );
+        let count = closed.checksums.file_count;
+        assert!(
+            a16[0].actual.contains(&format!("{count} files")),
+            "A16 must still state the file count it checked: {:?}",
+            a16[0].actual
+        );
 
         // And it must be in the document on disk too, not only in the returned
         // struct — the two can diverge if the final write is ever skipped.

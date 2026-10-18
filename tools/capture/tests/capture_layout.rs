@@ -860,12 +860,27 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "- `patch_fetch`: # chunks",
         "## Re-verifying",
         "```",
-        "gircap verify <this directory>",
+        "gircap verify --artifact <this directory>",
         "```",
         "Offline: no network, no writes. Exit # if every assertion still holds.",
     ];
     let lines: Vec<&str> = skel.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     assert_eq!(lines, README_SKELETON, "README.md prose changed");
+
+    // The skeleton's counts are blanked, so the *agreement* between the two
+    // documents has to be checked on the raw bytes. A generated file that
+    // disagrees with the document it renders is worse than no file: it is the
+    // one a reader opens first, and it was wrong by exactly the assertion the
+    // close-out adds after rendering.
+    let sc = json("verify/selfcheck.json");
+    let (total, passed) = (
+        sc["counts"]["total"].as_u64().expect("counts.total"),
+        sc["counts"]["passed"].as_u64().expect("counts.passed"),
+    );
+    assert!(
+        read("README.md").contains(&format!("{passed} of {total} assertions passed")),
+        "README.md's counts disagree with verify/selfcheck.json's"
+    );
 }
 
 /// `verify/selfcheck.json` is the tool's own verdict on itself, and it is the one

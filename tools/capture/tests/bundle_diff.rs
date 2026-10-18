@@ -22,30 +22,35 @@
 //! | `elapsed_ms` | `api/requests.ndjson` | a measured duration |
 //! | `argv`'s `--out` | `MANIFEST.json` | records the command line, which names *this run's* scratch directory |
 //!
-//! ## The cascade, and why four documents are exempted
+//! ## The cascade, and why three documents are exempted
 //!
 //! `api/requests.ndjson` is not byte-reproducible, and `checksums.json` covers
-//! it (A16). So its `bytes`/`md5`/`sha256` differ — and because four documents
+//! it (A16). So its `bytes`/`md5`/`sha256` differ — and because three documents
 //! *record* that file's size or digest, they differ too:
 //!
 //! ```text
 //!   api/requests.ndjson            (the root cause)
 //!     -> MANIFEST.json   files[] row for it, and `bytes_on_disk`
 //!     -> README.md       the "N B on disk" total
-//!     -> verify/checksums.json   rows for the three above, plus `total_bytes`
-//!     -> verify/selfcheck.json   the A16 "N files, M B" totals
+//!     -> verify/checksums.json   rows for the two above, plus `total_bytes`
 //! ```
 //!
-//! `DERIVED_PATHS` names exactly those four rows. For them this harness compares
+//! `DERIVED_PATHS` names exactly those three rows. For them this harness compares
 //! **structure with the known-dependent numbers blanked**, not bytes — which is
-//! what keeps the other ~54 files, including every blob and every assembled
+//! what keeps the other ~55 files, including every blob and every assembled
 //! `game/` file, under a byte-exact comparison.
 //!
-//! Two properties keep that exemption honest:
+//! `verify/selfcheck.json` used to be the fourth, blanking A16's "N files, M B".
+//! It no longer states a byte total at all — the row lives inside one of the
+//! counted documents, so any total written there describes an earlier, smaller
+//! tree — and with nothing volatile left in it the whole document is compared
+//! byte-for-byte.
+//!
+//! Two properties keep the remaining exemption honest:
 //!
 //! * every blank must **match something**, or the harness fails — so a refactor
-//!   that renames a field cannot silently turn "compare 4 documents with blanks"
-//!   into "compare 4 documents with nothing to compare";
+//!   that renames a field cannot silently turn "compare 3 documents with blanks"
+//!   into "compare 3 documents with nothing to compare";
 //! * `verify/` is not exempt from *being right* — the existing suites assert its
 //!   contents, and a real bundle is checked with `gircap verify` by hand.
 //!
@@ -186,12 +191,7 @@ struct Volatile<'a> {
 ///
 /// See the module doc for the cascade. Adding a path here is a claim that its
 /// digest cannot be reproduced; removing one is a claim that it can.
-const DERIVED_PATHS: [&str; 4] = [
-    "api/requests.ndjson",
-    "MANIFEST.json",
-    "README.md",
-    "verify/selfcheck.json",
-];
+const DERIVED_PATHS: [&str; 3] = ["api/requests.ndjson", "MANIFEST.json", "README.md"];
 
 /// Rewrite the fields that differ between two runs of one input.
 ///
@@ -459,6 +459,12 @@ fn tree(bundle: &Path, v: &Volatile<'_>) -> BTreeMap<String, Vec<u8>> {
 /// Every exemption is scoped to one named document and must match something, so
 /// a refactor that renamed a field fails the harness loudly instead of quietly
 /// turning an exemption into "compare nothing".
+///
+/// `verify/selfcheck.json` appears nowhere above, on purpose. It used to blank
+/// A16's "N files, M B", and that blank was hiding a number rather than removing
+/// one: A16's byte total was the total of the *previous* pass, because the row
+/// lives inside one of the counted documents. A16 no longer states a byte total,
+/// so nothing in that document is volatile and it is compared byte-for-byte.
 fn normalize_doc(rel: &str, body: &[u8], v: &Volatile<'_>) -> Vec<u8> {
     let n = normalize(body, v);
     let s = String::from_utf8_lossy(&n).into_owned();
@@ -475,8 +481,6 @@ fn normalize_doc(rel: &str, body: &[u8], v: &Volatile<'_>) -> Vec<u8> {
             let c = blank_derived_rows(&s, &DERIVED_PATHS);
             blank_number(&c, "total_bytes", 1)
         }
-        // A16's "N files, M B", on both the expected and the actual side.
-        "verify/selfcheck.json" => blank_prose_total(&s, " B, every digest re-hashed", 2),
         _ => return n,
     };
     out.into_bytes()
