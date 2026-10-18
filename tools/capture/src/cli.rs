@@ -82,10 +82,9 @@ pub struct CommonArgs {
 
 /// `--gzip-threshold`'s default, in bytes.
 ///
-/// A named constant rather than a literal in two places: the flag's default and
-/// [`crate::emit::index::Manifest::gzip_threshold`]'s *read* default have to be
-/// the same number, and a bundle written before that field existed used exactly
-/// this.
+/// A named constant rather than a literal at the flag and at the assertion that
+/// reads it back: the number a capture records must be the number the flag
+/// defaults to, and those are two different places in two different files.
 pub const DEFAULT_GZIP_THRESHOLD: u64 = 1_048_576;
 
 /// The `--audio` default: one launchable-install language, which is also a

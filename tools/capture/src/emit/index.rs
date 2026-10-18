@@ -909,15 +909,6 @@ mod tests {
 
 /// `MANIFEST.json` — the bundle's own index.
 ///
-/// The value `Manifest::gzip_threshold` falls back to when a bundle written
-/// before the field existed is read back.
-///
-/// The flag's own default, so the number a reader is shown is the number that
-/// run actually used.
-fn default_gzip_threshold() -> u64 {
-    crate::cli::DEFAULT_GZIP_THRESHOLD
-}
-
 /// Every field here is something the run already knew. The document exists so a
 /// reader can answer "what is this, what does it cover, and is it complete"
 /// without parsing `api/` and `diff/`, and so `README.md` has one source to
@@ -947,11 +938,12 @@ pub struct Manifest {
     /// and without it a re-run with different flags would produce a different
     /// tree with no recorded reason.
     ///
-    /// **Defaults on read** rather than being required. It was added after the
-    /// first bundles were written and `schema_version` is still `1`, so making
-    /// it mandatory would have turned a backwards-compatible addition into
-    /// `verify` refusing a bundle that is internally perfect.
-    #[serde(default = "default_gzip_threshold")]
+    /// **Required.** It was added after the first bundles were written and
+    /// defaulted on read so that `schema_version` could stay `1` — which meant a
+    /// bundle with no `gzip_threshold` read back as having used the *default*,
+    /// which is a claim about a run nobody recorded. A bundle that predates the
+    /// field is stale by definition; say so by refusing it rather than by
+    /// inventing its number.
     pub gzip_threshold: u64,
     /// The fields that were scored and diffed.
     pub selection_pool: SelectionPool,

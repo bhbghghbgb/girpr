@@ -205,7 +205,7 @@ any change to it:
 - **no fixture files under `tests/`** — the directory is 100% `.rs`, and every
   fixture is generated at test time.
 
-**Cheap enough to gate every commit.** 579 tests, none ignored, no sleeps and no
+**Cheap enough to gate every commit.** 580 tests, none ignored, no sleeps and no
 retry loops — which is the property that makes the suite usable as a gate rather
 than something run occasionally. The mock's world is built once per process and
 shared (`OnceLock`), rather than rebuilt per capture.
@@ -246,7 +246,7 @@ says which is which.
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` records the *decompressed* digest for gzipped files, so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | assembly exists purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
 | An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
-| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive and leaves `schema_version` at `1` — a reader must tolerate an unknown field and reject only an unknown `schema_version`. A new *document* is not: it becomes required, and the bundles that predate it are stale by definition. Re-capture them rather than teach every reader two shapes. |
+| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive and leaves `schema_version` at `1` — a reader must tolerate an unknown field and reject only an unknown `schema_version`. A new **required** thing is not: it makes the bundles that predate it stale by definition, and re-capturing them is the answer rather than teaching every reader two shapes. What is never acceptable is a **required field that defaults**, because the default is indistinguishable from the real value. |
 
 ---
 

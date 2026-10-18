@@ -206,6 +206,62 @@ fn the_manifest_index_key_set_is_the_documented_one() {
     );
 }
 
+/// `gzip_threshold` is required, and a bundle without it does not open.
+///
+/// It used to carry `#[serde(default = "…")]` so that `schema_version` could stay
+/// `1` and a bundle predating the field would still verify. That made a bundle
+/// with **no recorded threshold** read back as having used the flag's default —
+/// which is a claim about a run nobody wrote down, on the one field whose whole
+/// purpose is to say why one document is gzipped and the next is not.
+///
+/// A field that defaults to a constant is worse than a field that is required,
+/// because the default is indistinguishable from the real value. The bundle
+/// schema has no such defaults; this makes that true of the last one.
+#[test]
+fn a_manifest_without_the_gzip_threshold_does_not_open() {
+    // A copy, because `bundle()` is a `OnceLock` shared by every test in this
+    // file and the mutation below would poison whichever ran next.
+    let dir = std::env::temp_dir().join(format!(
+        "gircap-no-threshold-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_tree(bundle(), &dir);
+
+    let path = dir.join("MANIFEST.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("MANIFEST.json")).expect("parse");
+    // The key is gone, not zeroed: a `0` is a legal value and would pass a
+    // presence check while claiming every document should be gzipped.
+    doc.as_object_mut()
+        .expect("an object")
+        .remove("gzip_threshold");
+    std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()).expect("rewrite");
+
+    let err = gircap::verify::Bundle::open(&dir)
+        .expect_err("a bundle with no recorded gzip threshold must not open")
+        .to_string();
+    assert!(
+        err.contains("gzip_threshold"),
+        "the refusal must name the field: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("scratch");
+    for e in std::fs::read_dir(from).expect("readable").flatten() {
+        let target = to.join(e.file_name());
+        if e.file_type().expect("file type").is_dir() {
+            copy_tree(&e.path(), &target);
+        } else {
+            std::fs::copy(e.path(), &target).expect("copy file");
+        }
+    }
+}
+
 /// The chunk index's key set, pinned. A blob entry is what `materialize` reads
 /// back, so a rename here is a rename of the tool's own reconstruction input.
 #[test]
