@@ -1,4 +1,4 @@
-//! M10: the matrix, end to end — class predicates, greedy admission, and the
+//! The matrix, end to end - class predicates, greedy admission, and the
 //! budget — against the same mock the rest of the suite uses.
 //!
 //! `tests/measured_fixture.rs` already pins these predicates against the frozen
@@ -298,25 +298,20 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// `unavailable` here would be claiming the world cannot supply the file when
 /// the truth is that this run would not pay for it.
 ///
-/// **The run now fails, and this test used to assert the opposite.** It ended
-/// with "a budget is a preference, not a failure" and `exit_code == 0`. A17's
-/// own doc has always said `over_budget` is *deliberately* not an acceptable
-/// matrix state — "a finding about the run rather than about the world" — so A17
-/// already failed here, and the only reason the process exited `0` is that
-/// nothing consulted A17's verdict. Now that a failed row ends the run, the
-/// process exit agrees with the bundle's own account of itself.
+/// **The run ends `3`, not `0`.** A17's own doc has always said `over_budget` is
+/// *deliberately* not an acceptable matrix state — "a finding about the run
+/// rather than about the world" — so A17 fails here, and a failed row ends the
+/// run. The process exit agrees with the bundle's own account of itself.
 ///
 /// That is a change to what a budgeted capture *means* to a caller, and it is
 /// worth being explicit that it is one: `--max-download-bytes` is a supported
 /// flag, and a caller who sets it too low now gets exit 3 rather than exit 0
-/// with `result: fail`. Two documented positions disagreed — this test's line
-/// and A17's doc — and wiring `is_fatal` resolves it in A17's favour.
+/// with `result: fail`.
 ///
-/// The cost is visible below: `budget_limit`, `captures_over_budget` and
-/// `capture_bytes_admitted` are summary keys, and a failing run emits a
-/// failure summary instead of the capture summary, so those three numbers are
-/// no longer on stdout at all. They were asserted here before. Nothing in the
-/// bundle records them either.
+/// The run's own numbers are still on stdout, because the capture summary is
+/// emitted *before* the failure's: a caller who set a budget it could not afford
+/// wants to know what it did afford most precisely when the run failed. The
+/// bundle records the matrix either way — it is written before the verdict.
 #[test]
 fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // The budget is derived from a first, unlimited run rather than guessed: a
@@ -350,8 +345,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // **And the run's own numbers survive the failure.** This is the reason the
     // capture summary is printed before the failure's: a caller who set a budget
     // it could not afford wants to know what it did afford most precisely when
-    // the run failed. These three assertions were dropped from this test when
-    // the exit code changed and are here again because the record is emitted.
+    // the run failed.
     assert_eq!(c.summary["budget_limit"], half.to_string(), "the limit is recorded");
     assert_eq!(c.summary["budget_unlimited"], "false");
     let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");

@@ -6,9 +6,8 @@
 //! The split is what lets a test build a plan without a command line, and what
 //! keeps one rule from being applied twice under two spellings.
 //!
-//! This milestone lands the vocabulary and the flag-level validation. The parts
-//! that need an API answer — the version pair, the branch's `package_id` and
-//! `password` — arrive with [`crate::hyp`] in M2, because a plan whose `old_tag`
+//! What needs an API answer — the version pair, the branch's `package_id` and
+//! `password` — arrives with [`crate::hyp`], because a plan whose `old_tag`
 //! came from `diff_tags[0]` cannot be built without one.
 
 use std::path::{Path, PathBuf};
@@ -189,13 +188,13 @@ pub struct CapturePlan {
     pub max_download_bytes: Option<u64>,
     /// Classes whose absence must fail the run.
     ///
-    /// **Parsed, not raw.** §5.5 row 5: this was `Vec<String>` and the strings
-    /// were parsed in `run.rs` after the capture had run, so a misspelt class was
-    /// reported once a full bundle's worth of work had been spent on it.
-    ///
-    /// **Empty still means "all required"**, and is *not* defaulted here — the set
-    /// of required classes is the matrix's ordering, which exists in M5 and not
-    /// here.
+    /// **Parsed, not raw, and not defaulted.** Both matter and they are separate
+    /// decisions. Parsing happens here so that `--require-class identicalo` is a
+    /// usage error before a socket opens, naming the flag and the bad value.
+    /// Defaulting does *not* happen here, because the set of required classes is
+    /// the matrix's own ordering and duplicating it here would be a second source
+    /// of truth for one fact. An empty list therefore means "nothing is required",
+    /// and `select::require` is where an unmet class becomes exit `4`.
     pub require_class: Vec<crate::select::Class>,
     /// Explicit paths, bypassing matrix selection.
     pub files: Vec<String>,
@@ -217,9 +216,9 @@ pub struct CapturePlan {
     pub timeout: std::time::Duration,
     /// Ceiling on one response body.
     ///
-    /// §5.5 row 11. Not the same as --max-download-bytes, which is a *budget*
-    /// over the files a run admits to fetch; this limits any single response,
-    /// whether or not the file was admitted.
+    /// Not the same as `--max-download-bytes`, which is a *budget* over the files
+    /// a run admits to fetch; this limits any single response, whether or not the
+    /// file was admitted.
     pub max_response_bytes: u64,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
@@ -291,9 +290,9 @@ impl std::fmt::Display for AudioSelection {
 
 /// Validate a flag-level request into a [`CapturePlan`].
 ///
-/// This is the whole of M0's share of the work: it cannot resolve a version pair
-/// (no API yet), but everything that is wrong in the *request* is caught here, so
-/// a bad flag is rejected before a socket is opened rather than after.
+/// This cannot resolve a version pair — that needs an API answer — but everything
+/// that is wrong in the *request* is caught here, so a bad flag is rejected
+/// before a socket is opened rather than after.
 pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan> {
     let transport = validate_transport(
         args.jobs,
@@ -326,32 +325,19 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         out: args.out.clone(),
         new_tag: args.new_tag.clone(),
         old_tag: args.old_tag.clone(),
-        // **The floor is applied here, once.** §5.5 row 4: `--per-class 0` used to
-        // be clamped by each consumer that read it — `select::decide` and
-        // `emit::tree` each did `per_class.max(1)` — so the value was a
-        // convention rather than a property, and a third consumer would have had
-        // to remember it. It is now the plan's value.
+        // **The floor is applied here, once**, so it is a property of the plan
+        // rather than a convention each consumer has to remember.
         //
-        // **Still a floor, not a usage error**, which is the code's existing
-        // position and the one §5.5's "validate once in capture_plan" does not
-        // require changing: asking for zero captures of a class is not a request
-        // for an empty bundle, it is a request to capture nothing while still
-        // charging admission for it. `select::decide` keeps its own floor as
-        // defence, because it is a pure function called directly by tests with
-        // whatever they like.
+        // **Still a floor, not a usage error**: asking for zero captures of a
+        // class is not a request for an empty bundle, it is a request to capture
+        // nothing while still charging admission for it. `select::decide` keeps its
+        // own floor as defence, because it is a pure function called directly by
+        // tests with whatever they like.
         per_class: args.per_class.max(1),
         max_download_bytes: args.max_download_bytes,
-        // An empty `--require-class` means "all required"; the set of required
-        // classes is fixed by the matrix, so *defaulting* it here would duplicate
-        // the matrix's ordering. It stays a `Vec` and is defaulted in M5, where
-        // the matrix it refers to exists.
-        //
-        // The entries are **parsed** here even so — that is §5.5 row 5, and it has
-        // nothing to do with the empty case. A typo used to be reported only after
-        // both manifests per field, the diff and the whole selection had run, so
-        // `--require-class identicalo` cost a full capture to learn it was
-        // misspelled, against the stated intent at `capture_plan` that everything
-        // is validated before a socket opens.
+        // Parsed here, even though the empty case is not defaulted: a typo must be
+        // a usage error before any network work, not a finding discovered after
+        // both manifests per field, the diff and the whole selection have run.
         require_class: parse_classes(&args.require_class)?,
         files: args.files.clone(),
         audio,
@@ -369,17 +355,7 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
     })
 }
 
-/// Validate the transport flags together, naming the one at fault.
-///
-/// `--jobs` is range-checked here but is **not** part of the returned value:
-/// `http::Transport` is per-fetcher patience, and the concurrency a capture may
-/// use is the caller's business — the chunk fetcher reads `plan.jobs` where it
-/// builds its own queue.
 /// Parse every `--require-class` value, naming the flag and the bad one.
-///
-/// §5.5 row 5. Was a `map` in `run.rs` over the raw strings, called after the
-/// manifests, the diff and the selection — so a typo was discovered after a full
-/// capture, and named without the flag that carried it.
 fn parse_classes(raw: &[String]) -> Result<Vec<crate::select::Class>> {
     raw.iter()
         .map(|c| {
@@ -389,6 +365,12 @@ fn parse_classes(raw: &[String]) -> Result<Vec<crate::select::Class>> {
         .collect()
 }
 
+/// Validate the transport flags together, naming the one at fault.
+///
+/// `--jobs` is range-checked here but is **not** part of the returned value:
+/// `http::Transport` is per-fetcher patience, and the concurrency a capture may
+/// use is the caller's business — the chunk fetcher reads `plan.jobs` where it
+/// builds its own queue.
 fn validate_transport(
     jobs: usize,
     retries: u32,
@@ -418,10 +400,10 @@ fn validate_transport(
         return Err(UsageError::new("--timeout must be at least 1 second"));
     }
     if max_response_bytes == 0 {
-        // §5.5 row 11. The other three are checked here for the same reason, and a
-        // zero ceiling is the same kind of nonsense: it would refuse the very first
-        // byte of every response, which is a tool that cannot fetch anything rather
-        // than one with a limit.
+        // The other three are checked here for the same reason, and a zero ceiling
+        // is the same kind of nonsense: it would refuse the very first byte of every
+        // response, which is a tool that cannot fetch anything rather than one with
+        // a limit.
         return Err(UsageError::new("--max-response-bytes must be at least 1"));
     }
     Ok(crate::http::Transport {
@@ -700,10 +682,9 @@ mod tests {
 
     #[test]
     fn a_zero_per_class_is_floored_once_in_the_plan() {
-        // **§5.5 row 4.** The floor used to be applied by each consumer that read
-        // the field — `select::decide` and `emit::tree` each did
-        // `per_class.max(1)` — so it was a convention two places had to remember
-        // rather than a property of the plan.
+        // The floor belongs to the plan, not to each consumer: `select::decide`
+        // and `emit::tree` both read this field, and a convention two places have
+        // to remember is not a property of anything.
         //
         // Asserted on the *plan*, which is the point: a consumer reading
         // `plan.per_class` now gets a value that is already floored, and cannot
@@ -721,14 +702,9 @@ mod tests {
 
     #[test]
     fn a_misspelt_require_class_is_a_usage_error_before_anything_is_fetched() {
-        // **§5.5 row 5.** `--require-class identicalo` used to be reported only
-        // after both manifests per field, the diff and the whole selection had
-        // run — a full capture's work to learn a word was misspelt, against the
-        // stated intent at `capture_plan` that everything is validated before a
-        // socket opens.
-        //
-        // The test is in `config.rs` rather than in `run.rs` for exactly that
-        // reason: reaching it at all proves the check happens during planning.
+        // A misspelt class must be a usage error before a socket opens: the
+        // test is in `config.rs` rather than in `run.rs` for exactly that reason,
+        // because reaching it at all proves the check happens during planning.
         let err = plan(|a| a.require_class = vec!["identico".into()])
             .expect_err("an unknown class must not produce a plan");
         let msg = err.to_string();
@@ -748,9 +724,8 @@ mod tests {
 
     #[test]
     fn every_valid_require_class_survives_planning_and_keeps_its_order() {
-        // The other half of row 5: parsing early must not change what the plan
-        // carries. Empty stays empty — "all required" is defaulted in M5, where
-        // the matrix's ordering exists, and not here.
+        // Parsing early must not change what the plan carries. Empty stays empty:
+        // the required set is the matrix's ordering, not a default of this flag.
         let p = plan(|a| a.require_class = vec![]).expect("empty is valid");
         assert!(
             p.require_class.is_empty(),

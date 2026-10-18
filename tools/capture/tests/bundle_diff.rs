@@ -56,8 +56,8 @@
 //! `seq` 7 depends on which of four workers wakes first. That is real, and it is
 //! not what this gate is for. Pinning `--jobs 1` makes issue order deterministic
 //! and leaves the comparison to measure the thing it was built to measure.
-//! (Worth knowing for §5.3: concurrency does **not** preserve the `seq` values of
-//! a run, only the set of rows.)
+//! (Worth knowing for the concurrency work: `--jobs > 1` does **not** preserve
+//! the `seq` values of a run, only the set of rows.)
 //!
 //! ## Strictness
 //!

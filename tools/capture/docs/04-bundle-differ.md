@@ -1,23 +1,19 @@
-# The bundle differ — how the output-contract history was measured
+# The bundle differ — comparing bundles across commits
 
-Companion to [`04-output-contract-history.md`](04-output-contract-history.md),
-which reports what it found. This document is about the instrument: what it
-normalises, why each exemption exists, how it was proved to work, and how to
-re-run it.
+`gircap`'s own gate (`tests/bundle_diff.rs`) compares **two captures of one
+binary against each other**. That catches a change that is *non-uniform* — a row
+that flips depending on which worker woke first — and it is blind by
+construction to a change applied **uniformly to every capture**. This is the
+instrument for the cross-binary version of that question: it captures the same
+fixture at two different commits and compares the results.
 
-**The problem it solves.** `gircap`'s own band-1 gate (`tests/bundle_diff.rs`)
-compares **two captures of one binary against each other**. That catches a
-change that is *non-uniform* — a row that flips depending on which worker woke
-first. It is blind, by construction, to a change applied **uniformly to every
-capture**: exactly the kind this history is made of. `7771323` fills in six
-`stored_as` values; both captures of one binary get it, so `bundle_diff` is
-green. §5.5 of the plan names this blindness twice and calls the fix
-"per-field pins"; this differ is the instrument that makes it unnecessary,
-because it compares **across** binaries.
+The tool is `tools/capture/tools/bundle_differ.py`. It has no dependencies beyond
+the Python standard library, and it reads bundles; it never runs `gircap` itself
+(the probe driver builds a commit and runs the binary). Read
+[`../tools/README.md`](../tools/README.md) for how to run it.
 
-The tool is `tools/capture/tools/bundle_differ.py`. It has no dependencies
-beyond the Python standard library, and it reads bundles; it never runs
-`gircap`.
+Which gate to reach for is in
+[`03-design-notes.md` §3](03-design-notes.md#3-the-gates-and-what-each-one-cannot-see).
 
 ---
 
@@ -54,8 +50,8 @@ exactly five documents:
 
 which is the cascade, exactly as `tests/bundle_diff.rs` documents it. After
 scrubbing those five, two captures of one binary are identical — which is the
-check that the normalisation is not vacuous, and it is re-run for **every**
-commit probed (see §5).
+check that the normalisation is not vacuous, and it is re-run for **every** commit
+probed (see §5).
 
 | token | where it appears |
 |---|---|
@@ -115,9 +111,9 @@ blanked rather than compared:
 | `verify/selfcheck.json` | the `M` in A16's "N files, M B" |
 
 Every other byte in those four documents is still compared. That is deliberate:
-`d745680` and `43f66fa` later added per-field pins for exactly these documents
-inside the crate, and the two mechanisms are complementary — the crate's pins
-catch drift within one binary, this catches drift across the history.
+the crate's per-document pins catch drift *within* one binary, this catches drift
+*across* commits, and the two mechanisms are complementary — neither replaces the
+other.
 
 The exemption list **must match something**, or the differ fails rather than
 quietly comparing nothing (`--strict`).
@@ -126,7 +122,7 @@ quietly comparing nothing (`--strict`).
 
 For a gzipped document, `files[].bytes` and its digests are the
 **decompressed** size and digest, not the `.gz` bytes on disk. Measured on
-`artifacts/…/20261017T123335Z`:
+`artifacts/hk4e_global/7.0.0__7.1.0/20261017T123335Z`:
 
 ```
   manifests/7.0.0/en-us.manifest.json.gz   on disk 1 356 632 B
@@ -136,39 +132,38 @@ For a gzipped document, `files[].bytes` and its digests are the
 ```
 
 So the compressed bytes are **not** part of the recorded contract at all, and
-comparing `.gz` payloads decompressed is the right granularity. The one place
-they could still have mattered is `87412d1`, which changed how the `.gz` is
-produced; it was checked separately, against a capture forced down the `.gz`
-path (§6).
+comparing `.gz` payloads decompressed is the right granularity. If a change ever
+does alter how the `.gz` is produced, it must be checked with a capture forced
+down the `.gz` path — the default profile never takes it (§6).
 
 ## 4. Proving the differ works
 
 A differ that scrubs too much reports "identical" for two different bundles,
 and every conclusion drawn from it is then worthless. So the nine kinds of
-change the history actually made are injected into a known fingerprint, and the
-differ is required to catch each one:
+change listed in `tools/mutation_control.py` are injected into a known
+fingerprint, and the differ is required to catch each one:
 
 ```
-  CAUGHT  stored_as filled in on an api row   (7771323)
-  CAUGHT  a request header value changed     (cd0e876)
+  CAUGHT  stored_as filled in on an api row
+  CAUGHT  a request header value changed
   CAUGHT  a chunk blob's bytes changed
-  CAUGHT  an assertion's wording narrowed   (43f66fa)
+  CAUGHT  an assertion's wording narrowed
   CAUGHT  a document added
   CAUGHT  a document removed
-  CAUGHT  attempts=2 on a probe row         (527833c)
-  CAUGHT  bytes_in set on a 404 row         (844f5c2)
+  CAUGHT  attempts=2 on a probe row
+  CAUGHT  bytes_in set on a 404 row
   CAUGHT  paths.tsv rows reordered          (sort drift)
   OK     unmutated copy reads identical
 ```
 
-The last line is the negative control, and it is the one that matters: a
-harness that always fires proves nothing.
+The last line is the negative control, and it is the one that matters: a harness
+that always fires proves nothing.
 
 Each mutation asserts its own precondition first — that the fixture really
-contains the string it is about to change — so a mutation cannot pass by
-quietly doing nothing. That is not hypothetical: the first run of the wording
-mutation asserted against text this bundle does not contain, and failed on its
-own precondition rather than silently "passing".
+contains the string it is about to change — so a mutation cannot pass by quietly
+doing nothing. That is not hypothetical: a wording mutation once asserted
+against text this bundle does not contain, and failed on its own precondition
+rather than silently "passing".
 
 ## 5. The per-commit guard
 
@@ -193,10 +188,10 @@ every document type the tool writes:
 | chunk blobs | 10 | 38 |
 
 It is small, deterministic, offline, and produces the whole document surface —
-which is what makes 27 builds affordable. It is also a *healthy* capture, and a
-healthy capture cannot see three things:
+which is what makes a commit-by-commit search affordable. It is also a *healthy*
+capture, and a healthy capture cannot see three things:
 
-| not seen | why | how it was covered |
+| not seen | why | how it is covered |
 |---|---|---|
 | the `.gz` write path | the synthetic manifests are 1.0–3.7 kB and the default threshold is 1 MiB, so nothing is ever gzipped | a second profile with `--gzip-threshold 512` |
 | a mis-served chunk | every blob the mock serves is a real zstd frame | the mock patched to serve non-frame bytes |
@@ -206,86 +201,86 @@ The mock patch (`tools/capture/tools/mockpatch.py`) adds two builder methods and
 one dispatch check in `serve`. It is anchored, so it refuses to half-apply if
 the mock's shape has moved, and it is idempotent.
 
-Two shapes had to be anchored, because the mock's `serve` changed once inside
-this range: before `428fc8e` it handled one request per connection and returned,
-after it speaks keep-alive and loops. The anchors are matched as *line
-prefixes* — the HEAD shape writes `… tag.as_deref()) {` and the earlier one
-`… else {`, so the anchors deliberately omit whatever follows.
+Two shapes have to be anchored, because the mock's `serve` has changed inside the
+ranges this has been run over: one handled one request per connection and
+returned, the other speaks keep-alive and loops. The anchors are matched as *line
+prefixes* — deliberately omitting whatever follows — so a change further along
+the line does not break them.
 
 Two more details are not obvious, and each cost a run to find:
 
 - **The needle is matched against the whole request target, path *and* query.**
   The negative probes share their *paths* with the metadata capture
   (`/sophon/getBuild`, `/hyp/getGameConfigs`), so a path-only needle cannot tell
-  "the capture asked for this" from "the probe asked for this on purpose". An
-  early version armed `/chunk/`, believing it selected chunk fetches; it also
-  selected the 404 probes, which live under the same prefix — so it measured
-  `observe`, which already reads the body regardless, rather than the path under
-  test.
+  "the capture asked for this" from "the probe asked for this on purpose". A
+  needle of `/chunk/` is not sufficient either: it also selects the 404 probes,
+  which live under the same prefix — so it would measure `observe`, which already
+  reads the body regardless, rather than the path under test.
 - **Armed rules are re-armed between the probe's two captures.** Otherwise the
   second capture meets a mock that has already spent its one armed answer, the
   two captures legitimately differ, and the determinism guard rejects the commit
   for a reason that has nothing to do with the tool. The guard is right to
   reject; the instrument was wrong.
 
-**The patcher was wrong four times before it was right**, and each failure had
-the same shape: a textual edit that silently did not do what it looked like it
-did, surfacing as a syntax error fifty lines from the cause.
+**The patcher was wrong four times before it was right**, and each failure had the
+same shape: a textual edit that silently did not do what it looked like it did,
+surfacing as a syntax error fifty lines from the cause — a block substituted
+*in place of* its anchor instead of inserted before it; an anchor constant that
+lost its closing bracket; a guard that compared a *stripped* line against an
+*indented* anchor, so it could never fire; and an "insert after" splice that
+*replaced* the anchor line, dropping the `{` that opened `impl Mock {`.
 
-1. The block was *substituted in place of* its anchor instead of inserted before
-   it, so the `let … else {` the block depended on never appeared.
-2. One anchor constant lost its closing `]` in an edit — `"#![allow(dead_code]"`
-   became `"#![allow(dead_code)"` — so the patch matched four characters short
-   and ate the `]` out of the file.
-3. The guard written to catch (2) compared a *stripped* line against an
-   *indented* anchor, so it never matched anything and never fired. A check that
-   cannot fail is not a check.
-4. The brace-balance guard that did fire then caught the next one: an "insert
-   after" splice that *replaced* the anchor line, silently dropping the `{` that
-   opened `impl Mock {`.
-
-The lesson is §4's, applied to the instrument rather than the tool. The patcher
-now requires each anchor to match exactly one line, requires exactly one of the
-two `serve` variants to match, verifies the inserted block adds as many `{` as
-`}`, and verifies every anchor survives the write — and it is exercised against
-seven mock shapes across the range before being trusted.
+The patcher now requires each anchor to match exactly one line, requires exactly
+one of the two `serve` variants to match, verifies the inserted block adds as many
+`{` as `}`, and verifies every anchor survives the write. A check that cannot
+fail is not a check, and that is the lesson §4's negative control teaches,
+applied to the instrument rather than to the tool.
 
 **It is applied only for the armed profiles, never for the ordinary search**, and
 that is not tidiness. The arming probe names `arm_fail`/`arm_body`
 unconditionally and Rust type-checks both match arms whatever the runtime
 condition is, so a single probe binary cannot serve both cases; and keeping the
-search path on the tree's own unmodified mock means every fingerprint in the
-history was produced by a mock that is byte-for-byte the one in the repository.
+search path on the tree's own unmodified mock means every fingerprint was
+produced by a mock that is byte-for-byte the one in the repository.
 
 ## 7. The search, and why it is not a sweep
 
 Two captures of one binary tell you nothing about history. 56 adjacent
-comparisons would. So the boundary is found by divide and conquer, using a
+comparisons would. So a boundary is found by divide and conquer, using a
 predicate that is monotone:
 
 > P(lo, hi) — "some change lies in (lo, hi]" — is true **iff** F(mid) ≠ F(lo).
 
-One probe of the midpoint splits the interval and proves one half
-boundary-free. For *k* boundaries among *n* commits that is O(k·log(n/k)) builds
-instead of n−1, and the results are cached, so a re-run costs nothing.
+One probe of the midpoint splits the interval and proves one half boundary-free.
+For *k* boundaries among *n* commits that is O(k·log(n/k)) builds instead of n−1,
+and the results are cached, so a re-run costs nothing.
 
-The baseline is included as index 0 deliberately. It is the **parent** of the
-first src commit; leaving it out makes the first interval compare the first
-commit against a midpoint, which silently attributes that commit's own change to
-a later one. (It did, once, before it was noticed.)
+Two rules the search must follow, both learned the hard way:
+
+- **A split that finds a difference must search both halves; only a split that
+  finds equality may discard one.** A search that pops one interval and pushes
+  one back is a binary-search *chain* rather than a tree: it follows one branch,
+  abandons the other, and reports one boundary having examined half the range.
+- **The index bound is `n - 1`.** Seeding the frontier at `(0, n)` makes the leaf
+  branch read `commits[n]`, one past the end. That crashes *after* resolving most
+  of the tree, leaving one interval unexamined — and it is the crash, not the
+  gap, that gets noticed.
+
+Both are the same shape as the differ's own false positive: an instrument that
+reports a result rather than failing.
 
 ## 8. Validated against the real bundles, not only the mock
 
 The mock is convenient and deterministic; it is also not the thing anybody
-reads. So the same differ was run over the three reference bundles in
+reads. So the same differ is run over the reference bundles in
 `artifacts/hk4e_global/7.0.0__7.1.0/`, with no build at all:
 
 | comparison | identical | changed |
 |---|---|---|
-| `20261016T002107Z` vs `20261017T000730Z` — both **before** the band-3 work | 93 of 97 | 4 |
-| `20261017T000730Z` vs `20261017T123335Z` — **across** it | 93 of 97 | 4 |
+| `20261016T002107Z` vs `20261017T000730Z` — two captures of the same world, days apart | 93 of 97 | 4 |
+| `20261017T000730Z` vs `20261017T123335Z` — the older against the current reference | 93 of 97 | 4 |
 
-The first row is the important one: two captures of the same world, from
+The first row is a result in its own right: two captures of the same world, from
 different days, differ in **four** documents. That is the volatility floor of a
 real capture, and it matches the mock's five closely enough to be a check on the
 normaliser rather than a coincidence:
@@ -303,26 +298,27 @@ differ over real bundles once: a live capture has one more volatile document
 than a mock capture, and a gate that only ever sees mock captures will not know
 that.
 
-The second row is the finding the history is about, measured on real data rather
-than on a synthetic world: **every chunk blob, every assembled `game/` and
-`expected/` file, every `patchmaps/`, every `diff/`, every `manifests/` document
-is byte-identical across the band-3 work.** The only document carrying a
-contract change is `api/requests.ndjson`.
+The second row is the reusable finding: **every chunk blob, every assembled
+`game/` and `expected/` file, every `patchmaps/`, every `diff/`, every
+`manifests/` document is byte-identical across two captures of the same world on
+different days.** That is the claim worth re-checking after any change to the
+writer, and it is a cheap check — no build required.
 
-## 9. Cost, honestly
+## 9. Cost
 
 | | |
 |---|---|
-| cold build including all dependencies | 7 m 42 s |
-| rebuild of `gircap` alone, shared target dir | ~3.3 min |
-| two captures + fingerprint + both diffs | ~1.5 s |
-| commits actually built | 19 for the search, 8 for the degraded-input pairs; a sweep would be 56 |
+| commits built for the search | 8 — six midpoints and two leaves, for two boundaries among 56 |
+| commits built for the degraded-input pairs | 8, in four before/after pairs |
+| what a sweep would have built | 56 |
 
-Sharing one `CARGO_TARGET_DIR` across the worktrees is what makes the per-commit
-cost 3.3 minutes rather than 8: dependencies are compiled once and only
-`gircap` itself is rebuilt. On a 4-core machine, two builds do not run
-concurrently — cargo takes a target-directory lock — so this is deliberately
-serial.
+That ratio is the whole argument for §7: O(k·log(n/k)) behaving as advertised,
+rather than one build per adjacent pair.
+
+Sharing one `CARGO_TARGET_DIR` across the worktrees is what makes a per-commit
+build affordable at all: dependencies are compiled once and only `gircap` itself
+is rebuilt. On a small machine two builds do not run concurrently anyway — cargo
+takes a target-directory lock — so this is deliberately serial.
 
 ## 10. Reproducing it
 
@@ -330,10 +326,10 @@ serial.
 # one commit
 pwsh -File tools/capture/tools/probe.ps1 -Commit <sha> -Profile default
 
-# the whole search
+# the whole history (caches; safe to re-run, safe to interrupt)
 python tools/capture/tools/search.py
 
-# prove the differ still works
+# prove the differ still works - run this after any edit to bundle_differ.py
 python tools/capture/tools/mutation_control.py
 ```
 
@@ -348,14 +344,18 @@ listener and binds `127.0.0.1:0`.
   neither substitutes for the other.
 - **It compares mock captures, not live ones.** A change that only manifests
   against the real CDN — a header the mock does not model, a body the mock
-  cannot produce — is out of reach by construction. That is why the three
-  band-3 commits that *do* change the wire were additionally checked against a
-  live capture; see the report.
-- **"Identical" means identical to this fixture.** A 58-file bundle with 10
-  blobs exercises the same document surface as the 97-file reference, but it
-  does not exercise scale, and a difference that only appears at 113 610 chunks
-  would not show up here.
+  cannot produce — is out of reach by construction. A change to the wire needs a
+  live check as well.
+- **"Identical" means identical to this fixture.** A 58-file bundle with 10 blobs
+  exercises the same document surface as the 97-file reference, but it does not
+  exercise scale, and a difference that only appears at 113 610 chunks would not
+  show up here.
+- **`--jobs > 1` is not swept.** Every probe pins `--jobs 1`, because `seq` is
+  reserved at issue time and chunk-row *order* in the request log genuinely varies
+  at higher concurrency. That is real, and it is not what this measures.
+- **Non-default flags are not swept.** `--no-chunk-blobs`, `--audio`,
+  `--per-class > 1`, `--max-download-bytes` and `--probe-tags` are out of scope.
+  A low `--gzip-threshold` is the one exception, for the case in §3.
 - **It sees the bundle, not the contract.** A field that was wrong in the same
-  way at both ends is invisible to any before/after comparison. Fixing that
-  needs a written expectation, which is what `d745680` and `43f66fa` added
-  inside the crate.
+  way at both ends is invisible to any before/after comparison. Fixing that needs
+  a written expectation, which is what the crate's own per-document pins are.

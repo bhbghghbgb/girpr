@@ -397,20 +397,15 @@ impl<'a> HypClient<'a> {
     }
 }
 
-/// Attach each body's request sequence number, so the request log's `stored_as`
-/// can be filled in once the files are on disk.
+/// Fill in each body's request sequence number from the log.
 ///
 /// Done after the fact and by lookup rather than threaded through, because the
 /// sequence number is the fetcher's business and the capture's is to know where
-/// its bytes ended up.
-/// Fill in each body's request sequence number from the log.
-///
-/// **This had no production caller until §6.1**, and the plan's §2.1 lists it as
-/// "deleting it forecloses the fix" — the comment on [`CapturedBody::seq`] said
-/// "filled in by the caller" and no caller did, so all six bodies sat at `0` and
-/// `log.set_stored_as(0, ..)` found nothing to mark. Every `api` row in
-/// `requests.ndjson` therefore recorded a null `stored_as` for a body that was
-/// sitting on disk under `api/`. The manifest rows were 4/4 correct because
+/// its bytes ended up. Without this, [`CapturedBody::seq`]'s "filled in by the
+/// caller" would be a promise nobody keeps: all six bodies would sit at `0`,
+/// `log.set_stored_as(0, ..)` would find nothing to mark, and every `api` row in
+/// `requests.ndjson` would record a null `stored_as` for a body sitting on disk
+/// under `api/`. The manifest rows are correct either way, because
 /// `manifest::mark_stored` receives a real `seq` from the fetch.
 pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
     let records = log.records();
@@ -497,11 +492,11 @@ mod attach_seq_tests {
 
     #[test]
     fn two_bodies_for_one_endpoint_get_different_rows() {
-        // The defect §6.1's fix nearly shipped with. `getBuild` is fetched twice
-        // - once per build - and both bodies want a row whose URL contains
-        // `getBuild`. Matching on the name alone and reversing over the log
-        // gives both the *last* matching row, so one body overwrites the other
-        // and the bundle records five of six.
+        // The near-miss this function exists to avoid. `getBuild` is fetched
+        // twice - once per build - and both bodies want a row whose URL contains
+        // `getBuild`. Matching on the name alone and reversing over the log gives
+        // both the *last* matching row, so one body overwrites the other and the
+        // bundle records five of six.
         let log = log_with(&[
             "https://h/api/getGameConfigs?x=1",
             "https://s/api/getBuild?tag=7.1.0",

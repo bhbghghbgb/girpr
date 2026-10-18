@@ -198,12 +198,12 @@ impl BlobProps {
     /// [`BlobProps::measure`] for a blob already on disk, with its compressed
     /// digests already computed.
     ///
-    /// §6.6.2. The capture path streams a chunk to a file and digests it on the
-    /// way past, so by the time there is anything to measure the bytes have never
-    /// been in memory. `compressed` is what the *write* computed, which is the
-    /// same number [`BlobProps::measure`] would have computed over the same
-    /// bytes — `a_hashable_file_reports_the_digests_of_the_bytes_it_stored` is
-    /// what keeps that true rather than merely intended.
+    /// The capture path streams a chunk to a file and digests it on the way past,
+    /// so by the time there is anything to measure the bytes have never been in
+    /// memory. `compressed` is what the *write* computed, which is the same number
+    /// [`BlobProps::measure`] would have computed over the same bytes —
+    /// `a_hashable_file_reports_the_digests_of_the_bytes_it_stored` is what keeps
+    /// that true rather than merely intended.
     ///
     /// Only the decode reads the file, and it reads it through a 16 KB window.
     /// So the peak cost of measuring a blob is the cost of the network chunk that
@@ -261,13 +261,11 @@ impl BlobProps {
 
     /// The entry for a blob whose bytes arrived but are not a zstd frame.
     ///
-    /// **This is the evidence, not a failure.** §6.3: [`BlobProps::measure`]
-    /// returns `Err` for a body that is not a zstd frame, and the caller used
-    /// `?` — so the bytes were **discarded**, the slot was backfilled with a row
-    /// reading "fetched but not stored", and the bundle claimed the fetch had
-    /// failed when it had succeeded. A truncated or mis-served response is
-    /// precisely the thing this tool exists to keep, and this module's stated
-    /// purpose says so.
+    /// **This is the evidence, not a failure.** [`BlobProps::measure`] refuses a
+    /// body that is not a zstd frame, and a refusal must not become a hole: the
+    /// bytes are already on disk, so they are kept and the row says why they will
+    /// not decode. A truncated or mis-served response is precisely the thing this
+    /// tool exists to keep, and this module's stated purpose says so.
     ///
     /// The row carries **more** than a discarded one would. The compressed
     /// digests are computed because hashing the raw bytes does not need zstd, so
@@ -275,7 +273,7 @@ impl BlobProps {
     /// not decode — rather than a hole and a sentence saying nothing arrived.
     ///
     /// `verified` is `None` rather than a set of `false`s: nothing was measured
-    /// against the manifest, and M9 reports `null` as "not measured", which is
+    /// against the manifest, and `verify` reports `null` as "not measured", which is
     /// the honest reading. The two digest-dependent checks genuinely cannot be
     /// answered; a row of `false`s would claim they were answered and failed.
     pub fn undecodable(raw: &[u8], chunk: &SophonChunk, why: String) -> BlobProps {
@@ -439,9 +437,8 @@ mod tests {
 
     #[test]
     fn a_body_that_is_not_a_zstd_frame_is_refused_by_measure() {
-        // The condition §6.3 is about. `measure` must still refuse it — the
-        // caller decides what to do, and the caller's decision is the other
-        // test.
+        // `measure` must refuse an unframed body — the caller decides what to do
+        // with the refusal, and the caller's decision is the other test.
         let (chunk, cut) = mis_served_chunk();
         assert!(
             !hash::is_zstd(&cut),
@@ -452,10 +449,9 @@ mod tests {
 
     #[test]
     fn an_undecodable_body_keeps_its_bytes_digests_and_reason() {
-        // **§6.3's actual claim: the bytes are evidence, so they are kept.**
-        // Before this, a body like this propagated out of `measure` as an `Err`
-        // and was discarded; the slot was backfilled with a row saying "fetched
-        // but not stored" and the bundle claimed the fetch had failed.
+        // The bytes are evidence, so they are kept: a body like this propagates
+        // out of `measure` as an `Err`, and the row must carry the bytes, their
+        // digests and the real reason rather than a "the fetch failed" story.
         let (chunk, cut) = mis_served_chunk();
         let why = BlobProps::measure(&cut, &chunk).expect_err("unframed");
         let p = BlobProps::undecodable(&cut, &chunk, why.to_string());

@@ -64,27 +64,27 @@ pub enum Kind {
     /// Costs no blob bytes, only JSON — or, for the negative blob probes, only a
     /// `404`.
     ///
-    /// **Two paths share this kind, and they differ in retry behaviour. §5.5 row
-    /// 16.** The tag probe goes through [`Fetcher::get`] and so through
-    /// [`RetryPolicy`]; the negative probes go through [`Fetcher::observe`], which
-    /// sends once and records `attempts: 1` unconditionally. A reader of
-    /// `api/requests.ndjson` therefore cannot tell them apart from the row alone,
-    /// and the `kind` was deliberately not split to fix that — see the note on
-    /// [`Kind`]'s wire spelling below.
+    /// **Two paths share this kind, and they differ in retry behaviour.** The tag
+    /// probe goes through [`Fetcher::get`] and so through [`RetryPolicy`]; the
+    /// negative probes go through [`Fetcher::observe`], which sends once and
+    /// records `attempts: 1` unconditionally. A reader of `api/requests.ndjson`
+    /// therefore cannot tell them apart from the row alone, and the `kind` was
+    /// deliberately not split to fix that — see the note on [`Kind`]'s wire
+    /// spelling below.
     Probe,
 }
 
 impl Kind {
     /// The wire spelling.
     ///
-    /// **This is a closed vocabulary and `docs/01-artifact-schema.md:153` says
-    /// so**, which is why §5.5 row 16 was answered with documentation rather than
+    /// **This is a closed vocabulary and the schema doc says so**, which is why
+    /// the two probe behaviours are answered with documentation rather than
     /// distinct kinds. Splitting `probe` into `tag_probe` and `shape_probe` would
     /// not be additive: it would *remove* the value `probe`, so any reader matching
     /// on it — which is the natural way to ask "what did the metadata cost?" —
     /// would silently start seeing nothing. Widening a closed vocabulary by
     /// subtraction is a breaking change to a recorded field, which is a larger
-    /// decision than an unfalsifiable log row deserves.
+    /// decision than an ambiguous log row deserves.
     ///
     /// The distinction is recorded instead, on [`Kind::Probe`] and in the schema
     /// doc, and the behaviour it describes is pinned by
@@ -150,13 +150,13 @@ impl ApiError {
 
     /// The default exit code for a failure that has not been classified yet.
     ///
-    /// **This is not the tool's exit-code policy, and the old doc claiming it was
-    /// — "the code every API failure maps to" — was false.** §6.6 named two
-    /// reasons, and both hold:
+    /// **This is not the tool's exit-code policy.** Two things stop it from being
+    /// one:
     ///
-    /// - [`ApiError::Shape`] covers roughly 55 conditions with nothing to do with
-    ///   the network: local invariants, writer errors, budget ceilings, assembly
-    ///   steps. A `2` is a network code, and it would be wrong for most of them.
+    /// - [`ApiError::Shape`] covers around fifty conditions with nothing to do
+    ///   with the network: local invariants, writer errors, budget ceilings,
+    ///   assembly steps. A `2` is a network code, and it would be wrong for most of
+    ///   them.
     /// - The same error value is legitimately reported as exit `2` or exit `3`
     ///   depending on **where it happened**, which `ApiError` cannot express.
     ///   [`crate::failure::apierr`] and [`crate::failure::assertion`] take the same
@@ -336,9 +336,9 @@ impl Sleep for RecordingSleep {
 /// failure than the one it prevents, because it would turn a working capture into
 /// a non-working one.
 ///
-/// The point of the ceiling is not this number. It is that there is a number: a
-/// broken or hostile origin that never stops sending used to be able to fill RAM
-/// until the process died, with no bound anywhere on the path. See
+/// The point of the ceiling is not this number. It is that there is a number at
+/// all: a broken or hostile origin that never stops sending would otherwise be
+/// bounded by nothing but the machine's memory. See
 /// [`Transport::max_response_bytes`].
 pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -351,10 +351,9 @@ pub struct Transport {
     pub timeout: Duration,
     /// The most bytes one response body may contribute, in total.
     ///
-    /// **§5.5 row 11.** The client had only `timeout` and `user_agent`, and every
-    /// body read was unbounded, so an origin that kept sending was bounded by
-    /// nothing but the machine's memory. A timeout does not help: a server
-    /// streaming a gigabyte steadily for ten minutes never trips one.
+    /// **A timeout is not a size limit.** A server streaming a gigabyte steadily
+    /// for ten minutes never trips one, so the ceiling is the only bound on the
+    /// path between a socket and this tool's buffers.
     ///
     /// Checked in two places, because one is not enough: against the declared
     /// `Content-Length` before a byte is read (so a server claiming 10 GiB is
@@ -421,17 +420,14 @@ impl RequestRecord {
     /// Built once per `Fetcher` and cloned per record; see
     /// [`Fetcher::base_req_headers`].
     ///
-    /// **`accept-encoding` is `identity`, and that is the §6.2 finding.** It used
-    /// to read `gzip` here while the client was configured with no
-    /// `accept-encoding` at all — reqwest only sends one when its `gzip` feature
-    /// is on, and it is not. So the bundle claimed a header the tool never sent.
-    ///
-    /// Claiming `gzip` rather than fixing it would have been the worse of the
-    /// two. Adding the header *without* the feature is not a no-op: the CDN
-    /// would answer with a gzip body and reqwest, unable to decompress it, would
-    /// hand back the compressed bytes — and every manifest digest in the bundle
-    /// would be a digest of compressed JSON. So the record states what the wire
-    /// does, which is identity, and the client is configured to match.
+    /// **The record and the client must agree.** reqwest sends an
+    /// `accept-encoding` only when its `gzip` feature is on, and it is not, so the
+    /// wire carries `identity`. Naming `gzip` instead would be the worse of the
+    /// two: adding the header *without* the feature is not a no-op — the CDN would
+    /// answer with a gzip body and reqwest, unable to decompress it, would hand
+    /// back the compressed bytes, and every manifest digest in the bundle would be
+    /// a digest of compressed JSON. So the record states what the wire does, which
+    /// is identity, and the client is configured from the same list.
     fn default_req_headers(user_agent: &str, range: Option<&str>) -> BTreeMap<String, String> {
         let mut h = shared_req_headers(user_agent);
         if let Some(r) = range {
@@ -497,12 +493,10 @@ struct LogState {
     /// `seq -> index into records`.
     ///
     /// The index is what makes [`RequestLog::set_stored_as`] O(log n) instead of
-    /// O(n). It used to hold the lock and then walk `records` looking for a
-    /// matching `seq` — once per chunk, over a vector that reaches 113 610
-    /// entries. That is a ~23 MB memory walk *while holding the one
-    /// process-wide lock every other request needs*, which is why `--jobs 8`
-    /// did not scale: the eight workers serialised on exactly this line and
-    /// gave back the concurrency the chunk fetcher had bought.
+    /// O(n). A linear walk under the lock, once per chunk, over a vector that
+    /// reaches 113 610 entries is a ~23 MB memory walk *while holding the one
+    /// process-wide lock every other request needs*, which is enough to stop
+    /// `--jobs 8` scaling at all.
     ///
     /// A `BTreeMap` rather than a `Vec<Option<usize>>`: `reserve()` hands out
     /// dense `1..N` ids, so a vector would do — but `push` is told the `seq` and
@@ -592,9 +586,8 @@ impl RequestLog {
     /// By `seq` rather than by URL, because a chunk id can legitimately be
     /// requested twice and the two requests are not the same request.
     ///
-    /// **O(log n), holding the lock only long enough to look up an index.** This
-    /// used to walk `records` under the lock; see [`LogState::by_seq`] for what
-    /// that cost.
+    /// **O(log n), holding the lock only long enough to look up an index** — see
+    /// [`LogState::by_seq`].
     pub fn set_stored_as(&self, seq: u64, path: impl Into<String>) {
         let mut s = self.lock();
         if let Some(&i) = s.by_seq.get(&seq) {
@@ -603,86 +596,82 @@ impl RequestLog {
     }
 
     /// Write the log as newline-delimited JSON to `out`, one object per line.
-///
-/// **§5.5 row 10.** This replaces a `to_ndjson() -> String` that
-/// - built every record into one `String` — ~75-100 MB at 113 610 records, and
-/// - got them by calling [`RequestLog::records`], which **deep-clones every
-///   record while holding the lock**.
-///
-/// Nothing needs a clone here: a record is serialised, written, and forgotten. So
-/// the lock is taken once to build the *ordering* — a `Vec<usize>` of indices,
-/// 0.9 MB at that size rather than 113 610 deep copies — and then once per record
-/// for the few microseconds it takes to serialise one.
-///
-/// The ordering is by `seq`, for the reason [`RequestLog::records`] gives: `seq`
-/// is assigned at reserve time, so a `--jobs 8` capture lands rows in completion
-/// order while the `seq` column claims otherwise.
-pub fn write_ndjson_to<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
-    // One lock for the whole ordering. Sorting under it keeps `records` borrowed
-    // for the comparison instead of re-locking 113 610 times per sort.
-    let mut order: Vec<usize> = {
-        let s = self.lock();
-        let mut order: Vec<usize> = (0..s.records.len()).collect();
-        order.sort_by_key(|&i| s.records[i].seq);
-        order
-    };
-    let n = order.len();
-
-    for i in order.drain(..) {
-        // The lock is held for one record's serialisation and **not** for the
-        // write, so a slow disk cannot stall a fetch that is still logging.
-        let line = {
+    ///
+    /// **Nothing here needs a clone.** A record is serialised, written, and
+    /// forgotten, so the lock is taken once to build the *ordering* — a
+    /// `Vec<usize>` of indices — and then once per record, for the few microseconds
+    /// it takes to serialise one. At 113 610 records that is a 0.9 MB index
+    /// rather than 113 610 deep copies of a ~200 B record, and it is taken on the
+    /// blocking pool rather than a tokio worker.
+    ///
+    /// The ordering is by `seq`, for the reason [`RequestLog::records`] gives:
+    /// `seq` is assigned at reserve time, so a `--jobs 8` capture lands rows in
+    /// completion order while the `seq` column claims otherwise.
+    pub fn write_ndjson_to<W: std::io::Write>(&self, out: &mut W) -> std::io::Result<usize> {
+        // One lock for the whole ordering. Sorting under it keeps `records`
+        // borrowed for the comparison instead of re-locking 113 610 times.
+        let mut order: Vec<usize> = {
             let s = self.lock();
-            let r = &s.records[i];
-            match serde_json::to_string(r) {
-                Ok(line) => line,
-                // A record that cannot serialize would otherwise vanish silently,
-                // and a log with a hole in it is worse than one that says it has
-                // one. `RequestRecord` is all primitives, so this is unreachable;
-                // the line says so rather than being dropped.
-                Err(e) => {
-                    format!("{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}", r.seq)
-                }
-            }
+            let mut order: Vec<usize> = (0..s.records.len()).collect();
+            order.sort_by_key(|&i| s.records[i].seq);
+            order
         };
-        out.write_all(line.as_bytes())?;
-        out.write_all(b"\n")?;
-    }
-    Ok(n)
-}
+        let n = order.len();
 
-/// The log as newline-delimited JSON, one object per line.
-///
-/// **For tests and small logs.** The capture path uses
-/// [`RequestLog::write_ndjson_to`], which does not build the whole document in
-/// memory; this exists because a handful of assertions want to compare a string.
-pub fn to_ndjson(&self) -> String {
-    let mut out = Vec::new();
-    self.write_ndjson_to(&mut out)
-        .expect("writing to a Vec cannot fail");
-    String::from_utf8(out).expect("serde_json emits UTF-8")
-}
-
-/// Write the log to `path`, creating parent directories.
-///
-/// **Buffered, and one record at a time.** §5.5 row 10: this wrote
-/// `std::fs::write(path, whole_string)` — the whole document in memory, in one
-/// syscall, on whatever thread called it.
-///
-/// The `flush` is explicit rather than left to `BufWriter`'s `Drop`, and that is
-/// the whole reason it is here: a full disk surfaces at flush, and `Drop` throws
-/// that error away. Swallowed, the run would report having written a request log
-/// and leave a truncated file where `verify` would later read it.
-pub fn write_ndjson(&self, path: &Path) -> std::io::Result<usize> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
+        for i in order.drain(..) {
+            // The lock is held for one record's serialisation and **not** for the
+            // write, so a slow disk cannot stall a fetch that is still logging.
+            let line = {
+                let s = self.lock();
+                let r = &s.records[i];
+                match serde_json::to_string(r) {
+                    Ok(line) => line,
+                    // A record that cannot serialize would otherwise vanish
+                    // silently, and a log with a hole in it is worse than one that
+                    // says it has one. `RequestRecord` is all primitives, so this
+                    // is unreachable; the line says so rather than being dropped.
+                    Err(e) => {
+                        format!("{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}", r.seq)
+                    }
+                }
+            };
+            out.write_all(line.as_bytes())?;
+            out.write_all(b"\n")?;
+        }
+        Ok(n)
     }
-    let f = std::fs::File::create(path)?;
-    let mut w = std::io::BufWriter::with_capacity(256 * 1024, f);
-    let n = self.write_ndjson_to(&mut w)?;
-    std::io::Write::flush(&mut w)?;
-    Ok(n)
-}
+
+    /// The log as newline-delimited JSON, one object per line.
+    ///
+    /// **For tests and small logs.** The capture path uses
+    /// [`RequestLog::write_ndjson_to`], which does not build the whole document in
+    /// memory; this exists because a handful of assertions want to compare a string.
+    pub fn to_ndjson(&self) -> String {
+        let mut out = Vec::new();
+        self.write_ndjson_to(&mut out)
+            .expect("writing to a Vec cannot fail");
+        String::from_utf8(out).expect("serde_json emits UTF-8")
+    }
+
+    /// Write the log to `path`, creating parent directories.
+    ///
+    /// **Buffered, and one record at a time**, so a 113 610-row log never exists
+    /// whole in memory.
+    ///
+    /// The `flush` is explicit rather than left to `BufWriter`'s `Drop`, and that is
+    /// the whole reason it is here: a full disk surfaces at flush, and `Drop` throws
+    /// that error away. Swallowed, the run would report having written a request log
+    /// and leave a truncated file where `verify` would later read it.
+    pub fn write_ndjson(&self, path: &Path) -> std::io::Result<usize> {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        let f = std::fs::File::create(path)?;
+        let mut w = std::io::BufWriter::with_capacity(256 * 1024, f);
+        let n = self.write_ndjson_to(&mut w)?;
+        std::io::Write::flush(&mut w)?;
+        Ok(n)
+    }
 }
 
 /// A fetched body and the record of how it arrived.
@@ -692,10 +681,10 @@ pub struct Fetched {
     pub body: Vec<u8>,
     /// This request's sequence number, for `set_stored_as`.
     ///
-    /// A `u64` and not a [`RequestRecord`]. The log already owns the record;
-    /// handing a second copy to every caller meant deep-cloning two
-    /// `BTreeMap`s, a `String` URL and up to ~2 KB of response headers for each
-    /// of 113 610 chunks, and then dropping all of it after reading one integer.
+    /// A `u64` and not a [`RequestRecord`]. The log already owns the record, so
+    /// handing a second copy to every caller means deep-cloning two `BTreeMap`s, a
+    /// `String` URL and up to ~2 KB of response headers for each of 113 610 chunks,
+    /// and then dropping all of it after reading one integer.
     pub seq: u64,
     /// The status as received.
     ///
@@ -706,10 +695,9 @@ pub struct Fetched {
 
 /// Where a fetched body is put.
 ///
-/// §6.6.2. This exists so the retry loop, the status check and the request record
-/// are written **once**. The first draft of this change had a second loop for
-/// the file case, which is 30 lines that look identical until a retry policy is
-/// edited in one of them.
+/// This exists so the retry loop, the status check and the request record are
+/// written **once**. A second loop for the file case would be 30 lines that look
+/// identical until a retry policy is edited in one of them.
 pub enum Destination<'a> {
     /// Collected into a `Vec`, for the callers that parse the body: the API
     /// documents, the manifest archives, the probes. Small — the largest is a
@@ -783,10 +771,9 @@ fn body_failure(
 }
 /// Drain a response body into `sink`, refusing to exceed the transport's ceiling.
 ///
-/// **The one place a body is read, for every destination.** §5.5 row 11. There
-/// were four unbounded reads — the buffered path, the file path, `observe`, and
-/// the drain of an *error* body — and a ceiling enforced in three of them would be
-/// a ceiling with a hole in it.
+/// **The one place a body is read, for every destination** — the buffered path,
+/// the file path, `observe`, and the drain of an *error* body. A ceiling enforced
+/// in three of those four would be a ceiling with a hole in it.
 ///
 /// Two checks, because one is not enough:
 ///
@@ -875,8 +862,7 @@ pub struct Observation {
     /// The body, byte-exact.
     pub body: Vec<u8>,
     // No `record` field. An observation's provenance row is in the log, which
-    // owns it; `observe` used to clone the whole thing in order to return a
-    // copy nobody read a field of.
+    // owns it; nothing here reads a field of it.
 }
 
 impl Observation {
@@ -911,8 +897,8 @@ pub const ACCEPT_ENCODING: &str = "identity";
 ///
 /// **One list, two consumers.** [`client_default_headers`] turns this into the
 /// `HeaderMap` the `reqwest` client is built with, so the record and the wire
-/// cannot drift — which is the whole of §6.2, since the defect was two lists
-/// that nobody compared.
+/// cannot drift — the defect this exists to prevent was two lists that nobody
+/// compared.
 fn shared_req_headers(user_agent: &str) -> BTreeMap<String, String> {
     let mut h = BTreeMap::new();
     h.insert("accept".to_string(), ACCEPT.to_string());
@@ -1134,12 +1120,12 @@ impl Fetcher {
         // have already been captured by this point.
         //
         // **But a body over the ceiling is a failure, and the two are different
-        // things.** §5.5 row 11: this was `resp.bytes()`, unbounded, and a hostile
-        // origin answering a *probe* — which is the one request an attacker can
-        // most cheaply provoke — could fill RAM with it. Unreadable means "there
-        // is no body to record"; over the ceiling means "this body exists and is
-        // larger than this tool will hold", and recording an empty shape for that
-        // would put a falsehood in `api/error_shapes.json`.
+        // things.** A probe is the one request an attacker can most cheaply
+        // provoke, so it is exactly where an unbounded read does the most damage.
+        // Unreadable means "there is no body to record"; over the ceiling means
+        // "this body exists and is larger than this tool will hold", and recording
+        // an empty shape for that would put a falsehood in
+        // `api/error_shapes.json`.
         let mut body: Vec<u8> = Vec::new();
         let bytes_in = match drain_capped(
             resp,
@@ -1194,7 +1180,7 @@ impl Fetcher {
         // `run` is total over its destinations: `Memory` always yields the body
         // and `File` never does. This arm is unreachable by construction, and is
         // an `Err` rather than `unreachable!` so that no production path in this
-        // tool can panic (§5.1).
+        // tool can panic.
         let Some(body) = run.body else {
             return Err(ApiError::shape(
                 url,
@@ -1210,8 +1196,8 @@ impl Fetcher {
 
     /// Fetch one URL straight into `out`, never holding the body in memory.
     ///
-    /// §6.6.2. The digests and the byte count come from the write itself, so they
-    /// are the same numbers the buffered path produces over the same bytes — see
+    /// The digests and the byte count come from the write itself, so they are the
+    /// same numbers the buffered path produces over the same bytes — see
     /// `hash::tests::a_hashable_file_reports_the_digests_of_the_bytes_it_stored`.
     ///
     /// **The caller must not rename or read `out` until this returns `Ok`**, and
@@ -1409,14 +1395,14 @@ impl Fetcher {
         // `2xx`, which includes `206` — a `Range` response is a success, not a
         // partial failure.
         if !resp.status().is_success() {
-            // **The body of a failure is counted, not ignored.** §5.5 row 1: this
-            // used to record `bytes_in: 0` and drop the response, so a CDN
-            // `429`/`503` carrying a few KB of XML envelope was paid for on the
-            // wire and reported as free. `bytes_in` is sold in this module's doc
-            // as "the only way to price a manifest without re-downloading it", and
-            // it under-reported *precisely the retried requests that cost the
-            // most* — so a throttled run's cost figures were optimistic by the
-            // amount the throttle cost.
+            // **The body of a failure is counted, not ignored.** A CDN
+            // `429`/`503` carrying a few KB of XML envelope is paid for on the
+            // wire, so recording `bytes_in: 0` reports it as free.
+            // `bytes_in` is sold in this module's doc as "the only way to price a
+            // manifest without re-downloading it", and it must not under-report
+            // *precisely the retried requests that cost the most* — a throttled
+            // run's cost figures are optimistic by exactly the amount the throttle
+            // cost.
             //
             // **Streamed and discarded**, not read into a buffer: the content is
             // useless, only the length is not. Draining also lets the connection
@@ -1424,7 +1410,8 @@ impl Fetcher {
             //
             // A body that fails to read mid-way counts what arrived, like every
             // other count here: reporting `0` for bytes that demonstrably crossed
-            // the network is the defect being fixed.
+            // the network would be a lie in the direction that matters least to
+            // notice.
             let mut resp = resp;
             let mut bytes_in: u64 = 0;
             loop {
@@ -1587,9 +1574,8 @@ impl Fetcher {
 ///
 /// **The keys are already lowercase.** `http::HeaderName` validates and normalises
 /// to lowercase on construction and guarantees `as_str()` returns that form, so
-/// the `to_ascii_lowercase()` this used to call allocated a `String` per header
-/// name and then discarded the distinction it was protecting. The output is
-/// unchanged; only the copy is gone.
+/// normalising again would allocate a `String` per header name and discard the
+/// distinction it was protecting. The output is unchanged; only the copy is gone.
 fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
     h.iter()
         .map(|(k, v)| {
@@ -1621,15 +1607,12 @@ mod tests {
 
     #[test]
     fn the_record_claims_exactly_the_headers_the_client_is_configured_with() {
-        // **§6.2, and the defect in one assertion.** The record used to name
-        // `accept: */*` and `accept-encoding: gzip` while the `reqwest` client was
-        // built with neither — reqwest only sends an `accept-encoding` when its
-        // `gzip` feature is on, and it is not — so every row of
-        // `api/requests.ndjson` made a claim about the request that was false.
-        //
-        // The two are now built from one list, so this cannot drift by editing
-        // one of them. It is asserted rather than assumed because the whole
-        // defect was two lists that nobody compared.
+        // **The defect in one assertion.** A record that names headers the client
+        // was not configured with makes a false claim about its own request, in
+        // the one field a reader would use the log for. Both sides are now built
+        // from one list, so this cannot drift by editing one of them — asserted
+        // rather than assumed, because the whole failure mode was two lists that
+        // nobody compared.
         let ua = "test-agent/1.0";
         let recorded = RequestRecord::default_req_headers(ua, None);
         let configured = client_default_headers(ua).expect("header map");
@@ -1655,7 +1638,7 @@ mod tests {
         // no-op: the CDN would answer compressed and reqwest, unable to
         // decompress, would hand back the compressed bytes — so every manifest
         // digest in the bundle would be a digest of compressed JSON. This is the
-        // half of §6.2 the plan flagged as "be ready to drop".
+        // half of the choice that a "just send gzip" fix would get wrong.
         assert_eq!(
             ACCEPT_ENCODING, "identity",
             "the tool offers no compression, so it must not claim any"
@@ -1966,12 +1949,12 @@ impl std::io::Write for FailsAfter {
 
 /// A disk that fills mid-write must **not** be reported as a successful log.
 ///
-/// §5.5 row 10 traded a whole-document write for a streamed one, which
-/// introduces a hazard the old code did not have: a partially written
-/// `requests.ndjson` is a file that exists and is short. `write_ndjson_to`
-/// propagates the write error instead of returning a count, so the run fails
-/// loudly — and the count it *would* have returned is exactly the number of
-/// records that made it to disk, which is why the error must not be swallowed.
+/// The log is streamed, which introduces a hazard a whole-document write does not
+/// have: a partially written `requests.ndjson` is a file that exists and is
+/// short. `write_ndjson_to` propagates the write error instead of returning a
+/// count, so the run fails loudly — and the count it *would* have returned is
+/// exactly the number of records that made it to disk, which is why the error
+/// must not be swallowed.
 #[test]
 fn a_write_that_fails_mid_stream_is_an_error_not_a_short_log() {
     let log = RequestLog::new();
@@ -2012,13 +1995,12 @@ fn a_write_that_fails_mid_stream_is_an_error_not_a_short_log() {
     assert_eq!(ok.iter().filter(|&&b| b == b'\n').count(), 20);
 }
 
-/// §5.5 row 10's second claim: the write happens **outside** the lock.
+/// The write happens **outside** the lock.
 ///
 /// A byte-for-byte test cannot see this — moving the `write_all` calls inside
 /// the locked scope produces identical output — and it matters because the log
 /// is shared with the fetchers: a slow disk holding the log lock would stall
-/// every in-flight request's bookkeeping, which is the opposite of what this
-/// change is for.
+/// every in-flight request's bookkeeping.
 ///
 /// So it is checked directly. The writer is held inside `write` for 150 ms; if
 /// the lock were held across that window, `try_lock` could not succeed for any
@@ -2079,8 +2061,8 @@ fn the_write_happens_with_the_log_lock_released() {
         assert_eq!(log.bytes_in(), 0);
     }
 
-    /// The §5.5 row 10 gate: `write_ndjson_to` sorts indices rather than sorting
-    /// cloned records, so it has to reproduce `records()`'s ordering **exactly**.
+    /// `write_ndjson_to` sorts indices rather than sorting cloned records, so it
+    /// has to reproduce `records()`'s ordering **exactly**.
     ///
     /// Two properties, and the second is the one a mutation would break:
     ///
@@ -2348,11 +2330,8 @@ fn the_write_happens_with_the_log_lock_released() {
 
     /// The provenance row a fetch logged, for asserting what was **recorded**.
     ///
-    /// `Fetched` used to carry a second deep copy of its own record so tests
-    /// could read `recorded(&f).status` and the rest. That copy is gone — it cost
-    /// ~25 heap allocations per chunk in production to satisfy a test — so the
-    /// assertions read the log instead, which is the thing that actually
-    /// reaches the bundle.
+    /// `Fetched` carries only a `seq`, so the assertions read the log instead —
+    /// which is the thing that actually reaches the bundle.
     ///
     /// Returns the **last** row, because a retried request logs every attempt:
     /// the row carrying the final `attempts` count is the last one.
@@ -2419,9 +2398,9 @@ fn a_poisoned_request_log_still_takes_records() {
     #[tokio::test]
     async fn waiting_for_a_retry_yields_the_runtime_rather_than_blocking_it() {
         // `#[tokio::test]` runs a current-thread runtime: one worker, and
-        // everything on it. `RealSleep` used to be `std::thread::sleep`, so a
-        // retry backoff held that worker for its whole duration — which is what
-        // made `--jobs 64` on a 4-core box stall with every worker asleep.
+        // everything on it. A *synchronous* sleep in the retry backoff would hold
+        // that worker for its whole duration — which is what makes `--jobs 64` on
+        // a 4-core box stall with every worker asleep.
         //
         // The margin is deliberate and wide: blocked, this takes >= 300 ms;
         // yielding, it takes ~30 ms. A timing assertion is only meaningful if
@@ -2650,11 +2629,10 @@ fn a_poisoned_request_log_still_takes_records() {
 
 #[tokio::test]
     async fn a_body_over_the_ceiling_is_refused_rather_than_buffered() {
-        // **§5.5 row 11, the whole point of the ceiling.** The client had
-        // `timeout` and `user_agent` and nothing else, and every body read was
-        // unbounded — so a broken or hostile origin that kept sending filled RAM
-        // until the process died. A timeout does not help: a server streaming a
-        // gigabyte steadily for ten minutes never trips one.
+        // **The whole point of the ceiling.** Without one, a broken or hostile
+        // origin that keeps sending fills RAM until the process dies. A timeout
+        // does not help: a server streaming a gigabyte steadily for ten minutes
+        // never trips one.
         let body = big_body(4096);
         let mock = spawn(vec![(200, leak(&body)), (200, leak(&body))], "");
         let f = fetcher_with(
@@ -2794,15 +2772,15 @@ fn a_poisoned_request_log_still_takes_records() {
 
 #[tokio::test]
     async fn observe_records_a_server_error_once_and_never_retries() {
-    // **§5.5 row 16, the half that can be pinned.** `kind: "probe"` covers two
-    // paths with different retry behaviour: the tag probe goes through `get` and
-    // the retry policy, the negative probes go through `observe`, which sends once
-    // and records `attempts: 1` unconditionally.
+    // `kind: "probe"` covers two paths with different retry behaviour: the tag
+    // probe goes through `get` and the retry policy, the negative probes go
+    // through `observe`, which sends once and records `attempts: 1`
+    // unconditionally.
     //
     // All 8 probe rows in the reference bundle have `attempts = 1`, so a reader
-    // cannot tell the two apart from the log — which is why that row is being
-    // documented rather than split. What *can* be pinned is the asymmetry the
-    // documentation now asserts, and this is it: a `500`, which the retry policy
+    // cannot tell the two apart from the log — which is why that is documented
+    // rather than split into two kinds. What *can* be pinned is the asymmetry the
+    // documentation asserts, and this is it: a `500`, which the retry policy
     // treats as retryable, is still recorded once by `observe`.
     let mock = spawn(vec![(503, b"<Error><Code>Busy</Code></Error>"), (200, b"unused")], "");
     let f = fetcher(3, Arc::new(RecordingSleep::default()));
@@ -2827,11 +2805,9 @@ fn a_poisoned_request_log_still_takes_records() {
 
 #[tokio::test]
     async fn a_failed_request_counts_the_body_it_threw_away() {
-        // **§5.5 row 1.** `bytes_in` was recorded as `0` for every non-2xx and the
-        // response was dropped without its body being read. So a `429` carrying a
-        // few KB of XML envelope was transferred and reported as free — and the
-        // requests it under-reported are the retried ones, which is to say the
-        // expensive ones.
+        // `bytes_in` must price every request, not only the successful ones: a
+        // `429` carrying a few KB of XML envelope is transferred, and the requests
+        // it would under-report are the retried ones — the expensive ones.
         let envelope = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
                          <Code>TooManyRequests</Code>\n  <Message>Slow down.</Message>\n\
                          </Error>\n";
@@ -2899,11 +2875,10 @@ fn a_poisoned_request_log_still_takes_records() {
 
     #[tokio::test]
     async fn a_streamed_fetch_writes_the_body_and_reports_the_digests_of_those_bytes() {
-        // **§6.6.2's gate, at the layer the change touches.** The buffered path is
-        // the reference: this asserts the streamed path produced the same bytes on
-        // disk and the same digests and the same `bytes_in`, so nothing
-        // downstream — `chunks/index.json`'s md5, A6's four checks, the size in
-        // `MANIFEST.json` — can tell the two apart.
+        // The buffered path is the reference: this asserts the streamed path
+        // produced the same bytes on disk and the same digests and the same
+        // `bytes_in`, so nothing downstream — `chunks/index.json`'s md5, A6's four
+        // checks, the size in `MANIFEST.json` — can tell the two apart.
         let body = streamable_body();
         // Two mocks, because the server answers exactly as many requests as it
         // was given answers and this test makes two.

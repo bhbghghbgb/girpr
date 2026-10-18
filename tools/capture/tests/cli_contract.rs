@@ -384,7 +384,7 @@ fn rust_log_overrides_the_flag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ------------------------------------------------ M9: the offline three's codes
+// ------------------------------------------ the offline three's exit codes
 //
 // `verify`, `materialize` and `list` are checked here for their exit codes
 // against paths that are *wrong*, because a bundle that is right is a fixture's

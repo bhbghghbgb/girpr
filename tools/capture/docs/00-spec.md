@@ -1,12 +1,11 @@
 # `gircap` — live-artifact capture for `girpr` testing
 
-**Status:** implemented. The crate is complete through M13 and is the tool this
-document specifies; the milestones in [`02-plan.md`](02-plan.md) have all landed.
-What remains here is specification, not a to-do list — where this document and the
-code disagree, the code is right and this document is a bug.
 **Scope:** `tools/capture` only. This document and its siblings describe *this*
 tool; they say nothing about `girpr`'s behaviour beyond what is needed to know
 what a correct artifact looks like.
+**Status:** implemented. What follows is specification, not a to-do list — where
+this document and the code disagree, the code is right and this document is a
+bug.
 
 ---
 
@@ -54,9 +53,9 @@ no exit-code contract, no code."*
 
 ## 3. Live API surface used
 
-All of the following were **measured** against `hk4e_global` on 2026-10-14.
-Anything in this section marked *(measured)* is an observation, not an
-assumption, and `gircap` records it in the artifact as evidence.
+All of the following were **measured** against `hk4e_global`. Anything in this
+section marked *(measured)* is an observation, not an assumption, and `gircap`
+records it in the artifact as evidence.
 
 ### 3.1 HoYoPlay (JSON, cheap — always captured verbatim)
 
@@ -87,7 +86,7 @@ manifest: {manifest_download.url_prefix}/{manifest.id}
 chunk:    {chunk_download.url_prefix}/{chunk.id}
 ```
 
-### 3.3a The two route families disagree about failure *(measured, 2026-10-16)*
+### 3.3a The two route families disagree about failure *(measured)*
 
 This is recorded rather than assumed because both projects' retry policies are
 written against it, and because a capture that never sees a failure cannot
@@ -108,11 +107,12 @@ loop.
 
 `gircap` records all seven shapes in **`api/error_shapes.json`** on every capture,
 with the volatile fields named (`RequestId`, `HostId`, `Key`, and the body length
-that follows from `Key`) and `retryable: false` on each — so the policy is
-readable from the artifact and not only from the fetcher. See
+that follows from `Key`), an explicit `error` flag, and a `retryable` flag
+**derived from the tool's own retry policy** — so the policy is readable from the
+artifact and not only from the fetcher. See
 [`01-artifact-schema.md` §5a](01-artifact-schema.md).
 
-### 3.4 Version pair *(measured, 2026-10-14)*
+### 3.4 Version pair *(measured)*
 
 ```
 getGameBranches → main.tag       = "7.1.0"
@@ -131,12 +131,13 @@ getGameBranches → main.tag       = "7.1.0"
 
 `diff_tags` is a **patch-support** list, not a retention list. A full old-version
 file is therefore reconstructible **today** without the legacy zip path, so the
-legacy API is irrelevant to the capture. `getGamePackages` is captured anyway, purely as dated evidence:
+legacy API is irrelevant to the capture. `getGamePackages` is captured anyway,
+purely as dated evidence:
 
 ```
 main.major.version = "5.5.0"   main.major.game_pkgs = 8   patches = ["5.4.0","5.3.0"]
 ```
-— frozen at 2025-03-14, ~2 major versions stale.
+— frozen in 2025, ~2 major versions stale.
 
 **Pair resolution:** `--new-tag` defaults to `main.tag`; `--old-tag` defaults to
 `diff_tags[0]` ("current minus one"). Any tag the API serves is accepted; an
@@ -157,6 +158,11 @@ message SophonChunk {
 }
 ```
 
+The four sizes are `i64` **straight off the wire** and are treated as untrusted
+everywhere: negative values are clamped to zero and arithmetic on them is
+checked, so a manifest declaring an absurd size becomes a recorded finding rather
+than an abort.
+
 ### 3.6 Manifest structure *(measured, 7.0.0 and 7.1.0)*
 
 These hold for both `game` manifests and are recorded as assertions, not
@@ -166,6 +172,10 @@ assumptions — if a future version violates one, the capture still works and
 - 0 `is_folder` entries, 0 empty paths, 0 backslash paths, 0 duplicate paths, 0 non-ASCII paths
 - chunk offsets strictly ascending, gapless from 0, `Σ uncompressed_size == size` for every file
 - largest chunk: **3 689 476 B** compressed (bounds the main tool's whole-chunk buffering)
+
+A violation of any of these is **counted, never fatal**: the capture still
+happens, the property lands in `meta.json → decoded.structure`, and A11 goes red
+on the specific file that broke.
 
 ### 3.7 Hashes and containers *(measured)*
 
@@ -203,18 +213,19 @@ count; there are no per-variant flags.
 | class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
 | `identical` | `old.md5 == new.md5` | skip: size+MD5 match, 0 bytes | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | single download into empty `_tmp` | `…/AssetBundles/data_revision` | 42 B |
+| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | single download into empty `_tmp` | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
 | `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | N sequential downloads, no reuse | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `partial_same_offset` | `0 < reused < nchunks`, `moved == 0`, `size equal` | S2 reuse happy path | `…/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `partial_moved_offset` | `0 < reused < nchunks`, `moved > 0` | S2 reuse where the source offset ≠ target offset | `…/blocks/00/09801749.blk` | 22.7 MB |
-| `partial_size_changed` | `0 < reused < nchunks`, `moved == 0`, `size differs` | oversize-`_tmp` truncate + length gate | `…/blocks/00/00981562.blk` | 21.7 MB |
+| `partial_same_offset` | `0 < reused < nchunks`, `moved == 0`, `size equal` | S2 reuse happy path | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `partial_moved_offset` | `0 < reused < nchunks`, `moved > 0` | S2 reuse where the source offset ≠ target offset | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `partial_size_changed` | `0 < reused < nchunks`, `moved == 0`, `size differs` | oversize-`_tmp` truncate + length gate | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
 | `added` | path only in the new manifest | "missing local file" branch | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
-| `removed` | path only in the old manifest | not planned; `--purge-after` target | `…/blocks/00/00664172.blk` | 1.73 MB |
+| `removed` | path only in the old manifest | not planned; `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
 | `full_reuse_reordered` | `reused == nchunks`, `md5 differs` | every chunk reused, layout rearranged | **none in this pair** — recorded `unavailable` | — |
 
-*(measured)* population over the 2 662 common paths: `identical` 1 592,
-`partial_same_offset` 29, `partial_moved_offset` 430, `partial_size_changed`
-447, `zero_reuse_single` 120, `zero_reuse_multi` 491, `added` 82, `removed` 11.
+*(measured)* population over the `game` field's 2 662 common paths: `identical`
+1 592, `partial_same_offset` 29, `partial_moved_offset` 430,
+`partial_size_changed` 447, `zero_reuse_single` 120, `zero_reuse_multi` 491,
+`added` 82, `removed` 11.
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
@@ -241,6 +252,12 @@ Every captured file is tagged with **all** classes it satisfies, so
 `candidates.json` + `MANIFEST.json` always answer "which variant does this file
 cover, and why".
 
+`--require-class` is validated and parsed **before any socket opens**: a typo is
+a usage error at `exit 1` rather than a failure discovered after two manifests,
+a diff and a full selection have been paid for. `--per-class` is floored to `1`
+in the resolved plan rather than at each consumer, and `--jobs`, `--retries` and
+`--timeout` are range-checked in the same place.
+
 ### 4.1a What `api/` carries, including the failures
 
 `api/` holds the six response bodies **byte-exact**, the request log, and two
@@ -252,13 +269,13 @@ words:
 | `tag_probe.json` | which tags the API will actually serve |
 | `error_shapes.json` | what the API does with a request it will not serve |
 
-The second exists because **a bundle otherwise contains no not-found evidence
-at all** — every request a capture makes succeeds, so a recorded bundle says
-nothing about what a missing object looks like. A tool that replays a bundle
-would have to invent that, and its "the API 404s things" would be unfounded.
+The second exists because **a bundle otherwise contains no not-found evidence at
+all** — every request a capture makes succeeds, so a recorded bundle says nothing
+about what a missing object looks like. A tool that replays a bundle would have
+to invent that, and its "the API 404s things" would be unfounded.
 
 The two route families disagree about failure, and the document records both
-(measured 2026-10-16, `hk4e_global`):
+(measured against `hk4e_global`):
 
 | family | missing object | measured answer |
 |---|---|---|
@@ -273,9 +290,7 @@ shape of the rows around it.
 **A consumer must not synthesize its own failure shapes.** Replay `status`,
 `content-type` and `body` from `api/error_shapes.json`, substituting only the
 fields that entry marks volatile (`RequestId`, `HostId`, `Key` and the body
-length that follows from `Key`; the JSON envelopes have none). A bundle
-predating the file has no such document — skip those assertions and say so
-rather than inventing the behaviour.
+length that follows from `Key`; the JSON envelopes have none).
 
 ### 4.2 Chunk retention — three named sets
 
@@ -299,7 +314,17 @@ Blobs are stored **content-addressed by chunk id**, once, at
 `chunks/blobs/<chunk-id>.zst`, with `chunks/index.json` mapping every
 `(tag, file, chunk)` triple to its blob, its URL, and its membership in each of
 the three sets. A chunk reused by two captured files — or identical across the
-two builds — is stored once and referenced twice.
+two builds — is stored once and referenced twice. Each blob also records every
+`(tag, build_id)` that declares it, newest first, so the old CDN is only asked if
+the new one has gone; two builds declaring one id with *different* content is
+recorded as a conflict rather than silently resolved.
+
+**A blob that was fetched is kept even when it will not decode.** The store
+streams every fetched body to disk, digests it on the way past and records the
+row. If the bytes are not a zstd frame the row carries `decode_error` with the
+real reason and the two decode-dependent `verified` keys false, instead of being
+discarded. A truncated or mis-served response is the evidence this tool exists
+to keep.
 
 Corollaries that must hold and are asserted:
 
@@ -348,6 +373,10 @@ deliberate widening of the candidate corpus — a second audio language costs
 backstop for the case where the `game`-field pool yields no candidate for a
 required class in a given version pair.
 
+The prelude is written unconditionally, including under `--no-chunk-blobs`:
+`config.ini` and the audio scan file come from `getGameConfigs` and `--audio`,
+not from a chunk, so a metadata-only bundle still has a `game/` for A13 to read.
+
 ### 4.4 `expected/` — ground truth
 
 `expected/<same rel path>` holding the **new**-version bytes, assembled by
@@ -377,7 +406,8 @@ puts `HoYoChannel.dll` at 1.83 MB rather than its 274 KB patch size.
 Tie-break order: `total_cost`, then `matching_field` asc (`game` before the
 audio fields), then `moved` desc, then `reused` desc, then `path` asc. Fully
 deterministic; re-running on the same version pair and `--audio` picks the same
-files.
+files. One comparator owns that chain, because a tie-break that drifts between
+two spellings is a silent change of which file is admitted.
 
 ### Budget
 
@@ -385,14 +415,14 @@ files.
 files. Admission is **smallest-first**: files are sorted by `total_cost` asc and
 taken until the budget is exhausted; the rest are recorded as
 `status="over_budget"`. A single file that cannot fit is reported, not silently
-swallowed — and the run still exits `0` with `selfcheck` green, because a
-deliberate exclusion is not a failure.
+swallowed — and because the run's own assertions decide the exit code, a
+deliberate exclusion is a recorded status, not a failure.
 
 ---
 
 ## 6. Invariants asserted in `verify/selfcheck.json`
 
-Each row is `{assertion, subject, expected, actual, ok}`.
+Each row is `{id, assertion, subject, expected, actual, ok}`.
 
 | # | assertion |
 |---|---|
@@ -413,70 +443,64 @@ Each row is `{assertion, subject, expected, actual, ok}`.
 | A15 | `diff/` counts equal the recomputed set differences |
 | A16 | `checksums.json` covers every file written under the artifact root, and re-hashing matches |
 | A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` - never absent |
+| A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
+| A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
+| A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
 
-**`gircap capture` exits non-zero if any of the assertions it records fails.**
+There are **twenty** ids: seventeen from this spec (A1–A17), A19 from a capture,
+and A18 and A20 from `verify` only.
 
-Precisely: `capture` records **A1-A17 and A19** — twenty rows minus the two that
-are `verify`-only, which are A18 and A20. It exits `3` when any *recorded* row
-failed. A row that was **skipped** rather than failed is a different verdict and
-exits `0`: a `--no-chunk-blobs` run cannot prove A6-A12 or A19, records them as
-skipped, and reports `result: "incomplete"` in its `SUMMARY` line rather than
-claiming a pass. A caller that cares must read `result`, not just the exit code.
+**Which ids a `capture` records, and which fail the run.** `capture` records
+**A1–A17 and A19** — A18 and A20 are statements about the bundle rather than
+about the run, so no capture records them and a reader who sees either id in a
+capture's `selfcheck.json` has been handed a `verify` report. **Every** recorded
+id is fatal: a failure in any of them ends the run with exit `3`, because a
+failure in A15–A17 (the documents this tool just wrote) means the bundle is
+internally inconsistent, which is as untrustworthy as a wrong digest. A row that
+was **skipped** rather than failed is a different verdict and exits `0` with
+`result: "incomplete"`: a `--no-chunk-blobs` run cannot prove A6–A12 or A19,
+records those ids as skipped, and says so rather than claiming a pass. A caller
+that cares must read `result`, not just the exit code.
 
 ### A18 — and what `verify` does *not* re-derive
 
 None of the seventeen asks whether `game/` is what the retained blobs say it is.
-That is the bundle's central claim and the reason `materialize` exists, so it gets
-an id of its own:
-
-| A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
-
-A18 is a `verify`-only row. The capture cannot record it, because it is a
-statement about the bundle rather than about the run, so it never appears in a
-capture's `selfcheck.json`.
+That is the bundle's central claim and the reason `materialize` exists, so it
+gets an id of its own. It cannot be recorded by a capture, because it is a
+statement about the bundle rather than about the run.
 
 ### A19 — the converse of A14
 
 A14 asks one direction: is `game/` free of paths the tool under test would build
 a plan against? It cannot see the other failure — a capture admitted for
 `partial_same_offset` whose two variant files came out byte-identical. That
-bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared
-MD5), and be useless, because the fixture would hold no evidence of the patch it
-was captured for.
+bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared MD5),
+and be useless, because the fixture would hold no evidence of the patch it was
+captured for.
 
-| A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
-
-A19 is found by comparing the two trees, which nothing else in the suite does.
-It skips one-sided captures (`added`, `removed`) — their file is absent from one
-tree *by construction*, which is the point of the class.
+A19 is found by comparing the two trees. It skips one-sided captures (`added`,
+`removed`) — their file is absent from one tree *by construction*, which is the
+point of the class — and it is skipped under `--no-chunk-blobs` for the same
+reason A6 is: with no assembled sides the check would pass vacuously, and a green
+row about nothing is the exact failure mode this crate keeps having to fix.
 
 ### A20 — a patchmap must add up to itself
 
-| A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
+It re-sums `compressed_size` over the plan's `FETCH` entries, recounts
+`reuse`/`fetch`/`moved`, and checks that `expectations.download_bytes` is that
+same figure. `verify`-only, like A18. It exists because a patchmap can carry
+`"plan": null`, `"totals": null` and `"expectations": { … "download_bytes": 0 }`
+for an `added` capture and still be green — nothing else looks. §13 of the schema
+records the rule that prevents it; A20 is what stops the rule being quietly
+dropped.
 
-`verify`-only, like A18: it is a statement about the bundle, so no capture records
-it. It re-sums `compressed_size` over the plan's `FETCH` entries, recounts
-`reuse`/`fetch`/`moved`, and checks that `expectations.download_bytes` is that same
-figure.
+### What `verify` re-derives, and what it does not
 
-A20 exists because a patchmap can carry `"plan": null`, `"totals": null` and
-`"expectations": { … "download_bytes": 0 }` for an `added` capture and still be
-green — nothing else looks. The one-chunk file that case describes costs 114 357 B
-to repair. §1 of the artifact schema records the rule that prevents it; A20 is what
-stops the rule being quietly dropped.
-
-It is re-derivable offline like the other seven because it reads only
-`patchmaps/*.json`, which is why it belongs in the derived set rather than the
-covered-by-recording one.
-
-So there are **twenty** ids: seventeen from this spec, A18 and A20 from `verify`
-only, A19 from a capture.
-
-`gircap verify` re-derives **nine** of them — A6, A7, A8, A11, A13, A16, A17,
-A18 and A20. It does not re-derive A1-A5, A9, A10, A12, A14 or A15: those
-are statements about the API bodies, the manifests and the diff, and re-running
-them inside the bundle would be re-running the capture's own algorithm against
-the capture's own output, which can only ever agree.
+`gircap verify` re-derives **nine** of the twenty — A6, A7, A8, A11, A13, A16,
+A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15 or A19:
+those are statements about the API bodies, the manifests and the diff, and
+re-running them inside the bundle would be re-running the capture's own algorithm
+against the capture's own output, which can only ever agree.
 
 The nine are split in two, and `SUMMARY` names both as `checks_derived=`:
 
@@ -502,11 +526,11 @@ the finding that the bundle cannot be materialized.
 An empty `--require-class` is **not** "every required class". The implementation
 requires nothing unless a class is named, so a capture whose matrix leaves a
 class `unavailable` still exits `0`; the unavailable row is the finding, not the
-exit code. This reverses the design this document originally described, and the
-reversal is deliberate and recorded in [`02-plan.md`](02-plan.md): a bundle that
-is honest about a class it cannot cover is a useful fixture, and failing the
-whole capture over it would make the tool unusable on a real version pair. A
-caller that needs the stronger rule asks for it:
+exit code. That is a deliberate reversal of "all required classes", and the live
+pair is why: 7.0.0 → 7.1.0 has no `full_reuse_reordered` file, so requiring all
+nine by default would make *every* run of it exit `4`. `unavailable` is a fact
+about the manifests; `over_budget` is a fact about this run's flags; only a class
+the caller named is fatal. A caller that needs the stronger rule asks for it:
 
 ```
 gircap capture … --require-class identical --require-class added
@@ -533,7 +557,7 @@ gircap capture
   [--manifest-detail full|paths-only]         (default full)
   [--gzip-threshold <bytes>]                  (default 1048576)
   [--probe-tags <tag>…]                       (default: diff_tags ∪ {old,new}; JSON only)
-  [--no-chunk-blobs]                          (metadata only; breaks A7–A10 by design)
+  [--no-chunk-blobs]                          (metadata only; breaks A6-A12 by design)
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file P]
   [--output text|json]
 
@@ -548,30 +572,37 @@ gircap list        --root <DIR>               # index every capture under a root
 |---|---|
 | `0` | the run completed. **Read `result`**: `pass` means every asserted invariant is green, `incomplete` means rows were *skipped* (a `--no-chunk-blobs` bundle) rather than proven |
 | `1` | usage / configuration error |
-| `2` | network or API failure (incl. an unservable `--old-tag`) |
+| `2` | network or API failure (incl. an unservable `--old-tag`, and a writer `io::Error`) |
 | `3` | an assertion failed — the artifact is **not** trustworthy |
 | `4` | a `--require-class` could not be satisfied |
 
-Exit `0` with `result: incomplete` is not a pass. A `--no-chunk-blobs` capture
-provably cannot establish A6-A12 or A19, so it exits `0` and records them as
-skipped; a harness that treats "exited 0" as "every claim in this bundle is
-proven" will be wrong about exactly the bundles that prove least.
+Codes `3` and `4` are the two that leave a tree behind, and they are the two the
+failure summary marks `artifact_trustworthy=false`. Exit `0` with `result:
+incomplete` is not a pass: a `--no-chunk-blobs` capture provably cannot establish
+A6–A12 or A19, so it exits `0` and records them as skipped; a harness that treats
+"exited 0" as "every claim in this bundle is proven" will be wrong about exactly
+the bundles that prove least.
 
 ### Output
 
-stdout is a pure data plane: **records, one per line, summary last.** With
-`--output text` a record is `LABEL k=v k=v …`; with `--output json` it is one
+stdout is a pure data plane: **records, one per line, the terminal one last.**
+With `--output text` a record is `LABEL k=v k=v …`; with `--output json` it is one
 object per line, NDJSON, no enclosing array. All narration goes to stderr via
 `tracing` and, with `--log-file`, to a JSON-lines log. The only `println!` in the
 crate is the record emitter.
 
-Every run ends with exactly one `SUMMARY` — the terminal record, carrying the
-result and the exit code. A command may emit records before it: `list` writes
-one `BUNDLE` per bundle it found and then the `SUMMARY`, so a machine can read
-every per-bundle fact (path, tags, capture id, patchmap count, blob count,
-`selfcheck`, `complete`) from stdout instead of parsing stderr narration, and
-can read the stream until the summary rather than expecting one line and
-parsing it.
+**The last record is always the terminal one.** `list` writes one `bundle` record
+per bundle it found and then its terminal record, so a machine can read every
+per-bundle fact (path, tags, capture id, patchmap count, blob count,
+`selfcheck`, `complete`) from stdout instead of parsing stderr narration, and can
+read the stream until the end rather than expecting one line and parsing it.
+
+A **failing** `capture` emits **two** records: first the run's own summary —
+carrying the numbers it had already measured, `stage=`, and `exit_code=0` — and
+then the failure summary, carrying `result: "error"`, `exit_code=3` and
+`artifact_trustworthy=false`. Both are told apart by shape. A harness that reads
+the *first* terminal-looking line of a failing run will read `exit_code=0` off a
+run that exited `3`, so it must read the **last** record.
 
 ```
 $ gircap list --root artifacts --output json
@@ -584,8 +615,9 @@ $ gircap list --root artifacts --output json
 mid-stream. Its value is the record's command for the terminal record
 (`capture` / `verify` / `list` / `materialize`) and the label lowercased
 otherwise (`BUNDLE` → `bundle`) — a `BUNDLE` record saying `event: "list"` would
-tell a reader nothing the label does not. Within one object the keys are
-**names**: read them by name, never by position.
+tell a reader nothing the label does not. Within one object the keys are **names**:
+read them by name, never by position. Values are percent-escaped and the field
+separator is a space, so a harness can `split(' ')` without quoting rules.
 
 A directory under the root that does not open as a bundle is **not** a record.
 It stays stderr-only: there is no bundle to describe, so a record would have to
@@ -603,23 +635,12 @@ The bundle is built to be handed to the main tool.
 | rebuild old/new files offline | `gircap materialize` | ✅ works |
 | **run `girpr --game-path <copy-of-game>` and check it patches to the new version** | **`girpr` path inclusion/exclusion** | ✅ **shipped** — `girpr --include <GLOB>` |
 
-> **Update: the blocker is resolved, and the check has been run.** The path
-> include/exclude asked for below shipped as `girpr --include` / `--exclude`,
-> alongside `--max-files` / `--max-download-bytes` / `--max-write-bytes` /
-> `--max-delete-bytes` (exit `5` on a ceiling, never trimming the work list),
-> `--print-plan`, `--plan-out`, `--purge-only` and `--fail-fast`. `girpr`'s
-> README is the authority on what the flags guarantee — in particular that a
-> filtered-out path is treated as nonexistent and so is invisible to the
-> files-cleanup as well as to the repair, and that a scoped run does not bump
-> `config.ini`.
->
-> §8.1's body, §8.1.1 and §8.1.2 were **revised by the capture side** once the
-> flag existed, because the procedure was `gircap`'s to own and the reason it gave
-> for avoiding `--purge-after` had become false. All three were then run: every
-> capture repaired against a scratch copy, every figure matching the patchmap to
-> the byte, and the results are in §8.1.1.
+`girpr`'s README is the authority on what its flags guarantee — in particular
+that a filtered-out path is treated as nonexistent and so is invisible to the
+files-cleanup as well as to the repair, and that a scoped run does not bump
+`config.ini`.
 
-### 8.1 Why the scope was needed, and what it changed
+### 8.1 Why the scope is needed, and what it changed
 
 `game/` holds a handful of files. Run the main tool against it unscoped and the
 main tool does what it is specified to do: build the plan from the **whole live
@@ -642,22 +663,22 @@ and `SUMMARY download_bytes` can be compared against each capture's
 
 **`gircap` does not depend on `girpr`.** It does not invoke it, does not read
 its flags, and does not shim them; §2's independence rule holds and the grep over
-`tools/capture/src/` returns doc comments only. The end-to-end check is a manual
-step, run by hand against a scratch copy, for the reason §8.1.2 gives.
+`tools/capture/src/` returns doc comments only. The end-to-end check therefore
+lives on the `girpr` side (`girpr`'s `tests/artifact_bridge.rs`), is `#[ignore]`d
+because it needs a bundle and takes minutes, and is run by hand.
 
 ### 8.1.1 The procedure, and the numbers it must produce
 
 Recorded so that whoever runs it does not have to reconstruct it, and so that a
-result can be checked rather than believed. **This is the procedure that was run
-against this bundle, and the results below are transcribed from that run, not from
-the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
+result can be checked rather than believed. Every figure below is checked against
+the bundle's **own** patchmap — nothing here is a constant to hard-code.
 
 1. **Copy `game/` to scratch.** `girpr` writes into the game directory, so point
    `--game-path` at the copy and never at the bundle: that is what keeps a
    cleanup flag from turning into a way to destroy the evidence. Run every capture
    against the same copy — each touches exactly one path, so the runs accumulate
    and the reuse map stays anchored to the old version. Afterwards
-   `gircap verify --artifact <bundle>` must still exit `0`; it did, 90/90.
+   `gircap verify --artifact <bundle>` must still exit `0`.
 
 2. **Pre-flight for free, before spending anything.** `--print-plan` does not
    repair, purge or bump, and it is not an offline mode — it still fetches the
@@ -667,10 +688,9 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    PLAN files=1 est_download_bytes=274426 purge_files=0 purge_bytes=0 scoped=1
    ```
 
-   `est_download_bytes` is **`totals.download_bytes`** — 274 426 is exactly the
-   `partial_same_offset` figure in this bundle's patchmap. `files=1` proves the
-   glob selected the intended path and nothing else, and `purge_files=0` is the
-   scope holding over the cleanup.
+   `est_download_bytes` is **`totals.download_bytes`**. `files=1` proves the glob
+   selected the intended path and nothing else, and `purge_files=0` is the scope
+   holding over the cleanup.
 
    `--check-only` is the other free check, and it **is expected to report
    damage**: under `--include <a capture path>` the run verifies only that one
@@ -714,14 +734,12 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    answer: it is the only one that sees every request, including any that no
    client-side log line describes.
 
-   The procedure below reads assertion 3 out of `<exe-dir>/logs/girpr_<ts>.log`
-   at `--log-level trace` instead, and that is the fallback for a reader with no
-   shim. Its own caveat is the reason the server log is better: **a reused chunk
-   is logged too**, as `reuse slice md5 ok -> copy chunk=<id>`, so a naive
-   substring search for the id reports a violation on a perfectly correct reuse —
-   which is how a first attempt at this check failed, on 19 chunks that were never
-   downloaded. Match on the *download* record, never on the bare id:
-   `chunk downloaded chunk=<id>` and
+   The procedure reads assertion 3 out of `<exe-dir>/logs/girpr_<ts>.log` at
+   `--log-level trace` as the fallback for a reader with no shim. Its own caveat
+   is the reason the server log is better: **a reused chunk is logged too**, as
+   `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the id
+   reports a violation on a perfectly correct reuse. Match on the *download*
+   record, never on the bare id: `chunk downloaded chunk=<id>` and
    `no local reuse candidate -> download chunk=<id>`.
 
    `local_manifest=ok` is assertion 4's teeth. Without it a run whose local
@@ -738,26 +756,6 @@ the docs.** Against `artifacts/hk4e_global/7.0.0__7.1.0/20261015T092615Z`.
    returns `Keep` for anything not visible, so a scoped cleanup cannot reach the
    rest of the fixture — but `purge_files=0` in the `PLAN` line above is the
    direct evidence that the cleanup had nothing to do.
-
-**Result, all eight, exit `0`:**
-
-| capture | `download_bytes` | expected | md5 | `must_not_fetch` |
-|---|---|---|---|---|
-| `identical` | 0 | 0 | ok | 1 chunk reused, 0 downloaded |
-| `zero_reuse_single` | 21 | 21 | ok | — |
-| `zero_reuse_multi` | 336 852 | 336 852 | ok | — |
-| `partial_same_offset` | 274 426 | 274 426 | ok | 1 chunk reused, 0 downloaded |
-| `partial_moved_offset` | 1 564 894 | 1 564 894 | ok | 8 chunks reused, 0 downloaded |
-| `partial_size_changed` | 197 192 | 197 192 | ok | 9 chunks reused, 0 downloaded |
-| `added` | 114 357 | 114 357 | ok | — |
-| `removed` | 0 | 0 | *(gone)* | — |
-
-**2 487 742 B spent in total**, which is the sum of the patchmaps' figures to the
-byte. 19 reused chunks across the four captures that declare them, none of them
-downloaded. Only the eight captures' own paths changed on the scratch copy — the
-`added` file appeared, the `removed` file disappeared, and the other seven were
-modified in place — so the scope held across all eight runs. The bundle itself
-was never a working tree and still verifies 90/90.
 
 ### 8.1.2 `removed` needs a different run, and a different assertion
 
@@ -818,7 +816,8 @@ Three details worth knowing rather than rediscovering:
 - **The path is `/`-separated and case-insensitive**, like every other glob, and
   `*` also crosses `/` — which is why step 3 passes `--max-files 1`.
 
-Expected per-capture `download_bytes` for that bundle:
+Expected per-capture figures, for the reference bundle. Compare each against the
+artifact's own patchmap rather than against this table:
 
 | capture | class | `download_bytes` | reuse / fetch / moved | `must_not_fetch` |
 |---|---|---|---|---|
@@ -830,6 +829,13 @@ Expected per-capture `download_bytes` for that bundle:
 | `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
+
+All eight exit `0`. **2 487 742 B in total**, which is the sum of the patchmaps'
+figures to the byte. 19 reused chunks across the four captures that declare them,
+none of them downloaded. Only the eight captures' own paths changed on the
+scratch copy — the `added` file appeared, the `removed` file disappeared, and the
+other seven were modified in place — so the scope held across all eight runs. The
+bundle itself was never a working tree and still verifies.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -844,7 +850,7 @@ the rest, so read them with §13.1 of the schema:
   `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
 The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
-**2 487 742 B**, which is exactly what the eight runs spent.
+**2 487 742 B**.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 
@@ -865,12 +871,13 @@ The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
 
 | decision | value | where |
 |---|---|---|
-| workspace membership | **workspace member** (`members = [".", "tools/sync", "tools/capture"]`), matching `girsync` | plan M0 |
-| artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and regenerable | plan M0 |
+| workspace membership | **workspace member** (`members = [".", "tools/sync", "tools/capture"]`), matching `girsync` | [`02-plan.md`](02-plan.md) §0 |
+| artifact root | **`artifacts/` in the repo, gitignored** — bundles are large and regenerable | [`02-plan.md`](02-plan.md) §0 |
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| commit discipline | **one commit per milestone, no milestone lands uncommitted** | plan §3 |
+| `schema_version` | **stays `1`** unless the bundle's byte layout changes incompatibly | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---
 

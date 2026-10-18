@@ -759,12 +759,10 @@ mod tests {
 
     #[test]
     fn skipped_were_declared_not_asserted() {
-        // **The check §6.5 asks for.** `SKIPPED_WITHOUT_CHUNK_BLOBS` is what a
-        // `--no-chunk-blobs` run *records*; `Selfcheck::skipped()` is what the
-        // document *derives* from the rows. They were two sources of truth for
-        // one fact — a `vec![]` at the call site and a derived method beside it
-        // — so a change to `WORDING` would have moved what the document said
-        // without moving what the run recorded.
+        // `SKIPPED_WITHOUT_CHUNK_BLOBS` is what a `--no-chunk-blobs` run
+        // *records*; `Selfcheck::skipped()` is what the document *derives* from the
+        // rows. Two sources of truth for one fact would mean a change to `WORDING`
+        // moving what the document says without moving what the run records.
         //
         // Both directions, because either alone passes on a one-sided change: a
         // constant that gained an id the rows still assert, and a `WORDING` that

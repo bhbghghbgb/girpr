@@ -97,14 +97,12 @@ pub fn write(
     //    files[].encoding` says which one is on disk.
     if detail == ManifestDetail::Full {
         let full = FullDecode::from_captured(captured);
-        // **Measured, then written.** §6.4 removed the ~27 MB `String` this used
-        // to hold: the body was serialised into memory, measured, compressed into
-        // a second buffer, and only then written. Two things needed the length —
-        // the `--gzip-threshold` rule and `files[].uncompressed_bytes` — and the
+        // **Measured, then written.** Two things need the length — the
+        // `--gzip-threshold` rule and `files[].uncompressed_bytes` — and the
         // file's *name* depends on the answer, so the length has to exist before
-        // the write starts. Hence the counting pass: a second walk over the
-        // decode that allocates nothing, in exchange for ~34 MB of peak RSS that
-        // was alive for both manifests and every audio manifest in turn.
+        // the write starts. Hence the counting pass: a second walk over the decode
+        // that allocates nothing, in exchange for not holding a ~27 MB `String`
+        // plus its ~7 MB compressed copy alive at once for every manifest.
         let uncompressed_bytes =
             crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
         let gzipped = hash::should_gzip(uncompressed_bytes, gzip_threshold);
@@ -265,15 +263,6 @@ pub fn tag_dir(root: &Path, tag: &str) -> PathBuf {
     root.join(dir(tag))
 }
 
-/// **Removed:** `meta_json`.
-///
-/// It had no callers — not the crate, not the tests, not the integration tests
-/// — and its entire body was `to_value(m).expect("ManifestMeta is all owned
-/// data")`, which §5.1 lists as a production panic. A function with no callers
-/// whose only content is a panic is not a function, and the plan's fix for it
-/// ("`io::Error::other`, which is strictly better in a write path") does not
-/// apply: this is not in a write path. What a caller actually reads is the
-/// written document.
 #[cfg(test)]
 mod tests {
     use super::*;

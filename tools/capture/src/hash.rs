@@ -1,10 +1,10 @@
 //! Digests and the gzip decision.
 //!
-//! Cross-cutting, and early: M3 hashes manifests, M6 hashes chunk blobs, M7
-//! assembles files and MD5s the result, and M8 writes `checksums.json` over
-//! everything. Four milestones, one rule each ("MD5 what the manifest says,
-//! SHA-256 so a reader can verify with a stock tool"), so the helpers live here
-//! rather than being re-derived four times.
+//! Cross-cutting, and early: the manifest path hashes archives, the blob path
+//! hashes chunk bodies, assembly MD5s a rebuilt file, and the index writer
+//! digests everything it writes. Four call sites, one rule each ("MD5 what the
+//! manifest says, SHA-256 so a reader can verify with a stock tool"), so the
+//! helpers live here rather than being re-derived four times.
 //!
 //! ## Why two algorithms
 //!
@@ -60,9 +60,10 @@ pub struct Digests {
 /// identically whether the bytes arrive from a file, a gzip decoder or a zstd
 /// decoder.
 ///
-/// **This used to live in `emit::index` as a private `Tee`**, which meant the
-/// blob path re-derived it, and the crate's own "the helpers live here rather
-/// than being re-derived four times" was not true.
+/// **One type, because one pass over a buffer is a property of the buffer, not
+/// of the caller.** Every consumer here needs MD5 *and* SHA-256 over the same
+/// bytes, so the one-shot and the streaming forms have to agree — and a type that
+/// both are derived from is what makes that structural rather than a convention.
 ///
 /// Not [`Debug`]: `md5::Context` does not implement it, and a partial dump of a
 /// half-fed hash state is worse than none. [`Digests`] is the thing to print.
@@ -134,14 +135,11 @@ pub fn md5_sha256(bytes: &[u8]) -> Digests {
 
 /// A file that digests every byte written to it, on the way past.
 ///
-/// §6.6.2. A chunk blob used to be fetched into a `Vec<u8>` and only then written,
-/// so the body was resident twice — once in memory, once on disk — and the
-/// largest chunk in the reference bundle is 3 689 476 B. At `--jobs 8` that is up
-/// to ~30 MB of blobs held whole for the length of their fetch.
-///
-/// This writes as it reads and hashes what passes through. The digests are the
-/// same numbers over the same bytes, and no caller ever holds the body: peak
-/// memory is one network chunk.
+/// A chunk blob is 3 689 476 B at its largest, so holding one in a `Vec<u8>`
+/// before writing it means up to ~30 MB of bodies resident at `--jobs 8`. This
+/// writes as it reads and hashes what passes through: the digests are the same
+/// numbers over the same bytes, and no caller ever holds the body — peak memory
+/// is one network chunk.
 ///
 /// **Writes the file before it hashes the buffer.** A partial `write` returns
 /// `Err` and then hashes nothing, so the digest never counts bytes that did not
@@ -281,14 +279,14 @@ pub fn should_gzip(len: usize, threshold: u64) -> bool {
 
 /// gzip a body, in memory. **Test-only: this is the reference, not the path.**
 ///
-/// §6.4 moved production to [`crate::emit::write_json_gz`], which streams
-/// through the encoder and never holds the whole body. Nothing has called this
-/// since, so it is marked `#[cfg(test)]` — and that is the point. The signature
-/// is `&[u8] -> Vec<u8>`, which is precisely the shape that invites someone to
-/// go back to serialising a 27 MB manifest decode into a `String` and compressing
-/// it in one shot. `cfg(test)` turns "please don't" into "you can't", and this
-/// function stays available because the gate that proves streaming is byte-equal
-/// needs something to compare against.
+/// Production writes through [`crate::emit::write_json_gz`], which streams
+/// through the encoder and never holds the whole body. This function is
+/// `#[cfg(test)]` — and that is the point. The signature is
+/// `&[u8] -> Vec<u8>`, which is precisely the shape that invites someone to go
+/// back to serialising a 27 MB manifest decode into a `String` and compressing it
+/// in one shot. `cfg(test)` turns "please don't" into "you can't", and this stays
+/// available because the gate that proves streaming is byte-equal needs something
+/// to compare against.
 ///
 /// The level is the flate2 default and is **not** a promise: nothing in the
 /// bundle depends on the compressed bytes being reproducible, which is exactly
@@ -306,9 +304,9 @@ pub fn gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
 /// gunzip a body, in memory.
 ///
 /// Kept public for the integration tests that read a stored `.gz` back, which is
-/// what M10's gzip-rule assertions are about. Production does not go through
-/// here to *write* anything — that is `gzip`'s story, and the note there
-/// applies in reverse.
+/// what the gzip-rule assertions are about. Production does not go through here
+/// to *write* anything — that is `gzip`'s story, and the note there applies in
+/// reverse.
 pub fn gunzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut out = Vec::new();
@@ -338,12 +336,10 @@ pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
 
 /// [`zstd_decompress`] over a reader, optionally pre-sized.
 ///
-/// §5.5 row 8. The one caller that matters used to do
-/// `std::fs::read(path)` and then decode from that `Vec`, so the **compressed**
-/// bytes stayed alive for the whole decode beside the decompressed ones — peak
-/// `compressed + decompressed`, on a 22 MB file with a 2 MB blob. Decoding
-/// straight from the file drops that to the decompressed buffer plus one read
-/// window.
+/// This is what makes a chunk blob measurable without being held: decoding
+/// straight from the file drops peak memory from `compressed + decompressed` to
+/// the decompressed buffer plus one read window, which on a 22 MB file with a
+/// 2 MB blob is the difference between two buffers and one.
 ///
 /// `expected` is the decompressed length when the caller knows it, which for a
 /// chunk it does — the index carries it. It is a capacity hint and nothing else:
@@ -433,11 +429,9 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
 
 /// [`zstd_measure`] over a reader rather than a buffer.
 ///
-/// [`zstd_measure`] over a reader rather than a buffer.
-///
-/// §6.6.2, and the reason a chunk blob can be measured without being held: the
-/// file it was streamed into is the source, and this walks it with a 16 KB
-/// window instead of a 3.7 MB `Vec`.
+/// The reason a chunk blob can be measured without being held: the file it was
+/// streamed into is the source, and this walks it with a 16 KB window instead of
+/// a 3.7 MB `Vec`.
 ///
 /// **The same answers, and the same refusals — one deliberate difference in the
 /// error text.** [`zstd_error`] quotes the blob's total length, and a reader
@@ -447,11 +441,10 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
 /// needs — it separates "the CDN answered with an XML error page" from "a zstd
 /// frame arrived and is corrupt".
 ///
-/// **The loop below is duplicated from [`zstd_measure`] on purpose.** The first
-/// version of this had `zstd_measure` delegate here and passed a `total` down, to
-/// share it — which quietly downgraded the *slice* version's message too, and
-/// `a_streaming_measurement_agrees_with_decompressing_the_same_bytes` (§5.4)
-/// caught it, because that path is required to be byte-identical to
+/// **The loop below is duplicated from [`zstd_measure`] on purpose.** Making one
+/// delegate to the other, to share it, quietly downgrades the *slice* version's
+/// message too — and `a_streaming_measurement_agrees_with_decompressing_the_same_bytes`
+/// catches that, because that path is required to be byte-identical to
 /// [`zstd_decompress`]. Ten duplicated lines beat a shared function that makes
 /// one caller lie about what it knows.
 pub fn zstd_measure_from<R: std::io::Read>(mut reader: R, what: &str) -> Result<Measure, String> {
@@ -563,12 +556,11 @@ mod tests {
 
     #[test]
     fn gzip_bytes_do_not_depend_on_how_the_input_was_fed() {
-        // **§6.4's gate, stated as a fact rather than a hope.** The plan's
-        // position is that flate2's deflate stream "is not guaranteed identical
-        // when the input is fed in different chunk sizes", which is why
-        // streaming the manifest decode through `GzEncoder` was band 3: the
-        // compressed bytes are recorded in `checksums.json`, so if this varies,
-        // every reference bundle becomes stale.
+        // **The compressed bytes are not a contract, but they are recorded, so
+        // check that chunking does not move them.** flate2's deflate stream is not
+        // *guaranteed* identical when the input is fed in different chunk sizes,
+        // and `checksums.json` records the `.gz` files — so if this varied, every
+        // reference bundle would go stale.
         //
         // It does not vary. The deflate encoder buffers internally and decides
         // block boundaries from its own window, not from where the caller's
@@ -578,7 +570,7 @@ mod tests {
         let payload = gzip_probe_payload();
         let one_shot = gzip(&payload).expect("one-shot gzip");
 
-        // 8 KB is `BufWriter`'s default and the shape §6.4 would actually use:
+        // 8 KB is `BufWriter`'s default and the shape production actually uses:
         // `to_writer` hands the encoder one token at a time, and the `BufWriter`
         // is what coalesces them into these writes.
         let chunk_sizes = [1, 7, 8 * 1024, 8 * 1024 - 7, 64 * 1024];
@@ -604,8 +596,7 @@ mod tests {
 
     #[test]
     fn a_streamed_gzip_still_round_trips_to_the_same_body() {
-        // The other half of the claim: chunking does not corrupt anything. If
-        // this passes while the byte test above also passes, §6.4 is band 1.
+        // The other half of the claim: chunking does not corrupt anything.
         let payload = gzip_probe_payload();
         let streamed = gzipped_in_chunks(&payload, 8 * 1024);
         assert_eq!(gunzip(&streamed).expect("gunzip"), payload);
@@ -613,8 +604,6 @@ mod tests {
 
     #[test]
     fn dropping_a_gz_encoder_without_finishing_produces_the_same_bytes() {
-        // Recorded because `write_json_gz`'s comment used to claim the opposite.
-        //
         // `flate2::write::GzEncoder`'s `Drop` *attempts* the finish, so dropping
         // one without calling `finish` yields byte-identical output that still
         // decompresses — the "you lose the trailer" warning is folklore for this
@@ -657,12 +646,11 @@ mod tests {
 
     #[test]
     fn a_hashable_file_reports_the_digests_of_the_bytes_it_stored() {
-        // **§6.6.2's gate, in one pass.** The whole point of streaming is that the
-        // digests are computed *while* writing rather than after, so the numbers
-        // must be the ones `md5_sha256` gives for the same bytes. Fed in
-        // deliberately uneven chunks — 1, 7, 4096, and the remainder — because a
-        // writer that hashed whole buffers would pass a single-chunk test and
-        // fail a real one.
+        // **The whole point of streaming is that the digests are computed *while*
+        // writing** rather than after, so the numbers must be the ones
+        // `md5_sha256` gives for the same bytes. Fed in deliberately uneven chunks
+        // — 1, 7, 4096, and the remainder — because a writer that hashed whole
+        // buffers would pass a single-chunk test and fail a real one.
         let dir = tmp("hashing-file");
         let path = dir.join("blob.bin");
         let bytes = blob_bytes();
@@ -694,9 +682,7 @@ mod tests {
         // writing from position 0 simply overwrites the stale bytes and extends.
         // It is a *shorter* retry that leaves a tail of the old body behind, so
         // a test with only the first ordering passes against a `restart` that
-        // does nothing at all. Verified: dropping the `set_len(0)` from
-        // `restart` left this test green until the `for (first, second)` pair
-        // below was added.
+        // does nothing at all.
         for (first, second) in [
             (
                 b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".as_slice(),
@@ -762,11 +748,11 @@ mod tests {
 
     #[test]
     fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
-        // **§5.5 row 8's gate.** `ChunkSource::decoded` no longer reads the blob
-        // into a `Vec` before decoding it, so the two paths must be the same
-        // function. Checked on a real frame, and with the capacity hint both
-        // right and wrong, because a hint that changed the output would be a
-        // silent corruption of an assembled file.
+        // `ChunkSource::decoded` decodes straight off the file rather than reading
+        // the blob into a `Vec` first, so the two paths must be the same function.
+        // Checked on a real frame, and with the capacity hint both right and wrong,
+        // because a hint that changed the output would be a silent corruption of
+        // an assembled file.
         use std::io::Cursor;
         let payload = b"the quick brown fox jumps over the lazy dog".repeat(900);
         let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
@@ -786,8 +772,8 @@ mod tests {
 
     #[test]
     fn decompressing_from_a_reader_refuses_the_same_things_the_buffer_does() {
-        // The refusals must match too, since `decoded` now takes this path for a
-        // blob it would previously have read whole.
+        // The refusals must match too, since `decoded` takes this path for every
+        // blob.
         use std::io::Cursor;
         let xml = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
         let e = zstd_decompress_from(Cursor::new(xml), "blob", None).expect_err("not a frame");
@@ -803,11 +789,10 @@ mod tests {
 
     #[test]
     fn measuring_from_a_reader_agrees_with_measuring_the_buffer() {
-        // **§6.6.2's second gate.** The blob path will measure from the file it
-        // was streamed into, so this has to be the same function with a different
-        // source — same length, same md5, and the same answer for a frame that
-        // is broken. Read back through a `Cursor` so the reader is genuinely a
-        // reader and not a slice in disguise.
+        // The blob path measures from the file it was streamed into, so this has
+        // to be the same function with a different source — same length, same md5,
+        // and the same answer for a frame that is broken. Read back through a
+        // `Cursor` so the reader is genuinely a reader and not a slice in disguise.
         use std::io::Cursor;
 
         let payload = b"the quick brown fox jumps over the lazy dog, repeatedly and at length"
@@ -852,14 +837,13 @@ mod tests {
 
     /// One pass must equal two, or every digest in the bundle moves.
     ///
-    /// `DualDigest` replaced a `Tee` inside `emit::index` and three pairs of
-    /// one-shot calls, so this is the test standing between that refactor and a
-    /// silently different artifact. Checked over the lengths that matter —
-    /// empty, sub-block, block-exact, and well past it — and through
-    /// `std::io::copy` from a reader rather than a single `write_all`, because
-    /// the block boundaries are where a streaming digest goes wrong.
+    /// `DualDigest` is what every digest in the crate goes through, so this is the
+    /// test standing between it and a silently different artifact. Checked over the
+    /// lengths that matter — empty, sub-block, block-exact, and well past it — and
+    /// through `std::io::copy` from a reader rather than a single `write_all`,
+    /// because the block boundaries are where a streaming digest goes wrong.
     #[test]
-    fn one_pass_agrees_with_the_two_one_shots_it_replaced() {
+    fn one_pass_agrees_with_the_two_one_shots() {
         let cases: Vec<Vec<u8>> = vec![
             Vec::new(),
             vec![0_u8; 1],

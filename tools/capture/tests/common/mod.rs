@@ -1,6 +1,6 @@
 //! A local mock of the whole API surface, built by the test.
 //!
-//! **M10.** No dependency, no fixture file, and nothing borrowed from the
+//! No dependency, no fixture file, and nothing borrowed from the
 //! repair binary's own mock: the synthetic manifests, the chunk bodies, the
 //! `getBuild` bodies and the four HoYoPlay bodies are all *constructed here*,
 //! from a [`World`] the test writes. That is the point — a fixture file checked
@@ -29,7 +29,7 @@
 //!
 //! All three live on `127.0.0.1` with an ephemeral port, so **no test can reach
 //! the network even by accident** — there is nothing else to reach. That is the
-//! property M10 is asserting, so it is enforced by construction rather than by
+//! property the suite asserts, so it is enforced by construction rather than by
 //! remembering to pass `--hyp-base`.
 
 #![allow(dead_code)]
@@ -934,20 +934,16 @@ fn envelope_with_data(retcode: i64, message: &str, data: serde_json::Value) -> V
     .expect("render json")
 }
 
-/// Answer one request.
 /// Serve requests on one connection until the peer closes it or asks to close.
 ///
-/// **Keep-alive, because the real servers keep alive.** This used to handle
-/// exactly one request and return, and it answered `Connection: close`
-/// unconditionally — so every chunk blob in a capture cost a fresh TCP
-/// connection. That is not just unfaithful to the CDN, it made §3.2's
-/// concurrency question unanswerable: with ~12 ms per connect on loopback and
-/// almost no CPU, `--jobs 8` measured Windows' connect path, not the
-/// `RequestLog` mutex the question is about.
+/// **Keep-alive, because the real servers keep alive.** Answering one request
+/// per connection and `Connection: close` unconditionally costs a fresh TCP
+/// connection per chunk blob, which is not just unfaithful to the CDN — it
+/// measures Windows' connect path rather than anything about the fetcher.
 ///
-/// The client's pool was never the thing at fault — `Fetcher` builds one
-/// `reqwest::Client` and every clone shares it — so this was the mock refusing
-/// to let the pool be used.
+/// The client's pool is never the thing at fault: `Fetcher` builds one
+/// `reqwest::Client` and every clone shares it, so a mock that refuses to let
+/// the pool be used is the only way to see this.
 ///
 /// A request body is still never read: this client sends none, and a body-carrying
 /// request on a reused connection would desynchronise the stream. The reader is

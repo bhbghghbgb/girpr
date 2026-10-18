@@ -494,8 +494,7 @@ mod tests {
         }
     }
 
-    /// §5.5 row 3: one `Want` per chunk id, and the store's tmp-file naming
-    /// assumes it.
+    /// One `Want` per chunk id — which the store's tmp-file naming assumes.
     ///
     /// The `HoYoChannel.dll` fixture is the right one to assert it on: three old
     /// ids, two new-only and one **shared between the two builds**, so a dedup

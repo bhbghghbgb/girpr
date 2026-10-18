@@ -1,14 +1,14 @@
 //! Region identity: launcher ids, game ids, API bases, the channel tuple.
 //!
-//! **M1.** Every id this tool sends is *resolved* here rather than written into
-//! a URL, because the authoritative source is `getGameBranches` and the thing
-//! most worth recording is that the tool did not hardcode it.
+//! Every id this tool sends is *resolved* here rather than written into a URL,
+//! because the authoritative source is `getGameBranches` and the thing most
+//! worth recording is that the tool did not hardcode it.
 //!
 //! The measured global values — launcher `VYTpXlbWo8`, game `gopR6Cufr3`, cn
 //! channel `1/1`, global `1/0`, bili `14/0` — are the ones spec §3.4 pins.
 //! `hk4e_cn` and `hk4e_bilibili` carry the same shape but were **not** measured
-//! by this tool; only `hk4e_global` is exercised live (plan §6), and a capture
-//! against the other two is not yet a supported claim.
+//! by this tool; only `hk4e_global` is exercised live, and a capture against the
+//! other two is not yet a supported claim.
 //!
 //! Nothing here is hardcoded that the API can answer: `package_id`, `password`
 //! and `branch` come out of `getGameBranches`, so a build that rotates them
@@ -194,31 +194,28 @@ impl<'a> Endpoints<'a> {
     }
 
     /// Owned bases, for when an override is in play.
-///
-/// **This leaks, deliberately, and the leak is bounded by construction. §5.5 row
-/// 12.** The plan called the leak "bounded and intentional — but nothing says so",
-/// and it was right about the second half: there was no warning here at all, so
-/// the next person to find `Box::leak` in a codebase that otherwise avoids it would
-/// reasonably assume it was a bug and "fix" it — or copy the pattern.
-///
-/// The bound, stated so it can be checked:
-///
-/// - **production calls it once per run**, in `capture`, and only when
-///   `--hyp-base`/`--sophon-base` is in play; otherwise `Biz::bases()` returns
-///   borrowed `&'static` strings and this is not called at all;
-/// - **tests call it from fixture builders**, a handful of times per test.
-///
-/// What it would cost to be wrong: a loop. Each call leaks two short strings and
-/// never frees them, so a caller in a loop accumulates without bound and nothing
-/// would say so — which is the whole reason this paragraph exists.
-///
-/// **Not `Cow<'a, str>`.** That is the other fix the plan offers and it is the
-/// better shape — no leak at all, and the override could live in the `CapturePlan`
-/// it came from and be borrowed. It is also a change to every URL builder in the
-/// crate, for zero functional gain, on a seam that runs once per process. Worth
-/// doing if the shape ever needs to change; not worth doing to remove a leak that
-/// provably cannot accumulate.
-pub fn owned(hyp: String, sophon: String) -> Endpoints<'static> {
+    ///
+    /// **This leaks, deliberately, and the leak is bounded by construction.**
+    /// The next person to find `Box::leak` in a codebase that otherwise avoids it
+    /// would reasonably assume it was a bug and "fix" it — or copy the pattern.
+    ///
+    /// The bound, stated so it can be checked:
+    ///
+    /// - **production calls it once per run**, in `capture`, and only when
+    ///   `--hyp-base`/`--sophon-base` is in play; otherwise `Biz::bases()` returns
+    ///   borrowed `&'static` strings and this is not called at all;
+    /// - **tests call it from fixture builders**, a handful of times per test.
+    ///
+    /// What it would cost to be wrong: a loop. Each call leaks two short strings and
+    /// never frees them, so a caller in a loop accumulates without bound and nothing
+    /// would say so — which is the whole reason this paragraph exists.
+    ///
+    /// **Not `Cow<'a, str>`.** That would be the better shape — no leak at all, and
+    /// the override could live in the `CapturePlan` it came from and be borrowed. It
+    /// is also a change to every URL builder in the crate, for zero functional gain,
+    /// on a seam that runs once per process. Worth doing if the shape ever needs to
+    /// change; not worth doing to remove a leak that provably cannot accumulate.
+    pub fn owned(hyp: String, sophon: String) -> Endpoints<'static> {
         Endpoints {
             hyp: Box::leak(hyp.into_boxed_str()),
             sophon: Box::leak(sophon.into_boxed_str()),
@@ -407,10 +404,10 @@ mod tests {
 
     #[test]
     fn owned_endpoints_are_the_borrowed_ones_and_leak_only_on_construction() {
-        // §5.5 row 12. `Endpoints::owned` is `Box::leak` on purpose and the doc
-        // now says so; this checks the part a doc cannot: that the leaked value is
-        // the one the caller passed, and that a second call is independent of the
-        // first rather than aliasing it.
+        // `Endpoints::owned` is `Box::leak` on purpose and the doc says so; this
+        // checks the part a doc cannot: that the leaked value is the one the
+        // caller passed, and that a second call is independent of the first
+        // rather than aliasing it.
         //
         // The aliasing case is the one that would actually be wrong. If `owned`
         // returned a pointer into a shared buffer, or if the first call's strings

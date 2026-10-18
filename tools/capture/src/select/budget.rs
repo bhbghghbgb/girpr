@@ -109,7 +109,7 @@ pub enum Fate {
 /// Walk `costs` in the order given, admitting what fits.
 ///
 /// The caller supplies the order because *that* order is a decision made
-/// elsewhere (§5's tie-break). This function's only rule is "take what fits, in
+/// elsewhere (spec spec §5's tie-break). This function's only rule is "take what fits, in
 /// the order you were given", which is what makes it testable without a corpus.
 pub fn admit_in_order(costs: &[u64], mut budget: Budget) -> (Vec<Fate>, Budget) {
     let mut fates = Vec::with_capacity(costs.len());

@@ -1,4 +1,4 @@
-//! M10: the artifact's own documents — schema stability, the gzip rule, and
+//! The artifact's own documents - schema stability, the gzip rule, and
 //! `checksums.json` coverage.
 //!
 //! Everything here reads a bundle a real `capture` wrote against the mock, so
@@ -251,7 +251,7 @@ fn the_chunk_index_key_set_is_the_documented_one() {
 
 // ------------------------------------------------------------------- the gzip rule
 
-/// M10: **the gzip rule fires on a `>threshold` body and not below.**
+/// **The gzip rule fires on a `>threshold` body and not below.**
 ///
 /// The interesting half is "not below": a rule that gzipped everything would pass
 /// the first case and make every bundle 40% larger than it needs to be, and a

@@ -344,7 +344,7 @@ impl Admission {
 
 /// Build the candidate pool from every field's diff, cheapest first.
 ///
-/// Pure over `&[FieldDiff]`: the ordering is §5's — `total_cost`, then the
+/// Pure over `&[FieldDiff]`: the ordering is spec §5's — `total_cost`, then the
 /// field with `game` ranked first, then `moved` desc, then `reused` desc, then
 /// `path` — and one-sided paths are placed by their own size.
 pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {

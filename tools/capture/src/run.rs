@@ -31,10 +31,10 @@ pub use crate::failure::{
 
 /// `gircap capture` — fetch from the live APIs and write a bundle.
 ///
-/// **M2.** Writes the seven `api/` documents: the four HoYoPlay bodies and both
+/// Writes the `api/` documents first: the four HoYoPlay bodies and both
 /// `getBuild`s byte-exact, plus the generated tag probe, and
 /// `api/requests.ndjson` beside them. Manifests, chunks and the `game/` fixture
-/// land in M3, M6 and M8.
+/// follow.
 ///
 /// The order is [`hyp::HypClient::capture_all`]'s, not this function's:
 /// `getGameBranches` carries the `package_id` every `getBuild` URL is built from,
@@ -201,9 +201,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let diffs = diff::diff_all(&fields, &manifests)?;
 
     // The aggregate is computed **once**, here, and used twice: it is both the
-    // `diff/paths.diff.json` body and the headline numbers on the summary. It
-    // used to be built again at the summary, from the same inputs — one O(rows)
-    // walk and two sorted `Vec<String>` per call.
+    // `diff/paths.diff.json` body and the headline numbers on the summary, and
+    // each of those would otherwise be an O(rows) walk plus two sorted
+    // `Vec<String>` over the same inputs.
     let agg = diff::aggregate(&old_tag, &new_tag, &diffs);
 
     // 6c. Score, classify, admit. Pure arithmetic over `diffs` - the only work
@@ -283,9 +283,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // 7c. The fixture: assemble every admitted capture and write both sides,
     //     plus the launcher metadata that is not a chunk at all.
     //
-    //     A7-A12 are asserted here rather than left to M9, because a capture that
-    //     cannot rebuild its own files has nothing worth keeping and the operator
-    //     should find out at capture time.
+    //     A7-A12 are asserted here rather than left to `verify`, because a capture
+    //     that cannot rebuild its own files has nothing worth keeping and the
+    //     operator should find out at capture time.
     let fixture = emit::fixture::build(emit::fixture::FixtureInput {
         dir: &dir,
         captured: &captured,
@@ -309,11 +309,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let assembly_failures = fixture.failures;
     written.extend(fixture.written);
 
-    // On the blocking pool. §5.5 row 10: this serialises every record and writes
-    // them, which is both CPU-bound and synchronous `std::fs`, and it ran inline
-    // inside `async fn capture` — so a worker was unavailable to *fetch*
-    // anything for the duration. `RequestLog` is `Arc`-backed and cheap to clone,
-    // so the log moves to the pool rather than being borrowed.
+    // On the blocking pool. Serialising every record and writing them is both
+    // CPU-bound and synchronous `std::fs`, so doing it inline inside
+    // `async fn capture` holds a worker unavailable to *fetch* anything for the
+    // duration. `RequestLog` is `Arc`-backed and cheap to clone, so the log moves
+    // to the pool rather than being borrowed.
     {
         let for_the_pool = log.clone();
         let dir_for_the_pool = dir.clone();
@@ -510,8 +510,8 @@ fn satisfied(selection: &select::Selection) -> u64 {
 
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
 ///
-/// **M9.** Exits `0` when every re-derived row holds and `3` when one does not;
-/// there is no network failure to distinguish, because there is no network.
+/// Exits `0` when every re-derived row holds and `3` when one does not; there is
+/// no network failure to distinguish, because there is no network.
 ///
 /// The summary names `checks_derived` and `checks_covered_by_recording` because
 /// "verified" is a claim about how much was actually checked, and a reader who
@@ -592,8 +592,8 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
 
 /// `gircap materialize` — rebuild both files from `chunks/`, no network.
 ///
-/// **M9.** The same rebuild `verify` performs, written out rather than only
-/// compared. It is a separate command because the two answer different questions:
+/// The same rebuild `verify` performs, written out rather than only compared.
+/// It is a separate command because the two answer different questions:
 /// `verify` asks *is the bundle closed*, `materialize` hands a consumer the bytes
 /// and lets *it* do the comparing — which is the only way to answer "does a
 /// downstream tool accept these bytes" without `gircap` guessing what it does.
@@ -697,16 +697,16 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 
 /// `gircap list` — index every capture under a root.
 ///
-/// **M9.** The only command that takes a root rather than a bundle, because its
+/// The only command that takes a root rather than a bundle, because its
 /// job is to find bundles. A directory that looks like one and does not open is
 /// listed as a skip rather than aborting the walk: `list` exists to be run over a
 /// tree that may contain a half-finished capture.
 ///
 /// One `BUNDLE` record per **valid** bundle on stdout, then one `SUMMARY`. The
-/// per-bundle facts used to live only on stderr at INFO, so a machine could
-/// consume this command only by parsing narration; `complete` and
-/// `selfcheck` in particular are the two a caller needs to decide which bundle to
-/// verify, and neither is on the summary.
+/// per-bundle facts are on the data plane so a machine can consume this command
+/// without parsing narration; `complete` and `selfcheck` in particular are the
+/// two a caller needs to decide which bundle to verify, and neither is on the
+/// summary.
 ///
 /// A directory that does not open stays stderr-only, as before: there is no
 /// bundle to describe, so a `BUNDLE` record would have to carry the failure

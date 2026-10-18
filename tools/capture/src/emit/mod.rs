@@ -327,7 +327,7 @@ fn write_parts(root: &Path, rel: &str, parts: &[&[u8]]) -> std::io::Result<PathB
 
 /// A `Write` that counts what passes through it and keeps none of it.
 ///
-/// §6.4. [`json_len`] needs to know how long a serialised document will be
+/// [`json_len`] needs to know how long a serialised document will be
 /// before deciding how to write it, and a streaming writer cannot be asked.
 struct Counter(usize);
 
@@ -356,14 +356,15 @@ pub fn json_len(value: &impl serde::Serialize, what: &str) -> std::io::Result<us
 
 /// Write a serialisable document straight into its file, gzipping on the way.
 ///
-/// §6.4. `serde_json::to_string_pretty` built the whole body in memory — a
-/// ~27 MB `String` for a 2 744-entry manifest decode — and the gzip call then
-/// built a second ~7 MB compressed copy while that `String` was still alive.
+/// Building the whole body with `serde_json::to_string_pretty` costs a ~27 MB
+/// `String` for a 2 744-entry manifest decode, and the gzip call then builds a
+/// second ~7 MB compressed copy while that `String` is still alive.
 /// Serialising through the encoder holds neither: peak allocation is the
 /// 8 KB `BufWriter` and the encoder's own window.
 ///
-/// **The bytes are the same as the buffered path**, which is what makes this
-/// band 1 rather than band 3. Two facts, both tested:
+/// **The bytes are the same as a `to_string_pretty`-then-gzip path would produce**,
+/// which is what makes streaming safe here rather than a bundle-visible change.
+/// Two facts, both tested:
 ///
 ///  - `to_writer_pretty` and `to_string_pretty` share one `PrettyFormatter`, so
 ///    the uncompressed document is identical. Pinned by
@@ -372,9 +373,8 @@ pub fn json_len(value: &impl serde::Serialize, what: &str) -> std::io::Result<us
 ///    the `BufWriter` coalescing `to_writer`'s token-at-a-time writes cannot
 ///    change the compressed bytes. Pinned by
 ///    `streaming_a_gzipped_document_writes_the_bytes_the_buffered_path_wrote`
-///    and, underneath it, `hash::tests::gzip_bytes_do_not_depend_on_how_the_input_was_fed`
-///    — the test the plan's "try it in band 1 with a test that both paths produce
-///    identical gzip bytes" refers to.
+///    and, underneath it,
+///    `hash::tests::gzip_bytes_do_not_depend_on_how_the_input_was_fed`.
 ///
 /// Not written atomically, like every other bundle document here: see
 /// [`write_bytes`]. A partial manifest decode is a small, reproducible failure,
@@ -522,13 +522,12 @@ mod tests {
 
     #[test]
     fn streaming_a_gzipped_document_writes_the_bytes_the_buffered_path_wrote() {
-        // **§6.4's gate.** The compressed bytes of `manifests/*.json.gz` are in
-        // `checksums.json`, so if streaming through the encoder moved a single
-        // byte, every reference bundle on disk becomes stale and
-        // `SCHEMA_VERSION` would have to move with it. The plan allowed trying
-        // this in band 1 *only* on the strength of such a test, so this is it.
+        // The compressed bytes of `manifests/*.json.gz` are in `checksums.json`,
+        // so if streaming through the encoder moved a single byte every reference
+        // bundle on disk would go stale and `SCHEMA_VERSION` would have to move
+        // with it. This is the test that says it does not.
         //
-        // The comparison is against the code this replaced — `to_string_pretty`,
+        // The comparison is against the whole-body alternative — `to_string_pretty`,
         // then `hash::gzip`, then one `write_all` — not against a golden file, so
         // it cannot rot.
         let root = tmp("gz-identical");
@@ -580,9 +579,9 @@ mod tests {
 
     #[test]
     fn json_len_is_the_length_of_the_bytes_that_get_written() {
-        // The reason §6.4 walks the document twice. `json_len` decides the file's
-        // *name* and what `files[].uncompressed_bytes` claims, and the stream that
-        // follows cannot be consulted about either. So the two must agree, for
+        // `json_len` decides the file's *name* and what `files[].uncompressed_bytes`
+        // claims, and the stream that follows cannot be consulted about either.
+        // So the two must agree, for
         // both branches — otherwise the bundle records a length no reader can
         // reproduce from the file beside it.
         let root = tmp("len-agrees");

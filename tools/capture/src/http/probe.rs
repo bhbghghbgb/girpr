@@ -344,13 +344,12 @@ pub struct ErrorShape {
     /// What the retry policy says about this status.
     ///
     /// **Derived from [`crate::http::RetryPolicy::should_retry_status`], which is
-    /// the point.** This field used to be a hardcoded `false` whose doc claimed it
-    /// *was* the retry policy "stated in the artifact" — a claim that was true only
-    /// by luck, because every probe answers `200` or `404` and neither is in the
-    /// retry set. §5.5 row 15. A reader scanning the document for "what does a
-    /// bad request look like" got a constant, not a statement, and a future origin
-    /// answering `429` here would have made the document wrong without anything
-    /// failing.
+    /// the point.** A reader scanning the document for "what does a bad request
+    /// look like, and would we try again" must be reading the policy rather than a
+    /// constant — every probe answers `200` or `404` and neither is in the retry
+    /// set, so a hardcoded `false` would be indistinguishable from a correct
+    /// derivation on every input this tool can produce, and wrong the moment an
+    /// origin throttled with a `429`.
     ///
     /// **It states the policy, not what this run did.** The probe path uses
     /// [`crate::http::Fetcher::observe`], which never retries, so a `true` here
@@ -577,13 +576,13 @@ pub async fn probe_error_shapes(
 /// `game_ids[]` keeps them, and matching on a decoded form would silently not
 /// find the parameter.
 ///
-/// **The replacement value is percent-encoded, by [`crate::biz::enc`]. §5.5 row
-/// 14.** This used to splice `value` in raw, which made it a second URL grammar
-/// living beside [`crate::biz::push_pair`] — the one every real URL in this tool
-/// goes through. It agreed only because every value it is given is
-/// `"undefined"`: a value containing `&`, `=`, `+` or a space would have split
-/// the query into a different set of parameters and the probe would have asked
-/// the wrong question while still looking like a probe.
+/// **The replacement value is percent-encoded, by [`crate::biz::enc`].** Splicing
+/// `value` in raw would make this a second URL grammar living beside
+/// [`crate::biz::push_pair`] — the one every real URL in this tool goes through.
+/// The two would agree only while every value stays `"undefined"`: a value
+/// containing `&`, `=`, `+` or a space would split the query into a different set
+/// of parameters and the probe would ask the wrong question while still looking
+/// like a probe.
 ///
 /// The key stays literal for the same reason it is matched literally: `push_pair`
 /// appends keys unencoded too, so the two now agree on both halves. Encoding is a
@@ -636,15 +635,10 @@ mod tests {
 
     #[test]
     fn retryable_follows_the_policy_on_both_sides() {
-        // **§5.5 row 15.** `ErrorShape::retryable` was a hardcoded `false` whose doc
-        // claimed it *was* the retry policy. It was true only by luck: every probe
-        // answers `200` or `404` and neither is in the retry set, so a correct
-        // derivation and a constant were indistinguishable from anything a capture
-        // can produce.
-        //
         // Both branches, driven through the real `shape_from`. The `true` side is
-        // the one that matters and the one no capture reaches: it needs a status
-        // that *is* retryable, which means an origin that throttles a probe.
+        // the one that matters and the one no healthy capture reaches: it needs a
+        // status that *is* retryable, which means an origin that throttles a
+        // probe.
         let obs = |status: u16| Observation {
             status,
             content_type: Some("application/json".into()),
@@ -689,12 +683,9 @@ mod tests {
 
     #[test]
     fn a_value_needing_encoding_is_encoded_and_todays_is_not() {
-        // **§5.5 row 14.** `with_param` spliced its value in raw, making it a second
-        // URL grammar beside `biz::push_pair`, which percent-encodes. They agreed
-        // only because both probe values are the literal `"undefined"`.
-        //
-        // The second half of that claim is the one that matters for the artifact: if
-        // encoding changed today's URLs, this would be band 3 and not a refactor.
+        // The second half of the claim is the one that matters for the artifact:
+        // if encoding changed the URLs the probes send today, every recorded
+        // `error_shapes.json` URL would be a fiction.
         let good = "https://api.example/getBuild?branch=main&package_id=ScSYQBFhu9&tag=7.1.0";
 
         // Unchanged: what the probes actually send today.

@@ -1,4 +1,4 @@
-//! M9, end to end and entirely offline: build a bundle on disk, then `verify`
+//! End to end and entirely offline: build a bundle on disk, then `verify`
 //! it, `materialize` it, and `list` it.
 //!
 //! No test here touches the network. The fixture is written with the crate's own
@@ -436,9 +436,9 @@ fn reverify(root: &Path) -> gircap::verify::Report {
     gircap::verify::reverify(b)
 }
 
-// ---------------------------------------------------------------- M9's accept
+// --------------------------------------------------------------- acceptance
 
-/// M9: `verify` on a good artifact exits 0.
+/// `verify` on a good artifact exits 0.
 #[test]
 fn verify_passes_a_good_bundle() {
     let b = Bundle::build("good");
@@ -463,7 +463,7 @@ fn verify_passes_a_good_bundle() {
     assert!(!r.findings.is_empty() || r.findings.is_empty());
 }
 
-/// M9: after corrupting one byte of one chunk blob, `verify` reports `3` and
+/// After corrupting one byte of one chunk blob, `verify` reports `3` and
 /// names the blob and the assertion.
 #[test]
 fn verify_reports_a_damaged_blob_by_name() {
@@ -511,7 +511,7 @@ fn verify_reports_a_deleted_blob_by_name() {
     assert!(r.closure.is_some(), "and the closure failed too");
 }
 
-/// M9: `materialize` rebuilds both files from `chunks/` and matches `game/` and
+/// `materialize` rebuilds both files from `chunks/` and matches `game/` and
 /// `expected/`.
 #[test]
 fn materialize_rebuilds_both_files_byte_for_byte() {

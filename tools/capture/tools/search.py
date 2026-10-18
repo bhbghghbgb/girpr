@@ -15,10 +15,10 @@ accumulate.
 
     python tools/capture/tools/search.py [--repo <path>] [--since <sha>]
 
-The baseline is the parent of the first commit that touched src/ after the
-refactor plan was added.  It is index 0 deliberately: without it the first
-interval compares the first commit against a midpoint, which silently attributes
-that commit's own change to a later one.
+The baseline is the first commit that ever touched tools/capture/src, or
+`--since` if given.  It is index 0 deliberately: without it the first interval
+compares the first commit against a midpoint, which silently attributes that
+commit's own change to a later one.
 """
 import argparse
 import json
@@ -40,15 +40,25 @@ def git(repo, *a):
     return r.stdout or ""
 
 
-def commit_list(repo, plan_commit):
+def commit_list(repo, since):
     """The baseline, then every commit that touched src/, in order."""
-    out = [git(repo, "rev-parse", "--short", f"{plan_commit}~1").strip()]
+    out = [git(repo, "rev-parse", "--short", since).strip()]
     log = git(
-        repo, "log", "--reverse", "--format=%h", f"{plan_commit}~1..HEAD",
+        repo, "log", "--reverse", "--format=%h", f"{since}..HEAD",
         "--", "tools/capture/src",
     )
     out += [line.strip() for line in log.splitlines() if line.strip()]
     return out
+
+
+def first_src_commit(repo):
+    out = git(
+        repo, "log", "--reverse", "--format=%H", "-1",
+        "--", "tools/capture/src",
+    ).split()
+    if not out:
+        raise SystemExit("no commit has ever touched tools/capture/src")
+    return out[0]
 
 
 def fp_of(sha, profile):
@@ -90,27 +100,21 @@ def probe(sha, repo, profile):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parents[3]))
-    ap.add_argument("--plan-commit", default=None,
-                    help="the commit that added docs/03-refactor-plan.md (default: found)")
+    ap.add_argument("--since", default=None,
+                    help="baseline commit, included as index 0 "
+                         "(default: the first commit to touch tools/capture/src)")
     ap.add_argument("--profile", default="default")
     args = ap.parse_args()
 
     repo = Path(args.repo)
-    plan = args.plan_commit
-    if not plan:
-        plan = git(repo, "log", "--format=%H", "--diff-filter=A", "-1", "--",
-                   "tools/capture/docs/03-refactor-plan.md").split()[0]
-    if not plan:
-        raise SystemExit("could not find the commit that added 03-refactor-plan.md; "
-                         "pass --plan-commit")
-
-    cs = commit_list(repo, plan)
+    since = args.since or first_src_commit(repo)
+    cs = commit_list(repo, since)
     subj = {s: git(repo, "log", "-1", "--format=%s", s).strip() for s in cs}
     n = len(cs)
     differ = Path(__file__).with_name("bundle_differ.py")
 
     print(f"baseline {cs[0]}  ({subj[cs[0]]})")
-    print(f"range    {plan}~1..HEAD, {n - 1} commits touching tools/capture/src\n")
+    print(f"range    {since}..HEAD, {n - 1} commits touching tools/capture/src\n")
 
     st = json.loads(STATE.read_text()) if STATE.is_file() else {"boundaries": []}
     probed = set(st.get("probed", []))

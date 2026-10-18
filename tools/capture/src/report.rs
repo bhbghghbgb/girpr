@@ -336,9 +336,9 @@ impl Record {
     /// label lowercased, so a non-terminal record (`BUNDLE` → `bundle`) is still
     /// self-identifying. The field is not written twice.
     pub fn to_json_line(&self) -> String {
-        // Borrowed, not cloned. It used to `clone()` the whole `Val` — and a
-        // `Val::Str` is a `String` — to render one field of a record it already
-        // held a reference to.
+        // Borrowed, not cloned. A `Val::Str` is a `String`, and there is no
+        // reason to copy one to render a field of a record already held by
+        // reference.
         let fallback;
         let event = match self.fields.iter().find(|(k, _)| *k == "event") {
             Some((_, v)) => v,
@@ -442,19 +442,18 @@ fn push_json_value(out: &mut String, v: &Val) {
 
 /// Writes one stdout line and logs the matching event, as a single unit.
 ///
-/// A mutex rather than a bare `println!` because the summary can be emitted from
-/// a worker in later milestones; the lock is held for exactly one line and never
-/// across work.
+/// A mutex rather than a bare `println!` because a record can be emitted from a
+/// worker as well as from the dispatcher; the lock is held for exactly one line
+/// and never across work.
 static STDOUT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Everything `gircap capture` puts on its data plane.
 ///
-/// **The orchestrator's last job, moved here.** `capture()` used to build this
-/// line itself, with 56 chained [`Record::set`] calls between the close-out and
-/// its `Ok((summary, ExitCode::Ok))`. That put the run's entire reporting
-/// contract - every key name, every order - in the middle of the function that
-/// decides what a capture *does*, where a reader looking for either had to find
-/// the other first.
+/// **The orchestrator's last job, moved here.** This line has 56 chained
+/// [`Record::set`] calls in it, and the run's entire reporting contract — every
+/// key name, every order — belongs beside the other summaries, not in the middle
+/// of the function that decides what a capture *does*, where a reader looking
+/// for either had to find the other first.
 ///
 /// Grouped by what the numbers are about, not by where they came from. The
 /// diff, reuse and manifest groups come from three different walks over three

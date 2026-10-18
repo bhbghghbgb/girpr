@@ -77,9 +77,9 @@ fn line(row: &MatrixRow) -> String {
 ///   pay for it. A statement about *this run's* configuration. Recorded,
 ///   exit `0` unless the caller named the class.
 ///
-/// The list arrives already parsed (§5.5 row 5): it used to be `Vec<String>` and
-/// was parsed here in `run.rs`, which is after the manifests, the diff and the
-/// whole selection — so a misspelt class cost a complete capture to report.
+/// The list arrives already parsed and validated: by the time it reaches here the
+/// misspelt-class case is a usage error, and it is raised before any socket opens
+/// rather than after a complete capture has been paid for.
 pub fn check(required: &[Class], selection: &Selection) -> Result<(), Failure> {
     if required.is_empty() {
         return Ok(());

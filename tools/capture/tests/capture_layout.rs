@@ -1,4 +1,4 @@
-//! M10, end to end: a real `gircap capture` against a local mock, and then the
+//! End to end: a real `gircap capture` against a local mock, and then the
 //! whole offline half on what it wrote.
 //!
 //! **No test here can reach the network**, and that is enforced by construction
@@ -40,7 +40,7 @@ struct Scratch {
 impl Scratch {
     fn new(name: &str) -> Scratch {
         let path = std::env::temp_dir().join(format!(
-            "gircap-m10-{name}-{}-{:?}",
+            "gircap-layout-{name}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -173,9 +173,9 @@ fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
     (mock, scratch, r, bundle)
 }
 
-// ------------------------------------------------------- M10's acceptance
+// ----------------------------------------------------------------- acceptance
 
-/// M10: a captured artifact has **zero failed selfcheck rows**.
+/// A captured artifact has **zero failed selfcheck rows**.
 ///
 /// The one sentence the milestone's acceptance is written as, and the only
 /// assertion here that would be false about a real regression.
@@ -199,7 +199,7 @@ fn a_capture_leaves_no_failed_selfcheck_rows() {
     );
 }
 
-/// M10: `cargo test -p gircap` green and no network. The "no network" half is
+/// `cargo test -p gircap` green and no network. The "no network" half is
 /// the structural one: every request the capture made went to `127.0.0.1`.
 #[test]
 fn every_request_the_capture_made_went_to_the_mock() {
@@ -214,13 +214,11 @@ fn every_request_the_capture_made_went_to_the_mock() {
             "a request the mock does not own: {r:?}"
         );
     }
-    // **Only the ordering that still exists.** `getGameConfigs` and
-    // `getGameBranches` used to be asserted to arrive in that order, and that
-    // was always an accident: only the *second* carries the `package_id` that
-    // `getBuild` needs, so only `branches < builds` is a real invariant. The
-    // four HoYoPlay endpoints are now issued together, because none of them
-    // depends on another, and an assertion about which of two concurrent
-    // requests the mock happened to accept first is a test of the mock.
+    // **Only the ordering that is real.** Only `getGameBranches` carries the
+    // `package_id` that `getBuild` needs, so `branches < builds` is the invariant;
+    // anything asserting which of two *concurrent* requests the mock happened to
+    // accept first would be a test of the mock. The four HoYoPlay endpoints are
+    // issued together, because none of them depends on another.
     let order: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
     let branches = order
         .iter()
@@ -321,11 +319,11 @@ fn the_error_shapes_document_reproduces_the_measured_failure_answers() {
     );
 
     // The retry policy is stated in the artifact, not only in the fetcher — and
-    // "stated" now means *derived*. This used to assert `retryable == false` for
-    // every row, which passed against a hardcoded constant and would have kept
-    // passing if the policy changed. Asserting the policy *relation* is the
-    // claim the field's doc makes: if the fetcher would retry this status, the
-    // document says so, whatever the answer is today.
+    // "stated" means *derived*. Asserting `retryable == false` for every row would
+    // pass against a hardcoded constant and would keep passing if the policy
+    // changed. Asserting the policy *relation* is the claim the field's doc
+    // makes: if the fetcher would retry this status, the document says so,
+    // whatever the answer is today.
     for r in rows {
         let status = r["status"].as_u64().expect("every shape records a status");
         let expected =
@@ -598,16 +596,15 @@ fn the_bundle_has_the_shape_the_schema_documents() {
 
 /// The request log's rows, pinned.
 ///
-/// **§5.5 rows 1 and 16 landed here.** `api/requests.ndjson` is one of the six
-/// documents that always differ run to run — `ts`, `elapsed_ms`, CDN headers,
-/// `etag` — so `tests/bundle_diff.rs` compares it with those blanked and nothing
-/// else compares it at all. That is sound for what it was built to do: two
-/// captures of the *same* binary cannot disagree about a change they both carry,
-/// so the gate catches nondeterminism and nothing else. A refactor that changes
-/// what a row *says* passes it, and both bundles under `artifacts/` drifted that
-/// way without anything failing.
+/// `api/requests.ndjson` is one of the six documents that always differ run to
+/// run — `ts`, `elapsed_ms`, CDN headers, `etag` — so `tests/bundle_diff.rs`
+/// compares it with those blanked and nothing else compares it at all. That is
+/// sound for what it was built to do: two captures of the *same* binary cannot
+/// disagree about a change they both carry, so the gate catches nondeterminism
+/// and nothing else. A change to what a row *says* passes it, so the row content
+/// is pinned here instead.
 ///
-/// So the row content is pinned here instead. Each line is
+/// Each line is
 ///
 ///     seq kind method path status bytes_in attempts stored_as range
 ///
@@ -620,11 +617,12 @@ fn the_bundle_has_the_shape_the_schema_documents() {
 ///
 /// What it catches, each confirmed by mutation rather than by argument:
 ///
-/// - `bytes_in` on the seven `probe` rows. §5.5 row 1 found these were **0 for
-///   every non-2xx**, because the body was dropped unread. Zeroing them again
-///   fails here and nowhere else.
-/// - `stored_as` on the six `api` rows. §6.1 filled those in; the two bundles
-///   under `artifacts/` still carry 42 marked rows where the tool writes 48.
+/// - `bytes_in` on the seven `probe` rows, which are the only non-2xx rows this
+///   fixture produces. They must carry the real body length: zeroing them fails
+///   here and nowhere else.
+/// - `stored_as` on the six `api` rows. Zeroing them again fails here, and
+///   nothing in `verify` would, because `stored_as` is a claim about where a body
+///   was written rather than a digest it could re-derive.
 /// - the `seq` column: dense, unique, from 1. Making `reserve()` return a
 ///   constant fails here.
 ///
@@ -632,8 +630,8 @@ fn the_bundle_has_the_shape_the_schema_documents() {
 /// misleading: `attempts` is 1 on every row, because this fixture never
 /// retries. Forcing it to 1 survives. So a **spurious** retry is caught and a
 /// **hidden** one is not — the pin says "nothing was retried", not "retries are
-/// recorded". Closing that would need a route that fails once and then answers,
-/// which the mock does not have.
+/// recorded". `a_retry_is_recorded_as_retried` covers the other half, with a mock
+/// route that answers `503` exactly once.
 ///
 /// `--jobs 1` is pinned for determinism, the same reason `bundle_diff`'s module
 /// doc gives: `seq` is assigned at reserve time, so which request gets which
@@ -877,7 +875,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
 /// The wording is the point. `id` alone would pass if an assertion were
 /// silently narrowed — "every reused chunk's old-file slice MD5 matches" and
 /// "some reused chunk's MD5 matches" are both `A10`, and only the text tells
-/// them apart. §5.5 row 16 (`is_fatal`) is the same idea from the other side.
+/// them apart.
 #[test]
 fn the_selfcheck_document_asserts_what_it_always_asserted() {
     let (_m, _s, _r, bundle) = capture_ok("sc");
@@ -1137,7 +1135,7 @@ fn ureq_get(url: &str) -> Vec<u8> {
     all[split + 4..].to_vec()
 }
 
-/// M10: **no test touches the network.** Proven, not asserted.
+/// **No test touches the network.** Proven, not asserted.
 ///
 /// The claim is checkable from the artifact itself: `api/requests.ndjson` records
 /// the URL of every request the run made, including the manifest and chunk CDN
@@ -1212,7 +1210,7 @@ fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
 
 // ------------------------------------------- the offline half, on this bundle
 
-/// M10's real payload: what the capture wrote is good enough to verify and to
+/// The real payload: what the capture wrote is good enough to verify and to
 /// rebuild, with no network involved in either step.
 #[test]
 fn the_captured_bundle_verifies_offline() {
@@ -1345,7 +1343,7 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
     }
 }
 
-/// `--audio` widens the pool, which is M5's whole claim and the only reason the
+/// `--audio` widens the pool, which is its whole claim and the only reason the
 /// flag exists.
 ///
 /// The default is `en-us`, so the widening is asserted as a *difference*: with
@@ -1412,12 +1410,11 @@ fn requiring_an_unavailable_class_is_exit_four() {
 /// The six `api` rows in `requests.ndjson` carry the path their body was
 /// written to, and nothing else is marked.
 ///
-/// **§6.1, verified defect #2.** All six `api` rows recorded a null `stored_as`
-/// for a body that was sitting on disk, while `chunk` was 38/38 and `manifest`
-/// 4/4. The cause was `CapturedBody::seq` hardcoded to `0` with the comment
-/// "filled in by the caller", and the only thing that could fill it in —
-/// `hyp::attach_seq` — had no production caller. `set_stored_as(0, ..)` found no
-/// row and recorded nothing.
+/// **The property that is easy to lose.** A null `stored_as` here means the row
+/// is a claim about where a body went, and a null claim on a body that is
+/// sitting on disk under `api/` is a falsehood in the one field a reader would
+/// use the log for. Nothing in `verify` re-derives it — it is not a digest — so
+/// only a field-level check catches it.
 ///
 /// Asserted as a set equality rather than by sequence number or URL shape,
 /// because both of those are incidental: the property that matters is that the

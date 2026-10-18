@@ -1,9 +1,7 @@
 # `gircap` bundle differ
 
-The instrument behind [`../docs/04-output-contract-history.md`](../docs/04-output-contract-history.md).
-Read that document for what it found and
-[`../docs/05-bundle-differ.md`](../docs/05-bundle-differ.md) for why it is
-built this way. This file is how to run it.
+The instrument behind [`../docs/04-bundle-differ.md`](../docs/04-bundle-differ.md),
+which is how it works and why. This file is how to run it.
 
 Standard library only. Nothing here is part of the crate: `gircap` has no
 dependency on these scripts and they have no dependency on the tool beyond
@@ -14,7 +12,7 @@ reading bundles and, for the probe driver, running the `gircap` binary.
 | file | what it does |
 |---|---|
 | `bundle_differ.py` | **the instrument.** normalises a bundle and compares two of them, file-set first then byte-for-byte |
-| `mutation_control.py` | proves the instrument: injects the nine kinds of change this history made and requires all nine to be caught |
+| `mutation_control.py` | proves the instrument: injects nine kinds of change this tool's output has actually been through, and requires all nine to be caught |
 | `search.py` | the divide-and-conquer that finds which commits moved the output |
 | `probe.ps1` | build one commit and capture it twice; fingerprints and rejects it if the two disagree |
 | `zz_probe.rs` | the capture driver, copied into `tests/` by `probe.ps1` |
@@ -25,25 +23,28 @@ reading bundles and, for the probe driver, running the `gircap` binary.
 
 ```powershell
 # one commit
-pwsh -File tools/capture/tools/probe.ps1 -Commit 7771323 -Profile default
+pwsh -File tools/capture/tools/probe.ps1 -Commit <sha> -Profile default
 
-# the whole search (caches; safe to re-run, safe to interrupt)
+# the whole history (caches; safe to re-run, safe to interrupt)
 python tools/capture/tools/search.py
 
 # prove the differ still works - run this after any edit to bundle_differ.py
 python tools/capture/tools/mutation_control.py
 ```
 
+`mutation_control.py` mutates the fingerprint of the commit named by
+`GIRCAP_MUTATION_SRC` (default `HEAD`), so probe that commit first.
+
 Set `GIRCAP_PROBE_HOME` to choose the scratch root; it defaults to
 `%TEMP%\gircap-probe`. A `git worktree` and a shared `CARGO_TARGET_DIR` live
-under it, which is what keeps a rebuild at ~3 minutes instead of ~8.
+under it, which is what keeps a rebuild cheap.
 
 ## The two rules that make it mean something
 
 1. **Never compare one binary to itself and conclude "nothing changed".** That
    is `tests/bundle_diff.rs`'s job, and it is blind by construction to a change
-   applied uniformly to every capture — which is the entire subject here. This
-   tool exists to compare *across* binaries.
+   applied uniformly to every capture. This tool exists to compare *across*
+   binaries.
 2. **Prove the differ before trusting it.** `mutation_control.py` is that proof,
    including the negative control: an unmutated copy must read identical, or a
    harness that always fires would prove nothing.

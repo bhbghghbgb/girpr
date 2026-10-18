@@ -4,22 +4,23 @@ Mutation control for the differ.
 
 A normaliser that scrubs too much reports "identical" for two bundles that
 differ, and every conclusion drawn from it is then worthless.  So: take a known
-fingerprint, inject the exact kinds of change the refactor actually made, and
-require the differ to catch each one.
+fingerprint, inject the kinds of change this tool's output has actually
+undergone, and require the differ to catch each one.
 
-The mutations are the real ones, not invented:
-  * stored_as filled in on an api row        (what 7771323 does)
-  * a request header value changed          (what cd0e876 does)
-  * a blob's bytes changed                  (what 54ff12d / 12ef18a could do)
-  * a selfcheck assertion's wording moved   (what 43f66fa pins)
+The mutations are the real ones, not invented - each is a shape of change this
+tool's output has actually been through:
+  * stored_as filled in on an api row        (a null becoming a path)
+  * a request header value changed          (identity vs gzip)
+  * a blob's bytes changed
+  * a selfcheck assertion's wording moved   (an assertion silently narrowed)
   * a document added and one removed        (a layout change)
-  * attempts / bytes_in on a request row    (what 527833c / 844f5c2 do)
+  * attempts / bytes_in on a request row    (a retry, a priced failure)
   * paths.tsv rows reordered                (a sort comparator drifting)
 """
 import json
+import os
 import shutil
 import subprocess
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -27,7 +28,10 @@ from pathlib import Path
 H = Path(
     os.environ.get("GIRCAP_PROBE_HOME", str(Path(tempfile.gettempdir()) / "gircap-probe"))
 )
-SRC = H / "fp" / "default" / "884eeea"
+# Which cached fingerprint to mutate.  Produce one with
+# `pwsh -File tools/capture/tools/probe.ps1 -Commit <sha> -Profile default`.
+BASELINE = os.environ.get("GIRCAP_MUTATION_SRC", "HEAD")
+SRC = H / "fp" / "default" / BASELINE[:7]
 WORK = H / "fp" / ".mutants"
 
 
@@ -101,8 +105,8 @@ def m_stored_as(d):
 def m_header(d):
     p = d / "api" / "requests.ndjson"
     t = p.read_text(encoding="utf-8")
-    assert '"accept-encoding":"gzip"' in t, "the baseline records this header"
-    p.write_text(t.replace('"accept-encoding":"gzip"', '"accept-encoding":"identity"', 1), "utf-8")
+    assert '"accept-encoding":"identity"' in t, "the baseline records this header"
+    p.write_text(t.replace('"accept-encoding":"identity"', '"accept-encoding":"gzip"', 1), "utf-8")
 
 
 def m_blob(d):
@@ -164,19 +168,24 @@ def m_nothing(d):
 
 
 MUTATIONS = [
-    ("stored_as filled in on an api row   (7771323)", m_stored_as),
-    ("a request header value changed     (cd0e876)", m_header),
+    ("stored_as filled in on an api row   (a null becoming a path)", m_stored_as),
+    ("a request header value changed     (identity vs gzip)", m_header),
     ("a chunk blob's bytes changed", m_blob),
-    ("an assertion's wording narrowed   (43f66fa)", m_wording),
+    ("an assertion's wording narrowed", m_wording),
     ("a document added", m_add_doc),
     ("a document removed", m_drop_doc),
-    ("attempts=2 on a probe row         (527833c)", m_attempts),
-    ("bytes_in set on a 404 row         (844f5c2)", m_bytes_in),
+    ("attempts=2 on a probe row", m_attempts),
+    ("bytes_in set on a 404 row", m_bytes_in),
     ("paths.tsv rows reordered          (sort drift)", m_reorder),
 ]
 
 if __name__ == "__main__":
-    print("mutation control for the differ (source: 884eeea baseline)\n")
+    if not SRC.is_dir():
+        raise SystemExit(
+            f"no fingerprint for {BASELINE} at {SRC}; run "
+            f"pwsh -File tools/capture/tools/probe.ps1 -Commit {BASELINE} -Profile default"
+        )
+    print(f"mutation control for the differ (source: {BASELINE})\n")
     results = [(name, check(name, fn)) for name, fn in MUTATIONS]
 
     # Negative control: an unmutated copy must read identical, or a control that

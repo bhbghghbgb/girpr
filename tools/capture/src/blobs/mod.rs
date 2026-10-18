@@ -387,11 +387,9 @@ impl Store {
     /// Fetch one chunk straight to disk, digest it on the way past, and measure it
     /// from the file it landed in.
     ///
-    /// §6.6.2. This replaces three things: the body was fetched into a `Vec<u8>`,
-    /// the whole thing was then measured, and only then written. The largest chunk
-    /// in the reference bundle is 3 689 476 B and `--jobs 8` keeps eight in flight,
-    /// so the body was resident for the whole fetch — and §5.4 had already removed
-    /// the *decoded* buffer, so this was the last copy.
+    /// The largest chunk in the reference bundle is 3 689 476 B and `--jobs 8`
+    /// keeps eight in flight, so a body held whole for the length of its fetch is
+    /// up to ~30 MB of resident chunks.
     ///
     /// The order is deliberate and is why the digests can be trusted:
     ///
@@ -407,10 +405,10 @@ impl Store {
     /// decode task is cancelled, and so a decode failure is recorded on a row whose
     /// bytes a reader can actually check.
     ///
-    /// **An undecodable body is kept, not dropped** (§6.3). The bytes are on disk
-    /// before they are ever measured, so a body that is not a zstd frame becomes a
-    /// row carrying its digests and the reason — rather than a hole, and rather
-    /// than a bundle claiming the fetch failed when it succeeded.
+    /// **An undecodable body is kept, not dropped.** The bytes are on disk before
+    /// they are ever measured, so a body that is not a zstd frame becomes a row
+    /// carrying its digests and the reason — rather than a hole, and rather than a
+    /// bundle claiming the fetch failed when it succeeded.
     ///
     /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
     /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
@@ -465,23 +463,18 @@ impl Store {
 
     /// The final path for a blob, and the tmp path it is written under.
     ///
-    /// **The tmp round-trip is kept.** §6.6.2 said this could delete it, and it
-    /// could — but a crash mid-write would then leave a truncated file at the
-    /// final path, where it is indistinguishable from a good blob to every reader,
-    /// including `verify`. One rename is not worth that.
+    /// **The tmp round-trip is not removable.** A crash mid-write would otherwise
+    /// leave a truncated file at the final path, where it is indistinguishable from
+    /// a good blob to every reader, including `verify`. One rename is not worth
+    /// that — and on Windows `std::fs::rename` *does* replace an existing
+    /// destination (`renaming_a_blob_over_an_existing_one_replaces_it` in this
+    /// module's tests), so the step is not redundant with anything.
     ///
-    /// The *other* half of that item — "`fs::rename` fails on Windows when the
-    /// destination exists, so re-capturing into an existing bundle directory
-    /// fails on every blob" — is **not true**, and is checked rather than assumed:
-    /// `renaming_a_blob_over_an_existing_one_replaces_it` in this module's tests.
-    /// `std::fs::rename` replaces. Had it been believed, the "fix" would have been
-    /// to delete the atomic step this function exists to provide.
-    ///
-    /// **The tmp name carries the slot, not just the chunk id.** §5.5 row 3:
-    /// derived from the chunk id alone, two tasks that wanted the *same* id would
-    /// write one file interleaved and the first `rename` would publish a
-    /// half-written blob — silent corruption, with every digest in
-    /// `chunks/index.json` quietly describing the wrong bytes.
+    /// **The tmp name carries the slot, not just the chunk id.** Derived from the
+    /// chunk id alone, two tasks that wanted the *same* id would write one file
+    /// interleaved and the first `rename` would publish a half-written blob —
+    /// silent corruption, with every digest in `chunks/index.json` quietly
+    /// describing the wrong bytes.
     ///
     /// Those two tasks cannot exist today: `chunks::wants` keys a `BTreeMap` on
     /// `chunk.id`, so ids are unique by construction, and
@@ -634,16 +627,12 @@ mod tests {
         d
     }
 
-    /// §5.5 row 2 said `fs::rename` fails on Windows when the destination exists,
-    /// and that "re-capturing into an existing bundle directory fails on every
-    /// single blob". **It does not.** `std::fs::rename` calls `MoveFileExW` with
-    /// `MOVEFILE_REPLACE_EXISTING`, so the destination is replaced.
-    ///
-    /// Checked rather than argued, because the claim was filed as a reproducible
-    /// bug on the platform this repo develops on and would otherwise have been
-    /// "fixed" by deleting an atomic step the code needs. The destination here is
-    /// deliberately *longer* than the source, so a copy-not-replace
-    /// implementation would leave a tail behind and be caught.
+    /// `fs::rename` **does** replace an existing destination on Windows: it calls
+    /// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`. This is checked rather
+    /// than assumed, because "rename fails when the target exists" is a common
+    /// belief and acting on it here would mean deleting the atomic step the code
+    /// needs. The destination is deliberately *longer* than the source, so a
+    /// copy-not-replace implementation would leave a tail behind and be caught.
     #[test]
     fn renaming_a_blob_over_an_existing_one_replaces_it() {
         let dir = scratch("rename-over");
@@ -670,11 +659,11 @@ mod tests {
 
     #[test]
     fn two_wants_for_one_chunk_id_would_not_share_a_temp_file() {
-        // **§5.5 row 3, the store half.** The tmp path used to be derived from the
-        // chunk id alone, so two tasks wanting the same id would write one file
-        // interleaved and the first `rename` would publish a **half-written
-        // blob** — silent corruption, with every digest in `chunks/index.json`
-        // quietly describing the wrong bytes and nothing failing.
+        // The store half of the tmp-naming invariant: derived from the chunk id
+        // alone, two tasks wanting the same id would write one file interleaved
+        // and the first `rename` would publish a **half-written blob** — silent
+        // corruption, with every digest in `chunks/index.json` quietly describing
+        // the wrong bytes and nothing failing.
         //
         // Fed the *same* id twice on purpose, because that is the only input that
         // distinguishes a slot-suffixed name from an id-derived one.

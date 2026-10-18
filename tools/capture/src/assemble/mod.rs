@@ -1,6 +1,6 @@
 //! Building a file out of chunks.
 //!
-//! **M7.** Three assemblies, and the third is the point: `old` from
+//! Three assemblies, and the third is the point: `old` from
 //! `materialize_old`, `new` from `materialize_new`, and the *patch flow* -
 //! REUSE a local slice after verifying it by MD5, FETCH otherwise - which must
 //! then byte-equal the direct `new` assembly. The first two prove the artifact
@@ -39,10 +39,9 @@ enum Inner<'i> {
     /// Read `chunks/blobs/<id>.zst` and decompress it.
     Disk {
         root: PathBuf,
-        /// Borrowed, not copied. This used to build a `BTreeMap` of every
-        /// chunk's id, stored path and md5 at construction, which meant a
-        /// second copy of the index's whole id space for the life of the
-        /// source.
+        /// Borrowed, not copied. A `BTreeMap` of every chunk's id, stored path
+        /// and md5 built at construction would be a second copy of the index's
+        /// whole id space for the life of the source.
         index: &'i ChunkIndex,
         /// One cell per stored blob, filled on first decode, when
         /// [`ChunkSource::memoizing`] asked for it.
@@ -247,19 +246,16 @@ impl FileResult {
 pub struct PatchOutcome {
     /// `md5` of the bytes the patch flow produced.
     ///
-    /// **Not the bytes themselves.** §5.5 row 7: this struct used to carry
-    /// `bytes: Vec<u8>` as well, and nothing outside [`assemble`] ever read them —
-    /// they existed so A9 could compare them against the direct assembly, and then
-    /// were held for the rest of the capture beside `old.bytes` and `new.bytes`,
-    /// which is where the plan's ~22 MB went.
+    /// **Not the bytes themselves.** Holding them here would keep a third copy of
+    /// a ~22 MB file alive beside `old.bytes` and `new.bytes` for the rest of the
+    /// capture, and nothing outside [`assemble`] ever read them.
     ///
     /// The comparison is still a **byte** comparison, and still happens where both
-    /// sides are alive; it is settled before these bytes are returned. So removing
-    /// the field does not turn A9 into a digest check — see
+    /// sides are alive; it is settled before these bytes are returned. So this does
+    /// not turn A9 into a digest-only check — see
     /// [`Assembled::selfcheck_rows`] for what the *artifact's* A9 row compares,
-    /// which is `md5` against `md5`, and `docs/00-spec.md:407` for what the spec
-    /// says A9 is. Those two are not the same claim, which is worth knowing and is
-    /// not this commit's business.
+    /// which is `md5` against `md5`, and `docs/00-spec.md` §6 for what the spec
+    /// says A9 is. Those two are not the same claim, which is worth knowing.
     pub md5: String,
     /// A9: byte-equal to the direct `materialize_new` assembly.
     pub equals_new: bool,
@@ -282,7 +278,7 @@ impl PatchOutcome {
     }
 }
 
-/// Everything M7 produces for one capture.
+/// Everything this module produces for one capture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assembled {
     /// The map that describes the patch.
@@ -380,9 +376,9 @@ impl Assembled {
         self.selfcheck_rows().iter().all(|a| a.ok)
     }
 
-    /// A12, recomputed from the plan rather than read from M6.
+    /// A12, recomputed from the plan rather than read from the chunk store.
     ///
-    /// Recomputed on purpose: M6 checks it over the *planned* sets and this
+    /// Recomputed on purpose: the store checks it over the *planned* sets and this
     /// checks it over the *written* map. If the two ever disagree the map is what
     /// a consumer would follow, so the map is what has to be right.
     pub fn a12_holds(&self) -> bool {
@@ -538,12 +534,11 @@ impl<'i> ChunkSource<'i> {
                     .as_deref()
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
                 let path = root.join(rel);
-                // **Decoded from the file, not from a `Vec` of it.** §5.5 row 8:
-                // this used to `std::fs::read` the whole blob and then decode from
-                // that buffer, so the compressed bytes stayed alive for the whole
-                // decode beside the decompressed ones. Decoding straight through a
-                // buffered reader drops the compressed copy entirely — peak is the
-                // output plus one read window.
+                // **Decoded from the file, not from a `Vec` of it.** Reading the
+                // whole blob first would keep the compressed bytes alive for the
+                // whole decode beside the decompressed ones; decoding straight
+                // through a buffered reader drops the compressed copy entirely, so
+                // peak is the output plus one read window.
                 //
                 // The capacity comes from the index, which carries the declared
                 // decompressed length, so the output buffer is allocated once
@@ -743,7 +738,7 @@ pub struct AssemblyInput<'a, 'i> {
     pub chunks: &'a ChunkSource<'i>,
 }
 
-/// Assemble one file pair and return everything M7 produces.
+/// Assemble one file pair and return everything this module produces.
 ///
 /// The flow, per new-side chunk, in the order the spec states it:
 ///
@@ -771,9 +766,9 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     //
     // The flow's own bytes come back beside its outcome rather than inside it,
     // because **they are needed for exactly one comparison and then never
-    // again** (§5.5 row 7). `PatchOutcome` used to carry them for the rest of the
-    // capture — held alongside `old.bytes` and `new.bytes`, ~68 MB of peak
-    // residency for a file the bundle then writes to disk and stops caring about.
+    // again**. Keeping them on the outcome would hold them for the rest of the
+    // capture — alongside `old.bytes` and `new.bytes`, ~68 MB of peak residency
+    // for a file the bundle then writes to disk and stops caring about.
     let (plan, patch, patch_bytes) = match (new_entry, &old) {
         (Some(ne), Some(o)) => {
             let (plan, outcome, bytes) = patch_flow(input, ne, o, &old_tag, &new_tag)?;
@@ -781,11 +776,11 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
         }
         // `added`: no old side, so there is nothing to *patch from* - but there
         // is still a plan, and every entry in it is FETCH. A consumer handed
-        // this path has to download every new-side chunk, and `plan: null` /
-        // `totals: null` told it nothing about that. Leaving them null made
+        // this path has to download every new-side chunk, so `plan: null` /
+        // `totals: null` would tell it nothing about that. Leaving them null makes
         // `expectations.download_bytes` fall back to a defaulted `0`, which is
-        // not "unrecorded" but *false*: the one-chunk file in the M11 bundle
-        // costs 114 357 B to repair and the artifact claimed zero.
+        // not "unrecorded" but *false*: the one-chunk `added` file costs
+        // 114 357 B to repair and the artifact would claim zero.
         (Some(ne), None) => (Some(fetch_all_plan(input, ne, &new_tag)?), None, None),
         // `removed`: no new side, so there is no plan and no target.
         (None, _) => (None, None, None),
@@ -795,24 +790,22 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     // settled here rather than inside the flow — and `patch_bytes` dies on the
     // next line, so the ~22 MB is not resident while the bundle is written.
     //
-    // **A byte comparison, not a digest comparison**, because
-    // `docs/00-spec.md:407` specifies A9 as byte equality and the plan warned
-    // that keeping only `md5` would weaken it. Both buffers are therefore
-    // necessarily alive for the compare; what this buys is that they are not
-    // alive afterwards.
+    // **A byte comparison, not a digest comparison**, because `docs/00-spec.md` §6
+    // specifies A9 as byte equality. Both buffers are therefore necessarily alive
+    // for the compare; what this buys is that they are not alive afterwards.
     //
-    // **Two things worth knowing about that verdict, found while doing this.**
+    // **Two things worth knowing about that verdict.**
     //
     // First, `equals_new` reaches production only through the `assembled` log
     // line in `emit::fixture`. The *artifact's* A9 row is built by
     // `selfcheck_rows` from `p.md5` against `n.md5` — a digest comparison. So the
     // spec's byte-equality assertion and the bundle's A9 row are not the same
-    // claim; closing that gap is artifact-visible and is not made here.
+    // claim; closing that gap is artifact-visible and is not done here.
     //
-    // Second, that gap is why this change **cannot** be covered by a negative
-    // test. Every reachable disagreement also changes the digests, so the row goes
-    // red either way, and replacing this comparison with a constant `true` passes
-    // the entire suite — verified by mutation, twice.
+    // Second, that gap is why this **cannot** be covered by a negative test. Every
+    // reachable disagreement also changes the digests, so the row goes red either
+    // way, and replacing this comparison with a constant `true` passes the entire
+    // suite — verified by mutation, twice.
     // `a9_is_red_when_the_patch_flow_and_the_direct_assembly_disagree` pins the
     // part that *is* reachable: that a disagreement is visible at all.
     let mut patch = patch;
@@ -821,10 +814,9 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     }
     drop(patch_bytes);
 
-    // The plan is **moved**, not borrowed. It was `plan.as_deref()` plus a
-    // `to_vec()` inside `build_map` — a deep copy of every entry's ids, URLs,
-    // notes and sizes, ~300 allocations per capture — for a function that only
-    // ever read it.
+    // The plan is **moved**, not borrowed: `build_map` only ever reads it, and a
+    // `to_vec()` on the way in would deep-copy every entry's ids, URLs, notes and
+    // sizes — ~300 allocations per capture — to hand it a copy nobody mutates.
     let map = build_map(input, old.as_ref(), new.as_ref(), plan)?;
     Ok(Assembled {
         map,
@@ -1037,8 +1029,9 @@ fn build_map(
         md5: r.declared_md5.clone(),
         nchunks: r.nchunks,
     };
-    let totals = // One pass for all four numbers. It was five, each re-walking the plan and
-        // each calling `is_moved()` or comparing `decision` again.
+    let totals = // One pass for all four numbers. Five passes, each re-walking the
+        // plan and each calling `is_moved()` or comparing `decision` again, is
+        // five times the work for five numbers that a single walk produces.
         plan.as_ref().map(|p| {
             let mut reuse = 0_usize;
             let mut fetch = 0_usize;
@@ -1247,9 +1240,9 @@ fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
 const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
 
 /// The range is checked *before* the chunk is decoded.
-    ///
-    /// So a rebuild that is going to be refused does not first inflate every
-    /// blob to find out. `materialize` used to do this the other way round.
+///
+/// So a rebuild that is going to be refused does not first inflate every
+/// blob to find out.
     #[test]
     fn a_range_that_does_not_fit_is_refused_without_decoding_it() {
         use std::borrow::Cow;
@@ -1447,11 +1440,10 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             p.equals_new,
             "the patch flow and the direct assembly disagree"
         );
-        // `p.bytes` used to be asserted here directly. It is gone (§5.5 row 7), and this
-        // line is the reason the change is safe: `equals_new` **is** that byte
-        // comparison, settled inside `assemble` while both sides were alive. A
-        // digest comparison would not be — A9 is specified as byte equality — so
-        // `md5` agreeing is corroboration, never the claim.
+        // `equals_new` **is** the byte comparison, settled inside `assemble` while
+        // both sides were alive and then dropped. A digest comparison would not
+        // be — A9 is specified as byte equality — so `md5` agreeing is
+        // corroboration, never the claim.
         assert_eq!(p.md5, n.md5, "and the recorded digests agree too");
         assert!(a.all_green(), "{:?}", a.selfcheck_rows());
     }

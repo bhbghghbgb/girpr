@@ -1,21 +1,22 @@
 //! The path diff, the reuse pool, and the `getBuild.stats` reconciliation.
 //!
-//! **M4.** This is the module that makes the artifact a *measurement* rather
+//! This is the module that makes the artifact a *measurement* rather
 //! than a dump. Four things live here, and they are deliberately kept apart:
 //!
 //! 1. **Set difference over paths** — common / identical / changed / added /
 //!    removed. Cheap, and the only thing a reader needs to know whether a
 //!    version pair was interesting at all.
 //! 2. **Per-path scoring** — `reused`, `moved`, `patch_bytes`, `total_cost`.
-//!    §5 defines these; M4 computes them and M5 *selects* on them.
+//!    Spec §5 defines these; this module computes them and `select` *acts* on
+//!    them.
 //! 3. **The reuse pool** — how much same-file-only reuse forgoes. This is a
 //!    measurement of a deliberate simplification in the tool under test, and
 //!    nothing here acts on it.
 //! 4. **Two identities, deliberately different.** Scoring compares chunks by
 //!    `(uncompressed_md5, uncompressed_size)` — MD5 alone is not enough,
 //!    because a truncated chunk can share one. The reuse-pool headline number is
-//!    defined in §10 as *"an MD5 present somewhere in the old manifest"* and is
-//!    counted that way, so it measures what the document says it measures.
+//!    defined in spec §10 as *"an MD5 present somewhere in the old manifest"* and
+//!    is counted that way, so it measures what the document says it measures.
 //!
 //! ## What "moved" means, and why it is not a bug
 //!
@@ -69,7 +70,7 @@ impl State {
 /// diff. `(&str, i64)` is already `Hash + Eq`, so the helper is gone.
 type ChunkKey<'a> = (&'a str, i64);
 
-/// One common path's score (§5).
+/// One common path's score (spec §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathScore {
     /// Manifest-relative path.
@@ -207,7 +208,7 @@ impl PathDiff {
     }
 }
 
-/// `diff/reuse_pool.json` — the cost of same-file-only reuse (§10).
+/// `diff/reuse_pool.json` — the cost of same-file-only reuse (spec §10).
 ///
 /// Recorded because it bounds a deliberate simplification in the tool under test.
 /// `gircap` never acts on any of it.
@@ -217,7 +218,7 @@ pub struct ReusePool {
     pub new_chunks_total: u64,
     /// How many of them have an MD5 present *somewhere* in the old manifest.
     ///
-    /// MD5-only, because that is what the number in §10 measures. §5's scoring
+    /// MD5-only, because that is what the number in §10 measures. spec §5's scoring
     /// uses `(md5, size)`; the two differ, and mixing them up would make this
     /// number unreproducible against the document it comes from.
     pub new_chunks_md5_present_in_old_manifest: u64,
@@ -240,7 +241,7 @@ impl ReusePool {
         this quantifies its cost";
 }
 
-/// Everything M4 derives from one pair of captured manifests.
+/// Everything this module derives from one pair of captured manifests.
 #[derive(Debug, Clone)]
 pub struct FieldDiff {
     /// The `matching_field` this pair came from.
@@ -356,8 +357,8 @@ type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
 /// chunks again to compute.
 ///
 /// The byte total is folded into the index build because that walk is already
-/// happening: `score` used to make a second pass over the old file's chunks for
-/// `old_bytes`, once per common path.
+/// happening: a second pass over the old file's chunks for `old_bytes`, once per
+/// common path, is 113 610 walks of a 2 744-entry loop for one number.
 ///
 /// Public because [`score`] is, and a public function cannot take a private
 /// type. Nothing outside this module should build one: `index_file` is the
@@ -406,7 +407,7 @@ fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
     m
 }
 
-/// Score one common path (§5).
+/// Score one common path (spec §5).
 pub fn score(
     new: &SophonChunkFile,
     old: &SophonChunkFile,
@@ -448,11 +449,11 @@ pub fn score(
 }
 
 /// Measure what same-file-only reuse forgoes.
-/// `old_by_path` is borrowed rather than rebuilt.
 ///
-/// This used to construct the same `HashMap<&str, FileIndex>` — 113 610 inserts
-/// — from the same inputs, in the same call, a few lines after `diff_field` had
-/// already built it. About 40% of `diff`'s runtime, spent twice.
+/// `old_by_path` is borrowed rather than rebuilt. Constructing the same
+/// `HashMap<&str, FileIndex>` — 113 610 inserts — from the same inputs, in the
+/// same call, a few lines after `diff_field` had already built it is about 40% of
+/// this module's runtime, spent twice.
 fn reuse_pool<'a>(
     new: &CapturedManifest,
     old_by_path: &HashMap<&'a str, (&'a SophonChunkFile, OldFileIndex<'a>)>,
@@ -602,7 +603,7 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
     s
 }
 
-/// The cheapest scores, already ordered for §5's tie-break.
+/// The cheapest scores, already ordered for spec spec §5's tie-break.
 ///
 /// Order: `total_cost`, then the field — `game` **before** the audio fields —
 /// then `moved` desc, then `reused` desc, then `path` asc. Fully deterministic:
@@ -810,7 +811,7 @@ mod tests {
         );
     }
 
-    /// §5's formulas, computed by hand on the fixture above.
+    /// spec §5's formulas, computed by hand on the fixture above.
     #[test]
     fn reuse_moved_and_the_two_byte_totals_follow_section_five() {
         let d = three_state_pair();
@@ -1009,7 +1010,7 @@ mod tests {
 
     // ------------------------------------------------------------- ordering
 
-    /// §5's tie-break chain, asserted on inputs designed to collide at each
+    /// spec spec §5's tie-break chain, asserted on inputs designed to collide at each
     /// step. Determinism is the property: the same pair must always admit the
     /// same files.
     #[test]
@@ -1059,7 +1060,7 @@ mod tests {
     }
 
     /// `en-us` sorts before `game` alphabetically, so a plain `field asc` would
-    /// put a voice pack ahead of a game file on a cost tie — the opposite of §5.
+    /// put a voice pack ahead of a game file on a cost tie — the opposite of spec §5.
     #[test]
     fn game_ranks_before_the_audio_fields_not_alphabetically() {
         assert!(field_rank(GAME_FIELD) < field_rank("en-us"));
