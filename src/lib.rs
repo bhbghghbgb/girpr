@@ -39,6 +39,9 @@ pub mod report;
 pub mod sophon;
 pub mod util;
 
+#[cfg(test)]
+pub(crate) mod testtemp;
+
 pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang};
 pub use config::{RunCtx, RunFailure};

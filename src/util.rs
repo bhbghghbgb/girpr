@@ -300,21 +300,18 @@ mod tests {
 
     #[test]
     fn version_last_match_wins() {
-        let dir = std::env::temp_dir().join("girpr_test_cfg");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "version_last_match_wins");
         std::fs::write(
             dir.join("config.ini"),
             "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n",
         )
         .unwrap();
         assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn ignore_and_blacklist_parse() {
-        let dir = std::env::temp_dir().join("girpr_test_lists");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girpr_test_lists", "ignore_and_blacklist_parse");
         std::fs::write(
             dir.join("rc"),
             "{\"category\":\"10302\",\"is_delete\":true}\n{}\n",
@@ -323,13 +320,11 @@ mod tests {
         assert!(read_ignore_categories(&dir.join("rc")).contains("10302"));
         std::fs::write(dir.join("bl"), "{\"fileName\":\"a/b.dat\"}\n").unwrap();
         assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn config_bump_forces_target_keys_preserves_rest_and_is_idempotent() {
-        let dir = std::env::temp_dir().join("girpr_test_cfg_bump");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "bump_idempotent");
         std::fs::write(
             dir.join("config.ini"),
             "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
@@ -393,7 +388,6 @@ mod tests {
                 .count();
             assert_eq!(count, 1, "{key} must appear exactly once");
         }
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Collapse parity: other `[sections]` survive in place (never flattened
@@ -402,8 +396,7 @@ mod tests {
     /// (`uapc`/`wpf_version`/`predownload`/`plugin_*`) are preserved.
     #[test]
     fn config_bump_preserves_sections_and_merges_duplicates() {
-        let dir = std::env::temp_dir().join("girpr_test_cfg_sections");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "sections");
         std::fs::write(
             dir.join("config.ini"),
             "; leading comment\n\
@@ -482,15 +475,13 @@ mod tests {
             std::fs::read_to_string(dir.join("config.ini")).unwrap(),
             snapshot
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Missing file is created; header-less keys land in `[General]`;
     /// missing `sdk_version` defaults to empty (Collapse `DefaultIniVersion`).
     #[test]
     fn config_bump_creates_missing_and_handles_headerless() {
-        let dir = std::env::temp_dir().join("girpr_test_cfg_fresh");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "headerless");
         write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
@@ -505,6 +496,5 @@ mod tests {
         assert!(text2.contains("fps=60"), "{text2}");
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -64,6 +64,10 @@
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
+#[allow(dead_code)]
+#[path = "common/tempdir.rs"]
+mod tempdir;
+
 use std::path::{Path, PathBuf};
 
 use server::{Bridge, Bundle};
@@ -761,18 +765,19 @@ use server::{Capture, Origins};
 /// into a way to destroy the evidence.
 struct Scratch {
     root: PathBuf,
+    /// Removes the tree on drop. Named so the owned `root` path can stay a
+    /// plain `PathBuf` for the call sites that hand it to the binary.
+    _guard: tempdir::TempDir,
 }
 
 impl Scratch {
     fn new(bundle: &Bundle) -> Self {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("girpr_artifact_bridge_{}_{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("create scratch root");
+        let root = tempdir::TempDir::new("girpr_artifact_bridge", "scratch");
         copy_tree(&bundle.root.join("game"), &root.join("game"));
-        Self { root }
+        Self {
+            root: root.to_path_buf(),
+            _guard: root,
+        }
     }
 
     fn game(&self) -> PathBuf {
@@ -795,12 +800,6 @@ impl Scratch {
 
     fn plan_out(&self) -> PathBuf {
         self.root.join("plan.json")
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -1806,17 +1805,15 @@ async fn a_bundle_without_recorded_shapes_says_so_instead_of_inventing() {
 /// something the bundle does not vouch for" the spec forbids.
 struct ShadowBundle {
     dir: PathBuf,
+    /// Removes the tree on drop. Named so the owned `dir` path can stay a plain
+    /// `PathBuf` for the call sites that hand it to the binary.
+    _guard: tempdir::TempDir,
 }
 
 impl ShadowBundle {
     fn new(bundle: &Bundle) -> Self {
-        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "girpr_artifact_bridge_noshapes_{}_{n}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let guard = tempdir::TempDir::new("girpr_artifact_bridge_noshapes", "shadow");
+        let dir = guard.to_path_buf();
         std::fs::create_dir_all(dir.join("api")).expect("create shadow api/");
         std::fs::create_dir_all(dir.join("patchmaps")).expect("create shadow patchmaps/");
         std::fs::copy(bundle.root.join("MANIFEST.json"), dir.join("MANIFEST.json")).expect("copy");
@@ -1834,17 +1831,11 @@ impl ShadowBundle {
             )
             .unwrap_or_else(|e| panic!("copy api/{name}: {e}"));
         }
-        Self { dir }
+        Self { dir, _guard: guard }
     }
 
     fn dir(&self) -> &Path {
         &self.dir
-    }
-}
-
-impl Drop for ShadowBundle {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 

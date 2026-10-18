@@ -16,7 +16,6 @@
 //! sizes as int-or-string, chunk/manifest URL prefix + id joining.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -24,6 +23,11 @@ use std::sync::{
 
 use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 use prost::Message as _;
+
+// The scratch-directory helper lives beside this file rather than in it, so the
+// other integration targets can reach it without dragging in the mock server.
+#[path = "tempdir.rs"]
+pub mod tempdir;
 
 // ---------------------------------------------------------------------------
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)
@@ -177,15 +181,14 @@ pub fn build_fixture() -> GameFixture {
 // temp dirs (no extra deps)
 // ---------------------------------------------------------------------------
 
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Fresh unique temp dir for one test. Caller removes it at test end.
-pub fn temp_dir(name: &str) -> PathBuf {
-    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("girpr_it_{}_{}_{}", std::process::id(), n, name));
-    let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).expect("create temp game dir");
-    p
+/// Fresh unique temp dir for one test, removed when the returned guard drops.
+///
+/// The name carries the pid, a timestamp and a per-process counter so two runs
+/// — or two `cargo test` invocations — never share a tree, and the guard means
+/// the tree is removed even when a case fails before its last line. See
+/// [`tempdir`] for why each part is there.
+pub fn temp_dir(name: &str) -> tempdir::TempDir {
+    tempdir::TempDir::new("girpr_it", name)
 }
 
 pub fn write_game_file(game_dir: &std::path::Path, rel: &str, bytes: &[u8]) {

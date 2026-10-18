@@ -345,8 +345,7 @@ mod tests {
 
     #[test]
     fn writing_creates_the_parent_directory() {
-        let dir = std::env::temp_dir().join("girpr_test_plan_out");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, 60);
@@ -357,7 +356,6 @@ mod tests {
             written.ends_with('\n'),
             "a text document ends with a newline"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

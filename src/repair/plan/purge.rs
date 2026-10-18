@@ -295,6 +295,7 @@ fn file_name(rel: &str) -> &str {
 mod tests {
     use super::*;
     use crate::repair::plan::PlannedFile;
+    use crate::testtemp::TempDir;
     use std::collections::HashMap;
 
     fn purge_fixture() -> (HashSet<String>, HashSet<String>) {
@@ -455,45 +456,40 @@ mod tests {
 
     #[test]
     fn purge_dry_run_deletes_nothing_but_reports() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_dryrun");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("girpr_test_purge", "dryrun");
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("stray.dat"), b"drop").unwrap();
         let bytes = purge_now(&dir, &plan_of("game.dat"), true);
         assert_eq!(bytes, 0);
         assert!(dir.join("stray.dat").exists());
         assert!(dir.join("game.dat").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn purge_real_run_deletes_only_unexpected() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_real");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("girpr_test_purge", "real");
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("login.dat"), b"drop").unwrap();
         let bytes = purge_now(&dir, &plan_of("game.dat"), false);
         assert_eq!(bytes, 4);
         assert!(!dir.join("login.dat").exists());
         assert!(dir.join("game.dat").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn purge_removes_emptied_dirs_but_keeps_game_dir() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_dirs");
+        let dir = TempDir::new("girpr_test_purge", "dirs");
         std::fs::create_dir_all(dir.join("emptied/nested")).unwrap();
         std::fs::write(dir.join("emptied/nested/orphan.dat"), b"x").unwrap();
         let plan = plan_of("game.dat");
         purge_now(&dir, &plan, false);
         assert!(!dir.join("emptied").exists(), "emptied dir tree removed");
         assert!(dir.exists(), "game_dir itself survives");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn purge_keeps_dirs_that_still_hold_a_manifest_file() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_kept_dirs");
+        let dir = TempDir::new("girpr_test_purge", "kept_dirs");
         std::fs::create_dir_all(dir.join("deep/nested")).unwrap();
         std::fs::write(dir.join("deep/nested/game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
@@ -510,13 +506,11 @@ mod tests {
         assert!(dir.join("deep").exists(), "kept dir survives");
         assert!(dir.join("deep/nested/game.dat").exists());
         assert!(!dir.join("orphan.dat").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn plan_purge_totals_bytes_and_deletes_nothing() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_plan");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("girpr_test_purge", "plan");
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("a.dat"), b"12345").unwrap();
         std::fs::write(dir.join("b.dat"), b"123").unwrap();
@@ -533,7 +527,6 @@ mod tests {
         // Planning alone mutates nothing.
         assert!(dir.join("a.dat").exists());
         assert!(dir.join("b.dat").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The case a scope has to get right for it not to be destructive: a purge
@@ -542,8 +535,7 @@ mod tests {
     /// emptied-dir sweep never sweeps the tree it lives in.
     #[test]
     fn a_purge_under_a_scope_does_not_delete_or_sweep_anything_outside_it() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_scoped");
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = TempDir::new("girpr_test_purge", "scoped");
         std::fs::create_dir_all(dir.join("game")).unwrap();
         std::fs::create_dir_all(dir.join("adopted")).unwrap();
         // Two manifest paths, one admitted and one hidden, plus two hidden
@@ -576,13 +568,11 @@ mod tests {
         );
         assert_eq!(std::fs::read(dir.join("adopted/stray.dat")).unwrap(), b"y");
         assert_eq!(std::fs::read(dir.join("login.dat")).unwrap(), b"z");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_scope_that_admits_an_orphan_still_deletes_it() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_scope_purge");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("girpr_test_purge", "scope_purge");
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("stray.dat"), b"drop").unwrap();
         // `--include "*.dat"` admits the orphan; it is still not in the
@@ -594,12 +584,11 @@ mod tests {
         assert_eq!(apply_purge(&pp, false).unwrap(), 4);
         assert!(!dir.join("stray.dat").exists());
         assert!(dir.join("game.dat").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn dry_run_leaves_dirs_alone() {
-        let dir = std::env::temp_dir().join("girpr_test_purge_dirs_dry");
+        let dir = TempDir::new("girpr_test_purge", "dirs_dry");
         std::fs::create_dir_all(dir.join("empty_dir")).unwrap();
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
         let plan = plan_of("game.dat");
@@ -608,7 +597,6 @@ mod tests {
             dir.join("empty_dir").exists(),
             "dry-run must not sweep dirs"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

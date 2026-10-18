@@ -17,6 +17,9 @@
 //! fetched, so they live in `tests/repair_offline.rs` rather than here — this
 //! file never has a server.
 
+#[path = "common/tempdir.rs"]
+mod tempdir;
+
 use clap::Parser;
 use girpr::cli::Args;
 use std::process::Command;
@@ -197,9 +200,7 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // the file layer is installed: validation rejects it (exit 1) before any
     // game directory or network is touched, so the expected code is exact and
     // the case needs no server.
-    let scratch = std::env::temp_dir().join(format!("girpr_cli_logfile_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "unopenable");
     // A regular file where the log's parent directory should be: `create_dir_all`
     // cannot succeed, and cannot be confused with "the directory was absent".
     let blocker = scratch.join("not_a_dir");
@@ -232,8 +233,6 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // it. What must hold is that the failure moved nothing at all.
     let (base_code, _, _) = run(base);
     assert_eq!(code, base_code, "the log file must not move the exit code");
-
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 #[test]
@@ -246,8 +245,7 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
     // reports the default path is filtered out at `warn`, so anything still
     // saying `log file:` on stderr at that level is the acknowledgement the
     // caller asked for.
-    let scratch = std::env::temp_dir().join(format!("girpr_cli_logfile_ok_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "explicit");
     let log = scratch.join("nested").join("run.log");
 
     let (code, _, stderr) = run(&[
@@ -273,8 +271,6 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
         body.contains("log file:"),
         "the file carries the same announcement:\n{body}"
     );
-
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 #[test]

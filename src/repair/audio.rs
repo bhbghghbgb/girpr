@@ -103,13 +103,10 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::testtemp::TempDir;
 
-    fn dir(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("girpr_test_audio_{name}"));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    fn dir(name: &str) -> TempDir {
+        TempDir::new("girpr_test_audio", name)
     }
 
     #[test]
@@ -123,7 +120,6 @@ mod tests {
         let text = std::fs::read_to_string(d.join("Audio/scan.txt")).unwrap();
         assert_eq!(text, "Chinese\nEnglish(US)\nJapanese\nKorean");
         assert_eq!(read_scan_file(&d, "Audio/scan.txt"), all);
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -133,7 +129,6 @@ mod tests {
         let text = std::fs::read_to_string(d.join("scan.txt")).unwrap();
         assert!(text.is_empty(), "{text}");
         assert!(read_scan_file(&d, "scan.txt").is_empty());
-        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
@@ -145,6 +140,5 @@ mod tests {
         assert!(set.contains("en-us") && set.contains("zh-cn"));
         assert!(read_scan_file(&d, "").is_empty());
         assert!(read_scan_file(&d, "missing.txt").is_empty());
-        std::fs::remove_dir_all(&d).ok();
     }
 }
