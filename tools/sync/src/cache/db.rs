@@ -312,6 +312,10 @@ mod tests {
     ///
     /// The directory comes back as the guard that owns it, so the tree is
     /// removed when the test ends rather than when it remembers to ask.
+    ///
+    /// Bind it to `_dir`, not `_`: the lifetime *is* the cleanup, and a bare `_`
+    /// drops the guard at the end of the statement — deleting the tree the rest of
+    /// the test is about to write into.
     fn seeded(tag: &str, case_sensitive: bool) -> (crate::testtemp::TempDir, PathBuf) {
         let dir = crate::testtemp::TempDir::new("girsync_ro", tag);
         let p = dir.join(CACHE_PREFIX);
@@ -333,7 +337,7 @@ mod tests {
     /// run cannot corrupt the file it is observing by accident.
     #[test]
     fn read_only_cache_refuses_every_write() {
-        let (dir, p) = seeded("nowrite", true);
+        let (_dir, p) = seeded("nowrite", true);
         let c = open_db(&p, true, CacheOpen::ReadOnly).unwrap();
         assert!(c.is_read_only(), "reports its mode");
 
@@ -378,7 +382,7 @@ mod tests {
     /// so it warns and hands back a usable cache.
     #[test]
     fn read_only_open_tolerates_a_case_mode_mismatch() {
-        let (dir, p) = seeded("casemix", true);
+        let (_dir, p) = seeded("casemix", true);
         // Written above as case-sensitive; read it back in insensitive mode.
         let c = open_db(&p, false, CacheOpen::ReadOnly).unwrap();
         assert_eq!(c.get("a.txt").unwrap(), Some(file_rec()));

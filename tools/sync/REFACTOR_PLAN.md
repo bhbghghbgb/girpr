@@ -292,26 +292,66 @@ against the cache, not against `pruned`.
 
 ## §3 High risk
 
-Listed for completeness. **None of these are recommended without a decision
-from someone who owns the CLI contract.** Each changes something observable.
+**§3.1 is decided** (see below); 3.2 and 3.3 are still open but need no
+decision, only a reason to bother. They sit in this tier because of *where* they
+are — the durability boundary the README calls out — not because they change
+anything a user can observe, which is what the tier otherwise means. §3.2 says
+so of itself: "behaviour-preserving but it adds a cache API and touches the
+durability path, so it lands medium-to-high."
 
-### 3.1 `copy_one` re-reads src and dst to verify, after already having streamed both — `apply.rs:434-441`
+### 3.1 `copy_one` re-reads src and dst to verify, after already having streamed both — `apply.rs:483-484`
 
 `copy_one` streams src→dst, then calls `hash_file(&s, algos)` and
 `hash_file(&d, algos)` — two more full reads. On a cold sync with verification
-this is **3× the bytes moved**. The digests could be computed *during* the
-stream copy in the same pass, at the cost of a hash update per chunk.
+that is **3 reads + 1 write** per copied file.
 
-This is a large, genuine win (roughly a 3× reduction in the copy phase's I/O)
-but it changes the meaning of verify-after-copy from "re-read both sides and
-compare" to "compare what was written against what was read". Those are equal
-only if the files did not change mid-copy — which is exactly what a re-read
-catches and a single pass does not. On a live working directory that is a real
-difference, not a theoretical one.
+This changes the meaning of verify-after-copy from "re-read both sides and
+compare" to something weaker. On a live working directory that is a real
+difference, not a theoretical one, so it needs a decision rather than a
+judgement call. **Decided — see below.**
 
-**Do this only with a decision.** The re-read is what makes
-`tests/sync.rs`'s verify cases meaningful; a single-pass hash would silently
-weaken them.
+#### The fix this section originally proposed would not have worked
+
+The earlier draft of this section said the digests "could be computed *during*
+the stream copy in the same pass". That is not a weaker verification — it is
+**no** verification. Both digests would come out of one loop over one buffer,
+so they are equal by construction and `verify hash mismatch` (`apply.rs:487`)
+can never fire. The check would assert `x == x` and read as a guarantee.
+
+So the choice is not between "safe" and "risky". Of the two candidate shapes,
+one is a real check and the other is not a check at all:
+
+| shape | I/O per copied file | what `verify hash mismatch` means |
+| --- | --- | --- |
+| today (unchanged) | 3 reads + 1 write | compares the bytes on disk now against the bytes on disk a moment ago |
+| **chosen** | **2 reads + 1 write** | compares a digest of the stream read against a digest of the bytes actually on disk |
+| full single pass | 1 read + 1 write | nothing — the two digests are the same value |
+
+#### Decision: stream-hash src, re-read dst
+
+`hash_file`'s streaming loop is already there (`hash.rs:62-101`, a 512 KB buffer
+feeding both contexts per chunk), so hashing src as the copy streams is a
+mechanical substitution for `std::io::copy`. **dst is still re-read and still
+hashed.**
+
+That drops the src re-read and keeps every guarantee that matters:
+
+- the two digests still come from two independent reads, so the comparison is
+  real;
+- `fout.sync_all()` runs before the re-read, so the bytes being hashed are the
+  bytes that reached the platter — the write path still catches silent on-disk
+  corruption, which is the failure a single pass structurally cannot see and the
+  one this tool most needs to see on a large tree on a suspect disk;
+- it drops only "src changed between the stream read and the check". That race
+  is unwinnable anyway, and phase A's stat catches it on the next run.
+
+**Lands with:** a README update in the same change, plus these four sites, which
+all state the double-read as fact and would otherwise become false —
+`cli.rs:177` (ships in `--help`), `rw/mod.rs:8`, `apply.rs:227`, and the
+`predrop_cache_entries` note at `apply.rs:159-163`, which already lists "reuses
+a digest across a content change" among the changes that would make its
+pre-drop load-bearing. This change does not cross that line: the digest is still
+computed from a real read of dst, never carried over from a previous copy.
 
 ### 3.2 `effective/phase_a` loads the whole cache twice in insensitive mode — `phase_a.rs:98-113` and `222-225`
 
@@ -340,6 +380,14 @@ of the path set, alive for the whole phase.
 without re-running the globs. That is the right trade, but the duplication is
 avoidable: the set could hold `&str` borrowed from `live` rather than owned
 `String`s, which removes the copy entirely and keeps the O(1) lookup.
+
+**Not quite the one-line change it looks like.** `phase_a.rs:122` is
+`for e in live` — by value — so a `live_set` borrowing from `live` will not
+borrow-check until that becomes `for e in &live`. Both lookups change shape
+with it (`contains(&e.rel)` → `contains(e.rel.as_str())`). `live` is not used
+after the loop (`total_live` is taken at line 97), so nothing else moves; but
+this is a loop-and-signature change in the durability boundary, which is what
+puts it here rather than in §1.
 
 Low-risk in isolation, but it changes a signature in the module the README calls
 out as the durability boundary, so it belongs with 3.2 rather than in §1.
@@ -373,8 +421,9 @@ Naming these because each looks like an opportunity and is not:
 
 ## Progress log
 
-**§1 and §2 are done. §3 is untouched and still needs the decisions below.**
-Ten commits, one per step, plus a repo-wide `cargo fmt`. Suite green at every
+**§1 and §2 are done. §3 is untouched** — one decision now made, and two steps
+that never needed one. Ten commits, one per step, plus a repo-wide
+`cargo fmt`. Suite green at every
 one: **258 → 275 tests** (274 run, 1 `#[ignore]`d — see the §2.5 note),
 `cargo clippy -p girsync --all-targets` clean.
 
@@ -391,6 +440,29 @@ one: **258 → 275 tests** (274 run, 1 `#[ignore]`d — see the §2.5 note),
 | §2.3 | `2175be4` | pairing rule is a `CasePairing` value, not a bare `bool` | — |
 | §2.5 | `e3faa7f`, fixed in `see below` | `prune_dst_cache` derives the present set — **~1 s saved at 20 k files** | +4 |
 | — | `84e992e` | repo-wide `cargo fmt` (see the note at the bottom) | — |
+
+### After the merge with `main`
+
+`sync/refactor` merged `main` at `098da51`. Three of main's commits touch this
+crate — `bfd6c9f`, `2cf1673`, `8702234`, all scratch-directory hygiene for
+tests. **None of them touch `phase_a.rs`, `copy_one`, or the cache API**, so §1,
+§2 and §3 are all unaffected by the merge and the numbers above still hold:
+275 tests, 274 run, 1 `#[ignore]`d.
+
+They did leave two claims on this page untrue, both now fixed:
+
+- `2cf1673` made `seeded()` hand back the `TempDir` guard instead of a
+  `PathBuf`, and left both callers in `cache/db.rs` binding `dir` without using
+  it. That is two `unused_variable` warnings, so "`clippy --all-targets` clean"
+  above stopped being true. They are `_dir` now, not `_` — the binding's
+  lifetime is the cleanup, and a bare `_` would drop the guard on the spot.
+- `8702234` appended `impl AsRef<Path>` to `testtemp.rs` without a trailing
+  newline, so "`cargo fmt --check` … the tree is clean now" stopped being true
+  one commit later.
+
+That is the whole of it: three one-line fixes, no behaviour touched, and a
+reminder that a merge can invalidate this page's own housekeeping claims without
+invalidating any of its findings.
 
 ### §2.5 — found in review, fixed
 
@@ -516,52 +588,33 @@ up:
 
 `cargo fmt --check` was **not** clean on this repo at `6d96b1e` — 16 files drifted.
 This refactor formatted only the files it touched, and `84e992e` then took the
-rest, so the tree is clean now. That commit is mechanical and unrelated to the
-refactor; review it as such.
+rest, so the tree was clean when §1 and §2 finished. That commit is mechanical
+and unrelated to the refactor; review it as such. It stopped being clean again
+when `main` landed `8702234` — see "After the merge with `main`" above.
 
 ---
 
-## Still to decide (§3, high risk — none started)
+## Where §3 stands
 
-Both change something a user or a downstream reader can observe, so both need a
-decision from whoever owns the CLI contract rather than a judgement call here.
+One of the three needed a decision from whoever owns the CLI contract. Two did
+not, and the earlier draft of this section said "both" while listing three —
+which is the sentence that kept §3.2 and §3.3 sitting here.
 
-- **§3.1 `copy_one` re-reads both sides to verify.** Hashing during the stream
-  copy would cut the copy phase's I/O by ~3×, but "compare what was written
-  against what was read" is a weaker guarantee than "re-read both sides and
-  compare" — they differ exactly when a file changes mid-copy, which is a real
-  case in a live working directory. The re-read is what makes the verify cases
-  in `tests/sync.rs` meaningful.
-- **§3.2 `load_keys()`** to stop `effective/phase_a` decoding the whole `entries`
-  table twice in insensitive mode. Behaviour-preserving, but it adds a cache API
-  and touches the durability path. Only worth it if a large tree is actually
-  slow.
-- **§3.3 `live_set` holds `&str` borrowed from `live`** instead of duplicating
-  every path string for the whole phase. Cheap on its own; paired with §3.2
-  because it changes a signature in the module the README calls out as the
-  durability boundary.
+**§3.1 — decided, not started.** Stream-hash src during the copy, **re-read and
+re-hash dst**. 2 reads + 1 write instead of 3 + 1. See §3.1 above for why the
+fix this document originally proposed would have been a tautology, and for the
+four sites that state the double-read as fact and have to change with it.
 
----
+**§3.2 — no decision needed, only a measurement.** `load_keys()` on `CacheDb`
+and `CacheWrite`, so phase A's prune pass iterates the `entries` table without
+decoding every value. Behaviour-preserving. The only question is whether a large
+tree is actually slow enough to be worth adding a cache API on the durability
+path for.
 
-## Still to decide (§3, high risk — none started)
-
-Both change something a user or a downstream reader can observe, so both need a
-decision from whoever owns the CLI contract rather than a judgement call here.
-
-- **§3.1 `copy_one` re-reads both sides to verify.** Hashing during the stream
-  copy would cut the copy phase's I/O by ~3×, but "compare what was written
-  against what was read" is a weaker guarantee than "re-read both sides and
-  compare" — they differ exactly when a file changes mid-copy, which is a real
-  case in a live working directory. The re-read is what makes the verify cases
-  in `tests/sync.rs` meaningful.
-- **§3.2 `load_keys()`** to stop `effective/phase_a` decoding the whole `entries`
-  table twice in insensitive mode. Behaviour-preserving, but it adds a cache API
-  and touches the durability path. Only worth it if a large tree is actually
-  slow.
-- **§3.3 `live_set` holds `&str` borrowed from `live`** instead of duplicating
-  every path string for the whole phase. Cheap on its own; paired with §3.2
-  because it changes a signature in the module the README calls out as the
-  durability boundary.
+**§3.3 — no decision needed, and not free.** `live_set` holds `&str` borrowed
+from `live`. See §3.3 above: it needs `for e in &live`, so it is a loop change
+rather than the one-liner it reads as. Paired with §3.2, both being in the
+durability boundary.
 
 ---
 
@@ -577,12 +630,13 @@ decision from whoever owns the CLI contract rather than a judgement call here.
 8. §2.2 `diff_maps` index
 9. §2.3 pairing-rule clarity (no behaviour change, do it for the reader)
 10. §2.5 `prune_dst_cache` walk removal
-11. §3.2 / §3.3 — only if a large tree is actually slow
-12. §3.1 — only with an explicit decision on verify semantics
+11. §3.2 / §3.3 — no decision needed; only if a large tree is actually slow
+12. §3.1 — decided (stream-hash src, re-read dst); ready to land
 
 Each step is one commit, and steps 6-10 should each carry the test named above
 written first.
 
 **Status: 1–10 landed.** See the progress log at the top for commits,
 measurements, and the two places the implementation departed from what is
-written here. 11 and 12 are untouched and need a decision.
+written here. 11 and 12 are untouched; 12 has its decision and needs only the
+implementation plus the four doc sites named in §3.1.
