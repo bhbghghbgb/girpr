@@ -942,6 +942,14 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   (sync). If disk casing differs from the cached key, the key is fixed to the
   disk name first with hashes reused. Mode mixing never errors by itself — the
   meta flag is informational; the same record works in both modes.
+
+  **The fatal conflict is what makes the rename pass an index rather than a scan.**
+  Both sides are keyed by lowercase and every src key is a hash lookup, which is
+  only equivalent to the naive "scan all of dst" because a lowercase key maps to
+  exactly one path *per side* — `check_mixed_case` has already made the collision
+  fatal, and the pass runs only in the mode that check guards. Without that
+  invariant the two forms could disagree on which of two colliding keys they pick,
+  so relaxing the check would silently change which file gets renamed.
 - **Filters.** `glob`-crate patterns on relpaths; `--include` narrows, `--exclude`
   wins over include. Excluded paths are treated as nonexistent on **both** sides
   (skipped in walks, filtered from records, pruned from DBs, kept untouched in
@@ -986,6 +994,33 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 ```powershell
 .\target\debug\girsync compare-self --dir D:\game-live              # exit 0 = in step
 ```
+
+## Cost model
+
+Where a run's time goes, so a slow run can be read rather than guessed at. On a
+200 k-file tree the walk and the `stat` calls dominate; everything else is bounded
+by what the planner asked for.
+
+| | cost |
+| --- | --- |
+| every live path | one `stat`, one cache lookup. No content read. |
+| a file on both sides, size+mtime equal | one read per side per requested algorithm |
+| a stat-differing, one-sided, or conflicting path | nothing — already decided |
+| a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
+| a cold cache | the whole tree, once, on the first run that needs a digest |
+
+Two places that used to cost far more than their output was worth, and now cost
+one pass each. Both are index-shaped rather than nested-loop-shaped, which is the
+property worth preserving:
+
+- **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
+  comparisons. It is on the default path — insensitive mode is the default — and
+  the scan form quadrupled per doubling of the tree.
+- **`diff_maps`' insensitive branch** walks two lowercase indices once each, not
+  three collections plus a lookup per key.
+
+A `compare` that writes both caches costs the same read count as one that reads
+them; `--dry-run` costs the same again.
 
 ## Gotchas
 
