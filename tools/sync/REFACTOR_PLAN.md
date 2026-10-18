@@ -421,9 +421,16 @@ Naming these because each looks like an opportunity and is not:
 
 **All twelve steps are done.** Ten commits carry them — `1ec7661` covers three of
 §1 — plus a repo-wide `cargo fmt`, the §2.5 review fix, and a commit for what
-`main` left behind. Suite green at every one: **258 → 283 tests** (282 run,
+`main` left behind. Suite green at every one: **258 → 288 tests** (287 run,
 1 `#[ignore]`d — see the §2.5 note), `cargo clippy -p girsync --all-targets`
 clean.
+
+The tally is **288 / 287 run / 1 `#[ignore]`d**, not the 284 / 283 this page
+used to claim. Two corrections, and neither is a refactor step: the 284 figure
+was already one low when it was written, and the four since are the tests
+pinning that a copy's verify still compares two digests rather than a value
+against itself. The per-step deltas in the table below are unchanged and still
+correct.
 
 | step | commit | what changed | tests |
 | --- | --- | --- | --- |
