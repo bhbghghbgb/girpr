@@ -7,6 +7,12 @@ unknown `schema_version` rather than guess. JSON is UTF-8, LF, 2-space indent,
 keys in the order written here. `*.ndjson` is newline-delimited, one object per
 line, no enclosing array, so it streams.
 
+**Required, not additive.** `verify` and `materialize` refuse a bundle that is
+missing any document below. That is a deliberate choice: a bundle is a *fixture*
+other work depends on, so a field that some bundles carry and others do not is a
+trap for whoever reads it next. Where a field is genuinely optional within a
+document, it is marked below and is optional *everywhere*.
+
 **Compression rule.** A document is gzipped (`*.json.gz`) only when its
 uncompressed body exceeds `--gzip-threshold` (default 1 MiB). The decision is
 recorded in `MANIFEST.json → files[].encoding`, so a reader never has to guess.
@@ -320,10 +326,15 @@ mean a replayer must synthesize `RequestId`, `HostId` and `Key` — and therefor
 the body length — and nothing else. The JSON rows have no volatile fields, so
 they replay exactly.
 
-A bundle captured before this document existed has no `api/error_shapes.json`.
-That is still a valid bundle; a consumer that wants the not-found behaviour and
-finds no such file must skip those assertions and say so rather than invent the
-behaviour.
+**The document is required.** `verify` and `materialize` refuse a bundle without
+it, because a bundle recorded only successes contains no not-found evidence at
+all: a consumer that wanted to replay one would have to invent what a `404` looks
+like, and its "the API 404s things" would be unfounded. Making the document
+optional would have meant "this bundle can tell you how the API fails" is true of
+some bundles and not others, with nothing in the bundle to say which.
+
+It is read back through the same type that wrote it, so a document that is
+present and unusable fails at open, by name, rather than at some later consumer.
 
 ---
 

@@ -1,10 +1,10 @@
 //! `getBuild?tag=` probing: which version tags the API will actually serve, and
 //! what the API does with a request it will not serve.
 //!
-//! **M1.** `diff_tags` is a patch-support list, not a retention list. Measured
+//! `diff_tags` is a patch-support list, not a retention list. Measured
 //! 2026-10-14: `6.6.0` and `5.5.0` are absent from `diff_tags` and both served.
 //! The difference decides whether an old-version file is reconstructible at all
-//! today, without the legacy zip path — and it is the one measurement in this
+//! today, without the legacy zip path - and it is the one measurement in this
 //! tool that changes a *design conclusion* rather than a number in a table.
 //!
 //! A probe costs one small JSON request per tag and downloads no blob, so it is
@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::biz::BranchParams;
 use crate::http::{ApiError, Fetcher, Kind, Observation};
@@ -280,7 +280,7 @@ pub fn compose_tags(pair: &[String], diff_tags: &[String], extra: &[String]) -> 
 ///
 /// The two families are the reason this document exists, so the family is a field
 /// rather than something a reader infers from the status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Family {
     /// `autopatchhk.yuanshen.com` and friends: a missing object is a `404` with an
@@ -297,7 +297,11 @@ pub enum Family {
 /// recorded verbatim. Nothing here is synthesized: a replayer reading this
 /// document can reproduce the status, the content-type and the body without
 /// having to guess any of the three.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` because the document is **required**, not optional: `verify`
+/// reads it back through this type, so a bundle whose shapes are not the shape
+/// this tool writes fails to open rather than failing later and somewhere else.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorShapes {
     /// The bundle schema version.
     pub schema_version: u32,
@@ -306,7 +310,7 @@ pub struct ErrorShapes {
 }
 
 /// One measured negative response.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorShape {
     /// Stable identifier, e.g. `blob_missing`. A consumer asserts on this, never
     /// on the URL, which carries a build id and changes every capture.

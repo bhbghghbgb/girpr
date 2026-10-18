@@ -52,6 +52,7 @@ use crate::blobs::ChunkIndex;
 use crate::emit::index::{Checksums, Manifest};
 use crate::emit::selfcheck::{Assertion, Selfcheck};
 use crate::hash;
+use crate::http::probe::ErrorShapes;
 
 /// A18's wording, kept in one place because `verify` and the docs both quote it.
 pub const A18: &str =
@@ -102,6 +103,10 @@ pub struct Bundle {
     pub checksums: Checksums,
     /// `verify/selfcheck.json` - the capture's own account of itself.
     pub recorded: Selfcheck,
+    /// `api/error_shapes.json` - what the API did with the requests it would not
+    /// serve. Required: a bundle without it cannot answer a question every
+    /// consumer of the bundle eventually has to ask.
+    pub error_shapes: ErrorShapes,
 }
 
 impl Bundle {
@@ -110,6 +115,18 @@ impl Bundle {
     /// `MANIFEST.json` first, because the rest are located relative to the schema
     /// version it declares and a directory without one is not a bundle. Saying
     /// "no MANIFEST.json here" beats five separate "no such file" errors.
+    ///
+    /// **`api/error_shapes.json` is required, not additive.** A bundle recorded
+    /// only successes contains no not-found evidence at all, so a consumer that
+    /// wants to replay one would have to invent what a `404` looks like — and its
+    /// claim would be unfounded. Treating the document as optional let a bundle
+    /// drop the tool's only measurement of that and still verify clean, which
+    /// makes "this bundle can tell you how the API fails" true of some bundles
+    /// and not others with nothing to tell the reader which is which.
+    ///
+    /// It is read back through [`crate::http::probe::ErrorShapes`], the type that
+    /// wrote it, so a document that is present and unusable fails here, by name,
+    /// rather than at some consumer that happened to parse it.
     pub fn open(root: &Path) -> Result<Bundle, String> {
         if !root.is_dir() {
             return Err(format!(
@@ -122,6 +139,7 @@ impl Bundle {
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
+        let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
         let patchmaps = read_patchmaps(root)?;
         Ok(Bundle {
             root: root.to_path_buf(),
@@ -130,6 +148,7 @@ impl Bundle {
             patchmaps,
             checksums,
             recorded,
+            error_shapes,
         })
     }
 
@@ -137,7 +156,8 @@ impl Bundle {
     pub fn describe(&self) -> String {
         let v = &self.manifest.versions;
         format!(
-            "{} {} {} ({}) -> {} ({}) - {} blobs, {} patchmaps, recorded {} rows {} failed",
+            "{} {} {} ({}) -> {} ({}) - {} blobs, {} patchmaps, {} error shapes, \
+             recorded {} rows {} failed",
             self.manifest.biz.id,
             v.old.tag,
             v.old.build_id,
@@ -146,6 +166,7 @@ impl Bundle {
             v.new.build_id,
             self.index.blobs.len(),
             self.patchmaps.len(),
+            self.error_shapes.shapes.len(),
             self.recorded.counts.total,
             self.recorded.counts.failed,
         )

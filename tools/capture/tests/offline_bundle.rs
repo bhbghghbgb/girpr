@@ -261,6 +261,15 @@ impl Bundle {
             write_json(&root.join(format!("patchmaps/{id}.json")), m);
         }
 
+        // `api/error_shapes.json`. **Required**, and this fixture had to grow it:
+        // it was building a bundle that no capture could produce, and `verify`
+        // said so. A hand-built fixture that is easier than the real thing will
+        // always find a way to be easier.
+        write_json(
+            &root.join("api/error_shapes.json"),
+            &error_shapes(),
+        );
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -403,6 +412,34 @@ fn build(tag: &str, id: &str) -> gircap::emit::index::Build {
         tag: tag.into(),
         build_id: id.into(),
         source: "measured".into(),
+    }
+}
+
+/// The one required document this fixture has no measurement behind.
+///
+/// It is synthesised rather than probed, because probing needs a live API and
+/// this fixture is the point of being offline. What it has to be is **valid** —
+/// the same type `capture` writes, with the field shapes a reader relies on —
+/// because the requirement under test is "the document is there and readable",
+/// not "the numbers are right". The numbers are `capture_layout`'s job, against
+/// a real probe.
+fn error_shapes() -> gircap::http::probe::ErrorShapes {
+    use gircap::http::probe::ErrorShape;
+    gircap::http::probe::ErrorShapes {
+        schema_version: gircap::SCHEMA_VERSION,
+        shapes: vec![ErrorShape {
+            id: "chunk_missing".into(),
+            family: gircap::http::probe::Family::Blob,
+            request: "a chunk id the build does not have".into(),
+            url: "https://cdn.example/chunks/0000000000000000_0".into(),
+            status: 404,
+            content_type: Some("application/xml".into()),
+            retcode: None,
+            error: true,
+            body: "<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".into(),
+            volatile_fields: vec!["RequestId".into(), "HostId".into(), "Key".into()],
+            retryable: false,
+        }],
     }
 }
 
@@ -615,6 +652,11 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     round_trip::<ChunkIndex>(&b.root.join("chunks/index.json"));
     round_trip::<Checksums>(&b.root.join("verify/checksums.json"));
     round_trip::<Selfcheck>(&b.root.join("verify/selfcheck.json"));
+    // `error_shapes.json` is here because it is now **required** — `verify`
+    // reads it through the type that wrote it, so a `Serialize`-only struct would
+    // have been a compile error rather than a discovery. The round-trip is what
+    // says the two halves still agree on the wire format.
+    round_trip::<gircap::http::probe::ErrorShapes>(&b.root.join("api/error_shapes.json"));
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 

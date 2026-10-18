@@ -382,23 +382,68 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
     );
 }
 
-/// A bundle without `api/error_shapes.json` is still a valid bundle: the file
-/// is additive, and `verify` must not have started requiring it.
+/// A bundle without `api/error_shapes.json` does not open.
+///
+/// The document used to be additive: "a bundle captured before it existed has no
+/// `api/error_shapes.json`, and that is still a valid bundle". That let a bundle
+/// drop the tool's only measurement of what the API does with a request it will
+/// not serve, and still verify clean — so "this bundle can tell you how the API
+/// fails" was true of some bundles and not others, with nothing in the bundle to
+/// tell a reader which is which.
+///
+/// The exit code is `1`, not `3`. "This directory is not a readable bundle" is
+/// already `1` for every other reason — no `MANIFEST.json`, a truncated index —
+/// and that mapping is pinned by `cli_contract`; a missing required document is
+/// the same complaint. What matters here is that it is refused at all, and that
+/// the refusal names the file rather than leaving the operator to guess between
+/// five candidates.
 #[test]
-fn a_bundle_without_the_error_shapes_document_still_verifies() {
+fn a_bundle_without_the_error_shapes_document_does_not_verify() {
     let (_m, _s, r, bundle) = capture_ok("noshapes");
     assert_eq!(r.code, 0);
     let file = bundle.join("api/error_shapes.json");
     assert!(file.is_file(), "the capture wrote it");
     std::fs::remove_file(&file).unwrap();
 
-    // The index still lists it, which is what a real pre-change bundle's does not.
     let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
     assert_ne!(
-        v.code, 2,
-        "verify must not demand the document: it is not in the required set\n{}{}",
+        v.code, 0,
+        "a bundle without its error shapes must not verify clean:\n{}{}",
         v.stdout, v.stderr
     );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("error_shapes.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
+}
+
+/// And the same for `materialize`, which reads the bundle through the same door.
+///
+/// Without this the requirement would be `verify`-only, and the other two
+/// commands would happily rebuild and re-list a bundle that `verify` refuses —
+/// which is the shape of an inconsistency a reader meets as a bug in `verify`.
+#[test]
+fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required() {
+    let (_m, _s, r, bundle) = capture_ok("noshapes2");
+    assert_eq!(r.code, 0);
+    std::fs::remove_file(bundle.join("api/error_shapes.json")).unwrap();
+    let dir = bundle.to_string_lossy().to_string();
+
+    for cmd in [vec!["verify", "--artifact", &dir], vec!["materialize", "--artifact", &dir]] {
+        let out = run(&cmd);
+        assert_ne!(
+            out.code, 0,
+            "{} must refuse a bundle with no error shapes:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+        assert!(
+            format!("{}{}", out.stdout, out.stderr).contains("error_shapes.json"),
+            "{} must name the document:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+    }
 }
 
 /// Every chunk id the negative probes asked for, read from the document that
