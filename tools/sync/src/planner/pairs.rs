@@ -286,10 +286,7 @@ pub fn plan_pairs(
         for (idx, req, e, _) in sides {
             let t = &mut tally[idx];
             for algo in req.algos {
-                let slot = t
-                    .coverage
-                    .entry(algo.as_str().to_string())
-                    .or_insert((0, 0));
+                let slot = t.coverage.entry(*algo).or_insert((0, 0));
                 slot.1 += 1;
                 if e.cached.contains_key(algo.as_str()) {
                     slot.0 += 1;
@@ -424,7 +421,7 @@ fn obtainable(e: &SideEntry, cap: SideCapability, algo: &HashAlg) -> bool {
 #[derive(Debug, Default)]
 struct Tally {
     /// Requested algorithm -> (paths that hold it, undecided paths).
-    coverage: BTreeMap<String, (usize, usize)>,
+    coverage: BTreeMap<HashAlg, (usize, usize)>,
     /// rel path -> requested algorithms this side cannot obtain at all.
     missing: BTreeMap<String, AlgoSet>,
 }

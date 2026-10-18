@@ -116,8 +116,15 @@ impl std::fmt::Debug for HashAlg {
 }
 
 impl std::fmt::Display for HashAlg {
+    /// `f.pad`, not `f.write_str`.
+    ///
+    /// A `Display` impl is responsible for honouring the width/fill/alignment in the
+    /// format spec, and `write_str` does not: it is `pad` that applies them. The
+    /// visible consequence is the coverage error's per-algorithm column, which is
+    /// rendered `{:<12}` — `write_str` would silently print `md5 0/1` instead of
+    /// `md5         0/1`, with no error anywhere.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
@@ -510,6 +517,23 @@ mod tests {
             AlgoSet::NONE,
             "a set cannot gain a member by subtraction"
         );
+    }
+
+    /// **`Display` honours the width in the format spec.** A `Display` impl that
+    /// writes with `write_str` prints the string and silently drops the column,
+    /// which is how a coverage table loses its alignment with nothing failing.
+    #[test]
+    fn display_pads_to_the_width_in_the_format_spec() {
+        for a in HashAlg::ALL {
+            assert_eq!(format!("{a:>12}|"), format!("{:>12}|", a.as_str()));
+            assert_eq!(format!("{a:<12}|"), format!("{:<12}|", a.as_str()));
+            assert_eq!(format!("{a:012}|"), format!("{:012}|", a.as_str()));
+            assert_eq!(
+                format!("{a:<12} 0/1"),
+                format!("{:<12} 0/1", a.as_str()),
+                "and it is wider than the name, which is the only case that can tell"
+            );
+        }
     }
 
     /// **The memory claim, as an assertion.** One `AlgoSet` sits in
