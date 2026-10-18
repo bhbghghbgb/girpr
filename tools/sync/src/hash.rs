@@ -17,8 +17,9 @@ pub const CHUNK: usize = 512 * 1024;
 
 /// Validate repeated `--hash` values.
 ///
-/// Returns the lowercased algorithm list, or an empty list for `--hash none`
-/// (which is exclusive: decisions fall back to size+mtime).
+/// Returns the lowercased algorithm list — each algorithm once, in the order it
+/// was first typed — or an empty list for `--hash none` (which is exclusive:
+/// decisions fall back to size+mtime).
 pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
     let mut v: Vec<String> = input.iter().map(|s| s.to_lowercase()).collect();
     v.retain(|s| !s.is_empty());
@@ -40,8 +41,21 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
             );
         }
     }
-    v.dedup();
-    Ok(v)
+    // Full dedup in first-seen order, not `Vec::dedup`'s adjacent-only pass:
+    // `--hash-all-of md5 --hash-all-of sha256 --hash-all-of md5` parsed as three
+    // algorithms, which reached `HashPlan::digest_count` (three digests
+    // promised) and a `digest-differs:md5+sha256+md5` reason tag. Order is the
+    // user's, because `pick_one`'s tie-break is defined in terms of it.
+    //
+    // `contains` over a list bounded by the argv length: two short scans, and a
+    // `HashSet` here would be an allocation to save less than the deduped list.
+    let mut seen: Vec<String> = Vec::with_capacity(v.len());
+    for a in v {
+        if !seen.contains(&a) {
+            seen.push(a);
+        }
+    }
+    Ok(seen)
 }
 
 /// Validate repeated `--hash-any-of` values.
@@ -154,6 +168,56 @@ mod tests {
 
     fn algos(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn parse(input: &[&str]) -> Vec<String> {
+        parse_hash_list(&algos(input)).unwrap()
+    }
+
+    fn parse_any(input: &[&str]) -> Vec<String> {
+        parse_any_of(&algos(input)).unwrap()
+    }
+
+    /// A repeated algorithm is **one** request, however the flags were typed.
+    ///
+    /// The non-adjacent case comes first because it is the one that used to slip
+    /// through: `Vec::dedup` only collapses *consecutive* repeats, so
+    /// `md5 sha256 md5` survived as three algorithms and reached
+    /// `HashPlan::digest_count` as a promise of three digests.
+    #[test]
+    fn a_repeated_algorithm_is_one_request() {
+        assert_eq!(parse(&["md5", "sha256", "md5"]), vec!["md5", "sha256"]);
+        assert_eq!(
+            parse(&["md5", "md5", "sha256", "md5", "sha256"]),
+            vec!["md5", "sha256"]
+        );
+    }
+
+    /// First-seen order is the order kept. **This is the property `pick_one`
+    /// depends on** — `--hash-any-of`'s tie-break is the user's flag order, so a
+    /// dedup that sorted, or that kept the *last* occurrence, would change which
+    /// algorithm a pair is settled by.
+    #[test]
+    fn first_seen_order_is_the_order_kept() {
+        assert_eq!(parse(&["sha256", "md5", "sha256"]), vec!["sha256", "md5"]);
+        assert_eq!(parse(&["sha256", "md5"]), vec!["sha256", "md5"]);
+    }
+
+    /// The adjacent case `Vec::dedup` already handled, pinned so the fix above
+    /// cannot be read as "dedup was always broken".
+    #[test]
+    fn adjacent_repeats_collapse() {
+        assert_eq!(parse(&["md5", "md5"]), vec!["md5"]);
+        assert_eq!(parse(&["sha256", "md5", "md5"]), vec!["sha256", "md5"]);
+    }
+
+    /// `parse_any_of` delegates, so it inherits the dedup. Worth pinning because
+    /// it is the mode where a duplicate mattered most: the flag asks for *one*
+    /// algorithm, and a repeated one had nothing to change.
+    #[test]
+    fn any_of_dedupes_through_the_delegate() {
+        assert_eq!(parse_any(&["md5", "md5"]), vec!["md5"]);
+        assert_eq!(parse_any(&["md5", "sha256", "md5"]), vec!["md5", "sha256"]);
     }
 
     /// **The property the whole split rests on.** `copy_and_digest` folds the
