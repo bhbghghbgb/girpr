@@ -23,6 +23,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::Path;
 use tracing::{debug, error, info, trace};
 
@@ -30,7 +31,7 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::hash::hash_file;
+use crate::hash::{CHUNK, Digests, hash_file};
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
 use crate::util::mtime_ns_of;
@@ -160,7 +161,14 @@ impl Applier<'_> {
     /// any of those properties holding. It becomes load-bearing the moment
     /// `copy_one` stops truncating, stops deferring mtime, or reuses a digest
     /// across a content change — so do not "optimize it away" without checking
-    /// those three. Note also that it is not a *signal*: a later scan that
+    /// those three. `copy_one` digesting src during the copy does not make it
+    /// load-bearing, and is worth reading as the near-miss it is: src's digest
+    /// is now taken from the copy's own read, but dst's is still a separate read
+    /// of the file on disk, which is the third property speaking. The change
+    /// that *would* trip it is the single-pass one — digesting dst from the same
+    /// chunks going out — and at that point "the comparison" is a value against
+    /// itself and the pre-drop is the only thing left standing. Note also that
+    /// it is not a *signal*: a later scan that
     /// records stat without a digest for a size/mtime-differing file looks
     /// exactly like this, so nothing downstream may depend on the row's absence
     /// to detect a crash.
@@ -224,9 +232,10 @@ impl Applier<'_> {
     /// pretending to be one.
     ///
     /// Each copy holds **both** permits for its whole life — the stream copy and
-    /// both verify re-hashes — because the file is not finished until it verifies.
-    /// Under a shared counter that is one permit; under a split counter it is one
-    /// per side, which is what admits `min(src, dst)` concurrent copies.
+    /// the verify re-hash of dst — because the file is not finished until it
+    /// verifies. Under a shared counter that is one permit; under a split counter
+    /// it is one per side, which is what admits `min(src, dst)` concurrent
+    /// copies.
     fn copy_files(&self, plan: &Plan) -> Result<usize> {
         info!(
             files = plan.copy.len(),
@@ -422,10 +431,61 @@ impl Applier<'_> {
     }
 }
 
+/// Copy `src` over `dst`, digesting the bytes as they pass, and return the
+/// digest of what was **read**.
+///
+/// The digest is of the source stream, which is the point: `copy_one` needs a
+/// digest of src either way, and this is the one read that can produce it for
+/// free. It is emphatically *not* a substitute for the check the caller does
+/// afterwards — see `copy_one`'s own comment, which is where the reasoning
+/// lives.
+///
+/// With no algorithms requested there is nothing to fold into the loop, so
+/// `io::copy` is left alone and keeps whatever fast path it has between two
+/// files. Under `--hash none` that path is the entire copy, and there is no
+/// digest to justify giving it up.
+fn copy_and_digest(
+    src: &mut std::fs::File,
+    dst: &mut std::fs::File,
+    algos: &[String],
+) -> Result<HashMap<String, Vec<u8>>> {
+    if algos.is_empty() {
+        std::io::copy(src, dst)?;
+        return Ok(HashMap::new());
+    }
+    let mut digests = Digests::new(algos);
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n: usize = src.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        dst.write_all(&buf[..n])?;
+        digests.update(&buf[..n]);
+    }
+    Ok(digests.finish())
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
 /// re-copies rather than trusting it.
+///
+/// **Verify is two independent reads, and both are load-bearing.** src is
+/// digested as the copy streams it; dst is then re-read from disk and digested
+/// again, and the two are compared. A single pass that digested both sides as
+/// the bytes went past would compare a value with itself — equal by
+/// construction, so `verify hash mismatch` could never fire and would read as a
+/// guarantee while checking nothing. Because the re-read happens after
+/// `sync_all()`, it also hashes the bytes that actually reached the disk, which
+/// is the only way this catches silent corruption on the way down.
+///
+/// **What the src-side digest is not.** It describes the bytes src held *during*
+/// the copy, not after it. So a src file rewritten mid-copy is no longer caught
+/// here — dst is a faithful copy of a src that no longer exists, and the pair
+/// looks clean. That is the deliberate cost of dropping the extra read, and it
+/// is a race the tool cannot win anyway: phase A's stat sees the new mtime on
+/// the next run and re-copies.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
     trace!("copy_one start");
@@ -442,12 +502,12 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
     let ssize = smeta.len();
     let smtime_sys = smeta.modified().ok();
     let smtime_ns = mtime_ns_of(&smeta);
-    // stream copy (truncate + write in place)
+    // stream copy (truncate + write in place), digesting src as it goes
     let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
-    // File::create truncates existing. Write via &File (Write for &File).
+    // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
-    std::io::copy(&mut fin, &mut fout)
+    let sh = copy_and_digest(&mut fin, &mut fout, algos)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     fout.sync_all().ok();
     drop(fout);
@@ -480,7 +540,9 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
             hashes: HashMap::new(),
         });
     }
-    let sh = hash_file(&s, algos).with_context(|| format!("hash {}", s.display()))?;
+    // The read that makes the check a check: dst, now, off the disk — against
+    // the stream src's digest was taken from. Two separate reads of two
+    // separate files, so a disagreement means something.
     let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
     for a in algos {
         if sh.get(a) != dh.get(a) {
@@ -496,4 +558,92 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
         mtime_ns: smtime_ns,
         hashes: dh,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn algos(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The digest `copy_and_digest` returns has to be **the file's**, not the
+    /// loop's. If the chunk boundary is off by one — a stale `n`, a slice taken
+    /// before the read rather than after — the copy would still be byte-correct
+    /// and every real verify would fail, which is the kind of failure that only
+    /// shows up on a file larger than one buffer.
+    #[test]
+    fn the_digest_of_a_copy_is_the_digest_of_the_file() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "digest");
+        // Longer than `CHUNK`, so the loop really does iterate rather than
+        // doing one read and one write.
+        let body: Vec<u8> = (0..(CHUNK * 2 + 12345)).map(|i| (i % 251) as u8).collect();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, &body).unwrap();
+
+        let set = algos(&["md5", "sha256"]);
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        drop(fout);
+
+        assert_eq!(std::fs::read(&dst).unwrap(), body, "the bytes landed");
+        assert_eq!(
+            sh,
+            hash_file(&src, &set).unwrap(),
+            "the digest taken during the copy is the digest of the file, \
+             however the copy loop split it"
+        );
+    }
+
+    /// `--hash none` takes the other arm of `copy_and_digest`, and that arm is
+    /// the only thing standing between a stat-only sync and `io::copy`'s fast
+    /// path. It must still copy every byte — "no digest" is not "no copy" — and
+    /// must report no digest rather than an empty one for some other reason.
+    #[test]
+    fn no_digest_requested_still_copies_every_byte() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "noalgo");
+        // Bigger than `CHUNK`, so "it went through the other arm and came out
+        // whole" is a statement about more than one buffer.
+        let body: Vec<u8> = (0..(CHUNK * 3 + 7)).map(|i| (i % 97) as u8).collect();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, &body).unwrap();
+
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &[]).unwrap();
+        drop(fout);
+
+        assert!(
+            sh.is_empty(),
+            "nothing was requested, so nothing is reported"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            body,
+            "the bytes landed, through the arm that does not look at them"
+        );
+    }
+
+    /// An empty file is where a hand-rolled copy loop and `io::copy` most easily
+    /// disagree — the loop never enters its body at all.
+    #[test]
+    fn an_empty_file_copies_and_hashes() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "empty");
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, b"").unwrap();
+
+        let set = algos(&["md5", "sha256"]);
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        drop(fout);
+
+        assert_eq!(std::fs::read(&dst).unwrap(), Vec::<u8>::new());
+        assert_eq!(sh, hash_file(&src, &set).unwrap());
+    }
 }

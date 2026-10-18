@@ -174,9 +174,9 @@ pub struct CommonArgs {
     /// sides draw on one counter or two.
     ///
     /// **rw, not io.** The counter governs file *content* reads and writes —
-    /// hashing, and a copy's stream plus its verify re-hashes. It does not govern
-    /// `stat`, which is orders of magnitude cheaper and would otherwise eat the
-    /// whole budget on a tree of many small files.
+    /// hashing, and a copy's stream plus the verify re-hash of what it wrote. It
+    /// does not govern `stat`, which is orders of magnitude cheaper and would
+    /// otherwise eat the whole budget on a tree of many small files.
     #[command(flatten)]
     pub rw: RwArgs,
 }

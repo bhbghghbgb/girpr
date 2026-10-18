@@ -88,9 +88,9 @@ fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
 }
 
 /// A src-only file is copied without ever needing a digest at scan time: the pair
-/// is `MISSING`, which presence settles, and `copy_one` rehashes both sides to
-/// verify the copy and returns the record it caches. So a src-only file costs the
-/// *scan* nothing even though the copy itself reads it twice.
+/// is `MISSING`, which presence settles, and `copy_one` digests src as it copies
+/// and re-hashes what it wrote to verify, returning the record it caches. So a
+/// src-only file costs the *scan* nothing, and the copy itself reads src once.
 #[test]
 fn a_src_only_file_costs_the_sync_scan_no_digest() {
     let t = TempRoot::new("lz_sync_srconly");
@@ -122,9 +122,9 @@ fn a_src_only_file_costs_the_sync_scan_no_digest() {
 /// fingerprints are incompatible, so this fails loudly either way.
 ///
 /// It also pins where digests still come from, which is the part that is easy to
-/// break by over-applying laziness: `copy_one` hashes both sides to verify each
-/// copy and returns dst's record, so **dst** ends the run with digests even though
-/// its scan read nothing.
+/// break by over-applying laziness: `copy_one` hashes the copy to verify it and
+/// returns dst's record, so **dst** ends the run with digests even though its
+/// scan read nothing.
 #[test]
 fn a_lazy_sync_records_no_digest_it_never_needed() {
     let t = TempRoot::new("lz_sync_lazy");

@@ -255,7 +255,7 @@ called *rw* and not *io*:
 | gated | not gated |
 | --- | --- |
 | hashing a file in phase C | `stat` — `metadata()`, `is_file()`, `is_dir()` |
-| a copy: the stream plus both verify re-hashes | `mkdir` / `delete` / `rmdir` |
+| a copy: the stream, and the re-hash of what it wrote | `mkdir` / `delete` / `rmdir` |
 | | the redb cache's own reads, writes and commits |
 
 `stat` is excluded deliberately: it is orders of magnitude cheaper than a read, and
@@ -272,6 +272,29 @@ per-side counters it takes **one src permit and one dst permit**, held for the w
 copy including the verify. So `Split{s,d}` admits `min(s,d)` concurrent copies.
 Releasing around the halves would buy nothing — the file is not finished until it
 verifies.
+
+**Two reads and a write, and the check needs both.** A copied file is read from
+src once (the stream), written, `sync_all`'d, and then **re-read from dst and
+hashed again** — that is what is compared against src's digest, and the
+comparison is the verify. src's own digest is taken from the copy's read rather
+than from a third pass over the file, so the cost is **2 reads + 1 write** per
+copied file rather than 3 + 1.
+
+The re-read is not a belt-and-braces extra and must not be "optimised" away into
+a single pass. Hashing both sides from the same chunks going out would compare a
+value with itself: equal by construction, so a mismatch could never be reported
+and the verify would read as a guarantee while checking nothing. Two independent
+reads are what make `verify hash mismatch` mean anything, and because the second
+one happens after `sync_all()`, it hashes the bytes that actually reached the
+disk — the only way a copy catches silent corruption on the way down.
+
+What the src-side digest does **not** cover: a src file rewritten *during* the
+copy. dst is then a faithful copy of a src that no longer exists, and the pair
+compares clean. That race is unwinnable by construction; phase A's stat sees the
+new mtime on the next run and re-copies.
+
+Under `--hash none` there is no digest to fold into the loop, so the copy is left
+to `std::io::copy` and whatever fast path that has between two files.
 
 ### What this never changes
 
@@ -826,8 +849,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   already-`CHANGED` path costs no read at all, and neither does a stat-differing
   pair under `--no-trust-cached-hashes` — distrusting the cache does not make an
   unequal size uncertain. A `MISSING` file is still copied, because `copy_one`
-  rehashes both sides to verify and returns the record it caches; that rehash is
-  the only hash such a file needs. Both commands therefore leave **stat-only
+  digests src as it copies and re-hashes what it wrote to verify, returning the
+  record it caches; that pair of hashes is the only hashing such a file needs.
+  Both commands therefore leave **stat-only
   rows** for paths they did not hash, which is a valid state for a *folder* side:
   the next run sees a fresh row with nothing cached and asks for a digest, which
   it is able to do. It is **not** a valid state for a *record* side, which is why
