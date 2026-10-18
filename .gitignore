@@ -1,5 +1,7 @@
 /target/
 tools/*/target/
+/artifacts/
+tools/*/artifacts/
 /reference-projects/
 girpr-cache*
 *.log

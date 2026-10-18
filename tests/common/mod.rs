@@ -16,7 +16,6 @@
 //! sizes as int-or-string, chunk/manifest URL prefix + id joining.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -24,6 +23,11 @@ use std::sync::{
 
 use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 use prost::Message as _;
+
+// The scratch-directory helper lives beside this file rather than in it, so the
+// other integration targets can reach it without dragging in the mock server.
+#[path = "tempdir.rs"]
+pub mod tempdir;
 
 // ---------------------------------------------------------------------------
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)
@@ -50,7 +54,17 @@ pub struct GameFixture {
     pub files: Vec<FixtureFile>,
     /// chunk id -> zstd(compressed payload) bytes served by the mock
     pub chunk_store: HashMap<String, Vec<u8>>,
+    /// chunk id -> zstd(payload with one byte flipped). Well-formed: same
+    /// uncompressed length, different MD5, so the chunk decodes and then fails
+    /// verification. That is what makes a file *retry* rather than just fail.
+    pub corrupt_chunk_store: HashMap<String, Vec<u8>>,
 }
+
+/// The fixture's latest tag. The mock serves the chunk manifest for
+/// `getBuild?tag=<LATEST_TAG>` and returns `retcode -202` for any other tag, so
+/// writing this into `config.ini` is how a test says "the local build's
+/// manifests are available" (i.e. chunk reuse is available).
+pub const LATEST_TAG: &str = "9.9.9-test";
 
 fn md5hex(data: &[u8]) -> String {
     format!("{:x}", md5::compute(data))
@@ -61,7 +75,7 @@ fn zstd_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 pub fn build_fixture() -> GameFixture {
-    let latest_tag = "9.9.9-test".to_string();
+    let latest_tag = LATEST_TAG.to_string();
     let manifest_id = "manifest_test_game_001".to_string();
 
     // Fixed payloads (distinct bytes per chunk so corruption is detectable).
@@ -116,12 +130,18 @@ pub fn build_fixture() -> GameFixture {
 
     // Protobuf manifest + zstd + checksum (decompressed-bytes MD5, like prod).
     let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
     let mut pb_files: Vec<SophonChunkFile> = Vec::new();
     for f in &files {
         let mut pb_chunks: Vec<SophonChunk> = Vec::new();
         for c in &f.chunks {
             let compressed = zstd_bytes(&c.data);
             chunk_store.insert(c.id.clone(), compressed.clone());
+            // Same length, one byte different: decodes, fails its MD5.
+            let mut bad = c.data.clone();
+            let last = bad.len() - 1;
+            bad[last] ^= 0xFF;
+            corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
             pb_chunks.push(SophonChunk {
                 id: c.id.clone(),
                 uncompressed_md5: md5hex(&c.data),
@@ -153,6 +173,7 @@ pub fn build_fixture() -> GameFixture {
         manifest_checksum,
         files,
         chunk_store,
+        corrupt_chunk_store,
     }
 }
 
@@ -160,15 +181,14 @@ pub fn build_fixture() -> GameFixture {
 // temp dirs (no extra deps)
 // ---------------------------------------------------------------------------
 
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Fresh unique temp dir for one test. Caller removes it at test end.
-pub fn temp_dir(name: &str) -> PathBuf {
-    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("girpr_it_{}_{}_{}", std::process::id(), n, name));
-    let _ = std::fs::remove_dir_all(&p);
-    std::fs::create_dir_all(&p).expect("create temp game dir");
-    p
+/// Fresh unique temp dir for one test, removed when the returned guard drops.
+///
+/// The name carries the pid, a timestamp and a per-process counter so two runs
+/// — or two `cargo test` invocations — never share a tree, and the guard means
+/// the tree is removed even when a case fails before its last line. See
+/// [`tempdir`] for why each part is there.
+pub fn temp_dir(name: &str) -> tempdir::TempDir {
+    tempdir::TempDir::new("girpr_it", name)
 }
 
 pub fn write_game_file(game_dir: &std::path::Path, rel: &str, bytes: &[u8]) {
@@ -199,6 +219,28 @@ pub struct MockOpts {
     /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
     /// `Some("")` to model the API omitting the field.
     pub download_mode: Option<String>,
+    /// Serve every chunk request as `500`. Models a reachable-but-broken origin,
+    /// which is what exercises the retry/backoff paths (`--fail-fast`) without
+    /// a dead host and its connection timeouts.
+    pub fail_chunks: bool,
+    /// Serve every chunk request as `404`. Models the blob routes' real answer
+    /// to an id they do not have: the live CDN (`autopatchhk.yuanshen.com`,
+    /// `Server: AliyunOSS`) answers `404` with an `application/xml` `NoSuchKey`
+    /// body and never a `200`-with-a-code, and an id under the wrong build's
+    /// prefix is a `404` too. The distinction from `fail_chunks` is the whole
+    /// point: a 5xx is worth retrying and a 404 is not, so only one of the two
+    /// can be told apart by how many times it was asked for.
+    pub not_found_chunks: bool,
+    /// Serve every manifest request as `404`, for the same reason. The id is
+    /// published atomically with the build that serves it, so this models a
+    /// build whose manifests are gone rather than a not-yet-propagated one.
+    pub not_found_manifests: bool,
+    /// Serve the first N chunk responses with valid-but-**wrong** bytes: the
+    /// same uncompressed length and a well-formed body, so the chunk decodes
+    /// fine and fails on its MD5. Models a corrupt or half-propagated origin,
+    /// which is what makes a file retry — and therefore what distinguishes
+    /// "bytes of promoted files" from "bytes that crossed the wire".
+    pub corrupt_first_chunks: u32,
 }
 
 pub struct MockServer {
@@ -291,6 +333,13 @@ struct Responses {
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     latest_tag: String,
+    fail_chunks: bool,
+    not_found_chunks: bool,
+    not_found_manifests: bool,
+    corrupt_first_chunks: u32,
+    /// Chunk responses served so far, so the corrupt-N counter is per-server
+    /// and not per-connection.
+    served: AtomicU64,
 }
 
 fn build_responses(
@@ -382,6 +431,11 @@ fn build_responses(
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         latest_tag: fx.latest_tag.clone(),
+        fail_chunks: opts.fail_chunks,
+        not_found_chunks: opts.not_found_chunks,
+        not_found_manifests: opts.not_found_manifests,
+        corrupt_first_chunks: opts.corrupt_first_chunks,
+        served: AtomicU64::new(0),
     }
 }
 
@@ -449,7 +503,9 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        if id == fx.manifest_id {
+        if r.not_found_manifests {
+            ("404 Not Found", "text/plain", b"no such manifest".to_vec())
+        } else if id == fx.manifest_id {
             (
                 "200 OK",
                 "application/octet-stream",
@@ -466,12 +522,54 @@ async fn serve_one(
             .rsplit('/')
             .next()
             .unwrap_or("");
-        match fx.chunk_store.get(id) {
-            Some(bytes) => {
-                log.lock().unwrap().push(id.to_string());
-                ("200 OK", "application/octet-stream", bytes.clone())
+        if r.not_found_chunks || r.fail_chunks {
+            // Still logged, on both branches: "was this chunk even asked for,
+            // and how many times" is the assertion that tells a 404 (asked once)
+            // from a 5xx (asked five), so a 404 has to reach this log too.
+            log.lock().unwrap().push(id.to_string());
+            if r.not_found_chunks {
+                // The shape the live CDN uses, so a test cannot accidentally
+                // depend on a content-type the origin never sends.
+                (
+                    "404 Not Found",
+                    "application/xml",
+                    b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                )
+            } else {
+                (
+                    "500 Internal Server Error",
+                    "text/plain",
+                    b"chunk store is down".to_vec(),
+                )
             }
-            None => ("404 Not Found", "text/plain", b"no such chunk".to_vec()),
+        } else {
+            match fx.chunk_store.get(id) {
+                Some(bytes) => {
+                    log.lock().unwrap().push(id.to_string());
+                    let n = r.served.fetch_add(1, Ordering::Relaxed);
+                    if n < r.corrupt_first_chunks as u64 {
+                        // Well-formed, same uncompressed length, wrong MD5.
+                        let bad = fx
+                            .corrupt_chunk_store
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| bytes.clone());
+                        ("200 OK", "application/octet-stream", bad)
+                    } else {
+                        ("200 OK", "application/octet-stream", bytes.clone())
+                    }
+                }
+                None => {
+                    // An id the store has never heard of is the same event as
+                    // `not_found_chunks`, and it is logged for the same reason.
+                    log.lock().unwrap().push(id.to_string());
+                    (
+                        "404 Not Found",
+                        "application/xml",
+                        b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>".to_vec(),
+                    )
+                }
+            }
         }
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())

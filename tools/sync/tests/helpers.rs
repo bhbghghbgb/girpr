@@ -92,9 +92,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     // Cache created sensitive with "a.txt"; disk renames to "A.txt".
     // Insensitive run must NOT error: disk governs, cache key becomes
     // "A.txt" (hashes reused), and a later sensitive run still works.
-    let dir = std::env::temp_dir().join(format!("girsync_test_casefix_{}", std::process::id()));
-    std::fs::remove_dir_all(&dir).ok();
-    std::fs::create_dir_all(&dir).unwrap();
+    let t = TempRoot::new("casefix");
+    let dir = t.mkdirs("w");
     std::fs::write(dir.join("a.txt"), b"hello").unwrap();
     let db_path = dir.join(CACHE_PREFIX);
 
@@ -143,8 +142,6 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     assert!(eff.contains_key("A.txt"));
     assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
     drop(db);
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A three-file folder scanned on a cold cache, and the same folder scanned again

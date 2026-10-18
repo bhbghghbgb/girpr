@@ -1,4 +1,4 @@
-# Repair-by-Chunk Spec (language agnostic) — Genshin low-disk patcher
+# Repair spec - Repair-by-Chunk (language agnostic) - Genshin low-disk patcher
 
 Goal: bring a possibly-corrupt, possibly-any-older-version Genshin install to the current live
 version with minimal extra disk usage, unattended (args + exit code + logs).
@@ -78,7 +78,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    the on-disk version and the target version before any repair starts:
    `REPORT local_version=<v|none> latest_version=<latest> biz=… exe=… download_mode=… branch=… package_id=… build_id=… audio_langs=… diff_tags=…`
    (`local_version` and the effective `audio_langs` from Step 1; the rest from
-   the calls above — API-sourced, not from config). With `--json-summary` this is
+   the calls above — API-sourced, not from config). Under `--output json` this is
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
    list. This is the lazy call: fetched best-effort during the post-phase (Step 8), never in

@@ -45,6 +45,9 @@ pub mod rw;
 pub mod scan;
 pub mod util;
 
+#[cfg(test)]
+pub(crate) mod testtemp;
+
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{

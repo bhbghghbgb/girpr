@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use prost::Message;
 use std::collections::{HashMap, HashSet};
 
@@ -8,7 +8,7 @@ use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 /// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
 /// kept verbatim so diffs against the reference stay obvious. Do not "fix" the
 /// spelling.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30>
 /// message SophonChunkManifest { repeated SophonChunkFile chuncks = 1; }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SophonChunkManifest {
@@ -62,7 +62,7 @@ pub struct WantedManifest {
 /// set are both verbatim ports of `GetAvailableGameSophonChunkManifests` — the
 /// heuristic is fragile upstream, but diverging here would break parity.
 /// Do not "fix" without checking upstream first.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769>
 /// Audio fields look like `zh-cn` (len 5 with '-') or `mini-zh-cn` (len 10 with '-').
 pub fn select_manifests<'a>(
     build: &'a ChunkBuild,
@@ -91,7 +91,7 @@ pub fn select_manifests<'a>(
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
 /// verified case-insensitively before parsing, like `EnsureSophonManifestFileAsync`.
-/// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864
+/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864>
 /// V1-SIMPLIFICATION (S1, see README): the whole blob is buffered in memory
 /// (`decode_all`) and manifests are never cached inside `game_dir`, instead of
 /// Starward's file cache + streaming decompression. Simpler + lower disk use at
@@ -102,14 +102,23 @@ pub async fn fetch_manifest(
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
     let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=5u64 {
-        match try_fetch_manifest(client, &url, meta).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
+    for attempt in 1..=ATTEMPTS {
+        match try_fetch_manifest(client, &url, meta, attempt).await {
+            Attempt::Ok(v) => return Ok(v),
+            Attempt::Fatal(e) => {
+                tracing::debug!(
+                    manifest = %meta.manifest.id,
+                    attempt,
+                    "manifest fetch failed, not retryable: {e:#}"
+                );
+                return Err(e);
+            }
+            Attempt::Retry(e) => {
+                tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
                 last_err = e;
-                tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
             }
         }
+        tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)
 }
@@ -118,37 +127,52 @@ async fn try_fetch_manifest(
     client: &reqwest::Client,
     url: &str,
     meta: &ChunkManifestMeta,
-) -> Result<Vec<SophonChunkFile>> {
+    attempt: u64,
+) -> Attempt<Vec<SophonChunkFile>> {
     tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
-    let bytes = client
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("GET manifest {}", meta.manifest.id))?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Attempt::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
+        }
+    };
+    let status = resp.status();
+    if let Some(e) = status_failure(status, url) {
+        return verdict(e, retryable(status.as_u16()));
+    }
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => return Attempt::Retry(anyhow::anyhow!("read manifest body: {}", e)),
+    };
     tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = bytes.len(), "manifest downloaded");
     // Entire blob is zstd-compressed; checksum = MD5 of DECOMPRESSED bytes.
-    let decoded = zstd::stream::decode_all(std::io::Cursor::new(&bytes))
-        .context("zstd decompress manifest")?;
+    let decoded = match zstd::stream::decode_all(std::io::Cursor::new(&bytes)) {
+        Ok(d) => d,
+        Err(e) => return Attempt::Retry(anyhow::Error::new(e).context("zstd decompress manifest")),
+    };
     let digest = format!("{:x}", md5::compute(&decoded));
     tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = decoded.len(), expect_md5 = %meta.manifest.checksum, actual_md5 = %digest, "manifest checksum check");
+    // A checksum mismatch is worth another try: the origin may have served a
+    // torn body, and the next attempt is a fresh one.
     if !digest.eq_ignore_ascii_case(&meta.manifest.checksum) {
-        anyhow::bail!(
+        return Attempt::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             meta.manifest.id,
             meta.manifest.checksum,
             digest
-        );
+        ));
     }
-    let m = SophonChunkManifest::decode(decoded.as_slice()).context("protobuf decode manifest")?;
-    let (files, chunks): (usize, usize) = (
-        m.chuncks.len(),
-        m.chuncks.iter().map(|f| f.chunks.len()).sum(),
-    );
-    tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, "manifest parsed");
-    Ok(m.chuncks)
+    match SophonChunkManifest::decode(decoded.as_slice()) {
+        Ok(m) => {
+            let (files, chunks): (usize, usize) = (
+                m.chuncks.len(),
+                m.chuncks.iter().map(|f| f.chunks.len()).sum(),
+            );
+            tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, attempt, "manifest parsed");
+            Attempt::Ok(m.chuncks)
+        }
+        Err(e) => Attempt::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
+    }
 }
 
 /// Download one chunk's compressed bytes.
@@ -159,24 +183,104 @@ pub async fn fetch_chunk_bytes(
 ) -> Result<Vec<u8>> {
     let url = join_url(url_prefix, id);
     let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=5u64 {
-        match client.get(&url).send().await {
-            Ok(r) => match r.error_for_status() {
-                Ok(r) => match r.bytes().await {
-                    Ok(b) => {
-                        tracing::trace!(chunk = %id, compressed_bytes = b.len(), attempt, "chunk downloaded");
-                        return Ok(b.to_vec());
-                    }
-                    Err(e) => last_err = anyhow::anyhow!("read chunk body: {}", e),
-                },
-                Err(e) => last_err = anyhow::anyhow!("chunk status: {}", e),
-            },
-            Err(e) => last_err = anyhow::anyhow!("GET chunk: {}", e),
+    for attempt in 1..=ATTEMPTS {
+        match try_fetch_chunk(client, &url, id, attempt).await {
+            Attempt::Ok(b) => return Ok(b),
+            Attempt::Fatal(e) => {
+                tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
+                return Err(e);
+            }
+            Attempt::Retry(e) => {
+                tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
+                last_err = e;
+            }
         }
-        tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {}", last_err);
         tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)
+}
+
+async fn try_fetch_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    id: &str,
+    attempt: u64,
+) -> Attempt<Vec<u8>> {
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => return Attempt::Retry(anyhow::anyhow!("GET chunk: {}", e)),
+    };
+    let status = resp.status();
+    if let Some(e) = status_failure(status, url) {
+        return verdict(e, retryable(status.as_u16()));
+    }
+    match resp.bytes().await {
+        Ok(b) => {
+            // NOTE: the bridge parses this line to work out what was *downloaded*
+            // rather than reused, so it has to say which chunk it was about.
+            tracing::trace!(chunk = %id, compressed_bytes = b.len(), attempt, "chunk downloaded");
+            Attempt::Ok(b.to_vec())
+        }
+        Err(e) => Attempt::Retry(anyhow::anyhow!("read chunk body: {}", e)),
+    }
+}
+
+/// Attempts per blob fetch, and the backoff is `attempt` seconds: 1+2+3+4 s.
+const ATTEMPTS: u64 = 5;
+
+/// One attempt at a blob fetch, classified by whether an identical retry could
+/// come back different.
+///
+/// The three-way split is the retry policy. Collapsing `Fatal` into `Retry` is
+/// what makes a run spend ~15 s of sleep to learn something it already knew.
+enum Attempt<T> {
+    Ok(T),
+    /// Transient, or a failure we cannot classify. Worth another try.
+    Retry(anyhow::Error),
+    /// The origin has answered definitively. A second identical request will
+    /// answer identically.
+    Fatal(anyhow::Error),
+}
+
+/// Split an error by whether the status says it can change.
+fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Attempt<T> {
+    if retryable_status {
+        Attempt::Retry(e)
+    } else {
+        Attempt::Fatal(e)
+    }
+}
+
+/// `Some` when `status` is a failure, carrying a message in the shape `reqwest`
+/// would have produced for `error_for_status()`.
+fn status_failure(status: reqwest::StatusCode, url: &str) -> Option<anyhow::Error> {
+    if status.is_success() {
+        return None;
+    }
+    Some(anyhow::anyhow!(
+        "HTTP status client error ({status}) for url ({url})"
+    ))
+}
+
+/// Whether a blob status is worth another attempt.
+///
+/// Retried: `408`, `429`, and any `5xx` — a server that is overloaded or briefly
+/// broken may answer again. **Not** retried: every other `4xx`. A server that has
+/// decided this URL does not exist will not change its mind, and retrying it only
+/// makes the failure take longer and look like a network problem.
+///
+/// **Why a 404 is safe to give up on, here specifically.** A manifest or chunk id
+/// is not invented by this tool: it comes out of the `getBuild` body for the
+/// build it is fetched under, and that namespace is published atomically. There
+/// is no window in which an id is advertised by `getBuild` but its blob is not yet
+/// on the CDN, so a 404 means "this build does not have that object" rather than
+/// "ask again in a second". The same id under the *other* build's prefix is also
+/// a 404, which is what makes the build id part of a chunk's address.
+///
+/// Same rule as `gircap`'s `RetryPolicy::should_retry_status`. Two tools in one
+/// repository disagreeing about the same status code is itself a defect.
+pub fn retryable(status: u16) -> bool {
+    matches!(status, 408 | 429) || (500..=599).contains(&status)
 }
 
 pub fn join_url(prefix: &str, id: &str) -> String {
@@ -212,6 +316,33 @@ pub fn build_local_chunk_map(
 mod tests {
     use super::*;
     use crate::hyp::{ManifestFile, ManifestUrl};
+
+    /// The policy, pinned as a table rather than a prose claim: a retryable
+    /// status must be one where a second identical request could come back
+    /// different.
+    #[test]
+    fn only_transient_statuses_are_retryable() {
+        for s in [408, 429, 500, 502, 503, 504, 599] {
+            assert!(retryable(s), "{s} is transient and must be retried");
+        }
+        // The blob routes answer a missing object with a 404 and an AliyunOSS
+        // `NoSuchKey` body. Retrying that cannot change the answer: the id came
+        // out of this build's own `getBuild` body, so it is not in a
+        // propagation window.
+        for s in [400, 401, 403, 404, 405, 410, 418, 451] {
+            assert!(!retryable(s), "{s} is decided; retrying it changes nothing");
+        }
+    }
+
+    /// A success is not a retryable status, and that is fine: success never
+    /// reaches the verdict, which is only consulted once a response has already
+    /// been judged a failure. Pinning it keeps someone from later widening the
+    /// rule to "not an error at all".
+    #[test]
+    fn a_success_is_not_confused_with_a_retryable_failure() {
+        assert!(!retryable(200));
+        assert!(!retryable(204));
+    }
 
     fn meta(field: &str) -> ChunkManifestMeta {
         ChunkManifestMeta {

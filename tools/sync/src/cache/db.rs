@@ -308,11 +308,12 @@ mod tests {
     // write path, and that two read-only handles share the file, are the
     // library's guarantees, not ours: nothing here asserts them.
 
-    /// A scratch directory holding one real cache file, plus its path.
-    fn seeded(tag: &str, case_sensitive: bool) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("girsync_ro_{}_{}", std::process::id(), tag));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
+    /// A scratch directory holding one real cache file, plus the path to it.
+    ///
+    /// The directory comes back as the guard that owns it, so the tree is
+    /// removed when the test ends rather than when it remembers to ask.
+    fn seeded(tag: &str, case_sensitive: bool) -> (crate::testtemp::TempDir, PathBuf) {
+        let dir = crate::testtemp::TempDir::new("girsync_ro", tag);
         let p = dir.join(CACHE_PREFIX);
         let c = open_db(
             &p,
@@ -370,7 +371,6 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert!(all.contains_key("a.txt"));
         assert!(!all.contains_key("b.txt"), "the refused put did not land");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A read/write open rewrites `meta` when the recorded case mode disagrees
@@ -399,7 +399,6 @@ mod tests {
             meta.case_sensitive,
             "a read-only open must not rewrite the recorded case mode"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A read-only open refuses anything it cannot faithfully interpret: no
@@ -407,9 +406,7 @@ mod tests {
     /// build would decode under the wrong assumptions.
     #[test]
     fn read_only_open_requires_a_readable_current_version_cache() {
-        let dir = std::env::temp_dir().join(format!("girsync_ro_{}_gates", std::process::id()));
-        std::fs::remove_dir_all(&dir).ok();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testtemp::TempDir::new("girsync_ro", "gates");
         let ro = |p: &Path| open_db(p, true, CacheOpen::ReadOnly);
 
         // No file: there is nothing to observe, and creating one would be a write.
@@ -452,7 +449,5 @@ mod tests {
             txn.commit().unwrap();
         }
         assert!(ro(&future).is_err(), "a future version is refused");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

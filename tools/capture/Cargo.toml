@@ -1,0 +1,45 @@
+[package]
+name = "gircap"
+version = "0.1.0"
+edition = "2024"
+description = "Dev-only live-artifact capture tool: builds self-contained fixture bundles (real game_dir, real API bodies, real chunk blobs) plus offline ground truth, for testing the repair binary"
+
+# gircap shares no code with the repair binary: no path dep, no registry dep, and
+# no `Command` against its binary anywhere in the tree (docs/00-spec.md §2).
+
+[lib]
+name = "gircap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gircap"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+# No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
+# or handed on as raw bytes, and nothing reads a streaming body. The `stream`
+# feature is what a future "hash the blob as it lands" would ask for.
+reqwest = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost = "0.13"
+zstd = "0.13"
+md5 = "0.7"
+sha2 = "0.10"
+flate2 = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# Only the `non_blocking` writer guard, which is what flushes the tail of a
+# --log-file run. No rolling: a capture writes one log, it is not a daemon.
+tracing-appender = "0.2"
+chrono = { version = "0.4", features = ["clock"] }
+
+[dev-dependencies]
+# `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
+serde_json = "1"
+
+# Deliberately absent: `twox-hash`. The 16-hex manifest-id prefix is not a hash
+# of any observable input (docs/00-spec.md §3.7), so an xxh64 implementation
+# would be unused code asserting something false.

@@ -133,6 +133,20 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let explicit = ctx.audio_explicit.then_some(&ctx.audio);
     let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit);
     if ctx.audio_explicit && !ctx.readonly() && !config.audio_pkg_scan_dir.is_empty() {
+        // An explicit `--audio` under an active path scope is a
+        // contradiction, not a merge — the flag would mutate a path the scope
+        // may not have admitted. The escape hatch is to include the scan
+        // file's own rel path; it is never hardcoded, it comes from
+        // `getGameConfigs`, and it is in scope like anything else.
+        let scan_rel = config.audio_pkg_scan_dir.replace('\\', "/");
+        if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(&scan_rel) {
+            return Err(RunFailure::usage(anyhow::anyhow!(
+                "--audio writes the scan file at '{scan_rel}', which is outside the active \
+                 path scope (--include '{}' / --exclude '{}'); include it or drop one of the two flags",
+                ctx.path_scope.describe_includes(),
+                ctx.path_scope.describe_excludes(),
+            )));
+        }
         audio::write_scan_file(game_dir, &config.audio_pkg_scan_dir, &audio)
             .context("write audio scan file")
             .map_err(RunFailure::write)?;
