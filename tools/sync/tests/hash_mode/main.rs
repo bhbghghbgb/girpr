@@ -54,7 +54,9 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{
+    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
+};
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
 
@@ -96,8 +98,9 @@ fn record() -> SideCapability {
 /// Trust is on deliberately, because the cases here are about which algorithms a
 /// side is *short of*, and distrusting makes every side short of everything — which
 /// would hide the very tiers being tested. Trust's own rule is pinned separately in
-/// `planner.rs` (`distrusting_a_record_does_not_change_what_it_owes`) and
-/// end-to-end by `update_recomputes_every_digest_and_repairs_a_wrong_one`.
+/// `src/planner/coverage.rs`
+/// (`distrusting_a_record_does_not_change_what_it_owes`) and end-to-end by
+/// `update_recomputes_every_digest_and_repairs_a_wrong_one` in `tests/update.rs`.
 fn plan(
     s: &HashMap<String, SideEntry>,
     d: &HashMap<String, SideEntry>,
@@ -123,7 +126,7 @@ fn plan(
             cap: dc,
             label: "dst",
         },
-        true,
+        CasePairing::Exact,
         mode,
         stat,
     )
@@ -162,13 +165,12 @@ fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {
     }
 }
 
-/// Total digests a two-sided `compare` would compute.
-///
-/// Spelled out rather than borrowed from `lazy.rs` because that file's harness
-/// asserts verdicts across every difference class, and these cases are about a read
-/// count on a tree with no differences at all - a fixture with `CHANGED` paths in it
-/// would make the number depend on the prune and rename paths too.
 /// `(files opened, digests computed)` for a two-sided `compare`.
+///
+/// Spelled out rather than borrowed from `lazy/`: that harness asserts verdicts
+/// across every difference class, and these cases are about a read count on a tree
+/// with no differences at all — a fixture with `CHANGED` paths in it would make
+/// the number depend on the prune and rename paths too.
 ///
 /// Both at once because they are different facts and a case wants both. `hashed`
 /// counts **files opened**, while `hash_file` computes every algorithm for a path in
@@ -207,7 +209,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             cap: do_.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -249,7 +251,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -270,7 +272,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
         &disk.map,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         false,
     );
     (disk.stats.hashed, if diff.is_empty() { 0 } else { 4 })

@@ -11,10 +11,10 @@
 //! without restating how it is spelled, and a change to the prose rendering
 //! cannot fail a case whose point is the verdict.
 //!
-//! The `hashed` expectations in the doc comment on each test are the **lazy**
-//! numbers. The suite was written against the eager code first, with the eager
-//! numbers, and flipped once the short circuit landed; the diff of that flip is
-//! the record of what laziness actually changed.
+//! The `hashed` expectation in each test's doc comment is the count the run
+//! actually produces. Stating it is the point: an eager run over the same fixture
+//! would read every file on both sides, so the gap between the two numbers is
+//! exactly what laziness bought.
 //!
 //! ## Layout
 //!
@@ -49,7 +49,7 @@ use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::planner::{Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};
 use girsync::report::verdict;
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, TrustOpts, UpdateOpts, cmd_sync};
@@ -72,7 +72,7 @@ impl Run {
     fn records(&self) -> Vec<Value> {
         // `why: false` throughout this file: laziness is asserted on *which* pairs
         // were read, and a `why` field would be a reporting difference on records
-        // whose content is not what's under test. `tests/why.rs` covers the flag.
+        // whose content is not what's under test. `tests/why/` covers the flag.
         verdict(&self.diff, false, false)
             .iter()
             .map(|r| r.json())
@@ -121,7 +121,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -148,7 +148,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             &dm.map,
             &plans.required,
             plans.stat,
-            common.case_sensitive,
+            CasePairing::from(common.case_sensitive),
             false,
         ),
         hashed: sm.stats.hashed + dm.stats.hashed,

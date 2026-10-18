@@ -17,7 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
-use crate::planner::{Required, StatTrust};
+use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -166,9 +166,9 @@ pub fn pair_verdict(
     //
     // Reaching here with an empty `need` means the pair was left undecided with no way
     // left to decide it, so the honest verdict is `CHANGED` ("cannot confirm") rather
-    // than silently clean. Reporting it equal is how a size-differing pair once came
-    // back "identical" under `--hash-all-of none --no-trust-size`, and in `sync` that
-    // meant `dst` was left stale by a run that reported success.
+    // than silently clean. A size-differing pair under `--hash-all-of none
+    // --no-trust-size` is exactly that case: reported equal, and in `sync` that
+    // leaves `dst` stale under a run that reported success.
     //
     // Guarded on `need.is_empty()` deliberately. While a digest **is** available the
     // comparison above is a real verdict, and a pair whose content agrees is genuinely
@@ -215,6 +215,13 @@ pub fn pair_verdict(
 /// classification itself is produced whether or not anything asks for it: a diff
 /// that only computed a reason when a flag was on would be two diffs.
 ///
+/// `pairing` is which paths count as the same path, and it is the same
+/// [`CasePairing`] the planner was given — except where a rename has already made
+/// them line up. `sync` plans as on disk ([`CasePairing::Lowercase`]) and then
+/// diffs post-rename ([`CasePairing::Exact`]); passing [`CasePairing::Lowercase`]
+/// to the diff would resurrect the `CASE-MISMATCH` bucket the rename pass exists
+/// to eliminate.
+///
 /// `want_identical` fills [`Diff::identical`], and only that. It is off by default
 /// because the flag is — one record per equal file is a real cost in output volume,
 /// and a caller who has not asked for it should not pay it or read it.
@@ -223,11 +230,11 @@ pub fn diff_maps(
     dst: &HashMap<String, EffRec>,
     required: &Required,
     stat: StatTrust,
-    case_sensitive: bool,
+    pairing: CasePairing,
     want_identical: bool,
 ) -> Diff {
     let mut d = Diff::default();
-    if case_sensitive {
+    if pairing == CasePairing::Exact {
         let mut keys: HashSet<&String> = HashSet::new();
         for k in src.keys().chain(dst.keys()) {
             keys.insert(k);
@@ -257,42 +264,55 @@ pub fn diff_maps(
             }
         }
     } else {
-        // lower -> original (mixed-case already validated absent within each side)
+        // The union of both sides' lowercase keys, walked as src's keys and then
+        // the dst keys src does not already cover. Two indices and one pass each
+        // answer that; materialising the union as a third `HashSet<String>` would
+        // clone every lowercased key into it and then look each one up *again* to
+        // discover which side holds it — a whole pass over the key set, for an
+        // answer the pass already has.
+        //
+        // Mixed-case collisions within one side are already fatal (phase A), so
+        // each lowercase key maps to exactly one path per side and this join is
+        // well defined.
         let mut slow: HashMap<String, &String> = HashMap::new();
-        let mut dlow: HashMap<String, &String> = HashMap::new();
         for k in src.keys() {
             slow.insert(k.to_lowercase(), k);
         }
+        let mut dlow: HashMap<String, &String> = HashMap::new();
         for k in dst.keys() {
             dlow.insert(k.to_lowercase(), k);
         }
-        let mut keys: HashSet<String> = HashSet::new();
-        for k in slow.keys().chain(dlow.keys()) {
-            keys.insert(k.clone());
-        }
-        for lk in keys {
-            match (slow.get(&lk), dlow.get(&lk)) {
-                (Some(srel), None) => d.missing.push((*srel).clone()),
-                (None, Some(trel)) => d.extra.push((*trel).clone()),
-                (Some(srel), Some(trel)) => {
-                    if *srel != *trel {
-                        d.case_mismatch.push(((*srel).clone(), (*trel).clone()));
-                    }
-                    let s = &src[*srel];
-                    let t = &dst[*trel];
-                    if s.kind != t.kind {
-                        d.type_conflict.push((*srel).clone());
-                    } else {
-                        let v = pair_verdict(stat, required, s, t, srel);
-                        if v.is_changed() {
-                            d.changed.push((*srel).clone());
-                        } else if want_identical {
-                            d.identical.push((*srel).clone());
-                        }
-                        d.verdicts.insert((*srel).clone(), v);
-                    }
+        let classify = |lk: &str, d: &mut Diff| match (slow.get(lk), dlow.get(lk)) {
+            (Some(srel), None) => d.missing.push((*srel).clone()),
+            (None, Some(trel)) => d.extra.push((*trel).clone()),
+            (Some(srel), Some(trel)) => {
+                if *srel != *trel {
+                    d.case_mismatch.push(((*srel).clone(), (*trel).clone()));
                 }
-                (None, None) => {}
+                let s = &src[*srel];
+                let t = &dst[*trel];
+                if s.kind != t.kind {
+                    d.type_conflict.push((*srel).clone());
+                } else {
+                    let v = pair_verdict(stat, required, s, t, srel);
+                    if v.is_changed() {
+                        d.changed.push((*srel).clone());
+                    } else if want_identical {
+                        d.identical.push((*srel).clone());
+                    }
+                    d.verdicts.insert((*srel).clone(), v);
+                }
+            }
+            (None, None) => {}
+        };
+        for lk in slow.keys() {
+            classify(lk, &mut d);
+        }
+        // dst-only keys. One src already covered was classified above, under the
+        // *src* spelling, which is the spelling every bucket is keyed by.
+        for lk in dlow.keys() {
+            if !slow.contains_key(lk) {
+                classify(lk, &mut d);
             }
         }
     }
@@ -336,4 +356,179 @@ pub fn hashes_differ(
         }
     }
     differ
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(size: u64, mtime_ns: i64) -> EffRec {
+        EffRec {
+            kind: "file".into(),
+            size,
+            mtime_ns,
+            hashes: HashMap::new(),
+        }
+    }
+
+    fn dir() -> EffRec {
+        EffRec {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            hashes: HashMap::new(),
+        }
+    }
+
+    fn side(entries: Vec<(&str, EffRec)>) -> HashMap<String, EffRec> {
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    fn run(
+        src: &HashMap<String, EffRec>,
+        dst: &HashMap<String, EffRec>,
+        case_sensitive: bool,
+        want_identical: bool,
+    ) -> Diff {
+        diff_maps(
+            src,
+            dst,
+            &Required::default(),
+            StatTrust::default(),
+            CasePairing::from(case_sensitive),
+            want_identical,
+        )
+    }
+
+    /// Every pairing outcome the insensitive branch has to tell apart, in one tree,
+    /// stated as the whole [`Diff`] rather than one bucket at a time.
+    ///
+    /// The branch is a *join* over the two sides, and each bucket is a different
+    /// answer to "which side(s) hold this lowercase key". A rewrite that walks one
+    /// map and looks into the other has to reproduce all of them at once, so they
+    /// are pinned together: src-only, dst-only, a case-only pair, a genuine
+    /// change, a kind conflict, and a pair that came out equal.
+    #[test]
+    fn the_insensitive_branch_buckets_every_pairing_outcome() {
+        let src = side(vec![
+            ("same.txt", file(10, 100)),
+            ("Data.txt", file(10, 100)),
+            ("changed.txt", file(11, 100)),
+            ("clash", file(10, 100)),
+            ("only_src.txt", file(10, 100)),
+        ]);
+        let dst = side(vec![
+            ("same.txt", file(10, 100)),
+            ("data.txt", file(10, 100)),
+            ("changed.txt", file(10, 100)),
+            ("clash", dir()),
+            ("only_dst.txt", file(10, 100)),
+        ]);
+
+        let d = run(&src, &dst, false, true);
+
+        assert_eq!(d.missing, vec!["only_src.txt".to_string()]);
+        assert_eq!(d.extra, vec!["only_dst.txt".to_string()]);
+        assert_eq!(d.changed, vec!["changed.txt".to_string()]);
+        assert_eq!(d.type_conflict, vec!["clash".to_string()]);
+        assert_eq!(
+            d.case_mismatch,
+            vec![("Data.txt".to_string(), "data.txt".to_string())]
+        );
+        assert_eq!(
+            d.identical,
+            vec!["Data.txt".to_string(), "same.txt".to_string()],
+            "a case-only pair is also equal, and a kind conflict is neither"
+        );
+        // Every both-sides pair is classified, not just the equal ones: `--why`
+        // reads the same value to name the field that settled a `CHANGED`.
+        assert_eq!(
+            d.verdicts.get("changed.txt"),
+            Some(&Verdict::Stat {
+                field: StatField::Size,
+                both: false
+            })
+        );
+        assert_eq!(
+            d.verdicts.get("clash"),
+            None,
+            "a kind conflict is decided by kind"
+        );
+        assert_eq!(
+            d.total(),
+            4,
+            "the case-only pair is counted once, not twice"
+        );
+    }
+
+    /// The join is over *keys*, so a src-only path absent from dst must still be
+    /// reported when dst holds other paths too — the dst-only pass has to skip
+    /// exactly the keys src already covered and no others.
+    #[test]
+    fn one_sided_paths_on_both_sides_are_both_reported() {
+        let src = side(vec![("s.txt", file(1, 1)), ("both.txt", file(1, 1))]);
+        let dst = side(vec![("d.txt", file(1, 1)), ("both.txt", file(1, 1))]);
+        let d = run(&src, &dst, false, false);
+        assert_eq!(d.missing, vec!["s.txt".to_string()]);
+        assert_eq!(d.extra, vec!["d.txt".to_string()]);
+        assert!(d.changed.is_empty() && d.type_conflict.is_empty());
+        assert!(d.identical.is_empty(), "want_identical was off");
+    }
+
+    /// Two trees in step produce no differences at all. **Same casing on both
+    /// sides**, which is what "in step" means once the rename pass has run —
+    /// `sync` hands the diff exact keys for exactly that reason.
+    #[test]
+    fn an_insensitive_diff_of_identical_trees_is_empty() {
+        let src = side(vec![("a.txt", file(10, 100)), ("sub/B.txt", file(10, 100))]);
+        let dst = side(vec![("a.txt", file(10, 100)), ("sub/B.txt", file(10, 100))]);
+        let d = run(&src, &dst, false, false);
+        assert!(
+            d.is_empty(),
+            "exit 0: missing={:?} extra={:?} changed={:?} type_conflict={:?}",
+            d.missing,
+            d.extra,
+            d.changed,
+            d.type_conflict
+        );
+    }
+
+    /// A case-only pair is reported as `case_mismatch` but is **not** counted as a
+    /// difference, because its content compared equal. That asymmetry is the whole
+    /// reason `sync` re-keys dst before diffing: left in place, a clean tree would
+    /// exit 4 on spelling alone.
+    #[test]
+    fn a_case_only_pair_is_reported_but_not_counted_as_a_difference() {
+        let src = side(vec![("sub/B.txt", file(10, 100))]);
+        let dst = side(vec![("sub/b.txt", file(10, 100))]);
+        let d = run(&src, &dst, false, true);
+        assert_eq!(
+            d.case_mismatch,
+            vec![("sub/B.txt".to_string(), "sub/b.txt".to_string())]
+        );
+        assert_eq!(d.identical, vec!["sub/B.txt".to_string()]);
+        assert_eq!(d.total(), 0, "nothing differs: the content matched");
+    }
+
+    /// The sensitive branch pairs by exact key, so `Data.txt` and `data.txt` are
+    /// two different paths: missing plus extra, and no case mismatch.
+    ///
+    /// Stated against the same shape as the insensitive case above, because the two
+    /// branches reading one set of maps differently is exactly the asymmetry `sync`
+    /// depends on — it plans as on disk, then diffs post-rename.
+    #[test]
+    fn the_sensitive_branch_pairs_by_exact_key() {
+        let src = side(vec![("Data.txt", file(10, 100))]);
+        let dst = side(vec![("data.txt", file(10, 100))]);
+        let d = run(&src, &dst, true, false);
+        assert_eq!(d.missing, vec!["Data.txt".to_string()]);
+        assert_eq!(d.extra, vec!["data.txt".to_string()]);
+        assert!(
+            d.case_mismatch.is_empty(),
+            "two distinct paths, not a casing difference"
+        );
+    }
 }

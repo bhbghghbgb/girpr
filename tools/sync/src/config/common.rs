@@ -133,10 +133,10 @@ impl TryFrom<RwArgs> for RwLimits {
     /// caller who did nothing wrong.
     ///
     /// `0` is refused here rather than by clap, so it exits `3` with a message
-    /// naming the flag — the same treatment `--jobs 0` got, and the same code the
-    /// README documents for a runtime usage mistake. A clap range validator would
-    /// have made it exit `2`, which reads as "you typed it wrong" rather than "you
-    /// asked for zero of something".
+    /// naming the flag — the code the README documents for a runtime usage
+    /// mistake, as distinct from the `2` a parse error gets. A clap range validator
+    /// would have made it exit `2`, which reads as "you typed it wrong" rather
+    /// than "you asked for zero of something".
     fn try_from(a: RwArgs) -> Result<Self> {
         let one = RwLimits::one();
         let nz = |flag: &str, n: usize| -> Result<NonZeroUsize> {

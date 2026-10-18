@@ -50,11 +50,11 @@ fn any_of_still_hashes_when_the_pair_shares_no_algorithm() {
     // nothing is available anywhere, which is the only shape where every tier costs
     // a read.
     //
-    // **A fresh fixture per measurement**, for the reason `run_pair` gives. The
-    // first version of this test built one pair and measured both modes on it, and
-    // the `any-of` number came out 0 — not because the mode is free but because the
-    // `all-of` run before it had just backfilled both algorithms into both caches,
-    // so the second run found tier 1.
+    // **A fresh fixture per measurement**, for the reason `run_pair` gives. Measuring
+    // both modes against one fixture would make the `any-of` number come out 0 —
+    // not because the mode is free, but because the `all-of` run before it had
+    // already backfilled both algorithms into both caches, so the second run found
+    // tier 1.
     let t_all = TempRoot::new("hm_tier3_all");
     let t_any = TempRoot::new("hm_tier3_any");
     let spec: &[common::Spec] = &[("a.txt", Some(b"alpha"), Some(b"alpha"))];

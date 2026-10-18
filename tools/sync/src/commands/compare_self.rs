@@ -58,7 +58,7 @@ use crate::diff::diff_maps;
 use crate::effective::{
     SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
 };
-use crate::planner::{SideRequest, plan_pairs};
+use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
 
@@ -100,11 +100,10 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
 
     if common.dry_run {
-        // Warned, not rejected, and now for a shared reason with
+        // Warned, not rejected, and for the same reason as
         // `--no-trust-cached-hashes`: neither flag changes what this command
-        // checks any more. Erroring would break a script that passes `--dry-run`
-        // to every subcommand to be safe, which is exactly the usage this
-        // invites.
+        // checks. Erroring would break a script that passes `--dry-run` to every
+        // subcommand to be safe, which is exactly the usage this invites.
         warn!(
             "--dry-run is redundant for compare-self: this command writes nothing \
              (the disk side is scanned against an in-memory cache and the record \
@@ -150,7 +149,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     let record = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
     info!(
         cache = %db_path.display(),
-        entries = record.load_all()?.len(),
+        entries = record.load_keys()?.len(),
         "cache opened read-only"
     );
     let rec = load_record_side_from(&record, &common, &db_path.display().to_string())?;
@@ -194,6 +193,9 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // cannot supply a requested digest must fail rather than let the pair fall
     // back to size+mtime, which for an audit means reporting "in step" about
     // content nobody compared.
+    // One pairing for both calls: `compare-self` never renames, so the plan and the
+    // diff pair the same paths. See the note in `compare`.
+    let pairing = CasePairing::from(common.case_sensitive);
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,
@@ -212,7 +214,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        pairing,
         common.hash_mode,
         common.stat,
     )?;
@@ -258,7 +260,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         &disk,
         &plans.required,
         plans.stat,
-        common.case_sensitive,
+        pairing,
         common.show_identical,
     );
     let code = report_diff(&diff, &log.report(), common.why, common.show_identical);

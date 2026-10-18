@@ -77,12 +77,17 @@ pub fn scan_stat_only(
     let live = walk_live(root, max_depth)?;
     check_mixed_case(&live, &root.display().to_string(), case_sensitive)?;
     let mut map: HashMap<String, SideEntry> = HashMap::new();
-    let mut live_set: HashSet<String> = HashSet::new();
+    // Borrowed from `live`, which is why the scan below walks `&live` rather
+    // than consuming it. The set exists to answer "is this row still live?"
+    // in O(1) without re-running every glob, and holding the path strings here
+    // would be a second full copy of the tree's path set alive for the whole
+    // phase — one allocation per file, for a lookup the answer to.
+    let mut live_set: HashSet<&str> = HashSet::new();
     for e in &live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
             continue; // treated as not existing at all
         }
-        live_set.insert(e.rel.clone());
+        live_set.insert(e.rel.as_str());
     }
     info!(
         root = %root.display(),
@@ -119,11 +124,11 @@ pub fn scan_stat_only(
         Some(cache.begin_write()?)
     };
     let mut last_prog = std::time::Instant::now();
-    for e in live {
+    for e in &live {
         // `live_set` was built from this same predicate over this same vec, so
         // membership here is the exclusion test — and a hash lookup rather than
         // re-running every glob against the path.
-        if !live_set.contains(&e.rel) {
+        if !live_set.contains(e.rel.as_str()) {
             continue;
         }
         if e.is_dir {
@@ -212,20 +217,27 @@ pub fn scan_stat_only(
     // The prune *decision* is an answer, not a side effect: how many rows this run
     // would drop is part of what the run reports, so it is computed in both modes
     // and only the `remove` calls are suppressed. Gating the whole loop on the
-    // write handle — which is what this did — makes a dry run report `pruned = 0`
-    // over a tree a real run prunes, i.e. it answers a different question.
+    // write handle would make a dry run report `pruned = 0` over a tree a real run
+    // prunes, i.e. it would answer a different question.
     //
     // Reading through the batch handle when there is one is not required for
     // correctness: every key this run has written is a live key, and a live key is
     // never pruned, so the batch's pending writes cannot change the set. It does
     // change nothing about the *count* either way.
-    let existing = match batch.as_mut() {
-        Some(w) => w.load_all()?,
-        None => cache.load_all()?,
+    //
+    // Keys, not records. Nothing below looks at a `FileRec` — the question is
+    // only "does this row have a path on disk?" — and `load_all` would decode
+    // the entire `entries` table, hash map by hash map, to answer it. In
+    // insensitive mode this is the *second* full pass over that table in one
+    // phase (the first is `alt_recs` above, which does need its values), so the
+    // saving is real on a large tree and is why `load_keys` exists.
+    let cached_keys = match batch.as_mut() {
+        Some(w) => w.load_keys()?,
+        None => cache.load_keys()?,
     };
-    let stale: Vec<String> = existing
-        .keys()
-        .filter(|rel| !live_set.contains(*rel))
+    let stale: Vec<String> = cached_keys
+        .iter()
+        .filter(|rel| !live_set.contains(rel.as_str()))
         .cloned()
         .collect();
     let pruned = stale.len();

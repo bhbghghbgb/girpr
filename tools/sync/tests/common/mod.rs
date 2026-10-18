@@ -7,7 +7,7 @@
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::planner::{HashMode, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
@@ -159,8 +159,7 @@ pub fn scan(no_trust_cached_hashes: bool, dry_run: bool) -> ScanMode {
 }
 
 /// The limiter a test gets when concurrency is not what it is testing: strictly
-/// one rw operation at a time, which is what a command built for itself before
-/// the rw flags existed.
+/// one rw operation at a time, which is what an unflagged command resolves to.
 ///
 /// A `RwRuntime` rather than a thread count, so a test calling `resolve_folder`
 /// directly threads through exactly the same gate a command does and cannot
@@ -467,7 +466,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )

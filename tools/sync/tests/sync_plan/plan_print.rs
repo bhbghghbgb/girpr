@@ -51,10 +51,11 @@ fn sync_reports_the_diff_as_its_plan_before_it_acts() {
     );
 }
 
-/// **`sync` still exits 0 with a non-empty plan.** The single most damaging thing this
-/// feature could do by accident: printing a plan makes `sync` *look* like `compare`,
-/// and `compare` exits 4 on a difference. Returning 4 here would break every script
-/// that syncs a partly-different tree, and it is not what was asked for.
+/// **`sync` still exits 0 with a non-empty plan.** The single most damaging thing
+/// this command could do by accident: printing a plan makes `sync` *look* like
+/// `compare`, and `compare` exits 4 on a difference. Returning 4 here would break
+/// every script that syncs a partly-different tree, and it is not what is asked
+/// for.
 ///
 /// Asserted against a plan that is genuinely non-empty, so it cannot pass vacuously.
 #[test]

@@ -52,12 +52,11 @@ fn actions_are_reported_as_they_complete_under_a_parallel_rw_limit() {
 }
 
 /// **`--rw-threads 1` and `--rw-threads 4` report the same set of actions.** The
-/// point of the as-done change is that the *only* thing the rw limit affects is
-/// which thread finishes first. If it changed what was reported, the limit would be
-/// a correctness flag.
+/// only thing the rw limit may affect is which thread finishes first. If it
+/// changed *what* was reported, the limit would be a correctness flag.
 ///
 /// This is the general form of the crate's rule — the limiter changes scheduling and
-/// nothing else — on the surface that reports actions. `rw_threads.rs` pins the same
+/// nothing else — on the surface that reports actions. `rw_threads/` pins the same
 /// property on the resolver, against effective maps and `ScanStats` rather than
 /// printed records; this one is here because the action stream is what a caller
 /// actually reads.
@@ -89,10 +88,10 @@ fn the_rw_limit_does_not_change_what_is_reported() {
     );
 }
 
-/// **Every planned copy really happened**, under a parallel rw limit. The as-done
-/// change moves the emit into a worker closure, which is exactly the kind of move
-/// that can leave a file copied but unreported — so the filesystem is asserted, not
-/// only the stream.
+/// **Every planned copy really happened**, under a parallel rw limit. The `COPY`
+/// record is emitted from inside the copy worker, which is exactly the kind of
+/// placement that can leave a file copied but unreported — so the filesystem is
+/// asserted, not only the stream.
 #[test]
 fn parallel_copies_actually_land_on_disk() {
     let t = TempRoot::new("asdone_disk");
@@ -135,12 +134,11 @@ fn parallel_copies_actually_land_on_disk() {
 /// proves it.
 ///
 /// A single-file fixture finishes too fast to shuffle, so an order assertion would
-/// pass against the as-done implementation and give false comfort. Twenty-four files
+/// pass against any implementation and give false comfort. Twenty-four files
 /// of increasing size under `--rw-threads 4` do shuffle, and it is this one — the
 /// multiset comparison — that has to hold. Asserted as a *property of the fixture*
 /// rather than of a particular run: the order may still come out sorted on a lucky
-/// machine, and a test that depended on it would be the flaky test the plan is
-/// trying to avoid.
+/// machine, and a test that depended on it would be a flaky test.
 #[test]
 fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
     let t = TempRoot::new("asdone_many");

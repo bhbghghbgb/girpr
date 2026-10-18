@@ -3,10 +3,11 @@
 //!
 //! ## Why this is duplicated from `tests/common/mod.rs`
 //!
-//! The integration targets reach [`crate::tests_common`]'s `TempRoot`, which is
-//! theirs alone. A `#[cfg(test)]` module inside the library cannot see it, so
-//! the two in-crate test sites below get this instead. The two are identical in
-//! behaviour; if one changes, the other must change with it.
+//! The integration targets reach the shared `TempRoot` helper in
+//! `tests/common/mod.rs`, which is theirs alone. A `#[cfg(test)]` module inside
+//! the library cannot see it, so the in-crate test sites below get this
+//! instead. The two are identical in behaviour; if one changes, the other must
+//! change with it.
 //!
 //! ## Why the name carries so much
 //!
@@ -64,8 +65,9 @@ pub fn unique_path(prefix: &str, tag: &str) -> PathBuf {
 
 /// A scratch directory, removed when the value goes out of scope.
 ///
-/// Derefs to [`Path`], so `dir.join(..)`, `&dir` where a `&Path` is wanted, and
-/// every other path operation work without a conversion at the call site.
+/// Derefs to [`Path`] and implements `AsRef<Path>`, so `dir.join(..)`,
+/// `&dir` where a `&Path` is wanted, and every other path operation work
+/// without a conversion at the call site.
 pub struct TempDir {
     path: PathBuf,
 }

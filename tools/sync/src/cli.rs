@@ -63,8 +63,8 @@ pub struct CommonArgs {
     /// is the common case for a record written by an older run: any-of then reads
     /// the one the record has instead of refusing. Every algorithm it picks is
     /// still obtainable on **both** sides, so a pair settled this way is settled by
-    /// a digest both sides hold — which is the difference between this and the old
-    /// behaviour of skipping whatever was missing.
+    /// a digest both sides hold — which is the difference between this and simply
+    /// skipping whatever was missing and calling the pair equal.
     ///
     /// `none` is not accepted here: with nothing requested there is no "any of" to
     /// choose, and `--hash-all-of none` is the stat-only audit.
@@ -174,9 +174,9 @@ pub struct CommonArgs {
     /// sides draw on one counter or two.
     ///
     /// **rw, not io.** The counter governs file *content* reads and writes —
-    /// hashing, and a copy's stream plus its verify re-hashes. It does not govern
-    /// `stat`, which is orders of magnitude cheaper and would otherwise eat the
-    /// whole budget on a tree of many small files.
+    /// hashing, and a copy's stream plus the verify re-hash of what it wrote. It
+    /// does not govern `stat`, which is orders of magnitude cheaper and would
+    /// otherwise eat the whole budget on a tree of many small files.
     #[command(flatten)]
     pub rw: RwArgs,
 }

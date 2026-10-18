@@ -126,6 +126,24 @@ impl<'a> CacheWrite<'a> {
         Ok(map)
     }
 
+    /// Every key in this transaction, decoding nothing.
+    ///
+    /// The batched counterpart of [`CacheDb::load_keys`](crate::cache::CacheDb::load_keys),
+    /// and it exists for the same reason: a caller asking "which rows exist?"
+    /// should not pay to rebuild every `FileRec` to find out. It sees this
+    /// transaction's own pending writes, exactly as `load_all` does, because
+    /// both read the same transaction.
+    pub fn load_keys(&self) -> Result<Vec<String>> {
+        let txn = self.txn.as_ref().context("write txn gone")?;
+        let tbl = txn.open_table(ENTRIES).context("open entries table")?;
+        let mut keys = Vec::new();
+        for kv in tbl.iter().context("iterate cache")? {
+            let (k, _v) = kv.context("read cache entry")?;
+            keys.push(k.value().to_string());
+        }
+        Ok(keys)
+    }
+
     fn maybe_commit(&mut self) -> Result<()> {
         // The time check runs on mutation, i.e. right after the (possibly
         // minutes-long) hash that produced this put — exactly when the
@@ -171,6 +189,7 @@ impl<'a> CacheWrite<'a> {
 mod tests {
     use super::*;
     use crate::cache::CacheDb;
+    use std::collections::HashSet;
 
     fn file_rec() -> FileRec {
         FileRec {
@@ -217,6 +236,63 @@ mod tests {
         }
         assert!(c.get("a").unwrap().is_none());
         assert_eq!(c.get("b").unwrap().unwrap(), file_rec());
+    }
+
+    /// The batched `load_keys` has to see **this transaction's own pending
+    /// writes**, not the last committed state — that is the whole difference
+    /// from reading through the `CacheDb` handle, and phase A's prune relies on
+    /// it reading the same set `load_all` would have read.
+    ///
+    /// Pinned across an internal auto-commit too, because that reopens the
+    /// transaction underneath: the keys have to be the same before and after,
+    /// or the prune's answer would depend on when a threshold happened to trip.
+    #[test]
+    fn a_batch_sees_its_own_uncommitted_keys() {
+        let c = CacheDb::open_temp(true).unwrap();
+        // Trip the op-count trigger at 2 so the transaction reopens mid-test.
+        let limits = CommitLimits {
+            max_ops: 2,
+            ..quiet_limits()
+        };
+        let mut w = c.begin_write_with(limits).unwrap();
+        let keys =
+            |w: &CacheWrite| -> HashSet<String> { w.load_keys().unwrap().into_iter().collect() };
+
+        assert_eq!(keys(&w), HashSet::new(), "an empty table has no keys");
+
+        w.put("a", &file_rec()).unwrap();
+        assert_eq!(
+            keys(&w),
+            ["a".to_string()].into_iter().collect(),
+            "uncommitted, and visible"
+        );
+        assert_eq!(keys(&w), keys_of(&w), "load_keys agrees with load_all");
+
+        w.put("b", &file_rec()).unwrap();
+        assert_eq!(w.dirty, 0, "the threshold committed mid-test");
+        assert_eq!(
+            keys(&w),
+            ["a".to_string(), "b".to_string()].into_iter().collect(),
+            "the same keys after the transaction was reopened underneath"
+        );
+
+        w.remove("a").unwrap();
+        assert_eq!(
+            keys(&w),
+            ["b".to_string()].into_iter().collect(),
+            "a removal is visible before it is committed too"
+        );
+        let pending = keys(&w);
+        w.commit().unwrap();
+        assert_eq!(
+            c.load_keys().unwrap().into_iter().collect::<HashSet<_>>(),
+            pending,
+            "and it is what the committed table says"
+        );
+    }
+
+    fn keys_of(w: &CacheWrite) -> HashSet<String> {
+        w.load_all().unwrap().into_keys().collect()
     }
 
     #[test]

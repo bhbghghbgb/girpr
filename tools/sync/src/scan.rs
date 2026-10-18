@@ -2,17 +2,22 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{debug, info, trace};
 
 use crate::util::{elapsed_s, is_cache_rel, mtime_ns_of};
 
 /// One entry as found on disk, before any cache consultation.
+///
+/// Paths are relative to the walk root, and a caller that needs an absolute path
+/// re-derives it as `root.join(&ent.rel)`. Relative is the deliberate choice: a walk
+/// of a 200 k-file tree keeps every one of these alive at once, so a `PathBuf`
+/// retained per entry would be several MB of strings for a caller that mostly wants
+/// the relative form anyway.
 #[derive(Clone, Debug)]
 pub struct LiveEnt {
     /// `/`-separated path relative to the walk root, original casing preserved.
     pub rel: String,
-    pub abs: PathBuf,
     pub is_dir: bool,
     /// 0 for dirs: dirs are compared by presence only.
     pub size: u64,
@@ -31,21 +36,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
     let mut it = walkdir::WalkDir::new(root)
         .follow_links(true)
         .max_depth(max_depth)
-        .into_iter()
-        .filter_entry(|e| {
-            // Prune cache dirs from traversal.
-            let rel = e
-                .path()
-                .strip_prefix(root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .map(|s| s.replace('\\', "/"))
-                .unwrap_or_default();
-            if rel.is_empty() {
-                return true;
-            }
-            !is_cache_rel(&rel)
-        });
+        .into_iter();
     loop {
         match it.next() {
             None => break,
@@ -54,6 +45,11 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 if ent.depth() == 0 {
                     continue;
                 }
+                // Computed once per entry and used twice: the prune decision below and
+                // the emitted `LiveEnt`. A `filter_entry` predicate cannot hand its
+                // argument back, so deriving the rel inside one would mean deriving it
+                // again for every entry that survived — one `String` allocation each,
+                // for a path the loop already has.
                 let rel = ent
                     .path()
                     .strip_prefix(root)
@@ -61,7 +57,18 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     .and_then(|p| p.to_str())
                     .with_context(|| format!("non-UTF8 path {}", ent.path().display()))?
                     .replace('\\', "/");
-                if rel.is_empty() || is_cache_rel(&rel) {
+                if rel.is_empty() {
+                    continue;
+                }
+                // Prune cache dirs from traversal. `skip_current_dir` rather than a
+                // `filter_entry` predicate, so the rel above is the only copy of this
+                // path the walk makes. walkdir has already yielded the directory
+                // itself, so the subtree is pruned from here on; a cache *file* is
+                // simply dropped.
+                if is_cache_rel(&rel) {
+                    if ent.file_type().is_dir() {
+                        it.skip_current_dir();
+                    }
                     continue;
                 }
                 let ft = ent.file_type();
@@ -70,7 +77,6 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 if ft.is_dir() {
                     out.push(LiveEnt {
                         rel,
-                        abs: ent.path().to_path_buf(),
                         is_dir: true,
                         size: 0,
                         mtime_ns: 0,
@@ -80,7 +86,6 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                         .with_context(|| format!("stat {}", ent.path().display()))?;
                     out.push(LiveEnt {
                         rel,
-                        abs: ent.path().to_path_buf(),
                         is_dir: false,
                         size: meta.len(),
                         mtime_ns: mtime_ns_of(&meta),
@@ -126,4 +131,67 @@ pub fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pruning is asserted as the *set* of surviving rels, which is the property
+    /// every caller depends on, rather than as the order the walk happened to
+    /// produce. It covers both halves of the decision that a `girpr-cache*` entry
+    /// is not part of a mirror: the entry itself is dropped, and nothing beneath a
+    /// cache *directory* is visited — the one that a walk which merely filtered the
+    /// output would get wrong while still looking correct.
+    #[test]
+    fn cache_paths_are_pruned_along_with_their_contents() {
+        let root = std::env::temp_dir().join(format!("girsync_scan_prune_{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        // The live DB is a file; the backups and `old-*` snapshots are directories.
+        // All three are named `girpr-cache*` and none of them is mirror content.
+        for f in ["a.txt", "keep/b.txt", "girpr-cache/rows"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        for d in ["girpr-cache-backup-1", "girpr-cache-old-2"] {
+            let p = root.join(d).join("inner.bin");
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+
+        let mut rels: Vec<String> = walk_live(&root, 16)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.rel)
+            .collect();
+        rels.sort();
+
+        assert_eq!(rels, vec!["a.txt", "keep", "keep/b.txt"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `max_depth` is the walk's own bound, and the cache prune must not consume
+    /// it: a cache dir beyond the cap is never reached in the first place, and a
+    /// real dir exactly at the cap is still emitted.
+    #[test]
+    fn the_depth_cap_bounds_the_walk_independently_of_the_cache_prune() {
+        let root = std::env::temp_dir().join(format!("girsync_scan_depth_{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        for f in ["top.txt", "one/mid.txt", "one/two/deep.txt"] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+
+        let mut rels: Vec<String> = walk_live(&root, 2)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.rel)
+            .collect();
+        rels.sort();
+
+        assert_eq!(rels, vec!["one", "one/mid.txt", "one/two", "top.txt"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

@@ -219,7 +219,35 @@ impl CacheDb {
         }
     }
 
-    /// Every cached path.
+    /// Every cached path, decoding nothing.
+    ///
+    /// [`load_all`](Self::load_all) decodes every `FileRec` on the way — a hash
+    /// map rebuilt per row, on a table that can hold one row per file in a
+    /// large tree. A caller that only wants "which rows exist?" pays for all of
+    /// it and then throws it away, which is the shape phase A's prune is in.
+    ///
+    /// The answer is the same key set, and a missing table is still an empty
+    /// answer rather than an error — only the decoding is skipped. Order is
+    /// redb's business and is not part of what a caller may rely on; membership
+    /// is. There is deliberately no way to get a key and its value from here: a
+    /// caller that needs the value wants `load_all`, and one that does not should
+    /// not be able to ask for half of it by accident.
+    pub fn load_keys(&self) -> Result<Vec<String>> {
+        let txn = self.db.begin_read().context("begin read")?;
+        let tbl = match txn.open_table(ENTRIES) {
+            Ok(t) => t,
+            Err(e) if is_table_missing(&e) => return Ok(Vec::new()),
+            Err(e) => bail!("open entries table: {e:#}"),
+        };
+        let mut keys = Vec::new();
+        for kv in tbl.iter().context("iterate cache")? {
+            let (k, _v) = kv.context("read cache entry")?;
+            keys.push(k.value().to_string());
+        }
+        Ok(keys)
+    }
+
+    /// Every cached path, with its record.
     pub fn load_all(&self) -> Result<HashMap<String, FileRec>> {
         let txn = self.db.begin_read().context("begin read")?;
         let tbl = match txn.open_table(ENTRIES) {
@@ -302,6 +330,49 @@ mod tests {
         assert_eq!(c2.load_all().unwrap().len(), 1);
     }
 
+    /// `load_keys` exists to answer one question — which rows exist — so the
+    /// only thing that matters is that it answers it *exactly* as `load_all`
+    /// would. Asserted as a set rather than a list, because the order is redb's
+    /// business and is not part of what a caller may rely on; what a caller may
+    /// rely on is the membership.
+    ///
+    /// Both kinds of row are in the fixture deliberately: a dir row and a file
+    /// row decode to different shapes, so a key-only path that accidentally
+    /// decoded (or skipped) one of them would still pass a files-only fixture.
+    #[test]
+    fn load_keys_answers_exactly_what_load_all_would() {
+        let c = CacheDb::open_temp(true).unwrap();
+        assert_eq!(c.load_keys().unwrap(), Vec::<String>::new());
+
+        let mut expected = std::collections::HashSet::new();
+        for rel in ["a.txt", "sub/b.bin", "z.txt"] {
+            c.put(rel, &file_rec()).unwrap();
+            expected.insert(rel.to_string());
+        }
+        c.put("a_dir", &FileRec::dir()).unwrap();
+        expected.insert("a_dir".to_string());
+
+        let keys = c.load_keys().unwrap();
+        let got: std::collections::HashSet<String> = keys.iter().cloned().collect();
+        assert_eq!(got, expected, "every key, and nothing else");
+        assert_eq!(keys.len(), expected.len(), "no key is reported twice");
+        let all = c.load_all().unwrap();
+        assert_eq!(
+            got,
+            all.keys()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>(),
+            "load_keys and load_all describe the same table"
+        );
+
+        c.remove("a.txt").unwrap();
+        assert!(
+            !c.load_keys().unwrap().contains(&"a.txt".to_string()),
+            "a removal is visible"
+        );
+        assert_eq!(c.load_keys().unwrap().len(), 3);
+    }
+
     // -- read-only opens ---------------------------------------------------
     //
     // Scoped to what this crate decides. That redb hands out a handle with no
@@ -312,6 +383,10 @@ mod tests {
     ///
     /// The directory comes back as the guard that owns it, so the tree is
     /// removed when the test ends rather than when it remembers to ask.
+    ///
+    /// Bind it to `_dir`, not `_`: the lifetime *is* the cleanup, and a bare `_`
+    /// drops the guard at the end of the statement — deleting the tree the rest of
+    /// the test is about to write into.
     fn seeded(tag: &str, case_sensitive: bool) -> (crate::testtemp::TempDir, PathBuf) {
         let dir = crate::testtemp::TempDir::new("girsync_ro", tag);
         let p = dir.join(CACHE_PREFIX);
@@ -333,13 +408,18 @@ mod tests {
     /// run cannot corrupt the file it is observing by accident.
     #[test]
     fn read_only_cache_refuses_every_write() {
-        let (dir, p) = seeded("nowrite", true);
+        let (_dir, p) = seeded("nowrite", true);
         let c = open_db(&p, true, CacheOpen::ReadOnly).unwrap();
         assert!(c.is_read_only(), "reports its mode");
 
         // Reads still work, and see the same rows a read/write open would.
         assert_eq!(c.get("a.txt").unwrap(), Some(file_rec()));
         assert_eq!(c.load_all().unwrap().len(), 1);
+        assert_eq!(
+            c.load_keys().unwrap(),
+            vec!["a.txt".to_string()],
+            "the key-only read is a read too, so it is allowed on a read-only cache"
+        );
 
         let refusals: Vec<Result<()>> = vec![
             c.put("b.txt", &file_rec()),
@@ -378,7 +458,7 @@ mod tests {
     /// so it warns and hands back a usable cache.
     #[test]
     fn read_only_open_tolerates_a_case_mode_mismatch() {
-        let (dir, p) = seeded("casemix", true);
+        let (_dir, p) = seeded("casemix", true);
         // Written above as case-sensitive; read it back in insensitive mode.
         let c = open_db(&p, false, CacheOpen::ReadOnly).unwrap();
         assert_eq!(c.get("a.txt").unwrap(), Some(file_rec()));

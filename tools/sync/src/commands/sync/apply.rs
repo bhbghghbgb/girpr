@@ -23,6 +23,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::Path;
 use tracing::{debug, error, info, trace};
 
@@ -30,11 +31,9 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::filter::is_excluded;
-use crate::hash::hash_file;
+use crate::hash::{CHUNK, Digests, hash_file};
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
-use crate::scan::walk_live;
 use crate::util::mtime_ns_of;
 
 /// Everything the apply phases share: both roots, the dst cache, the two
@@ -44,8 +43,8 @@ pub(super) struct Applier<'a> {
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
     /// dst effective map, after the rename pass. Consulted for what dst actually
-    /// holds at a path; src's map is not needed here any more, because the
-    /// planner already decided which directories to remove (`Plan::rmdir`).
+    /// holds at a path; src's map is not consulted, because the planner already
+    /// decided which directories to remove (`Plan::rmdir`).
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
     /// The run's rw limits and the pool they size.
@@ -86,7 +85,7 @@ impl Applier<'_> {
             copied: self.copy_files(plan)?,
             removed_dirs: self.remove_unknown_dirs(plan)?,
         };
-        self.prune_dst_cache()?;
+        self.prune_dst_cache(plan)?;
         Ok(applied)
     }
 
@@ -162,7 +161,13 @@ impl Applier<'_> {
     /// any of those properties holding. It becomes load-bearing the moment
     /// `copy_one` stops truncating, stops deferring mtime, or reuses a digest
     /// across a content change — so do not "optimize it away" without checking
-    /// those three. Note also that it is not a *signal*: a later scan that
+    /// those three. `copy_one` digesting src during the copy is the near-miss
+    /// worth knowing about: src's digest comes from the copy's own read, but
+    /// dst's is still a separate read of the file on disk, which is the third
+    /// property speaking. A single-pass copy — digesting dst from the same chunks
+    /// going out — would trip it, and at that point "the comparison" is a value
+    /// against itself and the pre-drop is the only thing left standing. Note also that
+    /// it is not a *signal*: a later scan that
     /// records stat without a digest for a size/mtime-differing file looks
     /// exactly like this, so nothing downstream may depend on the row's absence
     /// to detect a crash.
@@ -226,9 +231,10 @@ impl Applier<'_> {
     /// pretending to be one.
     ///
     /// Each copy holds **both** permits for its whole life — the stream copy and
-    /// both verify re-hashes — because the file is not finished until it verifies.
-    /// Under a shared counter that is one permit; under a split counter it is one
-    /// per side, which is what admits `min(src, dst)` concurrent copies.
+    /// the verify re-hash of dst — because the file is not finished until it
+    /// verifies. Under a shared counter that is one permit; under a split counter
+    /// it is one per side, which is what admits `min(src, dst)` concurrent
+    /// copies.
     fn copy_files(&self, plan: &Plan) -> Result<usize> {
         info!(
             files = plan.copy.len(),
@@ -269,8 +275,9 @@ impl Applier<'_> {
                         trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
                     }
                     // **As done.** Announced the moment the file is in place, not
-                    // after every copy finishes — which is the whole difference from
-                    // the ordered emit this replaced.
+                    // after every copy finishes — so with more than one rw operation
+                    // permitted the `COPY` lines come out in completion order rather
+                    // than plan order.
                     //
                     // Only on success: a failed copy aborts the run before the
                     // summary, so announcing one would be a claim about work that
@@ -349,23 +356,74 @@ impl Applier<'_> {
     }
 
     /// Drop dst cache rows for paths that no longer exist on disk.
-    fn prune_dst_cache(&self) -> Result<()> {
-        let live = walk_live(self.dst, self.common.max_depth)?;
-        let mut present: HashSet<String> = HashSet::new();
-        for e in live {
-            if !is_excluded(
-                &e.rel,
-                &self.common.includes,
-                &self.common.excludes,
-                self.common.case_sensitive,
-            ) {
-                present.insert(e.rel);
-            }
+    ///
+    /// The present set is derived rather than walked. `dm` is the post-rename dst
+    /// map — the same filtered, depth-capped set of paths a live walk would report,
+    /// which is why `Plan::rmdir` reads it instead of deriving a second one — so the
+    /// only thing it cannot know is what *this run* has done to the disk since.
+    ///
+    /// Both directions matter, and getting only one right is the failure mode:
+    /// an additive-only set keeps rows for a subtree a copy wiped, and a
+    /// subtractive-only set drops rows for a path the run created.
+    ///
+    /// **Added** — what the apply phases create. `mkdir` for new directories, `copy`
+    /// for copied files, `fix_dirs` for the directories that replaced a file. All
+    /// three put a cache row as they go, so all three count as present; leaving one
+    /// out deletes a row for a path that is on disk, and the damage does not show up
+    /// here — it surfaces later as a `compare-self` reporting drift for a file that
+    /// never moved.
+    ///
+    /// **Subtracted** — what a copy destroys. `delete_files` and `rmdir` drop their
+    /// own rows, so those need nothing. The one that does is `copy_one` clearing a
+    /// blocking dst directory *recursively*, which takes a whole subtree with it.
+    /// `Plan::rmdir` deliberately excludes that subtree from its own list — the
+    /// directory is gone by the time the removal pass runs, so listing it would
+    /// promise an `rmdir` the run cannot reach — which leaves this the only place
+    /// that can tell "dst held this before the run" from "dst holds it now".
+    ///
+    /// The subtraction is by path prefix, so it covers the subtree at any depth
+    /// rather than only the entries the plan happened to enumerate.
+    ///
+    /// **One case this cannot reach**, deliberately: `--case-sensitive` on a
+    /// case-insensitive filesystem, where a directory this run `mkdir`s can be the
+    /// same directory a later `rmdir` removes. Deriving cannot see that without
+    /// case-folding the prune against the plan, in the one mode that deliberately
+    /// does not case-fold. Such rows survive until the next run's phase A prunes
+    /// them, and `compare-self` builds a cold cache so it cannot be misled.
+    ///
+    /// Cost: one pass over the map and three in-memory lists, against a full
+    /// traversal of dst with a `stat` per entry. On a large tree that traversal is
+    /// a real fraction of the run, and it would be the only one left in a real
+    /// `sync`.
+    fn prune_dst_cache(&self, plan: &Plan) -> Result<()> {
+        // dst paths this run's copies destroy, as `dir/` prefixes. Computed from
+        // `dm` rather than the plan's own lists, so it names exactly the subtrees
+        // `copy_one` will clear: a copy whose dst is a directory.
+        let wiped: Vec<String> = plan
+            .copy
+            .iter()
+            .filter(|item| self.dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
+            .map(|item| format!("{}/", item.rel))
+            .collect();
+        let mut present: HashSet<&str> = self.dm.keys().map(String::as_str).collect();
+        for r in &plan.mkdir {
+            present.insert(r);
+        }
+        for r in &plan.fix_dirs {
+            present.insert(r);
+        }
+        for item in &plan.copy {
+            present.insert(&item.rel);
         }
         let mut w = self.dst_db.begin_write()?;
-        for rel in w.load_all()?.keys() {
-            if !present.contains(rel) {
-                w.remove(rel)?;
+        for rel in w.load_keys()? {
+            // Strictly longer than the prefix, so the copied path itself keeps its
+            // row: only what is *under* a wiped directory is gone.
+            let wiped_subtree = wiped
+                .iter()
+                .any(|p| rel.len() > p.len() && rel.starts_with(p.as_str()));
+            if !present.contains(rel.as_str()) || wiped_subtree {
+                w.remove(&rel)?;
             }
         }
         w.commit()?;
@@ -373,10 +431,85 @@ impl Applier<'_> {
     }
 }
 
+/// Copy `src` over `dst`, digesting the bytes as they pass, and return the
+/// digest of what was **read**.
+///
+/// The digest is of the source stream, which is the point: `copy_one` needs a
+/// digest of src either way, and this is the one read that can produce it for
+/// free. It is emphatically *not* a substitute for the check the caller does
+/// afterwards — see [`verify_digests`], which is where the reasoning lives.
+///
+/// With no algorithms requested there is nothing to fold into the loop, so
+/// `io::copy` is left alone and keeps whatever fast path it has between two
+/// files. Under `--hash none` that path is the entire copy, and there is no
+/// digest to justify giving it up.
+fn copy_and_digest(
+    src: &mut std::fs::File,
+    dst: &mut std::fs::File,
+    algos: &[String],
+) -> Result<HashMap<String, Vec<u8>>> {
+    if algos.is_empty() {
+        std::io::copy(src, dst)?;
+        return Ok(HashMap::new());
+    }
+    let mut digests = Digests::new(algos);
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n: usize = src.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        dst.write_all(&buf[..n])?;
+        digests.update(&buf[..n]);
+    }
+    Ok(digests.finish())
+}
+
+/// Compare the two digests a copy produced, and fail if they disagree.
+///
+/// Two *separate* arguments, and that is the whole point. `src` is the digest
+/// of the bytes the copy streamed; `dst` is a fresh read of the file on disk,
+/// taken after `sync_all()`. A single pass that digested both sides from the
+/// same chunks would hand this the same map twice and it would have nothing to
+/// say — which is why the signature takes two, and why a caller that cannot
+/// produce two has no verify to run at all.
+///
+/// Only the requested `algos` are judged. A digest the run did not ask for is
+/// not evidence about this copy either way.
+fn verify_digests(
+    path: &Path,
+    algos: &[String],
+    src: &HashMap<String, Vec<u8>>,
+    dst: &HashMap<String, Vec<u8>>,
+) -> Result<()> {
+    for a in algos {
+        if src.get(a) != dst.get(a) {
+            error!(algo = %a, path = %path.display(), "verify hash mismatch");
+            bail!("verify hash({}) {}", a, path.display());
+        }
+    }
+    Ok(())
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
 /// re-copies rather than trusting it.
+///
+/// **Verify is two independent reads, and both are load-bearing.** src is
+/// digested as the copy streams it; dst is then re-read from disk and digested
+/// again, and the two are compared. A single pass that digested both sides as
+/// the bytes went past would compare a value with itself — equal by
+/// construction, so `verify hash mismatch` could never fire and would read as a
+/// guarantee while checking nothing. Because the re-read happens after
+/// `sync_all()`, it also hashes the bytes that actually reached the disk, which
+/// is the only way this catches silent corruption on the way down.
+///
+/// **What the src-side digest is not.** It describes the bytes src held *during*
+/// the copy, not after it. So a src file rewritten mid-copy is not caught here:
+/// dst is a faithful copy of a src that no longer exists, and the pair looks
+/// clean. That is a race the tool cannot win anyway — phase A's stat sees the new
+/// mtime on the next run and re-copies.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
     trace!("copy_one start");
@@ -393,12 +526,12 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
     let ssize = smeta.len();
     let smtime_sys = smeta.modified().ok();
     let smtime_ns = mtime_ns_of(&smeta);
-    // stream copy (truncate + write in place)
+    // stream copy (truncate + write in place), digesting src as it goes
     let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
-    // File::create truncates existing. Write via &File (Write for &File).
+    // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
-    std::io::copy(&mut fin, &mut fout)
+    let sh = copy_and_digest(&mut fin, &mut fout, algos)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     fout.sync_all().ok();
     drop(fout);
@@ -431,14 +564,8 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
             hashes: HashMap::new(),
         });
     }
-    let sh = hash_file(&s, algos).with_context(|| format!("hash {}", s.display()))?;
     let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
-    for a in algos {
-        if sh.get(a) != dh.get(a) {
-            error!(algo = %a, path = %d.display(), "verify hash mismatch");
-            bail!("verify hash({}) {}", a, d.display());
-        }
-    }
+    verify_digests(&d, algos, &sh, &dh)?;
     tracing::Span::current().record("bytes", ssize);
     trace!(bytes = ssize, "copy_one done");
     Ok(FileRec {
@@ -447,4 +574,184 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
         mtime_ns: smtime_ns,
         hashes: dh,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn algos(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The digest `copy_and_digest` returns has to be **the file's**, not the
+    /// loop's. If the chunk boundary is off by one — a stale `n`, a slice taken
+    /// before the read rather than after — the copy would still be byte-correct
+    /// and every real verify would fail, which is the kind of failure that only
+    /// shows up on a file larger than one buffer.
+    #[test]
+    fn the_digest_of_a_copy_is_the_digest_of_the_file() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "digest");
+        // Longer than `CHUNK`, so the loop really does iterate rather than
+        // doing one read and one write.
+        let body: Vec<u8> = (0..(CHUNK * 2 + 12345)).map(|i| (i % 251) as u8).collect();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, &body).unwrap();
+
+        let set = algos(&["md5", "sha256"]);
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        drop(fout);
+
+        assert_eq!(std::fs::read(&dst).unwrap(), body, "the bytes landed");
+        assert_eq!(
+            sh,
+            hash_file(&src, &set).unwrap(),
+            "the digest taken during the copy is the digest of the file, \
+             however the copy loop split it"
+        );
+    }
+
+    /// `--hash none` takes the other arm of `copy_and_digest`, and that arm is
+    /// the only thing standing between a stat-only sync and `io::copy`'s fast
+    /// path. It must still copy every byte — "no digest" is not "no copy" — and
+    /// must report no digest rather than an empty one for some other reason.
+    #[test]
+    fn no_digest_requested_still_copies_every_byte() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "noalgo");
+        // Bigger than `CHUNK`, so "it went through the other arm and came out
+        // whole" is a statement about more than one buffer.
+        let body: Vec<u8> = (0..(CHUNK * 3 + 7)).map(|i| (i % 97) as u8).collect();
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, &body).unwrap();
+
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &[]).unwrap();
+        drop(fout);
+
+        assert!(
+            sh.is_empty(),
+            "nothing was requested, so nothing is reported"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            body,
+            "the bytes landed, through the arm that does not look at them"
+        );
+    }
+
+    /// An empty file is where a hand-rolled copy loop and `io::copy` most easily
+    /// disagree — the loop never enters its body at all.
+    #[test]
+    fn an_empty_file_copies_and_hashes() {
+        let dir = crate::testtemp::TempDir::new("girsync_copy", "empty");
+        let src = dir.join("src.bin");
+        let dst = dir.join("dst.bin");
+        std::fs::write(&src, b"").unwrap();
+
+        let set = algos(&["md5", "sha256"]);
+        let mut fin = std::fs::File::open(&src).unwrap();
+        let mut fout = std::fs::File::create(&dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        drop(fout);
+
+        assert_eq!(std::fs::read(&dst).unwrap(), Vec::<u8>::new());
+        assert_eq!(sh, hash_file(&src, &set).unwrap());
+    }
+
+    /// One digest per algorithm, every one holding `byte` — so two maps built
+    /// from the same call differ exactly where a caller makes them differ.
+    fn digests(algos: &[&str], byte: u8) -> HashMap<String, Vec<u8>> {
+        algos.iter().map(|a| (a.to_string(), vec![byte])).collect()
+    }
+
+    /// **This is the test the check exists for.** A verify that compares the two
+    /// digests a copy produced has to be able to *fail* when they disagree, and
+    /// the way to show that without arranging for a disk to corrupt itself is to
+    /// hand the comparison two maps that disagree. Every copy in the suite is
+    /// byte-correct, so without this the comparison could be written as a value
+    /// against itself and pass every other test in the crate unchanged.
+    ///
+    /// The two stderr strings are contract, so they are asserted rather than
+    /// left to inspection: an operator seeing a failed run is owed the
+    /// algorithm and the path.
+    #[test]
+    fn a_disagreement_between_the_two_digests_is_a_failure() {
+        let path = Path::new("dst/file.bin");
+        // Same key set, one digest differs: the shape silent on-disk corruption
+        // takes, and the only one a real copy can produce.
+        let src = digests(&["md5", "sha256"], 1);
+        let mut dst = src.clone();
+        dst.insert("md5".into(), vec![2]);
+
+        let err = verify_digests(path, &algos(&["md5", "sha256"]), &src, &dst)
+            .expect_err("two digests that disagree are not a verified copy");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("verify hash(md5)"),
+            "names the algorithm: {msg}"
+        );
+        assert!(msg.contains("dst/file.bin"), "names the path: {msg}");
+    }
+
+    /// The other half of the pair, and the reason test 1 above is trustworthy:
+    /// it fails for the disagreement it names rather than for anything about the
+    /// maps, and it would fail identically if the comparison were inverted.
+    /// `algos` is non-empty on purpose — an empty request has nothing to judge,
+    /// and would make this pass for the wrong reason.
+    #[test]
+    fn agreement_is_not_a_failure() {
+        let both = digests(&["md5", "sha256"], 1);
+        assert!(
+            verify_digests(
+                Path::new("dst/file.bin"),
+                &algos(&["md5", "sha256"]),
+                &both,
+                &both
+            )
+            .is_ok(),
+            "two reads of the same bytes agreeing is the whole point"
+        );
+    }
+
+    /// A digest one side has and the other does not is **not** agreement. It is
+    /// the case a loop written as `for (k, v) in src { if dst.get(k) != Some(v) }`
+    /// skips silently, because it walks the map instead of the request — so the
+    /// missing entry is never looked up at all. `src.get(a) != dst.get(a)` sees
+    /// `Some(..) != None`.
+    #[test]
+    fn a_digest_that_only_one_side_has_is_a_failure() {
+        let src = digests(&["md5"], 1);
+        let dst = HashMap::new();
+
+        let err = verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst)
+            .expect_err("a digest dst never produced is not one it agrees with");
+        assert!(
+            err.to_string().contains("verify hash(md5)"),
+            "the missing digest is the one reported: {err}"
+        );
+    }
+
+    /// Only what the run asked for is evidence about this copy. A digest nobody
+    /// requested is not a disagreement, and treating it as one would fail every
+    /// copy whose maps happen to carry more than `algos` names.
+    ///
+    /// This pins which side the loop walks: `algos`, not the maps. A comparison
+    /// iterating the digests instead would fail here, having found a real
+    /// difference in a value no caller asked about.
+    #[test]
+    fn only_the_requested_algorithms_are_judged() {
+        let src = digests(&["md5", "sha256"], 1);
+        let mut dst = src.clone();
+        dst.insert("sha256".into(), vec![2]);
+
+        assert!(
+            verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst).is_ok(),
+            "sha256 was not requested, so its disagreement is not this copy's problem"
+        );
+    }
 }

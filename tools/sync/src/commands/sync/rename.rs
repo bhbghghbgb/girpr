@@ -11,6 +11,49 @@ use tracing::info;
 
 use crate::report::{Record, Report};
 
+/// The dst paths that must move to src's casing, as `(dst rel, src rel)` pairs.
+///
+/// The decision, with no filesystem or cache involved, so it can be stated as a
+/// set. **A dst path is renamed exactly when src holds the same path under
+/// different casing** — the pair whose lowercase key matches and whose exact key
+/// does not.
+///
+/// Both sides are indexed by lowercase key and every src key is looked up, rather
+/// than every src key scanning every dst key and lowercasing as it goes. The result
+/// is the same set, and it is the same set because a lowercase key maps to exactly
+/// one path per side: `check_mixed_case` has already made a mixed-case collision
+/// within one side fatal, and this pass runs only in the insensitive mode that check
+/// guards. Without that invariant the two forms could disagree on *which* of two
+/// colliding keys they pick, which is why this is not a free substitution.
+///
+/// Ordered by lowercase src key, because these become `RENAME` records in report
+/// order and `HashMap` iteration is seeded per process — an unsorted pass would
+/// reshuffle between two runs over the same tree.
+fn case_renames<'a>(
+    src: &'a HashMap<String, crate::effective::EffRec>,
+    dm: &'a HashMap<String, crate::effective::EffRec>,
+) -> Vec<(&'a String, &'a String)> {
+    // lower -> rel, per side.
+    let mut slow: HashMap<String, &String> = HashMap::new();
+    for k in src.keys() {
+        slow.insert(k.to_lowercase(), k);
+    }
+    let mut dlow: HashMap<String, &String> = HashMap::new();
+    for k in dm.keys() {
+        dlow.insert(k.to_lowercase(), k);
+    }
+    let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
+    by_lower.sort();
+    let mut out: Vec<(&String, &String)> = Vec::new();
+    for (lk, srel) in &by_lower {
+        // The same path on both sides is not a rename: it is already correct.
+        if let Some(drel) = dlow.get(lk).copied().filter(|d| *d != *srel) {
+            out.push((drel, srel));
+        }
+    }
+    out
+}
+
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
 ///
 /// Returns the number of renames performed (or that a dry run would perform).
@@ -27,29 +70,14 @@ pub(super) fn rename_to_src_casing(
     dry_run: bool,
     report: &Report,
 ) -> Result<usize> {
-    // lower -> src rel
-    let mut slow: HashMap<String, &String> = HashMap::new();
-    for k in src.keys() {
-        slow.insert(k.to_lowercase(), k);
-    }
-    // Iterate sorted, not in `HashMap` order. These become `RENAME` records on
-    // stdout, in both modes, and `HashMap` iteration is seeded per process, so
-    // unsorted order would reshuffle between two runs over the same tree. Sorting
-    // is also what makes the dry-run plan assertions in `tests/sync_plan/`
-    // possible at all.
-    let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
-    by_lower.sort();
     let mut renames: Vec<(PathBuf, PathBuf, String, String)> = Vec::new();
-    for (lk, srel) in &by_lower {
-        // find dst key with same lower but different case
-        if let Some(drel) = dm.keys().find(|k| k.to_lowercase() == *lk && *k != *srel) {
-            renames.push((
-                dst_root.join(drel),
-                dst_root.join(*srel),
-                (*drel).clone(),
-                (*srel).clone(),
-            ));
-        }
+    for (drel, srel) in case_renames(src, dm) {
+        renames.push((
+            dst_root.join(drel),
+            dst_root.join(srel),
+            drel.clone(),
+            srel.clone(),
+        ));
     }
     info!(pending = renames.len(), "rename pass");
     let mut renamed = 0usize;
@@ -106,6 +134,103 @@ mod tests {
             mtime_ns: 0,
             hashes: HashMap::new(),
         }
+    }
+
+    fn side(rels: &[&str]) -> HashMap<String, EffRec> {
+        rels.iter().map(|r| (r.to_string(), file_rec())).collect()
+    }
+
+    /// The rename set, as sorted `(dst, src)` string pairs.
+    fn renames(src: &[&str], dst: &[&str]) -> Vec<(String, String)> {
+        let (s, d) = (side(src), side(dst));
+        let mut out: Vec<(String, String)> = case_renames(&s, &d)
+            .into_iter()
+            .map(|(d, s)| (d.clone(), s.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The set is exactly "dst holds it under different casing", stated as a set
+    /// rather than as a transcript of the records — the ordering is a consequence
+    /// of the sort, not the property being pinned.
+    ///
+    /// Three shapes in one tree: a pure case-only difference, a path already in
+    /// step (which must *not* be renamed to itself), and a pair of paths that
+    /// differ by more than case and so are not a rename at all.
+    #[test]
+    fn the_rename_set_is_exactly_the_case_only_differences() {
+        assert_eq!(
+            renames(
+                &[
+                    "Data.txt",
+                    "same.txt",
+                    "Alpha/Beta.txt",
+                    "only_src.txt",
+                    "only_dst.txt"
+                ],
+                &["data.txt", "same.txt", "alpha/beta.txt"],
+            ),
+            vec![
+                ("alpha/beta.txt".to_string(), "Alpha/Beta.txt".to_string()),
+                ("data.txt".to_string(), "Data.txt".to_string()),
+            ],
+        );
+    }
+
+    /// Zero renames is the common case and the one a lookup can get wrong: the
+    /// dst path *is* the src path, so the lowercase key matches and only the
+    /// exact-key check stands between the two and a spurious self-rename.
+    #[test]
+    fn a_tree_already_in_step_renames_nothing() {
+        assert_eq!(
+            renames(
+                &["a.txt", "sub/B.txt", "c.txt"],
+                &["a.txt", "sub/B.txt", "c.txt"],
+            ),
+            Vec::<(String, String)>::new(),
+        );
+    }
+
+    /// Several renames at once, and the one-sided paths among them stay out of
+    /// the set: a path only one side holds has no casing to align.
+    #[test]
+    fn several_case_only_differences_rename_independently() {
+        assert_eq!(
+            renames(
+                &["One.txt", "Two.txt", "Three.txt", "src_only.txt"],
+                &["one.txt", "two.txt", "three.txt", "dst_only.txt"],
+            ),
+            vec![
+                ("one.txt".to_string(), "One.txt".to_string()),
+                ("three.txt".to_string(), "Three.txt".to_string()),
+                ("two.txt".to_string(), "Two.txt".to_string()),
+            ],
+        );
+    }
+
+    /// A path src does not hold is never renamed, whatever dst calls it — the
+    /// pass moves dst onto *src's* casing, so a dst-only path keeps its own.
+    #[test]
+    fn a_dst_only_path_is_never_a_rename() {
+        assert_eq!(
+            renames(&["a.txt"], &["a.txt", "Orphan.txt"]),
+            Vec::<(String, String)>::new(),
+        );
+    }
+
+    /// The order is by lowercase src key, not `HashMap` order. These become
+    /// `RENAME` records in both modes, and the seed is per process, so unsorted
+    /// order would reshuffle between two runs over the same tree.
+    #[test]
+    fn the_rename_order_is_by_lowercase_key() {
+        let s = side(&["Zeta.txt", "Alpha.txt", "Mid.txt"]);
+        let d = side(&["zeta.txt", "alpha.txt", "mid.txt"]);
+        let ordered: Vec<String> = case_renames(&s, &d)
+            .into_iter()
+            .map(|(_, s)| s.to_lowercase())
+            .collect();
+        assert_eq!(ordered, vec!["alpha.txt", "mid.txt", "zeta.txt"]);
     }
 
     /// A dry run must re-key the dst map to src's casing, not just report that it

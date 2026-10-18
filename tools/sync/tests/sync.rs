@@ -335,11 +335,11 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
 ///
-/// This is the one gate in this stage that catches a wrong planner case-flag, and
-/// it exists because the fixture above cannot. That fixture's two sides hold the
-/// same bytes, so a run that never learns a digest for the pair still concludes
+/// This is the one gate that catches a wrong planner case-flag, and it exists
+/// because the fixture above cannot. That fixture's two sides hold the same
+/// bytes, so a run that never learns a digest for the pair still concludes
 /// "equal" and reaches the right answer by luck. Same for the case-only pair in
-/// `sync_plan.rs`'s fixture table, whose row for this shape is `Case.txt`.
+/// `sync_plan/`'s fixture table, whose row for this shape is `Case.txt`.
 ///
 /// Here the bytes differ at the same length with the mtime pinned, so size+mtime
 /// agree and only a digest can tell them apart. If `plan_pairs` is handed
@@ -393,4 +393,191 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
         0,
         "converged"
     );
+}
+
+/// **A copy into a directory this same run created must leave a cache row.**
+///
+/// `prune_dst_cache` drops dst cache rows for paths that are no longer on disk,
+/// and it has to know what is on disk *after* this run's own writes. The files it
+/// copies are not in the map phase A read, so a prune that answered "what did
+/// dst hold before I started" would delete the rows for everything it just wrote.
+///
+/// The fixture is the smallest shape where that can go wrong: `mkdir` creates
+/// `fresh/`, `copy_one` then creates `fresh/a.txt` and `fresh/b.txt` inside it.
+/// Neither file existed when phase A read dst.
+///
+/// Asserted against **the cache**, not against a reported prune count: a wrong
+/// derivation does not necessarily report a wrong count, it deletes live rows,
+/// and the damage only surfaces later as phantom drift from a `compare-self`.
+#[test]
+fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
+    let t = TempRoot::new("prune_keeps_copied");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // One file at the root, so the run has work beyond the new directory and the
+    // prune is not trivially looking at an empty table.
+    wfile(&src, "top.txt", b"top");
+    wfile(&src, "fresh/a.txt", b"a");
+    wfile(&src, "fresh/b.txt", b"b");
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    // On disk, everything this run wrote is there...
+    assert!(dst.join("top.txt").is_file());
+    assert!(dst.join("fresh/a.txt").is_file());
+    assert!(dst.join("fresh/b.txt").is_file());
+    // ...and so is every one of them in dst's cache, including the directory.
+    let rows = recs(&dst);
+    for rel in ["top.txt", "fresh", "fresh/a.txt", "fresh/b.txt"] {
+        assert!(
+            rows.contains_key(rel),
+            "no cache row for {rel}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// **A row for a path that is genuinely gone must be dropped.**
+///
+/// The other half of the same prune, and the half that makes it worth doing at
+/// all: without it a deleted file's row would sit in the cache describing
+/// content that no longer exists. The path is removed from disk *after* the run
+/// that created it, so nothing this run writes can put it back.
+///
+/// Asserted against the cache, per the reasoning above.
+#[test]
+fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
+    let t = TempRoot::new("prune_drops_gone");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "kept.txt", b"kept");
+    wfile(&src, "doomed.txt", b"doomed");
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert!(recs(&dst).contains_key("doomed.txt"), "the run recorded it");
+
+    // A later run, after the file is gone from both sides.
+    std::fs::remove_file(src.join("doomed.txt")).unwrap();
+    std::fs::remove_file(dst.join("doomed.txt")).unwrap();
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    let rows = recs(&dst);
+    assert!(
+        !rows.contains_key("doomed.txt"),
+        "the row for a deleted path must not survive: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        rows.contains_key("kept.txt"),
+        "and the rows for live paths must not be collateral: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+}
+
+/// **A row for a path a copy wiped must be dropped, with the whole subtree.**
+///
+/// src has `x` as a file; dst has `x/` as a directory holding `x/sub/f.txt`.
+/// The type conflict puts `x` on the copy list, and `copy_one` clears a
+/// blocking dst directory *recursively* — so `x/sub` and `x/sub/f.txt` leave the
+/// disk without anything scheduled to remove their rows.
+///
+/// `Plan::rmdir` deliberately skips that subtree (`plan.rs`): the directory is
+/// gone by the time the removal pass runs, so listing it would promise an
+/// `rmdir` the run cannot reach. That leaves `prune_dst_cache` as the only
+/// thing that can drop those rows, which makes it the only place that can tell
+/// "dst held this before the run" from "dst holds it now".
+///
+/// Asserted against the cache, like the two tests above: a wrong answer here is
+/// invisible in the run's own output and shows up later as cache bloat.
+#[test]
+fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
+    let t = TempRoot::new("prune_wiped_subtree");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    // src: x is a file.
+    wfile(&src, "x", b"file contents");
+    // dst: x is a directory, with a subtree under it. Two levels, so the
+    // subtraction is pinned by prefix at depth rather than by one exact entry.
+    wfile(
+        &dst,
+        "x/sub/f.txt",
+        b"a much longer body under a blocking directory",
+    );
+    wfile(
+        &dst,
+        "x/sub/deeper/g.txt",
+        b"and a second level under that too",
+    );
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    // The wipe actually happened: x is now a file and the subtree is gone.
+    assert!(
+        dst.join("x").is_file(),
+        "the blocking dir was replaced by a file"
+    );
+    assert!(
+        !dst.join("x/sub").exists(),
+        "and it went with its whole subtree"
+    );
+
+    let rows = recs(&dst);
+    assert!(
+        rows.contains_key("x"),
+        "the copied file keeps its row: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    for stale in ["x/sub", "x/sub/f.txt", "x/sub/deeper", "x/sub/deeper/g.txt"] {
+        assert!(
+            !rows.contains_key(stale),
+            "a row survived for {stale}, which no longer exists: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// **Trigger (b): a directory this run created and then removed in the same run.**
+///
+/// Reachable only with `--case-sensitive` on a case-insensitive filesystem: src
+/// holds `Sub/`, dst holds `sub/`, and the two name the same directory. `mkdir`
+/// creates `Sub` and `rmdir` then removes `sub` — which is `Sub` — taking the
+/// freshly created tree with it. Nothing is left on disk, so nothing should be
+/// left in the cache.
+///
+/// Recorded here as a **known limitation of the derived present set**, not as a
+/// passing assertion. Deriving cannot see this without also case-folding the
+/// prune against the plan — in the one mode that deliberately does not case-fold.
+/// Asking the filesystem instead would drop these rows, at the cost of a full
+/// traversal of dst in every real run; the rows are stale until the next run's
+/// phase A prunes them, and `compare-self` builds a cold cache so it cannot be
+/// misled.
+#[test]
+#[ignore = "known: the derived present set keeps rows for a dir created and rmdir'd in the same run"]
+fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
+    let t = TempRoot::new("prune_create_then_rmdir");
+    let src = t.mkdirs("src");
+    let dst = t.mkdirs("dst");
+    wfile(&src, "Sub/One.txt", b"one");
+    wfile(&src, "Sub/Two.txt", b"two");
+    // Only reachable on a case-insensitive filesystem; skip elsewhere rather
+    // than assert something that cannot happen.
+    if !std::fs::metadata(src.join("Sub"))
+        .map(|_| src.join("sub").exists())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.case_sensitive = true;
+    let _ = cmd_sync(o, &log());
+
+    let rows = recs(&dst);
+    for stale in ["Sub", "Sub/One.txt", "Sub/Two.txt"] {
+        assert!(
+            !rows.contains_key(stale),
+            "a row survived for {stale}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
 }

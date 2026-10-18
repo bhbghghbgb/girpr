@@ -66,8 +66,8 @@ fn self_audit(dir: &Path) -> Run {
     let rec = load_record_side_from(&record, &common, "record").unwrap();
     // The disk: **an empty handle**, because this audit must not be able to
     // compare the record with itself. A folder side's phase A takes only digests
-    // from a cache, so handing it the record's rows is what made every
-    // stat-equal content comparison vacuous.
+    // from a cache, so handing it the record's rows would make every stat-equal
+    // content comparison vacuous.
     let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
     let disk_a = scan_stat_only(dir, &cold, &common, mode).unwrap();
     // Labels only so a coverage error can name a side. Every audited folder here
@@ -89,7 +89,7 @@ fn self_audit(dir: &Path) -> Run {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
@@ -111,7 +111,7 @@ fn self_audit(dir: &Path) -> Run {
             &disk.map,
             &plans.required,
             plans.stat,
-            common.case_sensitive,
+            CasePairing::from(common.case_sensitive),
             false,
         ),
         hashed: disk.stats.hashed,
@@ -121,10 +121,9 @@ fn self_audit(dir: &Path) -> Run {
 }
 
 /// **The win, and the one worth having.** Every pair differs in stat, so size and
-/// mtime have already settled all of them and no digest is needed anywhere.
-///
-/// This is where the shared-handle version was worst: it read all sixteen files to
-/// conclude things their sizes had decided for free.
+/// mtime have already settled all of them and no digest is needed anywhere: an
+/// audit that gave the disk side the record's cache would have read all sixteen
+/// files to conclude things their sizes had decided for free.
 #[test]
 fn an_audit_where_every_pair_differs_in_stat_reads_nothing() {
     let t = TempRoot::new("lz_self_alldiffer");

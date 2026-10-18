@@ -123,8 +123,7 @@ fn dual_drive_is_not_the_same_request_as_one_shared_thread() {
 /// A runtime error rather than a parse error, deliberately: the value arrives as a
 /// `usize`, so `0` is well-formed and only the resolved `NonZeroUsize` can turn it
 /// down. A clap range validator would have made it exit `2`, which reads as "you
-/// typed it wrong" rather than "you asked for none of something". `--jobs 0` behaved
-/// this way and this keeps it.
+/// typed it wrong" rather than "you asked for none of something".
 #[test]
 fn rw_threads_rejects_a_zero_count() {
     for (flag, args) in [
@@ -184,12 +183,12 @@ fn rw_flags_are_mutually_exclusive() {
     .expect("both sides together is legal");
 }
 
-/// **The flags reach every subcommand, not just `sync`.**
+/// **The budget flags reach every subcommand, not just `sync`.**
 ///
-/// `--jobs` lived on the `Sync` variant alone, which meant `update` — which rehashes
-/// every file — had no way to be given a budget at all. That is the scope widening
-/// this commit makes deliberately, and it is worth one test so nobody narrows the
-/// surface back by accident.
+/// `update` — which rehashes every file — has as much use for a budget as any
+/// other command, and a flag that only reached one of them would make that a
+/// property of the CLI rather than of the phase. Worth one test so nobody
+/// narrows the surface back by accident.
 #[test]
 fn the_rw_flags_reach_every_subcommand() {
     for cmd in [
@@ -211,14 +210,15 @@ fn the_rw_flags_reach_every_subcommand() {
     }
 }
 
-/// **`--jobs` is gone, loudly.**
+/// **The pre-`--rw-threads` spelling is rejected, not aliased.**
 ///
-/// The one half of the removal that is not a feature. A script still passing `--jobs
-/// 4` now fails at clap with exit 2 and an "unexpected argument" message that names
-/// neither the replacement nor the reason — which is why this is a deliberate choice
-/// rather than an oversight, and why the Gotchas entry exists. The crate's own
-/// precedent is `--hash` -> `--hash-all-of`, rejected rather than aliased so a script
-/// fails loudly instead of quietly getting the new default.
+/// The trade-off of widening the surface: a script still passing the old flag
+/// fails at clap with exit 2 and an "unexpected argument" message that names
+/// neither the replacement nor the reason. That is deliberate rather than an
+/// oversight — a silent alias would let an old script quietly get the *default*
+/// budget instead of the one it asked for, which is worse than a loud failure.
+/// The crate's other rename took the same shape, `--hash` ->
+/// `--hash-all-of`.
 #[test]
 fn jobs_is_rejected_rather_than_aliased() {
     let err = Cli::try_parse_from(["girsync", "sync", "--src", "a", "--dst", "b", "--jobs", "4"])

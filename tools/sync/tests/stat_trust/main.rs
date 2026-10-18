@@ -48,7 +48,7 @@ mod refusal;
 mod verdict;
 
 use common::{TempRoot, age, log, opts, recs_of, serial_rw, sync_mtime, update, wfile};
-use girsync::planner::StatTrust;
+use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 /// One invocation of the real binary: exit code and stderr.
@@ -186,7 +186,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
             cap: d.cap,
             label: &d_label,
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )

@@ -255,7 +255,7 @@ called *rw* and not *io*:
 | gated | not gated |
 | --- | --- |
 | hashing a file in phase C | `stat` — `metadata()`, `is_file()`, `is_dir()` |
-| a copy: the stream plus both verify re-hashes | `mkdir` / `delete` / `rmdir` |
+| a copy: the stream, and the re-hash of what it wrote | `mkdir` / `delete` / `rmdir` |
 | | the redb cache's own reads, writes and commits |
 
 `stat` is excluded deliberately: it is orders of magnitude cheaper than a read, and
@@ -272,6 +272,29 @@ per-side counters it takes **one src permit and one dst permit**, held for the w
 copy including the verify. So `Split{s,d}` admits `min(s,d)` concurrent copies.
 Releasing around the halves would buy nothing — the file is not finished until it
 verifies.
+
+**Two reads and a write, and the check needs both.** A copied file is read from
+src once (the stream), written, `sync_all`'d, and then **re-read from dst and
+hashed again** — that is what is compared against src's digest, and the
+comparison is the verify. src's own digest is taken from the copy's read rather
+than from a third pass over the file, so the cost is **2 reads + 1 write** per
+copied file rather than 3 + 1.
+
+The re-read is not a belt-and-braces extra and must not be "optimised" away into
+a single pass. Hashing both sides from the same chunks going out would compare a
+value with itself: equal by construction, so a mismatch could never be reported
+and the verify would read as a guarantee while checking nothing. Two independent
+reads are what make `verify hash mismatch` mean anything, and because the second
+one happens after `sync_all()`, it hashes the bytes that actually reached the
+disk — the only way a copy catches silent corruption on the way down.
+
+What the src-side digest does **not** cover: a src file rewritten *during* the
+copy. dst is then a faithful copy of a src that no longer exists, and the pair
+compares clean. That race is unwinnable by construction; phase A's stat sees the
+new mtime on the next run and re-copies.
+
+Under `--hash none` there is no digest to fold into the loop, so the copy is left
+to `std::io::copy` and whatever fast path that has between two files.
 
 ### What this never changes
 
@@ -320,6 +343,14 @@ So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
 from a bad prune; it is a recovery aid, not a correctness mechanism.
 
+The prune keeps rows for what the run *created* — new directories, copied files,
+directories that replaced a file — as well as what it found, and drops rows for
+what it *destroyed*, including the whole subtree under a directory a copy had to
+clear out of the way. One case reaches neither: with `--case-sensitive` on a
+case-insensitive filesystem, a directory the run creates can be the same
+directory a later step removes, and its row then survives until the next run
+prunes it.
+
 It runs the same three phases as every other command — stat-only scan, plan,
 resolve — via `HashPlan::plan_one_side`, which is the one-sided predicate: there
 is no other side to be lazy *relative to*, so every file is a candidate and every
@@ -328,6 +359,23 @@ the coverage check that stops a `compare` against an incomplete record: it asks 
 folder for digests of files the folder has, which a folder can always compute.
 The `hashed` counter in the run's log line is the answer to "how much would this
 read?", which is the question `--dry-run` exists to ask.
+
+The scan asks the cache two different questions, and they are worth telling
+apart because only one of them needs the records. `alt_recs` loads the whole
+`entries` table *with* its values, to adopt a stale alternate-cased row — it has
+to see them. The prune that follows asks only "which rows exist?", and gets
+`load_keys`, which walks the table without decoding a single `FileRec`. In the
+default insensitive mode that is the second full pass over the table in one
+phase, so the distinction is the difference between rebuilding a hash map per
+file and not.
+
+The set of paths the scan treats as live is built once, borrowed from the walk
+rather than copied out of it. It exists so the prune can ask "is this row still
+live?" in O(1) instead of re-running every include/exclude glob per row — and
+holding those paths as owned `String`s would have been a second full copy of the
+tree's path set, alive for the whole phase, to answer a question the walk already
+had. That is why the scan loop walks `&live` rather than consuming it: the
+borrow is the point.
 
 ### compare
 
@@ -565,6 +613,11 @@ counts, not the work done. An unflagged run is byte-identical to one without the
 Each record is *also* logged, as a `debug` `tracing` event carrying the same
 `event` name and fields, so a `--log-file` contains the same data plane without
 being asked for it twice in two shapes.
+
+Whether that event is written is decided by what the run has a subscriber for,
+not by `--log-level`: the console layer is filtered by that flag, but a
+`--log-file` layer always records at `trace`, so a file log captures every record
+even at the default `info`.
 
 ### sync
 
@@ -813,8 +866,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   already-`CHANGED` path costs no read at all, and neither does a stat-differing
   pair under `--no-trust-cached-hashes` — distrusting the cache does not make an
   unequal size uncertain. A `MISSING` file is still copied, because `copy_one`
-  rehashes both sides to verify and returns the record it caches; that rehash is
-  the only hash such a file needs. Both commands therefore leave **stat-only
+  digests src as it copies and re-hashes what it wrote to verify, returning the
+  record it caches; that pair of hashes is the only hashing such a file needs.
+  Both commands therefore leave **stat-only
   rows** for paths they did not hash, which is a valid state for a *folder* side:
   the next run sees a fresh row with nothing cached and asks for a digest, which
   it is able to do. It is **not** a valid state for a *record* side, which is why
@@ -888,6 +942,14 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   (sync). If disk casing differs from the cached key, the key is fixed to the
   disk name first with hashes reused. Mode mixing never errors by itself — the
   meta flag is informational; the same record works in both modes.
+
+  **The fatal conflict is what makes the rename pass an index rather than a scan.**
+  Both sides are keyed by lowercase and every src key is a hash lookup, which is
+  only equivalent to the naive "scan all of dst" because a lowercase key maps to
+  exactly one path *per side* — `check_mixed_case` has already made the collision
+  fatal, and the pass runs only in the mode that check guards. Without that
+  invariant the two forms could disagree on which of two colliding keys they pick,
+  so relaxing the check would silently change which file gets renamed.
 - **Filters.** `glob`-crate patterns on relpaths; `--include` narrows, `--exclude`
   wins over include. Excluded paths are treated as nonexistent on **both** sides
   (skipped in walks, filtered from records, pruned from DBs, kept untouched in
@@ -932,6 +994,33 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 ```powershell
 .\target\debug\girsync compare-self --dir D:\game-live              # exit 0 = in step
 ```
+
+## Cost model
+
+Where a run's time goes, so a slow run can be read rather than guessed at. On a
+200 k-file tree the walk and the `stat` calls dominate; everything else is bounded
+by what the planner asked for.
+
+| | cost |
+| --- | --- |
+| every live path | one `stat`, one cache lookup. No content read. |
+| a file on both sides, size+mtime equal | one read per side per requested algorithm |
+| a stat-differing, one-sided, or conflicting path | nothing — already decided |
+| a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
+| a cold cache | the whole tree, once, on the first run that needs a digest |
+
+Two places that used to cost far more than their output was worth, and now cost
+one pass each. Both are index-shaped rather than nested-loop-shaped, which is the
+property worth preserving:
+
+- **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
+  comparisons. It is on the default path — insensitive mode is the default — and
+  the scan form quadrupled per doubling of the tree.
+- **`diff_maps`' insensitive branch** walks two lowercase indices once each, not
+  three collections plus a lookup per key.
+
+A `compare` that writes both caches costs the same read count as one that reads
+them; `--dry-run` costs the same again.
 
 ## Gotchas
 

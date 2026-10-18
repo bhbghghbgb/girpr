@@ -5,8 +5,8 @@
 //! *io*:
 //!
 //! - **gated** — phase C's `hash_file`, and everything `copy_one` does between
-//!   opening src and returning its record (the stream copy plus both verify
-//!   re-hashes);
+//!   opening src and returning its record (the stream copy, which digests src as
+//!   it goes, plus the verify re-hash of what was written);
 //! - **not gated** — `stat`. `walk_live`'s `metadata()`, `copy_one`'s own `stat`
 //!   calls, `create_dir_all` / `remove_file` / `remove_dir_all`. A `stat` is orders
 //!   of magnitude cheaper than a read, and a tree of many small files would spend

@@ -5,8 +5,8 @@
 
 use super::*;
 
-/// **`any-of` is the remedy 5b could only name in prose.** A record that holds
-/// md5 fails an all-of `compare` against a folder (5b) and passes an any-of one,
+/// **`any-of` is the remedy the all-of error can only name.** A record that
+/// holds md5 fails an all-of `compare` against a folder and passes an any-of one,
 /// with the same fixture and the same folder.
 #[test]
 fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
@@ -17,8 +17,8 @@ fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
         wfile(dir, "a.txt", b"hello");
     }
     sync_mtime(&rec_home.join("a.txt"), &folder.join("a.txt"));
-    // The record was written when md5 was all this crate recorded, which is the
-    // shape 5b's error is about: it holds one of the two requested algorithms.
+    // The record holds md5 only, which is the shape the coverage error is about:
+    // one of the two requested algorithms, and not the other.
     cmd_update(
         girsync::UpdateOpts {
             dir: rec_home.clone(),

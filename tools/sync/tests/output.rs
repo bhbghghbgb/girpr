@@ -135,7 +135,7 @@ fn compare_json_is_the_verdict_the_library_builds() {
             fallback: o.common.algos.clone(),
         },
         o.common.stat,
-        o.common.case_sensitive,
+        girsync::planner::CasePairing::from(o.common.case_sensitive),
         false,
     );
     let lib: Vec<Value> = girsync::report::verdict(&diff, false, false)
@@ -270,5 +270,137 @@ fn an_unknown_output_format_is_rejected_by_the_parser() {
         out.status.code(),
         Some(2),
         "a bad --output is a parse error, not a fallback"
+    );
+}
+
+/// **`--log-level debug` still logs every record, fields and all.**
+///
+/// `Report::emit` builds the log event's payload only when debug is actually
+/// enabled, because `rec.event()` and `rec.fields_json()` cost an allocation and
+/// a JSON serialisation per record and the default `--log-level info` discards
+/// all of it. The risk of that gate is that it reads as "logging was dropped",
+/// and this is the assertion that it was not: at debug, each printed record must
+/// appear in the log carrying the same event name and the same fields.
+///
+/// The file log is read rather than stderr because the file layer is always at
+/// trace and its output is JSON, so an event can be checked field by field
+/// instead of by substring.
+#[test]
+fn a_record_is_logged_with_its_fields_at_debug_level() {
+    let t = TempRoot::new("out_debug_log");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    let mut args = compare_args(&src, &dst, &["--output", "json", "--log-level", "debug"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+
+    let r = run(&args);
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+    let printed: Vec<&str> = r
+        .records
+        .iter()
+        .map(|rec| rec["event"].as_str().unwrap())
+        .collect();
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let report_events: Vec<&serde_json::Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "report")
+        .collect();
+    assert!(
+        !report_events.is_empty(),
+        "the run logged its records: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+
+    // One logged event per printed record, and the event names agree. `MISSING`
+    // appears twice in the fixture, so this also pins that nothing is collapsed.
+    assert_eq!(
+        report_events.len(),
+        printed.len(),
+        "every printed record is logged once"
+    );
+    let logged_names: Vec<&str> = report_events
+        .iter()
+        .map(|e| e["fields"]["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(logged_names, printed, "same events, same order");
+
+    // And the fields survived, not just the name. `fields` is a JSON string, so
+    // each is parsed and compared against the record that was printed at the same
+    // index — every named field the caller saw on stdout is in the log, which is
+    // the whole promise of "logged as well as printed".
+    for (i, (printed, event)) in r.records.iter().zip(&report_events).enumerate() {
+        let payload: serde_json::Value = serde_json::from_str(
+            event["fields"]["fields"]
+                .as_str()
+                .unwrap_or_else(|| panic!("record {i} logged no fields: {event}")),
+        )
+        .expect("the logged fields are JSON");
+        for (k, v) in printed.as_object().expect("a record is an object") {
+            // `fields_json` carries the payload alone; `event` is logged beside it
+            // as its own field (checked above), so it is not expected twice.
+            if k == "event" {
+                continue;
+            }
+            assert_eq!(
+                payload.get(k),
+                Some(v),
+                "record {i} ({}) logged field {k} differently than it printed it",
+                printed["event"]
+            );
+        }
+    }
+}
+
+/// **The file log carries every record at the *default* `--log-level`.**
+///
+/// The case that pins `Report::emit`'s gate to the installed subscriber rather
+/// than to the console level. The console layer is filtered by `--log-level` and
+/// defaults to `info`, but the file layer is always `trace` — so with
+/// `--log-file` and *no* `--log-level`, the record event is wanted by the file
+/// layer even though the console would discard it. A gate that consulted
+/// `--log-level` instead would silently drop every record from the log file.
+///
+/// The previous test pins the opposite pole: the console at `debug` wants the
+/// event. This one pins the case where only the file layer does.
+///
+/// What this does *not* discriminate is the `STATIC_MAX_LEVEL` term in that gate:
+/// `tracing` is depended on without a `release_max_level_*` feature, so that
+/// ceiling is `TRACE` in every profile and a gate of `STATIC_MAX_LEVEL` alone
+/// passes this test too (verified in both debug and release). It becomes
+/// discriminating the day such a feature is added; until then the promise being
+/// pinned here is the one the gate actually makes.
+#[test]
+fn a_record_reaches_the_file_log_at_the_default_log_level() {
+    let t = TempRoot::new("out_default_log");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    // No --log-level at all: the default `info`, where the console layer discards
+    // a debug event and only the file layer wants it.
+    let mut args = compare_args(&src, &dst, &["--output", "json"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+
+    let r = run(&args);
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let report_events: Vec<&serde_json::Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "report")
+        .collect();
+    assert_eq!(
+        report_events.len(),
+        r.records.len(),
+        "the always-trace file layer captured every record at the default level: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    // And with its fields, so the gate did not degenerate into logging the name.
+    assert!(
+        report_events.iter().all(|e| e["fields"]["fields"]
+            .as_str()
+            .is_some_and(|f| !f.is_empty())),
+        "each logged record carries its payload"
     );
 }

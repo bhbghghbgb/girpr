@@ -58,8 +58,43 @@ pub struct PairPlan {
     pub stat: StatTrust,
 }
 
+/// How two sides are paired into the paths they both hold.
+///
+/// The same rule [`crate::diff::diff_maps`] pairs by, and a **value rather than a
+/// `bool`** so the two rules a run applies are each named at the call site. They
+/// are not always the same, and the case where they differ is the one worth being
+/// careful about:
+///
+/// | pairing | means | used by |
+/// | --- | --- | --- |
+/// | [`Exact`](Self::Exact) | `a.txt` and `A.txt` are two different paths | a diff over paths that already line up |
+/// | [`Lowercase`](Self::Lowercase) | `a.txt` and `A.txt` are one path, spelled two ways | pairing what is on disk, before any rename |
+///
+/// `sync` plans with [`Lowercase`](Self::Lowercase) in insensitive mode and then
+/// diffs with [`Exact`](Self::Exact), because the rename pass has re-keyed dst
+/// onto src's spelling by then. Read as two bare booleans that is a pair of calls
+/// that must disagree and nothing says so; read as two values it is a sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CasePairing {
+    /// Pair by exact key — the paths must match character for character.
+    Exact,
+    /// Pair by lowercase key — spelling is not part of a path's identity.
+    Lowercase,
+}
+
+impl From<bool> for CasePairing {
+    /// From the run's `--case-sensitive` flag: `true` pairs exactly.
+    fn from(case_sensitive: bool) -> Self {
+        if case_sensitive {
+            Self::Exact
+        } else {
+            Self::Lowercase
+        }
+    }
+}
+
 /// The paths both sides hold, paired the way [`crate::diff::diff_maps`] pairs
-/// them: by exact key when case-sensitive, by lowercase when not.
+/// them.
 ///
 /// **This must not be re-derived differently.** `diff_maps` decides the verdict;
 /// if the planner paired by a different rule it would compute digests for paths
@@ -70,29 +105,32 @@ pub struct PairPlan {
 fn shared_pairs<'a>(
     src: &'a HashMap<String, SideEntry>,
     dst: &'a HashMap<String, SideEntry>,
-    case_sensitive: bool,
+    pairing: CasePairing,
 ) -> Vec<(&'a String, &'a String)> {
     let mut out: Vec<(&String, &String)> = Vec::new();
-    if case_sensitive {
-        // Within one side, mixed-case collisions are already fatal (phase A), so
-        // a first-wins insert cannot lose a pair.
-        let mut seen: HashMap<&str, &String> = HashMap::new();
-        for k in src.keys() {
-            seen.insert(k.as_str(), k);
-        }
-        for drel in dst.keys() {
-            if let Some(srel) = seen.get(drel.as_str()) {
-                out.push((srel, drel));
+    match pairing {
+        CasePairing::Exact => {
+            // Within one side, mixed-case collisions are already fatal (phase A), so
+            // a first-wins insert cannot lose a pair.
+            let mut seen: HashMap<&str, &String> = HashMap::new();
+            for k in src.keys() {
+                seen.insert(k.as_str(), k);
+            }
+            for drel in dst.keys() {
+                if let Some(srel) = seen.get(drel.as_str()) {
+                    out.push((srel, drel));
+                }
             }
         }
-    } else {
-        let mut slow: HashMap<String, &String> = HashMap::new();
-        for k in src.keys() {
-            slow.insert(k.to_lowercase(), k);
-        }
-        for (lkey, drel) in dst.keys().map(|k| (k.to_lowercase(), k)) {
-            if let Some(srel) = slow.get(&lkey) {
-                out.push((srel, drel));
+        CasePairing::Lowercase => {
+            let mut slow: HashMap<String, &String> = HashMap::new();
+            for k in src.keys() {
+                slow.insert(k.to_lowercase(), k);
+            }
+            for (lkey, drel) in dst.keys().map(|k| (k.to_lowercase(), k)) {
+                if let Some(srel) = slow.get(&lkey) {
+                    out.push((srel, drel));
+                }
             }
         }
     }
@@ -164,6 +202,15 @@ fn shared_pairs<'a>(
 /// they can now fail coverage, and that is the intended consequence rather than an
 /// accident of the check's placement.
 ///
+/// ## `pairing`
+///
+/// [`CasePairing`] is which paths count as the same path, and it must be the same
+/// answer [`crate::diff::diff_maps`] is given for the pairs this planner decides —
+/// except where a rename has already made them line up. `sync` is exactly that
+/// case: it plans with [`CasePairing::Lowercase`] in insensitive mode (the paths
+/// are on disk under two spellings) and then diffs with [`CasePairing::Exact`],
+/// because the rename pass re-keyed dst onto src's spelling in between.
+///
 /// ## The two modes
 ///
 /// [`HashMode::AllOf`] requires the whole requested list on an undecided pair, which
@@ -179,7 +226,7 @@ fn shared_pairs<'a>(
 pub fn plan_pairs(
     src: SideRequest<'_>,
     dst: SideRequest<'_>,
-    case_sensitive: bool,
+    pairing: CasePairing,
     mode: HashMode,
     stat: StatTrust,
 ) -> Result<PairPlan> {
@@ -202,7 +249,7 @@ pub fn plan_pairs(
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
-    for (srel, drel) in shared_pairs(src.entries, dst.entries, case_sensitive) {
+    for (srel, drel) in shared_pairs(src.entries, dst.entries, pairing) {
         let s = &src.entries[srel];
         let d = &dst.entries[drel];
         // Dirs compare by presence, and a kind conflict is decided by kind.

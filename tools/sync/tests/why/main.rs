@@ -63,7 +63,9 @@ use common::{TempRoot, age, serial_rw, sync_mtime, wfile};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::planner::{HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs};
+use girsync::planner::{
+    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
+};
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, EffRec, cmd_update};
 
@@ -164,7 +166,7 @@ fn resolved(
             cap: d.cap,
             label: &format!("dst {}", d_side.cache_path().display()),
         },
-        common.case_sensitive,
+        CasePairing::from(common.case_sensitive),
         common.hash_mode,
         common.stat,
     )
