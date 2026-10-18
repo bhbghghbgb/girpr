@@ -37,10 +37,10 @@ fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
     .unwrap();
     let record = recs_of(&rec_home);
     assert!(
-        record["a.txt"].hashes.contains_key("md5")
-            && !record["a.txt"].hashes.contains_key("sha256"),
+        record["a.txt"].hashes.get_named("md5").is_some()
+            && record["a.txt"].hashes.get_named("sha256").is_none(),
         "the fixture is a one-algorithm record: {:?}",
-        record["a.txt"].hashes.keys().collect::<Vec<_>>()
+        digests_of(&rec_home, "a.txt")
     );
 
     let err = cmd_compare(
@@ -109,7 +109,7 @@ fn update_populates_every_algorithm_under_any_of() {
     .unwrap();
     let got = &recs_of(&dir)["a.txt"].hashes;
     assert!(
-        got.contains_key("md5") && got.contains_key("sha256"),
+        got.get_named("md5").is_some() && got.get_named("sha256").is_some(),
         "both, because a record stores rather than chooses: {got:?}"
     );
 }

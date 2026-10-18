@@ -18,6 +18,7 @@ use anyhow::Result;
 
 use crate::cache::{CacheDb, CacheWrite, FileRec};
 use crate::config::ScanMode;
+use crate::hash::DigestSet;
 
 /// What one side's scan actually did.
 ///
@@ -115,7 +116,7 @@ pub struct EffRec {
     pub kind: String,
     pub size: u64,
     pub mtime_ns: i64,
-    pub hashes: HashMap<String, Vec<u8>>,
+    pub hashes: DigestSet,
 }
 
 impl EffRec {
@@ -124,7 +125,7 @@ impl EffRec {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 }
@@ -162,13 +163,16 @@ pub(super) fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) ->
 pub(super) fn merge_row(
     size: u64,
     mtime_ns: i64,
-    computed: HashMap<String, Vec<u8>>,
+    computed: DigestSet,
     prior: Option<&FileRec>,
 ) -> FileRec {
     let hashes = match prior.filter(|c| stat_matches(Some(c), size, mtime_ns)) {
         Some(c) => {
+            // `merge` is `other` into `self` with `self` winning, so the prior row is
+            // `self` and this run's computed digests are `other` — computed replaces,
+            // everything else rides along.
             let mut merged = c.hashes.clone();
-            merged.extend(computed);
+            merged.merge(&computed);
             merged
         }
         None => computed,
@@ -202,7 +206,7 @@ pub struct SideEntry {
     /// Empty for a dir, for a new path, and for a path whose stat moved. That
     /// last case is the load-bearing one: a stale row's digests must never reach
     /// the planner, or a changed file gets judged against its pre-change digest.
-    pub cached: HashMap<String, Vec<u8>>,
+    pub cached: DigestSet,
     /// Whether the cache row's stat still matches disk.
     ///
     /// Not derivable from `cached` being empty, because a fresh row can carry no
@@ -219,7 +223,7 @@ impl SideEntry {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            cached: HashMap::new(),
+            cached: DigestSet::default(),
             fresh: true,
         }
     }
@@ -310,28 +314,41 @@ mod tests {
     /// A file row carrying `md5` and `sha256` digests, distinguishable by a
     /// single byte so an assertion cannot pass on length alone.
     fn row(size: u64, mtime_ns: i64, md5: u8, sha256: u8) -> FileRec {
+        let mut hashes = DigestSet::default();
+        hashes.insert_named("md5", &[md5; 16]);
+        hashes.insert_named("sha256", &[sha256; 32]);
         FileRec {
             kind: "file".into(),
             size,
             mtime_ns,
-            hashes: [
-                ("md5".to_string(), vec![md5; 16]),
-                ("sha256".to_string(), vec![sha256; 32]),
-            ]
-            .into_iter()
-            .collect(),
+            hashes,
         }
     }
 
-    fn digests(algos: &[(&str, u8)]) -> HashMap<String, Vec<u8>> {
-        algos
-            .iter()
-            .map(|(a, b)| (a.to_string(), vec![*b; 16]))
-            .collect()
+    /// One digest per named algorithm, all holding `byte` — so two sets built
+    /// from the same call differ exactly where a caller makes them differ.
+    ///
+    /// Every digest is 16 bytes whatever the name, so a name this build knows but
+    /// the wrong length for lands in `foreign`. That is deliberate for `blake3`
+    /// (unreachable) and pointed for `sha256` (reachable), and it is what the
+    /// foreign cases below need.
+    fn digests(algos: &[(&str, u8)]) -> DigestSet {
+        let mut set = DigestSet::default();
+        for (a, b) in algos {
+            set.insert_named(a, &[*b; 16]);
+        }
+        set
     }
 
+    /// Every name on the row, sorted — known and foreign alike, so a dropped
+    /// digest cannot hide behind the iteration order of one arm.
     fn algos_of(rec: &FileRec) -> Vec<String> {
-        let mut v: Vec<String> = rec.hashes.keys().cloned().collect();
+        let mut v: Vec<String> = rec
+            .hashes
+            .iter()
+            .map(|(a, _)| a.as_str().to_string())
+            .collect();
+        v.extend(rec.hashes.foreign_iter().map(|(n, _)| n.to_string()));
         v.sort();
         v
     }
@@ -361,7 +378,7 @@ mod tests {
         let out = merge_row(10, 99, digests(&[("md5", 7)]), None);
         assert_eq!((out.size, out.mtime_ns), (10, 99));
         assert_eq!(algos_of(&out), vec!["md5"]);
-        assert_eq!(out.hashes["md5"], vec![7u8; 16]);
+        assert_eq!(out.hashes.get_named("md5"), Some(&[7u8; 16][..]));
     }
 
     /// Stat changed: the content is assumed to have changed with it, so every
@@ -374,10 +391,50 @@ mod tests {
         let out = merge_row(10, 100, digests(&[("md5", 7)]), Some(&prior));
         assert_eq!(algos_of(&out), vec!["md5"], "sha256 was never recomputed");
         assert_eq!(
-            out.hashes["md5"],
-            vec![7u8; 16],
+            out.hashes.get_named("md5"),
+            Some(&[7u8; 16][..]),
             "and md5 took the new value"
         );
+    }
+
+    /// **A foreign digest is dropped on a stat change too.** `blake3` has no context
+    /// in this build, so nothing this run did could have re-derived it — which is
+    /// exactly why it must go: the rule is that a stat change makes *every* stored
+    /// digest suspect, and keeping the ones this build cannot check would leave the
+    /// row asserting something about content nobody here can verify.
+    ///
+    /// The unchanged-stat half is stated in the same breath, because the two halves
+    /// are one rule and the interesting half of this is that it is not
+    /// "drop what we did not recompute" — it is "drop everything, then merge".
+    #[test]
+    fn merge_row_drops_a_foreign_digest_when_the_stat_changed() {
+        let prior = digests(&[("md5", 1), ("blake3", 2)]);
+        let prior_rec = FileRec {
+            kind: "file".into(),
+            size: 10,
+            mtime_ns: 99,
+            hashes: prior,
+        };
+        assert_eq!(
+            algos_of(&prior_rec),
+            vec!["blake3", "md5"],
+            "the fixture really does carry a name this build does not know"
+        );
+
+        let changed = merge_row(10, 100, digests(&[("md5", 7)]), Some(&prior_rec));
+        assert_eq!(
+            algos_of(&changed),
+            vec!["md5"],
+            "blake3 was never recomputed, and a stat change makes it suspect anyway"
+        );
+
+        let same = merge_row(10, 99, digests(&[("md5", 7)]), Some(&prior_rec));
+        assert_eq!(
+            algos_of(&same),
+            vec!["blake3", "md5"],
+            "and with the stat holding it rides along, exactly like sha256 does"
+        );
+        assert_eq!(same.hashes.get_named("blake3"), Some(&[2u8; 16][..]));
     }
 
     /// Stat unchanged: digests this run did not ask for are still valid and ride
@@ -387,8 +444,16 @@ mod tests {
         let prior = row(10, 99, 1, 2);
         let out = merge_row(10, 99, digests(&[("md5", 7)]), Some(&prior));
         assert_eq!(algos_of(&out), vec!["md5", "sha256"], "sha256 rides along");
-        assert_eq!(out.hashes["md5"], vec![7u8; 16], "md5 was recomputed");
-        assert_eq!(out.hashes["sha256"], vec![2u8; 32], "sha256 was not");
+        assert_eq!(
+            out.hashes.get_named("md5"),
+            Some(&[7u8; 16][..]),
+            "md5 was recomputed"
+        );
+        assert_eq!(
+            out.hashes.get_named("sha256"),
+            Some(&[2u8; 32][..]),
+            "sha256 was not"
+        );
     }
 
     /// `--hash none` with an unchanged stat: stat is recorded, digests survive.
@@ -398,9 +463,9 @@ mod tests {
     #[test]
     fn merge_row_with_nothing_computed_preserves_digests_when_the_stat_holds() {
         let prior = row(10, 99, 1, 2);
-        let out = merge_row(10, 99, HashMap::new(), Some(&prior));
+        let out = merge_row(10, 99, DigestSet::default(), Some(&prior));
         assert_eq!(algos_of(&out), vec!["md5", "sha256"]);
-        assert_eq!(out.hashes["md5"], vec![1u8; 16]);
+        assert_eq!(out.hashes.get_named("md5"), Some(&[1u8; 16][..]));
     }
 
     /// `--hash none` with a *changed* stat: the row becomes stat-only. A row with
@@ -409,7 +474,7 @@ mod tests {
     #[test]
     fn merge_row_with_nothing_computed_drops_digests_when_the_stat_changed() {
         let prior = row(10, 99, 1, 2);
-        let out = merge_row(10, 100, HashMap::new(), Some(&prior));
+        let out = merge_row(10, 100, DigestSet::default(), Some(&prior));
         assert!(out.hashes.is_empty(), "stat-only row");
         assert_eq!((out.size, out.mtime_ns), (10, 100));
     }

@@ -196,13 +196,15 @@ mod tests {
             kind: "file".into(),
             size: 42,
             mtime_ns: 123456789,
-            hashes: [
-                ("md5".to_string(), vec![1u8; 16]),
-                ("sha256".to_string(), vec![2u8; 32]),
-            ]
-            .into_iter()
-            .collect(),
+            hashes: file_digests(),
         }
+    }
+
+    fn file_digests() -> crate::hash::DigestSet {
+        let mut h = crate::hash::DigestSet::default();
+        h.insert_named("md5", &[1u8; 16]);
+        h.insert_named("sha256", &[2u8; 32]);
+        h
     }
 
     fn sized_rec(size: u64) -> FileRec {
@@ -210,7 +212,7 @@ mod tests {
             kind: "file".into(),
             size,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: crate::hash::DigestSet::default(),
         }
     }
 

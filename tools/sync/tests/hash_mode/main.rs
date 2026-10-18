@@ -46,7 +46,7 @@ mod read_count;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{TempRoot, log, opts, pair, recs_of, serial_rw, sync_mtime, wfile};
+use common::{TempRoot, digests_of, log, opts, pair, recs_of, serial_rw, sync_mtime, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
@@ -54,7 +54,7 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::hash::{AlgoSet, HashAlg};
+use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };
@@ -69,10 +69,13 @@ fn file(size: u64, mtime_ns: i64, cached: &[&str]) -> SideEntry {
         kind: "file".into(),
         size,
         mtime_ns,
-        cached: cached
-            .iter()
-            .map(|a| (a.to_string(), vec![1u8; 16]))
-            .collect(),
+        cached: {
+            let mut d = DigestSet::default();
+            for a in cached {
+                d.insert_named(a, &[1u8; 16]);
+            }
+            d
+        },
         fresh: true,
     }
 }
@@ -134,7 +137,7 @@ fn plan(
 }
 
 /// A pair of maps with no cache at all, for the diff-level cases.
-fn eff(entries: Vec<(&str, &HashMap<String, Vec<u8>>)>) -> HashMap<String, EffRec> {
+fn eff(entries: Vec<(&str, &DigestSet)>) -> HashMap<String, EffRec> {
     entries
         .into_iter()
         .map(|(rel, hashes)| {
@@ -151,11 +154,12 @@ fn eff(entries: Vec<(&str, &HashMap<String, Vec<u8>>)>) -> HashMap<String, EffRe
         .collect()
 }
 
-fn digests(pairs: &[(&str, &[u8])]) -> HashMap<String, Vec<u8>> {
-    pairs
-        .iter()
-        .map(|(a, v)| (a.to_string(), v.to_vec()))
-        .collect()
+fn digests(pairs: &[(&str, &[u8])]) -> DigestSet {
+    let mut set = DigestSet::default();
+    for (a, v) in pairs {
+        set.insert_named(a, v);
+    }
+    set
 }
 
 fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {

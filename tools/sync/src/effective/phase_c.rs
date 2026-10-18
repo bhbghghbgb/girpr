@@ -12,7 +12,7 @@ use tracing::{debug, info, trace};
 
 use crate::cache::CacheDb;
 use crate::config::ScanMode;
-use crate::hash::hash_file;
+use crate::hash::{DigestSet, hash_file};
 use crate::planner::HashPlan;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
@@ -111,7 +111,7 @@ pub fn resolve_folder(
         // The permit is taken *around* the read rather than inside `hash_file`, so
         // the gate stays a property of a phase and `hash_file` keeps the signature
         // every other caller already has.
-        let computed: Vec<Result<HashMap<String, Vec<u8>>>> = rw.pool().install(|| {
+        let computed: Vec<Result<DigestSet>> = rw.pool().install(|| {
             use rayon::prelude::*;
             chunk
                 .par_iter()
@@ -124,7 +124,7 @@ pub fn resolve_folder(
                         .with_context(|| format!("hash {}", path.display()));
                     trace!(
                         rel = %rel,
-                        algos = ?r.as_ref().map(|h| h.keys().collect::<Vec<_>>()),
+                        algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
                         "hashed"
                     );
                     r

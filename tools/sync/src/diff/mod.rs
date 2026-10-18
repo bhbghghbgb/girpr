@@ -17,7 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
-use crate::hash::AlgoSet;
+use crate::hash::{AlgoSet, DigestSet};
 use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
@@ -342,17 +342,13 @@ pub fn diff_maps(
 /// A **set** of algorithms on both sides, so the answer has a fixed order rather than
 /// the order the user happened to type them in. See [`Verdict::why_tag`] — that is the
 /// one place this order becomes visible, and it is a tag a parser reads.
-pub fn hashes_differ(
-    a: &HashMap<String, Vec<u8>>,
-    b: &HashMap<String, Vec<u8>>,
-    algos: AlgoSet,
-) -> AlgoSet {
+pub fn hashes_differ(a: &DigestSet, b: &DigestSet, algos: AlgoSet) -> AlgoSet {
     let mut differ = AlgoSet::NONE;
     for algo in algos.iter() {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
         // not force differ here.
-        if let (Some(x), Some(y)) = (a.get(algo.as_str()), b.get(algo.as_str()))
+        if let (Some(x), Some(y)) = (a.get_named(algo.as_str()), b.get_named(algo.as_str()))
             && x != y
         {
             differ.insert(algo);
@@ -364,13 +360,14 @@ pub fn hashes_differ(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::DigestSet;
 
     fn file(size: u64, mtime_ns: i64) -> EffRec {
         EffRec {
             kind: "file".into(),
             size,
             mtime_ns,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 
@@ -379,7 +376,7 @@ mod tests {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 

@@ -103,19 +103,18 @@ impl HashPlan {
     /// [`crate::effective::merge_row`], which stores the same row either way —
     /// so the plan asks again while phase A keeps reporting the old value.
     ///
-    /// A row key this build does not recognise is simply not counted as held.
-    /// That cannot widen the answer: an unknown name is never in `want`, and
-    /// `difference` only ever removes members of `other` that are in `want`.
+    /// Held is decided by **name**, not by slot: a row whose `md5` is stored with an
+    /// unexpected length is not held in the sense that matters, and must not be
+    /// counted as covering a request. A name this build does not recognise cannot be
+    /// in `want` at all, so it cannot widen the answer either.
     fn missing(entry: &SideEntry, want: AlgoSet, no_trust: bool) -> AlgoSet {
         if no_trust {
             return want;
         }
-        let have = AlgoSet::from_iter(
-            entry
-                .cached
-                .keys()
-                .filter_map(|a| a.parse::<HashAlg>().ok()),
-        );
+        let have = HashAlg::ALL
+            .into_iter()
+            .filter(|a| entry.cached.get_named(a.as_str()).is_some())
+            .collect::<AlgoSet>();
         want.difference(have)
     }
 
@@ -195,6 +194,7 @@ pub(super) fn plan_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::DigestSet;
     use std::collections::HashMap;
 
     fn entry(cached: &[&str]) -> SideEntry {
@@ -202,10 +202,13 @@ mod tests {
             kind: "file".into(),
             size: 10,
             mtime_ns: 99,
-            cached: cached
-                .iter()
-                .map(|a| (a.to_string(), vec![1u8; 16]))
-                .collect(),
+            cached: {
+                let mut d = DigestSet::default();
+                for a in cached {
+                    d.insert_named(a, &[1u8; 16]);
+                }
+                d
+            },
             fresh: !cached.is_empty(),
         }
     }
@@ -215,7 +218,7 @@ mod tests {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            cached: HashMap::new(),
+            cached: DigestSet::default(),
             fresh: true,
         }
     }

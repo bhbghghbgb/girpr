@@ -31,7 +31,7 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::hash::{AlgoSet, CHUNK, Digests, HashAlg, hash_file};
+use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, HashAlg, hash_file};
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
 use crate::util::mtime_ns_of;
@@ -447,10 +447,10 @@ fn copy_and_digest(
     src: &mut std::fs::File,
     dst: &mut std::fs::File,
     algos: &AlgoSet,
-) -> Result<HashMap<String, Vec<u8>>> {
+) -> Result<DigestSet> {
     if algos.is_empty() {
         std::io::copy(src, dst)?;
-        return Ok(HashMap::new());
+        return Ok(DigestSet::default());
     }
     let mut digests = Digests::new(algos);
     let mut buf = vec![0u8; CHUNK];
@@ -476,14 +476,9 @@ fn copy_and_digest(
 ///
 /// Only the requested `algos` are judged. A digest the run did not ask for is
 /// not evidence about this copy either way.
-fn verify_digests(
-    path: &Path,
-    algos: &[HashAlg],
-    src: &HashMap<String, Vec<u8>>,
-    dst: &HashMap<String, Vec<u8>>,
-) -> Result<()> {
+fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestSet) -> Result<()> {
     for a in algos {
-        if src.get(a.as_str()) != dst.get(a.as_str()) {
+        if src.get_named(a.as_str()) != dst.get_named(a.as_str()) {
             error!(algo = %a, path = %path.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, path.display());
         }
@@ -566,7 +561,7 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
             kind: "file".into(),
             size: ssize,
             mtime_ns: smtime_ns,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         });
     }
     let dh = hash_file(&d, &set).with_context(|| format!("hash {}", d.display()))?;
@@ -676,8 +671,12 @@ mod tests {
 
     /// One digest per algorithm, every one holding `byte` — so two maps built
     /// from the same call differ exactly where a caller makes them differ.
-    fn digests(algos: &[&str], byte: u8) -> HashMap<String, Vec<u8>> {
-        algos.iter().map(|a| (a.to_string(), vec![byte])).collect()
+    fn digests(algos: &[&str], byte: u8) -> DigestSet {
+        let mut set = DigestSet::default();
+        for a in algos {
+            set.insert_named(a, &[byte; 16]);
+        }
+        set
     }
 
     /// **This is the test the check exists for.** A verify that compares the two
@@ -697,7 +696,7 @@ mod tests {
         // takes, and the only one a real copy can produce.
         let src = digests(&["md5", "sha256"], 1);
         let mut dst = src.clone();
-        dst.insert("md5".into(), vec![2]);
+        dst.insert_named("md5", &[2u8; 16]);
 
         let err = verify_digests(path, &algos(&["md5", "sha256"]), &src, &dst)
             .expect_err("two digests that disagree are not a verified copy");
@@ -737,7 +736,7 @@ mod tests {
     #[test]
     fn a_digest_that_only_one_side_has_is_a_failure() {
         let src = digests(&["md5"], 1);
-        let dst = HashMap::new();
+        let dst = DigestSet::default();
 
         let err = verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst)
             .expect_err("a digest dst never produced is not one it agrees with");
@@ -758,7 +757,7 @@ mod tests {
     fn only_the_requested_algorithms_are_judged() {
         let src = digests(&["md5", "sha256"], 1);
         let mut dst = src.clone();
-        dst.insert("sha256".into(), vec![2]);
+        dst.insert_named("sha256", &[2u8; 16]);
 
         assert!(
             verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst).is_ok(),

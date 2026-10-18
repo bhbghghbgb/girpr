@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::Digest;
-use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -525,13 +524,18 @@ impl Digests {
 
     /// The digests of everything fed so far. Values are **raw** bytes (16 for
     /// md5, 32 for sha256), which is what the cache stores.
-    pub fn finish(self) -> HashMap<String, Vec<u8>> {
-        let mut out = HashMap::new();
+    ///
+    /// Assigned to the slots directly rather than through `insert_named`: the
+    /// context knows exactly which algorithm each of its two halves is, so there is
+    /// no name to route and no decision to get wrong.
+    pub fn finish(self) -> DigestSet {
+        let mut out = DigestSet::default();
         if let Some(c) = self.md5ctx {
-            out.insert("md5".into(), c.compute().0.to_vec());
+            out.md5 = Some(c.compute().0);
         }
         if let Some(c) = self.sha2ctx {
-            out.insert("sha256".into(), c.finalize().to_vec());
+            let d = c.finalize();
+            out.sha256 = Some(d.into());
         }
         out
     }
@@ -539,15 +543,15 @@ impl Digests {
 
 /// Digest `path` with every requested algorithm in a single pass.
 ///
-/// An empty `algos` returns an empty map without touching the file.
+/// An empty `algos` returns an empty set without touching the file.
 /// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
 /// stores them as-is instead of hex, halving hash disk cost.
-pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<HashMap<String, Vec<u8>>> {
+pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<DigestSet> {
     // Before any context is built: with nothing requested there is nothing to
     // digest, and opening the file at all would turn a stat-only decision into a
-    // read. The empty map below is the whole answer.
+    // read. The empty set below is the whole answer.
     if algos.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(DigestSet::default());
     }
     let mut f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut digests = Digests::new(algos);

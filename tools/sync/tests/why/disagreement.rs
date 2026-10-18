@@ -3,6 +3,7 @@
 //! The harness and the fixture builders are in the parent module.
 
 use super::*;
+use girsync::hash::DigestSet;
 
 /// A file record with the given stat and digests. Hand-built rather than scanned,
 /// because the state under test is one a scan will not produce on request: a pair
@@ -16,11 +17,33 @@ fn rec(hashes: &[&str]) -> EffRec {
         kind: "file".into(),
         size: 10,
         mtime_ns: 100,
-        hashes: hashes
-            .iter()
-            .map(|a| (a.to_string(), vec![a.len() as u8; 16]))
-            .collect(),
+        hashes: digests_of_len(hashes),
     }
+}
+
+/// One digest per name.
+///
+/// The lengths here are deliberately **not** each algorithm's real digest length —
+/// `sha256` gets six bytes in one of these. That is the point: a known name carrying
+/// an unexpected length lands in the foreign arm rather than a slot, and every lookup
+/// here goes **by name**, so the fixture still behaves exactly as it did when a row
+/// was a `HashMap`. A `DigestSet::get(HashAlg::Sha256)` would have missed it.
+fn digests<'a, I: IntoIterator<Item = (&'a str, &'a [u8])>>(pairs: I) -> DigestSet {
+    let mut set = DigestSet::default();
+    for (name, digest) in pairs {
+        set.insert_named(name, digest);
+    }
+    set
+}
+
+/// `rec`'s digests: the byte is the name's length, so two records naming the same
+/// algorithm still disagree.
+fn digests_of_len(names: &[&str]) -> DigestSet {
+    let mut set = DigestSet::default();
+    for a in names {
+        set.insert_named(a, &[a.len() as u8; 16]);
+    }
+    set
 }
 
 /// **The one case that separates "what was asked for" from "what disagreed."**
@@ -49,7 +72,7 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
     // other side to compare it against.
     let s = rec(&["md5", "sha256"]);
     let d = EffRec {
-        hashes: [("md5".to_string(), vec![9u8; 16])].into_iter().collect(),
+        hashes: digests([("md5", &[9u8; 16][..])]),
         ..rec(&[])
     };
     let required = Required {
@@ -103,12 +126,7 @@ fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
     };
     // Same shape, but the digests both sides actually hold agree.
     let agreeing = EffRec {
-        hashes: [
-            ("md5".to_string(), vec![3u8; 16]),
-            ("sha256".to_string(), vec![6u8; 16]),
-        ]
-        .into_iter()
-        .collect(),
+        hashes: digests([("md5", &[3u8; 16][..]), ("sha256", &[6u8; 16][..])]),
         ..rec(&[])
     };
     assert_eq!(

@@ -127,7 +127,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
     let want = md5::compute(b"hello").0.to_vec();
-    assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+    assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
     assert!(
         keys.contains(&"A.txt".to_string()),
@@ -140,7 +140,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db = open_db(&db_path, true, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &sensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"));
-    assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+    assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     drop(db);
 }
 
@@ -294,7 +294,7 @@ fn phase_a_never_hashes() {
     assert_eq!(pa.stats.hashed, 0);
     assert!(pa.map["a.txt"].fresh);
     assert!(
-        pa.map["a.txt"].cached.contains_key("md5"),
+        pa.map["a.txt"].cached.get_named("md5").is_some(),
         "the cached digest is carried for the planner"
     );
     drop(db);
@@ -393,9 +393,13 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     let db_path = dir.join(CACHE_PREFIX);
     let db = open_db(&db_path, true, rw()).unwrap();
     let _ = phased(&dir, &db, &opts(), scan(false, false));
-    let real = load_all_records(&db).unwrap()["a.txt"].hashes["md5"].clone();
+    let real = load_all_records(&db).unwrap()["a.txt"]
+        .hashes
+        .get_named("md5")
+        .unwrap()
+        .to_vec();
     let mut poisoned = load_all_records(&db).unwrap()["a.txt"].clone();
-    poisoned.hashes.insert("md5".to_string(), vec![0u8; 16]);
+    poisoned.hashes.insert_named("md5", &[0u8; 16]);
     db.put("a.txt", &poisoned).unwrap();
     drop(db);
 
@@ -420,6 +424,9 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     // merely unread.
     let after = load_all_records(&db).unwrap();
     assert!(after["a.txt"].hashes.is_empty());
-    assert_ne!(after["a.txt"].hashes.get("md5"), Some(&real));
+    assert_ne!(
+        after["a.txt"].hashes.get_named("md5"),
+        Some(real.as_slice())
+    );
     drop(db);
 }

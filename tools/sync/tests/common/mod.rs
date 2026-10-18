@@ -7,7 +7,7 @@
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::hash::HashAlg;
+use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
@@ -320,9 +320,25 @@ fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
 }
 
 /// Drop one algorithm from a row, leaving its stat intact.
+///
+/// Rebuilt rather than deleted in place: `DigestSet` has no `remove`, and the reason
+/// it has none is that a name this build knows can be sitting in the foreign arm, so a
+/// caller deleting "md5" has to look in both places. The rebuild does that by
+/// construction rather than by remembering to.
 pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
     edit_rec(dir, rel, |r| {
-        r.hashes.remove(algo);
+        let mut kept = DigestSet::default();
+        for (a, d) in r.hashes.iter() {
+            if a.as_str() != algo {
+                kept.insert_named(a.as_str(), d);
+            }
+        }
+        for (n, d) in r.hashes.foreign_iter() {
+            if n != algo {
+                kept.insert_named(n, d);
+            }
+        }
+        r.hashes = kept;
     });
 }
 
@@ -331,8 +347,10 @@ pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
 /// a digest is the only thing that can decide the pair.
 pub fn poison_digest(dir: &Path, rel: &str, algo: &str) {
     edit_rec(dir, rel, |r| {
-        let n = r.hashes.get(algo).map(|d| d.len()).unwrap_or(32);
-        r.hashes.insert(algo.to_string(), vec![0xABu8; n]);
+        // By *name*, so the length that gets replaced is whatever the row really
+        // holds -- including the unexpected length a corrupt row would carry.
+        let n = r.hashes.get_named(algo).map(|d| d.len()).unwrap_or(32);
+        r.hashes.insert_named(algo, &vec![0xABu8; n]);
     });
 }
 
@@ -349,8 +367,13 @@ pub fn age(dir: &Path, rel: &str, secs: u64) {
 }
 
 /// The digest rows currently hold, for asserting what a case left behind.
+///
+/// Known and foreign names together, sorted, so a case asserting "the row still holds
+/// md5" cannot pass because the foreign arm happened to be checked first.
 pub fn digests_of(dir: &Path, rel: &str) -> Vec<String> {
-    let mut v: Vec<String> = recs_of(dir)[rel].hashes.keys().cloned().collect();
+    let hashes = &recs_of(dir)[rel].hashes;
+    let mut v: Vec<String> = hashes.iter().map(|(a, _)| a.as_str().to_string()).collect();
+    v.extend(hashes.foreign_iter().map(|(n, _)| n.to_string()));
     v.sort();
     v
 }

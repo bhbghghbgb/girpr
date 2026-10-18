@@ -288,7 +288,7 @@ pub fn plan_pairs(
             for algo in req.algos {
                 let slot = t.coverage.entry(*algo).or_insert((0, 0));
                 slot.1 += 1;
-                if e.cached.contains_key(algo.as_str()) {
+                if e.cached.get_named(algo.as_str()).is_some() {
                     slot.0 += 1;
                 }
             }
@@ -402,8 +402,8 @@ fn pick_one(
         .iter()
         .filter(|a| obtainable(s, sc, a) && obtainable(d, dc, a))
         .min_by_key(|a| {
-            usize::from(!s.cached.contains_key(a.as_str()))
-                + usize::from(!d.cached.contains_key(a.as_str()))
+            usize::from(s.cached.get_named(a.as_str()).is_none())
+                + usize::from(d.cached.get_named(a.as_str()).is_none())
         })
         .copied()
 }
@@ -414,7 +414,7 @@ fn pick_one(
 /// to re-read rather than reuse, and a record has no filesystem to re-read. Folding
 /// it in would make `--no-trust-cached-hashes src` fatal for every record.
 fn obtainable(e: &SideEntry, cap: SideCapability, algo: &HashAlg) -> bool {
-    e.cached.contains_key(algo.as_str()) || cap.can_hash_from_disk
+    e.cached.get_named(algo.as_str()).is_some() || cap.can_hash_from_disk
 }
 
 /// What one side owes, and how much of it it could meet, over the undecided set.
