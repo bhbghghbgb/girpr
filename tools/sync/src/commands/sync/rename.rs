@@ -113,9 +113,8 @@ mod tests {
     /// casing reports a case-only difference as both `COPY` and `DELETE`.
     #[test]
     fn dry_run_rekeys_the_dst_map_without_touching_disk() {
-        let root = std::env::temp_dir().join(format!("girsync_rename_dry_{}", std::process::id()));
+        let root = crate::testtemp::TempDir::new("girsync_rename_dry", "rekeys_map");
         let dst = root.join("dst");
-        std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(&dst).unwrap();
         std::fs::write(dst.join("data.txt"), b"data").unwrap();
 
@@ -140,7 +139,5 @@ mod tests {
             dst.join("data.txt").is_file(),
             "a dry run still renames nothing on disk"
         );
-
-        std::fs::remove_dir_all(&root).ok();
     }
 }
