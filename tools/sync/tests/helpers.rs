@@ -253,7 +253,7 @@ fn hash_none_reads_nothing_and_says_so() {
     assert_eq!(
         (cold.a.hashed, cold.c.hashed),
         (0, 0),
-        "and the cold run read nothing either, which is the bug this fixed"
+        "and the cold run read nothing either: a --hash none run answers from stat alone"
     );
     assert_eq!(
         (warm.c.hashed, warm.c.cache_hit, warm.c.stat_only),
@@ -388,7 +388,7 @@ fn a_corrupt_cache_is_refused_by_a_dry_run_too() {
 /// decision is made, so it is asserted here: poison a row with a digest the file
 /// does not have, change the stat, and confirm the poison is neither carried nor
 /// left on disk. Carrying it would judge a changed file against its pre-change
-/// digest — the exact bug this carry rule exists to prevent.
+/// digest, which is the whole reason the carry rule keys on the stat alone.
 #[test]
 fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     let t = TempRoot::new("phase_a_stale");

@@ -365,12 +365,12 @@ fn a_record_is_logged_with_its_fields_at_debug_level() {
 /// The previous test pins the opposite pole: the console at `debug` wants the
 /// event. This one pins the case where only the file layer does.
 ///
-/// What this does *not* currently discriminate is the `STATIC_MAX_LEVEL` term in
-/// that gate: `tracing` is depended on without a `release_max_level_*` feature,
-/// so that ceiling is `TRACE` in every profile and a gate of `STATIC_MAX_LEVEL`
-/// alone passes this test too (verified in both debug and release). It becomes
-/// discriminating the day such a feature is added. The promise being pinned here
-/// is the one that is real today.
+/// What this does *not* discriminate is the `STATIC_MAX_LEVEL` term in that gate:
+/// `tracing` is depended on without a `release_max_level_*` feature, so that
+/// ceiling is `TRACE` in every profile and a gate of `STATIC_MAX_LEVEL` alone
+/// passes this test too (verified in both debug and release). It becomes
+/// discriminating the day such a feature is added; until then the promise being
+/// pinned here is the one the gate actually makes.
 #[test]
 fn a_record_reaches_the_file_log_at_the_default_log_level() {
     let t = TempRoot::new("out_default_log");

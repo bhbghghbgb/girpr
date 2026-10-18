@@ -98,8 +98,9 @@ fn record() -> SideCapability {
 /// Trust is on deliberately, because the cases here are about which algorithms a
 /// side is *short of*, and distrusting makes every side short of everything — which
 /// would hide the very tiers being tested. Trust's own rule is pinned separately in
-/// `planner.rs` (`distrusting_a_record_does_not_change_what_it_owes`) and
-/// end-to-end by `update_recomputes_every_digest_and_repairs_a_wrong_one`.
+/// `src/planner/coverage.rs`
+/// (`distrusting_a_record_does_not_change_what_it_owes`) and end-to-end by
+/// `update_recomputes_every_digest_and_repairs_a_wrong_one` in `tests/update.rs`.
 fn plan(
     s: &HashMap<String, SideEntry>,
     d: &HashMap<String, SideEntry>,
@@ -164,13 +165,12 @@ fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {
     }
 }
 
-/// Total digests a two-sided `compare` would compute.
-///
-/// Spelled out rather than borrowed from `lazy.rs` because that file's harness
-/// asserts verdicts across every difference class, and these cases are about a read
-/// count on a tree with no differences at all - a fixture with `CHANGED` paths in it
-/// would make the number depend on the prune and rename paths too.
 /// `(files opened, digests computed)` for a two-sided `compare`.
+///
+/// Spelled out rather than borrowed from `lazy/`: that harness asserts verdicts
+/// across every difference class, and these cases are about a read count on a tree
+/// with no differences at all — a fixture with `CHANGED` paths in it would make
+/// the number depend on the prune and rename paths too.
 ///
 /// Both at once because they are different facts and a case wants both. `hashed`
 /// counts **files opened**, while `hash_file` computes every algorithm for a path in

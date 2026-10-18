@@ -78,9 +78,9 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         // *comparison* requires, and this command has no counterpart. And obeying it
         // would be actively harmful — a record that stored only the one algorithm
         // this run happened to pick would leave the *next* comparison short of the
-        // others, which is the failure 5b made fatal. Storing everything named is a
-        // superset of what any-of can ask for, so it is never wrong, only possibly
-        // more work than the user expected.
+        // others, which is the coverage failure `plan_pairs` makes fatal. Storing
+        // everything named is a superset of what any-of can ask for, so it is never
+        // wrong, only possibly more work than the user expected.
         //
         // Rejecting would be defensible, but the precedent for a flag that cannot
         // apply is `compare-self`'s `--no-trust-cached-hashes`: warn, keep the flag,

@@ -43,8 +43,8 @@ pub(super) struct Applier<'a> {
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
     /// dst effective map, after the rename pass. Consulted for what dst actually
-    /// holds at a path; src's map is not needed here any more, because the
-    /// planner already decided which directories to remove (`Plan::rmdir`).
+    /// holds at a path; src's map is not consulted, because the planner already
+    /// decided which directories to remove (`Plan::rmdir`).
     pub dm: &'a HashMap<String, EffRec>,
     pub common: &'a CommonOpts,
     /// The run's rw limits and the pool they size.
@@ -161,13 +161,12 @@ impl Applier<'_> {
     /// any of those properties holding. It becomes load-bearing the moment
     /// `copy_one` stops truncating, stops deferring mtime, or reuses a digest
     /// across a content change — so do not "optimize it away" without checking
-    /// those three. `copy_one` digesting src during the copy does not make it
-    /// load-bearing, and is worth reading as the near-miss it is: src's digest
-    /// is now taken from the copy's own read, but dst's is still a separate read
-    /// of the file on disk, which is the third property speaking. The change
-    /// that *would* trip it is the single-pass one — digesting dst from the same
-    /// chunks going out — and at that point "the comparison" is a value against
-    /// itself and the pre-drop is the only thing left standing. Note also that
+    /// those three. `copy_one` digesting src during the copy is the near-miss
+    /// worth knowing about: src's digest comes from the copy's own read, but
+    /// dst's is still a separate read of the file on disk, which is the third
+    /// property speaking. A single-pass copy — digesting dst from the same chunks
+    /// going out — would trip it, and at that point "the comparison" is a value
+    /// against itself and the pre-drop is the only thing left standing. Note also that
     /// it is not a *signal*: a later scan that
     /// records stat without a digest for a size/mtime-differing file looks
     /// exactly like this, so nothing downstream may depend on the row's absence
@@ -276,8 +275,9 @@ impl Applier<'_> {
                         trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
                     }
                     // **As done.** Announced the moment the file is in place, not
-                    // after every copy finishes — which is the whole difference from
-                    // the ordered emit this replaced.
+                    // after every copy finishes — so with more than one rw operation
+                    // permitted the `COPY` lines come out in completion order rather
+                    // than plan order.
                     //
                     // Only on success: a failed copy aborts the run before the
                     // summary, so announcing one would be a claim about work that
@@ -362,8 +362,9 @@ impl Applier<'_> {
     /// which is why `Plan::rmdir` reads it instead of deriving a second one — so the
     /// only thing it cannot know is what *this run* has done to the disk since.
     ///
-    /// That is both directions, and getting only one right is the bug this comment
-    /// exists to prevent.
+    /// Both directions matter, and getting only one right is the failure mode:
+    /// an additive-only set keeps rows for a subtree a copy wiped, and a
+    /// subtractive-only set drops rows for a path the run created.
     ///
     /// **Added** — what the apply phases create. `mkdir` for new directories, `copy`
     /// for copied files, `fix_dirs` for the directories that replaced a file. All
@@ -389,12 +390,11 @@ impl Applier<'_> {
     /// case-folding the prune against the plan, in the one mode that deliberately
     /// does not case-fold. Such rows survive until the next run's phase A prunes
     /// them, and `compare-self` builds a cold cache so it cannot be misled.
-    /// `main`'s walk dropped them as a side effect of asking the filesystem, not
-    /// by deciding to.
     ///
     /// Cost: one pass over the map and three in-memory lists, against a full
-    /// traversal of dst with a `stat` per entry. On a large tree that walk is a real
-    /// fraction of the run, and it was the last full walk of dst in a real `sync`.
+    /// traversal of dst with a `stat` per entry. On a large tree that traversal is
+    /// a real fraction of the run, and it would be the only one left in a real
+    /// `sync`.
     fn prune_dst_cache(&self, plan: &Plan) -> Result<()> {
         // dst paths this run's copies destroy, as `dir/` prefixes. Computed from
         // `dm` rather than the plan's own lists, so it names exactly the subtrees
@@ -506,11 +506,10 @@ fn verify_digests(
 /// is the only way this catches silent corruption on the way down.
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
-/// the copy, not after it. So a src file rewritten mid-copy is no longer caught
-/// here — dst is a faithful copy of a src that no longer exists, and the pair
-/// looks clean. That is the deliberate cost of dropping the extra read, and it
-/// is a race the tool cannot win anyway: phase A's stat sees the new mtime on
-/// the next run and re-copies.
+/// the copy, not after it. So a src file rewritten mid-copy is not caught here:
+/// dst is a faithful copy of a src that no longer exists, and the pair looks
+/// clean. That is a race the tool cannot win anyway — phase A's stat sees the new
+/// mtime on the next run and re-copies.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
     trace!("copy_one start");

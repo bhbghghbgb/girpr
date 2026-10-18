@@ -13,8 +13,8 @@ use super::StatField;
 /// state the diff must never be in. Directories are a verdict rather than a silent
 /// fall-through precisely so that `--show-identical` cannot accidentally be partial.
 ///
-/// **One variant per decision, not one per check.** `is_changed` was a short circuit,
-/// so the reason is whatever *settled* the pair — and "never report a previous
+/// **One variant per decision, not one per check.** The diff is a short circuit, so
+/// the reason is whatever *settled* the pair — and "never report a previous
 /// check's efforts" then falls out for free rather than needing enforcement, because
 /// there is no earlier evidence to accumulate.
 #[derive(Debug, Clone, PartialEq, Eq)]

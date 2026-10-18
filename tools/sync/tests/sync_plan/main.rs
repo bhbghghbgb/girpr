@@ -3,12 +3,12 @@
 //! ## Why there is no golden here
 //!
 //! A whole-run golden is a transcript: one hardcoded vector for everything the run
-//! reported. It works while an eager implementation exists to compare against, and
-//! stops working the moment it does not, because then the only way to "update" it
-//! is to paste the actual output — which requires no understanding of whether the
-//! new output is right. From that point it is a change detector wearing the costume
-//! of a specification, and every future behaviour lands as a diff against a wall of
-//! JSON rather than as a statement about intent.
+//! reported. It works only while a reference implementation exists to compare
+//! against, and the only way to update one once that is gone is to paste the
+//! actual output — which requires no understanding of whether that output is right.
+//! From that point it is a change detector wearing the costume of a specification,
+//! and every future behaviour lands as a diff against a wall of JSON rather than as
+//! a statement about intent.
 //!
 //! So the expectation here is a **table keyed by path**. Each row says what a path
 //! is on each side and what the plan must therefore do about it. That is a claim
@@ -32,11 +32,8 @@
 //!
 //! ## What this file does not do
 //!
-//! It does not compare a dry run against a real run. That is a differential between
-//! two runs of the same code differing only in the write gate, which is meaningful
-//! without an eager reference — it catches the dry run taking a different branch,
-//! which is the whole `--dry-run` contract. It lives in [`dry_run`] instead, sharing
-//! this fixture.
+//! It does not compare a dry run against a real run — that belongs in [`dry_run`],
+//! which shares this fixture.
 //!
 //! ## Layout
 //!

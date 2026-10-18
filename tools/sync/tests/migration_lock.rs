@@ -45,8 +45,8 @@ fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
     load_all_records(&db).unwrap()
 }
 
-/// Cache path exists after update (dir today, file after migration: only
-/// assert existence), and files + dirs are recorded with hashes.
+/// The cache path exists after update, and files + dirs are recorded with hashes.
+///
 #[test]
 fn lock_update_records_files_dirs_and_hashes() {
     let t = TempRoot::new("lock_basic");

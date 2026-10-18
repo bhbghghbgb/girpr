@@ -141,7 +141,7 @@ fn any_of_settles_each_pair_separately() {
 
 /// **The reason a record works at all under `any-of`.** It holds one of the two
 /// requested algorithms, which is exactly as much as `any-of` asks for — so this
-/// is the remedy 5b's error message could only promise in prose.
+/// is the remedy the all-of error message could only promise in prose.
 #[test]
 fn any_of_answers_a_record_that_holds_one_of_the_two() {
     let s = map(vec![("a.txt", file(10, 100, &["md5"]))]);
@@ -233,7 +233,7 @@ fn all_of_requires_every_algorithm_on_both_sides() {
 
 /// Scope is the undecided set in **both** modes. A pair stat already settled
 /// needs no digest, so it cannot be a coverage failure however the request reads
-/// — the rule 5b pinned for all-of still holds for any-of.
+/// — the rule that holds for all-of holds for any-of too.
 #[test]
 fn a_stat_differing_pair_needs_no_coverage_in_either_mode() {
     let s = map(vec![("d.txt", file(10, 100, &[]))]);

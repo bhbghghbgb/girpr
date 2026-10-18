@@ -9,10 +9,11 @@ use crate::util::{elapsed_s, is_cache_rel, mtime_ns_of};
 
 /// One entry as found on disk, before any cache consultation.
 ///
-/// Paths are relative to the walk root. A caller that needs an absolute path
-/// re-derives it as `root.join(&ent.rel)`, which is one join rather than a
-/// `PathBuf` retained per entry for the whole phase — a tree of 200 k files keeps
-/// every one of these alive at once, so a field nothing reads is several MB.
+/// Paths are relative to the walk root, and a caller that needs an absolute path
+/// re-derives it as `root.join(&ent.rel)`. Relative is the deliberate choice: a walk
+/// of a 200 k-file tree keeps every one of these alive at once, so a `PathBuf`
+/// retained per entry would be several MB of strings for a caller that mostly wants
+/// the relative form anyway.
 #[derive(Clone, Debug)]
 pub struct LiveEnt {
     /// `/`-separated path relative to the walk root, original casing preserved.
@@ -45,10 +46,10 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     continue;
                 }
                 // Computed once per entry and used twice: the prune decision below and
-                // the emitted `LiveEnt`. A `filter_entry` predicate needs the same
-                // string to answer `is_cache_rel` and cannot hand it back, so it used
-                // to be derived a second time for every entry that survived — one
-                // `String` allocation each, for a path the loop already had.
+                // the emitted `LiveEnt`. A `filter_entry` predicate cannot hand its
+                // argument back, so deriving the rel inside one would mean deriving it
+                // again for every entry that survived — one `String` allocation each,
+                // for a path the loop already has.
                 let rel = ent
                     .path()
                     .strip_prefix(root)

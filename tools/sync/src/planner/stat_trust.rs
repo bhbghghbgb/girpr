@@ -197,10 +197,10 @@ impl StatTrust {
     }
 
     // Deliberately no `untrusted_disagrees() -> bool` alongside this one. It would
-    // have no caller, and a second spelling of a rule is a rule that can drift: when
-    // this was a boolean, the mutation that made *it* disagree with the diff while the
-    // diff agreed with the itemised form passed every test in the suite. One
-    // definition, and the caller that wants a bool asks `.any()`.
+    // have no caller, and a second spelling of a rule is a rule that can drift
+    // silently: a bool that disagreed with this one would be caught by nothing,
+    // because the diff agrees with the itemised form. One definition, and the
+    // caller that wants a bool asks `.any()`.
 
     /// True when **at least one** field is not trusted.
     ///

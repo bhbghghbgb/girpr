@@ -166,9 +166,9 @@ pub fn pair_verdict(
     //
     // Reaching here with an empty `need` means the pair was left undecided with no way
     // left to decide it, so the honest verdict is `CHANGED` ("cannot confirm") rather
-    // than silently clean. Reporting it equal is how a size-differing pair once came
-    // back "identical" under `--hash-all-of none --no-trust-size`, and in `sync` that
-    // meant `dst` was left stale by a run that reported success.
+    // than silently clean. A size-differing pair under `--hash-all-of none
+    // --no-trust-size` is exactly that case: reported equal, and in `sync` that
+    // leaves `dst` stale under a run that reported success.
     //
     // Guarded on `need.is_empty()` deliberately. While a digest **is** available the
     // comparison above is a real verdict, and a pair whose content agrees is genuinely
@@ -265,11 +265,11 @@ pub fn diff_maps(
         }
     } else {
         // The union of both sides' lowercase keys, walked as src's keys and then
-        // the dst keys src does not already cover. A third `HashSet<String>` used
-        // to materialise that union — cloning every lowercased key into it, then
-        // looking each one up *again* to discover which side holds it. Two
-        // indices and one pass each answers the same question, and the key is
-        // already in hand.
+        // the dst keys src does not already cover. Two indices and one pass each
+        // answer that; materialising the union as a third `HashSet<String>` would
+        // clone every lowercased key into it and then look each one up *again* to
+        // discover which side holds it — a whole pass over the key set, for an
+        // answer the pass already has.
         //
         // Mixed-case collisions within one side are already fatal (phase A), so
         // each lowercase key maps to exactly one path per side and this join is

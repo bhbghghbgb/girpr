@@ -215,8 +215,8 @@ mod tests {
     }
 
     /// `Digests::new(&[])` must be the inert object, because `--hash none` is
-    /// the mode where a copy never builds one. A context built and thrown away
-    /// would be the same waste `§1.4` removed from `hash_file`.
+    /// the mode where a copy never builds one. A context built and thrown away is
+    /// the per-file allocation [`hash_file`] is written to avoid.
     #[test]
     fn no_algorithms_asked_for_means_no_context_and_no_digest() {
         let mut d = Digests::new(&[]);

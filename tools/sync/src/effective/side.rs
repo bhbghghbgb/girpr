@@ -222,10 +222,10 @@ fn display_path(p: &Path) -> String {
 ///
 /// Nothing here decides *whether* the two overlap — the limiter does. Under
 /// [`crate::rw::RwLimits::Shared`] there is one counter, so the two hash phases take
-/// turns and this is the old sequential run with extra steps. Under a split limit
-/// each side has its own counter, so the two phases genuinely proceed at once,
-/// which is the entire point of the flag: on two separate physical drives, src
-/// being read no longer has to wait for dst to finish being read.
+/// turns and the run is sequential. Under a split limit each side has its own
+/// counter, so the two phases genuinely proceed at once, which is the entire point
+/// of the flag: on two separate physical drives, src being read does not have to
+/// wait for dst to finish being read.
 ///
 /// **Why this is sound.** [`ensure_distinct_sides`] already ran and guarantees the
 /// two sides are different cache files, and redb permits one writable handle per
@@ -234,10 +234,12 @@ fn display_path(p: &Path) -> String {
 /// lifetime never crosses a thread boundary.
 ///
 /// **Why the error is src's.** Both sides can fail at once, and which one finished
-/// first is a function of I/O timing. Today the resolves are sequential, so src's
-/// failure is always the one reported; keeping that means two runs over the same
-/// broken tree print the same message. The cost is that a dst-only failure waits
-/// for src's to be seen, which is invisible — the run stops either way.
+/// first is a function of I/O timing. src runs on the spawned thread and dst on the
+/// calling one, so the ordering is not fixed — what is fixed is that the caller
+/// unwraps src's result first, so src's failure is the one reported whatever the
+/// timing was, and two runs over the same broken tree print the same message. The
+/// cost is that a dst-only failure waits for src's to be seen, which is invisible —
+/// the run stops either way.
 ///
 /// `std::thread::scope` rather than a detached spawn: both sides' borrows are live
 /// here, and a scoped thread cannot outlive them.

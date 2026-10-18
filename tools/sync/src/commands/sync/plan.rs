@@ -132,13 +132,12 @@ pub(super) fn build_plan(
     }
     // Sorted by path, then deduped **by path alone**.
     //
-    // The dedup key matters now that a reason rides along. It is still correct,
-    // because `missing`, `changed` and `type_conflict` are disjoint buckets — a path
-    // cannot be on two of them at once — so no path ever arrives here twice carrying
-    // two different reasons. Deduplicating on the whole item instead would be
-    // equivalent *today* and would stop being equivalent the day two buckets could
-    // overlap, which is exactly the kind of quiet assumption that becomes a bug
-    // nobody can reproduce.
+    // Correct because `missing`, `changed` and `type_conflict` are disjoint buckets
+    // — a path cannot be on two of them at once — so no path ever arrives here
+    // twice carrying two different reasons. Deduplicating on the whole item
+    // instead would be equivalent *today* and would stop being equivalent the day
+    // two buckets could overlap, which is exactly the kind of quiet assumption
+    // that becomes a bug nobody can reproduce.
     copy.sort_by(|a, b| a.rel.cmp(&b.rel));
     copy.dedup_by(|a, b| a.rel == b.rel);
 

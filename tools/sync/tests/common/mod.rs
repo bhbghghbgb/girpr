@@ -159,8 +159,7 @@ pub fn scan(no_trust_cached_hashes: bool, dry_run: bool) -> ScanMode {
 }
 
 /// The limiter a test gets when concurrency is not what it is testing: strictly
-/// one rw operation at a time, which is what a command built for itself before
-/// the rw flags existed.
+/// one rw operation at a time, which is what an unflagged command resolves to.
 ///
 /// A `RwRuntime` rather than a thread count, so a test calling `resolve_folder`
 /// directly threads through exactly the same gate a command does and cannot

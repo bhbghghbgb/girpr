@@ -138,11 +138,13 @@ fn effective_maps(
 /// *decision* (how many rows would be dropped) and not a side effect.
 ///
 /// This is the test that catches the whole class of bug rather than one instance
-/// of it. `pruned` was the instance found: the prune loop sat behind the write
-/// handle, so a dry run over a tree with an orphan row reported `0` where a real
-/// run reports `1`. Nothing else compared the counters, so it passed. `ScanStats`
-/// derives `PartialEq` so a future counter is covered by this assertion without
-/// anyone remembering to extend it.
+/// of it, and `pruned` is the case it is written for: the prune loop is the one
+/// piece of work whose cost is a *number* rather than a row, so it is the one that
+/// can sit behind the write handle without anything else noticing — a dry run over
+/// a tree with an orphan row would then report `0` where a real run reports `1`,
+/// and no other comparison in the suite would disagree. `ScanStats` derives
+/// `PartialEq` so a future counter is covered by this assertion without anyone
+/// remembering to extend it.
 #[test]
 fn dry_run_reports_the_same_counters_as_a_real_run() {
     let t = TempRoot::new("dry_stats");
@@ -242,7 +244,7 @@ fn a_dry_run_decides_to_prune_without_dropping_the_row() {
 /// content — so `plan_pairs` cannot settle it from stat and both sides must read
 /// it. `a.txt` and `sub/nested.txt` are equal pairs for the same reason, so they
 /// hash too; the size-differing and one-sided paths must *not* appear in the
-/// total, which is also checked so a regression to eager hashing is visible here.
+/// total, which is also checked so a widening of the undecided set is visible here.
 #[test]
 fn the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs() {
     let t = TempRoot::new("cmp_dry_fixture");

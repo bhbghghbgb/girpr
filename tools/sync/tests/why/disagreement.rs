@@ -81,9 +81,10 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
 
 /// The mirror of the above, and the reason it needed saying twice: when the
 /// algorithms that *were* compared agree, silence must not be read as a
-/// disagreement. `hashes_differ` is silent either way, so a reader of its `bool`
-/// could not tell the two apart — which is the `Required::fallback` trap this crate
-/// has already paid for once.
+/// disagreement. `hashes_differ` is silent either way — empty covers both "they
+/// agree" and "there was nothing to compare" — so the caller has to tell them
+/// apart, and a `bool` return would have thrown that away. That is what
+/// `Required::fallback` exists for.
 #[test]
 fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
     let s = rec(&["md5", "sha256"]);

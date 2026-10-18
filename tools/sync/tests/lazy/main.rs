@@ -11,10 +11,10 @@
 //! without restating how it is spelled, and a change to the prose rendering
 //! cannot fail a case whose point is the verdict.
 //!
-//! The `hashed` expectations in the doc comment on each test are the **lazy**
-//! numbers. The suite was written against the eager code first, with the eager
-//! numbers, and flipped once the short circuit landed; the diff of that flip is
-//! the record of what laziness actually changed.
+//! The `hashed` expectation in each test's doc comment is the count the run
+//! actually produces. Stating it is the point: an eager run over the same fixture
+//! would read every file on both sides, so the gap between the two numbers is
+//! exactly what laziness bought.
 //!
 //! ## Layout
 //!
@@ -72,7 +72,7 @@ impl Run {
     fn records(&self) -> Vec<Value> {
         // `why: false` throughout this file: laziness is asserted on *which* pairs
         // were read, and a `why` field would be a reporting difference on records
-        // whose content is not what's under test. `tests/why.rs` covers the flag.
+        // whose content is not what's under test. `tests/why/` covers the flag.
         verdict(&self.diff, false, false)
             .iter()
             .map(|r| r.json())

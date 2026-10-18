@@ -335,11 +335,11 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
 ///
-/// This is the one gate in this stage that catches a wrong planner case-flag, and
-/// it exists because the fixture above cannot. That fixture's two sides hold the
-/// same bytes, so a run that never learns a digest for the pair still concludes
+/// This is the one gate that catches a wrong planner case-flag, and it exists
+/// because the fixture above cannot. That fixture's two sides hold the same
+/// bytes, so a run that never learns a digest for the pair still concludes
 /// "equal" and reaches the right answer by luck. Same for the case-only pair in
-/// `sync_plan.rs`'s fixture table, whose row for this shape is `Case.txt`.
+/// `sync_plan/`'s fixture table, whose row for this shape is `Case.txt`.
 ///
 /// Here the bytes differ at the same length with the mtime pinned, so size+mtime
 /// agree and only a digest can tell them apart. If `plan_pairs` is handed
@@ -545,11 +545,12 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
 /// left in the cache.
 ///
 /// Recorded here as a **known limitation of the derived present set**, not as a
-/// passing assertion. The walk this replaced would have dropped these rows
-/// because it asked the filesystem. Deriving cannot, without also case-folding
-/// the prune against the plan — in the one mode that deliberately does not
-/// case-fold. The rows are stale until the next run's phase A prunes them, and
-/// `compare-self` builds a cold cache so it cannot be misled.
+/// passing assertion. Deriving cannot see this without also case-folding the
+/// prune against the plan — in the one mode that deliberately does not case-fold.
+/// Asking the filesystem instead would drop these rows, at the cost of a full
+/// traversal of dst in every real run; the rows are stale until the next run's
+/// phase A prunes them, and `compare-self` builds a cold cache so it cannot be
+/// misled.
 #[test]
 #[ignore = "known: the derived present set keeps rows for a dir created and rmdir'd in the same run"]
 fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {

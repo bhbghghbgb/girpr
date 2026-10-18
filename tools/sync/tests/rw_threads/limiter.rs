@@ -138,11 +138,12 @@ fn every_rw_setting_answers_the_same_question() {
 /// Distinct from the test above on purpose. That varies the *limits* with the call
 /// shape fixed; this varies the *call shape* — the commands' overlapping
 /// `resolve_sides_concurrently` against a straight sequential resolve — with the
-/// limits fixed. The seam this change opened is the concurrency, and pinning only
-/// the limits would leave the new threading itself unasserted.
+/// limits fixed. Pinning only the limits would leave the threading itself
+/// unasserted, and a scheduling change is exactly the kind that leaves the answer
+/// intact.
 ///
 /// Two `redb::WriteTransaction`s are also open against two caches at the same
-/// time here, which is the first place in the test suite that happens.
+/// time here, which is the only place in the test suite that happens.
 #[test]
 fn an_overlapping_resolve_agrees_with_a_sequential_one() {
     let t = TempRoot::new("rw_overlap");

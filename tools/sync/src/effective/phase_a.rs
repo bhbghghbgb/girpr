@@ -217,8 +217,8 @@ pub fn scan_stat_only(
     // The prune *decision* is an answer, not a side effect: how many rows this run
     // would drop is part of what the run reports, so it is computed in both modes
     // and only the `remove` calls are suppressed. Gating the whole loop on the
-    // write handle — which is what this did — makes a dry run report `pruned = 0`
-    // over a tree a real run prunes, i.e. it answers a different question.
+    // write handle would make a dry run report `pruned = 0` over a tree a real run
+    // prunes, i.e. it would answer a different question.
     //
     // Reading through the batch handle when there is one is not required for
     // correctness: every key this run has written is a live key, and a live key is

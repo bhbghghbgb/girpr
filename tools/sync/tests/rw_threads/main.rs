@@ -1,11 +1,10 @@
 //! The rw limiter: one gate over every file read and write, with a per-side mode.
 //!
-//! The limiter is wired into phase C and the two sides of a pair now resolve
-//! concurrently, but no flag reaches any of it yet — a command builds itself a
-//! `serial()` runtime. That leaves the invariant unpinned, and this is the worst
-//! moment to leave it: the structural change and the CLI break land in different
-//! commits, and the second is the loud one. So the limiter is exercised here
-//! through its public API, at every shape the CLI is about to offer.
+//! The limiter is wired into phase C and the two sides of a pair resolve
+//! concurrently, so the invariant has to be pinned somewhere that is not the CLI:
+//! a scheduling bug does not necessarily change what the run prints. It is
+//! exercised here through the limiter's own public API, at every shape the
+//! `--rw-threads*` family can be given.
 //!
 //! What is asserted throughout is the crate's standing rule: the limiter changes
 //! **scheduling** and nothing else. Every setting must resolve the same trees to
@@ -15,9 +14,10 @@
 //!
 //! What is *not* here, and why: a `sync` driven at a **split** limit through the
 //! CLI. `--rw-threads-src 1 --rw-threads-dst 1` is spelled in `--rw-dual-drive`,
-//! so the flags below do reach that shape — but only for a shape a user asked for.
-//! The single-copy shape is asserted directly against the limiter, where the
-//! two-permit path is contended rather than incidentally exercised.
+//! so the flags in [`flag_surface`] do reach that shape — but only for a shape a
+//! user asked for. The single-copy shape is asserted directly against the
+//! limiter, where the two-permit path is contended rather than incidentally
+//! exercised.
 //!
 //! ## Layout
 //!
@@ -135,7 +135,7 @@ fn fixture(t: &TempRoot) -> (PathBuf, PathBuf) {
 
 /// Action events `sync` emits, as opposed to the records that describe why.
 ///
-/// Copied rather than imported: `sync_plan.rs` owns this vocabulary and duplicating
+/// Copied rather than imported: `sync_plan/` owns this vocabulary and duplicating
 /// one match arm here would be a second place for it to be wrong. It is a *filter*
 /// either way -- the same events `plan::dry_run_records` and the applier phases
 /// announce -- so a new action event has to be added in two places, and that is

@@ -100,11 +100,10 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
 
     if common.dry_run {
-        // Warned, not rejected, and now for a shared reason with
+        // Warned, not rejected, and for the same reason as
         // `--no-trust-cached-hashes`: neither flag changes what this command
-        // checks any more. Erroring would break a script that passes `--dry-run`
-        // to every subcommand to be safe, which is exactly the usage this
-        // invites.
+        // checks. Erroring would break a script that passes `--dry-run` to every
+        // subcommand to be safe, which is exactly the usage this invites.
         warn!(
             "--dry-run is redundant for compare-self: this command writes nothing \
              (the disk side is scanned against an in-memory cache and the record \

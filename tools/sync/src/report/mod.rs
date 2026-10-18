@@ -50,8 +50,8 @@ use crate::diff::Diff;
 #[value(rename_all = "kebab-case")]
 pub enum OutputFormat {
     /// One human-readable line per record: `MISSING a.txt`, `COPY a.txt`,
-    /// `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the docs
-    /// and the golden tests are written against.
+    /// `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the README's
+    /// examples are written in.
     #[default]
     Text,
     /// One JSON object per line (NDJSON), same records, same order:
