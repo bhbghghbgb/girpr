@@ -437,8 +437,7 @@ impl Applier<'_> {
 /// The digest is of the source stream, which is the point: `copy_one` needs a
 /// digest of src either way, and this is the one read that can produce it for
 /// free. It is emphatically *not* a substitute for the check the caller does
-/// afterwards — see `copy_one`'s own comment, which is where the reasoning
-/// lives.
+/// afterwards — see [`verify_digests`], which is where the reasoning lives.
 ///
 /// With no algorithms requested there is nothing to fold into the loop, so
 /// `io::copy` is left alone and keeps whatever fast path it has between two
@@ -464,6 +463,32 @@ fn copy_and_digest(
         digests.update(&buf[..n]);
     }
     Ok(digests.finish())
+}
+
+/// Compare the two digests a copy produced, and fail if they disagree.
+///
+/// Two *separate* arguments, and that is the whole point. `src` is the digest
+/// of the bytes the copy streamed; `dst` is a fresh read of the file on disk,
+/// taken after `sync_all()`. A single pass that digested both sides from the
+/// same chunks would hand this the same map twice and it would have nothing to
+/// say — which is why the signature takes two, and why a caller that cannot
+/// produce two has no verify to run at all.
+///
+/// Only the requested `algos` are judged. A digest the run did not ask for is
+/// not evidence about this copy either way.
+fn verify_digests(
+    path: &Path,
+    algos: &[String],
+    src: &HashMap<String, Vec<u8>>,
+    dst: &HashMap<String, Vec<u8>>,
+) -> Result<()> {
+    for a in algos {
+        if src.get(a) != dst.get(a) {
+            error!(algo = %a, path = %path.display(), "verify hash mismatch");
+            bail!("verify hash({}) {}", a, path.display());
+        }
+    }
+    Ok(())
 }
 
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
@@ -540,16 +565,8 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
             hashes: HashMap::new(),
         });
     }
-    // The read that makes the check a check: dst, now, off the disk — against
-    // the stream src's digest was taken from. Two separate reads of two
-    // separate files, so a disagreement means something.
     let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
-    for a in algos {
-        if sh.get(a) != dh.get(a) {
-            error!(algo = %a, path = %d.display(), "verify hash mismatch");
-            bail!("verify hash({}) {}", a, d.display());
-        }
-    }
+    verify_digests(&d, algos, &sh, &dh)?;
     tracing::Span::current().record("bytes", ssize);
     trace!(bytes = ssize, "copy_one done");
     Ok(FileRec {
@@ -645,5 +662,97 @@ mod tests {
 
         assert_eq!(std::fs::read(&dst).unwrap(), Vec::<u8>::new());
         assert_eq!(sh, hash_file(&src, &set).unwrap());
+    }
+
+    /// One digest per algorithm, every one holding `byte` — so two maps built
+    /// from the same call differ exactly where a caller makes them differ.
+    fn digests(algos: &[&str], byte: u8) -> HashMap<String, Vec<u8>> {
+        algos.iter().map(|a| (a.to_string(), vec![byte])).collect()
+    }
+
+    /// **This is the test the check exists for.** A verify that compares the two
+    /// digests a copy produced has to be able to *fail* when they disagree, and
+    /// the way to show that without arranging for a disk to corrupt itself is to
+    /// hand the comparison two maps that disagree. Every copy in the suite is
+    /// byte-correct, so without this the comparison could be written as a value
+    /// against itself and pass every other test in the crate unchanged.
+    ///
+    /// The two stderr strings are contract, so they are asserted rather than
+    /// left to inspection: an operator seeing a failed run is owed the
+    /// algorithm and the path.
+    #[test]
+    fn a_disagreement_between_the_two_digests_is_a_failure() {
+        let path = Path::new("dst/file.bin");
+        // Same key set, one digest differs: the shape silent on-disk corruption
+        // takes, and the only one a real copy can produce.
+        let src = digests(&["md5", "sha256"], 1);
+        let mut dst = src.clone();
+        dst.insert("md5".into(), vec![2]);
+
+        let err = verify_digests(path, &algos(&["md5", "sha256"]), &src, &dst)
+            .expect_err("two digests that disagree are not a verified copy");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("verify hash(md5)"),
+            "names the algorithm: {msg}"
+        );
+        assert!(msg.contains("dst/file.bin"), "names the path: {msg}");
+    }
+
+    /// The other half of the pair, and the reason test 1 above is trustworthy:
+    /// it fails for the disagreement it names rather than for anything about the
+    /// maps, and it would fail identically if the comparison were inverted.
+    /// `algos` is non-empty on purpose — an empty request has nothing to judge,
+    /// and would make this pass for the wrong reason.
+    #[test]
+    fn agreement_is_not_a_failure() {
+        let both = digests(&["md5", "sha256"], 1);
+        assert!(
+            verify_digests(
+                Path::new("dst/file.bin"),
+                &algos(&["md5", "sha256"]),
+                &both,
+                &both
+            )
+            .is_ok(),
+            "two reads of the same bytes agreeing is the whole point"
+        );
+    }
+
+    /// A digest one side has and the other does not is **not** agreement. It is
+    /// the case a loop written as `for (k, v) in src { if dst.get(k) != Some(v) }`
+    /// skips silently, because it walks the map instead of the request — so the
+    /// missing entry is never looked up at all. `src.get(a) != dst.get(a)` sees
+    /// `Some(..) != None`.
+    #[test]
+    fn a_digest_that_only_one_side_has_is_a_failure() {
+        let src = digests(&["md5"], 1);
+        let dst = HashMap::new();
+
+        let err = verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst)
+            .expect_err("a digest dst never produced is not one it agrees with");
+        assert!(
+            err.to_string().contains("verify hash(md5)"),
+            "the missing digest is the one reported: {err}"
+        );
+    }
+
+    /// Only what the run asked for is evidence about this copy. A digest nobody
+    /// requested is not a disagreement, and treating it as one would fail every
+    /// copy whose maps happen to carry more than `algos` names.
+    ///
+    /// This pins which side the loop walks: `algos`, not the maps. A comparison
+    /// iterating the digests instead would fail here, having found a real
+    /// difference in a value no caller asked about.
+    #[test]
+    fn only_the_requested_algorithms_are_judged() {
+        let src = digests(&["md5", "sha256"], 1);
+        let mut dst = src.clone();
+        dst.insert("sha256".into(), vec![2]);
+
+        assert!(
+            verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst).is_ok(),
+            "sha256 was not requested, so its disagreement is not this copy's problem"
+        );
     }
 }
