@@ -25,6 +25,10 @@
 //!   names. `--hash-all-of md5 sha256` asks for both, so a reason built from the
 //!   *request* would look identical to one built from the *disagreement* — and the
 //!   difference is the whole usefulness of the field.
+//! - The tag's **order** is pinned separately, and is the disagreement's rather
+//!   than the flag order's: `--hash-all-of sha256 md5` produces the same
+//!   `digest-differs:md5+sha256`, so a parser can compare tags without first
+//!   normalising them.
 //! - The `any-of` row is the same claim against a different mechanism. There the run
 //!   asked for two algorithms and the planner picked one; naming the request would
 //!   say `md5+sha256` for a pair only `md5` ever touched, and `pick_one`'s tier
@@ -63,7 +67,7 @@ use common::{TempRoot, age, serial_rw, sync_mtime, wfile};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::hash::HashAlg;
+use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };

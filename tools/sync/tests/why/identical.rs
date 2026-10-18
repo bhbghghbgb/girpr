@@ -14,7 +14,7 @@ fn equal_only(count: usize) -> Diff {
         d.verdicts.insert(
             rel,
             Verdict::Matches {
-                algos: vec!["md5".into()],
+                algos: AlgoSet::one(HashAlg::Md5),
             },
         );
     }
@@ -199,13 +199,13 @@ fn identical_records_are_reported_with_their_own_reasons() {
     diff.verdicts.insert(
         "c.txt".into(),
         Verdict::Differs {
-            algos: vec!["md5".into()],
+            algos: AlgoSet::one(HashAlg::Md5),
         },
     );
     diff.verdicts.insert(
         "same.txt".into(),
         Verdict::Matches {
-            algos: vec!["md5".into()],
+            algos: AlgoSet::one(HashAlg::Md5),
         },
     );
     diff.verdicts

@@ -577,7 +577,7 @@ SUMMARY missing=0 extra=0 changed=2 type_conflict=0 case_mismatch=0 total_diff=2
 | --- | --- |
 | `stat-size` / `stat-mtime` | a stat field **this run trusts** differs, so no digest was read |
 | `stat-size+stat-mtime` | both differ — still one stat decision |
-| `digest-differs:<algos>` | the digests disagree; `<algos>` are the ones that **disagreed**, not the ones requested |
+| `digest-differs:<algos>` | the digests disagree; `<algos>` are the ones that **disagreed**, not the ones requested, in a fixed order |
 | `digest-matches:<algos>` | digests agree (identical pairs; see `--show-identical`) |
 | `stat-match` | every trusted stat field agrees and no digest was consulted |
 | `unverifiable:<fields>` | no digest was available and a difference this run distrusts is unresolved |
@@ -597,8 +597,12 @@ Three things worth knowing:
 
 `digest-differs` names the algorithms that **actually disagreed**, which under
 `--hash-any-of` is not the list you asked for — the planner settles a pair with one
-digest, and the tag says which. A parser splits on the first `:`; the JSON form is a
-flat string (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
+digest, and the tag says which. The list is always in a **fixed order** (`md5` before
+`sha256`), not the order the flags were typed, so `--hash-all-of sha256 md5` reports
+`digest-differs:md5+sha256`. That makes the tag a function of the disagreement rather
+than of how two flags were ordered, which is what lets a parser switch on it. A parser
+splits on the first `:`; the JSON form is a flat string
+(`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
 
 **Default off, and it changes nothing but the text** — not the exit code, not the
 counts, not the work done. An unflagged run is byte-identical to one without the flag.

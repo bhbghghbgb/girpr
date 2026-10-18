@@ -17,7 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
-use crate::hash::HashAlg;
+use crate::hash::{AlgoSet, HashAlg};
 use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
@@ -160,7 +160,7 @@ pub fn pair_verdict(
     // nothing is not agreement.
     if !need.is_empty() {
         return Verdict::Matches {
-            algos: need.iter().map(|a| a.as_str().to_string()).collect(),
+            algos: AlgoSet::from_iter(need.iter().copied()),
         };
     }
     // **No digest was consulted, and there was a difference we were told to ignore.**
@@ -340,12 +340,16 @@ pub fn diff_maps(
 /// the pair — so a reason built from the request would name an algorithm that was
 /// never compared. Empty means "no disagreement found", which covers both agreement
 /// and silence; the caller tells them apart by whether it consulted anything.
+///
+/// A **set** of algorithms, so the answer has a fixed order rather than the order the
+/// user happened to type them in. See [`Verdict::why_tag`] — that is the one place
+/// this order becomes visible, and it is a tag a parser reads.
 pub fn hashes_differ(
     a: &HashMap<String, Vec<u8>>,
     b: &HashMap<String, Vec<u8>>,
     algos: &[HashAlg],
-) -> Vec<String> {
-    let mut differ: Vec<String> = Vec::new();
+) -> AlgoSet {
+    let mut differ = AlgoSet::NONE;
     for algo in algos {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
@@ -353,7 +357,7 @@ pub fn hashes_differ(
         if let (Some(x), Some(y)) = (a.get(algo.as_str()), b.get(algo.as_str()))
             && x != y
         {
-            differ.push(algo.as_str().to_string());
+            differ.insert(*algo);
         }
     }
     differ

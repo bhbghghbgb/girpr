@@ -61,11 +61,15 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
     let differs = hashes_differ(&s.hashes, &d.hashes, required.of("a.txt"));
     let got = pair_verdict(StatTrust::default(), &required, &s, &d, "a.txt");
 
-    assert_eq!(differs, vec!["md5".to_string()], "only md5 was comparable");
+    assert_eq!(
+        differs,
+        AlgoSet::one(HashAlg::Md5),
+        "only md5 was comparable"
+    );
     assert_eq!(
         got,
         Verdict::Differs {
-            algos: vec!["md5".into()]
+            algos: AlgoSet::one(HashAlg::Md5)
         },
         "and only md5 is named, though the planner's answer named two"
     );
@@ -103,7 +107,7 @@ fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
     };
     assert_eq!(
         hashes_differ(&s.hashes, &agreeing.hashes, required.of("a.txt")),
-        Vec::<String>::new(),
+        AlgoSet::NONE,
         "nothing disagreed"
     );
     let got = pair_verdict(StatTrust::default(), &required, &s, &agreeing, "a.txt");
