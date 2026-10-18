@@ -357,6 +357,7 @@ pub fn hashes_differ(
     }
     differ
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
