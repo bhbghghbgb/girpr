@@ -598,11 +598,13 @@ per-bundle fact (path, tags, capture id, patchmap count, blob count,
 read the stream until the end rather than expecting one line and parsing it.
 
 A **failing** `capture` emits **two** records: first the run's own summary —
-carrying the numbers it had already measured, `stage=`, and `exit_code=0` — and
-then the failure summary, carrying `result: "error"`, `exit_code=3` and
-`artifact_trustworthy=false`. Both are told apart by shape. A harness that reads
-the *first* terminal-looking line of a failing run will read `exit_code=0` off a
-run that exited `3`, so it must read the **last** record.
+carrying the numbers it had already measured, `stage=artifact`, and
+`exit_code=0` — and then the failure summary, carrying `result: "error"`,
+`exit_code=3` and `artifact_trustworthy=false`. `stage` is what tells the two
+apart: the failure record does not carry it. A harness that reads the *first*
+terminal-looking line of a failing run will read `exit_code=0` off a run that
+exited `3`, so it must read the **last** record; a harness that wants the run's
+numbers rather than the verdict matches on `stage=`.
 
 ```
 $ gircap list --root artifacts --output json

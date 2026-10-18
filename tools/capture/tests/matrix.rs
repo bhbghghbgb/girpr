@@ -109,10 +109,10 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let (code, stdout, stderr) = run(&borrowed);
     // A failing capture prints two records: the run's own numbers, then the
-    // failure's. The run's is the one carrying `stage=`, which the failure's
-    // never does — so the two are told apart by shape rather than by position,
-    // and a harness that assumed "the first SUMMARY is the one" would have read
-    // `exit_code=0` off a run that exited 3.
+    // failure's. The run's is the one carrying `stage=artifact`, which the
+    // failure's never does — so the two are told apart by shape rather than by
+    // position, and a harness that assumed "the first SUMMARY is the one" would
+    // have read `exit_code=0` off a run that exited 3.
     let records: Vec<&str> = stdout
         .lines()
         .filter(|l| l.starts_with("SUMMARY "))

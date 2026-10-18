@@ -620,6 +620,15 @@ pub struct ProbeStats {
     pub served_outside_diff_tags: u64,
 }
 
+/// The `stage` a `capture` summary carries.
+///
+/// **A named constant, because it is part of the data plane.** It used to spell a
+/// milestone — `m8-artifact` — which told a reader about the order the crate was
+/// built in and nothing about the run in front of them. It names the stage now:
+/// every record this builder emits is written after the artifact, so the value is
+/// the same on every capture and its job is to identify *which* record this is.
+pub const STAGE_CAPTURE: &str = "artifact";
+
 /// Build the `capture` summary record.
 ///
 /// **The key list is the contract.** `girpr` and anything else reading this
@@ -629,13 +638,23 @@ pub struct ProbeStats {
 /// tidier right up until the day it silently renamed a field a caller depended
 /// on.
 ///
-/// The order below is the order the numbers were historically appended in, not a
-/// grouping: it is preserved so that a diff of two summaries over the same run
-/// shows only what actually changed.
+/// The order below is the order the numbers were appended in, not a grouping: it
+/// is preserved so that a diff of two summaries over the same run shows only
+/// what actually changed.
+///
+/// `stage` says how far the run got, and it is the field that tells this record
+/// apart from the *failure* record a failing capture also emits: the run's own
+/// record carries the numbers it had already measured plus `stage=`, and the
+/// failure's carries `result: "error"`, `exit_code` and `artifact_trustworthy`.
+/// A harness reading the **last** record gets the verdict either way; one
+/// matching on `stage=` wants the run's own numbers.
 pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
     Record::summary("capture").set_all([
         ("result", Val::from(s.result)),
-        ("stage", Val::from("m8-artifact")),
+        // Every capture that reaches this line has written its artifact, so the
+        // value names the stage rather than counting one: `artifact`, in the same
+        // vocabulary as `MANIFEST.json`'s `capture.complete`.
+        ("stage", Val::from(STAGE_CAPTURE)),
         ("biz", Val::from(s.biz)),
         ("old_tag", Val::from(s.old_tag)),
         ("new_tag", Val::from(s.new_tag)),
@@ -1278,6 +1297,26 @@ mod tests {
                 expected.len()
             );
         }
+    }
+
+    #[test]
+    fn the_stage_names_the_stage_not_a_milestone() {
+        // The value used to be `m8-artifact`, which told a reader about the order
+        // the crate was built in and nothing about the run in front of them. It
+        // is pinned here because it is on the data plane: a caller matching on
+        // `stage=artifact` has to break loudly if it changes, and the pin also
+        // keeps a milestone label from creeping back in.
+        let r = capture_summary(&zeroed());
+        assert_eq!(
+            r.get("stage"),
+            Some(&Val::from(STAGE_CAPTURE)),
+            "stage must name the stage"
+        );
+        assert_eq!(STAGE_CAPTURE, "artifact");
+        assert!(
+            !STAGE_CAPTURE.starts_with('m') || !STAGE_CAPTURE.contains(|c: char| c.is_ascii_digit()),
+            "a milestone label has crept back into the data plane: {STAGE_CAPTURE:?}"
+        );
     }
 
     #[test]
