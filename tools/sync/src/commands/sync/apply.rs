@@ -416,14 +416,14 @@ impl Applier<'_> {
             present.insert(&item.rel);
         }
         let mut w = self.dst_db.begin_write()?;
-        for rel in w.load_all()?.keys() {
+        for rel in w.load_keys()? {
             // Strictly longer than the prefix, so the copied path itself keeps its
             // row: only what is *under* a wiped directory is gone.
             let wiped_subtree = wiped
                 .iter()
                 .any(|p| rel.len() > p.len() && rel.starts_with(p.as_str()));
             if !present.contains(rel.as_str()) || wiped_subtree {
-                w.remove(rel)?;
+                w.remove(&rel)?;
             }
         }
         w.commit()?;

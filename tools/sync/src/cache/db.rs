@@ -226,11 +226,12 @@ impl CacheDb {
     /// large tree. A caller that only wants "which rows exist?" pays for all of
     /// it and then throws it away, which is the shape phase A's prune is in.
     ///
-    /// The answer is the same key set in the same order, and a missing table is
-    /// still an empty answer rather than an error — only the decoding is
-    /// skipped. There is deliberately no way to get a key and its value from
-    /// here: a caller that needs the value wants `load_all`, and one that does
-    /// not should not be able to ask for half of it by accident.
+    /// The answer is the same key set, and a missing table is still an empty
+    /// answer rather than an error — only the decoding is skipped. Order is
+    /// redb's business and is not part of what a caller may rely on; membership
+    /// is. There is deliberately no way to get a key and its value from here: a
+    /// caller that needs the value wants `load_all`, and one that does not should
+    /// not be able to ask for half of it by accident.
     pub fn load_keys(&self) -> Result<Vec<String>> {
         let txn = self.db.begin_read().context("begin read")?;
         let tbl = match txn.open_table(ENTRIES) {

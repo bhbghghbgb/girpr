@@ -150,7 +150,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     let record = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
     info!(
         cache = %db_path.display(),
-        entries = record.load_all()?.len(),
+        entries = record.load_keys()?.len(),
         "cache opened read-only"
     );
     let rec = load_record_side_from(&record, &common, &db_path.display().to_string())?;
