@@ -360,6 +360,23 @@ folder for digests of files the folder has, which a folder can always compute.
 The `hashed` counter in the run's log line is the answer to "how much would this
 read?", which is the question `--dry-run` exists to ask.
 
+The scan asks the cache two different questions, and they are worth telling
+apart because only one of them needs the records. `alt_recs` loads the whole
+`entries` table *with* its values, to adopt a stale alternate-cased row — it has
+to see them. The prune that follows asks only "which rows exist?", and gets
+`load_keys`, which walks the table without decoding a single `FileRec`. In the
+default insensitive mode that is the second full pass over the table in one
+phase, so the distinction is the difference between rebuilding a hash map per
+file and not.
+
+The set of paths the scan treats as live is built once, borrowed from the walk
+rather than copied out of it. It exists so the prune can ask "is this row still
+live?" in O(1) instead of re-running every include/exclude glob per row — and
+holding those paths as owned `String`s would have been a second full copy of the
+tree's path set, alive for the whole phase, to answer a question the walk already
+had. That is why the scan loop walks `&live` rather than consuming it: the
+borrow is the point.
+
 ### compare
 
 Each side is classified by basename: path whose final component starts with

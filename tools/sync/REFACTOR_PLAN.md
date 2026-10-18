@@ -294,12 +294,13 @@ against the cache, not against `pruned`.
 
 ## §3 High risk
 
-**§3.1 is decided** (see below); 3.2 and 3.3 are still open but need no
-decision, only a reason to bother. They sit in this tier because of *where* they
+**All three are landed.** 3.2 and 3.3 sat in this tier because of *where* they
 are — the durability boundary the README calls out — not because they change
-anything a user can observe, which is what the tier otherwise means. §3.2 says
+anything a user can observe, which is what the tier otherwise means. §3.2 said
 so of itself: "behaviour-preserving but it adds a cache API and touches the
-durability path, so it lands medium-to-high."
+durability path, so it lands medium-to-high." Neither ever needed the CLI
+contract decision this section originally implied they did; the sentence that
+said "both" while listing three is gone.
 
 ### 3.1 `copy_one` re-reads src and dst to verify, after already having streamed both — `apply.rs:483-484`
 
@@ -418,8 +419,9 @@ Naming these because each looks like an opportunity and is not:
 
 ## Progress log
 
-**§1 and §2 are done, and so is §3.1.** Eleven commits, one per step, plus a
-repo-wide `cargo fmt`. Suite green at every one: **258 → 281 tests** (280 run,
+**All twelve steps are done.** Ten commits carry them — `1ec7661` covers three of
+§1 — plus a repo-wide `cargo fmt`, the §2.5 review fix, and a commit for what
+`main` left behind. Suite green at every one: **258 → 283 tests** (282 run,
 1 `#[ignore]`d — see the §2.5 note), `cargo clippy -p girsync --all-targets`
 clean.
 
@@ -436,7 +438,11 @@ clean.
 | §2.3 | `2175be4` | pairing rule is a `CasePairing` value, not a bare `bool` | — |
 | §2.5 | `e3faa7f`, fixed in `see below` | `prune_dst_cache` derives the present set — **~1 s saved at 20 k files** | +4 |
 | — | `84e992e` | repo-wide `cargo fmt` (see the note at the bottom) | — |
-| §3.1 | *this commit* | src digested during the copy, **dst still re-read** — 3 reads → 2 | +6 |
+| §3.1 | `48ce583` | src digested during the copy, **dst still re-read** — 3 reads → 2 | +6 |
+| §3.2 / §3.3 | *this commit* | prune asks for keys, not records; `live_set` borrows from the walk | +2 |
+
+(The §3.2/§3.3 row names the commit it is in rather than a hash, because a
+commit cannot contain its own.)
 
 ### §3.1 — what landed, and what it deliberately did not
 
@@ -480,6 +486,37 @@ no error, and that is a real difference from what the re-read used to promise.
 It is recorded in the README's "What a copy costs", in `copy_one`'s own doc, and
 in `predrop_cache_entries`, whose list of "changes that would make me
 load-bearing" this comes close to without crossing.
+
+### §3.2 / §3.3 — what landed
+
+Two changes to one loop, because they are the same loop: the prune's only input
+is "which paths are live", and before this it paid for that twice over.
+
+**`load_keys` on `CacheDb` and `CacheWrite`.** The prune asked for
+`HashMap<String, FileRec>` and used nothing but `.keys()`. In the default
+insensitive mode phase A walks the whole `entries` table twice — once for
+`alt_recs`, which genuinely needs its values to adopt a stale alternate-cased
+row, and once for the prune, which does not. The second walk no longer decodes.
+
+Both variants are pinned against `load_all` on the same cache, as a set, because
+membership is the contract and redb's ordering is not. The batched one is pinned
+harder: it has to see **its own uncommitted writes**, and it is checked across an
+auto-commit, because the transaction reopens underneath when a threshold trips
+and the prune's answer must not depend on when that happened.
+
+**`live_set` holds `&str` borrowed from `live`.** A second full copy of the
+tree's path set, alive for the whole phase, to answer a question the walk had
+already answered. As §3.3 says, this is not the one-liner it looks like: the scan
+loop had to stop consuming `live` and walk `&live` instead, and both membership
+tests changed shape. That is the whole cost.
+
+**No characterisation tests were added, and that is a decision rather than an
+oversight.** The prune's three outcomes are already each pinned by a test that
+would fail if this were wrong — a row for a path gone from disk
+(`tests/lazy/sync.rs`, `tests/update.rs`), a row for a path now excluded
+(`tests/update.rs`), and a row that must survive (`tests/lazy/sync.rs`). What is
+new here is the `load_keys` API, and that is what the two new tests cover. Adding
+a third prune test would have restated existing coverage in new words.
 
 ### After the merge with `main`
 
@@ -646,16 +683,14 @@ independent reads, so a mismatch can still fire. See §3.1 above for why the fix
 this document originally proposed would have been a tautology, and the progress
 log for what was and was not given up.
 
-**§3.2 — no decision needed, only a measurement.** `load_keys()` on `CacheDb`
-and `CacheWrite`, so phase A's prune pass iterates the `entries` table without
-decoding every value. Behaviour-preserving. The only question is whether a large
-tree is actually slow enough to be worth adding a cache API on the durability
-path for.
+**§3.2 — landed.** `load_keys()` on `CacheDb` and `CacheWrite`, so phase A's
+prune pass iterates the `entries` table without decoding every value.
+Behaviour-preserving; the prune's three outcomes stay pinned by the tests that
+already covered them.
 
-**§3.3 — no decision needed, and not free.** `live_set` holds `&str` borrowed
-from `live`. See §3.3 above: it needs `for e in &live`, so it is a loop change
-rather than the one-liner it reads as. Paired with §3.2, both being in the
-durability boundary.
+**§3.3 — landed, with the loop change it turns out to need.** `live_set` holds
+`&str` borrowed from `live`, which required the scan loop to walk `&live` rather
+than consume it. Paired with §3.2, both being in the durability boundary.
 
 ---
 
@@ -671,12 +706,12 @@ durability boundary.
 8. §2.2 `diff_maps` index
 9. §2.3 pairing-rule clarity (no behaviour change, do it for the reader)
 10. §2.5 `prune_dst_cache` walk removal
-11. §3.2 / §3.3 — no decision needed; only if a large tree is actually slow
+11. §3.2 / §3.3 — landed (prune asks for keys; `live_set` borrows from the walk)
 12. §3.1 — landed (stream-hash src, re-read dst)
 
 Each step is one commit, and steps 6-10 should each carry the test named above
 written first.
 
-**Status: 1–10 and 12 landed.** See the progress log at the top for commits,
-measurements, and the two places the implementation departed from what is
-written here. 11 is untouched; it needs no decision, only a reason to bother.
+**Status: all twelve steps landed.** See the progress log at the top for
+commits, measurements, and the three places the implementation departed from
+what is written here.
