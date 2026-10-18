@@ -120,8 +120,8 @@ pub fn resolve_folder(
                     let path = root.join(rel);
                     let algos = plan.get(rel);
                     debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
-                    let r =
-                        hash_file(&path, algos).with_context(|| format!("hash {}", path.display()));
+                    let r = hash_file(&path, &algos)
+                        .with_context(|| format!("hash {}", path.display()));
                     trace!(
                         rel = %rel,
                         algos = ?r.as_ref().map(|h| h.keys().collect::<Vec<_>>()),

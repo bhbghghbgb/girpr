@@ -53,10 +53,13 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
         ..rec(&[])
     };
     let required = Required {
-        by_rel: [("a.txt".to_string(), vec![HashAlg::Md5, HashAlg::Sha256])]
-            .into_iter()
-            .collect(),
-        fallback: vec![],
+        by_rel: [(
+            "a.txt".to_string(),
+            AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
+        )]
+        .into_iter()
+        .collect(),
+        fallback: AlgoSet::NONE,
     };
     let differs = hashes_differ(&s.hashes, &d.hashes, required.of("a.txt"));
     let got = pair_verdict(StatTrust::default(), &required, &s, &d, "a.txt");
@@ -90,10 +93,13 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
 fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
     let s = rec(&["md5", "sha256"]);
     let required = Required {
-        by_rel: [("a.txt".to_string(), vec![HashAlg::Md5, HashAlg::Sha256])]
-            .into_iter()
-            .collect(),
-        fallback: vec![],
+        by_rel: [(
+            "a.txt".to_string(),
+            AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
+        )]
+        .into_iter()
+        .collect(),
+        fallback: AlgoSet::NONE,
     };
     // Same shape, but the digests both sides actually hold agree.
     let agreeing = EffRec {

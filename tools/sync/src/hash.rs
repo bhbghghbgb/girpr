@@ -311,17 +311,17 @@ pub struct Digests {
 }
 
 impl Digests {
-    /// Build the contexts `algos` asks for. An empty list builds none, so
+    /// Build the contexts `algos` asks for. An empty set builds none, so
     /// [`update`](Self::update) does nothing and [`finish`](Self::finish)
     /// yields an empty map — the same answer [`hash_file`] gives for it.
     ///
-    /// Borrowed comparison, not `algos.contains(&"md5".to_string())`. This runs
-    /// once per file per phase C and once per copied file, and the `String`
-    /// that form allocates exists only to be compared against borrowed data.
-    pub fn new(algos: &[HashAlg]) -> Self {
+    /// A membership test on a bitfield rather than a scan for a name: this runs
+    /// once per file per phase C and once per copied file, so a `String` search
+    /// would be the whole of what this function does.
+    pub fn new(algos: &AlgoSet) -> Self {
         Self {
-            md5ctx: algos.contains(&HashAlg::Md5).then(md5::Context::new),
-            sha2ctx: algos.contains(&HashAlg::Sha256).then(sha2::Sha256::new),
+            md5ctx: algos.contains(HashAlg::Md5).then(md5::Context::new),
+            sha2ctx: algos.contains(HashAlg::Sha256).then(sha2::Sha256::new),
         }
     }
 
@@ -355,7 +355,7 @@ impl Digests {
 /// An empty `algos` returns an empty map without touching the file.
 /// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
 /// stores them as-is instead of hex, halving hash disk cost.
-pub fn hash_file(path: &Path, algos: &[HashAlg]) -> Result<HashMap<String, Vec<u8>>> {
+pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<HashMap<String, Vec<u8>>> {
     // Before any context is built: with nothing requested there is nothing to
     // digest, and opening the file at all would turn a stat-only decision into a
     // read. The empty map below is the whole answer.
@@ -385,8 +385,8 @@ mod tests {
         p
     }
 
-    fn algos(names: &[&str]) -> Vec<HashAlg> {
-        names.iter().map(|s| s.parse().unwrap()).collect()
+    fn algos(names: &[&str]) -> AlgoSet {
+        AlgoSet::from_iter(names.iter().map(|s| s.parse().unwrap()))
     }
 
     fn parse(input: &[&str]) -> Vec<HashAlg> {
@@ -512,7 +512,18 @@ mod tests {
         );
     }
 
-    /// **`Debug` is a log-line contract.** `info!(algos = ?algos)` prints in the
+    /// **The memory claim, as an assertion.** One `AlgoSet` sits in
+    /// `HashPlan.by_rel` for every path the run will read, and one in
+    /// `Required.by_rel` for every undecided pair — and under `--hash-all-of`
+    /// every entry of the latter is the same value. As a `Vec` that is a heap
+    /// allocation per path holding a fresh clone of the run-wide request; as two
+    /// bytes it is part of a map value that already exists.
+    #[test]
+    fn a_set_is_two_bytes() {
+        assert_eq!(std::mem::size_of::<AlgoSet>(), 2);
+    }
+
+    /// `Debug` is a log-line contract. `info!(algos = ?algos)` prints in the
     /// span of all four subcommands, and it renders `["md5", "sha256"]` today; a
     /// derive on either type would rewrite every one of those lines to
     /// `[Md5, Sha256]` without failing a single test elsewhere.
@@ -670,13 +681,13 @@ mod tests {
     /// the per-file allocation [`hash_file`] is written to avoid.
     #[test]
     fn no_algorithms_asked_for_means_no_context_and_no_digest() {
-        let mut d = Digests::new(&[]);
+        let mut d = Digests::new(&AlgoSet::NONE);
         d.update(b"these bytes must not be absorbed by anything");
         assert!(d.finish().is_empty());
         // ...and `hash_file` must agree, without opening the file at all.
         let dir = crate::testtemp::TempDir::new("girsync_hash", "absent");
         assert!(
-            hash_file(&dir.join("not-there.bin"), &[])
+            hash_file(&dir.join("not-there.bin"), &AlgoSet::NONE)
                 .unwrap()
                 .is_empty(),
             "an empty request is answered without touching the disk"

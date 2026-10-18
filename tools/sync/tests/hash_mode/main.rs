@@ -54,7 +54,7 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
-use girsync::hash::HashAlg;
+use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };

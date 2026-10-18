@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
-use crate::hash::HashAlg;
+use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -246,7 +246,7 @@ pub fn plan_pairs(
         // short of.
         return Ok(plan);
     }
-    plan.required.fallback = src.algos.to_vec();
+    plan.required.fallback = AlgoSet::from_iter(src.algos.iter().copied());
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
@@ -308,21 +308,26 @@ pub fn plan_pairs(
                     if req.cap.can_hash_from_disk {
                         continue;
                     }
-                    let short: Vec<HashAlg> = req
-                        .algos
-                        .iter()
-                        .filter(|a| !obtainable(e, req.cap, a))
-                        .copied()
-                        .collect();
+                    let short = AlgoSet::from_iter(
+                        req.algos
+                            .iter()
+                            .copied()
+                            .filter(|a| !obtainable(e, req.cap, a)),
+                    );
                     if !short.is_empty() {
                         tally[idx].missing.insert((*rel).clone(), short);
                     }
                 }
-                plan.required
-                    .by_rel
-                    .insert((*srel).clone(), src.algos.to_vec());
-                plan_one(&src, s, srel, src.algos, &mut plan.src);
-                plan_one(&dst, d, drel, dst.algos, &mut plan.dst);
+                let want = AlgoSet::from_iter(src.algos.iter().copied());
+                plan.required.by_rel.insert((*srel).clone(), want);
+                plan_one(&src, s, srel, want, &mut plan.src);
+                plan_one(
+                    &dst,
+                    d,
+                    drel,
+                    AlgoSet::from_iter(dst.algos.iter().copied()),
+                    &mut plan.dst,
+                );
             }
             HashMode::AnyOf => {
                 // `None` means no requested algorithm is obtainable on both sides.
@@ -339,24 +344,22 @@ pub fn plan_pairs(
                             continue;
                         }
                         let t = &mut tally[idx];
-                        let short: Vec<HashAlg> = req
-                            .algos
-                            .iter()
-                            .filter(|a| !obtainable(e, req.cap, a))
-                            .copied()
-                            .collect();
+                        let short = AlgoSet::from_iter(
+                            req.algos
+                                .iter()
+                                .copied()
+                                .filter(|a| !obtainable(e, req.cap, a)),
+                        );
                         if !short.is_empty() {
                             t.missing.insert((*rel).clone(), short);
                         }
                     }
                     continue;
                 };
-                let chosen = [pick];
-                plan.required
-                    .by_rel
-                    .insert((*srel).clone(), chosen.to_vec());
-                plan_one(&src, s, srel, &chosen, &mut plan.src);
-                plan_one(&dst, d, drel, &chosen, &mut plan.dst);
+                let chosen = AlgoSet::one(pick);
+                plan.required.by_rel.insert((*srel).clone(), chosen);
+                plan_one(&src, s, srel, chosen, &mut plan.src);
+                plan_one(&dst, d, drel, chosen, &mut plan.dst);
             }
         }
     }
@@ -423,7 +426,7 @@ struct Tally {
     /// Requested algorithm -> (paths that hold it, undecided paths).
     coverage: BTreeMap<String, (usize, usize)>,
     /// rel path -> requested algorithms this side cannot obtain at all.
-    missing: BTreeMap<String, Vec<HashAlg>>,
+    missing: BTreeMap<String, AlgoSet>,
 }
 
 #[cfg(test)]

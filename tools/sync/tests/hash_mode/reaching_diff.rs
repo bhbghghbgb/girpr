@@ -35,12 +35,12 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
     // settled by md5 (free on both sides), `two.txt` by sha256.
     let by_path = Required {
         by_rel: [
-            ("one.txt".to_string(), vec![HashAlg::Md5]),
-            ("two.txt".to_string(), vec![HashAlg::Sha256]),
+            ("one.txt".to_string(), AlgoSet::one(HashAlg::Md5)),
+            ("two.txt".to_string(), AlgoSet::one(HashAlg::Sha256)),
         ]
         .into_iter()
         .collect(),
-        fallback: vec![HashAlg::Md5, HashAlg::Sha256],
+        fallback: AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
     };
 
     let d = diff_maps(
@@ -62,7 +62,7 @@ fn the_diff_compares_by_the_algorithms_the_plan_chose() {
     // if `diff_maps` were ignoring `required` altogether it would land here and fail.
     let uniform = Required {
         by_rel: HashMap::new(),
-        fallback: vec![HashAlg::Md5, HashAlg::Sha256],
+        fallback: AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
     };
     let d = diff_maps(
         &src,
@@ -94,7 +94,7 @@ fn a_path_the_plan_did_not_reach_is_compared_by_the_whole_requested_list() {
     )]);
     let populated = Required {
         by_rel: HashMap::new(),
-        fallback: vec![HashAlg::Md5, HashAlg::Sha256],
+        fallback: AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
     };
     let d = diff_maps(
         &src,

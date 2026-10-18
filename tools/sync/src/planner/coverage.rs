@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::hash::HashAlg;
+use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
 
@@ -38,7 +38,7 @@ pub struct Coverage {
     /// for any one algorithm, which is the whole of `any-of`.
     pub mode: HashMode,
     /// rel path -> the requested algorithms it could not obtain.
-    pub missing: BTreeMap<String, Vec<HashAlg>>,
+    pub missing: BTreeMap<String, AlgoSet>,
     /// Requested algorithm -> (paths holding it, undecided paths).
     ///
     /// Keyed by name rather than by [`HashAlg`] because the rendered line is the
@@ -74,7 +74,7 @@ impl fmt::Display for Coverage {
             // Joined by name, so the rendered line is the list of spellings and not
             // whatever an algorithm serialises as. `AlgoSet` deliberately has no
             // `Display`: three call sites need three separators.
-            let names: Vec<&str> = algos.iter().map(|a| a.as_str()).collect();
+            let names: Vec<&str> = algos.iter().map(HashAlg::as_str).collect();
             writeln!(f, "\n    {rel:<32} {}", names.join(", "))?;
         }
         if self.missing.len() > EXAMPLE_PATHS {

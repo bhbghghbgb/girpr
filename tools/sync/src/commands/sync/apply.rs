@@ -31,7 +31,7 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::hash::{CHUNK, Digests, HashAlg, hash_file};
+use crate::hash::{AlgoSet, CHUNK, Digests, HashAlg, hash_file};
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
 use crate::util::mtime_ns_of;
@@ -446,7 +446,7 @@ impl Applier<'_> {
 fn copy_and_digest(
     src: &mut std::fs::File,
     dst: &mut std::fs::File,
-    algos: &[HashAlg],
+    algos: &AlgoSet,
 ) -> Result<HashMap<String, Vec<u8>>> {
     if algos.is_empty() {
         std::io::copy(src, dst)?;
@@ -531,7 +531,12 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
     // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
-    let sh = copy_and_digest(&mut fin, &mut fout, algos)
+    // The request is a slice; what the digester wants is a set. One conversion per
+    // copy, from a list of at most two, and it borrows nothing — the slice stays the
+    // thing `verify_digests` walks below, because only the *requested* digests are
+    // judged.
+    let set = AlgoSet::from_iter(algos.iter().copied());
+    let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     fout.sync_all().ok();
     drop(fout);
@@ -564,7 +569,7 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
             hashes: HashMap::new(),
         });
     }
-    let dh = hash_file(&d, algos).with_context(|| format!("hash {}", d.display()))?;
+    let dh = hash_file(&d, &set).with_context(|| format!("hash {}", d.display()))?;
     verify_digests(&d, algos, &sh, &dh)?;
     tracing::Span::current().record("bytes", ssize);
     trace!(bytes = ssize, "copy_one done");
@@ -584,6 +589,12 @@ mod tests {
         names.iter().map(|s| s.parse().unwrap()).collect()
     }
 
+    /// The same algorithms as a set, for the digester. `verify_digests` keeps
+    /// taking the list: it walks the *request*, not the digests.
+    fn aset(names: &[&str]) -> AlgoSet {
+        AlgoSet::from_iter(algos(names))
+    }
+
     /// The digest `copy_and_digest` returns has to be **the file's**, not the
     /// loop's. If the chunk boundary is off by one — a stale `n`, a slice taken
     /// before the read rather than after — the copy would still be byte-correct
@@ -599,7 +610,7 @@ mod tests {
         let dst = dir.join("dst.bin");
         std::fs::write(&src, &body).unwrap();
 
-        let set = algos(&["md5", "sha256"]);
+        let set = aset(&["md5", "sha256"]);
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
         let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
@@ -630,7 +641,7 @@ mod tests {
 
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
-        let sh = copy_and_digest(&mut fin, &mut fout, &[]).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &AlgoSet::NONE).unwrap();
         drop(fout);
 
         assert!(
@@ -653,7 +664,7 @@ mod tests {
         let dst = dir.join("dst.bin");
         std::fs::write(&src, b"").unwrap();
 
-        let set = algos(&["md5", "sha256"]);
+        let set = aset(&["md5", "sha256"]);
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
         let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
