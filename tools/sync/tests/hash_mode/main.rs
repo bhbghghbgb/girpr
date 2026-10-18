@@ -54,6 +54,7 @@ use girsync::effective::{
     EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
     open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
+use girsync::hash::HashAlg;
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };
@@ -110,7 +111,7 @@ fn plan(
     mode: HashMode,
     stat: StatTrust,
 ) -> anyhow::Result<PairPlan> {
-    let algos: Vec<String> = algos.iter().map(|a| a.to_string()).collect();
+    let algos: Vec<HashAlg> = algos.iter().map(|a| a.parse().unwrap()).collect();
     plan_pairs(
         SideRequest {
             entries: s,
@@ -159,7 +160,7 @@ fn digests(pairs: &[(&str, &[u8])]) -> HashMap<String, Vec<u8>> {
 
 fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {
     CommonOpts {
-        algos: algos.iter().map(|a| a.to_string()).collect(),
+        algos: algos.iter().map(|a| a.parse().unwrap()).collect(),
         hash_mode: mode,
         ..opts()
     }

@@ -230,7 +230,7 @@ mod tests {
             "SUMMARY missing=0 total_diff=0"
         );
         assert_eq!(
-            update_summary(&PathBuf::from("C:/w"), 3, 2, &["md5".to_string()]).text(),
+            update_summary(&PathBuf::from("C:/w"), 3, 2, &[crate::hash::HashAlg::Md5]).text(),
             format!(
                 "update {} files=3 dirs=2 algos=[md5]",
                 PathBuf::from("C:/w").display()

@@ -1,12 +1,10 @@
 //! Hash algorithm selection and streaming file digests.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use sha2::Digest;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
-
-const SUPPORTED_HASHES: &[&str] = &["md5", "sha256"];
 
 /// Chunk size for every read of file *content* this crate does.
 ///
@@ -235,10 +233,14 @@ impl std::fmt::Debug for AlgoSet {
 
 /// Validate repeated `--hash` values.
 ///
-/// Returns the lowercased algorithm list — each algorithm once, in the order it
-/// was first typed — or an empty list for `--hash none` (which is exclusive:
-/// decisions fall back to size+mtime).
-pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
+/// Returns the requested algorithms — each one once, in the order it was first
+/// typed — or an empty list for `--hash none` (which is exclusive: decisions fall
+/// back to size+mtime).
+///
+/// Strings stop here. Below this point an algorithm is a [`HashAlg`], so "which
+/// algorithms can a row hold" and "which algorithms did the user ask for" are
+/// asked with the same vocabulary rather than two spellings of it.
+pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
     let mut v: Vec<String> = input.iter().map(|s| s.to_lowercase()).collect();
     v.retain(|s| !s.is_empty());
     if v.iter().any(|s| s == "none") {
@@ -250,15 +252,10 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
     if v.is_empty() {
         return Ok(vec![]);
     }
-    for a in &v {
-        if !SUPPORTED_HASHES.contains(&a.as_str()) {
-            bail!(
-                "unsupported hash '{}' (supported: {} or none)",
-                a,
-                SUPPORTED_HASHES.join(",")
-            );
-        }
-    }
+    // Validate and dedup in one pass, so the *first* unsupported name is still the
+    // one reported: `["md5", "nope"]` names `nope`, exactly as it did when the two
+    // were separate loops over the same list.
+    //
     // Full dedup in first-seen order, not `Vec::dedup`'s adjacent-only pass:
     // `--hash-all-of md5 --hash-all-of sha256 --hash-all-of md5` parsed as three
     // algorithms, which reached `HashPlan::digest_count` (three digests
@@ -267,10 +264,15 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
     //
     // `contains` over a list bounded by the argv length: two short scans, and a
     // `HashSet` here would be an allocation to save less than the deduped list.
-    let mut seen: Vec<String> = Vec::with_capacity(v.len());
-    for a in v {
-        if !seen.contains(&a) {
-            seen.push(a);
+    let mut seen: Vec<HashAlg> = Vec::with_capacity(v.len());
+    for a in &v {
+        // `UnknownHash` names the offender; the supported list is this message's
+        // to add. The resulting text is unchanged from the hand-rolled one.
+        let algo = a
+            .parse::<HashAlg>()
+            .map_err(|e| anyhow!("{e} (supported: {} or none)", HashAlg::names()))?;
+        if !seen.contains(&algo) {
+            seen.push(algo);
         }
     }
     Ok(seen)
@@ -283,7 +285,7 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<String>> {
 /// request — it is no request — and `--hash-all-of none` is the flag that says so.
 /// Accepting it would give a stat-only audit a name claiming a digest was optional
 /// but not required, which is the ambiguity all-of exists to remove.
-pub fn parse_any_of(input: &[String]) -> Result<Vec<String>> {
+pub fn parse_any_of(input: &[String]) -> Result<Vec<HashAlg>> {
     let algos = parse_hash_list(input)?;
     if algos.is_empty() {
         bail!(
@@ -316,11 +318,10 @@ impl Digests {
     /// Borrowed comparison, not `algos.contains(&"md5".to_string())`. This runs
     /// once per file per phase C and once per copied file, and the `String`
     /// that form allocates exists only to be compared against borrowed data.
-    pub fn new(algos: &[String]) -> Self {
-        let wants = |a: &str| algos.iter().any(|x| x == a);
+    pub fn new(algos: &[HashAlg]) -> Self {
         Self {
-            md5ctx: wants("md5").then(md5::Context::new),
-            sha2ctx: wants("sha256").then(sha2::Sha256::new),
+            md5ctx: algos.contains(&HashAlg::Md5).then(md5::Context::new),
+            sha2ctx: algos.contains(&HashAlg::Sha256).then(sha2::Sha256::new),
         }
     }
 
@@ -354,7 +355,7 @@ impl Digests {
 /// An empty `algos` returns an empty map without touching the file.
 /// Values are **raw** digest bytes (16 for md5, 32 for sha256): the cache
 /// stores them as-is instead of hex, halving hash disk cost.
-pub fn hash_file(path: &Path, algos: &[String]) -> Result<HashMap<String, Vec<u8>>> {
+pub fn hash_file(path: &Path, algos: &[HashAlg]) -> Result<HashMap<String, Vec<u8>>> {
     // Before any context is built: with nothing requested there is nothing to
     // digest, and opening the file at all would turn a stat-only decision into a
     // read. The empty map below is the whole answer.
@@ -384,16 +385,16 @@ mod tests {
         p
     }
 
-    fn algos(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
+    fn algos(names: &[&str]) -> Vec<HashAlg> {
+        names.iter().map(|s| s.parse().unwrap()).collect()
     }
 
-    fn parse(input: &[&str]) -> Vec<String> {
-        parse_hash_list(&algos(input)).unwrap()
+    fn parse(input: &[&str]) -> Vec<HashAlg> {
+        parse_hash_list(&input.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
     }
 
-    fn parse_any(input: &[&str]) -> Vec<String> {
-        parse_any_of(&algos(input)).unwrap()
+    fn parse_any(input: &[&str]) -> Vec<HashAlg> {
+        parse_any_of(&input.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap()
     }
 
     // -- HashAlg --------------------------------------------------------------
@@ -534,10 +535,13 @@ mod tests {
     /// `HashPlan::digest_count` as a promise of three digests.
     #[test]
     fn a_repeated_algorithm_is_one_request() {
-        assert_eq!(parse(&["md5", "sha256", "md5"]), vec!["md5", "sha256"]);
+        assert_eq!(
+            parse(&["md5", "sha256", "md5"]),
+            vec![HashAlg::Md5, HashAlg::Sha256]
+        );
         assert_eq!(
             parse(&["md5", "md5", "sha256", "md5", "sha256"]),
-            vec!["md5", "sha256"]
+            vec![HashAlg::Md5, HashAlg::Sha256]
         );
     }
 
@@ -547,16 +551,25 @@ mod tests {
     /// algorithm a pair is settled by.
     #[test]
     fn first_seen_order_is_the_order_kept() {
-        assert_eq!(parse(&["sha256", "md5", "sha256"]), vec!["sha256", "md5"]);
-        assert_eq!(parse(&["sha256", "md5"]), vec!["sha256", "md5"]);
+        assert_eq!(
+            parse(&["sha256", "md5", "sha256"]),
+            vec![HashAlg::Sha256, HashAlg::Md5]
+        );
+        assert_eq!(
+            parse(&["sha256", "md5"]),
+            vec![HashAlg::Sha256, HashAlg::Md5]
+        );
     }
 
     /// The adjacent case `Vec::dedup` already handled, pinned so the fix above
     /// cannot be read as "dedup was always broken".
     #[test]
     fn adjacent_repeats_collapse() {
-        assert_eq!(parse(&["md5", "md5"]), vec!["md5"]);
-        assert_eq!(parse(&["sha256", "md5", "md5"]), vec!["sha256", "md5"]);
+        assert_eq!(parse(&["md5", "md5"]), vec![HashAlg::Md5]);
+        assert_eq!(
+            parse(&["sha256", "md5", "md5"]),
+            vec![HashAlg::Sha256, HashAlg::Md5]
+        );
     }
 
     /// `parse_any_of` delegates, so it inherits the dedup. Worth pinning because
@@ -564,8 +577,34 @@ mod tests {
     /// algorithm, and a repeated one had nothing to change.
     #[test]
     fn any_of_dedupes_through_the_delegate() {
-        assert_eq!(parse_any(&["md5", "md5"]), vec!["md5"]);
-        assert_eq!(parse_any(&["md5", "sha256", "md5"]), vec!["md5", "sha256"]);
+        assert_eq!(parse_any(&["md5", "md5"]), vec![HashAlg::Md5]);
+        assert_eq!(
+            parse_any(&["md5", "sha256", "md5"]),
+            vec![HashAlg::Md5, HashAlg::Sha256]
+        );
+    }
+
+    /// The refusal names the offender and the alternatives, in the wording the
+    /// README documents. `UnknownHash` carries only the name and this framing
+    /// supplies the rest, so there is exactly one place that sentence is written.
+    #[test]
+    fn an_unsupported_name_is_refused_with_the_supported_list() {
+        let err = parse_hash_list(&["bogus".to_string()]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "unsupported hash 'bogus' (supported: md5,sha256 or none)"
+        );
+        // The first unsupported name is the one named, whatever follows it.
+        let err = parse_hash_list(&[
+            "md5".to_string(),
+            "nope".to_string(),
+            "also-nope".to_string(),
+        ])
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("'nope'"),
+            "the first refusal, not the last: {err}"
+        );
     }
 
     /// **The property the whole split rests on.** `copy_and_digest` folds the

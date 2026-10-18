@@ -108,7 +108,7 @@ fn size_differs(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
 /// take a side.
 fn distrusting(algos: &[&str], stat: StatTrust) -> CommonOpts {
     CommonOpts {
-        algos: algos.iter().map(|a| a.to_string()).collect(),
+        algos: algos.iter().map(|a| a.parse().unwrap()).collect(),
         stat,
         ..opts()
     }

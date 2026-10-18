@@ -9,6 +9,7 @@ use tracing::{info, trace};
 use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
+use crate::hash::HashAlg;
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::elapsed_s;
 
@@ -64,7 +65,7 @@ pub fn scan_stat_only(
     common: &CommonOpts,
     mode: ScanMode,
 ) -> Result<SideScan<SideEntry>> {
-    let algos: &[String] = &common.algos;
+    let algos: &[HashAlg] = &common.algos;
     let includes: &[Pattern] = &common.includes;
     let excludes: &[Pattern] = &common.excludes;
     let case_sensitive = common.case_sensitive;

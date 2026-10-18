@@ -17,6 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
+use crate::hash::HashAlg;
 use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
@@ -159,7 +160,7 @@ pub fn pair_verdict(
     // nothing is not agreement.
     if !need.is_empty() {
         return Verdict::Matches {
-            algos: need.to_vec(),
+            algos: need.iter().map(|a| a.as_str().to_string()).collect(),
         };
     }
     // **No digest was consulted, and there was a difference we were told to ignore.**
@@ -342,17 +343,17 @@ pub fn diff_maps(
 pub fn hashes_differ(
     a: &HashMap<String, Vec<u8>>,
     b: &HashMap<String, Vec<u8>>,
-    algos: &[String],
+    algos: &[HashAlg],
 ) -> Vec<String> {
     let mut differ: Vec<String> = Vec::new();
     for algo in algos {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
         // not force differ here.
-        if let (Some(x), Some(y)) = (a.get(algo), b.get(algo))
+        if let (Some(x), Some(y)) = (a.get(algo.as_str()), b.get(algo.as_str()))
             && x != y
         {
-            differ.push(algo.clone());
+            differ.push(algo.as_str().to_string());
         }
     }
     differ

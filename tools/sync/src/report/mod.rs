@@ -44,6 +44,7 @@ use tracing::debug;
 use tracing::level_filters::STATIC_MAX_LEVEL;
 
 use crate::diff::Diff;
+use crate::hash::HashAlg;
 
 /// How stdout records are rendered. Selected by the global `--output` flag.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -242,12 +243,17 @@ pub fn update_summary(
     dir: &std::path::Path,
     files: usize,
     dirs: usize,
-    algos: &[String],
+    algos: &[HashAlg],
 ) -> Record {
+    // Rendered by name, so the reported field is the spellings the user typed and
+    // not whatever a `HashAlg` happens to serialise as.
     Record::positional("update", "dir", &dir.display().to_string())
         .put("files", files)
         .put("dirs", dirs)
-        .put("algos", algos.to_vec())
+        .put(
+            "algos",
+            algos.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+        )
 }
 
 #[cfg(test)]
@@ -261,7 +267,7 @@ mod tests {
     /// path that is not one.
     #[test]
     fn a_leading_field_is_named_for_what_it_holds() {
-        let rec = update_summary(&PathBuf::from("C:/w"), 3, 2, &["md5".to_string()]);
+        let rec = update_summary(&PathBuf::from("C:/w"), 3, 2, &[HashAlg::Md5]);
         assert_eq!(
             rec.json(),
             json!({"event": "update", "dir": r"C:/w", "files": 3, "dirs": 2,

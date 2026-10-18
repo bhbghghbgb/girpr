@@ -15,6 +15,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::effective::{SideCapability, SideEntry};
+use crate::hash::HashAlg;
 
 use super::HashMode;
 use super::pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
@@ -128,7 +129,7 @@ impl Shape {
             can_hash_from_disk: ok,
             can_write_cache: ok,
         };
-        let algos: Vec<String> = self.algos.iter().map(|a| a.to_string()).collect();
+        let algos: Vec<HashAlg> = self.algos.iter().map(|a| a.parse().unwrap()).collect();
         plan_pairs(
             SideRequest {
                 entries: s,

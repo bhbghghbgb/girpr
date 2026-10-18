@@ -14,23 +14,24 @@ mod common;
 
 use common::{TempRoot, compare, log, rw, sync, update, wfile};
 use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
+use girsync::hash::HashAlg;
 use girsync::hash::hash_file;
 use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
 use std::collections::HashMap;
 
-fn md5s() -> Vec<String> {
-    vec!["md5".to_string()]
+fn md5s() -> Vec<HashAlg> {
+    vec![HashAlg::Md5]
 }
 
-fn sha256s() -> Vec<String> {
-    vec!["sha256".to_string()]
+fn sha256s() -> Vec<HashAlg> {
+    vec![HashAlg::Sha256]
 }
 
-fn both() -> Vec<String> {
-    vec!["md5".to_string(), "sha256".to_string()]
+fn both() -> Vec<HashAlg> {
+    vec![HashAlg::Md5, HashAlg::Sha256]
 }
 
-fn with_algos(dir: std::path::PathBuf, algos: Vec<String>) -> girsync::UpdateOpts {
+fn with_algos(dir: std::path::PathBuf, algos: Vec<HashAlg>) -> girsync::UpdateOpts {
     girsync::UpdateOpts {
         dir,
         common: CommonOpts {

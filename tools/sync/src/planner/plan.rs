@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::effective::SideEntry;
+use crate::hash::HashAlg;
 
 use super::pairs::SideRequest;
 
@@ -26,9 +27,9 @@ use super::pairs::SideRequest;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Required {
     /// src relative path -> the algorithms that settle it.
-    pub by_rel: HashMap<String, Vec<String>>,
+    pub by_rel: HashMap<String, Vec<HashAlg>>,
     /// Consulted for a path with no entry. See [`Required::of`].
-    pub fallback: Vec<String>,
+    pub fallback: Vec<HashAlg>,
 }
 
 impl Required {
@@ -42,7 +43,7 @@ impl Required {
     /// [`crate::diff::hashes_differ`] is *silent* when a digest is missing — a
     /// fallback of nothing would report every unplanned pair as equal. A safe fallback
     /// and the reachable answer coincide, so the safety costs nothing.
-    pub fn of(&self, srel: &str) -> &[String] {
+    pub fn of(&self, srel: &str) -> &[HashAlg] {
         self.by_rel.get(srel).unwrap_or(&self.fallback)
     }
 }
@@ -57,12 +58,12 @@ pub struct HashPlan {
     /// distinction is what makes `--no-trust-cached-hashes` expressible: it
     /// asks for the digest again, while phase A keeps reporting the cached one
     /// so the planner can still see what is on hand.
-    pub by_rel: HashMap<String, Vec<String>>,
+    pub by_rel: HashMap<String, Vec<HashAlg>>,
 }
 
 impl HashPlan {
     /// The algorithms to compute for `rel`; empty when the path needs no read.
-    pub fn get(&self, rel: &str) -> &[String] {
+    pub fn get(&self, rel: &str) -> &[HashAlg] {
         self.by_rel.get(rel).map(|v| &v[..]).unwrap_or(&[])
     }
 
@@ -96,11 +97,11 @@ impl HashPlan {
     /// to *reuse* a digest, never an instruction to forget it — see
     /// [`crate::effective::merge_row`], which stores the same row either way —
     /// so the plan asks again while phase A keeps reporting the old value.
-    fn missing(entry: &SideEntry, algos: &[String], no_trust: bool) -> Vec<String> {
+    fn missing(entry: &SideEntry, algos: &[HashAlg], no_trust: bool) -> Vec<HashAlg> {
         algos
             .iter()
-            .filter(|a| no_trust || !entry.cached.contains_key(*a))
-            .cloned()
+            .filter(|a| no_trust || !entry.cached.contains_key(a.as_str()))
+            .copied()
             .collect()
     }
 
@@ -136,7 +137,7 @@ impl HashPlan {
     /// tie-break `--hash-any-of` will use is defined in terms of it.
     pub fn plan_one_side(
         entries: &HashMap<String, SideEntry>,
-        algos: &[String],
+        algos: &[HashAlg],
         no_trust: bool,
     ) -> Self {
         let mut by_rel = HashMap::new();
@@ -162,7 +163,7 @@ pub(super) fn plan_one(
     req: &SideRequest<'_>,
     e: &SideEntry,
     rel: &str,
-    algos: &[String],
+    algos: &[HashAlg],
     into: &mut HashPlan,
 ) {
     if !req.cap.can_hash_from_disk {
@@ -210,8 +211,12 @@ mod tests {
         m
     }
 
-    fn algos() -> Vec<String> {
-        vec!["md5".to_string(), "sha256".to_string()]
+    fn algos() -> Vec<HashAlg> {
+        vec![HashAlg::Md5, HashAlg::Sha256]
+    }
+
+    fn names(set: &[HashAlg]) -> Vec<&'static str> {
+        set.iter().map(|a| a.as_str()).collect()
     }
 
     /// A complete cache row costs no read, an incomplete one costs only what is
@@ -219,11 +224,8 @@ mod tests {
     #[test]
     fn one_side_plans_only_what_the_cache_lacks() {
         let p = HashPlan::plan_one_side(&entries(), &algos(), false);
-        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
-        assert_eq!(
-            p.get("stale.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
+        assert_eq!(names(p.get("cached.txt")), vec!["sha256"]);
+        assert_eq!(names(p.get("stale.txt")), vec!["md5", "sha256"]);
         assert!(p.is_settled("sub"), "a dir never needs a read");
     }
 
@@ -236,7 +238,7 @@ mod tests {
         let stale = e.get("cached.txt").unwrap().clone();
         e.insert("cached.txt".to_string(), stale);
         let p = HashPlan::plan_one_side(&e, &algos(), false);
-        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
+        assert_eq!(names(p.get("cached.txt")), vec!["sha256"]);
     }
 
     /// A distrusting run must pay for the read even against a complete cache —
@@ -244,14 +246,8 @@ mod tests {
     #[test]
     fn no_trust_plans_every_algorithm_regardless_of_the_cache() {
         let p = HashPlan::plan_one_side(&entries(), &algos(), true);
-        assert_eq!(
-            p.get("cached.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
-        assert_eq!(
-            p.get("stale.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
+        assert_eq!(names(p.get("cached.txt")), vec!["md5", "sha256"]);
+        assert_eq!(names(p.get("stale.txt")), vec!["md5", "sha256"]);
     }
 
     /// `--hash none` is a distinct mode, not all-of over an empty set that
@@ -277,10 +273,8 @@ mod tests {
     #[test]
     fn pending_is_sorted_and_excludes_settled_paths() {
         let mut p = HashPlan::default();
-        p.by_rel
-            .insert("z.txt".to_string(), vec!["md5".to_string()]);
-        p.by_rel
-            .insert("a.txt".to_string(), vec!["md5".to_string()]);
+        p.by_rel.insert("z.txt".to_string(), vec![HashAlg::Md5]);
+        p.by_rel.insert("a.txt".to_string(), vec![HashAlg::Md5]);
         p.by_rel.insert("done.txt".to_string(), vec![]);
         assert_eq!(p.pending(), vec!["a.txt", "z.txt"]);
         assert!(p.is_settled("done.txt"));

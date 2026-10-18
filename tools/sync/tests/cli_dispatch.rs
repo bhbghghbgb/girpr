@@ -16,7 +16,10 @@ fn run_cli_dispatch_update_compare_sync() {
     wfile(&dst, "a.txt", b"bbb");
 
     let common = || CommonArgs {
-        hash_all_of: common::md5arg(),
+        hash_all_of: common::md5arg()
+            .iter()
+            .map(|a| a.as_str().to_string())
+            .collect(),
         hash_any_of: vec![],
         no_trust_size: false,
         no_trust_mtime: false,

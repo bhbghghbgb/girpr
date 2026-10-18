@@ -63,6 +63,7 @@ use common::{TempRoot, age, serial_rw, sync_mtime, wfile};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::hash::HashAlg;
 use girsync::planner::{
     CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };
@@ -101,7 +102,8 @@ fn none_without_trusting_anything() -> CommonOpts {
 
 fn any_of_md5_sha256() -> CommonOpts {
     CommonOpts {
-        algos: vec!["md5".to_string(), "sha256".to_string()],
+        // The order is meaningful: `pick_one` breaks a tie in the user's flag order.
+        algos: vec![HashAlg::Md5, HashAlg::Sha256],
         hash_mode: HashMode::AnyOf,
         ..common::opts()
     }

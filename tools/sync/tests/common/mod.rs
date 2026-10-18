@@ -7,6 +7,7 @@
 
 use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::hash::HashAlg;
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
@@ -112,7 +113,7 @@ pub fn sync_mtime(source: &Path, target: &Path) {
 /// Default options for the end-to-end tests: md5, no filters, case-sensitive.
 pub fn opts() -> CommonOpts {
     CommonOpts {
-        algos: vec!["md5".to_string()],
+        algos: vec![HashAlg::Md5],
         hash_mode: HashMode::default(),
         stat: StatTrust::default(),
         why: false,
@@ -240,8 +241,8 @@ pub fn sync_dry(src: PathBuf, dst: PathBuf) -> SyncOpts {
     }
 }
 
-pub fn md5arg() -> Vec<String> {
-    vec!["md5".to_string()]
+pub fn md5arg() -> Vec<HashAlg> {
+    vec![HashAlg::Md5]
 }
 
 /// True when a `girpr-cache-backup-*` sibling exists next to `dir`.
@@ -411,9 +412,13 @@ pub fn pair(t: &TempRoot, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathB
 
 /// Pin a case's algorithm set on an existing pair, so the caches were warmed
 /// with one set and the run is asked for another.
+///
+/// Takes the spellings rather than the algorithms, so a case reads the way the
+/// flag does and a typo is a compile-adjacent `unwrap` rather than a silent
+/// empty plan.
 pub fn with_algos(algos: &[&str]) -> CommonOpts {
     CommonOpts {
-        algos: algos.iter().map(|a| a.to_string()).collect(),
+        algos: algos.iter().map(|a| a.parse().unwrap()).collect(),
         ..opts()
     }
 }

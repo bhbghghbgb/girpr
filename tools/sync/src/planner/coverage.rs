@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::hash::HashAlg;
+
 use super::HashMode;
 
 /// A side that could not supply every digest the run required.
@@ -36,8 +38,11 @@ pub struct Coverage {
     /// for any one algorithm, which is the whole of `any-of`.
     pub mode: HashMode,
     /// rel path -> the requested algorithms it could not obtain.
-    pub missing: BTreeMap<String, Vec<String>>,
+    pub missing: BTreeMap<String, Vec<HashAlg>>,
     /// Requested algorithm -> (paths holding it, undecided paths).
+    ///
+    /// Keyed by name rather than by [`HashAlg`] because the rendered line is the
+    /// contract here: `{:<12} {}/{}`. See [`fmt::Display`].
     pub coverage: BTreeMap<String, (usize, usize)>,
 }
 
@@ -66,7 +71,11 @@ impl fmt::Display for Coverage {
             undecided
         )?;
         for (rel, algos) in self.missing.iter().take(EXAMPLE_PATHS) {
-            writeln!(f, "\n    {rel:<32} {}", algos.join(", "))?;
+            // Joined by name, so the rendered line is the list of spellings and not
+            // whatever an algorithm serialises as. `AlgoSet` deliberately has no
+            // `Display`: three call sites need three separators.
+            let names: Vec<&str> = algos.iter().map(|a| a.as_str()).collect();
+            writeln!(f, "\n    {rel:<32} {}", names.join(", "))?;
         }
         if self.missing.len() > EXAMPLE_PATHS {
             writeln!(

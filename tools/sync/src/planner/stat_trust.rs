@@ -220,6 +220,7 @@ impl StatTrust {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::HashAlg;
     use crate::planner::fixtures::{Shape, dir, file, map};
 
     // -- distrusting the short circuit --------------------------------------------
@@ -252,7 +253,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             hashing.required.of("a.txt"),
-            ["md5"],
+            [HashAlg::Md5],
             "the pair is now undecided, so it must be comparable"
         );
         assert_eq!(
@@ -292,7 +293,7 @@ mod tests {
             let p = Shape::FOLDERS.run(&s, &d, true, off).unwrap();
             assert_eq!(
                 p.required.of("a.txt"),
-                ["md5"],
+                [HashAlg::Md5],
                 "nothing is left for the short circuit to act on"
             );
         }
@@ -320,7 +321,7 @@ mod tests {
         assert_eq!(p.dst.pending().len(), 1);
         // Under all-of the pair is settled by the whole requested list, so this is
         // comparable rather than merely comparable-by-one-algorithm.
-        assert_eq!(p.required.of("a.txt"), ["md5"]);
+        assert_eq!(p.required.of("a.txt"), [HashAlg::Md5]);
     }
 
     /// A distrusted field must not resurrect a pair that stat cannot decide *even so* —

@@ -9,7 +9,7 @@ use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
-use girsync::hash::parse_hash_list;
+use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, ScanStats};
@@ -75,7 +75,7 @@ fn hash_arg_none_exclusive() {
     assert!(parse_hash_list(&["none".to_string()]).unwrap().is_empty());
     assert!(parse_hash_list(&["NONE".to_string()]).unwrap().is_empty());
     assert!(parse_hash_list(&["md5".to_string(), "none".to_string()]).is_err());
-    assert!(parse_hash_list(&["md5".to_string()]).unwrap() == vec!["md5".to_string()]);
+    assert!(parse_hash_list(&["md5".to_string()]).unwrap() == vec![HashAlg::Md5]);
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 
 /// A three-file folder scanned on a cold cache, and the same folder scanned again
 /// once warm. Returns `(cold, warm)`, each carrying both phases' counters.
-fn cold_then_warm(tag: &str, algos: Vec<String>) -> (Run, Run) {
+fn cold_then_warm(tag: &str, algos: Vec<HashAlg>) -> (Run, Run) {
     let t = TempRoot::new(tag);
     let dir = t.mkdirs("w");
     wfile(&dir, "a.txt", b"hello");
@@ -215,11 +215,7 @@ fn scan_counters_characterize_the_eager_baseline() {
 /// phase C buckets the files phase A found.
 #[test]
 fn every_file_lands_in_exactly_one_bucket() {
-    for algos in [
-        md5arg(),
-        vec!["md5".to_string(), "sha256".to_string()],
-        vec![],
-    ] {
+    for algos in [md5arg(), vec![HashAlg::Md5, HashAlg::Sha256], vec![]] {
         let (cold, warm) = cold_then_warm("stats_buckets", algos.clone());
         for s in [cold, warm] {
             assert_eq!(

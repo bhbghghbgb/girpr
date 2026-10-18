@@ -53,12 +53,9 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
         ..rec(&[])
     };
     let required = Required {
-        by_rel: [(
-            "a.txt".to_string(),
-            vec!["md5".to_string(), "sha256".to_string()],
-        )]
-        .into_iter()
-        .collect(),
+        by_rel: [("a.txt".to_string(), vec![HashAlg::Md5, HashAlg::Sha256])]
+            .into_iter()
+            .collect(),
         fallback: vec![],
     };
     let differs = hashes_differ(&s.hashes, &d.hashes, required.of("a.txt"));
@@ -89,12 +86,9 @@ fn a_tag_names_only_the_algorithms_that_were_actually_compared() {
 fn a_skipped_algorithm_is_never_reported_as_a_disagreement() {
     let s = rec(&["md5", "sha256"]);
     let required = Required {
-        by_rel: [(
-            "a.txt".to_string(),
-            vec!["md5".to_string(), "sha256".to_string()],
-        )]
-        .into_iter()
-        .collect(),
+        by_rel: [("a.txt".to_string(), vec![HashAlg::Md5, HashAlg::Sha256])]
+            .into_iter()
+            .collect(),
         fallback: vec![],
     };
     // Same shape, but the digests both sides actually hold agree.

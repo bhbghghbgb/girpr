@@ -31,7 +31,7 @@ use super::plan::Plan;
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
-use crate::hash::{CHUNK, Digests, hash_file};
+use crate::hash::{CHUNK, Digests, HashAlg, hash_file};
 use crate::report::{Record, Report};
 use crate::rw::RwRuntime;
 use crate::util::mtime_ns_of;
@@ -446,7 +446,7 @@ impl Applier<'_> {
 fn copy_and_digest(
     src: &mut std::fs::File,
     dst: &mut std::fs::File,
-    algos: &[String],
+    algos: &[HashAlg],
 ) -> Result<HashMap<String, Vec<u8>>> {
     if algos.is_empty() {
         std::io::copy(src, dst)?;
@@ -478,12 +478,12 @@ fn copy_and_digest(
 /// not evidence about this copy either way.
 fn verify_digests(
     path: &Path,
-    algos: &[String],
+    algos: &[HashAlg],
     src: &HashMap<String, Vec<u8>>,
     dst: &HashMap<String, Vec<u8>>,
 ) -> Result<()> {
     for a in algos {
-        if src.get(a) != dst.get(a) {
+        if src.get(a.as_str()) != dst.get(a.as_str()) {
             error!(algo = %a, path = %path.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, path.display());
         }
@@ -511,7 +511,7 @@ fn verify_digests(
 /// clean. That is a race the tool cannot win anyway — phase A's stat sees the new
 /// mtime on the next run and re-copies.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
-fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Result<FileRec> {
+fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> Result<FileRec> {
     trace!("copy_one start");
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
@@ -580,8 +580,8 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[String]) -> Re
 mod tests {
     use super::*;
 
-    fn algos(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
+    fn algos(names: &[&str]) -> Vec<HashAlg> {
+        names.iter().map(|s| s.parse().unwrap()).collect()
     }
 
     /// The digest `copy_and_digest` returns has to be **the file's**, not the
