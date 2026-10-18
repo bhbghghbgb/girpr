@@ -620,11 +620,8 @@ mod tests {
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("gircap-blobs-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).expect("scratch dir");
-        d
+    fn scratch(name: &str) -> crate::testtemp::TempDir {
+        crate::testtemp::TempDir::new("gircap-blobs", name)
     }
 
     /// `fs::rename` **does** replace an existing destination on Windows: it calls
@@ -654,7 +651,6 @@ mod tests {
             !tmp.exists(),
             "the tmp file must be gone after the rename publishes it"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -691,7 +687,6 @@ mod tests {
                 "{name} must stay hidden and temporary"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn chunk(payload: &[u8], offset: i64, prefix: u64) -> SophonChunk {
@@ -954,7 +949,7 @@ mod tests {
     #[test]
     fn an_unfilled_want_still_has_a_row_and_says_it_was_not_stored() {
         let w = chunks::wants(&[pair()]);
-        let root = std::env::temp_dir().join(format!("gircap-m6-{}", std::process::id()));
+        let root = crate::testtemp::TempDir::new("gircap-m6", "unfilled_want");
         let store = Store::new(&root, sources());
         let (entry, roles) = store.unfilled(&w[0]);
         assert_eq!(roles, w[0].sets);
@@ -970,6 +965,5 @@ mod tests {
             entry.props.decode_error
         );
         assert!(!entry.props.is_usable());
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

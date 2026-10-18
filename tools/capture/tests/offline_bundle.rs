@@ -12,8 +12,14 @@
 //! Small enough to reason about, and the only shape in which "reused a chunk from
 //! a different offset" is already true.
 
+// This target builds its bundle with the crate's own writers rather than
+// against the mock, so it takes the scratch-directory helper directly instead
+// of the whole of `tests/common`.
+#[path = "tempdir.rs"]
+mod tempdir;
+
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gircap::assemble::{PatchMap, Side};
 use gircap::blobs::chunks::{Reference, Set};
@@ -76,22 +82,16 @@ fn reference(tag: &str, path: &str, role: Set, offset: i64) -> Reference {
 
 /// A complete bundle on disk, with everything removed when it goes out of scope.
 ///
-/// `Drop` rather than an explicit teardown, because the interesting tests are
+/// The guard rather than an explicit teardown, because the interesting tests are
 /// the ones that fail partway through and a fixture that only cleans up on the
 /// happy path leaks into the next test.
 struct Bundle {
-    root: PathBuf,
+    root: tempdir::TempDir,
 }
 
 impl Bundle {
     fn build(name: &str) -> Bundle {
-        let root = std::env::temp_dir().join(format!(
-            "gircap-offline-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("scratch");
+        let root = tempdir::TempDir::new("gircap-offline", name);
 
         // The three chunks of one file, at the offsets the index will record.
         let (a, ab, ar) = chunk(0xa1, 64, 0x7d3f_0504_4383_7e58);
@@ -312,12 +312,6 @@ impl Bundle {
         let c = Checksums::scan(&self.root).expect("scan");
         write_json(&self.root.join("verify/checksums.json"), &c);
         rel
-    }
-}
-
-impl Drop for Bundle {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -570,13 +564,15 @@ fn materialize_rebuilds_both_files_byte_for_byte() {
 #[test]
 fn materialize_defaults_beside_the_bundle() {
     let b = Bundle::build("beside");
-    let out = b.root.with_file_name(format!(
+    // The tool picks this path itself when `--out` is absent, so the assertion
+    // can only be made against it. It is a *sibling* of the bundle root, hence a
+    // guard of its own: the bundle's guard does not own it.
+    let out = tempdir::TempDir::at(b.root.with_file_name(format!(
         "{}-materialized",
         b.root.file_name().unwrap().to_string_lossy()
-    ));
-    let _ = std::fs::remove_dir_all(&out);
+    )));
     let plan = gircap::config::MaterializePlan {
-        artifact: b.root.clone(),
+        artifact: b.root.to_path_buf(),
         out: None,
     };
     let (summary, code) = block_on(gircap::run::materialize(plan)).expect("materialize runs");
@@ -587,7 +583,6 @@ fn materialize_defaults_beside_the_bundle() {
     );
     assert!(out.join(format!("expected/{DLL}")).is_file());
     assert!(!b.root.join("materialized").exists(), "and not inside it");
-    let _ = std::fs::remove_dir_all(&out);
 }
 
 /// `list` finds a bundle by walking, not by knowing the layout.

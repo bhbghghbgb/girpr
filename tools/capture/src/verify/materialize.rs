@@ -401,7 +401,7 @@ mod tests {
     /// content in each build (same length, different id prefix), offset 690719
     /// is byte-identical in both, and the tail is shared.
     struct Fixture {
-        root: std::path::PathBuf,
+        root: crate::testtemp::TempDir,
         index: ChunkIndex,
     }
 
@@ -415,13 +415,7 @@ mod tests {
 
     impl Fixture {
         fn build(name: &str) -> Fixture {
-            let root = std::env::temp_dir().join(format!(
-                "gircap-m9-{name}-{}-{:?}",
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            let _ = std::fs::remove_dir_all(&root);
-            std::fs::create_dir_all(&root).expect("scratch");
+            let root = crate::testtemp::TempDir::new("gircap-m9", name);
             // (chunk, body, compressed, references)
             let (a, ab, ar) = chunk(1, 64, 0x7d3f_0504_4383_7e58);
             let (b, bb, br) = chunk(2, 128, 0xf5dc_3ca1_f3a0_ba3d);
@@ -513,12 +507,6 @@ mod tests {
             )
             .expect("rebuilds");
             r.bytes
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
         }
     }
 

@@ -298,11 +298,9 @@ fn f_detail(a: &Assertion) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn scratch(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("gircap-closeout-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
+    fn scratch(name: &str) -> crate::testtemp::TempDir {
+        let p = crate::testtemp::TempDir::new("gircap-closeout", name);
         std::fs::create_dir_all(p.join("game")).expect("scratch root");
         std::fs::create_dir_all(p.join("scan")).expect("scan dir");
         p

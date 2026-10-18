@@ -473,11 +473,8 @@ pub type ManifestFile = FileEntry;
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("gircap-m8-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).expect("scratch");
-        p
+    fn scratch(name: &str) -> crate::testtemp::TempDir {
+        crate::testtemp::TempDir::new("gircap-m8", name)
     }
 
     #[test]

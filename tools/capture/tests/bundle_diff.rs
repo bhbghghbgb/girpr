@@ -85,7 +85,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Mock, World, tempdir::TempDir};
 
 /// The binary under test, beside this test's own executable.
 fn bin() -> PathBuf {
@@ -98,28 +98,7 @@ fn bin() -> PathBuf {
 }
 
 /// A scratch root that is removed when the test ends, whatever happens.
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Scratch {
-    fn new(name: &str) -> Scratch {
-        let path = std::env::temp_dir().join(format!(
-            "gircap-diff-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("scratch");
-        Scratch { path }
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
+type Scratch = TempDir;
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(bin())
@@ -135,7 +114,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 
 /// Capture `World::five_classes()` into `<scratch>/<slot>/`.
 fn capture_into(mock: &Mock, scratch: &Scratch, slot: &str) -> PathBuf {
-    let out = scratch.path.join(slot);
+    let out = scratch.join(slot);
     let args = [
         "capture",
         "--out",
@@ -526,13 +505,13 @@ fn differences(a: &[u8], b: &[u8]) -> String {
 #[test]
 fn two_captures_of_the_same_fixture_agree() {
     let mock = Mock::start(World::five_classes());
-    let scratch = Scratch::new("pair");
+    let scratch = TempDir::new("gircap-diff", "pair");
 
     let a = capture_into(&mock, &scratch, "a");
     let b = capture_into(&mock, &scratch, "b");
 
     let id = |p: &Path| p.file_name().unwrap().to_string_lossy().into_owned();
-    let (a_root, b_root) = (scratch.path.join("a"), scratch.path.join("b"));
+    let (a_root, b_root) = (scratch.join("a"), scratch.join("b"));
     let ta = tree(
         &a,
         &Volatile {

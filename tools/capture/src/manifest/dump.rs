@@ -333,14 +333,10 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        // Named per test, not per process: these run concurrently in one
-        // process, and a shared path means one test's `remove_dir_all` deletes
-        // another's tree mid-run — which fails intermittently and looks like a
-        // writer bug rather than a test bug.
-        let d = std::env::temp_dir().join(format!("gircap-dump-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+    fn tmp(name: &str) -> crate::testtemp::TempDir {
+        // Absent, not created: these cases are about what the dump writes, and
+        // one of them asserts the writer creates its own parents.
+        crate::testtemp::TempDir::absent("gircap-dump", name)
     }
 
     #[test]

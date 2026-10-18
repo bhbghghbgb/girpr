@@ -63,6 +63,9 @@ pub mod verify;
 
 pub use exit::ExitCode;
 
+#[cfg(test)]
+pub(crate) mod testtemp;
+
 /// The version this tool reports in `MANIFEST.json` and in its `User-Agent`.
 ///
 /// Kept in step with `Cargo.toml` by reading it at build time rather than by a

@@ -106,6 +106,12 @@ impl TempDir {
     }
 }
 
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl Deref for TempDir {
     type Target = Path;
     fn deref(&self) -> &Path {

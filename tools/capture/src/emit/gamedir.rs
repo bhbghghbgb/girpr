@@ -342,8 +342,7 @@ mod tests {
 
     #[test]
     fn writing_the_tree_produces_three_kinds_of_entry_and_nothing_else() {
-        let root = std::env::temp_dir().join(format!("gircap-m8-gamedir-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = crate::testtemp::TempDir::new("gircap-m8-gamedir", "three_kinds");
         let old = VariantFile {
             rel_path: "GenshinImpact_Data/a.dll",
             bytes: b"old",
@@ -399,7 +398,6 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(expected_entries, vec!["GenshinImpact_Data".to_string()]);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

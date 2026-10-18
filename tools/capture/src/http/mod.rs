@@ -2168,8 +2168,7 @@ fn the_write_happens_with_the_log_lock_released() {
         }
         // 300 rows of ~950 B is ~285 KB, past the 256 KB BufWriter, so the
         // write really does cross a flush boundary mid-document.
-        let dir = std::env::temp_dir().join(format!("gircap-http-ndjson-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-http-ndjson", "crosses_a_flush");
         let path = dir.join("api").join("requests.ndjson");
         let n = log.write_ndjson(&path).expect("write");
         assert_eq!(n, 300);
@@ -2590,11 +2589,8 @@ fn a_poisoned_request_log_still_takes_records() {
         Box::leak(v.to_vec().into_boxed_slice())
     }
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("gircap-stream-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).expect("scratch dir");
-        d
+    fn scratch(name: &str) -> crate::testtemp::TempDir {
+        crate::testtemp::TempDir::new("gircap-stream", name)
     }
 
     /// A body the mock will send, `n` bytes of it.
@@ -3113,8 +3109,7 @@ fn a_poisoned_request_log_still_takes_records() {
 
     #[tokio::test]
     async fn the_log_is_written_to_disk_as_ndjson() {
-        let dir = std::env::temp_dir().join(format!("gircap-http-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-http", "written_to_disk_as_ndjson");
         let path = dir.join("api").join("requests.ndjson");
 
         let mock = spawn(vec![(200, b"body")], "");

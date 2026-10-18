@@ -13,6 +13,11 @@
 //! That is what makes the seam worth having — the contract is asserted against a
 //! run that started, failed, and reported, rather than against a stub.
 
+// This target never talks to the mock, so it takes the scratch-directory
+// helper directly rather than the whole of `tests/common`.
+#[path = "tempdir.rs"]
+mod tempdir;
+
 use std::process::Command;
 
 /// The binary under test, beside this test's own executable.
@@ -212,9 +217,7 @@ fn a_plaintext_override_to_a_remote_host_is_refused_and_says_why() {
 /// consumer is most likely to get wrong.
 #[test]
 fn list_emits_one_record_per_bundle_then_a_summary() {
-    let scratch = std::env::temp_dir().join(format!("gircap-list-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).expect("empty root");
+    let scratch = tempdir::TempDir::new("gircap-list", "one_record_per_bundle");
 
     let r = run(&[
         "list",
@@ -261,8 +264,6 @@ fn list_emits_one_record_per_bundle_then_a_summary() {
     );
     let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(v["bundles"], 0);
-
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 /// stdout under `--output json` is **pure NDJSON**: one object per line, nothing
@@ -275,9 +276,7 @@ fn list_emits_one_record_per_bundle_then_a_summary() {
 /// contains.
 #[test]
 fn every_record_puts_event_first_and_the_stream_is_pure_ndjson() {
-    let scratch = std::env::temp_dir().join(format!("gircap-ndjson-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch).expect("root");
+    let scratch = tempdir::TempDir::new("gircap-ndjson", "event_first");
 
     for argv in [
         vec![
@@ -315,7 +314,6 @@ fn every_record_puts_event_first_and_the_stream_is_pure_ndjson() {
             });
         }
     }
-    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 #[test]
@@ -346,8 +344,9 @@ fn stderr_carries_the_narration_and_stdout_carries_none_of_it() {
 
 #[test]
 fn a_log_file_is_written_and_flushed_before_the_process_ends() {
-    let dir = std::env::temp_dir().join(format!("gircap-contract-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    // Absent on purpose: the run is what has to create the parent, and that is
+    // half of what this case is about.
+    let dir = tempdir::TempDir::absent("gircap-contract", "log_file");
     let log = dir.join("nested").join("run.ndjson");
 
     let r = run_owned(&offline_capture(&["--log-file", log.to_str().unwrap()]));
@@ -359,13 +358,11 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
         text.lines().any(|l| l.contains("\"gircap start\"")),
         "the start event is missing from the log:\n{text}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn rust_log_overrides_the_flag() {
-    let dir = std::env::temp_dir().join(format!("gircap-rustlog-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = tempdir::TempDir::absent("gircap-rustlog", "rust_log_wins");
     let log = dir.join("run.ndjson");
 
     let argv = offline_capture(&["--log-level", "error", "--log-file", log.to_str().unwrap()]);
@@ -381,7 +378,6 @@ fn rust_log_overrides_the_flag() {
         text.lines().any(|l| l.contains("\"gircap start\"")),
         "the file sink must not inherit the console's `error` filter:\n{text}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ------------------------------------------ the offline three's exit codes
@@ -391,8 +387,11 @@ fn rust_log_overrides_the_flag() {
 // job (see `offline_bundle.rs`) and these tests must not grow one.
 
 /// A scratch directory that does not exist yet, named per test.
-fn scratch(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("gircap-contract-{name}-{}", std::process::id()))
+///
+/// Absent on purpose: these cases are about what the tool does with a path that
+/// is *not* a bundle, so the fixture must not hand it one.
+fn scratch(name: &str) -> tempdir::TempDir {
+    tempdir::TempDir::absent("gircap-contract", name)
 }
 
 /// A path that is not a bundle is a usage error, not an assertion failure: the
@@ -406,7 +405,6 @@ fn verify_on_a_directory_that_is_not_a_bundle_is_a_usage_error() {
     assert!(r.stdout.contains("event=verify"), "{}", r.stdout);
     assert!(r.stdout.contains("MANIFEST.json"), "{}", r.stdout);
     assert!(r.stdout.contains("exit_code=1"), "{}", r.stdout);
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// The same for `materialize`, and the same code - the two read the same bundle.
@@ -416,7 +414,6 @@ fn materialize_on_a_directory_that_is_not_a_bundle_is_a_usage_error() {
     std::fs::create_dir_all(&d).unwrap();
     let r = assert_code(&["materialize", "--artifact", d.to_str().unwrap()], 1);
     assert!(r.stdout.contains("event=materialize"), "{}", r.stdout);
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// `--out` equal to `--artifact` is refused before anything is written.
@@ -436,7 +433,6 @@ fn materialize_refuses_to_write_into_the_bundle_it_is_proving() {
     );
     assert!(r.stdout.contains("--out"), "{}", r.stdout);
     assert!(r.stdout.contains("--artifact"), "{}", r.stdout);
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// `list` over an empty tree is a success with zero bundles, not a failure.
@@ -447,7 +443,6 @@ fn list_over_an_empty_tree_is_a_success_with_nothing_in_it() {
     let r = assert_code(&["list", "--root", d.to_str().unwrap()], 0);
     assert!(r.stdout.contains("bundles=0"), "{}", r.stdout);
     assert!(r.stdout.contains("result=ok"), "{}", r.stdout);
-    let _ = std::fs::remove_dir_all(&d);
 }
 
 /// A root that is not there is a usage error - again, the operator's mistake.
@@ -483,5 +478,4 @@ fn verify_takes_no_base_flags_and_needs_none() {
         "and clap names the flag: {}",
         r.stderr
     );
-    let _ = std::fs::remove_dir_all(&d);
 }

@@ -511,13 +511,10 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        // Per test name, not per process: these run concurrently in one process,
-        // so a shared path means one test's `remove_dir_all` deletes another's
-        // tree mid-run.
-        let d = std::env::temp_dir().join(format!("gircap-emit-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+    fn tmp(name: &str) -> crate::testtemp::TempDir {
+        // Absent, not created: one of these cases is about the writer creating
+        // its own parents, so pre-creating the root would assert nothing.
+        crate::testtemp::TempDir::absent("gircap-emit", name)
     }
 
     #[test]
@@ -684,8 +681,7 @@ mod tests {
 
     #[test]
     fn the_eight_api_documents_are_written_byte_exact() {
-        let dir = std::env::temp_dir().join(format!("gircap-api-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-api", "byte_exact");
         let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
 
         assert_eq!(
@@ -717,8 +713,7 @@ mod tests {
     /// from here is the whole mechanism, so it is pinned rather than assumed.
     #[test]
     fn the_error_shapes_document_is_returned_so_it_reaches_files_and_checksums() {
-        let dir = std::env::temp_dir().join(format!("gircap-api-shapes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-api-shapes", "reaches_files");
         let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         assert!(
             written.contains(&"api/error_shapes.json".to_string()),
@@ -729,8 +724,7 @@ mod tests {
 
     #[test]
     fn the_generated_probe_is_pretty_printed_and_valid_json() {
-        let dir = std::env::temp_dir().join(format!("gircap-api-probe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-api-probe", "pretty_printed");
         write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/tag_probe.json")).unwrap();
         assert!(text.contains('\n'), "a document is not one long line");
@@ -746,9 +740,7 @@ mod tests {
     /// every consumer of a bundle breaks on it.
     #[test]
     fn the_error_shapes_document_is_valid_json_despite_its_xml_body() {
-        let dir =
-            std::env::temp_dir().join(format!("gircap-api-shapes-json-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-api-shapes-json", "valid_json_despite_xml");
         write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         let text = std::fs::read_to_string(dir.join("api/error_shapes.json")).unwrap();
         assert!(text.ends_with('\n'), "a document ends with a newline");
@@ -768,8 +760,7 @@ mod tests {
 
     #[test]
     fn the_log_lands_at_api_requests_ndjson_and_creates_its_directory() {
-        let dir = std::env::temp_dir().join(format!("gircap-emit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::absent("gircap-emit-log", "creates_its_directory");
         let root = dir
             .join("hk4e_global")
             .join("7.0.0__7.1.0")
@@ -778,7 +769,5 @@ mod tests {
         let log = RequestLog::new();
         assert_eq!(write_requests_log(&root, &log).unwrap(), 0);
         assert!(root.join("api").join("requests.ndjson").exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

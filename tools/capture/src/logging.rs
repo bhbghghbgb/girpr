@@ -300,8 +300,7 @@ mod tests {
 
     #[test]
     fn a_log_file_writer_appends_and_flushes() {
-        let dir = std::env::temp_dir().join(format!("gircap-log-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::testtemp::TempDir::new("gircap-log-test", "appends_and_flushes");
         let path = dir.join("nested").join("run.log");
 
         let w = open_log_file(&path).expect("creates the parent directory");
@@ -320,6 +319,5 @@ mod tests {
             "one\ntwo\n",
             "--log-file must append"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

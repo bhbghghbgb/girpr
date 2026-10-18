@@ -865,12 +865,9 @@ mod tests {
 
     #[test]
     fn opening_a_directory_with_no_manifest_names_the_missing_document() {
-        let d = std::env::temp_dir().join(format!("gircap-m9-empty-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
+        let d = crate::testtemp::TempDir::new("gircap-m9-empty", "no_manifest");
         let e = Bundle::open(&d).unwrap_err();
         assert!(e.contains("MANIFEST.json"), "{e}");
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"
@@ -967,8 +964,7 @@ mod tests {
 
     #[test]
     fn a_blob_whose_bytes_were_altered_turns_its_row_red() {
-        let d = std::env::temp_dir().join(format!("gircap-m9-blob-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        let d = crate::testtemp::TempDir::new("gircap-m9-blob", "altered_bytes");
         std::fs::create_dir_all(d.join("chunks/ab")).unwrap();
         let body = vec![7_u8; 64];
         let raw = zstd::encode_all(body.as_slice(), 1).unwrap();
@@ -1006,7 +1002,6 @@ mod tests {
         assert!(!row.ok, "one altered byte turns the row red");
         assert_eq!(row.subject, "chunks/ab/cd", "and names the blob");
         assert!(row.id == "A6", "and the assertion: {}", row.id);
-        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

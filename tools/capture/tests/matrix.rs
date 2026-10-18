@@ -13,7 +13,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Mock, World, tempdir::TempDir};
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("a path");
@@ -38,29 +38,18 @@ fn run(args: &[&str]) -> (i32, String, String) {
 
 /// A scratch root removed when the test ends.
 struct Scratch {
-    path: PathBuf,
+    root: TempDir,
 }
 
 impl Scratch {
     fn new(name: &str) -> Scratch {
-        let path = std::env::temp_dir().join(format!(
-            "gircap-matrix-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("scratch");
-        Scratch { path }
+        Scratch {
+            root: TempDir::new("gircap-matrix", name),
+        }
     }
 
     fn out(&self) -> PathBuf {
-        self.path.join("artifacts")
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        self.root.join("artifacts")
     }
 }
 

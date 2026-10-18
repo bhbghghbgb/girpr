@@ -11,7 +11,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Mock, World, tempdir::{TempDir, unique_path}};
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("the test binary has a path");
@@ -34,36 +34,54 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// Build a capture once into a fresh scratch root, and hand back the bundle.
+///
+/// **The root is not removed, and cannot be.** The result is handed out as a
+/// `&'static`, so it lives in a `OnceLock` — and a `OnceLock` is never dropped,
+/// which is the one place a `Drop`-based cleanup does not reach. What the name
+/// can still carry is uniqueness: `unique_path` gives every run its own
+/// directory, so a second `cargo test` never writes into the tree this one is
+/// reading, and a run that was killed leaves a directory no later run mistakes
+/// for a fixture. Two directories per test run is the cost, and the system temp
+/// cleaner owns them.
+///
+/// Every other tree in this suite is built by [`common::tempdir::TempDir`],
+/// which is dropped; see `tests/tempdir.rs`.
+fn capture_into(prefix: &str, extra: &[&str]) -> PathBuf {
+    let scratch = unique_path(prefix, "shared");
+    std::fs::create_dir_all(&scratch).expect("scratch");
+    let mock = Mock::start(World::five_classes());
+    let out = scratch.join("artifacts");
+    let hyp_base = mock.hyp_base();
+    let sophon_base = mock.sophon_base();
+    let out_arg = out.to_string_lossy().into_owned();
+    let mut argv = vec![
+        "capture",
+        "--out",
+        &out_arg,
+        "--hyp-base",
+        &hyp_base,
+        "--sophon-base",
+        &sophon_base,
+    ];
+    argv.extend_from_slice(extra);
+    let (code, stdout, stderr) = run(&argv);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    // The listener goes away with this function; the bundle does not, and is
+    // what the assertions read.
+    std::mem::forget(mock);
+    find_bundle(&out)
+}
+
 /// One capture, written once and shared by the tests below.
 ///
 /// `OnceLock` rather than one capture per test: each capture is a process
 /// against a listener, and five tests paying for five captures makes the suite
 /// slow for no extra coverage. The bundle is read-only to every test that uses
-/// it.
+/// it. See [`capture_into`] for why the tree outlives the run.
 fn bundle() -> &'static PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    let scratch = std::env::temp_dir().join(format!("gircap-schema-{}", std::process::id()));
-    DIR.get_or_init(|| {
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch).expect("scratch");
-        let mock = Mock::start(World::five_classes());
-        let out = scratch.join("artifacts");
-        let (code, stdout, stderr) = run(&[
-            "capture",
-            "--out",
-            &out.to_string_lossy(),
-            "--hyp-base",
-            &mock.hyp_base(),
-            "--sophon-base",
-            &mock.sophon_base(),
-        ]);
-        assert_eq!(code, 0, "{stdout}\n{stderr}");
-        let bundle = find_bundle(&out);
-        // The listener and the scratch root go away with this function; the
-        // bundle does not, and is what the assertions read.
-        std::mem::forget(mock);
-        bundle
-    })
+    DIR.get_or_init(|| capture_into("gircap-schema", &[]))
 }
 
 /// A capture with a threshold low enough that the gzip rule both fires and
@@ -71,30 +89,16 @@ fn bundle() -> &'static PathBuf {
 ///
 /// Separate from [`bundle`] because a lower threshold is a *different tree*,
 /// and a test that reused the default bundle could never see the rule fire.
+/// Outlives the run for the same reason [`bundle`] does; see
+/// [`capture_into`].
 fn gzipped() -> &'static PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let scratch = std::env::temp_dir().join(format!("gircap-gzip-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch).expect("scratch");
-        let mock = Mock::start(World::five_classes());
-        let out = scratch.join("artifacts");
-        let (code, stdout, stderr) = run(&[
-            "capture",
-            "--out",
-            &out.to_string_lossy(),
-            "--hyp-base",
-            &mock.hyp_base(),
-            "--sophon-base",
-            &mock.sophon_base(),
+        capture_into(
+            "gircap-gzip",
             // Small enough to split a 1.5 KB manifest from a 400 B meta file.
-            "--gzip-threshold",
-            "1000",
-        ]);
-        assert_eq!(code, 0, "{stdout}\n{stderr}");
-        let b = find_bundle(&out);
-        std::mem::forget(mock);
-        b
+            &["--gzip-threshold", "1000"],
+        )
     })
 }
 
@@ -221,12 +225,7 @@ fn the_manifest_index_key_set_is_the_documented_one() {
 fn a_manifest_without_the_gzip_threshold_does_not_open() {
     // A copy, because `bundle()` is a `OnceLock` shared by every test in this
     // file and the mutation below would poison whichever ran next.
-    let dir = std::env::temp_dir().join(format!(
-        "gircap-no-threshold-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = TempDir::new("gircap-no-threshold", "copy");
     copy_tree(bundle(), &dir);
 
     let path = dir.join("MANIFEST.json");
@@ -246,8 +245,6 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
         err.contains("gzip_threshold"),
         "the refusal must name the field: {err}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) {

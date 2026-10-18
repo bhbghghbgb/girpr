@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{Mock, World, tempdir::TempDir};
 
 /// The binary under test, beside this test's own executable.
 fn bin() -> PathBuf {
@@ -30,33 +30,22 @@ fn bin() -> PathBuf {
 
 /// A scratch root that is removed when the test ends, whatever happens.
 ///
-/// `Drop` rather than a teardown call: the interesting tests are the ones that
-/// fail partway, and a fixture that only cleans up on the happy path leaks into
-/// the next one.
+/// The guard rather than a teardown call, because the interesting tests are the
+/// ones that fail partway, and a fixture that only cleans up on the happy path
+/// leaks into the next one.
 struct Scratch {
-    path: PathBuf,
+    root: TempDir,
 }
 
 impl Scratch {
     fn new(name: &str) -> Scratch {
-        let path = std::env::temp_dir().join(format!(
-            "gircap-layout-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("scratch");
-        Scratch { path }
+        Scratch {
+            root: TempDir::new("gircap-layout", name),
+        }
     }
 
     fn out(&self) -> PathBuf {
-        self.path.join("artifacts")
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        self.root.join("artifacts")
     }
 }
 

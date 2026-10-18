@@ -625,11 +625,8 @@ mod tests {
         assert_eq!(gunzip(&sink).expect("dropped stream still decodes"), payload);
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("gircap-hash-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).expect("scratch dir");
-        d
+    fn tmp(name: &str) -> crate::testtemp::TempDir {
+        crate::testtemp::TempDir::new("gircap-hash", name)
     }
 
     /// Blob-shaped bytes: binary, with repeats, long enough to span many
