@@ -24,16 +24,17 @@ use crate::report::OutputFormat;
 /// mode can fail the same way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum RepairMode {
-    /// Repair in place when the target can be opened for writing, and fall
-    /// back to the temp path when it cannot. The default.
+    /// Repair in place when the target can be opened for writing, and write
+    /// the file the `temp` way when it cannot. The default.
     #[default]
     Auto,
     /// Repair in place: write only the bytes that are wrong, at the offsets
     /// they belong at. No `_tmp` file, and the peak extra disk is the file's
     /// *growth* rather than its size.
     Inplace,
-    /// Write `{path}_tmp` and rename it over the target. The original is
-    /// never touched, and the peak extra disk is the whole file.
+    /// Assemble the repair in `{path}_tmp` and rename it over the target. The
+    /// target file is never modified and the swap is atomic, and the peak
+    /// extra disk is the whole file.
     Temp,
     /// Delete the target and write the file from scratch. Zero peak extra
     /// disk, and a full download for every file it touches.

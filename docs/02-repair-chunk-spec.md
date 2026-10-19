@@ -130,9 +130,11 @@ Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
 - **in place** (the default): the target is opened `read+write` and only the bytes that are
   wrong are written, at the offsets they belong at. No `_tmp` file is created, and the peak
   extra disk is the file's **growth** rather than its size.
-- **temp**: `{path}_tmp` is written and renamed over the target. The original is never
-  modified, and the peak extra disk is the whole file. This is the escape hatch, and the
-  fallback for a target that cannot be opened for writing.
+- **temp**: the repair is assembled in `{path}_tmp` and renamed over the target, so the
+  **target file is never modified** and the swap is atomic — a repair that fails leaves the
+  target exactly as it was. The peak extra disk is the whole file. It is the mode to pick
+  when the target must not be touched, and the way a file is written when its target cannot
+  be opened for writing.
 
 Per file `F`:
 1. **Scan** — one read of `game_dir/F.path` that answers everything: the whole-file MD5 (the
@@ -161,7 +163,7 @@ Per file `F`:
    those are redone; if they still do not match, the file is counted as failed and the run
    continues — after all files, `Ok(summary, 3)` (skips the post-phase so `config.ini` is
    not bumped while damaged) — not `Err(RunFailure::write)`.
-6. A target that cannot be opened for writing degrades to the temp path, loudly: write
+6. A target that cannot be opened for writing is written the temp way, loudly: write
    `{path}_tmp` (kept, not truncated), work only on chunks with
    `offset+uncompressed_size > have` (the already-complete prefix is kept; the final
    whole-file MD5 gates the rename), then `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic
@@ -169,11 +171,12 @@ Per file `F`:
    and continue.
 7. `--check-only`: perform only step 1 for all files and report; write nothing.
 
-**What the in-place path gives up.** The original is no longer protected from a crash: a run
-that dies mid-file leaves a file that fails the same check and converges on the next run
-(resume-by-verification, not resume-by-length). The version in `config.ini` is still not
-bumped by a run that did not finish, and the whole-file MD5 is still the gate that decides
-whether a file is good. docs/07 §5 lists every weakened and new invariant.
+**How the two modes resume.** In place there is no artefact to resume from and none is
+needed: the scan of step 1 finds the chunks that are already correct where they belong, so
+the next run rewrites only the rest — and a corrupt prefix is not something it can inherit.
+The temp mode resumes by **length**: the completed prefix of `{path}_tmp` is kept and the
+next run continues it. The whole-file MD5 is the gate in both, and the version in
+`config.ini` is advanced only by a run in which every planned file verified.
 
 Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated
 and the final whole-file MD5 gates the file. Any-version → latest works because the plan is
@@ -232,14 +235,18 @@ derived from the latest manifest alone (local manifest is a pure optimization).
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
 download_bytes, deleted_extra_bytes}` (numeric-only; the versions were already
 reported at Step 2.5). Exit code per §1. Rerun is safe
-(skips intact files, resumes partial `*_tmp`).
+(skips intact files, and re-verifies the rest: the in-place path finds the chunks that
+are already right where they belong, the temp path resumes the `*_tmp` prefix).
 
 ## 3. Disk-usage argument (why minimal)
 
 - Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
-- During: transient per active file = `≤ 1 × file size` (`_tmp` grows beside the old file) plus pipe
-  buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no in-game manifest cache.
-  Peak ≈ `io_threads × largest_file`. With `io_threads=1` the tool needs only
+- During: transient per active file = the file's **growth** under the in-place path
+  (`≤ 1 × file size` under `--repair-mode temp`, where the `_tmp` grows beside the old
+  file) plus pipe buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip
+  staging, no in-game manifest cache. Peak ≈ `io_threads × largest growth`, which is 0
+  for a same-size repair. Under `--repair-mode temp` the peak is
+  `io_threads × largest_file`, and with `io_threads=1` the tool needs only
   `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
   missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).
@@ -249,11 +256,11 @@ reported at Step 2.5). Exit code per §1. Rerun is safe
 | Failure | Handling |
 |---|---|
 | Manifest MD5 mismatch | retry whole fetch up to 5×, then abort exit 2 (never patch from bad metadata) |
-| Chunk download corrupt (final MD5 fail) | delete `_tmp`, retry file ×5, then fail file exit 3 |
+| Chunk download corrupt (final MD5 fail) | the temp path deletes `_tmp` and retries the file ×5; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
-| Interrupted run | `_tmp` resume by length + final MD5; leftover `*_tmp` purged only via `--purge-before`/`--purge-after` |
+| Interrupted run | the in-place path re-verifies and continues (the chunks that are already right stay right); the temp path resumes by length; a leftover `*_tmp` is purged only via `--purge-before`/`--purge-after` |
 
 ## 5. What was deliberately excluded (and when to add)
 

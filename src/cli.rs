@@ -100,11 +100,11 @@ pub struct Args {
 
     /// How each file is repaired.
     /// `auto` (the default) repairs in place when the target can be opened
-    /// for writing, and falls back to `temp` when it cannot; `inplace`
-    /// forces the in-place path; `temp` writes `{path}_tmp` and renames it
-    /// over the target (the original is never touched, and the peak extra
-    /// disk is the whole file); `discard` deletes the target and writes it
-    /// from scratch.
+    /// for writing, and writes it the `temp` way when it cannot; `inplace`
+    /// forces the in-place path; `temp` assembles the repair in `{path}_tmp`
+    /// and renames it over the target — **the target file is never modified**
+    /// and the swap is atomic, at the cost of the whole file existing twice;
+    /// `discard` deletes the target and writes it from scratch.
     #[arg(long, value_enum)]
     pub repair_mode: Option<RepairMode>,
 

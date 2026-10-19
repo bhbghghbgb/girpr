@@ -338,9 +338,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
 
-    // The single-writer lock. Two runs against one install are safe under
-    // the temp path and not under the in-place one, so a run that mutates
-    // the install takes the lock — and only such a run, and only when the
+    // The single-writer lock. Two runs against one install can write
+    // conflicting bytes into the same file, so a run that mutates the
+    // install takes the lock — and only such a run, and only when the
     // path scope admits the lock file (the same rule `config.ini` lives
     // under: a path outside the scope does not exist to the run).
     let _lock = if !readonly
