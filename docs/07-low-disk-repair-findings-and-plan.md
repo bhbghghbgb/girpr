@@ -8,6 +8,16 @@ the two disagree this file wins once implemented; until then `docs/02` is still
 the spec. Every claim about current behaviour is anchored to a file and line so
 it can be re-checked when the code moves.
 
+**Status: implemented.** The in-place repair, `--repair-mode`, `--max-ram-bytes`
+and `--scan` are in the tree; `docs/02` step 6 and `docs/03` §6 have been
+rewritten to match, and this file is now the spec for the repair algorithm.
+The commit-separated plan in §9 is kept as the record of how it was built —
+one commit per behaviour, each with its own tests — and every commit in it
+landed as described, with two deliberate deviations: the **mode resolution**
+arrived with the writer rather than after it (the writer needs to know which
+path it is on), and the **ordered tier** fell back to the temp path rather than
+being deferred (it shipped in the next commit, as planned).
+
 ## 0. The question
 
 > The current approach is "write `{path}_tmp`, then `rename` over the target".

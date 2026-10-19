@@ -460,6 +460,7 @@ one that earns the whole exercise.
 | 3 | **no id in `expectations.must_not_fetch` was requested** | the server's request log |
 | 4 | exit `0`, `config_bumped=0`, and every path outside the scope is untouched on disk | `SUMMARY` + the per-run tree diff |
 | 5 | **the eight capture paths are pairwise distinct** | `patchmaps/*.json` |
+| 6 | **the two repair modes produce the same file, and the in-place one writes less** | a second run over a second copy |
 
 Assertion 4's `config_bumped=0` is the tool stating that a scoped run
 deliberately did not put the bytes in place; the tree diff is what proves it did
@@ -474,6 +475,20 @@ But a repeat would make the **second** run silently skip — the file is already
 the new version — and report `download_bytes=0` against a non-zero expectation,
 which is a baffling failure to diagnose from the number that is wrong.
 
+Assertion 6 is the **differential**, and it is the one that makes the space
+claim checkable. Each repair capture is driven **twice**, on two copies of the
+same fixture: once with `--repair-mode temp` and once with the default. The two
+runs must produce the **same file** — the mode is a choice of how to get there,
+not of what to produce — and the in-place run must write **strictly fewer**
+bytes than the temp run, which writes the whole file. The offline fixture is
+128 bytes, too small to tell "wrote 128" from "wrote 64"; here the difference
+is megabytes, and the bridge is the only place that can show it.
+
+Nothing is relaxed for it. Assertion 1 still holds for **both** modes: a chunk
+whose content the old file cannot supply cannot be "already correct" at its
+destination, so it is always fetched, and a chunk it *can* supply is copied —
+by either mode.
+
 ### 7.1 The figure assertion is exact, not approximate
 
 `girpr`'s `download_bytes` counts the actual bytes of files that were promoted,
@@ -483,6 +498,18 @@ uncompressed_size)` match on the old side. A6 asserts `len(blob) ==
 compressed_size`, and the runtime ledger folds the real measurement back into the
 manifest's reservation, so the two figures are equal by construction — not
 approximately equal, and not equal only when nothing retries.
+
+The same reasoning carries the in-place path: a chunk the old file cannot supply
+is fetched by either mode, and a chunk it can supply is copied by either mode —
+the in-place path copies it from inside the file instead of from a temp file. So
+the equality holds for the in-place mode too, and it is worth pinning rather
+than relaxing: it is what proves the new writer fetches the same set the patchmap
+says a consumer must fetch, and not one chunk more.
+
+If the bridge is ever run with `--max-ram-bytes 0`, the **ordered** tier is
+selected, and a shifted chunk it could not salvage is downloaded instead of
+copied — so `download_bytes` becomes an **upper** bound rather than an equality.
+The bridge says so rather than silently asserting the wrong direction.
 
 ### 7.2 Per-class expectations
 

@@ -130,3 +130,24 @@ warning and a sink, never a failure.
 
 Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, no dispatcher
 persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` reuse dir not retained.
+
+**The in-place repair weakens four invariants** (docs/07 §5 has the full list and the reason
+for each):
+
+- the original is no longer protected from a crash — a file that fails its own whole-file
+  MD5 is written in place, and a run that dies mid-file leaves a file that fails the same
+  check and converges on the next run;
+- resume is by **verification** (the scan finds the chunks that are already right), not by
+  length, so there is no `_tmp` artefact to resume from — the temp path still has one, and
+  `--repair-mode temp` still uses it;
+- a final-MD5 mismatch redoes only the chunks the per-chunk verdicts name, instead of
+  deleting the temp and restarting the file;
+- the peak extra disk is `io_threads × largest file` **growth**, not `io_threads × largest
+  file`.
+
+**What is deliberately not implemented yet:** the interval-graph optimum for the chunk order
+(one pure function, `repair::reuse::salvage_order`, produces the order today and can be
+replaced without touching the writer); cross-file reuse, which is mutually exclusive with an
+in-place repair until the file order is topological; a compressed chunk cache on disk; a
+reclaim-on-demand pass that deletes files to make room mid-run.
+
