@@ -613,6 +613,45 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
 }
 
 #[tokio::test]
+async fn the_run_counts_the_paths_it_used() {
+    // The disk claim of the run, in two numbers: how many files were written
+    // where they lie, and how many went through a `_tmp`.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("mode_counts");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+
+    // The default: in place.
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 1);
+    assert_eq!(summary.files_temp.load(Ordering::Relaxed), 0);
+
+    // The same file, forced through the temp path.
+    let dir2 = temp_dir("mode_counts_temp");
+    write_game_file(&dir2, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
+    let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    let (summary, code) = repair::run(ctx).await.expect("temp run");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
+    assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
+    // The temp path wrote the whole file; the in-place path wrote one chunk.
+    assert_eq!(summary.write_bytes.load(Ordering::Relaxed), 128);
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn an_interrupted_in_place_run_resumes_by_verification() {
     // The state an interrupted in-place run leaves behind: some chunks
     // correct where they belong, some not. There is no artefact to resume

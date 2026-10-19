@@ -169,20 +169,20 @@ impl Summary {
     /// much was staged at once.
     pub fn reserve_ram_bytes(&self, n: u64) -> bool {
         let limit = self.ram_limit.load(Ordering::Relaxed);
-        let mut cur = self.ram_bytes.load(Ordering::Relaxed);
+        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
             if next > limit {
                 return false;
             }
-            match self.ram_bytes.compare_exchange_weak(
+            match self.ram_reserved.compare_exchange_weak(
                 cur,
                 next,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
-                    self.ram_peak.fetch_max(next, Ordering::Relaxed);
+                    self.ram_bytes.fetch_max(next, Ordering::Relaxed);
                     return true;
                 }
                 Err(actual) => cur = actual,
@@ -192,12 +192,12 @@ impl Summary {
 
     /// Give a reservation back: the file that held it is done.
     pub fn release_ram_bytes(&self, n: u64) {
-        self.ram_bytes.fetch_sub(n, Ordering::Relaxed);
+        self.ram_reserved.fetch_sub(n, Ordering::Relaxed);
     }
 
     /// The peak staged payload of the run.
     pub fn ram_peak_bytes(&self) -> u64 {
-        self.ram_peak.load(Ordering::Relaxed)
+        self.ram_bytes.load(Ordering::Relaxed)
     }
 
     /// `--fail-fast` armed?
@@ -325,18 +325,22 @@ mod tests {
         s.set_ram_limit(Some(100));
         assert_eq!(s.max_ram_bytes(), Some(100));
         assert!(s.reserve_ram_bytes(60));
-        assert_eq!(s.ram_bytes.load(Ordering::Relaxed), 60);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 60);
         // 60 + 40 == the limit: allowed.
         assert!(s.reserve_ram_bytes(40));
-        assert_eq!(s.ram_bytes.load(Ordering::Relaxed), 100);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 100);
         // One more byte: refused, and nothing was added.
         assert!(!s.reserve_ram_bytes(1));
-        assert_eq!(s.ram_bytes.load(Ordering::Relaxed), 100, "no partial add");
+        assert_eq!(
+            s.ram_reserved.load(Ordering::Relaxed),
+            100,
+            "no partial add"
+        );
         // The peak remembers what was staged at once, even after it is given
         // back.
         assert_eq!(s.ram_peak_bytes(), 100);
         s.release_ram_bytes(100);
-        assert_eq!(s.ram_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 0);
         assert_eq!(s.ram_peak_bytes(), 100, "the peak is not a live total");
     }
 
@@ -368,9 +372,9 @@ mod tests {
             })
             .collect();
         let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
-        assert_eq!(total * 100, s.ram_bytes.load(Ordering::Relaxed));
+        assert_eq!(total * 100, s.ram_reserved.load(Ordering::Relaxed));
         assert!(
-            s.ram_bytes.load(Ordering::Relaxed) <= 1000,
+            s.ram_reserved.load(Ordering::Relaxed) <= 1000,
             "eight racing reservations overshot"
         );
     }

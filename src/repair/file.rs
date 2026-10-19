@@ -82,6 +82,21 @@ pub struct ChunkStats {
     /// Chunks that were already correct where they belong and were not
     /// written at all. The in-place path's own "kept" count.
     pub chunks_kept: u64,
+    /// Bytes written into the install for this file. The per-file half of
+    /// the run's `write_bytes`.
+    pub bytes_written: u64,
+    /// Which path wrote this file.
+    pub mode: Mode,
+}
+
+/// How one file was written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Repaired in place: the target was written where it lies.
+    #[default]
+    Inplace,
+    /// Written through `{path}_tmp` and renamed over the target.
+    Temp,
 }
 
 /// Run the repair loop over the whole plan, bounded to `jobs` concurrent files.
@@ -154,11 +169,22 @@ pub async fn repair_all(
                     Ok(Repaired::Skipped) => {
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(Repaired::Repaired(_stats)) => {
+                    Ok(Repaired::Repaired(stats)) => {
                         // `download_bytes` is already live: it is incremented
                         // per chunk inside `write_downloaded_chunk`, because the
                         // runtime hard stop has to read it mid-flight.
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
+                        // Which path wrote it. The disk claim of the run is
+                        // "how many files were written where they lie", and
+                        // this is the number that says it.
+                        match stats.mode {
+                            Mode::Inplace => {
+                                ctx.summary.files_inplace.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Mode::Temp => {
+                                ctx.summary.files_temp.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                     }
                     Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
@@ -232,9 +258,10 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
 
-    // `--repair-mode temp` is today's behaviour, exactly. Every other mode
-    // starts with the in-place path, which is the one that saves disk.
-    let mut inplace = ctx.repair_mode != RepairMode::Temp;
+    // The mode for this file. `--repair-mode temp` never uses the in-place
+    // path; the rest decide from what the target is.
+    let mut mode = resolve_mode(ctx.repair_mode, &final_path);
+    let mut inplace = mode == Mode::Inplace;
 
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
@@ -258,12 +285,17 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         match outcome {
             Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
             Ok(Inplace::DryRun) => return Ok(Repaired::DryRun),
-            Ok(Inplace::Repaired(stats)) => return Ok(Repaired::Repaired(stats)),
+            Ok(Inplace::Repaired(stats)) => {
+                let mut stats = stats;
+                stats.mode = mode;
+                return Ok(Repaired::Repaired(stats));
+            }
             // The in-place path cannot run for this file. The temp path can:
             // it does not need write access to the target. The switch is
             // permanent for this file — an attempt is not spent on it.
             Ok(Inplace::Unavailable(reason)) => {
                 tracing::warn!(file = %file.rel, reason, "in-place repair unavailable -> temp");
+                mode = Mode::Temp;
                 inplace = false;
                 continue;
             }
@@ -304,6 +336,40 @@ enum Inplace {
     /// This path cannot run for this file; the caller should use the other
     /// one. The reason is for the log.
     Unavailable(&'static str),
+}
+
+/// How one file will be repaired.
+///
+/// The table (docs/07 §4.4):
+///
+/// | the target              | mode                          |
+/// |-------------------------|-------------------------------|
+/// | does not exist          | in place — it is created      |
+/// | an existing regular file| in place                      |
+/// | a directory, a symlink  | temp — it is not a file       |
+///
+/// `--repair-mode` decides whether the in-place path is tried at all:
+/// `temp` never is, and `discard` deletes the target first and then repairs
+/// it in place.
+///
+/// A target that turns out to be unopenable for writing is **not** decided
+/// here: the attempt finds out and answers `Inplace::Unavailable`, and the
+/// caller falls back to the temp path with a warning. Deciding it from the
+/// metadata alone would be a guess; deciding it from the open is a fact.
+fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {
+    if requested == RepairMode::Temp {
+        return Mode::Temp;
+    }
+    match std::fs::symlink_metadata(path) {
+        // An existing regular file: repair it where it lies.
+        Ok(m) if m.is_file() => Mode::Inplace,
+        // A directory, a symlink, a device: not a file we can write into.
+        // The temp path replaces the path with a regular file, which is what
+        // a manifest entry means.
+        Ok(_) => Mode::Temp,
+        // Not there: the in-place path creates it.
+        Err(_) => Mode::Inplace,
+    }
 }
 
 /// The temp path: the original size + MD5 check, then the attempt.
@@ -606,7 +672,7 @@ async fn attempt_inplace_inner(
         let dst = c.offset.max(0) as u64;
         if let Some(bytes) = &captured[i] {
             // A staged source: the bytes are already verified.
-            write_at(ctx, &mut handle, dst, bytes)?;
+            write_at(ctx, stats, &mut handle, dst, bytes)?;
             stats.chunks_reused += 1;
         } else if let Some(o) = &order
             && o.live[k]
@@ -615,6 +681,7 @@ async fn attempt_inplace_inner(
             // The source survives the order: copy it from inside the file.
             copy_within(
                 ctx,
+                stats,
                 &mut handle,
                 src,
                 dst,
@@ -631,7 +698,7 @@ async fn attempt_inplace_inner(
     // ordered tier a hole can still hold a source that a later chunk needs.
     let layout = file.layout();
     for (offset, len) in &layout.gaps {
-        zero_fill(ctx, &mut handle, *offset, *len)?;
+        zero_fill(ctx, stats, &mut handle, *offset, *len)?;
     }
 
     // The file must end at its manifest size: shorter means the tail is
@@ -728,10 +795,17 @@ enum Tier {
 }
 
 /// Write `bytes` at `offset`.
-fn write_at(ctx: &FileCtx, f: &mut File, offset: u64, bytes: &[u8]) -> Result<()> {
+fn write_at(
+    ctx: &FileCtx,
+    stats: &mut ChunkStats,
+    f: &mut File,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<()> {
     reserve_write(ctx, bytes.len() as u64)?;
     f.seek(SeekFrom::Start(offset))?;
     f.write_all(bytes)?;
+    stats.bytes_written += bytes.len() as u64;
     Ok(())
 }
 
@@ -742,6 +816,7 @@ fn write_at(ctx: &FileCtx, f: &mut File, offset: u64, bytes: &[u8]) -> Result<()
 /// *handle* — only in the *file*, which the write order guarantees.
 fn copy_within(
     ctx: &FileCtx,
+    stats: &mut ChunkStats,
     f: &mut File,
     src: u64,
     dst: u64,
@@ -759,6 +834,7 @@ fn copy_within(
         reserve_write(ctx, n as u64)?;
         f.seek(SeekFrom::Start(dst + done))?;
         f.write_all(&buf[..n])?;
+        stats.bytes_written += n as u64;
         done += n as u64;
     }
     Ok(())
@@ -855,7 +931,13 @@ fn trim_is_free(file: &PlannedFile, entries: &[(String, i64, i64)]) -> bool {
 ///
 /// A hole in the chunk coverage is a region no chunk claims, so nothing else
 /// would ever write it: without this it would keep the old file's bytes.
-fn zero_fill(ctx: &FileCtx, out: &mut File, offset: u64, len: u64) -> Result<()> {
+fn zero_fill(
+    ctx: &FileCtx,
+    stats: &mut ChunkStats,
+    out: &mut File,
+    offset: u64,
+    len: u64,
+) -> Result<()> {
     if len == 0 {
         return Ok(());
     }
@@ -868,6 +950,7 @@ fn zero_fill(ctx: &FileCtx, out: &mut File, offset: u64, len: u64) -> Result<()>
     while left > 0 {
         let n = (left as usize).min(zeros.len());
         out.write_all(&zeros[..n])?;
+        stats.bytes_written += n as u64;
         left -= n as u64;
     }
     Ok(())
@@ -926,7 +1009,7 @@ async fn repair_attempt_inner(
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f)? {
+        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, stats)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -964,6 +1047,7 @@ fn try_reuse_slice(
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
+    stats: &mut ChunkStats,
 ) -> Result<ChunkOutcome> {
     let end = (c.offset + c.uncompressed_size) as u64;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1009,6 +1093,7 @@ fn try_reuse_slice(
                 // appears in neither `download_bytes` nor the plan's estimate.
                 reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
+                stats.bytes_written += n as u64;
                 remaining -= n as u64;
             }
             Ok(ChunkOutcome::Reused)
@@ -1088,6 +1173,7 @@ async fn write_downloaded_chunk(
     out.seek(SeekFrom::Start(c.offset as u64))?;
     reserve_write(ctx, decoded.len() as u64)?;
     out.write_all(&decoded)?;
+    stats.bytes_written += decoded.len() as u64;
     stats.chunks_downloaded += 1;
     Ok(())
 }
@@ -1151,5 +1237,66 @@ fn promote_tmp(
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
         chunks_kept: stats.chunks_kept,
+        bytes_written: stats.bytes_written,
+        mode: Mode::Temp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resolution table, as a table.
+    ///
+    /// The mode is decided from what the target **is**, not from what the
+    /// repair would like it to be: a path that is not a regular file cannot
+    /// be written in place, and the temp path is the one that replaces a
+    /// path with a regular file.
+    #[test]
+    fn the_resolution_table_is_pinned() {
+        let dir = crate::testtemp::TempDir::new("girpr_test_resolve", "table");
+
+        // Not there: the in-place path creates it.
+        let missing = dir.join("missing.dat");
+        assert_eq!(resolve_mode(RepairMode::Auto, &missing), Mode::Inplace);
+        assert_eq!(
+            resolve_mode(RepairMode::Inplace, &missing),
+            Mode::Inplace
+        );
+
+        // An existing regular file: in place.
+        let file = dir.join("f.dat");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(resolve_mode(RepairMode::Auto, &file), Mode::Inplace);
+
+        // A directory: not a file we can write into.
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(resolve_mode(RepairMode::Auto, &sub), Mode::Temp);
+
+        // A symlink: the temp path replaces it with a regular file, which is
+        // what a manifest entry means. (Windows needs the privilege, so the
+        // case is skipped where it cannot be made.)
+        #[cfg(unix)]
+        {
+            let link = dir.join("link.dat");
+            std::os::unix::fs::symlink(&file, &link).unwrap();
+            assert_eq!(resolve_mode(RepairMode::Auto, &link), Mode::Temp);
+        }
+
+        // `--repair-mode temp` never uses the in-place path.
+        assert_eq!(resolve_mode(RepairMode::Temp, &file), Mode::Temp);
+        assert_eq!(resolve_mode(RepairMode::Temp, &missing), Mode::Temp);
+    }
+
+    /// The mode a file was repaired with is carried on its stats, so the run
+    /// can count the paths it used.
+    #[test]
+    fn the_mode_is_part_of_the_file_stats() {
+        let mut s = ChunkStats::default();
+        assert_eq!(s.mode, Mode::Inplace, "the default is the disk-saving one");
+        s.mode = Mode::Temp;
+        assert_eq!(s.mode, Mode::Temp);
+        assert_ne!(Mode::Inplace, Mode::Temp);
+    }
 }
