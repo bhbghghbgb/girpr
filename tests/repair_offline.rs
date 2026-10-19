@@ -764,8 +764,8 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
 
 #[tokio::test]
 async fn a_second_run_against_the_same_install_is_refused() {
-    // The in-place path is not safe against two runs: they write into the
-    // same files. The lock is what stops the second one — and it stops it
+    // Two runs against one install can write conflicting bytes into the same
+    // file. The lock is what stops the second one — and it stops it
     // loudly, by naming the file and the pid that holds it.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
@@ -1903,11 +1903,11 @@ async fn print_plan_with_dry_run_is_coherent() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn max_write_bytes_stops_mid_flight_and_leaves_the_tmp() {
+async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run() {
     // The only ceiling that cannot be a pre-flight refusal: reuse success is
     // decided per chunk at runtime, against bytes that may not be there. This
-    // run downloads both files, so almost every byte written into `*_tmp` is a
-    // write the plan's estimate never counted.
+    // run downloads both files, so almost every byte written into the install
+    // is a write the plan's estimate never counted.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("max_write");
@@ -1936,13 +1936,13 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_tmp() {
     assert!(line.contains("stopped=write"), "{line}");
     assert!(line.contains("write_bytes="), "{line}");
 
-    // The un-promoted `_tmp` is left in place: resume-by-length makes the next
-    // run a smaller run, not a corrupt one.
+    // The file is left half-written: the next run re-verifies it and finishes
+    // it, so an aborted run is a smaller run, not a corrupt one.
     assert!(!dir.join("config.ini").exists(), "post-phase is skipped");
     assert_ne!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         fx2.files[0].data,
-        "nothing was promoted"
+        "the file was not finished"
     );
 
     mock.stop();

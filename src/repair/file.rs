@@ -1,5 +1,5 @@
-//! Per-file repair: skip check, in-place patch, `_tmp` resume, chunk reuse vs
-//! download, final MD5 (docs/02 step 6, docs/07 §4).
+//! Per-file repair: skip check, in-place patch, chunk reuse vs download,
+//! final MD5 (docs/02 step 6, docs/07 §4).
 //!
 //! Per file, in order:
 //! 1. `size + whole-file MD5` match → [`Repaired::Skipped`], 0 bytes touched.
@@ -7,9 +7,11 @@
 //!    `read+write` and only the bytes that are wrong are written, at the
 //!    offsets they belong at. No `_tmp` file, and the peak extra disk is the
 //!    file's *growth* rather than its size.
-//! 3. The temp path is the fallback and the escape hatch: `{path}_tmp` is
+//! 3. `--repair-mode temp` writes the file the other way: `{path}_tmp` is
 //!    written (kept, not truncated) and renamed over the target, so the
-//!    original is never touched. It is what `--repair-mode temp` asks for.
+//!    target file is never modified and the swap is atomic. That is the
+//!    property to pick the mode for, and it is also the fallback for a
+//!    target that cannot be opened for writing.
 //!
 //! The in-place path, in detail:
 //! - **scan** — one read that answers everything: the whole-file MD5 (the
@@ -65,9 +67,11 @@ pub enum Repaired {
     /// `--dry-run`: the file would be repaired, nothing was written.
     DryRun,
     /// A runtime hard stop fired. The file was **not** failed and
-    /// **not** repaired: its `*_tmp` is left in place and the next run resumes
-    /// from it (S3), which is what makes an aborted run a smaller run rather
-    /// than a broken one. Not counted in any counter.
+    /// **not** repaired, and the work already done for it is kept: under
+    /// `--repair-mode temp` the `*_tmp` is left in place and the next run
+    /// resumes from it, and in place the chunks that were already correct
+    /// stay correct. Either way an aborted run is a smaller run rather than
+    /// a broken one. Not counted in any counter.
     Stopped,
 }
 
@@ -237,7 +241,10 @@ struct FileCtx {
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // A runtime hard stop already fired: drop out without touching the file.
-    // Its `*_tmp` (if any) stays, and the next run resumes from it.
+    // The work already done for it is kept — under `--repair-mode temp` the
+    // `*_tmp` stays and the next run resumes from it, in place the chunks
+    // that are already right stay right — so an aborted run is a smaller
+    // run, not a broken one.
     if ctx.summary.download_stopped() || ctx.summary.write_stopped() || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
@@ -259,8 +266,9 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // `FullPath + "_tmp"` (OpenOrCreate), verifies MD5, then `Move(tmp, final,
     // true)` and `Delete(tmp)` on mismatch — same contract here, including the
     // suffix, so foreign leftovers are swept on the next run.
-    // This is the **fallback** and the `--repair-mode temp` path; the
-    // in-place path is the default and never creates a `_tmp`.
+    // This is the `--repair-mode temp` path, and the way a file is written
+    // when its target cannot be opened for writing; the in-place path is the
+    // default and never creates a `_tmp`.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L330-L331
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
@@ -297,11 +305,12 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                 stats.mode = mode;
                 return Ok(Repaired::Repaired(stats));
             }
-            // The in-place path cannot run for this file. The temp path can:
-            // it does not need write access to the target. The switch is
-            // permanent for this file — an attempt is not spent on it.
+            // The target cannot be opened for writing, so this file cannot
+            // be written where it lies. The temp path can: it does not need
+            // write access to the target. The switch is permanent for this
+            // file — an attempt is not spent on it.
             Ok(Inplace::Unavailable(reason)) => {
-                tracing::warn!(file = %file.rel, reason, "in-place repair unavailable -> temp");
+                tracing::warn!(file = %file.rel, reason, "cannot write the target in place -> writing it through a temp file");
                 mode = Mode::Temp;
                 inplace = false;
                 continue;
@@ -383,9 +392,11 @@ pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mod
 
 /// The temp path: the original size + MD5 check, then the attempt.
 ///
-/// This is today's behaviour, unchanged: the target is never modified, the
-/// work happens in `{path}_tmp`, and the final whole-file MD5 gates the
-/// atomic rename over the target.
+/// The repair is assembled in `{path}_tmp` and swapped over the target with
+/// an atomic rename, so **the target file is never modified** and a repair
+/// that fails leaves it exactly as it was. That is the property this mode
+/// exists for; what it costs is the disk — the whole file has to exist
+/// twice, for as long as the repair takes.
 async fn attempt_temp(
     ctx: &FileCtx,
     file: &PlannedFile,
@@ -437,9 +448,9 @@ async fn attempt_temp(
 ///    not match, the per-chunk verdicts name the culprit and only those are
 ///    redone.
 ///
-/// A file that cannot be repaired in place — the target cannot be opened for
-/// writing, or its moving bytes do not fit the RAM budget — answers
-/// [`Inplace::Unavailable`] and the caller uses the temp path instead.
+/// A target that cannot be opened for writing answers [`Inplace::Unavailable`]
+/// and the caller writes that file the other way — through a `_tmp`, which
+/// does not need write access to the target.
 async fn attempt_inplace(
     ctx: &FileCtx,
     file: &PlannedFile,
@@ -1060,9 +1071,10 @@ fn try_reuse_slice(
 ) -> Result<ChunkOutcome> {
     let end = (c.offset + c.uncompressed_size) as u64;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
-    // S3 (see README): resume-by-length. A completed prefix is kept without
-    // per-chunk re-verification; the final whole-file MD5 gates promotion, so a
-    // corrupt prefix only wastes work before failing shut. Mirrors Starward's
+    // Resume-by-length: the temp mode's resume property (see README). A
+    // completed prefix is kept without per-chunk re-verification; the final
+    // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
+    // before failing shut. Mirrors Starward's
     // `if (fs.Length < chunk.Offset + chunk.UncompressedSize)` skip.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343
     if cur_len >= end {
@@ -1191,10 +1203,11 @@ async fn write_downloaded_chunk(
 /// runtime hard stop.
 ///
 /// Reserving **before** the write is what makes the ceiling meaningful: the
-/// bytes land in `*_tmp` as soon as `write_all` returns, so a check-then-write
-/// under `--io-threads N` would overshoot by up to N-1 buffers. On refusal the
-/// file is left where it is and `*_tmp` keeps whatever prefix it already had,
-/// which S3 resume-by-length picks up next run.
+/// bytes land in the install as soon as `write_all` returns, so a
+/// check-then-write under `--io-threads N` would overshoot by up to N-1
+/// buffers. On refusal the file is left where it is, and whatever was
+/// already correct in it stays correct: the next run re-verifies and
+/// continues.
 fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     if ctx.summary.reserve_write_bytes(n) {
         return Ok(());

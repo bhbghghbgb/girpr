@@ -1,15 +1,14 @@
 //! The single-writer lock.
 //!
-//! Two `girpr` runs against one install are **not** safe any more. Under the
-//! temp path they were: both runs share one `*_tmp`, its MD5 fails unless
-//! exactly one of them wrote the right bytes, and nothing is promoted
-//! otherwise. Under the in-place path they write into the same files, so two
-//! runs with different plans (`--audio`, `--include`) write conflicting bytes
-//! into one file, and `discard` deletes a file the other run has open.
+//! Two `girpr` runs against one install can write conflicting bytes into the
+//! same file — different `--audio` or `--include` plans, or a `discard` that
+//! deletes a file the other run has open — and neither run can know about the
+//! other.
 //!
 //! The lock is one file — `{game_dir}/girpr.lock` — created with
 //! `create_new(true)`, so the *creation* is the mutual exclusion: there is no
-//! window between "check" and "take".
+//! window between "check" and "take". It holds the pid and the time it was
+//! taken, so a refusal can name the run to look at.
 //!
 //! Two rules keep it from being a nuisance:
 //!

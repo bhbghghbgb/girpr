@@ -3,10 +3,9 @@
 Series note: this is a **third** docs series, independent of the `repair-`
 prefix series (`docs/01`–`docs/03`, which describe the shipped whole-install
 patcher) and of `docs/04` (scope limitations) and `docs/06` (the artifact
-bridge). It describes a change to the algorithm in `docs/02` step 6, so where
-the two disagree this file wins once implemented; until then `docs/02` is still
-the spec. Every claim about current behaviour is anchored to a file and line so
-it can be re-checked when the code moves.
+bridge). It describes the algorithm in `docs/02` step 6, so where the two
+disagree this file is the spec. Every claim about behaviour is anchored to a
+file and line so it can be re-checked when the code moves.
 
 **Status: implemented.** The in-place repair, `--repair-mode`, `--max-ram-bytes`
 and `--scan` are in the tree; `docs/02` step 6 and `docs/03` §6 have been
@@ -21,15 +20,15 @@ being deferred (it shipped in the next commit, as planned).
 ## 0. The question
 
 > The current approach is "write `{path}_tmp`, then `rename` over the target".
-> Can `girpr` recover more space **before** and **during** a repair, given that
-> invariants may be weakened and backwards compatibility is not required?
+> Can `girpr` recover more space **before** and **during** a repair, and what
+> is the right way to write a file?
 > Primary goal: **disk**. Network is secondary. Other wins are welcome.
 
 Everything below is about *transient* disk (the extra bytes the install needs
 while the tool runs). Permanent shrinkage is `--purge-*`'s job and is not
 re-litigated here except where it interacts.
 
-## 1. What the disk is actually spent on today
+## 1. What the disk was spent on
 
 ### 1.1 The mechanism
 
@@ -63,7 +62,7 @@ chunk 0 is intact and whose chunk 1 is corrupt downloads **one** chunk
 
 Three consequences:
 
-| consequence | today | evidence |
+| consequence | the temp-then-promote path | evidence |
 |---|---|---|
 | transient free space needed | `size` of each file being repaired, `× io_threads` in flight | `README.md:200` ("free bytes ≈ `io_threads × largest file`") |
 | disk **writes** per run | `Σ size(file)` over the repaired set | `src/repair/file.rs:363` |
@@ -76,7 +75,7 @@ file even though it is only keeping one byte of it. The first row of the table
 is what `README.md:200` states as the tool's requirement; it follows from the
 code rather than from a choice.
 
-### 1.3 Why the current shape exists
+### 1.3 Why the temp-then-promote contract exists
 
 The temp-then-promote contract buys three things:
 
@@ -85,6 +84,11 @@ The temp-then-promote contract buys three things:
 2. **Promotion is atomic.** `rename` is a metadata operation.
 3. **Resume-by-length (S3).** A leftover `*_tmp` is a completed prefix, so the
    next run continues rather than restarts.
+
+Those three are what `--repair-mode temp` offers, and they are why the mode
+stays: a target that must not be touched has a way to be repaired that does not
+touch it. What the contract costs is the whole file, twice — and §1.2 is what
+that cost is.
 
 Starward does exactly the same thing (`GameInstallHelper.cs:330-331` opens
 `FullPath + "_tmp"` with `FileMode.OpenOrCreate`; `:445` `File.Move(tmp, final,
@@ -97,39 +101,47 @@ default, `ProgressBase.cs:1309`). **So "write the broken file where it lies"
 is a shipped, shipping-launcher behaviour for exactly this scenario.** It is
 simply not what `girpr` copied from Starward.
 
-### 1.4 What is actually being protected
+### 1.4 What each mode buys, and what it costs
 
-The thing the temp protects is a file that has **already failed its own
-whole-file MD5**. That is the definition of a file being repaired. Its previous
-bytes are:
+The temp mode's guarantee is real and worth having: the repair is assembled
+beside the target and swapped in with an atomic rename, so **the target file is
+never modified**, and a repair that fails leaves it exactly as it was. For
+some installs that is the property you want, and it is one flag away.
+
+What it costs is the whole file, twice, for as long as the repair takes. And
+the file it is protecting is one that has **already failed its own whole-file
+MD5** — that is the definition of a file being repaired. Its previous bytes are:
 
 - not part of the install the manifest describes,
 - not usable by the game,
 - worth at most a *network* saving to the next run, and only through the reuse
   map, which `try_reuse_slice` hash-checks anyway.
 
-So the invariant "the original is never modified" is protecting bytes that are
-already known-bad, at the price of rewriting the good ones. That is the whole
-opportunity.
+So the choice is not "safety against risk" — it is **a property against disk**.
+Most repairs want the disk, and the property stays available for the ones that
+want it instead.
 
 ## 2. The disk model, per mode
 
 Let `S` = target size, `O` = current on-disk size (0 if absent), `G` = growth.
 
-| mode | bytes written per repaired file | peak extra free space | reuse sources readable | a crash leaves |
+| mode | bytes written per repaired file | peak extra free space | reuse sources readable | if the run is interrupted |
 |---|---|---|---|---|
-| `temp` (today) | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file, entirely | the old file + a partial `*_tmp` |
-| `inplace` | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | the old file, subject to a write order (§4.4) | a mixed file, re-verified next run |
+| `temp` | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file, entirely | the old file untouched + a partial `*_tmp` |
+| `inplace` (default) | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | the old file, subject to a write order (§4.4) | a mixed file, re-verified next run |
 | `discard` | `S` | `0` | none | a partial file |
+
+The two rows are not a safety ladder: they are two ways to spend disk, and
+each has a property of its own. `inplace` spends the least and writes the
+least; `temp` spends the whole file and, in exchange, **the target file is
+never modified**. `discard` (delete the file, then download it whole) has `0`
+peak but a full network cost, so it is only ever right when nothing on the
+file is reusable — which the plan can decide without reading it.
 
 For a corrupt-but-right-sized file — the common repair case — `inplace` needs
 **zero** extra space and writes only the corrupt bytes. For a file that grows by
 `Δ`, `inplace` needs `Δ`, not `S`. For a fresh install nothing is saved because
 nothing is on disk to save.
-
-`discard` (delete the file, then download it whole) has `0` peak but a full
-network cost, so it is only ever right when nothing on the file is reusable —
-which the plan can decide without reading it.
 
 The `inplace` row is the *bound* that holds for both of its tiers (§4). Tier 1
 — the default — is strictly better than the row says: it writes only the wrong
@@ -206,11 +218,16 @@ relocations so no source is overwritten before it is read (§4.4).
   constraining the reuse, so both shift directions survive and the writes run
   forward instead of backwards.
 
-*Costs / risks.* The "original is never modified" and "a crash leaves the
-install as it was" invariants go away; a file that grows needs `Δ` of free
-space with no query to check it against; the staging costs RAM, bounded by a
-budget; the pre-flight download estimate becomes an upper bound instead of a
-tight figure (§6).
+*Costs / risks.* A file that grows needs `Δ` of free space, with no query
+to check it against; the staging costs RAM, bounded by a budget; the pre-flight
+download estimate becomes an upper bound instead of a tight figure (§6).
+
+*What it does not do.* The temp mode's property — the target file is never
+modified — is not carried over, and it is not carried over *by accident*: it
+is the property `--repair-mode temp` exists to offer (§2), and the choice
+between the two is a choice of what to spend, not of what to risk. A file that
+is interrupted mid-repair fails the same check it failed before, and the next
+run re-verifies and continues.
 
 *Verdict.* **SELECTED.** §4 is the design.
 
@@ -304,8 +321,10 @@ it necessary; if it is needed later it should be its own flag and its own doc.
   `temp` (with a `warn`) if the target cannot be opened read-write.
 - `inplace` / `discard` — forced; no fallback except the same I/O-error one,
   which is reported rather than hidden.
-- `temp` — today's behaviour, kept as the escape hatch and as the mode the
-  artifact bridge exercises.
+- `temp` — the mode whose property is that **the target file is never
+  modified**: the repair is assembled in `{path}_tmp` and swapped in with an
+  atomic rename. It is the mode to pick when the target must not be touched,
+  and the mode the artifact bridge exercises alongside the default.
 
 ### 4.0 Two regimes: patching and relocating
 
@@ -340,8 +359,10 @@ one algorithm but three tiers:
 | **3. `temp`** (`--repair-mode temp`) | asked for | `S` | `0` | 100 % | the whole file | ascending |
 
 Tier 1 and tier 2 produce **the same file**; they differ in how much reuse
-they keep and in which direction they write. Tier 3 is the old behaviour, kept
-for the users who want the old guarantee and for the artifact bridge.
+they keep and in which direction they write. Tier 3 is the other way to write a
+file: the target is never modified, and the whole file is paid for in disk. It
+is there for the users who want that property, and the artifact bridge drives
+it alongside the default.
 
 ### 4.1 Preconditions (all checkable, none assumed)
 
@@ -353,7 +374,7 @@ for the users who want the old guarantee and for the artifact bridge.
 | P4 | no read-only attribute | cleared before an in-place write, Starward-parity (`GameInstallService.cs:232-236`) — `girpr` does not do this today |
 | P5 | one writer per `game_dir` | lock file (commit 9) — under `temp` a collision only wastes work; under `inplace` two runs with different plans can write conflicting bytes (D1) |
 | P6 | the game is not running | already required; under `inplace` it is fatal rather than wasteful |
-| P7 | free space ≥ growth | not checked in v1; a short write fails the file, and `--repair-mode temp` is the recovery |
+| P7 | free space ≥ growth | not checked in v1; a short write fails the file, and `--repair-mode temp` is the mode for a volume with no room for the file's growth |
 | P8 | scope still governs everything | unchanged: out-of-scope paths are neither read for reuse nor written |
 | P9 | RAM ≥ the repair payload | a run-level budget (`--max-ram-bytes`); a file that cannot get its payload falls to the ordered tier (§4.4), not to a failure |
 
@@ -393,7 +414,7 @@ attempt_inplace(file):
     if md5(h) == file.md5: Ok
     else: reverify_chunks(h, file) -> redo only the mismatching ones -> re-check
 
-attempt_temp(file):                    # today's repair_attempt_inner, verbatim
+attempt_temp(file):                    # the temp mode's repair_attempt_inner, verbatim
     ... existing _tmp resume / reuse / download / promote ...
 ```
 
@@ -401,24 +422,24 @@ Six properties worth naming explicitly:
 
 1. **The scan is free.** It replaces the skip check's read (`file.rs:200`) and
    adds per-chunk verdicts to it. The run reads each file **twice** in total
-   (scan, then the final verify) where it reads it **three** times today
+   (scan, then the final verify) where the temp path reads it **three** times
    (skip check, reuse-slice MD5s, final MD5 of the temp).
 2. **Only the wrong chunks are written.** For a corruption repair that is a
    handful of chunks, not the whole file.
 3. **The writes run ascending** — forward, never backwards. That is the
    opposite of the ordered tier's pattern (§4.4) and it is what makes the
    in-place path acceptable on an HDD.
-4. **Every byte written is hash-gated before it lands.** Unchanged from today:
-   a downloaded chunk's MD5 is checked before `write_all` (`file.rs:471`), a
-   reused slice's before the copy (`file.rs:380`).
+4. **Every byte written is hash-gated before it lands.** Unchanged from the
+   temp path: a downloaded chunk's MD5 is checked before `write_all`
+   (`file.rs:471`), a reused slice's before the copy (`file.rs:380`).
 5. **Resume is free and needs no artefact.** An interrupted in-place file is
    simply a file with some correct and some incorrect chunks; re-running finds
    the correct ones in the scan and rewrites the rest. There is no
-   `*_tmp`, no marker file, no length heuristic — so `S3`'s "resume-by-length"
-   becomes "resume-by-verification", which is strictly stronger (it cannot
-   inherit a corrupt prefix).
-6. **Final-MD5 failure costs one read pass, not a re-download.** Today a
-   mismatch deletes the temp and re-fetches the whole file up to five times
+   `*_tmp`, no marker file, no length heuristic — so the temp mode's
+   "resume-by-length" becomes "resume-by-verification", which is strictly
+   stronger (it cannot inherit a corrupt prefix).
+6. **Final-MD5 failure costs one read pass, not a re-download.** The temp path
+   deletes the temp and re-fetches the whole file up to five times
    (`file.rs:523-530`). Re-verifying per chunk names the culprit.
 
 ### 4.3 The RAM tier — what is staged, and what it is not
@@ -504,9 +525,9 @@ dead weight and `set_len` releases it before a single byte is written. When it
 is false and `O − S` is large, the trim is deferred to the end (the file grows
 during the repair instead) and the reason is logged.
 
-## 5. Invariants: kept, weakened, new
+## 5. The invariants, and each mode's own
 
-**Kept, unchanged.**
+**The tool's, unchanged.**
 
 - The plan derives from the latest manifest alone; the local manifest is an
   optimisation, never an input to correctness.
@@ -519,25 +540,28 @@ during the repair instead) and the reason is logged.
 - `--dry-run`, `--check-only`, `--purge-only` and the path scope write exactly
   what they wrote before.
 
-**Weakened — deliberately, with the reason.**
+**Each mode's own.** These are the properties the two ways of writing a file
+have, side by side. They are not a ladder: the left column is what the mode
+gives you, the right column is what it costs.
 
-| # | invariant | why it is safe to drop it |
+| | `inplace` (default) | `temp` (`--repair-mode temp`) |
 |---|---|---|
-| W1 | "the original is never modified in place" | the file already failed its own whole-file MD5; its bytes are not part of the install and are worth at most a network saving |
-| W2 | "a crash leaves the install at its previous state" | it leaves a file that fails the same check and converges on the next run; the version in `config.ini` is not bumped by a run that did not finish |
-| W3 | "a final-MD5 mismatch deletes the temp and restarts the file" | replaced by per-chunk re-verification, which is both cheaper and narrower |
-| W4 | "`*_tmp` is the resume artefact" | resume-by-verification needs no artefact and cannot inherit a corrupt prefix; the `_tmp` path still exists under `--repair-mode temp` |
-| W5 | "peak disk ≈ `io_threads × largest file`" (`README.md:200`) | it is now `io_threads × largest *growth*`, which is 0 for a same-size repair |
-| W6 | "`stopped=bytes`/`stopped=write`: the next run resumes" | the next run re-verifies and continues; the wording must say so |
+| the target file | is written where it lies: the wrong bytes are replaced in place | is **never modified**: the repair is assembled in `{path}_tmp` and swapped in with an atomic rename |
+| an interrupted run | leaves a file that fails the same check; the next run re-verifies and continues | leaves the target exactly as it was, plus a partial `*_tmp` the next run resumes by length |
+| a final-MD5 mismatch | redoes only the chunks the per-chunk verdicts name | deletes the temp and restarts the file |
+| the resume artefact | none: the scan finds the chunks that are already right, so a corrupt prefix cannot be inherited | the `*_tmp` prefix, kept and continued |
+| peak extra disk | `io_threads × largest *growth*` — 0 for a same-size repair | `io_threads × largest file` |
+| `stopped=bytes`/`stopped=write` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
 
 **New.**
 
 - N1 a single-writer lock (commit 9).
 - N2 read-only attributes cleared before an in-place write.
 - N3 gaps in a chunk layout are zero-filled rather than left as stale bytes.
-- N4 a file whose target cannot be opened `read+write` degrades to `temp`, loudly.
+- N4 a file whose target cannot be opened `read+write` is written the temp
+  way, loudly.
 - N5 a run-level RAM budget (`--max-ram-bytes`) that a file reserves against and
-  that degrades to the ordered tier rather than failing.
+  that falls back to the ordered tier rather than failing.
 
 ## 6. Risks
 
@@ -546,7 +570,7 @@ during the repair instead) and the reason is logged.
 | D1 | two concurrent `girpr` runs | **medium** | lock file, exit 1. Two in-place runs pursuing the *same* manifest write the same bytes and converge, but runs with different `--audio`/`--include` plans write conflicting bytes into one file, and `discard` deletes a file the other run has open (silently losing its work on Unix). Under `temp` a collision only wastes work: both runs share one `*_tmp`, its MD5 fails, nothing is promoted |
 | D2 | read-only attribute on a game file | medium | clear it (P4); today the tool would fail the same way at rename |
 | D3 | power loss mid-file | medium | whole-file MD5 catches it on the next run |
-| D4 | the file is grown and the volume is full | medium | file fails, counted, retried, reported; recovery is `--repair-mode temp` |
+| D4 | the file is grown and the volume is full | medium | file fails, counted, retried, reported; `--repair-mode temp` is the mode for a volume with no room for the file's growth |
 | D5 | `est_download_bytes` becomes an **upper** bound, so `--max-download-bytes` over-refuses | medium | `--scan` (commit 10) makes it exact; documented until then |
 | D6 | cross-file reuse, if ever added, breaks in-place unless file order is topologically sorted | latent | S2 stays same-file-only; recorded here |
 | D7 | the artifact bridge asserts `download_bytes == patchmap total` | **low** | it **still holds** under the RAM tier, and that is worth pinning rather than relaxing. The patchmap's `FETCH` set is "chunks this old file cannot supply" (`tools/capture/src/assemble/mod.rs:745-749`), and the RAM tier downloads exactly that set — a chunk whose content is absent from the old file cannot be "already correct" at its destination, so it is always fetched. The *ordered* tier can **exceed** the total (a shifted chunk it could not salvage is downloaded instead of copied), never fall below it. The bridge therefore gains a mode-vs-mode differential rather than a relaxed bound (commit 11) |
@@ -830,8 +854,8 @@ repair actually downloads, which is the assertion that does not exist today.
 
 `README.md` (the "How it keeps disk usage low" section, the requirements line
 `README.md:200`, the `--max-write-bytes` row, the two new flags, and the
-S1/S2/S3 "deliberate simplifications" note, which becomes S1/S2 + the weakened
-invariants of §5), `docs/02` step 6, `docs/03` §6, and `docs/06`'s
+S1/S2/S3 "deliberate simplifications" note, which becomes S1/S2 + the two
+modes' properties of §5), `docs/02` step 6, `docs/03` §6, and `docs/06`'s
 per-capture assertions.
 
 The bridge amendment is the substantive part, and it is **additive** — nothing

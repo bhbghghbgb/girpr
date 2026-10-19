@@ -14,7 +14,7 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
 | **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 | **artifact bridge** (shipped) | [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md) | the `#[ignore]`d end-to-end test against a real bundle |
-| **low-disk repair** (shipped) | [`docs/07-low-disk-repair-findings-and-plan.md`](docs/07-low-disk-repair-findings-and-plan.md) | why a repair rewrote every file, the options to stop, and the in-place repair that replaced temp-then-promote |
+| **low-disk repair** (shipped) | [`docs/07-low-disk-repair-findings-and-plan.md`](docs/07-low-disk-repair-findings-and-plan.md) | why a repair rewrote every file, the disk model per write mode, and the in-place repair that made the rewrite unnecessary |
 
 The repair-spec series describes the whole-install patcher and is unaffected by
 the scope-limitations tier: a flag list and a byte ceiling are not a change to
@@ -46,7 +46,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
 | `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file.rs` | per-file repair: in-place patch, temp fallback, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
+| `src/repair/file.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
 | `src/repair/lock.rs` | the single-writer lock | `Lock::acquire`, `LOCK_FILE` |
@@ -98,7 +98,7 @@ flowchart TD
         J5b --> J5
         J5 -->|ok| J3b["in place: done, no _tmp<br/>temp: rename _tmp → final"]
         J5 -->|mismatch after 5 tries| J4["count failed, continue"]
-        J2a -->|"the target cannot be opened"| J2b["degrade to the temp path (loudly)"]
+        J2a -->|"the target cannot be opened"| J2b["write it the temp way<br/>(the target is never modified)"]
     end
     J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
@@ -149,15 +149,18 @@ flowchart TD
   work list; under `--include` they are a *check on* the selection, which is why
   the two flags are not redundant. `--max-files N` with exactly N planned files
   passes (`> N`, not `>= N`). One exception to "nothing is written": a
-  **runtime** hard stop, which fires mid-flight by definition. It leaves `*_tmp`
-  files behind — safe, because resume-by-length makes the next run resume rather
-  than restart — and `SUMMARY stopped=` says which ceiling bound and that it
-  happened at all: `stopped=bytes` (`--max-download-bytes`), `stopped=write`
-  (`--max-write-bytes`), `stopped=delete` (a cleanup pass refused). That key is
+  **runtime** hard stop, which fires mid-flight by definition. It leaves the work
+  it had already done in place — under `--repair-mode temp` that is a `*_tmp`
+  file, and resume-by-length makes the next run resume rather than restart; in
+  place, the chunks that were already correct stay correct and the next run
+  re-verifies and continues — and `SUMMARY stopped=` says which ceiling bound and
+  that it happened at all: `stopped=bytes` (`--max-download-bytes`),
+  `stopped=write` (`--max-write-bytes`), `stopped=delete` (a cleanup pass
+  refused). That key is
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
-  promoted**. An attempt that fails and is retried hands its
+  repaired**. An attempt that fails and is retried hands its
   bytes back, so a run that had to retry does not report what the network cost
   the retries. The counter is nevertheless live during the repair, which is what
   `--max-download-bytes` needs to stop mid-flight.
@@ -173,8 +176,8 @@ flowchart TD
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
   exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
-  part of the work and leaves the install to be re-verified by the next run
-  (`SUMMARY stopped=…`). Either way
+  part of the work, and the next run re-verifies and continues (`SUMMARY
+  stopped=…`). Either way
   `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
@@ -221,12 +224,12 @@ S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chu
 single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
-**S3 is gone, and what replaced it is weaker on purpose.** Resume-by-length (a `*_tmp`
-prefix) belonged to the temp path. The in-place path resumes by **verification**: the scan
-finds the chunks that are already correct where they belong, and the next run rewrites only
-the rest. It cannot inherit a corrupt prefix, and it needs no artefact — but the original
-file is no longer protected from a crash, and a run that dies mid-file leaves a file that
-fails the same check. The weakened and new invariants are listed in docs/07 §5.
+**S3 was a property of the temp path, and it is now the mode's own.** Resume-by-length
+(a `*_tmp` prefix) is how `--repair-mode temp` resumes: the completed prefix is kept and the
+next run continues it. The in-place path has no artefact to resume from and needs none — it
+resumes by **verification**: the scan finds the chunks that are already correct where they
+belong, and the next run rewrites only the rest, which cannot inherit a corrupt prefix. The
+two modes' properties are side by side in docs/07 §5.
 
 ## Requirements / build / usage
 
@@ -259,7 +262,7 @@ cargo build --release
 | `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=delete`); out-of-scope paths are never candidates |
 | `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. The estimate is an **upper bound** without `--scan` (it counts every chunk the local reuse map cannot supply, while the in-place path keeps the ones that are already correct); with `--scan` it is the figure the repair will really spend. Does **not** bound metadata or manifest traffic |
 | `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong |
-| `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`); `temp`: write `{path}_tmp` and rename it over the target (the original is never touched, and the peak extra disk is the whole file); `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing degrades to `temp`, loudly |
+| `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
 | `--check-only` | off | Verify size+MD5; writes nothing |
@@ -362,8 +365,6 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 1. **In-place repair (the default).** A repair writes only the bytes that are wrong, at the
    offsets they belong at, into the file itself. The peak extra disk is the file's
    **growth**, not its size — so a same-size repair of a 2 GB file needs **0** extra bytes.
-   The temp file (`{path}_tmp` + rename) is still there, behind `--repair-mode temp`, for
-   the cases that want the original never touched.
 2. Files-cleanup (`--purge-before`/`--purge-after`): delete everything not in the live manifest.
 3. Skip intact files (size + full MD5): 0 bytes for healthy files.
 4. Chunk-level repair: only missing/corrupt chunks fetched; unchanged chunks kept in place, or
@@ -373,11 +374,20 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
    `_tmp` artefact, no blob store, no zip staging.
 6. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
 
-What the in-place path gives up: a crash mid-file leaves a file that fails the same check
-and converges on the next run, and the original is no longer protected from that. The
-whole-file MD5 is still the gate that decides whether a file is good, and `config.ini` is
-still not bumped by a run that did not finish. docs/07 §5 lists every weakened and new
-invariant.
+**Two ways to write a file — two ways to spend disk, and each with a property of its own:**
+
+| mode | how the file is written | peak extra disk | the property it gives you |
+|---|---|---|---|
+| `inplace` (default) | the wrong bytes are written into the file, at the offsets they belong at | the file's **growth** (0 for a same-size repair) | the least disk and the least writing, and a rerun that re-verifies and continues |
+| `temp` (`--repair-mode temp`) | the repair is assembled in `{path}_tmp` and swapped over the target with an atomic rename | the whole file | **the target file is never modified** — a repair that fails leaves it exactly as it was, and the swap is atomic |
+| `discard` (`--repair-mode discard`) | the target is deleted and written from scratch | 0 | a file with nothing reusable in it, written without asking the network twice |
+
+The whole-file MD5 is the gate in every mode, `config.ini` advances only when every planned
+file verified, and `--scan` reports the exact figures before any of it starts. The two modes
+also resume differently, and each in the way that suits it: the in-place path finds the
+chunks that are already right and rewrites only the rest, so it has no artefact to resume
+from and cannot inherit a corrupt prefix; the temp mode keeps the completed `*_tmp` prefix
+and continues it.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
 SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,
