@@ -123,37 +123,61 @@ Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
 Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
-(HDD-friendly; also bounds peak disk to `io_threads × largest_file`). Retries: 5× per file.
+(HDD-friendly). Retries: 5× per file.
+
+Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
+
+- **in place** (the default): the target is opened `read+write` and only the bytes that are
+  wrong are written, at the offsets they belong at. No `_tmp` file is created, and the peak
+  extra disk is the file's **growth** rather than its size.
+- **temp**: `{path}_tmp` is written and renamed over the target. The original is never
+  modified, and the peak extra disk is the whole file. This is the escape hatch, and the
+  fallback for a target that cannot be opened for writing.
 
 Per file `F`:
-1. `if exists(game_dir/F.path) and len==F.size and md5(file)==F.md5` → **skip** (log
-   `check: md5 match -> skip`, count as verified, no download). Else proceed.
-2. Ensure parent dir. Open `game_dir/F.path_tmp` (`{path}_tmp`) with `OpenOrCreate|ReadWrite`.
-   Let `have = len(tmp)`. If `have > F.size` → truncate to `F.size` (corrupt resume). Work only on
-   chunks with `offset+uncompressed_size > have` (already-complete prefix is kept; it is re-verified
-   by the final whole-file MD5).
-3. For each pending chunk `C` in offset order, seek `tmp` to `C.offset`:
-   a. If `C.reuse` set and `exists(reuse_path)` with expected length: read
-      `reuse_path[reuse_offset .. +uncompressed_size]`, MD5 it; if equals `C.uncompressed_md5` →
-      copy bytes to `tmp` at `C.offset`, continue (no network). Mismatch → fall through to (b).
-   b. `GET {chunk_prefix}/{C.id}` → response bytes are **zstd-compressed** chunk payload.
-      v1 (S1 simplification, see README): buffer the whole chunk, `decode_all`, then verify
-      `uncompressed_md5` immediately — mismatch fails the attempt and retries the whole file
-      (up to 5×). Only then write the bytes at `C.offset`. A streaming
-      `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to
-      lower peak RAM; the final whole-file MD5 still gates promotion.
-   c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
- 4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
-   log the structured `repaired` event (`chunks_total`/`chunks_reused`/`chunks_downloaded`/
-   `chunks_resumed`, `download_bytes`, `final_md5`). Else delete `tmp`, log error, count the file as
-   failed and continue remaining files; after all files, return `Ok(summary, 3)` (skips the post-phase
-   so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
-   Never modify the original in place; never leave `tmp` behind on success.
-5. `--check-only`: perform only step 1 for all files and report; write nothing.
+1. **Scan** — one read of `game_dir/F.path` that answers everything: the whole-file MD5 (the
+   skip check), which chunks are already correct where they belong, and which reuse sources
+   are intact. `if len==F.size and md5==F.md5` → **skip** (log `check: md5 match -> skip`,
+   count as verified, no download). Else proceed.
+2. **Stage** — the bytes of the chunks that have to *move* inside the file are read into RAM
+   (bounded by `--max-ram-bytes`), so the write order cannot destroy them. A chunk needs
+   staging only if its reuse source is *elsewhere* in the file and the chunk is actually
+   wrong: a source at the chunk's own offset is the bad chunk itself, so it is not a source
+   at all. A file whose payload does not fit the budget is written in the other direction
+   instead (docs/07 §4.4), which produces the same file with less reuse.
+3. **Patch** — the wrong chunks are written, ascending: from the staged bytes when there are
+   any, from a download otherwise. A download is `GET {chunk_prefix}/{C.id}` → response bytes
+   are **zstd-compressed** chunk payload → v1 (S1 simplification, see README): buffer the
+   whole chunk, `decode_all`, then verify `uncompressed_md5` immediately — mismatch fails the
+   attempt and retries the whole file (up to 5×). Only then write the bytes at `C.offset`.
+   Every byte written is hash-gated before it lands. A streaming
+   `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to lower
+   peak RAM.
+4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
+   tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
+5. **Verify** — one more read: `if md5==F.md5` the file is good, and the structured `repaired`
+   event is logged (`chunks_total`/`chunks_reused`/`chunks_downloaded`/`chunks_kept`,
+   `download_bytes`, `final_md5`). Else the per-chunk verdicts name the culprit and only
+   those are redone; if they still do not match, the file is counted as failed and the run
+   continues — after all files, `Ok(summary, 3)` (skips the post-phase so `config.ini` is
+   not bumped while damaged) — not `Err(RunFailure::write)`.
+6. A target that cannot be opened for writing degrades to the temp path, loudly: write
+   `{path}_tmp` (kept, not truncated), work only on chunks with
+   `offset+uncompressed_size > have` (the already-complete prefix is kept; the final
+   whole-file MD5 gates the rename), then `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic
+   `rename(tmp → final)` (overwrite), else delete `tmp`, log error, count the file as failed
+   and continue.
+7. `--check-only`: perform only step 1 for all files and report; write nothing.
 
-Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated and
-the final whole-file MD5 gates promotion. Any-version → latest works because the plan is derived
-from the latest manifest alone (local manifest is a pure optimization).
+**What the in-place path gives up.** The original is no longer protected from a crash: a run
+that dies mid-file leaves a file that fails the same check and converges on the next run
+(resume-by-verification, not resume-by-length). The version in `config.ini` is still not
+bumped by a run that did not finish, and the whole-file MD5 is still the gate that decides
+whether a file is good. docs/07 §5 lists every weakened and new invariant.
+
+Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated
+and the final whole-file MD5 gates the file. Any-version → latest works because the plan is
+derived from the latest manifest alone (local manifest is a pure optimization).
 
 ### Step 7 — Post-phase (deletes + config)
 
