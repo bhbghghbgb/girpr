@@ -268,18 +268,23 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
     if ctx.print_plan {
+        // The disk figures: one `stat` per planned file, and the same
+        // resolution table the repair uses — so the plan and the repair
+        // cannot disagree about which path a file takes.
+        let disk = scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs);
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
+            &disk,
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
-                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
+                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes, &disk);
             doc.write_to(std::path::Path::new(out))
                 .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
         }
@@ -360,6 +365,19 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     .await;
     if ctx.limits.write_bytes.is_some() {
         summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
+    }
+    // The repair-mode group: what was asked for, what happened, and how many
+    // bytes did not have to be written. Emitted only when the flag was
+    // passed, so an unflagged run's `SUMMARY` stays byte-identical.
+    if ctx.repair_mode_explicit {
+        summary.flags.repair_mode = Some(ctx.repair_mode.as_str());
+        summary.flags.files_inplace = Some(summary.files_inplace.load(Ordering::Relaxed));
+        summary.flags.files_temp = Some(summary.files_temp.load(Ordering::Relaxed));
+        summary.flags.kept_bytes = Some(summary.kept_bytes.load(Ordering::Relaxed));
+    }
+    // The peak staged payload, when a RAM budget was asked for.
+    if ctx.limits.ram_bytes.is_some() {
+        summary.flags.ram_bytes = Some(summary.ram_bytes.load(Ordering::Relaxed));
     }
     // A runtime hard stop is the one place the run writes *some* of what it was
     // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3

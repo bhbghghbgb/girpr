@@ -652,6 +652,117 @@ async fn the_run_counts_the_paths_it_used() {
 }
 
 #[tokio::test]
+async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
+    // The disk claim, on the data plane. The four keys travel together and
+    // appear only when `--repair-mode` was passed, and `ram_bytes=` only
+    // when `--max-ram-bytes` was: an unflagged run's line stays
+    // byte-identical.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("mode_group");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+
+    // Unflagged: nothing.
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
+        assert!(!line.contains(k), "{k} must be absent when unflagged: {line}");
+    }
+
+    // Flagged: the mode, the paths it used, and the bytes it kept.
+    let dir2 = temp_dir("mode_group_flagged");
+    write_game_file(&dir2, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
+    let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Auto;
+    ctx.repair_mode_explicit = true;
+    let (summary, code) = repair::run(ctx).await.expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(line.contains("repair_mode=auto"), "{line}");
+    assert!(line.contains("inplace=1"), "{line}");
+    assert!(line.contains("temp=0"), "{line}");
+    // The file is 128 bytes and 64 of them were written: the other 64 were
+    // already correct and were left alone.
+    assert!(line.contains("kept_bytes=64"), "{line}");
+    assert!(!line.contains("ram_bytes"), "{line}");
+
+    // The RAM peak, with a RAM budget asked for.
+    let dir3 = temp_dir("mode_group_ram");
+    write_game_file(&dir3, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir3, &fx2.files[0].rel, &half_bad);
+    let mut ctx = ctx_for(dir3.to_path_buf(), &mock, 1);
+    ctx.limits.ram_bytes = Some(0);
+    let (summary, code) = repair::run(ctx).await.expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(line.contains("ram_bytes=0"), "{line}");
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
+    // The `PLAN` line carries the two disk figures: the bytes a repair
+    // writes into the install, and the free space it needs beyond it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_disk");
+    let fx2 = build_fixture();
+    // bar.dat is 48 bytes in the manifest and 32 on disk: it has to grow by
+    // 16. foo.dat is not there: it has to be created, so it needs all 128.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data[..32]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.print_plan = true;
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    // The run reported the plan, not a repair.
+    assert!(summary.files_repaired.load(Ordering::Relaxed) == 0);
+
+    // The plan line itself is on stdout; the driver only keeps the summary
+    // here, so the figures are checked through the plan-out document.
+    let out = dir.join("plan.json");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.print_plan = true;
+    ctx.plan_out = Some(out.clone());
+    repair::run(ctx).await.expect("print-plan runs");
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let foo = v["repair"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["rel"] == "game/foo.dat")
+        .expect("foo.dat is planned");
+    assert_eq!(foo["mode"], "inplace");
+    assert_eq!(
+        foo["extra_bytes"], 128,
+        "a file that is not there has to be created"
+    );
+    let bar = v["repair"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["rel"] == "game/bar.dat")
+        .expect("bar.dat is planned");
+    assert_eq!(bar["mode"], "inplace");
+    assert_eq!(bar["extra_bytes"], 16, "bar.dat has to grow by 16");
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn an_interrupted_in_place_run_resumes_by_verification() {
     // The state an interrupted in-place run leaves behind: some chunks
     // correct where they belong, some not. There is no artefact to resume
