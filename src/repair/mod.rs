@@ -45,6 +45,7 @@ mod manifest;
 mod metadata;
 mod plan;
 mod post;
+pub mod reuse;
 pub mod scope;
 
 pub use metadata::Meta;
