@@ -507,36 +507,47 @@ async fn attempt_inplace_inner(
         }
     }
 
-    // 3. stage. A chunk needs staging only if its reuse source is
-    // *elsewhere* in the file and the chunk is actually wrong: a source at
-    // the chunk's own offset is the bad chunk itself, so it is not a source
-    // at all. The common repair case therefore stages nothing.
+    // 3. the tier, and the staging that goes with it.
+    //
+    // `Staged` reads the bytes that have to move into RAM, so **every**
+    // source survives and the writes run forward. `Ordered` reads each
+    // source from the file at the moment it is written, and the write
+    // order is the one that keeps the most of them alive (docs/07 §4.4).
+    //
+    // The budget picks the tier; it never refuses the file. A file that
+    // cannot get its reservation is written in the ordered direction, which
+    // produces the same file with less reuse.
     let payload: u64 = bad
         .iter()
         .filter(|&&i| sources[i].is_some() && scan.source_ok[i])
         .map(|&i| file.chunks[i].uncompressed_size.max(0) as u64)
         .sum();
-    // The reservation is held until the end of the attempt: the guard gives
-    // the RAM back when it is dropped.
-    let _reservation = if payload > 0 {
-        if !ctx.summary.reserve_ram_bytes(payload) {
-            // The budget is a budget, not a refusal: the file is repaired by
-            // the other path instead. (The ordered tier replaces this
-            // fallback; until it lands, the temp path is the safe answer.)
-            return Ok(Inplace::Unavailable(
-                "the bytes to move do not fit the RAM budget",
-            ));
+    let (tier, _reservation) = match ctx.summary.max_ram_bytes() {
+        // "stage nothing at all" is a mode, not a shortage.
+        Some(0) => (Tier::Ordered, None),
+        _ if payload == 0 => (Tier::Staged, None),
+        _ => {
+            if ctx.summary.reserve_ram_bytes(payload) {
+                (
+                    Tier::Staged,
+                    Some(RamReservation {
+                        summary: &ctx.summary,
+                        bytes: payload,
+                    }),
+                )
+            } else {
+                tracing::info!(
+                    file = %file.rel,
+                    payload,
+                    "the moving bytes do not fit the RAM budget -> ordered tier"
+                );
+                (Tier::Ordered, None)
+            }
         }
-        Some(RamReservation {
-            summary: &ctx.summary,
-            bytes: payload,
-        })
-    } else {
-        None
     };
 
     let mut captured: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
-    if payload > 0 {
+    if matches!(tier, Tier::Staged) && payload > 0 {
         for &i in &bad {
             if !scan.source_ok[i] {
                 continue;
@@ -556,28 +567,71 @@ async fn attempt_inplace_inner(
         }
     }
 
+    // The order (ordered tier only): the direction that keeps the most
+    // sources alive, and which sources those are. Only the sources the scan
+    // found intact can be salvaged — the rest have to be downloaded.
+    let order = match tier {
+        Tier::Staged => None,
+        Tier::Ordered => {
+            let chunks: Vec<SophonChunk> =
+                bad.iter().map(|&i| file.chunks[i].clone()).collect();
+            let srcs: Vec<Option<u64>> = bad
+                .iter()
+                .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
+                .collect();
+            let usable = handle.metadata().map(|m| m.len()).unwrap_or(0);
+            let o = reuse::salvage_order(&chunks, &srcs, usable);
+            tracing::info!(
+                file = %file.rel,
+                ascending = o.ascending,
+                salvaged = o.live_count(),
+                of = chunks.len(),
+                "ordered tier"
+            );
+            Some(o)
+        }
+    };
+
+    // 4. patch. Ascending in the staged tier (forward writes), in the
+    // salvage order in the ordered tier.
+    let mut write_order: Vec<usize> = (0..bad.len()).collect();
+    if let Some(o) = &order
+        && !o.ascending
+    {
+        write_order.reverse();
+    }
+    for k in write_order {
+        let i = bad[k];
+        let c = &file.chunks[i];
+        let dst = c.offset.max(0) as u64;
+        if let Some(bytes) = &captured[i] {
+            // A staged source: the bytes are already verified.
+            write_at(ctx, &mut handle, dst, bytes)?;
+            stats.chunks_reused += 1;
+        } else if let Some(o) = &order
+            && o.live[k]
+            && let Some(src) = sources[i]
+        {
+            // The source survives the order: copy it from inside the file.
+            copy_within(
+                ctx,
+                &mut handle,
+                src,
+                dst,
+                c.uncompressed_size.max(0) as u64,
+            )?;
+            stats.chunks_reused += 1;
+        } else {
+            write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
+        }
+    }
+
     // A hole in the chunk coverage would keep the old file's stale bytes,
-    // so it is zero-filled. The staged bytes are already in RAM, so a hole
-    // that overlaps a source does not lose it.
+    // so it is zero-filled. The fill happens **after** the writes: in the
+    // ordered tier a hole can still hold a source that a later chunk needs.
     let layout = file.layout();
     for (offset, len) in &layout.gaps {
         zero_fill(ctx, &mut handle, *offset, *len)?;
-    }
-
-    // 4. patch. Ascending, and only the wrong chunks.
-    for &i in &bad {
-        let c = &file.chunks[i];
-        match &captured[i] {
-            Some(bytes) => {
-                handle.seek(SeekFrom::Start(c.offset.max(0) as u64))?;
-                reserve_write(ctx, bytes.len() as u64)?;
-                handle.write_all(bytes)?;
-                stats.chunks_reused += 1;
-            }
-            None => {
-                write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
-            }
-        }
     }
 
     // The file must end at its manifest size: shorter means the tail is
@@ -659,6 +713,55 @@ impl Drop for RamReservation<'_> {
             self.summary.release_ram_bytes(self.bytes);
         }
     }
+}
+
+/// Which way the file is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tier {
+    /// The bytes that have to move inside the file are staged in RAM, so
+    /// every source survives and the writes run forward.
+    Staged,
+    /// No staging: the sources are read from the file at the moment they are
+    /// written, and the write order is the one that keeps the most of them
+    /// alive.
+    Ordered,
+}
+
+/// Write `bytes` at `offset`.
+fn write_at(ctx: &FileCtx, f: &mut File, offset: u64, bytes: &[u8]) -> Result<()> {
+    reserve_write(ctx, bytes.len() as u64)?;
+    f.seek(SeekFrom::Start(offset))?;
+    f.write_all(bytes)?;
+    Ok(())
+}
+
+/// Copy `len` bytes from `src` to `dst` inside the same file.
+///
+/// The copy is done in pieces, and each piece is read before it is written,
+/// so the source and the destination never have to be disjoint in the
+/// *handle* — only in the *file*, which the write order guarantees.
+fn copy_within(
+    ctx: &FileCtx,
+    f: &mut File,
+    src: u64,
+    dst: u64,
+    len: u64,
+) -> Result<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    let mut buf = vec![0u8; COPY_BUF.min(len as usize)];
+    let mut done = 0u64;
+    while done < len {
+        let n = ((len - done) as usize).min(buf.len());
+        f.seek(SeekFrom::Start(src + done))?;
+        f.read_exact(&mut buf[..n])?;
+        reserve_write(ctx, n as u64)?;
+        f.seek(SeekFrom::Start(dst + done))?;
+        f.write_all(&buf[..n])?;
+        done += n as u64;
+    }
+    Ok(())
 }
 
 /// Open the target for the in-place repair.
