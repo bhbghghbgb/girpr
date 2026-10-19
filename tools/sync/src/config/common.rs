@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::compile_patterns;
-use crate::hash::{parse_any_of, parse_hash_list};
+use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report};
 use crate::rw::RwLimits;
@@ -56,7 +56,13 @@ impl LogCtx {
 #[derive(Debug, Clone)]
 pub struct CommonOpts {
     /// Algorithms to record; empty means `--hash-all-of none` (size+mtime only).
-    pub algos: Vec<String>,
+    ///
+    /// **A list, not a set, and deliberately.** `--hash-any-of`'s tie-break is the
+    /// user's flag order, so the request has to keep the order it was typed in;
+    /// [`crate::hash::AlgoSet`] is the per-path *answer* and has no order of its
+    /// own. It is one value per run, so keeping it ordered costs nothing — the
+    /// per-path problem is solved by the set below it, not by flattening this.
+    pub algos: Vec<HashAlg>,
     /// Which stat fields may settle a pair without a digest.
     ///
     /// See [`StatTrust`]. Trusting both is the default and is what makes the laziness

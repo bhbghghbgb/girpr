@@ -113,13 +113,17 @@ fn convert_sled_dir_to_redb_file() {
     let a = &recs["a.txt"];
     assert_eq!(a.kind, "file");
     assert_eq!(a.size, 5);
-    assert_eq!(a.hashes["md5"], md5::compute(b"hello").0.to_vec());
+    assert_eq!(
+        a.hashes.get_named("md5"),
+        Some(&md5::compute(b"hello").0[..]),
+        "hex digests were decoded to raw bytes"
+    );
 
     let b = &recs["sub/b.bin"];
-    assert_eq!(b.hashes["sha256"].len(), 32);
+    assert_eq!(b.hashes.get_named("sha256").map(<[u8]>::len), Some(32));
     assert_eq!(
-        b.hashes["blake3"],
-        vec![0xabu8; 32],
+        b.hashes.get_named("blake3"),
+        Some(&[0xabu8; 32][..]),
         "unknown algorithms pass through as raw bytes"
     );
 
@@ -145,7 +149,7 @@ fn convert_sled_dir_to_redb_file() {
     let mut o = common::compare(dst.clone(), live.clone());
     o.trust.no_trust_src = true;
     o.trust.no_trust_dst = true;
-    o.common.algos = vec!["md5".to_string(), "sha256".to_string()];
+    o.common.algos = vec![girsync::hash::HashAlg::Md5, girsync::hash::HashAlg::Sha256];
     let _ = &log();
     // record-vs-folder with extra blake3 rows: blake3 is not requested, so
     // the diff only consults md5/sha256 and must be equal.

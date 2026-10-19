@@ -24,7 +24,7 @@ fn any_of_prefers_the_algorithm_that_is_cached_on_both_sides() {
         StatTrust::default(),
     )
     .unwrap();
-    assert_eq!(p.required.of("a.txt"), ["md5"]);
+    assert_eq!(p.required.of("a.txt"), AlgoSet::one(HashAlg::Md5));
     assert!(
         p.src.pending().is_empty() && p.dst.pending().is_empty(),
         "tier 1 reads nothing: src {:?} dst {:?}",
@@ -54,7 +54,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
         StatTrust::default(),
     )
     .unwrap();
-    assert_eq!(md5_first.required.of("a.txt"), ["md5"]);
+    assert_eq!(md5_first.required.of("a.txt"), AlgoSet::one(HashAlg::Md5));
     let sha_first = plan(
         &s,
         &d,
@@ -67,7 +67,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
     .unwrap();
     assert_eq!(
         sha_first.required.of("a.txt"),
-        ["sha256"],
+        AlgoSet::one(HashAlg::Sha256),
         "reversing the flags reverses the choice"
     );
 
@@ -86,7 +86,7 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
     .unwrap();
     assert_eq!(
         p.required.of("a.txt"),
-        ["md5"],
+        AlgoSet::one(HashAlg::Md5),
         "flag order loses to cost: sha256 would need two reads, md5 one"
     );
     assert_eq!(p.src.pending(), Vec::<&String>::new(), "src already has it");
@@ -125,12 +125,12 @@ fn any_of_settles_each_pair_separately() {
     .unwrap();
     assert_eq!(
         p.required.of("first.txt"),
-        ["md5"],
+        AlgoSet::one(HashAlg::Md5),
         "both sides hold md5, so nothing is read"
     );
     assert_eq!(
         p.required.of("second.txt"),
-        ["sha256"],
+        AlgoSet::one(HashAlg::Sha256),
         "and md5 would have cost a read on src"
     );
     assert!(
@@ -158,7 +158,7 @@ fn any_of_answers_a_record_that_holds_one_of_the_two() {
     .unwrap_or_else(|e| panic!("the record holds md5, so the pair is answerable: {e:#}"));
     assert_eq!(
         p.required.of("a.txt"),
-        ["md5"],
+        AlgoSet::one(HashAlg::Md5),
         "the record's own algorithm"
     );
     assert!(
@@ -220,7 +220,7 @@ fn all_of_requires_every_algorithm_on_both_sides() {
     .unwrap();
     assert_eq!(
         p.required.of("a.txt"),
-        ["md5", "sha256"],
+        AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
         "the whole requested list settles the pair"
     );
     assert_eq!(

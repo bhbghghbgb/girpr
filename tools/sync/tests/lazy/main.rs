@@ -49,6 +49,7 @@ use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
+use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};
 use girsync::report::verdict;
 use girsync::rw::RwSide;

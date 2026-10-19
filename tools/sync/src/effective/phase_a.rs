@@ -9,6 +9,7 @@ use tracing::{info, trace};
 use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
+use crate::hash::{DigestSet, HashAlg};
 use crate::scan::{check_mixed_case, walk_live};
 use crate::util::elapsed_s;
 
@@ -64,7 +65,7 @@ pub fn scan_stat_only(
     common: &CommonOpts,
     mode: ScanMode,
 ) -> Result<SideScan<SideEntry>> {
-    let algos: &[String] = &common.algos;
+    let algos: &[HashAlg] = &common.algos;
     let includes: &[Pattern] = &common.includes;
     let excludes: &[Pattern] = &common.excludes;
     let case_sensitive = common.case_sensitive;
@@ -181,7 +182,7 @@ pub fn scan_stat_only(
                 mtime_ns: e.mtime_ns,
                 cached: match (fresh, cached.as_ref()) {
                     (true, Some(c)) => c.hashes.clone(),
-                    _ => HashMap::new(),
+                    _ => DigestSet::default(),
                 },
                 fresh,
             },
@@ -192,7 +193,7 @@ pub fn scan_stat_only(
         // unconditionally — only the put is gated, so "what would be stored" is
         // never something that depends on whether the run may write.
         if !fresh || adopted {
-            let row = merge_row(e.size, e.mtime_ns, HashMap::new(), cached.as_ref());
+            let row = merge_row(e.size, e.mtime_ns, DigestSet::default(), cached.as_ref());
             trace!(rel = %e.rel, fresh, adopted, "stat-only row");
             if let Some(w) = batch.as_mut() {
                 w.put(&e.rel, &row)?;

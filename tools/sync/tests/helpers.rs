@@ -9,7 +9,7 @@ use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::filter::{compile_patterns, is_excluded};
-use girsync::hash::parse_hash_list;
+use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, ScanStats};
@@ -75,7 +75,7 @@ fn hash_arg_none_exclusive() {
     assert!(parse_hash_list(&["none".to_string()]).unwrap().is_empty());
     assert!(parse_hash_list(&["NONE".to_string()]).unwrap().is_empty());
     assert!(parse_hash_list(&["md5".to_string(), "none".to_string()]).is_err());
-    assert!(parse_hash_list(&["md5".to_string()]).unwrap() == vec!["md5".to_string()]);
+    assert!(parse_hash_list(&["md5".to_string()]).unwrap() == vec![HashAlg::Md5]);
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
     let want = md5::compute(b"hello").0.to_vec();
-    assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+    assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
     assert!(
         keys.contains(&"A.txt".to_string()),
@@ -140,13 +140,13 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db = open_db(&db_path, true, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &sensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"));
-    assert_eq!(eff["A.txt"].hashes.get("md5").unwrap(), &want);
+    assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     drop(db);
 }
 
 /// A three-file folder scanned on a cold cache, and the same folder scanned again
 /// once warm. Returns `(cold, warm)`, each carrying both phases' counters.
-fn cold_then_warm(tag: &str, algos: Vec<String>) -> (Run, Run) {
+fn cold_then_warm(tag: &str, algos: Vec<HashAlg>) -> (Run, Run) {
     let t = TempRoot::new(tag);
     let dir = t.mkdirs("w");
     wfile(&dir, "a.txt", b"hello");
@@ -215,11 +215,7 @@ fn scan_counters_characterize_the_eager_baseline() {
 /// phase C buckets the files phase A found.
 #[test]
 fn every_file_lands_in_exactly_one_bucket() {
-    for algos in [
-        md5arg(),
-        vec!["md5".to_string(), "sha256".to_string()],
-        vec![],
-    ] {
+    for algos in [md5arg(), vec![HashAlg::Md5, HashAlg::Sha256], vec![]] {
         let (cold, warm) = cold_then_warm("stats_buckets", algos.clone());
         for s in [cold, warm] {
             assert_eq!(
@@ -298,7 +294,7 @@ fn phase_a_never_hashes() {
     assert_eq!(pa.stats.hashed, 0);
     assert!(pa.map["a.txt"].fresh);
     assert!(
-        pa.map["a.txt"].cached.contains_key("md5"),
+        pa.map["a.txt"].cached.get_named("md5").is_some(),
         "the cached digest is carried for the planner"
     );
     drop(db);
@@ -397,9 +393,13 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     let db_path = dir.join(CACHE_PREFIX);
     let db = open_db(&db_path, true, rw()).unwrap();
     let _ = phased(&dir, &db, &opts(), scan(false, false));
-    let real = load_all_records(&db).unwrap()["a.txt"].hashes["md5"].clone();
+    let real = load_all_records(&db).unwrap()["a.txt"]
+        .hashes
+        .get_named("md5")
+        .unwrap()
+        .to_vec();
     let mut poisoned = load_all_records(&db).unwrap()["a.txt"].clone();
-    poisoned.hashes.insert("md5".to_string(), vec![0u8; 16]);
+    poisoned.hashes.insert_named("md5", &[0u8; 16]);
     db.put("a.txt", &poisoned).unwrap();
     drop(db);
 
@@ -424,6 +424,9 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
     // merely unread.
     let after = load_all_records(&db).unwrap();
     assert!(after["a.txt"].hashes.is_empty());
-    assert_ne!(after["a.txt"].hashes.get("md5"), Some(&real));
+    assert_ne!(
+        after["a.txt"].hashes.get_named("md5"),
+        Some(real.as_slice())
+    );
     drop(db);
 }

@@ -132,7 +132,7 @@ mod tests {
             kind: "file".into(),
             size: 4,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: crate::hash::DigestSet::default(),
         }
     }
 

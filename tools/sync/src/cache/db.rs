@@ -304,12 +304,7 @@ mod tests {
             kind: "file".into(),
             size: 42,
             mtime_ns: 123456789,
-            hashes: [
-                ("md5".to_string(), vec![1u8; 16]),
-                ("sha256".to_string(), vec![2u8; 32]),
-            ]
-            .into_iter()
-            .collect(),
+            hashes: crate::hash::DigestSet::default(),
         }
     }
 

@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
+use crate::hash::DigestSet;
+
 /// Reserved sled key holding the schema meta blob.
 const OLD_META_KEY: &str = "\0meta";
 
@@ -89,9 +91,12 @@ pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Co
         if o.kind != "file" && o.kind != "dir" {
             anyhow::bail!("invalid kind {:?} for {rel}", o.kind);
         }
-        let mut hashes = HashMap::with_capacity(o.hashes.len());
+        // `insert_named` is the routing rule, so a sled record carrying an
+        // algorithm this build has never heard of lands in the same foreign arm a
+        // redb row would -- one place decides what "an unknown algorithm" means.
+        let mut hashes = DigestSet::default();
         for (algo, hex) in &o.hashes {
-            hashes.insert(algo.clone(), hex_to_bytes(hex, &rel, algo)?);
+            hashes.insert_named(algo, &hex_to_bytes(hex, &rel, algo)?);
         }
         recs.push((
             rel,

@@ -13,9 +13,23 @@ use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
 };
+use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, SideRequest, plan_pairs};
 use girsync::rw::{RwLimits, RwSide};
 use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+
+/// One digest per name, `byte` repeated to that algorithm's length.
+fn digests(pairs: &[(&str, u8)]) -> DigestSet {
+    let mut set = DigestSet::default();
+    for (name, byte) in pairs {
+        let n = name
+            .parse::<HashAlg>()
+            .map(|a| a.digest_len())
+            .unwrap_or(32);
+        set.insert_named(name, &vec![*byte; n]);
+    }
+    set
+}
 
 /// A cache file's bytes, for "byte-identical" claims. Length alone would pass on
 /// a rewrite that happened to produce the same row count.
@@ -161,7 +175,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
                 kind: "file".into(),
                 size: 7,
                 mtime_ns: 1234,
-                hashes: [("md5".to_string(), vec![3u8; 16])].into_iter().collect(),
+                hashes: digests(&[("md5", 3u8)]),
             },
         )
         .unwrap();
@@ -178,7 +192,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
                 kind: "file".into(),
                 size: 4,
                 mtime_ns: 1,
-                hashes: [("md5".to_string(), vec![9u8; 16])].into_iter().collect(),
+                hashes: digests(&[("md5", 9u8)]),
             },
         )
         .unwrap();

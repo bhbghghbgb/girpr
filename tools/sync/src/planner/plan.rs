@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use crate::effective::SideEntry;
+use crate::hash::{AlgoSet, HashAlg};
 
 use super::pairs::SideRequest;
 
@@ -26,9 +27,9 @@ use super::pairs::SideRequest;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Required {
     /// src relative path -> the algorithms that settle it.
-    pub by_rel: HashMap<String, Vec<String>>,
+    pub by_rel: HashMap<String, AlgoSet>,
     /// Consulted for a path with no entry. See [`Required::of`].
-    pub fallback: Vec<String>,
+    pub fallback: AlgoSet,
 }
 
 impl Required {
@@ -42,8 +43,8 @@ impl Required {
     /// [`crate::diff::hashes_differ`] is *silent* when a digest is missing — a
     /// fallback of nothing would report every unplanned pair as equal. A safe fallback
     /// and the reachable answer coincide, so the safety costs nothing.
-    pub fn of(&self, srel: &str) -> &[String] {
-        self.by_rel.get(srel).unwrap_or(&self.fallback)
+    pub fn of(&self, srel: &str) -> AlgoSet {
+        self.by_rel.get(srel).copied().unwrap_or(self.fallback)
     }
 }
 
@@ -57,13 +58,13 @@ pub struct HashPlan {
     /// distinction is what makes `--no-trust-cached-hashes` expressible: it
     /// asks for the digest again, while phase A keeps reporting the cached one
     /// so the planner can still see what is on hand.
-    pub by_rel: HashMap<String, Vec<String>>,
+    pub by_rel: HashMap<String, AlgoSet>,
 }
 
 impl HashPlan {
     /// The algorithms to compute for `rel`; empty when the path needs no read.
-    pub fn get(&self, rel: &str) -> &[String] {
-        self.by_rel.get(rel).map(|v| &v[..]).unwrap_or(&[])
+    pub fn get(&self, rel: &str) -> AlgoSet {
+        self.by_rel.get(rel).copied().unwrap_or(AlgoSet::NONE)
     }
 
     /// True when `rel` needs no read at all, because everything it needs is
@@ -89,19 +90,32 @@ impl HashPlan {
         self.by_rel.values().map(|a| a.len()).sum()
     }
 
-    /// The algorithms this side still has to compute for `entry`, in `algos`
-    /// order.
+    /// The algorithms this side still has to compute for `entry`, in
+    /// [`AlgoSet::iter`] order.
+    ///
+    /// Everything in `want`, minus what the row already holds — set arithmetic
+    /// rather than a filtered copy of the request, because the answer is the same
+    /// one for every path under `--hash-all-of` and there is one of them per file
+    /// in the tree.
     ///
     /// `no_trust` overrides the subtraction: distrusting the cache is a refusal
     /// to *reuse* a digest, never an instruction to forget it — see
     /// [`crate::effective::merge_row`], which stores the same row either way —
     /// so the plan asks again while phase A keeps reporting the old value.
-    fn missing(entry: &SideEntry, algos: &[String], no_trust: bool) -> Vec<String> {
-        algos
-            .iter()
-            .filter(|a| no_trust || !entry.cached.contains_key(*a))
-            .cloned()
-            .collect()
+    ///
+    /// Held is decided by **name**, not by slot: a row whose `md5` is stored with an
+    /// unexpected length is not held in the sense that matters, and must not be
+    /// counted as covering a request. A name this build does not recognise cannot be
+    /// in `want` at all, so it cannot widen the answer either.
+    fn missing(entry: &SideEntry, want: AlgoSet, no_trust: bool) -> AlgoSet {
+        if no_trust {
+            return want;
+        }
+        let have = HashAlg::ALL
+            .into_iter()
+            .filter(|a| entry.cached.get_named(a.as_str()).is_some())
+            .collect::<AlgoSet>();
+        want.difference(have)
     }
 
     /// The plan for a side with no counterpart, and the one `update` uses: every
@@ -132,19 +146,22 @@ impl HashPlan {
     ///   `tests/update.rs` is the only test that would notice if it stopped, because
     ///   idempotence cannot distinguish a reused digest from a recomputed one.
     ///
-    /// `algos` order is preserved, because it is the user's flag order and the
-    /// tie-break `--hash-any-of` will use is defined in terms of it.
+    /// The plan's entries are in canonical order, which is [`AlgoSet`]'s and not
+    /// the user's: the flag order is what `pick_one` reads, and it reads the
+    /// **request** for that. Nothing downstream of here depends on which order the
+    /// flags were typed in, which is what makes a `--why` tag stable across them.
     pub fn plan_one_side(
         entries: &HashMap<String, SideEntry>,
-        algos: &[String],
+        algos: &[HashAlg],
         no_trust: bool,
     ) -> Self {
+        let requested = AlgoSet::from_iter(algos.iter().copied());
         let mut by_rel = HashMap::new();
         for (rel, e) in entries {
-            if !e.is_file() || algos.is_empty() {
+            if !e.is_file() || requested.is_empty() {
                 continue;
             }
-            let want = Self::missing(e, algos, no_trust);
+            let want = Self::missing(e, requested, no_trust);
             if !want.is_empty() {
                 by_rel.insert(rel.clone(), want);
             }
@@ -162,7 +179,7 @@ pub(super) fn plan_one(
     req: &SideRequest<'_>,
     e: &SideEntry,
     rel: &str,
-    algos: &[String],
+    algos: AlgoSet,
     into: &mut HashPlan,
 ) {
     if !req.cap.can_hash_from_disk {
@@ -177,6 +194,7 @@ pub(super) fn plan_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::DigestSet;
     use std::collections::HashMap;
 
     fn entry(cached: &[&str]) -> SideEntry {
@@ -184,10 +202,13 @@ mod tests {
             kind: "file".into(),
             size: 10,
             mtime_ns: 99,
-            cached: cached
-                .iter()
-                .map(|a| (a.to_string(), vec![1u8; 16]))
-                .collect(),
+            cached: {
+                let mut d = DigestSet::default();
+                for a in cached {
+                    d.insert_named(a, &[1u8; 16]);
+                }
+                d
+            },
             fresh: !cached.is_empty(),
         }
     }
@@ -197,7 +218,7 @@ mod tests {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            cached: HashMap::new(),
+            cached: DigestSet::default(),
             fresh: true,
         }
     }
@@ -210,8 +231,12 @@ mod tests {
         m
     }
 
-    fn algos() -> Vec<String> {
-        vec!["md5".to_string(), "sha256".to_string()]
+    fn algos() -> Vec<HashAlg> {
+        vec![HashAlg::Md5, HashAlg::Sha256]
+    }
+
+    fn names(set: AlgoSet) -> Vec<&'static str> {
+        set.iter().map(|a| a.as_str()).collect()
     }
 
     /// A complete cache row costs no read, an incomplete one costs only what is
@@ -219,11 +244,8 @@ mod tests {
     #[test]
     fn one_side_plans_only_what_the_cache_lacks() {
         let p = HashPlan::plan_one_side(&entries(), &algos(), false);
-        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
-        assert_eq!(
-            p.get("stale.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
+        assert_eq!(names(p.get("cached.txt")), vec!["sha256"]);
+        assert_eq!(names(p.get("stale.txt")), vec!["md5", "sha256"]);
         assert!(p.is_settled("sub"), "a dir never needs a read");
     }
 
@@ -236,7 +258,7 @@ mod tests {
         let stale = e.get("cached.txt").unwrap().clone();
         e.insert("cached.txt".to_string(), stale);
         let p = HashPlan::plan_one_side(&e, &algos(), false);
-        assert_eq!(p.get("cached.txt"), &["sha256".to_string()]);
+        assert_eq!(names(p.get("cached.txt")), vec!["sha256"]);
     }
 
     /// A distrusting run must pay for the read even against a complete cache —
@@ -244,14 +266,32 @@ mod tests {
     #[test]
     fn no_trust_plans_every_algorithm_regardless_of_the_cache() {
         let p = HashPlan::plan_one_side(&entries(), &algos(), true);
-        assert_eq!(
-            p.get("cached.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
-        assert_eq!(
-            p.get("stale.txt"),
-            &["md5".to_string(), "sha256".to_string()]
-        );
+        assert_eq!(names(p.get("cached.txt")), vec!["md5", "sha256"]);
+        assert_eq!(names(p.get("stale.txt")), vec!["md5", "sha256"]);
+    }
+
+    /// **The plan's entries are canonical, not the flag order.** With the two
+    /// flags the other way round the plan still names md5 first, because
+    /// `AlgoSet` iterates `HashAlg::ALL`. Everything downstream reads this through
+    /// `AlgoSet::iter` and the `--why` tag is built from it, so a plan that
+    /// inherited the flag order would quietly put that tag's behaviour back.
+    #[test]
+    fn the_plan_names_algorithms_in_canonical_order_not_the_flag_order() {
+        let reversed = vec![HashAlg::Sha256, HashAlg::Md5];
+        let p = HashPlan::plan_one_side(&entries(), &reversed, false);
+        assert_eq!(names(p.get("stale.txt")), vec!["md5", "sha256"]);
+    }
+
+    /// A row carrying an algorithm this build has never heard of is neither
+    /// refused nor counted as covering anything. `AlgoSet` has no slot for a name
+    /// it does not know, so the key is dropped — and it could not have been in the
+    /// request either, so the answer is still exactly "requested minus held".
+    #[test]
+    fn a_row_with_an_unknown_algorithm_still_plans_exactly_what_it_lacks() {
+        let mut e = entries();
+        e.insert("odd.txt".to_string(), entry(&["blake3"]));
+        let p = HashPlan::plan_one_side(&e, &algos(), false);
+        assert_eq!(names(p.get("odd.txt")), vec!["md5", "sha256"]);
     }
 
     /// `--hash none` is a distinct mode, not all-of over an empty set that
@@ -278,10 +318,10 @@ mod tests {
     fn pending_is_sorted_and_excludes_settled_paths() {
         let mut p = HashPlan::default();
         p.by_rel
-            .insert("z.txt".to_string(), vec!["md5".to_string()]);
+            .insert("z.txt".to_string(), AlgoSet::one(HashAlg::Md5));
         p.by_rel
-            .insert("a.txt".to_string(), vec!["md5".to_string()]);
-        p.by_rel.insert("done.txt".to_string(), vec![]);
+            .insert("a.txt".to_string(), AlgoSet::one(HashAlg::Md5));
+        p.by_rel.insert("done.txt".to_string(), AlgoSet::NONE);
         assert_eq!(p.pending(), vec!["a.txt", "z.txt"]);
         assert!(p.is_settled("done.txt"));
         assert_eq!(p.digest_count(), 2);

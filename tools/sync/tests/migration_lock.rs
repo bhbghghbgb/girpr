@@ -15,22 +15,35 @@ mod common;
 use common::{TempRoot, compare, log, rw, sync, update, wfile};
 use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
 use girsync::hash::hash_file;
+use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
 use std::collections::HashMap;
 
-fn md5s() -> Vec<String> {
-    vec!["md5".to_string()]
+fn md5s() -> Vec<HashAlg> {
+    vec![HashAlg::Md5]
 }
 
-fn sha256s() -> Vec<String> {
-    vec!["sha256".to_string()]
+fn sha256s() -> Vec<HashAlg> {
+    vec![HashAlg::Sha256]
 }
 
-fn both() -> Vec<String> {
-    vec!["md5".to_string(), "sha256".to_string()]
+fn both() -> Vec<HashAlg> {
+    vec![HashAlg::Md5, HashAlg::Sha256]
 }
 
-fn with_algos(dir: std::path::PathBuf, algos: Vec<String>) -> girsync::UpdateOpts {
+/// Every name on a row, sorted -- known and foreign alike.
+fn digests_of_names(h: &DigestSet) -> Vec<&str> {
+    let mut v: Vec<&str> = h.iter().map(|(a, _)| a.as_str()).collect();
+    v.extend(h.foreign_iter().map(|(n, _)| n));
+    v.sort();
+    v
+}
+
+fn aset(names: &[HashAlg]) -> AlgoSet {
+    AlgoSet::from_iter(names.iter().copied())
+}
+
+fn with_algos(dir: std::path::PathBuf, algos: Vec<HashAlg>) -> girsync::UpdateOpts {
     girsync::UpdateOpts {
         dir,
         common: CommonOpts {
@@ -65,7 +78,7 @@ fn lock_update_records_files_dirs_and_hashes() {
     assert_eq!(r["empty"].kind, "dir");
     assert_eq!(r["a.txt"].kind, "file");
 
-    let want = hash_file(&dir.join("a.txt"), &md5s()).unwrap();
+    let want = hash_file(&dir.join("a.txt"), &aset(&md5s())).unwrap();
     assert_eq!(r["a.txt"].hashes, want, "cached hash matches hash_file");
     assert!(!r["a.txt"].hashes.is_empty());
     assert!(r["empty"].hashes.is_empty());
@@ -103,16 +116,16 @@ fn lock_multi_algo_backfill() {
     wfile(&dir, "a.txt", b"digest me");
 
     cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
-    assert!(recs(&dir)["a.txt"].hashes.contains_key("md5"));
+    assert!(recs(&dir)["a.txt"].hashes.get_named("md5").is_some());
 
     cmd_update(with_algos(dir.clone(), both()), &log()).unwrap();
     let r = recs(&dir);
     let got = &r["a.txt"].hashes;
-    assert!(got.contains_key("md5"));
-    assert!(got.contains_key("sha256"));
+    assert!(got.get_named("md5").is_some());
+    assert!(got.get_named("sha256").is_some());
     assert_eq!(
         *got,
-        hash_file(&dir.join("a.txt"), &both()).unwrap(),
+        hash_file(&dir.join("a.txt"), &aset(&both())).unwrap(),
         "backfilled hashes match fresh digests"
     );
 }
@@ -130,7 +143,7 @@ fn lock_cache_writes_merge_unless_stat_changed() {
     let dir = t.mkdirs("w");
     wfile(&dir, "a.txt", b"digest me");
     wfile(&dir, "sub/b.txt", b"nested payload");
-    let full = hash_file(&dir.join("a.txt"), &both()).unwrap();
+    let full = hash_file(&dir.join("a.txt"), &aset(&both())).unwrap();
 
     // Baseline: every algorithm on the row.
     cmd_update(with_algos(dir.clone(), both()), &log()).unwrap();
@@ -148,10 +161,10 @@ fn lock_cache_writes_merge_unless_stat_changed() {
     cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
     let kept = recs(&dir)["a.txt"].hashes.clone();
     assert!(
-        kept.contains_key("sha256"),
+        kept.get_named("sha256").is_some(),
         "unrequested sha256 survives an md5-only update"
     );
-    assert_eq!(kept["md5"], full["md5"]);
+    assert_eq!(kept.get_named("md5"), full.get_named("md5"));
 
     // stat changed -> every stored digest is suspect, so all are dropped and
     // only the algos requested this run are kept.
@@ -162,21 +175,21 @@ fn lock_cache_writes_merge_unless_stat_changed() {
         after.len(),
         1,
         "a stat change drops digests the run did not recompute, got {:?}",
-        after.keys().collect::<Vec<_>>()
+        digests_of_names(after)
     );
     assert!(
-        after.contains_key("md5"),
+        after.get_named("md5").is_some(),
         "the requested algo is present after the drop"
     );
     assert_eq!(
         *after,
-        hash_file(&dir.join("a.txt"), &md5s()).unwrap(),
+        hash_file(&dir.join("a.txt"), &aset(&md5s())).unwrap(),
         "recomputed digest still matches the file"
     );
     // The untouched sibling proves this is per-path, not a whole-cache wipe.
     assert_eq!(
         recs(&dir)["sub/b.txt"].hashes,
-        hash_file(&dir.join("sub/b.txt"), &both()).unwrap(),
+        hash_file(&dir.join("sub/b.txt"), &aset(&both())).unwrap(),
         "unchanged path keeps its digests"
     );
 }
@@ -235,7 +248,10 @@ fn lock_sha256_sync_converges() {
     assert_eq!(common::rfile(&dst, "a.txt"), b"sha payload v2 longer");
 
     let got = recs(&dst)["a.txt"].hashes.clone();
-    assert_eq!(got, hash_file(&dst.join("a.txt"), &sha256s()).unwrap());
+    assert_eq!(
+        got,
+        hash_file(&dst.join("a.txt"), &aset(&sha256s())).unwrap()
+    );
 
     let mut c = compare(src.clone(), dst.clone());
     c.common.algos = sha256s();
@@ -299,10 +315,18 @@ fn lock_no_trust_cached_hashes_is_per_side() {
 fn poison(dir: &std::path::Path, rel: &str) {
     let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
     let mut rec = get_rec(&db, rel).unwrap().expect("row exists after update");
-    let real = hash_file(&dir.join(rel), &md5s()).unwrap();
-    assert_eq!(real["md5"].len(), 16, "md5 digest is 16 raw bytes");
-    rec.hashes.insert("md5".into(), vec![0u8; 16]);
-    assert_ne!(rec.hashes["md5"], real["md5"], "planted digest differs");
+    let real = hash_file(&dir.join(rel), &aset(&md5s())).unwrap();
+    assert_eq!(
+        real.get_named("md5").map(<[u8]>::len),
+        Some(16),
+        "md5 digest is 16 raw bytes"
+    );
+    rec.hashes.insert_named("md5", &[0u8; 16]);
+    assert_ne!(
+        rec.hashes.get_named("md5"),
+        real.get_named("md5"),
+        "planted digest differs"
+    );
     put_rec(&db, rel, &rec).unwrap();
 }
 

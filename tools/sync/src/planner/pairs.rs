@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
+use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -22,8 +23,8 @@ use super::stat_trust::StatTrust;
 pub struct SideRequest<'a> {
     /// Phase A's output for this side.
     pub entries: &'a HashMap<String, SideEntry>,
-    /// The algorithms the run asked for.
-    pub algos: &'a [String],
+    /// The algorithms the run asked for, **in the order the user typed them**.
+    pub algos: &'a [HashAlg],
     /// `--no-trust-cached-hashes <side>`.
     pub no_trust: bool,
     /// What this side is able to do.
@@ -245,7 +246,7 @@ pub fn plan_pairs(
         // short of.
         return Ok(plan);
     }
-    plan.required.fallback = src.algos.to_vec();
+    plan.required.fallback = AlgoSet::from_iter(src.algos.iter().copied());
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
@@ -285,9 +286,9 @@ pub fn plan_pairs(
         for (idx, req, e, _) in sides {
             let t = &mut tally[idx];
             for algo in req.algos {
-                let slot = t.coverage.entry(algo.clone()).or_insert((0, 0));
+                let slot = t.coverage.entry(*algo).or_insert((0, 0));
                 slot.1 += 1;
-                if e.cached.contains_key(algo) {
+                if e.cached.get_named(algo.as_str()).is_some() {
                     slot.0 += 1;
                 }
             }
@@ -304,21 +305,26 @@ pub fn plan_pairs(
                     if req.cap.can_hash_from_disk {
                         continue;
                     }
-                    let short: Vec<String> = req
-                        .algos
-                        .iter()
-                        .filter(|a| !obtainable(e, req.cap, a))
-                        .cloned()
-                        .collect();
+                    let short = AlgoSet::from_iter(
+                        req.algos
+                            .iter()
+                            .copied()
+                            .filter(|a| !obtainable(e, req.cap, a)),
+                    );
                     if !short.is_empty() {
                         tally[idx].missing.insert((*rel).clone(), short);
                     }
                 }
-                plan.required
-                    .by_rel
-                    .insert((*srel).clone(), src.algos.to_vec());
-                plan_one(&src, s, srel, src.algos, &mut plan.src);
-                plan_one(&dst, d, drel, dst.algos, &mut plan.dst);
+                let want = AlgoSet::from_iter(src.algos.iter().copied());
+                plan.required.by_rel.insert((*srel).clone(), want);
+                plan_one(&src, s, srel, want, &mut plan.src);
+                plan_one(
+                    &dst,
+                    d,
+                    drel,
+                    AlgoSet::from_iter(dst.algos.iter().copied()),
+                    &mut plan.dst,
+                );
             }
             HashMode::AnyOf => {
                 // `None` means no requested algorithm is obtainable on both sides.
@@ -335,24 +341,22 @@ pub fn plan_pairs(
                             continue;
                         }
                         let t = &mut tally[idx];
-                        let short: Vec<String> = req
-                            .algos
-                            .iter()
-                            .filter(|a| !obtainable(e, req.cap, a))
-                            .cloned()
-                            .collect();
+                        let short = AlgoSet::from_iter(
+                            req.algos
+                                .iter()
+                                .copied()
+                                .filter(|a| !obtainable(e, req.cap, a)),
+                        );
                         if !short.is_empty() {
                             t.missing.insert((*rel).clone(), short);
                         }
                     }
                     continue;
                 };
-                let chosen = [pick];
-                plan.required
-                    .by_rel
-                    .insert((*srel).clone(), chosen.to_vec());
-                plan_one(&src, s, srel, &chosen, &mut plan.src);
-                plan_one(&dst, d, drel, &chosen, &mut plan.dst);
+                let chosen = AlgoSet::one(pick);
+                plan.required.by_rel.insert((*srel).clone(), chosen);
+                plan_one(&src, s, srel, chosen, &mut plan.src);
+                plan_one(&dst, d, drel, chosen, &mut plan.dst);
             }
         }
     }
@@ -388,19 +392,20 @@ pub fn plan_pairs(
 /// the choice is visible in the command they typed rather than in a rule they would
 /// have to look up.
 fn pick_one(
-    algos: &[String],
+    algos: &[HashAlg],
     s: &SideEntry,
     d: &SideEntry,
     sc: SideCapability,
     dc: SideCapability,
-) -> Option<String> {
+) -> Option<HashAlg> {
     algos
         .iter()
         .filter(|a| obtainable(s, sc, a) && obtainable(d, dc, a))
         .min_by_key(|a| {
-            usize::from(!s.cached.contains_key(*a)) + usize::from(!d.cached.contains_key(*a))
+            usize::from(s.cached.get_named(a.as_str()).is_none())
+                + usize::from(d.cached.get_named(a.as_str()).is_none())
         })
-        .cloned()
+        .copied()
 }
 
 /// Whether a side can supply `algo` at all: it holds it, or it can go and read it.
@@ -408,17 +413,17 @@ fn pick_one(
 /// **No trust term**, for the reason the coverage check has none: trust asks a side
 /// to re-read rather than reuse, and a record has no filesystem to re-read. Folding
 /// it in would make `--no-trust-cached-hashes src` fatal for every record.
-fn obtainable(e: &SideEntry, cap: SideCapability, algo: &str) -> bool {
-    e.cached.contains_key(algo) || cap.can_hash_from_disk
+fn obtainable(e: &SideEntry, cap: SideCapability, algo: &HashAlg) -> bool {
+    e.cached.get_named(algo.as_str()).is_some() || cap.can_hash_from_disk
 }
 
 /// What one side owes, and how much of it it could meet, over the undecided set.
 #[derive(Debug, Default)]
 struct Tally {
     /// Requested algorithm -> (paths that hold it, undecided paths).
-    coverage: BTreeMap<String, (usize, usize)>,
+    coverage: BTreeMap<HashAlg, (usize, usize)>,
     /// rel path -> requested algorithms this side cannot obtain at all.
-    missing: BTreeMap<String, Vec<String>>,
+    missing: BTreeMap<String, AlgoSet>,
 }
 
 #[cfg(test)]

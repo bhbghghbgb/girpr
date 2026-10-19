@@ -110,14 +110,18 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
     wfile(&dir, "a.txt", b"stable content");
 
     cmd_update(update(dir.clone()), &log()).unwrap();
-    let good = recs_of(&dir)["a.txt"].hashes["md5"].clone();
+    let good = recs_of(&dir)["a.txt"]
+        .hashes
+        .get_named("md5")
+        .unwrap()
+        .to_vec();
 
     // Same stat, wrong content: only a rehash can settle it.
     poison_digest(&dir, "a.txt", "md5");
     let poisoned = recs_of(&dir);
     assert_eq!(
-        poisoned["a.txt"].hashes["md5"],
-        vec![0xABu8; 16],
+        poisoned["a.txt"].hashes.get_named("md5"),
+        Some(&[0xABu8; 16][..]),
         "the fixture is a wrong digest, not a missing one"
     );
     assert_eq!(
@@ -127,8 +131,8 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
 
     cmd_update(update(dir.clone()), &log()).unwrap();
     assert_eq!(
-        recs_of(&dir)["a.txt"].hashes["md5"],
-        good,
+        recs_of(&dir)["a.txt"].hashes.get_named("md5"),
+        Some(good.as_slice()),
         "update trusts nothing, so the poison is recomputed away"
     );
 }

@@ -5,6 +5,8 @@
 //! one place — a tag built anywhere else is a tag that can disagree with the
 //! decision it claims to explain.
 
+use crate::hash::{AlgoSet, HashAlg};
+
 use super::StatField;
 
 /// What the diff concluded about one file-on-both-sides pair, and why.
@@ -32,14 +34,14 @@ pub enum Verdict {
     /// several and the planner settled this pair with one, so naming the request
     /// would report an algorithm nobody compared.
     Differs {
-        /// The algorithms whose digests differ, in the order they were requested.
-        algos: Vec<String>,
+        /// The algorithms whose digests differ, in [`AlgoSet`]'s canonical order.
+        algos: AlgoSet,
     },
     /// Digests were consulted and agree. The complement of [`Self::Differs`], and
     /// only reachable when a digest was available — see [`Self::StatMatch`].
     Matches {
-        /// The algorithms that were compared.
-        algos: Vec<String>,
+        /// The algorithms that were compared, in canonical order.
+        algos: AlgoSet,
     },
     /// Every trusted stat field agrees and no digest was needed.
     ///
@@ -84,8 +86,8 @@ impl Verdict {
                 both: true,
             } => "stat-size+stat-mtime".to_string(),
             Verdict::Stat { field, both: false } => format!("stat-{}", field.as_str()),
-            Verdict::Differs { algos } => format!("digest-differs:{}", join(algos)),
-            Verdict::Matches { algos } => format!("digest-matches:{}", join(algos)),
+            Verdict::Differs { algos } => format!("digest-differs:{}", join(*algos)),
+            Verdict::Matches { algos } => format!("digest-matches:{}", join(*algos)),
             Verdict::StatMatch => "stat-match".to_string(),
             Verdict::Unverifiable { fields } => format!(
                 "unverifiable:{}",
@@ -128,7 +130,19 @@ impl Verdict {
 ///
 /// Never `,`: see [`Verdict::why_tag`]. Non-empty because a detail that names
 /// nothing is a malformed tag, and the two variants that carry one can always.
-fn join(algos: &[String]) -> String {
+///
+/// **Canonical order, not the user's flag order**, and that is the one deliberate
+/// change to what a run prints. `AlgoSet` has no order of its own, so
+/// `--hash-all-of sha256 md5` now reports `digest-differs:md5+sha256` where it used
+/// to report `digest-differs:sha256+md5`. The tag is now a function of *the
+/// disagreement* rather than of *how two flags were ordered*, which is what a
+/// parser wants: `md5+sha256` means the same thing whichever way round the user
+/// typed them.
+fn join(algos: AlgoSet) -> String {
     debug_assert!(!algos.is_empty(), "a reason detail must name something");
-    algos.join("+")
+    algos
+        .iter()
+        .map(HashAlg::as_str)
+        .collect::<Vec<_>>()
+        .join("+")
 }

@@ -17,6 +17,7 @@ pub use verdict::Verdict;
 use std::collections::{HashMap, HashSet};
 
 use crate::effective::EffRec;
+use crate::hash::{AlgoSet, DigestSet};
 use crate::planner::{CasePairing, Required, StatTrust};
 
 /// Per-class diff buckets, each sorted by relative path.
@@ -158,9 +159,7 @@ pub fn pair_verdict(
     // non-empty: `hashes_differ` over an empty list is silent, and silence over
     // nothing is not agreement.
     if !need.is_empty() {
-        return Verdict::Matches {
-            algos: need.to_vec(),
-        };
+        return Verdict::Matches { algos: need };
     }
     // **No digest was consulted, and there was a difference we were told to ignore.**
     //
@@ -339,20 +338,20 @@ pub fn diff_maps(
 /// the pair — so a reason built from the request would name an algorithm that was
 /// never compared. Empty means "no disagreement found", which covers both agreement
 /// and silence; the caller tells them apart by whether it consulted anything.
-pub fn hashes_differ(
-    a: &HashMap<String, Vec<u8>>,
-    b: &HashMap<String, Vec<u8>>,
-    algos: &[String],
-) -> Vec<String> {
-    let mut differ: Vec<String> = Vec::new();
-    for algo in algos {
+///
+/// A **set** of algorithms on both sides, so the answer has a fixed order rather than
+/// the order the user happened to type them in. See [`Verdict::why_tag`] — that is the
+/// one place this order becomes visible, and it is a tag a parser reads.
+pub fn hashes_differ(a: &DigestSet, b: &DigestSet, algos: AlgoSet) -> AlgoSet {
+    let mut differ = AlgoSet::NONE;
+    for algo in algos.iter() {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
         // not force differ here.
-        if let (Some(x), Some(y)) = (a.get(algo), b.get(algo))
+        if let (Some(x), Some(y)) = (a.get_named(algo.as_str()), b.get_named(algo.as_str()))
             && x != y
         {
-            differ.push(algo.clone());
+            differ.insert(algo);
         }
     }
     differ
@@ -361,13 +360,14 @@ pub fn hashes_differ(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::DigestSet;
 
     fn file(size: u64, mtime_ns: i64) -> EffRec {
         EffRec {
             kind: "file".into(),
             size,
             mtime_ns,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 
@@ -376,7 +376,7 @@ mod tests {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 

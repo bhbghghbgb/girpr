@@ -12,7 +12,7 @@ use tracing::{debug, info, trace};
 
 use crate::cache::CacheDb;
 use crate::config::ScanMode;
-use crate::hash::hash_file;
+use crate::hash::{DigestSet, hash_file};
 use crate::planner::HashPlan;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
@@ -63,9 +63,11 @@ use super::side::{OpenSide, Side};
 ///   of it on disk.
 ///
 /// A window rather than one `collect()` over the whole pending set for a third
-/// reason: peak memory. Every pending file holds a live `HashMap<String,
-/// Vec<u8>>` until the batch writes it, which on a 200k-file tree is tens of MB
-/// of map structure the sequential form never allocated.
+/// reason: peak memory. Every pending file holds its digests until the batch
+/// writes them, and on a 200k-file tree an unbounded `collect()` would hold the
+/// whole hash phase at once. A [`DigestSet`] is 72 bytes and allocates nothing, so
+/// what the window bounds is that 72 bytes per pending file — and the bound is
+/// still worth having, because the *files* are what is unbounded.
 pub fn resolve_folder(
     root: &Path,
     cache: &CacheDb,
@@ -111,7 +113,7 @@ pub fn resolve_folder(
         // The permit is taken *around* the read rather than inside `hash_file`, so
         // the gate stays a property of a phase and `hash_file` keeps the signature
         // every other caller already has.
-        let computed: Vec<Result<HashMap<String, Vec<u8>>>> = rw.pool().install(|| {
+        let computed: Vec<Result<DigestSet>> = rw.pool().install(|| {
             use rayon::prelude::*;
             chunk
                 .par_iter()
@@ -120,11 +122,11 @@ pub fn resolve_folder(
                     let path = root.join(rel);
                     let algos = plan.get(rel);
                     debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
-                    let r =
-                        hash_file(&path, algos).with_context(|| format!("hash {}", path.display()));
+                    let r = hash_file(&path, &algos)
+                        .with_context(|| format!("hash {}", path.display()));
                     trace!(
                         rel = %rel,
-                        algos = ?r.as_ref().map(|h| h.keys().collect::<Vec<_>>()),
+                        algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
                         "hashed"
                     );
                     r

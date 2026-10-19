@@ -16,6 +16,7 @@
 mod common;
 
 use common::{TempRoot, parse_ndjson, summary_of, sync_mtime, wfile};
+use girsync::hash::AlgoSet;
 use serde_json::Value;
 use std::path::Path;
 
@@ -132,7 +133,7 @@ fn compare_json_is_the_verdict_the_library_builds() {
         &dm.map,
         &girsync::planner::Required {
             by_rel: Default::default(),
-            fallback: o.common.algos.clone(),
+            fallback: AlgoSet::from_iter(o.common.algos.iter().copied()),
         },
         o.common.stat,
         girsync::planner::CasePairing::from(o.common.case_sensitive),

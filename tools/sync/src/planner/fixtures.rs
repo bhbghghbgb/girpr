@@ -15,6 +15,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::effective::{SideCapability, SideEntry};
+use crate::hash::{DigestSet, HashAlg};
 
 use super::HashMode;
 use super::pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
@@ -26,7 +27,7 @@ pub(super) fn file(size: u64, mtime: i64) -> SideEntry {
         kind: "file".into(),
         size,
         mtime_ns: mtime,
-        cached: HashMap::new(),
+        cached: DigestSet::default(),
         fresh: false,
     }
 }
@@ -37,7 +38,7 @@ pub(super) fn dir() -> SideEntry {
         kind: "dir".into(),
         size: 0,
         mtime_ns: 0,
-        cached: HashMap::new(),
+        cached: DigestSet::default(),
         fresh: true,
     }
 }
@@ -48,10 +49,13 @@ pub(super) fn cached_entry(cached: &[&str]) -> SideEntry {
         kind: "file".into(),
         size: 10,
         mtime_ns: 100,
-        cached: cached
-            .iter()
-            .map(|a| (a.to_string(), vec![1u8; 16]))
-            .collect(),
+        cached: {
+            let mut d = DigestSet::default();
+            for a in cached {
+                d.insert_named(a, &[1u8; 16]);
+            }
+            d
+        },
         fresh: true,
     }
 }
@@ -128,7 +132,7 @@ impl Shape {
             can_hash_from_disk: ok,
             can_write_cache: ok,
         };
-        let algos: Vec<String> = self.algos.iter().map(|a| a.to_string()).collect();
+        let algos: Vec<HashAlg> = self.algos.iter().map(|a| a.parse().unwrap()).collect();
         plan_pairs(
             SideRequest {
                 entries: s,

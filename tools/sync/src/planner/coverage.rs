@@ -13,6 +13,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::hash::{AlgoSet, HashAlg};
+
 use super::HashMode;
 
 /// A side that could not supply every digest the run required.
@@ -36,9 +38,17 @@ pub struct Coverage {
     /// for any one algorithm, which is the whole of `any-of`.
     pub mode: HashMode,
     /// rel path -> the requested algorithms it could not obtain.
-    pub missing: BTreeMap<String, Vec<String>>,
+    pub missing: BTreeMap<String, AlgoSet>,
     /// Requested algorithm -> (paths holding it, undecided paths).
-    pub coverage: BTreeMap<String, (usize, usize)>,
+    ///
+    /// Keyed by [`HashAlg`], so the map is ordered by *canonical* order rather than
+    /// by name. Those are the same thing for the two algorithms that exist — `md5`
+    /// then `sha256` is both declaration order and alphabetical — which is why the
+    /// rendered lines and the two remedies below are unchanged. They stop being the
+    /// same the day a third algorithm is added, and at that point the remedy text
+    /// reorders silently rather than failing. That is the trade, and it is stated
+    /// here because the rendered message is what a user acts on.
+    pub coverage: BTreeMap<HashAlg, (usize, usize)>,
 }
 
 impl fmt::Display for Coverage {
@@ -66,7 +76,11 @@ impl fmt::Display for Coverage {
             undecided
         )?;
         for (rel, algos) in self.missing.iter().take(EXAMPLE_PATHS) {
-            writeln!(f, "\n    {rel:<32} {}", algos.join(", "))?;
+            // Joined by name, so the rendered line is the list of spellings and not
+            // whatever an algorithm serialises as. `AlgoSet` deliberately has no
+            // `Display`: three call sites need three separators.
+            let names: Vec<&str> = algos.iter().map(HashAlg::as_str).collect();
+            writeln!(f, "\n    {rel:<32} {}", names.join(", "))?;
         }
         if self.missing.len() > EXAMPLE_PATHS {
             writeln!(
@@ -109,7 +123,7 @@ impl fmt::Display for Coverage {
             .coverage
             .iter()
             .find(|(_, (have, total))| *total > 0 && have == total)
-            .map(|(a, _)| a.clone());
+            .map(|(a, _)| *a);
         match self.mode {
             HashMode::AllOf => {
                 if let Some(a) = narrower {
@@ -121,7 +135,7 @@ impl fmt::Display for Coverage {
                     writeln!(
                         f,
                         "  - require only one of them: --hash-any-of {}",
-                        self.coverage.keys().cloned().collect::<Vec<_>>().join(" ")
+                        self.names()
                     )?;
                 }
             }
@@ -130,7 +144,7 @@ impl fmt::Display for Coverage {
                     f,
                     "  - require every one of them, which is stricter but equally \
                      unanswerable:\n    --hash-all-of {}",
-                    self.coverage.keys().cloned().collect::<Vec<_>>().join(" ")
+                    self.names()
                 )?;
             }
         }
@@ -150,6 +164,21 @@ impl fmt::Display for Coverage {
 
 impl std::error::Error for Coverage {}
 
+impl Coverage {
+    /// The requested algorithms, in map order, space-joined for a remedy line.
+    ///
+    /// A helper rather than a third inline `join`, because the two remedies that
+    /// name the whole request must not be able to spell it differently from each
+    /// other.
+    fn names(&self) -> String {
+        self.coverage
+            .keys()
+            .map(|a| a.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 /// How many uncovered paths the message names in full.
 ///
 /// Enough to recognise the shape of the problem, few enough that the message stays
@@ -159,6 +188,8 @@ const EXAMPLE_PATHS: usize = 5;
 
 #[cfg(test)]
 mod tests {
+    use super::Coverage;
+    use crate::hash::{AlgoSet, HashAlg};
     use crate::planner::HashMode;
     use crate::planner::fixtures::{Shape, cached_entry, dir, file, map};
     use crate::planner::stat_trust::StatTrust;
@@ -317,6 +348,82 @@ mod tests {
             Shape::record_src(&["md5"])
                 .run(&s, &d, true, StatTrust::default())
                 .is_err()
+        );
+    }
+
+    /// **The rendered message is the part a user acts on**, and until now only two
+    /// substrings of it were pinned — the algorithm name and the coverage fraction.
+    /// The rest is a command line they copy and paste: the padded per-algorithm
+    /// column, and the remedies. Those are asserted whole here.
+    ///
+    /// Both remedies that name the whole request go through one helper, so there is
+    /// no way for them to spell it differently from each other, and the padded
+    /// column is `{:<12}` — which only lines up because `Display for HashAlg` uses
+    /// `f.pad` rather than `f.write_str`.
+    #[test]
+    fn the_message_names_the_algorithms_and_the_remedies_exactly() {
+        use std::collections::BTreeMap;
+
+        let msg = format!(
+            "{:#}",
+            Coverage {
+                side: "src",
+                label: "rec".into(),
+                mode: HashMode::AllOf,
+                missing: BTreeMap::from([(
+                    "a.txt".to_string(),
+                    AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256])
+                )]),
+                coverage: BTreeMap::from([
+                    (HashAlg::Md5, (0usize, 2usize)),
+                    (HashAlg::Sha256, (1, 2)),
+                ]),
+            }
+        );
+        for want in [
+            // The padded column: name left-aligned in twelve, then the fraction.
+            "    md5          0/2",
+            "    sha256       1/2",
+            // The shortfall line: the path, then the algorithms it lacks.
+            "    a.txt                            md5, sha256",
+            // Neither algorithm alone covers, so the remedy is the weaker mode
+            // over the whole request — the string the user will paste.
+            "  - require only one of them: --hash-any-of md5 sha256",
+        ] {
+            assert!(
+                msg.contains(want),
+                "missing from the message:\n{want}\n\n{msg}"
+            );
+        }
+    }
+
+    /// One algorithm *does* cover the undecided set, so the remedy is to narrow the
+    /// request rather than weaken it — and `narrower` picks the first algorithm in
+    /// map order that fully covers, which is canonical order.
+    #[test]
+    fn a_covered_algorithm_offers_a_narrower_request_first() {
+        use std::collections::BTreeMap;
+
+        let msg = format!(
+            "{:#}",
+            Coverage {
+                side: "src",
+                label: "rec".into(),
+                mode: HashMode::AllOf,
+                missing: BTreeMap::new(),
+                coverage: BTreeMap::from([
+                    (HashAlg::Md5, (0usize, 2usize)),
+                    (HashAlg::Sha256, (2, 2)),
+                ]),
+            }
+        );
+        assert!(
+            msg.contains("  - narrow the request to what it already holds: --hash-all-of sha256"),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("--hash-any-of"),
+            "and the weaker mode is not offered when a narrower request would do: {msg}"
         );
     }
 

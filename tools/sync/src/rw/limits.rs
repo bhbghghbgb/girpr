@@ -18,9 +18,11 @@ pub(super) const LOUD_THREAD_COUNT: usize = 64;
 ///   an interruption can lose, and that only holds if a digest becomes durable
 ///   shortly after it is computed. Per-window keeps that true; one big `collect()`
 ///   would put the whole hash phase in memory and none of it on disk.
-/// - **memory.** One `HashMap<String, Vec<u8>>` per pending file is real overhead on
-///   a large tree — roughly 25–50 MB of map structure at 200k files, which the
-///   sequential form never allocated.
+/// - **memory.** A window's results are live at once, and every pending file holds
+///   its digests until the batch writes them. A [`crate::hash::DigestSet`] is 72
+///   bytes and allocates nothing, so the window's share of a resolve is bounded by
+///   the window and not by the tree — which the sequential form also got right, and
+///   which a per-file map would have undone.
 /// - **the progress heartbeat**, which reports a `done` count and stays meaningful
 ///   with a window in flight and `pending.len() - window` still to go.
 const MIN_WINDOW: usize = 32;

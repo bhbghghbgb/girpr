@@ -3,7 +3,7 @@
 //! The types, with no encoding and no redb. [`codec`] turns them into bytes and
 //! this module says what the bytes mean.
 
-use std::collections::HashMap;
+use crate::hash::DigestSet;
 
 /// Cache file name. Also the prefix that marks a path as a *record*
 /// (backups and `old-*` snapshots share it).
@@ -21,8 +21,11 @@ pub struct Meta {
     pub case_sensitive: bool,
 }
 
-/// One cached path. `hashes` maps algorithm name (`md5`, `sha256`, ...) to
-/// the **raw** digest bytes (16 for md5, 32 for sha256 — never hex).
+/// One cached path. `hashes` holds the **raw** digest bytes (16 for md5, 32 for
+/// sha256 — never hex), under an algorithm this build may or may not recognise.
+///
+/// `PartialEq` is what lets a codec round-trip be asserted as a whole, and what
+/// [`crate::effective::merge_row`]'s rule is checked against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileRec {
     /// "file" or "dir"
@@ -30,7 +33,7 @@ pub struct FileRec {
     pub size: u64,
     /// Nanoseconds since the epoch.
     pub mtime_ns: i64,
-    pub hashes: HashMap<String, Vec<u8>>,
+    pub hashes: DigestSet,
 }
 
 impl FileRec {
@@ -41,7 +44,7 @@ impl FileRec {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
-            hashes: HashMap::new(),
+            hashes: DigestSet::default(),
         }
     }
 

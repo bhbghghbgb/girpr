@@ -89,7 +89,7 @@ fn rows() -> Vec<Row> {
             build: |t| pinned(t, "d.txt", b"aaaa", b"bbbb"),
             common: md5,
             verdict: Verdict::Differs {
-                algos: vec!["md5".into()],
+                algos: AlgoSet::one(HashAlg::Md5),
             },
             tag: "digest-differs:md5",
         },
@@ -101,7 +101,7 @@ fn rows() -> Vec<Row> {
             build: |t| pinned(t, "d.txt", b"aaaa", b"bbbb"),
             common: md5_and_sha256,
             verdict: Verdict::Differs {
-                algos: vec!["md5".into(), "sha256".into()],
+                algos: AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256]),
             },
             tag: "digest-differs:md5+sha256",
         },
@@ -111,7 +111,7 @@ fn rows() -> Vec<Row> {
             build: |t| pinned(t, "e.txt", b"same", b"same"),
             common: md5,
             verdict: Verdict::Matches {
-                algos: vec!["md5".into()],
+                algos: AlgoSet::one(HashAlg::Md5),
             },
             tag: "digest-matches:md5",
         },
@@ -204,7 +204,7 @@ fn rows() -> Vec<Row> {
             },
             common: any_of_md5_sha256,
             verdict: Verdict::Differs {
-                algos: vec!["md5".into()],
+                algos: AlgoSet::one(HashAlg::Md5),
             },
             tag: "digest-differs:md5",
         },
@@ -300,14 +300,15 @@ fn the_table_covers_every_classification() {
     }
 }
 
-/// Two algorithms that disagree are both named, and in the order they were asked
-/// for. `required.by_rel` is written in `algos` order, so a tag built from the
-/// disagreement inherits it — and a tag built from the *request* would be
-/// indistinguishable from it here, which is why the `any-of` row exists as well.
+/// Two algorithms that disagree are both named. A tag built from the
+/// *disagreement* rather than the request — which is why this is not
+/// automatically the same as "everything that was asked for", and why the
+/// `any-of` row above exists as well.
 ///
-/// Pinned as its own case because it is the one field a parser cannot reconstruct.
+/// Pinned as its own case because it is the one field a parser cannot
+/// reconstruct.
 #[test]
-fn a_tag_names_the_algorithms_that_disagreed_in_the_order_they_were_asked_for() {
+fn a_tag_names_the_algorithms_that_disagreed() {
     let t = TempRoot::new("why_algo_order");
     let (src, dst) = pinned(&t, "a.txt", b"aaaa", b"bbbb");
     let common = md5_and_sha256();
@@ -323,8 +324,38 @@ fn a_tag_names_the_algorithms_that_disagreed_in_the_order_they_were_asked_for() 
     assert_eq!(
         got,
         Verdict::Differs {
-            algos: vec!["md5".into(), "sha256".into()]
+            algos: AlgoSet::from_iter([HashAlg::Md5, HashAlg::Sha256])
         }
     );
     assert_eq!(got.why_tag(), "digest-differs:md5+sha256");
+}
+
+/// **The tag's order is the disagreement's, not the flag order's.** Same fixture
+/// as above with the two `--hash` flags the other way round: the pair still
+/// disagrees on both algorithms, and the tag is unchanged.
+///
+/// This is the one deliberate change to what a run prints. `--hash-all-of
+/// sha256 md5` used to report `digest-differs:sha256+md5`; it now reports
+/// `digest-differs:md5+sha256`. A tag that depends on how two flags were ordered
+/// is a tag a parser has to normalise before it can compare it with anything, and
+/// the disagreement itself has no order to depend on.
+#[test]
+fn a_tag_names_the_algorithms_in_a_fixed_order_not_the_flag_order() {
+    let t = TempRoot::new("why_algo_fixed_order");
+    let (src, dst) = pinned(&t, "a.txt", b"aaaa", b"bbbb");
+    let common = common::with_algos(&["sha256", "md5"]);
+    let (sm, dm, plans) = resolved("algo fixed order", &src, &dst, &common);
+
+    let got = pair_verdict(
+        plans.stat,
+        &plans.required,
+        &sm["a.txt"],
+        &dm["a.txt"],
+        "a.txt",
+    );
+    assert_eq!(
+        got.why_tag(),
+        "digest-differs:md5+sha256",
+        "the same disagreement, named the same way whichever order the flags were typed"
+    );
 }

@@ -158,7 +158,7 @@ fn only_pairs_get_a_classification_and_only_classified_paths_get_a_tag() {
     diff.verdicts.insert(
         "c.txt".into(),
         Verdict::Differs {
-            algos: vec!["md5".into()],
+            algos: AlgoSet::one(HashAlg::Md5),
         },
     );
     assert_eq!(diff.why_tag("c.txt").as_deref(), Some("digest-differs:md5"));
@@ -326,7 +326,7 @@ fn the_reporter_takes_the_flag_and_adds_only_the_why_field() {
     diff.verdicts.insert(
         "c.txt".into(),
         Verdict::Differs {
-            algos: vec!["md5".into()],
+            algos: AlgoSet::one(HashAlg::Md5),
         },
     );
 
@@ -369,7 +369,7 @@ fn holding_reasons_does_not_make_a_pair_a_difference() {
     equal_only.verdicts.insert(
         "same.txt".into(),
         Verdict::Matches {
-            algos: vec!["md5".into()],
+            algos: AlgoSet::one(HashAlg::Md5),
         },
     );
     equal_only.verdicts.insert("d".into(), Verdict::DirPresent);

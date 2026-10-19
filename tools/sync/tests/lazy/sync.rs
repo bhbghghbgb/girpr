@@ -277,7 +277,7 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
         &dm.map,
         &Required {
             by_rel: HashMap::new(),
-            fallback: vec!["md5".to_string()],
+            fallback: AlgoSet::one(HashAlg::Md5),
         },
         StatTrust::default(),
         CasePairing::Exact,
