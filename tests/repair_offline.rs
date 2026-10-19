@@ -774,6 +774,76 @@ async fn the_plan_line_reports_the_disk_cost() {
     mock.stop();
 }
 
+// ---------------------------------------------------------------------------
+// the single-writer lock
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_second_run_is_refused_while_the_lock_is_held() {
+    // Two runs against one install are harmless under the temp path and
+    // *not* harmless under the in-place path, so the second one is refused
+    // — with the file's name and the holder's pid (docs/07 §4.1, P5).
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock_held");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+    // A lock held by "another run".
+    std::fs::write(
+        dir.join("girpr.lock"),
+        format!("pid=4242\nstarted={}\n", chrono_now()),
+    )
+    .unwrap();
+
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a held lock refuses the run");
+    assert_eq!(err.exit_code, 1, "the refusal is a usage/config failure");
+    let msg = format!("{:#}", err.source);
+    assert!(msg.contains("girpr.lock"), "must name the lock: {msg}");
+    assert!(msg.contains("4242"), "must name the holder: {msg}");
+    // Nothing was repaired: the file is still the damaged one.
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        half_intact_foo(&fx2)
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_stale_lock_does_not_refuse_the_run() {
+    // A run that was killed must not block the next one for a day.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock_stale");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+    let old = chrono_now() - 2 * 24 * 60 * 60;
+    std::fs::write(dir.join("girpr.lock"), format!("pid=4242\nstarted={old}\n")).unwrap();
+
+    let (_summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("a stale lock is taken over");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    // The run released the lock on its way out.
+    assert!(!dir.join("girpr.lock").exists());
+
+    mock.stop();
+}
+
+/// The current unix time, in seconds.
+fn chrono_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after 1970")
+        .as_secs() as i64
+}
+
 #[tokio::test]
 async fn explicit_audio_selection_overwrites_scan_file() {
     let fx = build_fixture();
