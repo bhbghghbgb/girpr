@@ -39,7 +39,8 @@
 mod common;
 
 use common::{
-    LATEST_TAG, MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file,
+    LATEST_TAG, MockOpts, MockServer, build_fixture, build_moved_fixture, read_game_file, temp_dir,
+    write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
@@ -522,6 +523,91 @@ async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
         !dir.join("game").join("foo.dat_tmp").exists(),
         "the in-place path repaired it without a temp file"
     );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
+    // The fixture's old file is `P || Q || R` and the new one is `R || P ||
+    // T`: the content moved, so the repair has to move bytes *inside* the
+    // file. The sources are in both directions (R's is later, P's is
+    // earlier), which is the case the two tiers differ on.
+    //
+    // The RAM tier stages the moving bytes, so **every** source survives:
+    // only the brand-new chunk is downloaded.
+    let fx = build_moved_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("moved_staged");
+    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=9.9.8-test\n",
+    )
+    .unwrap();
+    write_game_file(&dir, &old_rel, &old_bytes);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("moved run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_t".to_string()],
+        "both moved chunks are salvaged; only the new one is downloaded"
+    );
+    // The file is the new one.
+    let want = build_moved_fixture().files[0].data.clone();
+    assert_eq!(read_game_file(&dir, &old_rel).unwrap(), want);
+    // And nothing was staged for nothing: the payload was the two moved
+    // chunks, and the peak says so.
+    assert!(
+        summary.ram_peak_bytes() > 0,
+        "the staged payload is counted"
+    );
+    assert!(!dir.join("game").join("moved.dat_tmp").exists());
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
+    // The same file, repaired by the ordered tier: no staging, so the
+    // sources are read from the file at write time and only the ones that
+    // survive the write order can be used. One direction's worth is kept —
+    // here the tie goes to ascending, which keeps `R` and loses `P`.
+    //
+    // The file that comes out is **the same file**: the tier is a choice of
+    // how to get there, not of what to produce.
+    let fx = build_moved_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("moved_ordered");
+    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=9.9.8-test\n",
+    )
+    .unwrap();
+    write_game_file(&dir, &old_rel, &old_bytes);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    // "stage nothing at all" is what selects the ordered tier.
+    ctx.limits.ram_bytes = Some(0);
+    let (summary, code) = repair::run(ctx).await.expect("moved run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_p".to_string(), "chunk_t".to_string()],
+        "the source that the other direction needed was lost, so it downloaded"
+    );
+    // The same file the RAM tier produces.
+    let want = build_moved_fixture().files[0].data.clone();
+    assert_eq!(read_game_file(&dir, &old_rel).unwrap(), want);
+    assert!(!dir.join("game").join("moved.dat_tmp").exists());
 
     mock.stop();
 }
