@@ -42,7 +42,7 @@ use common::{
     LATEST_TAG, MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
-use girpr::{Biz, OutputFormat, RunCtx, repair};
+use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
@@ -329,8 +329,10 @@ async fn verified_local_slice_is_reused_without_redownload() {
 
 #[tokio::test]
 async fn partial_tmp_prefix_is_resumed() {
-    // S3: resume-by-length. foo missing but foo_tmp holds the first chunk;
-    // only the second chunk is downloaded, then tmp is promoted.
+    // S3: resume-by-length. This is the **temp** path's resume mechanism, so
+    // it is asked for explicitly: `--repair-mode temp` is the mode that
+    // writes `{path}_tmp` at all. foo missing but foo_tmp holds the first
+    // chunk; only the second chunk is downloaded, then tmp is promoted.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("resume");
@@ -338,9 +340,9 @@ async fn partial_tmp_prefix_is_resumed() {
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     write_game_file(&dir, "game/foo.dat_tmp", &fx2.files[0].data[..64]);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("resume run");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    let (summary, code) = repair::run(ctx).await.expect("resume run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -353,6 +355,214 @@ async fn partial_tmp_prefix_is_resumed() {
         "tmp promoted"
     );
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
+    // The disk claim, on the fixture: a right-sized file whose second chunk
+    // is corrupt is repaired by writing that chunk and nothing else. The
+    // write counter is the evidence — the temp path would have written the
+    // whole 128 bytes.
+    //
+    // There is no `config.ini` here, so there is no local manifest and no
+    // reuse map: the in-place path finds the intact chunk on its own, from
+    // the scan. That is the network win that needs no manifest at all.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_patch");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("in-place run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file is correct"
+    );
+    // The disk claim: one chunk written, not the whole file.
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "only the corrupt chunk was written"
+    );
+    // And no `_tmp` anywhere: the in-place path never creates one.
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "the in-place path must not create a temp file"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo1".to_string()],
+        "the intact chunk is kept, not fetched"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_file_that_grows_writes_only_the_growth() {
+    // foo.dat is 128 bytes in the manifest; on disk it is 64. The first
+    // chunk is already right, the second is missing: the repair writes 64
+    // bytes — the growth — and not the 128 the temp path would have.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_grow");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("in-place run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file grew to its manifest size"
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "only the missing chunk was written"
+    );
+    assert!(!dir.join("game").join("foo.dat_tmp").exists());
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
+    // `discard` trades the network for the disk: the target is deleted and
+    // written again, so nothing reusable survives — not even the chunk that
+    // was already correct where it belonged.
+    //
+    // The local manifest is loaded here (config.ini at the latest tag), so
+    // the reuse map exists and the *default* run would keep the intact
+    // chunk. That is the difference the mode makes visible.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("discard");
+    std::fs::write(
+        dir.join("config.ini"),
+        format!("[General]\ngame_version={}\n", LATEST_TAG),
+    )
+    .unwrap();
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Discard;
+    let (summary, code) = repair::run(ctx).await.expect("discard run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        "after the delete there is nothing left to reuse, so both chunks are fetched"
+    );
+    assert!(!dir.join("game").join("foo.dat_tmp").exists());
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
+    // A game file can carry the read-only attribute, and then it cannot be
+    // opened for writing. The repair clears the attribute and carries on —
+    // the temp path would not have helped, because the promote renames over
+    // the target and that fails the same way.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("readonly");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    let target = dir.join("game").join("foo.dat");
+    let mut perms = std::fs::metadata(&target).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&target, perms).unwrap();
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("read-only run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "the in-place path repaired it without a temp file"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_interrupted_in_place_run_resumes_by_verification() {
+    // The state an interrupted in-place run leaves behind: some chunks
+    // correct where they belong, some not. There is no artefact to resume
+    // from — the next run finds the correct chunks in its scan and rewrites
+    // the rest, and a `_tmp` is nowhere in sight.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_resume");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    // Half of the second chunk is wrong: the file is neither the old one
+    // nor the new one, which is exactly what an interrupted write leaves.
+    let mut interrupted = fx2.files[0].data.clone();
+    for b in interrupted.iter_mut().skip(96) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &interrupted);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("in-place run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "the chunk that was already right was not rewritten"
+    );
+    assert!(!dir.join("game").join("foo.dat_tmp").exists());
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "no artefact: resume is by verification"
+    );
 
     mock.stop();
 }
@@ -1957,9 +2167,24 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
         mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
-        "with no local manifest there is nothing to reuse from, so even the \
-         half-intact file downloads both of its chunks"
+        vec!["chunk_foo1".to_string()],
+        "with no local manifest there is no reuse *map*, but the in-place \
+         repair keeps the chunk that is already correct where it belongs — \
+         the scan finds it without any manifest"
+    );
+    // The estimate is what still moves: with no local manifest the plan's
+    // estimate is every chunk, while the run only fetched the corrupt one.
+    // That is the "the estimate is an upper bound" property docs/07 D5
+    // records, and it is why the `local_manifest` key has to be there.
+    assert_eq!(
+        summary.flags.plan_download_bytes,
+        None,
+        "the estimate is only reported when the ceiling asked for it"
+    );
+    assert!(
+        summary.download_bytes.load(Ordering::Relaxed) < est,
+        "the degraded run still fetched less than the whole plan: {} vs {est}",
+        summary.download_bytes.load(Ordering::Relaxed)
     );
     mock.stop();
 }

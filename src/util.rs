@@ -115,11 +115,16 @@ pub fn scan_file(
 /// The in-place repair opens its target `read+write` and then has to write to
 /// it, so the scan cannot own the handle: it borrows it, and the caller seeks
 /// before every write afterwards.
+///
+/// The scan always starts at the beginning of the file: the handle's current
+/// position is whatever the caller's last read or write left it at, and a
+/// scan that started there would hash half a file.
 pub fn scan_reader(
     f: &mut File,
     dest: &[ScanRange<'_>],
     source: &[ScanRange<'_>],
 ) -> Result<Scan> {
+    f.seek(SeekFrom::Start(0))?;
     let mut ranges: Vec<RangeState> = Vec::new();
     let mut index: HashMap<(u64, u64, String), usize> = HashMap::new();
     let mut dest_idx = Vec::with_capacity(dest.len());

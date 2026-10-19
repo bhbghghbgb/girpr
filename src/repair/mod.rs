@@ -355,6 +355,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.jobs,
         ctx.dry_run,
         ctx.output,
+        ctx.repair_mode,
     )
     .await;
     if ctx.limits.write_bytes.is_some() {
