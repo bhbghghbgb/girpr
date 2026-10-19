@@ -190,6 +190,7 @@ fn help_text_lists_every_documented_flag() {
         "--fail-fast",
         "--print-plan",
         "--plan-out",
+        "--scan",
         "--output",
         "--log-level",
         "--log-file",

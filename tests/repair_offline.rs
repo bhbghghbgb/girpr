@@ -68,6 +68,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         repair_mode: None,
         ram_budget: girpr::config::DEFAULT_RAM_BUDGET,
         jobs,
+        scan: false,
         check_only: false,
         purge_only: false,
         fail_fast: false,
@@ -842,6 +843,92 @@ fn chrono_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("the clock is after 1970")
         .as_secs() as i64
+}
+
+// ---------------------------------------------------------------------------
+// the scan pass
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_scan_makes_the_download_estimate_exact() {
+    // The estimate the plan carries is a **lower bound**: it cannot know
+    // that a chunk is already correct where it belongs. The scan knows, so
+    // the estimate becomes the figure the repair will actually fetch — and
+    // `--max-download-bytes` refuses on it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scan_exact");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+    // The one chunk that has to be fetched.
+    let one = fx2
+        .chunk_store
+        .get("chunk_foo1")
+        .map(|b| b.len() as u64)
+        .expect("the fixture's chunk");
+
+    // Without the scan, the estimate is the bound: the whole file.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.print_plan = true;
+    ctx.limits.download_bytes = Some(1 << 30);
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+    let bound = summary.flags.plan_download_bytes.expect("the estimate");
+    assert!(
+        bound > one,
+        "the bound cannot know what is already right: {bound} vs {one}"
+    );
+
+    // With the scan, it is exact.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.scan = true;
+    ctx.print_plan = true;
+    ctx.limits.download_bytes = Some(1 << 30);
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+    assert_eq!(
+        summary.flags.plan_download_bytes,
+        Some(one),
+        "the estimate is the one chunk that is actually fetched"
+    );
+
+    // And the repair fetches exactly that.
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    assert_eq!(summary.download_bytes.load(Ordering::Relaxed), one);
+}
+
+#[tokio::test]
+async fn the_scan_counts_the_damaged_chunks() {
+    // `--check-only` normally reports how many *files* are damaged. The scan
+    // knows how many *chunks* are.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scan_damaged");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.scan = true;
+    ctx.check_only = true;
+    let (summary, code) = repair::run(ctx).await.expect("check runs");
+    assert_eq!(code, 4, "one file is damaged");
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(line.contains("damaged_chunks=1"), "{line}");
+
+    // Without the scan the key is absent: an unflagged run's line stays
+    // byte-identical to one that never passes the flag.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.check_only = true;
+    let (summary, code) = repair::run(ctx).await.expect("check runs");
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(!line.contains("damaged_chunks"), "{line}");
+
+    mock.stop();
 }
 
 #[tokio::test]

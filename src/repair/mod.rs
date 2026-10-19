@@ -47,6 +47,7 @@ mod metadata;
 mod plan;
 mod post;
 pub mod reuse;
+pub mod scan;
 pub mod scope;
 
 pub use metadata::Meta;
@@ -135,12 +136,35 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let plan = Arc::new(plan::build_plan(
+    let mut plan = plan::build_plan(
         per_manifest,
         &meta.blacklist,
         &meta.latest,
         scope,
-    ));
+    );
+    // 4.0 the scan pass (`--scan`): read every planned file once and record
+    // what each chunk looks like. The download estimate becomes exact, so
+    // the ceiling below refuses on the real figure — and the repair loop
+    // starts with the same verdicts the estimate was built from.
+    //
+    // It is opt-in because it costs a full read pass before any repair
+    // starts (docs/07 §7, option I).
+    let mut scan_bytes = 0u64;
+    let mut damaged_chunks = 0u64;
+    if ctx.scan {
+        let report = scan::scan_plan(&game_dir, &plan.files, &local_map, ctx.jobs);
+        scan_bytes = report.bytes;
+        damaged_chunks = report.damaged_chunks;
+        tracing::info!(
+            files = report.verdicts.len(),
+            scan_bytes,
+            damaged_chunks,
+            damaged_files = report.damaged_files,
+            "scan: the plan now knows what every chunk looks like"
+        );
+        plan.verdicts = Some(report.verdicts);
+    }
+    let plan = Arc::new(plan);
     tracing::info!(
         "work list: {} files{}",
         plan.files.len(),
@@ -276,6 +300,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             est_download_bytes,
             scope.is_active(),
             &extras,
+            ctx.scan.then_some(scan_bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
@@ -338,6 +363,11 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     if ctx.check_only {
         let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output);
         summary.files_failed.store(bad, Ordering::Relaxed);
+        if ctx.scan {
+            // The scan knows how many *chunks* are damaged, not just how many
+            // files are.
+            summary.flags.damaged_chunks = Some(damaged_chunks);
+        }
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 

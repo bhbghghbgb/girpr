@@ -157,6 +157,9 @@ pub struct RunCtx {
     /// `--fail-fast`: stop the run once one file exhausts its retries.
     pub fail_fast: bool,
     pub dry_run: bool,
+    /// `--scan`: read every planned file before the repair starts, so the
+    /// download estimate is exact.
+    pub scan: bool,
     /// `--print-plan`: report the plan and stop. Read-only by construction —
     /// the pipeline returns before `create_dir_all` — and **not** the same thing
     /// as `check_only`, which answers "what is wrong" rather than "what would

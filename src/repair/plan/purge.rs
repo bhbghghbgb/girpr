@@ -329,6 +329,7 @@ mod tests {
                 })
                 .collect(),
             url_prefix_by_file: HashMap::new(),
+            verdicts: None,
         }
     }
 

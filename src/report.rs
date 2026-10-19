@@ -403,6 +403,9 @@ pub struct SummaryFlags {
     /// The peak number of bytes staged in RAM. `None` unless
     /// `--max-ram-bytes` was passed.
     pub ram_bytes: Option<u64>,
+    /// The chunks that are not correct where they belong. `None` unless
+    /// `--scan` was passed — the scan is what knows it.
+    pub damaged_chunks: Option<u64>,
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
     pub config_bumped_zero: bool,
@@ -476,6 +479,9 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.ram_bytes {
         out.push(Extra::Num("ram_bytes", n));
+    }
+    if let Some(n) = f.damaged_chunks {
+        out.push(Extra::Num("damaged_chunks", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -737,6 +743,7 @@ mod tests {
             repair_mode: Some("auto"),
             kept_bytes: Some(11),
             ram_bytes: Some(22),
+            damaged_chunks: Some(3),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
@@ -744,7 +751,7 @@ mod tests {
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
              write_bytes=77 repair_mode=auto inplace=0 temp=0 kept_bytes=11 ram_bytes=22 \
-             stopped=bytes local_manifest=unavailable"
+             damaged_chunks=3 stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -769,6 +776,7 @@ mod tests {
                 "temp",
                 "kept_bytes",
                 "ram_bytes",
+                "damaged_chunks",
                 "stopped",
                 "local_manifest"
             ]

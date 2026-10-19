@@ -137,6 +137,17 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 
+    /// Scan every planned file before the repair starts, and record what each
+    /// chunk looks like. The download estimate becomes **exact** (a chunk
+    /// that is already correct where it belongs is not fetched), so
+    /// `--max-download-bytes` refuses on the real figure, `--print-plan`
+    /// reports `scan_bytes`, and `--check-only` reports how many *chunks* are
+    /// damaged.
+    ///
+    /// Opt-in because it costs a full read pass before the repair starts.
+    #[arg(long, default_value_t = false)]
+    pub scan: bool,
+
     /// Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=…`)
     /// to stdout and exit 0 without repairing, purging or bumping anything.
     /// NOT an offline mode: the plan *is* the manifest, so this still fetches
@@ -219,6 +230,7 @@ impl Args {
             // switch.
             ram_budget: self.max_ram_bytes.unwrap_or(crate::config::DEFAULT_RAM_BUDGET),
             jobs: self.io_threads,
+            scan: self.scan,
             check_only: self.check_only,
             purge_only: self.purge_only,
             fail_fast: self.fail_fast,

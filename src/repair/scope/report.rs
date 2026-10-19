@@ -46,6 +46,8 @@ pub struct PlanTotals {
     pub purge_bytes: u64,
     pub max_chunk_bytes: u64,
     pub scoped: bool,
+    /// The bytes the scan pass read, when `--scan` ran.
+    pub scan_bytes: Option<u64>,
 }
 
 impl PlanTotals {
@@ -55,6 +57,7 @@ impl PlanTotals {
         est_download_bytes: u64,
         scoped: bool,
         extras: &PlanExtras,
+        scan_bytes: Option<u64>,
     ) -> Self {
         let per_file: Vec<FileExtra> = plan.files.iter().map(|f| extras.for_file(f)).collect();
         Self {
@@ -77,6 +80,7 @@ impl PlanTotals {
                 .max()
                 .unwrap_or(0),
             scoped,
+            scan_bytes,
         }
     }
 }
@@ -144,7 +148,7 @@ impl PlanExtras {
 /// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
 /// key name carries one type across the whole stream.
 pub fn plan_record(t: &PlanTotals) -> Record {
-    Record::keyed("PLAN")
+    let rec = Record::keyed("PLAN")
         .put("files", t.files)
         .put("est_download_bytes", t.est_download_bytes)
         .put("est_write_bytes", t.est_write_bytes)
@@ -152,7 +156,13 @@ pub fn plan_record(t: &PlanTotals) -> Record {
         .put("purge_files", t.purge_files)
         .put("purge_bytes", t.purge_bytes)
         .put("max_chunk_bytes", t.max_chunk_bytes)
-        .put("scoped", u64::from(t.scoped))
+        .put("scoped", u64::from(t.scoped));
+    // The scan's own figure, when it ran: how much the plan had to read to
+    // know what it was going to do.
+    match t.scan_bytes {
+        Some(n) => rec.put("scan_bytes", n),
+        None => rec,
+    }
 }
 
 /// The `--plan-out` document.
@@ -304,6 +314,7 @@ mod tests {
                 },
             ],
             url_prefix_by_file: HashMap::new(),
+            verdicts: None,
         }
     }
 
@@ -330,7 +341,7 @@ mod tests {
 
     #[test]
     fn the_plan_line_has_a_fixed_key_order() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras());
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras(), None);
         let rec = plan_record(&t);
         assert_eq!(
             rec.text(),
@@ -338,7 +349,7 @@ mod tests {
              purge_files=1 purge_bytes=4096 max_chunk_bytes=30 scoped=1"
         );
         // No purge flag: the purge fields are zero, not absent.
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras());
+        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
         assert_eq!(
             plan_record(&t).text(),
             "PLAN files=3 est_download_bytes=60 est_write_bytes=192 est_extra_bytes=192 \
@@ -350,7 +361,7 @@ mod tests {
     /// text line uses — `files`, not `plan` — so a parser reads one vocabulary.
     #[test]
     fn the_plan_is_one_record_on_either_plane() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras());
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras(), None);
         let rec = plan_record(&t);
         let json = rec.json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -371,7 +382,7 @@ mod tests {
 
     #[test]
     fn a_plan_that_is_not_scoped_reports_zero_not_a_boolean() {
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras());
+        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
         let v: serde_json::Value = serde_json::from_str(&plan_record(&t).json()).unwrap();
         assert_eq!(v["scoped"], 0);
         assert!(!v["scoped"].is_boolean(), "{v}");
@@ -381,7 +392,7 @@ mod tests {
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
         // peak transient disk is io_threads x that.
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras());
+        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
             &RepairPlan {
@@ -392,6 +403,7 @@ mod tests {
             0,
             false,
             &extras(),
+            None,
         );
         assert_eq!(t.max_chunk_bytes, 0, "an empty plan has no chunks");
     }

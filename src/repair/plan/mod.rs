@@ -92,6 +92,12 @@ pub struct RepairPlan {
     pub latest: String,
     pub files: Vec<PlannedFile>,
     pub url_prefix_by_file: HashMap<String, String>,
+    /// The per-file verdicts, when the scan pass ran (`--scan`).
+    ///
+    /// `None` means "not scanned", and the download estimate is the
+    /// lower bound it has always been. `Some` means the estimate is
+    /// **exact**: every chunk's verdict is known before the repair starts.
+    pub verdicts: Option<HashMap<String, super::scan::FileVerdict>>,
 }
 
 impl RepairPlan {
@@ -107,11 +113,34 @@ impl RepairPlan {
     /// at 0 bytes can still download its whole body. It is what
     /// `--max-download-bytes` refuses on, and the runtime hard stop is what
     /// actually enforces.
+    ///
+    /// **With the scan pass (`--scan`) the estimate is exact**: the
+    /// per-chunk verdicts say which chunks are already correct where they
+    /// belong (kept, not fetched) and which have a salvageable source, so
+    /// the figure is what the repair will actually download.
     pub fn est_download_bytes(&self, local_map: &LocalChunkMap) -> u64 {
-        self.files
-            .iter()
-            .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
-            .sum()
+        match &self.verdicts {
+            Some(verdicts) => self
+                .files
+                .iter()
+                .map(|f| {
+                    let Some(v) = verdicts.get(&f.rel) else {
+                        // A file the scan did not reach (it failed to read):
+                        // fall back to the bound rather than to zero.
+                        return est_file_download_bytes(f, local_map.get(&f.rel));
+                    };
+                    super::scan::chunks_to_download(f, v, local_map.get(&f.rel))
+                        .iter()
+                        .map(|c| c.compressed_size.max(0) as u64)
+                        .sum()
+                })
+                .sum(),
+            None => self
+                .files
+                .iter()
+                .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
+                .sum(),
+        }
     }
 }
 
@@ -197,6 +226,7 @@ pub fn build_plan(
         latest: latest_tag.to_string(),
         files,
         url_prefix_by_file: prefix,
+        verdicts: None,
     }
 }
 
