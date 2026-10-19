@@ -109,7 +109,7 @@ Let `S` = target size, `O` = current on-disk size (0 if absent), `G` = growth.
 | mode | bytes written per repaired file | peak extra free space | reuse sources readable | a crash leaves |
 |---|---|---|---|---|
 | `temp` (today) | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file, entirely | the old file + a partial `*_tmp` |
-| `inplace` | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | the old file, subject to a write order (§4.3) | a mixed file, re-verified next run |
+| `inplace` | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | the old file, subject to a write order (§4.4) | a mixed file, re-verified next run |
 | `discard` | `S` | `0` | none | a partial file |
 
 For a corrupt-but-right-sized file — the common repair case — `inplace` needs
@@ -120,6 +120,11 @@ nothing is on disk to save.
 `discard` (delete the file, then download it whole) has `0` peak but a full
 network cost, so it is only ever right when nothing on the file is reusable —
 which the plan can decide without reading it.
+
+The `inplace` row is the *bound* that holds for both of its tiers (§4). Tier 1
+— the default — is strictly better than the row says: it writes only the wrong
+chunks, and it stages the moving bytes in RAM rather than letting the write
+order constrain them.
 
 ## 3. Options considered
 
@@ -143,7 +148,7 @@ tool is mostly waiting on.
 *Idea.* Before writing, if `O > S`, `set_len(S)` to drop the tail.
 
 *Buys.* Frees `O − S` immediately; costs nothing but the reuse sources that live
-past `S` (rare, and cheaply detected — §4.4).
+past `S` (rare, and cheaply detected — §4.5).
 
 *Costs.* On its own it saves only the *excess*. A file that is the right size
 and 2 bytes wrong still needs `S` of headroom under `temp`.
@@ -169,25 +174,33 @@ Making it automatic for files with an empty reuse map is wrong under the new
 design, because per-chunk verification (§4.2) can find most of such a file
 already correct — deleting it would throw away bytes that cost nothing.
 
-### D. Repair in place with ordered salvage — `inplace`
+### D. Repair in place, staging the moving bytes — `inplace`
 
-*Idea.* Write the target file where it lies. For each chunk: if the bytes
-already at its destination hash correctly, write nothing; else copy from a
-still-intact local slice; else download. Choose the chunk order so that the
-reuse sources survive (§4.3).
+*Idea.* Write the target file where it lies. Scan it once to learn which
+chunks are already correct where they belong; write only the wrong ones, each
+to its final offset. Where a wrong chunk's bytes live *elsewhere* in the same
+file, stage them in RAM first (§4.3) so the write order does not have to
+constrain the reuse; where that does not fit, fall back to ordering the
+relocations so no source is overwritten before it is read (§4.4).
 
 *Buys.*
 
 - peak extra space `G` per file instead of `S` — **zero for a same-size repair**;
 - disk writes drop from `S` to the sum of the chunks that actually change;
+- the run also **reads** each file twice instead of three times, because the
+  per-chunk verdicts come out of the skip check's read;
 - **a network win that needs no local manifest at all**: a corrupt-but-mostly-
   intact file now downloads only its corrupt chunks, where today it downloads
-  the whole file whenever `getBuild(local)` failed.
+  the whole file whenever `getBuild(local)` failed;
+- with the moving bytes staged in RAM (§4.3), the write order stops
+  constraining the reuse, so both shift directions survive and the writes run
+  forward instead of backwards.
 
 *Costs / risks.* The "original is never modified" and "a crash leaves the
-install as it was" invariants go away; reuse needs an order; a file that grows
-needs `Δ` of free space with no query to check it against; the pre-flight
-download estimate becomes an upper bound instead of a tight figure (§6).
+install as it was" invariants go away; a file that grows needs `Δ` of free
+space with no query to check it against; the staging costs RAM, bounded by a
+budget; the pre-flight download estimate becomes an upper bound instead of a
+tight figure (§6).
 
 *Verdict.* **SELECTED.** §4 is the design.
 
@@ -250,7 +263,7 @@ loop becomes write-only.
 *Costs.* The ceiling refusals get slower (a full read pass before them), and
 `--fail-fast`'s "SUMMARY in seconds" property moves.
 
-*Verdict.* **Adopted as a separate, opt-in flag** (§7, commit 9). It is the
+*Verdict.* **Adopted as a separate, opt-in flag** (§7, commit 10). It is the
 answer to the estimate regression `inplace` introduces, so it belongs to the
 change, but it must not be on by default.
 
@@ -284,6 +297,42 @@ it necessary; if it is needed later it should be its own flag and its own doc.
 - `temp` — today's behaviour, kept as the escape hatch and as the mode the
   artifact bridge exercises.
 
+### 4.0 Two regimes: patching and relocating
+
+The in-place repair is **not** a defragmentation, and the difference decides the
+design. There is no staging area anywhere in it — a reuse source and its
+destination are both inside the same file, and the copy between them uses the
+existing 512 KiB `COPY_BUF` and nothing else.
+
+- **Corruption repair** — the file is the right size and most chunks are
+  intact. A chunk's reuse source is at *its own offset* (`r_i == o_i`), so the
+  bad chunk is simply overwritten where it lies. **No bytes move.** There is no
+  ordering constraint and nothing to stage: this is a patch, not a relocation.
+- **Version upgrade** — the file's content shifted, so a chunk's source is
+  elsewhere and its bytes have to physically move from `r_i` to `o_i`. *This*
+  is the defrag-shaped case.
+
+The second regime is the classic "relocate blocks inside a file without a
+staging area" problem, and it has exactly two answers: **order the relocations**
+so no source is overwritten before it is read, or **stage the moving bytes in
+RAM**. The first is free and forces the writes into one direction (a
+backwards-seek pattern, which is why the RAM answer is preferred); the second
+costs RAM and buys everything else. §4.2 is the RAM answer and is the default;
+§4.4 is the ordering answer and is the fallback for when the RAM does not fit.
+
+Which of the two answers a file gets is decided per file, so `inplace` is not
+one algorithm but three tiers:
+
+| tier | when | extra disk | RAM | reuse | writes | direction |
+|---|---|---|---|---|---|---|
+| **1. RAM-staged** (§4.2–4.3) | the repair payload fits the budget | `0` | the payload | 100 % | only the wrong chunks | ascending |
+| **2. ordered** (§4.4) | the payload does not fit | `0` | `0` | one direction | the wrong chunks | ascending *or* descending |
+| **3. `temp`** (`--repair-mode temp`) | asked for | `S` | `0` | 100 % | the whole file | ascending |
+
+Tier 1 and tier 2 produce **the same file**; they differ in how much reuse
+they keep and in which direction they write. Tier 3 is the old behaviour, kept
+for the users who want the old guarantee and for the artifact bridge.
+
 ### 4.1 Preconditions (all checkable, none assumed)
 
 | # | precondition | how it is met |
@@ -292,33 +341,45 @@ it necessary; if it is needed later it should be its own flag and its own doc.
 | P2 | chunks tile `[0, size)` exactly | validated at plan time; a gap is zero-filled and logged (commit 2) |
 | P3 | the target is openable `read+write` | `open_inplace`; on failure the file falls back to `temp` (commit 5) |
 | P4 | no read-only attribute | cleared before an in-place write, Starward-parity (`GameInstallService.cs:232-236`) — `girpr` does not do this today |
-| P5 | one writer per `game_dir` | lock file (commit 8) — under `temp` a collision only wastes work; under `inplace` two runs with different plans can write conflicting bytes (D1) |
+| P5 | one writer per `game_dir` | lock file (commit 9) — under `temp` a collision only wastes work; under `inplace` two runs with different plans can write conflicting bytes (D1) |
 | P6 | the game is not running | already required; under `inplace` it is fatal rather than wasteful |
 | P7 | free space ≥ growth | not checked in v1; a short write fails the file, and `--repair-mode temp` is the recovery |
 | P8 | scope still governs everything | unchanged: out-of-scope paths are neither read for reuse nor written |
+| P9 | RAM ≥ the repair payload | a run-level budget (`--max-ram-bytes`); a file that cannot get its payload falls to the ordered tier (§4.4), not to a failure |
 
-### 4.2 The algorithm
+### 4.2 The algorithm: scan once, patch in place
+
+The scan **replaces** today's skip check, so it is not an extra read — it is
+the same read with more answers computed from it.
 
 ```
 repair_one_file(file):
     whole-file MD5 == expected            -> Skipped            (unchanged)
     dry-run                               -> DryRun             (unchanged)
-    mode = resolve(target)                                  (commit 6)
+    mode = resolve(target)                                  (commit 7)
 
 attempt_inplace(file):
     h = open(target, read+write+create)            # P3; failure -> mode = temp
     clear read-only if the open needed it                    # P4
-    if len(h) > size and trim_is_free(file):                # §4.4, option B
-        h.set_len(size)
-    order = salvage_order(file.chunks, reuse, usable_len)   # §4.3, commit 3
-    for c in chunks, in order:
-        if c fits in len(h) and md5(h[c.offset ..+c.size]) == c.md5:
-            chunks_kept += 1; continue                        # nothing written
-        if order.live[i] and md5(h[c.src ..+c.size]) == c.md5:
-            copy h[c.src ..+c.size] -> h[c.offset ..+c.size] # salvage
-        else:
-            download -> zstd -> verify md5 -> write at c.offset
-    h.set_len(size)
+
+    # ---- pass 1: one read, every answer we need ----
+    scan = scan_file(h, dest_ranges = chunks, source_ranges = reuse_candidates)
+        scan.file_md5    -> whole-file MD5
+        scan.dest_ok[i]  -> chunk i is already correct where it belongs
+        scan.source_ok[j]-> candidate source j is intact
+    if scan.file_md5 == expected: Skipped
+    bad = { i : !scan.dest_ok[i] }
+
+    # ---- stage the moving bytes, if any are needed ----
+    payload = sum(size(i) for i in bad if source is elsewhere and source_ok)
+    if payload > 0 and reserve_ram(payload):   # the run-level budget
+        capture = read_sources(h, bad)          # pass 2, only the needed ranges
+
+    # ---- patch: only the wrong chunks, ascending ----
+    for i in bad, ascending offset:
+        if i has a captured source: write it at dest
+        else: download -> zstd -> verify md5 -> write at dest
+    h.set_len(size)                              # §4.5
     if md5(h) == file.md5: Ok
     else: reverify_chunks(h, file) -> redo only the mismatching ones -> re-check
 
@@ -326,24 +387,61 @@ attempt_temp(file):                    # today's repair_attempt_inner, verbatim
     ... existing _tmp resume / reuse / download / promote ...
 ```
 
-Four properties worth naming explicitly:
+Six properties worth naming explicitly:
 
-1. **Keep costs one read and zero writes.** The per-chunk MD5 is the same
-   computation the final whole-file MD5 would do, done per range.
-2. **Every byte written is hash-gated before it lands.** Unchanged from today:
+1. **The scan is free.** It replaces the skip check's read (`file.rs:200`) and
+   adds per-chunk verdicts to it. The run reads each file **twice** in total
+   (scan, then the final verify) where it reads it **three** times today
+   (skip check, reuse-slice MD5s, final MD5 of the temp).
+2. **Only the wrong chunks are written.** For a corruption repair that is a
+   handful of chunks, not the whole file.
+3. **The writes run ascending** — forward, never backwards. That is the
+   opposite of the ordered tier's pattern (§4.4) and it is what makes the
+   in-place path acceptable on an HDD.
+4. **Every byte written is hash-gated before it lands.** Unchanged from today:
    a downloaded chunk's MD5 is checked before `write_all` (`file.rs:471`), a
    reused slice's before the copy (`file.rs:380`).
-3. **Resume is free and needs no artefact.** An interrupted in-place file is
+5. **Resume is free and needs no artefact.** An interrupted in-place file is
    simply a file with some correct and some incorrect chunks; re-running finds
-   the correct ones with step 1 and rewrites the rest. There is no
+   the correct ones in the scan and rewrites the rest. There is no
    `*_tmp`, no marker file, no length heuristic — so `S3`'s "resume-by-length"
    becomes "resume-by-verification", which is strictly stronger (it cannot
    inherit a corrupt prefix).
-4. **Final-MD5 failure costs one read pass, not a re-download.** Today a
+6. **Final-MD5 failure costs one read pass, not a re-download.** Today a
    mismatch deletes the temp and re-fetches the whole file up to five times
    (`file.rs:523-530`). Re-verifying per chunk names the culprit.
 
-### 4.3 The salvage order — the one non-obvious piece
+### 4.3 The RAM tier — what is staged, and what it is not
+
+**Not the file. The repair payload.** A chunk needs staging only if its reuse
+source is *elsewhere* in the file (`r_i != o_i`) **and** the chunk is actually
+wrong. The second condition is what makes the payload small in the case that
+matters:
+
+| regime | wrong chunks | sources elsewhere? | payload |
+|---|---|---|---|
+| corruption repair | a few | no — normally `r_i == o_i`, and that source *is* the bad chunk, so it is not a source at all | **0** |
+| version upgrade | most | yes | ~`S` |
+| mixed re-flow | some | some | the sum over those chunks |
+
+So the common repair case stages **nothing**, and the case that stages the most
+is the one where the file is being rewritten wholesale anyway.
+
+The budget is **run-level**, reserved per file the way `--max-write-bytes`
+already reserves (`Summary::reserve_write_bytes`), because `io_threads` files
+are in flight at once. A file that cannot get its reservation does not fail: it
+falls to the ordered tier (§4.4), or to `temp` if the user asked for that.
+
+A RAM tier is a *quality* choice, not a correctness one: it buys 100 % reuse
+(both shift directions) and forward writes, and costs `payload` bytes of RAM.
+It never changes the result — the ordered tier produces the same file, with
+less reuse and a different write order.
+
+### 4.4 The ordered tier — the salvage order
+
+Used when the payload does not fit the RAM budget. This is the defrag-shaped
+regime: chunk bytes physically move from `r_i` to `o_i` inside the file, and
+the ordering is what keeps a source from being overwritten before it is read.
 
 Write chunk `i`'s destination `W_i = [o_i, o_i+s_i)` from its reuse source
 `R_i = [r_i, r_i+s_i)` in the same file. The `W`s are disjoint and, after P2's
@@ -387,7 +485,7 @@ ascending:  AAAA@4  <- @0   x  r=0  <  o=4  (already overwritten by 0000)
             CCCC@12 <- @8   x                                        0/4
 ```
 
-### 4.4 Eager trim is nearly always free
+### 4.5 Eager trim is nearly always free
 
 `trim_is_free(file)` = "no reuse candidate has `r + s > size`". That is the
 whole test: an entry in the local reuse map past the target's end can only ever
@@ -424,10 +522,12 @@ during the repair instead) and the reason is logged.
 
 **New.**
 
-- N1 a single-writer lock (commit 8).
+- N1 a single-writer lock (commit 9).
 - N2 read-only attributes cleared before an in-place write.
 - N3 gaps in a chunk layout are zero-filled rather than left as stale bytes.
 - N4 a file whose target cannot be opened `read+write` degrades to `temp`, loudly.
+- N5 a run-level RAM budget (`--max-ram-bytes`) that a file reserves against and
+  that degrades to the ordered tier rather than failing.
 
 ## 6. Risks
 
@@ -437,12 +537,13 @@ during the repair instead) and the reason is logged.
 | D2 | read-only attribute on a game file | medium | clear it (P4); today the tool would fail the same way at rename |
 | D3 | power loss mid-file | medium | whole-file MD5 catches it on the next run |
 | D4 | the file is grown and the volume is full | medium | file fails, counted, retried, reported; recovery is `--repair-mode temp` |
-| D5 | `est_download_bytes` becomes an **upper** bound, so `--max-download-bytes` over-refuses | medium | `--scan` (commit 9) makes it exact; documented until then |
+| D5 | `est_download_bytes` becomes an **upper** bound, so `--max-download-bytes` over-refuses | medium | `--scan` (commit 10) makes it exact; documented until then |
 | D6 | cross-file reuse, if ever added, breaks in-place unless file order is topologically sorted | latent | S2 stays same-file-only; recorded here |
-| D7 | the artifact bridge asserts `download_bytes == patchmap total` | medium | that assertion becomes `≤`; `must_not_fetch` still holds. Amended in commit 10 |
+| D7 | the artifact bridge asserts `download_bytes == patchmap total` | medium | that assertion becomes `≤`; `must_not_fetch` still holds. Amended in commit 11 |
 | D8 | hard-linked game files are unlinked by an in-place write | low | no launcher creates them here; noted |
 | D9 | `--max-write-bytes` documentation says "`*_tmp`" | low | reworded to "into the install"; the arithmetic is unchanged |
 | D10 | a manifest whose chunks do not tile the file | low | validated at plan time, zero-filled, logged (P2) |
+| D11 | the staged payload is larger than expected and the process is memory-pressured | low | the budget is a hard reservation, so the run never exceeds it; a file that cannot get a reservation degrades to the ordered tier. The payload is bounded by the sum of the *wrong* chunks' source sizes, and is 0 for the common corruption repair |
 
 ## 7. What changes in the machine contract
 
@@ -454,6 +555,8 @@ Only additive, and only under a flag or a mode, so the discipline in
   logged either way.
 - `SUMMARY`: `write_bytes` (existing) keeps its meaning as "bytes written into
   the install"; only its prose changes.
+- `SUMMARY`: `ram_bytes` — the peak staged payload, emitted only when
+  `--max-ram-bytes` is passed, like every other requested ceiling.
 - `PLAN` (`--print-plan` only): `est_write_bytes=`, `est_extra_bytes=`, and
   under `--scan` `scan_bytes=`.
 - `--plan-out`: per-file `mode` and `extra_bytes`.
@@ -464,7 +567,8 @@ Only additive, and only under a flag or a mode, so the discipline in
 
 | item | why not now |
 |---|---|
-| interval-graph optimum for the chunk order (§4.3) | correct, but the two-direction rule already captures a uniform shift, which is the dominant real shape; it is one pure function to swap |
+| interval-graph optimum for the chunk order (§4.4) | the RAM tier (§4.3) removes the ordering constraint entirely wherever the payload fits, and the two-direction rule already captures a uniform shift — the dominant real shape — for the rest. It is one pure function to swap |
+| a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves one read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about and the read is mostly served by the page cache |
 | cross-file salvage (§E) | mutually exclusive with `inplace` absent a file-level order |
 | reclaim-on-demand + `GetDiskFreeSpaceExW` (§J) | `inplace` removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and doc |
 | streaming zstd decode (§H) | RAM, not disk |
@@ -473,83 +577,120 @@ Only additive, and only under a flag or a mode, so the discipline in
 
 ## 9. Implementation plan
 
-Ten commits, each one behaviour, each carrying its own tests, each leaving the
-tree green. The series is ordered so that the risky part (the writer) lands
-after the parts it depends on and before the parts that describe it.
+Eleven commits, each one behaviour, each carrying its own tests, each leaving
+the tree green. The series is ordered so that the risky part (the writer) lands
+after the parts it depends on and before the parts that describe it, and so
+that every commit is useful on its own — the ordered tier arrives after the
+RAM tier, and the RAM tier is useful before it.
 
-### 1. `util`: one read pass, two answers
+### 1. `util`: the scan primitive — one read, every answer
 
 `src/util.rs`: add
 
 ```rust
-fn verify_chunks(path: &Path, chunks: &[(u64, u64, &str)]) -> Result<(String, Vec<bool>)>
+pub struct Scan {
+    pub file_md5: String,
+    /// per destination range: is the chunk already correct where it belongs?
+    pub dest_ok: Vec<bool>,
+    /// per candidate source range: is the reuse source intact?
+    pub source_ok: Vec<bool>,
+}
+fn scan_file(
+    path: &Path,
+    dest: &[(u64, u64, &str)],
+    source: &[(u64, u64, &str)],
+) -> Result<Scan>
 ```
 
-It walks the file once in 512 KiB blocks, feeding a running whole-file
-`md5::Context` and one context per chunk (indices mapped from a single sort),
-so the skip check, the in-place keep decision and the final re-verification
-share one pass instead of three. A missing or short file returns
+One read pass in 512 KiB blocks, feeding a running whole-file `md5::Context`
+plus one context per distinct range (ranges sorted and deduped once, indices
+mapped back). This is the primitive every other piece needs: the skip check
+becomes `scan.file_md5`, the "is this chunk already right" test becomes
+`scan.dest_ok[i]`, and the "is this source intact" test becomes
+`scan.source_ok[j]`. A missing or short file returns
 `("d41d8cd98f00b204e9800998ecf8427e", vec![false; n])` rather than an error —
 "nothing is correct" is the answer, not a failure. Unit tests: intact file, one
-corrupt chunk, truncated file, absent file, unsorted chunk input.
+corrupt chunk, truncated file, absent file, unsorted ranges, a range that is
+also a destination.
 
 ### 2. `plan`: a trustworthy chunk layout
 
 `src/repair/plan/mod.rs`: sort `f.chunks` by `offset` in `build_plan`; drop
 zero-length chunks defensively (logged); add `PlannedFile::layout()` returning
 `(tiled, gaps)`. Nothing else in the crate can currently assume ascending
-order, and §4.2's "already correct" test and §4.3's order proof both do.
+order, and both the "already correct" test and the ordered tier's proof do.
 Unit tests: unsorted manifest input is sorted; a hole is reported; an
 overlapping pair is reported.
 
 ### 3. `reuse`: the salvage order (pure, no I/O)
 
 New `src/repair/reuse.rs`: `salvage_order(chunks, candidates, usable_len) ->
-Order { ascending: bool, live: Vec<bool> }`, implementing §4.3 exactly. The
+Order { ascending: bool, live: Vec<bool> }`, implementing §4.4 exactly. The
 module doc carries the two-line proof. Unit tests pin every case the proof
 makes: `r > o` counts ascending, `r < o` counts descending, `r == o` counts
 both, a source past `usable_len` counts for neither, and an empty candidate
 list yields an arbitrary-but-valid direction.
 
-### 4. `--repair-mode`
+### 4. the flags: `--repair-mode` and `--max-ram-bytes`
 
 `src/cli.rs` (`#[arg(long, value_enum, default_value_t)]`), `src/config.rs`
-(`RepairMode` + `RunCtx::repair_mode`). Unit tests: default is `auto`; an
-unknown value is exit 1 through the existing clap remap.
+(`RepairMode` + `RunCtx::repair_mode` + `RunCtx::ram_budget`),
+`src/repair/scope/limits.rs` (`Limits::ram_bytes`), and
+`src/repair/scope/ledger.rs` (`Summary::reserve_ram_bytes`, mirroring
+`reserve_write_bytes`: a compare-and-swap against a `u64::MAX` sentinel, no
+`Option` check on the hot path). Unit tests: default is `auto`; an unknown
+value is exit 1 through the existing clap remap; the reservation is
+all-or-nothing and the boundary is inclusive.
 
-### 5. `inplace`: the writer
+### 5. `inplace`: the writer — the RAM tier
 
 `src/repair/file.rs`. Split `repair_attempt_inner` into `attempt_temp` (the
 current body, unchanged, still promoting `_tmp`) and `attempt_inplace` (the
 §4.2 algorithm): `open_inplace` with the read-only clear and the `temp`
-fallback, `trim_is_free` + eager `set_len`, the ordered chunk loop with
-keep/reuse/download, the final `set_len`, and `reverify_and_redo` replacing
-"delete the temp and restart" on a final-MD5 mismatch. Both attempts funnel
-through the existing `repair_attempt`, so the give-back-the-bytes rule
-(`file.rs:283`) still holds for both.
+fallback, the scan, the payload computation and its RAM reservation, the
+capture pass, the ascending patch loop (captured source → download), the
+eager trim, the final `set_len`, and `reverify_and_redo` replacing "delete the
+temp and restart" on a final-MD5 mismatch. Both attempts funnel through the
+existing `repair_attempt`, so the give-back-the-bytes rule (`file.rs:283`)
+still holds for both.
+
+Until commit 6 lands, a file that cannot get its RAM reservation falls back to
+`temp` — which is the safe behaviour and is what the artifact bridge expects.
 
 Integration tests (`tests/repair_offline.rs`): a right-sized file with one
-corrupt chunk is repaired **without** writing a `_tmp` at all; a file that
-grows writes only the growth; a shifted-content file reuses its slices in the
-direction the order picks and downloads the rest; an interrupted in-place run
-resumes by verification on the next run.
+corrupt chunk is repaired **without** writing a `_tmp` at all, and the file's
+bytes outside that chunk are not rewritten; a file that grows writes only the
+growth; an interrupted in-place run resumes by verification on the next run,
+with no `_tmp` anywhere.
 
-### 6. mode resolution + the counters
+### 6. `inplace`: the ordered tier
+
+The same writer, with the RAM tier bypassed: `salvage_order` picks the
+direction, the sources are read from the file at write time (which is safe
+because the order guarantees they are still intact), and the writes run in
+that direction. The tier is chosen when the RAM reservation fails, or when
+`--repair-mode inplace` is combined with `--max-ram-bytes 0`. Integration
+tests: a file whose content shifted one chunk to the right salvages three of
+four chunks in the descending direction and downloads the fourth; the same
+file with the RAM tier enabled salvages all four and writes them ascending.
+
+### 7. mode resolution + the counters
 
 `src/repair/file.rs`: `resolve_mode()` (missing target → create-in-place;
 existing regular file → in-place; open failure → `temp` + `warn`). `ChunkStats`
-gains `chunks_kept`, `bytes_written`, `mode`; `Summary` gains `files_inplace`
-and `files_temp`. Unit tests for the resolution table.
+gains `chunks_kept`, `bytes_written`, `mode`; `Summary` gains `files_inplace`,
+`files_temp` and `ram_bytes`. Unit tests for the resolution table.
 
-### 7. the data plane
+### 8. the data plane
 
-`src/report.rs` (`SummaryFlags.repair_mode`, the two counters, `kept_bytes` in
-`conditional_extras` at a fixed position), `src/repair/scope/report.rs`
-(`PLAN est_write_bytes`/`est_extra_bytes`, `PlanDocument` per-file `mode` and
-`extra_bytes`). Follows the existing rule: conditional keys only when their
-flag is passed. Unit tests for the rendering of each new key on both planes.
+`src/report.rs` (`SummaryFlags.repair_mode`, the two counters, `kept_bytes` and
+`ram_bytes` in `conditional_extras` at fixed positions),
+`src/repair/scope/report.rs` (`PLAN est_write_bytes`/`est_extra_bytes`,
+`PlanDocument` per-file `mode` and `extra_bytes`). Follows the existing rule:
+conditional keys only when their flag is passed. Unit tests for the rendering
+of each new key on both planes.
 
-### 8. the single-writer lock
+### 9. the single-writer lock
 
 New `src/repair/lock.rs`: `{game_dir}/girpr.lock` via `create_new(true)`,
 holding pid + timestamp; a live lock refuses with exit 1 naming the file and
@@ -558,21 +699,21 @@ the pid; a lock older than 24 h is taken over. `purge::keep_set()` gains
 created when the path scope admits it — the same rule `config.ini` lives
 under. Unit tests: fresh lock, stale lock, scope-hidden path.
 
-### 9. `--scan`: an exact plan
+### 10. `--scan`: an exact plan
 
-New `src/repair/scan.rs`: the skip-check pass hoisted into the plan phase,
-parallel over `jobs`, using `verify_chunks`. It produces per-file chunk
-verdicts that make `est_download_bytes` exact, feed `--check-only` a damaged
-chunk count, and let `--print-plan` report `scan_bytes`. `RepairPlan` carries
-an optional verdict map; the ceilings are checked after it. Integration tests:
+New `src/repair/scan.rs`: the scan pass hoisted into the plan phase, parallel
+over `jobs`, using `scan_file`. It produces per-file chunk verdicts that make
+`est_download_bytes` exact, feed `--check-only` a damaged chunk count, and
+let `--print-plan` report `scan_bytes`. `RepairPlan` carries an optional
+verdict map; the ceilings are checked after it. Integration tests:
 `--scan --print-plan` reports an estimate equal to the bytes the following
 repair actually downloads, which is the assertion that does not exist today.
 
-### 10. docs and the artifact bridge
+### 11. docs and the artifact bridge
 
 `README.md` (the "How it keeps disk usage low" section, the requirements line
-`README.md:200`, the `--max-write-bytes` row, the new flag, and the S1/S2/S3
-"deliberate simplifications" note, which becomes S1/S2 + the weakened
+`README.md:200`, the `--max-write-bytes` row, the two new flags, and the
+S1/S2/S3 "deliberate simplifications" note, which becomes S1/S2 + the weakened
 invariants of §5), `docs/02` step 6, `docs/03` §6, and `docs/06`'s
 `download_bytes == patchmap total` assertion, which becomes `≤` with the
 reason (already-correct chunks are not fetched).
@@ -588,4 +729,10 @@ reason (already-correct chunks are not fetched).
   `SUMMARY write_bytes` against `Σ size(repaired files)`, which the new
   `kept_bytes` key makes visible per run.
 - `tests/artifact_bridge.rs` stays `#[ignore]`d and is re-run by hand for
-  commits 5, 9 and 10 — the only three that change what crosses the wire.
+  commits 5, 6, 10 and 11 — the only ones that change what crosses the wire.
+- **The RAM tier is asserted, not assumed.** The integration tests pin that a
+  repair writes only the wrong chunks (the file's other bytes are byte-identical
+  before and after), that the ordered tier and the RAM tier produce the *same*
+  file, and that `--max-ram-bytes 0` takes the ordered path. Without those
+  three, "the payload is 0 for a corruption repair" would be a claim rather
+  than a fact.
