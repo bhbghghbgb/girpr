@@ -88,6 +88,22 @@ enum WriteMode {
     Inplace,
 }
 
+/// Which tier of the in-place repair is running (docs/07 §4.0).
+///
+/// Both tiers produce the **same file**; they differ in how much reuse they
+/// keep and in which direction they write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tier {
+    /// The moving bytes are staged in RAM, so the write order does not
+    /// constrain the reuse: both shift directions survive, and the writes
+    /// run forward.
+    Ram,
+    /// The moving bytes are **not** staged: the salvage order picks the
+    /// direction, and only the sources that order preserves are used. The
+    /// rest download.
+    Ordered,
+}
+
 /// The in-place path could not run: the temp path takes over.
 ///
 /// It is a *signal*, not a failure: the file is repaired either way, and the
@@ -524,36 +540,64 @@ async fn attempt_inplace(
         movable[i] = true;
     }
 
+    // The tier. The RAM tier stages the moving bytes and can therefore use
+    // both shift directions; the ordered tier stages nothing and has to
+    // settle for one direction (docs/07 §4.4).
+    let usable_len = h.metadata().map(|m| m.len()).unwrap_or(0);
+    let candidates: &[(String, i64, i64)] = ctx
+        .local_map
+        .get(&file.rel)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+    let order = super::reuse::salvage_order(&file.chunks, candidates, usable_len);
+    let mut reserved = 0u64;
+    let tier = if payload == 0 {
+        // Nothing to move: the two tiers agree, and the cheaper one runs.
+        Tier::Ram
+    } else if ctx.summary.reserve_ram_bytes(payload) {
+        reserved = payload;
+        Tier::Ram
+    } else {
+        tracing::debug!(
+            payload,
+            ascending = order.ascending,
+            "staging budget exhausted -> the ordered tier"
+        );
+        Tier::Ordered
+    };
+
     // The RAM tier: stage the moving bytes before a single byte is written,
     // so the write order does not have to constrain the reuse.
-    let captured: Option<HashMap<usize, Vec<u8>>> = if payload > 0 {
-        if ctx.summary.reserve_ram_bytes(payload) {
-            let cap = capture_sources(&mut h, file, &layout, &bad, &movable)?;
-            tracing::debug!(payload, "inplace: moving bytes staged");
-            Some(cap)
-        } else {
-            // The budget is gone. The file is repaired by the temp path,
-            // which is the safe thing to do and what the shipped behaviour
-            // was.
-            return Err(NeedsTemp {
-                why: format!("staging budget of {payload} bytes is not available"),
+    let captured: Option<HashMap<usize, Vec<u8>>> = match tier {
+        Tier::Ram => {
+            if payload == 0 {
+                None
+            } else {
+                let cap = capture_sources(&mut h, file, &layout, &bad, &movable)?;
+                tracing::debug!(payload, "inplace: moving bytes staged");
+                Some(cap)
             }
-            .into());
         }
-    } else {
-        None
+        Tier::Ordered => None,
     };
     // The staging area belongs to this file until it is done with it — and
     // "done" includes every way the attempt can end.
     let _staging = RamGuard {
         ctx,
-        bytes: payload,
+        bytes: reserved,
     };
 
-    // The patch: only the wrong chunks, ascending.
-    for &i in &bad {
+    // The patch: only the wrong chunks. The RAM tier writes them ascending;
+    // the ordered tier writes them in the direction that keeps the most
+    // reuse.
+    let mut order_of_writes: Vec<usize> = bad.clone();
+    if matches!(tier, Tier::Ordered) && !order.ascending {
+        order_of_writes.reverse();
+    }
+    for &i in &order_of_writes {
         let c = &file.chunks[i];
         let dest = c.offset.max(0) as u64;
+        // 1. the staged bytes (the RAM tier),
         match captured.as_ref().and_then(|m| m.get(&i)) {
             // The staged bytes were hash-verified by the scan, and they were
             // staged *before* any write, so they are still the right bytes.
@@ -564,7 +608,20 @@ async fn attempt_inplace(
                 stats.chunks_reused += 1;
             }
             None => {
-                write_downloaded_chunk(ctx, prefix, c, &mut h, stats).await?;
+                // 2. the file's own bytes, if the order says they are still
+                // there (the ordered tier),
+                if matches!(tier, Tier::Ordered)
+                    && order.live[i]
+                    && let Some(bytes) = read_source_at(&mut h, file, &layout, i, &scan)?
+                {
+                    h.seek(SeekFrom::Start(dest))?;
+                    reserve_write(ctx, bytes.len() as u64)?;
+                    h.write_all(&bytes)?;
+                    stats.chunks_reused += 1;
+                } else {
+                    // 3. the network.
+                    write_downloaded_chunk(ctx, prefix, c, &mut h, stats).await?;
+                }
             }
         }
     }
@@ -760,6 +817,55 @@ impl Reuse {
             .map(|(o, s, m)| (*o, *s, m.as_str()))
             .collect()
     }
+}
+
+/// Read a chunk's reuse source **at write time**, and verify it.
+///
+/// The ordered tier reads the source from the file as it goes, which is safe
+/// because the order guarantees the source has not been overwritten yet.
+/// The bytes are still hash-gated: a source that does not hash to what the
+/// chunk wants is not used, and the chunk downloads instead.
+///
+/// `None` means "this chunk has no usable source right now".
+fn read_source_at(
+    h: &mut File,
+    file: &PlannedFile,
+    layout: &Reuse,
+    i: usize,
+    scan: &util::Scan,
+) -> Result<Option<Vec<u8>>> {
+    let Some(si) = layout.source_of[i] else {
+        return Ok(None);
+    };
+    if !scan.source_ok[si] {
+        // The scan already said the source is not intact.
+        return Ok(None);
+    }
+    let (off, len, _) = &layout.sources[si];
+    let dest = file.chunks[i].offset.max(0) as u64;
+    let dlen = file.chunks[i].uncompressed_size.max(0) as u64;
+    // A source that overlaps its own destination cannot be copied in place:
+    // the copy would read bytes it has already overwritten. Such a chunk
+    // downloads instead — the salvage order does not rule it out, because
+    // the order is about *other* chunks' writes.
+    if *off < dest + dlen && dest < *off + len {
+        return Ok(None);
+    }
+    h.seek(SeekFrom::Start(*off))?;
+    let mut buf = vec![0u8; *len as usize];
+    if h.read_exact(&mut buf).is_err() {
+        // The source is shorter than the scan said: it is not there.
+        return Ok(None);
+    }
+    let digest = format!("{:x}", md5::compute(&buf));
+    if !digest.eq_ignore_ascii_case(&file.chunks[i].uncompressed_md5) {
+        tracing::debug!(
+            chunk = %file.chunks[i].id,
+            "inplace: source no longer verifies -> download"
+        );
+        return Ok(None);
+    }
+    Ok(Some(buf))
 }
 
 /// Read the bytes that have to move, into RAM, **before** a single byte is

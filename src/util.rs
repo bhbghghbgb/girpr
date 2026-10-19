@@ -105,8 +105,14 @@ pub fn scan_file(path: &Path, dest: &[Range], source: &[Range]) -> Result<Scan> 
         source_ref.push(intern(&mut specs, *offset, *len, md5));
     }
     // Sorted by offset so the read pass can stop scanning ranges once it is
-    // past them.
+    // past them. The sort permutes the list, so the caller's indices are
+    // remapped through it — an index that is not remapped answers a
+    // *different* range's question.
     specs.sort_by_key(|s| (s.offset, s.len));
+    let mut remap = vec![0usize; specs.len()];
+    for (new_index, s) in specs.iter().enumerate() {
+        remap[s.id] = new_index;
+    }
 
     let mut file = match File::open(path) {
         Ok(f) => f,
@@ -166,8 +172,8 @@ pub fn scan_file(path: &Path, dest: &[Range], source: &[Range]) -> Result<Scan> 
 
     Ok(Scan {
         file_md5: format!("{:x}", whole.compute()),
-        dest_ok: dest_ref.iter().map(|i| ok[*i]).collect(),
-        source_ok: source_ref.iter().map(|i| ok[*i]).collect(),
+        dest_ok: dest_ref.iter().map(|i| ok[remap[*i]]).collect(),
+        source_ok: source_ref.iter().map(|i| ok[remap[*i]]).collect(),
     })
 }
 
@@ -177,6 +183,9 @@ struct Spec {
     len: u64,
     /// Lowercased, so the comparison is a plain `==`.
     md5: String,
+    /// The index this spec had before the list was sorted — the caller's
+    /// indices are remapped through it.
+    id: usize,
 }
 
 /// Intern a range in the spec list, returning its index. An existing spec
@@ -189,7 +198,12 @@ fn intern(specs: &mut Vec<Spec>, offset: u64, len: u64, md5: &str) -> usize {
     {
         return i;
     }
-    specs.push(Spec { offset, len, md5 });
+    specs.push(Spec {
+        offset,
+        len,
+        md5,
+        id: specs.len(),
+    });
     specs.len() - 1
 }
 
@@ -751,6 +765,25 @@ mod tests {
             let path = write(&dir, "f.dat", b"AAAA");
             let scan = scan_file(&path, &[], &[(4, 4, &md5hex(b"BBBB"))]).unwrap();
             assert_eq!(scan.source_ok, vec![false]);
+        }
+
+        /// The verdicts follow the caller's indices even when the ranges are
+        /// sorted differently from the order they were asked for — and even
+        /// when two ranges are the same bytes with different expectations.
+        #[test]
+        fn a_range_asked_for_with_the_wrong_expectation_is_not_correct() {
+            let dir = crate::testtemp::TempDir::new("girpr_test_scan", "wrong_expectation");
+            let path = write(&dir, "f.dat", b"AAAABBBBCCCC");
+            let scan = scan_file(
+                &path,
+                // [4,8) holds BBBB, not AAAA: the expectation is not met.
+                &[(4, 4, &md5hex(b"AAAA"))],
+                // [0,4) does hold AAAA.
+                &[(0, 4, &md5hex(b"AAAA"))],
+            )
+            .unwrap();
+            assert_eq!(scan.dest_ok, vec![false]);
+            assert_eq!(scan.source_ok, vec![true]);
         }
     }
 

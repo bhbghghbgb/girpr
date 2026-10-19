@@ -508,6 +508,101 @@ async fn an_intact_file_is_still_skipped_and_never_written() {
     mock.stop();
 }
 
+/// A tree where the **local** build's manifest has the file's chunks at
+/// different offsets than the latest manifest's — the shape a version
+/// upgrade leaves behind.
+///
+/// Returns the mock, the game dir, and the bytes the file has on disk.
+async fn reflowed_tree(
+    name: &str,
+) -> (MockServer, common::tempdir::TempDir, common::GameFixture) {
+    let fx = build_fixture();
+    let local = common::build_reflowed_manifest(&fx);
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            local_manifest: Some(local),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir(name);
+    // The local version, so the local build (and its re-flowed manifest)
+    // loads.
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=1.0.0-old\n",
+    )
+    .unwrap();
+    let fx2 = build_fixture();
+    // The file on disk holds the *re-flowed* content: the chunks in the
+    // order the local manifest lists them.
+    write_game_file(&dir, &fx2.files[0].rel, &common::reflowed_file_data(&fx2, 0));
+    write_game_file(&dir, &fx2.files[1].rel, &common::reflowed_file_data(&fx2, 1));
+    (mock, dir, fx2)
+}
+
+#[tokio::test]
+async fn the_ram_tier_salvages_both_directions_and_downloads_nothing() {
+    // A version upgrade: the file's content moved, so the bytes a chunk
+    // wants live *elsewhere* in the file. The RAM tier stages the moving
+    // bytes before it writes anything, so both shift directions survive and
+    // nothing has to be downloaded.
+    let (mock, dir, fx2) = reflowed_tree("inplace_ram_tier").await;
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("inplace run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file is correct afterwards"
+    );
+    assert!(
+        mock.chunk_hits().is_empty(),
+        "both chunks were salvaged from the file's own bytes: {:?}",
+        mock.chunk_hits()
+    );
+    assert_eq!(summary.write_bytes.load(Ordering::Relaxed), 128, "the whole file");
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_ordered_tier_produces_the_same_file_with_one_download() {
+    // The same tree, with the staging budget taken away: the ordered tier
+    // has to pick one direction, and the chunk whose source that direction
+    // destroys is downloaded instead.
+    //
+    // The two tiers produce the **same file** — that is the property the
+    // ordered tier rests on — and the ordered tier costs one download.
+    let (mock, dir, fx2) = reflowed_tree("inplace_ordered_tier").await;
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    // No staging at all: the ordered tier for every file.
+    ctx.limits.ram_bytes = Some(0);
+    ctx.ram_budget = 0;
+    let (summary, code) = repair::run(ctx).await.expect("inplace run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the same file the RAM tier produced"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo1".to_string()],
+        "the chunk whose source the chosen direction destroys is downloaded"
+    );
+    assert!(!dir.join("game").join("foo.dat_tmp").exists());
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        128,
+        "the whole file was written, in the order the salvage picked"
+    );
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn explicit_audio_selection_overwrites_scan_file() {
     let fx = build_fixture();
