@@ -146,6 +146,23 @@ fn argument_errors_exit_one_not_two() {
             "--max-write-bytes",
             "abc",
         ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--max-ram-bytes",
+            "abc",
+        ],
+        // An unknown repair mode is an unknown enum value like any other.
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--repair-mode",
+            "sideways",
+        ],
     ];
     for args in cases {
         let (code, _, stderr) = run(&args);
@@ -184,6 +201,8 @@ fn help_text_lists_every_documented_flag() {
         "--max-delete-bytes",
         "--max-download-bytes",
         "--max-write-bytes",
+        "--max-ram-bytes",
+        "--repair-mode",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
     }
@@ -298,6 +317,8 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
         "0",
         "--max-write-bytes",
         "0",
+        "--max-ram-bytes",
+        "0",
         "--fail-fast",
         "--purge-only",
     ]);
@@ -306,6 +327,7 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
     assert_eq!(ctx.limits.delete_bytes, Some(0));
     assert_eq!(ctx.limits.download_bytes, Some(0));
     assert_eq!(ctx.limits.write_bytes, Some(0));
+    assert_eq!(ctx.limits.ram_bytes, Some(0));
     assert!(ctx.limits.is_active());
     assert!(ctx.fail_fast);
     assert!(ctx.purge_only);

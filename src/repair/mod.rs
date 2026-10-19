@@ -339,6 +339,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
+    // The staging budget is always installed, flag or not: the default
+    // applies whether or not the user asked about RAM, so a run can never
+    // stage a whole file by accident.
+    summary.set_ram_limit(Some(ctx.ram_budget));
     summary.set_fail_fast(ctx.fail_fast);
     summary = file::repair_all(
         http,

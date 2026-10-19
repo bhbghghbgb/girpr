@@ -267,6 +267,17 @@ pub struct Summary {
     pub write_bytes: AtomicU64,
     /// Set when the runtime **write** hard stop fired (see `write_bytes`).
     pub write_stopped: AtomicBool,
+    /// `--max-ram-bytes`, same `u64::MAX` sentinel as `download_limit`. This
+    /// is the *staging* budget: how much RAM the in-place repair may use to
+    /// hold the bytes that have to move inside a file.
+    pub ram_limit: AtomicU64,
+    /// The RAM currently reserved by the files in flight. A file reserves its
+    /// whole payload before it stages any of it, so the sum is what the
+    /// process is actually holding.
+    pub ram_reserved: AtomicU64,
+    /// The peak number of bytes staged at once — the `SUMMARY ram_bytes`
+    /// figure, and the one the budget bounds.
+    pub ram_bytes: AtomicU64,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
@@ -295,6 +306,9 @@ impl Summary {
             write_limit: AtomicU64::new(u64::MAX),
             write_bytes: AtomicU64::new(0),
             write_stopped: AtomicBool::new(false),
+            ram_limit: AtomicU64::new(u64::MAX),
+            ram_reserved: AtomicU64::new(0),
+            ram_bytes: AtomicU64::new(0),
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
         }
@@ -318,6 +332,9 @@ impl Summary {
             write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
             write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
             write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
+            ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
+            ram_reserved: AtomicU64::new(self.ram_reserved.load(Ordering::Relaxed)),
+            ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
         }

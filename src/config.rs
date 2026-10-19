@@ -17,6 +17,63 @@ use crate::Biz;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
+/// How a repair puts the bytes on disk.
+///
+/// The default is [`RepairMode::Auto`], which repairs **in place** wherever
+/// it can: the target is written where it lies, so a repair costs the growth
+/// of the file rather than a second copy of it (docs/07 §2). The other modes
+/// exist because the in-place contract is deliberately weaker than the
+/// temp-then-promote one (docs/07 §5), and a user who wants the old
+/// guarantee has to be able to ask for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum RepairMode {
+    /// In place when the target can be opened read+write; the temp path when
+    /// it cannot. The default.
+    #[default]
+    Auto,
+    /// Always in place: the target is written where it lies. Falls back to
+    /// the temp path only on an I/O error, and says so when it does.
+    Inplace,
+    /// The shipped behaviour: write `{path}_tmp`, then rename it over the
+    /// target. The original is never modified, and the extra space is one
+    /// whole file per file in flight.
+    Temp,
+    /// Delete the target first, then write it fresh. Costs no extra space
+    /// and no network reuse — the two are the same thing, and the mode is
+    /// only useful when the user knows the file has nothing worth keeping.
+    Discard,
+}
+
+impl RepairMode {
+    /// The value as it appears in `--repair-mode` and in the `SUMMARY` key.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepairMode::Auto => "auto",
+            RepairMode::Inplace => "inplace",
+            RepairMode::Temp => "temp",
+            RepairMode::Discard => "discard",
+        }
+    }
+}
+
+impl std::fmt::Display for RepairMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The default staging budget: how much RAM the in-place repair may use to
+/// hold the bytes that have to move inside a file.
+///
+/// It is a **budget**, not a hint: a file whose payload does not fit in what
+/// is left of it does not fail — it falls to the ordered tier, which writes
+/// the same file without staging anything (docs/07 §4.3). The default is
+/// small on purpose: the common repair (a corrupt file) stages **nothing**,
+/// and the case that stages the most is the one where the file is being
+/// rewritten wholesale anyway.
+pub const DEFAULT_RAM_BUDGET: u64 = 64 * 1024 * 1024;
+
 /// Typed failure carrying the process exit code.
 /// `1` usage/config, `2` metadata/network, `3` write/verify.
 #[derive(Debug)]
@@ -75,6 +132,17 @@ pub struct RunCtx {
     /// unflagged run, which is what makes every refusal a no-op and keeps
     /// `SUMMARY limited=1` absent.
     pub limits: Limits,
+    /// How the repair writes: in place, through a `_tmp`, or by discarding
+    /// the target first. `Auto` (the default) picks per file.
+    pub repair_mode: RepairMode,
+    /// The effective staging budget for the run, in bytes: how much RAM the
+    /// in-place repair may use to hold the bytes that have to move inside a
+    /// file. `--max-ram-bytes` sets it; otherwise it is
+    /// [`DEFAULT_RAM_BUDGET`].
+    ///
+    /// It is a *budget*, not a limit that refuses a run: a file that cannot
+    /// get its reservation falls to the ordered tier and is repaired anyway.
+    pub ram_budget: u64,
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,
