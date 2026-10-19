@@ -25,6 +25,7 @@ use super::manifest::LocalChunkMap;
 use super::scope::PathScope;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
+#[derive(Clone)]
 pub struct PlannedFile {
     /// `/`-separated rel path, as it appears in the manifest.
     pub rel: String,
