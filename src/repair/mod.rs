@@ -352,6 +352,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary,
         ctx.jobs,
         ctx.dry_run,
+        ctx.repair_mode,
         ctx.output,
     )
     .await;

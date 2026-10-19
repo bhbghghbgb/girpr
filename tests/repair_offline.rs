@@ -329,8 +329,14 @@ async fn verified_local_slice_is_reused_without_redownload() {
 
 #[tokio::test]
 async fn partial_tmp_prefix_is_resumed() {
-    // S3: resume-by-length. foo missing but foo_tmp holds the first chunk;
-    // only the second chunk is downloaded, then tmp is promoted.
+    // S3: resume-by-length — the `_tmp` artefact, and therefore the only
+    // mode that has one. Under `--repair-mode temp` the shipped path runs
+    // unchanged: foo is missing but foo_tmp holds the first chunk, so only
+    // the second chunk is downloaded and the tmp is promoted.
+    //
+    // The default mode is `auto`, which repairs in place: there the file
+    // itself is the resume artefact, and a leftover `_tmp` is not read
+    // (docs/07 §5, W4).
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("resume");
@@ -338,9 +344,9 @@ async fn partial_tmp_prefix_is_resumed() {
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     write_game_file(&dir, "game/foo.dat_tmp", &fx2.files[0].data[..64]);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("resume run");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = girpr::RepairMode::Temp;
+    let (summary, code) = repair::run(ctx).await.expect("resume run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -599,6 +605,71 @@ async fn the_ordered_tier_produces_the_same_file_with_one_download() {
         128,
         "the whole file was written, in the order the salvage picked"
     );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_temp_mode_is_the_shipped_path() {
+    // `--repair-mode temp`: the whole file is written to `{path}_tmp` and
+    // promoted over the target. The original is never modified, and the
+    // extra space is one whole file per file in flight — which is exactly
+    // what the mode is for.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("mode_temp");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = girpr::RepairMode::Temp;
+    let (summary, code) = repair::run(ctx).await.expect("temp run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "the temp is promoted"
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        128,
+        "the whole file was written, not just the wrong chunk"
+    );
+    assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
+    assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_discard_mode_deletes_the_target_and_writes_it_fresh() {
+    // `--repair-mode discard`: the target is deleted and written fresh, so
+    // nothing of it is reused — the file is downloaded whole.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("mode_discard");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = girpr::RepairMode::Discard;
+    let (summary, code) = repair::run(ctx).await.expect("discard run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        "nothing of the old file is reused: it was deleted"
+    );
+    assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 1);
 
     mock.stop();
 }

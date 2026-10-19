@@ -240,6 +240,13 @@ pub struct Summary {
     pub files_skipped: AtomicU64,
     pub files_repaired: AtomicU64,
     pub files_failed: AtomicU64,
+    /// The files that were repaired **in place** — the target was written
+    /// where it lies, so the repair cost the file's growth rather than a
+    /// second copy of it.
+    pub files_inplace: AtomicU64,
+    /// The files that were repaired through `{path}_tmp` — the shipped path,
+    /// which needs one whole file of free space per file in flight.
+    pub files_temp: AtomicU64,
     pub download_bytes: AtomicU64,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
@@ -298,6 +305,8 @@ impl Summary {
             files_skipped: AtomicU64::new(0),
             files_repaired: AtomicU64::new(0),
             files_failed: AtomicU64::new(0),
+            files_inplace: AtomicU64::new(0),
+            files_temp: AtomicU64::new(0),
             download_bytes: AtomicU64::new(0),
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
@@ -321,6 +330,8 @@ impl Summary {
             files_skipped: AtomicU64::new(self.files_skipped.load(Ordering::Relaxed)),
             files_repaired: AtomicU64::new(self.files_repaired.load(Ordering::Relaxed)),
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
+            files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
+            files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,

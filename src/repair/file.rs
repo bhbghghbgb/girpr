@@ -75,6 +75,16 @@ pub struct ChunkStats {
     pub chunks_reused: u64,
     pub chunks_downloaded: u64,
     pub chunks_resumed: u64,
+    /// The chunks that were already correct and were **not** written: the
+    /// in-place path's whole point, made countable.
+    pub chunks_kept: u64,
+    /// The bytes written into the install for this file. Under the in-place
+    /// path this is the *changed* bytes; under the temp path it is the whole
+    /// file.
+    pub bytes_written: u64,
+    /// Which path wrote the file: `"inplace"` or `"temp"`. `None` for a file
+    /// that was skipped.
+    pub mode: Option<&'static str>,
 }
 
 /// How one file's bytes are put on disk.
@@ -86,6 +96,16 @@ enum WriteMode {
     Temp,
     /// The target, written where it lies.
     Inplace,
+}
+
+impl WriteMode {
+    /// The name the `SUMMARY` counters use.
+    fn as_str(&self) -> &'static str {
+        match self {
+            WriteMode::Temp => "temp",
+            WriteMode::Inplace => "inplace",
+        }
+    }
 }
 
 /// Which tier of the in-place repair is running (docs/07 §4.0).
@@ -138,6 +158,7 @@ pub async fn repair_all(
     summary: Summary,
     jobs: usize,
     dry_run: bool,
+    repair_mode: crate::config::RepairMode,
     output: crate::report::OutputFormat,
 ) -> Summary {
     let summary = Arc::new(summary);
@@ -153,6 +174,7 @@ pub async fn repair_all(
         local_map,
         summary: summary.clone(),
         dry_run,
+        repair_mode,
     });
     let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
@@ -189,11 +211,23 @@ pub async fn repair_all(
                     Ok(Repaired::Skipped) => {
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(Repaired::Repaired(_stats)) => {
+                    Ok(Repaired::Repaired(stats)) => {
                         // `download_bytes` is already live: it is incremented
                         // per chunk inside `write_downloaded_chunk`, because the
                         // runtime hard stop has to read it mid-flight.
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
+                        // Which path wrote it is the disk story of the run:
+                        // an in-place repair costs the file's growth, a temp
+                        // repair costs a whole file of headroom.
+                        match stats.mode {
+                            Some("inplace") => {
+                                ctx.summary.files_inplace.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Some("temp") => {
+                                ctx.summary.files_temp.fetch_add(1, Ordering::Relaxed);
+                            }
+                            _ => {}
+                        }
                     }
                     Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
@@ -232,6 +266,9 @@ struct FileCtx {
     local_map: LocalChunkMap,
     summary: Arc<Summary>,
     dry_run: bool,
+    /// How the repair writes: in place, through a `_tmp`, or by discarding
+    /// the target first.
+    repair_mode: crate::config::RepairMode,
 }
 
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
@@ -255,7 +292,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // answers "is the file intact?" and "which chunks are wrong?" in one
     // read, so the in-place path never reads the file twice for the same
     // question.
-    let mode = resolve_mode(ctx, file, &final_path);
+    let mode = resolve_mode(ctx.repair_mode, file, &final_path);
 
     let mut scan = match &mode {
         WriteMode::Inplace => {
@@ -290,6 +327,18 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if ctx.dry_run {
         tracing::info!("would repair");
         return Ok(Repaired::DryRun);
+    }
+    // `--repair-mode discard`: the target is deleted and written fresh. It
+    // happens *here*, after the skip check, because deleting an intact file
+    // and downloading it again would be the opposite of what the mode is
+    // for.
+    if ctx.repair_mode == crate::config::RepairMode::Discard
+        && std::fs::remove_file(&final_path).is_ok()
+    {
+        tracing::info!(file = %file.rel, "discard: the target is deleted and written fresh");
+        // The scan described the file that is now gone: the attempt has to
+        // look again.
+        scan = None;
     }
     let prefix = ctx
         .plan
@@ -350,20 +399,42 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
 
 /// Which path this file's bytes take.
 ///
-/// The in-place path needs the target to be openable read+write (P3); a
-/// read-only attribute is cleared first (P4 — the game ships read-only files,
-/// and Starward clears the attribute before writing). A target that cannot be
-/// opened at all falls back to the temp path, and says so (N4).
-fn resolve_mode(_ctx: &FileCtx, file: &PlannedFile, final_path: &Path) -> WriteMode {
-    // A target that is not there yet has nothing to patch: the temp path
-    // fetches it whole.
-    let Ok(meta) = std::fs::metadata(final_path) else {
-        return WriteMode::Temp;
-    };
-    if !meta.is_file() {
+/// The rules (docs/07 §4):
+///
+/// - `temp` — always the shipped path: write `{path}_tmp`, then rename it
+///   over the target. The original is never modified, and the extra space is
+///   one whole file per file in flight.
+/// - `auto` — in place wherever the target can be opened read+write, and
+///   the temp path when it cannot (with a warning: the degradation is
+///   reported, not hidden).
+/// - `inplace` — always in place.
+/// - `discard` — the target is deleted and written fresh.
+///
+/// A target that is **not there** is created in place: there is nothing to
+/// salvage from a file that does not exist, and creating it in place needs
+/// no second copy of it — which is the whole difference between a fresh
+/// install that needs `S` free bytes and one that needs none.
+fn resolve_mode(
+    repair_mode: crate::config::RepairMode,
+    file: &PlannedFile,
+    final_path: &Path,
+) -> WriteMode {
+    if repair_mode == crate::config::RepairMode::Temp {
         return WriteMode::Temp;
     }
-    match open_inplace(final_path) {
+    // A target that is not there (or is not a regular file) is created.
+    let exists = std::fs::metadata(final_path)
+        .map(|m| m.is_file())
+        .unwrap_or(false);
+    if !exists {
+        return WriteMode::Inplace;
+    }
+    // The in-place path needs the target openable read+write (P3); a
+    // read-only attribute is cleared first (P4 — the game ships read-only
+    // files, and Starward clears the attribute before writing). A target
+    // that cannot be opened at all falls back to the temp path, and says so
+    // (N4).
+    match open_inplace(final_path, false) {
         Ok(_) => WriteMode::Inplace,
         Err(e) => {
             tracing::warn!(
@@ -450,7 +521,7 @@ async fn attempt_temp(
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f)? {
+        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, stats)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -489,7 +560,7 @@ async fn attempt_inplace(
     stats: &mut ChunkStats,
 ) -> Result<ChunkStats> {
     let layout = Reuse::of(ctx, file);
-    let mut h = open_inplace(final_path).map_err(|e| {
+    let mut h = open_inplace(final_path, true).map_err(|e| {
         NeedsTemp {
             why: format!("open {}: {e:#}", final_path.display()),
         }
@@ -603,7 +674,7 @@ async fn attempt_inplace(
             // staged *before* any write, so they are still the right bytes.
             Some(bytes) => {
                 h.seek(SeekFrom::Start(dest))?;
-                reserve_write(ctx, bytes.len() as u64)?;
+                reserve_write(ctx, stats, bytes.len() as u64)?;
                 h.write_all(bytes)?;
                 stats.chunks_reused += 1;
             }
@@ -615,7 +686,7 @@ async fn attempt_inplace(
                     && let Some(bytes) = read_source_at(&mut h, file, &layout, i, &scan)?
                 {
                     h.seek(SeekFrom::Start(dest))?;
-                    reserve_write(ctx, bytes.len() as u64)?;
+                    reserve_write(ctx, stats, bytes.len() as u64)?;
                     h.write_all(&bytes)?;
                     stats.chunks_reused += 1;
                 } else {
@@ -638,7 +709,7 @@ async fn attempt_inplace(
                 "chunk layout does not tile the file -> zero-filled"
             );
             h.seek(SeekFrom::Start(off))?;
-            reserve_write(ctx, len)?;
+            reserve_write(ctx, stats, len)?;
             let mut left = len;
             let zeros = vec![0u8; ZERO_FILL_BUF.min(left as usize)];
             while left > 0 {
@@ -679,10 +750,15 @@ async fn attempt_inplace(
         tracing::debug!(actual_md5 = %h_md5, "inplace: final md5 mismatch -> re-verify chunks");
         reverify_and_redo(ctx, file, prefix, final_path, stats).await?;
     }
+    // The chunks that were already correct where they belong: the in-place
+    // path's whole point, made countable.
+    stats.chunks_kept = stats.chunks_total.saturating_sub(bad.len() as u64);
     tracing::info!(
         chunks_total = stats.chunks_total,
+        chunks_kept = stats.chunks_kept,
         chunks_reused = stats.chunks_reused,
         chunks_downloaded = stats.chunks_downloaded,
+        bytes_written = stats.bytes_written,
         download_bytes = stats.download_bytes,
         final_md5 = %file.md5,
         "repaired"
@@ -693,6 +769,9 @@ async fn attempt_inplace(
         chunks_reused: stats.chunks_reused,
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
+        chunks_kept: stats.chunks_kept,
+        bytes_written: stats.bytes_written,
+        mode: Some(WriteMode::Inplace.as_str()),
     })
 }
 
@@ -928,11 +1007,15 @@ fn trim_is_free(ctx: &FileCtx, file: &PlannedFile) -> bool {
 /// is cleared first — the game ships read-only files, Starward clears the
 /// attribute before writing, and the old path failed on them at the rename
 /// (docs/07 §4.1, N2).
-fn open_inplace(path: &Path) -> Result<File> {
+///
+/// `create` says whether a missing target may be created: the in-place path
+/// creates the file it is going to write.
+fn open_inplace(path: &Path, create: bool) -> Result<File> {
     let attempt = || -> std::io::Result<File> {
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
+            .create(create)
             .truncate(false) // never truncate: the file's own bytes are the source
             .open(path)
     };
@@ -1008,6 +1091,7 @@ fn try_reuse_slice(
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
+    stats: &mut ChunkStats,
 ) -> Result<ChunkOutcome> {
     let end = (c.offset + c.uncompressed_size) as u64;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1051,7 +1135,7 @@ fn try_reuse_slice(
                 }
                 // The write ceiling counts *this* copy: it goes into `*_tmp` and
                 // appears in neither `download_bytes` nor the plan's estimate.
-                reserve_write(ctx, n as u64)?;
+                reserve_write(ctx, stats, n as u64)?;
                 out.write_all(&buf[..n])?;
                 remaining -= n as u64;
             }
@@ -1130,7 +1214,7 @@ async fn write_downloaded_chunk(
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
     out.seek(SeekFrom::Start(c.offset as u64))?;
-    reserve_write(ctx, decoded.len() as u64)?;
+    reserve_write(ctx, stats, decoded.len() as u64)?;
     out.write_all(&decoded)?;
     stats.chunks_downloaded += 1;
     Ok(())
@@ -1144,8 +1228,12 @@ async fn write_downloaded_chunk(
 /// `--io-threads N` would overshoot by up to N-1 buffers. On refusal the
 /// file is left where it is and `*_tmp` keeps whatever prefix it already had,
 /// which S3 resume-by-length picks up next run.
-fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
+///
+/// The reservation is also the file's own byte count: every byte written
+/// into the install is counted here, once, for both paths.
+fn reserve_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) -> Result<()> {
     if ctx.summary.reserve_write_bytes(n) {
+        stats.bytes_written += n;
         return Ok(());
     }
     ctx.summary.stop_writes();
@@ -1157,7 +1245,7 @@ fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     anyhow::bail!("write-bytes ceiling reached")
 }
 
-/// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the
+/// The stage of the final MD5 gate: length + whole-file MD5, then the atomic promote. On mismatch the
 /// tmp is deleted so the next attempt starts from a clean state and a bad file
 /// can never be promoted partially.
 ///
@@ -1194,5 +1282,97 @@ fn promote_tmp(
         chunks_reused: stats.chunks_reused,
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
+        // The temp path writes the whole file, so nothing is "kept": the
+        // resumed prefix is counted as resumed, not as kept.
+        chunks_kept: stats.chunks_resumed,
+        bytes_written: stats.bytes_written,
+        mode: Some(WriteMode::Temp.as_str()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RepairMode;
+    use crate::sophon::SophonChunk;
+
+    fn planned() -> PlannedFile {
+        PlannedFile {
+            rel: "game/foo.dat".into(),
+            size: 128,
+            md5: "m".into(),
+            chunks: vec![SophonChunk {
+                id: "c0".into(),
+                uncompressed_md5: "md5-c0".into(),
+                offset: 0,
+                compressed_size: 64,
+                uncompressed_size: 64,
+                unknown: 0,
+                compressed_md5: String::new(),
+            }],
+        }
+    }
+
+    /// The resolution table, one row at a time (docs/07 §4).
+    #[test]
+    fn the_mode_table_is_what_the_plan_says_it_is() {
+        let dir = crate::testtemp::TempDir::new("girpr_test_mode", "table");
+        let target = dir.join("foo.dat");
+        let file = planned();
+
+        // A target that is not there: created in place. There is nothing to
+        // salvage from a file that does not exist, and creating it in place
+        // needs no second copy of it.
+        for mode in [RepairMode::Auto, RepairMode::Inplace, RepairMode::Discard] {
+            assert_eq!(
+                resolve_mode(mode, &file, &target),
+                WriteMode::Inplace,
+                "{mode}: a missing target is created in place"
+            );
+        }
+        // ...except under the temp path, which is the shipped contract.
+        assert_eq!(
+            resolve_mode(RepairMode::Temp, &file, &target),
+            WriteMode::Temp
+        );
+
+        // A target that is there and can be opened read+write: in place,
+        // whatever the mode says — except the temp path.
+        std::fs::write(&target, b"x").unwrap();
+        for mode in [RepairMode::Auto, RepairMode::Inplace, RepairMode::Discard] {
+            assert_eq!(
+                resolve_mode(mode, &file, &target),
+                WriteMode::Inplace,
+                "{mode}: an openable target is patched in place"
+            );
+        }
+        assert_eq!(
+            resolve_mode(RepairMode::Temp, &file, &target),
+            WriteMode::Temp,
+            "the temp path is the shipped path, and it is never automatic"
+        );
+    }
+
+    /// A target that cannot be opened read+write falls back to the temp
+    /// path — and says so, rather than failing the file.
+    #[test]
+    fn a_target_that_cannot_be_opened_falls_back_to_the_temp_path() {
+        let dir = crate::testtemp::TempDir::new("girpr_test_mode", "unopenable");
+        let target = dir.join("foo.dat");
+        std::fs::write(&target, b"x").unwrap();
+        // A directory is not a file: `metadata().is_file()` is false, so it
+        // takes the "create it in place" branch — and the attempt's own open
+        // is what fails, which is the fallback the writer reports.
+        let as_dir = dir.join("sub");
+        std::fs::create_dir(&as_dir).unwrap();
+        assert_eq!(
+            resolve_mode(RepairMode::Auto, &planned(), &as_dir),
+            WriteMode::Inplace
+        );
+        // A file that is there is in place.
+        assert_eq!(
+            resolve_mode(RepairMode::Auto, &planned(), &target),
+            WriteMode::Inplace
+        );
+    }
 }
