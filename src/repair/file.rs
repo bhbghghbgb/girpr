@@ -78,6 +78,8 @@ pub struct ChunkStats {
     /// The chunks that were already correct and were **not** written: the
     /// in-place path's whole point, made countable.
     pub chunks_kept: u64,
+    /// The bytes behind `chunks_kept` — the disk the repair did not spend.
+    pub bytes_kept: u64,
     /// The bytes written into the install for this file. Under the in-place
     /// path this is the *changed* bytes; under the temp path it is the whole
     /// file.
@@ -228,6 +230,11 @@ pub async fn repair_all(
                             }
                             _ => {}
                         }
+                        // The disk the run did *not* spend: the chunks that
+                        // were already correct and were not written.
+                        ctx.summary
+                            .kept_bytes
+                            .fetch_add(stats.bytes_kept, Ordering::Relaxed);
                     }
                     Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
@@ -753,6 +760,13 @@ async fn attempt_inplace(
     // The chunks that were already correct where they belong: the in-place
     // path's whole point, made countable.
     stats.chunks_kept = stats.chunks_total.saturating_sub(bad.len() as u64);
+    stats.bytes_kept = file
+        .chunks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !bad.contains(i))
+        .map(|(_, c)| c.uncompressed_size.max(0) as u64)
+        .sum();
     tracing::info!(
         chunks_total = stats.chunks_total,
         chunks_kept = stats.chunks_kept,
@@ -770,6 +784,7 @@ async fn attempt_inplace(
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
         chunks_kept: stats.chunks_kept,
+        bytes_kept: stats.bytes_kept,
         bytes_written: stats.bytes_written,
         mode: Some(WriteMode::Inplace.as_str()),
     })
@@ -1285,6 +1300,7 @@ fn promote_tmp(
         // The temp path writes the whole file, so nothing is "kept": the
         // resumed prefix is counted as resumed, not as kept.
         chunks_kept: stats.chunks_resumed,
+        bytes_kept: 0,
         bytes_written: stats.bytes_written,
         mode: Some(WriteMode::Temp.as_str()),
     })

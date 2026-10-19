@@ -98,8 +98,11 @@ pub struct Args {
     /// `{path}_tmp`, then rename it over the target — the original is never
     /// modified, and the extra space is one whole file per file in flight),
     /// and `discard` deletes the target first and writes it fresh.
-    #[arg(long, value_enum, default_value_t)]
-    pub repair_mode: RepairMode,
+    ///
+    /// The flag's presence is remembered: the `SUMMARY` keys that describe
+    /// the mode are emitted only when it was passed.
+    #[arg(long, value_enum)]
+    pub repair_mode: Option<RepairMode>,
 
     /// Cap the RAM the in-place repair may use to stage the bytes that have
     /// to move inside a file. A file whose payload does not fit in what is
@@ -368,7 +371,10 @@ mod tests {
     fn the_repair_mode_defaults_to_auto_and_the_ram_budget_has_a_default() {
         let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
         let ctx = args.into_ctx().unwrap();
-        assert_eq!(ctx.repair_mode, RepairMode::Auto);
+        // The flag was not passed: the mode is `auto`, and the fact that it
+        // was not passed is what the `SUMMARY` keys are gated on.
+        assert_eq!(ctx.repair_mode, None);
+        assert_eq!(ctx.effective_repair_mode(), RepairMode::Auto);
         assert_eq!(ctx.limits.ram_bytes, None, "not requested");
         assert_eq!(ctx.ram_budget, crate::config::DEFAULT_RAM_BUDGET);
     }
@@ -393,7 +399,8 @@ mod tests {
                 arg,
             ]);
             let ctx = args.into_ctx().unwrap();
-            assert_eq!(ctx.repair_mode, want, "{arg}");
+            assert_eq!(ctx.repair_mode, Some(want), "{arg}");
+            assert_eq!(ctx.effective_repair_mode(), want, "{arg}");
         }
     }
 

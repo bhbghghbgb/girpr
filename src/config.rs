@@ -133,8 +133,13 @@ pub struct RunCtx {
     /// `SUMMARY limited=1` absent.
     pub limits: Limits,
     /// How the repair writes: in place, through a `_tmp`, or by discarding
-    /// the target first. `Auto` (the default) picks per file.
-    pub repair_mode: RepairMode,
+    /// the target first. `None` = the flag was not passed, and the effective
+    /// mode is [`RepairMode::Auto`] — see [`RunCtx::effective_repair_mode`].
+    ///
+    /// The `Option` is not laziness: the flag's *presence* is what the
+    /// `SUMMARY` keys are gated on, and "the user asked for `auto`" and
+    /// "the user did not ask" are different facts.
+    pub repair_mode: Option<RepairMode>,
     /// The effective staging budget for the run, in bytes: how much RAM the
     /// in-place repair may use to hold the bytes that have to move inside a
     /// file. `--max-ram-bytes` sets it; otherwise it is
@@ -180,6 +185,11 @@ pub struct RunCtx {
 }
 
 impl RunCtx {
+    /// The mode the repair actually uses: what was asked for, or `auto`.
+    pub fn effective_repair_mode(&self) -> RepairMode {
+        self.repair_mode.unwrap_or_default()
+    }
+
     /// Read-only modes must not write anything: `--dry-run` logs actions only,
     /// `--check-only` verifies only. Every delete/write in the pipeline is
     /// gated on this, which covers `--purge-before` as well as the phases

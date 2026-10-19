@@ -247,6 +247,10 @@ pub struct Summary {
     /// The files that were repaired through `{path}_tmp` — the shipped path,
     /// which needs one whole file of free space per file in flight.
     pub files_temp: AtomicU64,
+    /// The bytes the in-place repairs **kept**: the chunks that were already
+    /// correct and were not written. The counterpart of `write_bytes` — the
+    /// disk the run did *not* spend.
+    pub kept_bytes: AtomicU64,
     pub download_bytes: AtomicU64,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
@@ -307,6 +311,7 @@ impl Summary {
             files_failed: AtomicU64::new(0),
             files_inplace: AtomicU64::new(0),
             files_temp: AtomicU64::new(0),
+            kept_bytes: AtomicU64::new(0),
             download_bytes: AtomicU64::new(0),
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
@@ -332,6 +337,7 @@ impl Summary {
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
             files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
             files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
+            kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,
@@ -386,6 +392,17 @@ pub struct SummaryFlags {
     /// What a **runtime** hard stop cut short (`bytes` / `write` / `delete`), vs
     /// a pre-flight refusal which wrote nothing at all.
     pub stopped: Option<&'static str>,
+    /// `--repair-mode`, when it was passed. It gates the mode's own keys
+    /// (`repair_mode`, `inplace`, `temp`, `kept_bytes`): an unflagged run
+    /// says nothing about a mode it was never asked about.
+    pub repair_mode: Option<&'static str>,
+    /// The bytes the in-place repairs **kept** — the chunks that were
+    /// already correct and were not written. `None` unless
+    /// `--repair-mode` was passed.
+    pub kept_bytes: Option<u64>,
+    /// The peak number of bytes staged in RAM. `None` unless
+    /// `--max-ram-bytes` was passed.
+    pub ram_bytes: Option<u64>,
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
     pub config_bumped_zero: bool,
@@ -446,6 +463,19 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.write_bytes {
         out.push(Extra::Num("write_bytes", n));
+    }
+    // The mode's own keys: what was asked for, how the files were actually
+    // written, and how many bytes were kept rather than rewritten.
+    if let Some(m) = f.repair_mode {
+        out.push(Extra::Word("repair_mode", m));
+        out.push(Extra::Num("inplace", sum.files_inplace.load(Ordering::Relaxed)));
+        out.push(Extra::Num("temp", sum.files_temp.load(Ordering::Relaxed)));
+        if let Some(n) = f.kept_bytes {
+            out.push(Extra::Num("kept_bytes", n));
+        }
+    }
+    if let Some(n) = f.ram_bytes {
+        out.push(Extra::Num("ram_bytes", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -704,13 +734,17 @@ mod tests {
             stopped: Some("bytes"),
             config_bumped_zero: false,
             local_manifest: Some("unavailable"),
+            repair_mode: Some("auto"),
+            kept_bytes: Some(11),
+            ram_bytes: Some(22),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
             rec.text(),
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 stopped=bytes local_manifest=unavailable"
+             write_bytes=77 repair_mode=auto inplace=0 temp=0 kept_bytes=11 ram_bytes=22 \
+             stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -730,10 +764,43 @@ mod tests {
                 "plan_files",
                 "plan_download_bytes",
                 "write_bytes",
+                "repair_mode",
+                "inplace",
+                "temp",
+                "kept_bytes",
+                "ram_bytes",
                 "stopped",
                 "local_manifest"
             ]
         );
+    }
+
+    /// The mode's keys are gated on the mode having been asked for: an
+    /// unflagged run says nothing about a mode it was never given.
+    #[test]
+    fn the_mode_keys_appear_only_when_the_mode_was_asked_for() {
+        let mut s = Summary {
+            files_total: 2,
+            ..Summary::default()
+        };
+        s.files_inplace.store(2, Ordering::Relaxed);
+        let line = summary_record(&s, 0).text();
+        for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
+            assert!(!line.contains(k), "{k} must be absent when unflagged: {line}");
+        }
+        // Asked for: the mode and the two counters are there.
+        s.flags.repair_mode = Some("auto");
+        s.flags.kept_bytes = Some(64);
+        let line = summary_record(&s, 0).text();
+        assert!(line.contains("repair_mode=auto"), "{line}");
+        assert!(line.contains("inplace=2"), "{line}");
+        assert!(line.contains("temp=0"), "{line}");
+        assert!(line.contains("kept_bytes=64"), "{line}");
+        // `ram_bytes` is a different flag's key: it is not there yet.
+        assert!(!line.contains("ram_bytes"), "{line}");
+        s.flags.ram_bytes = Some(128);
+        let line = summary_record(&s, 0).text();
+        assert!(line.contains("ram_bytes=128"), "{line}");
     }
 
     /// `local_manifest` is about the run, not a verdict on it, so it must not

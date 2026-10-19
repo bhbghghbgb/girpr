@@ -65,7 +65,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         audio_explicit: false,
         path_scope: PathScope::default(),
         limits: Limits::default(),
-        repair_mode: girpr::RepairMode::Auto,
+        repair_mode: None,
         ram_budget: girpr::config::DEFAULT_RAM_BUDGET,
         jobs,
         check_only: false,
@@ -345,7 +345,7 @@ async fn partial_tmp_prefix_is_resumed() {
     write_game_file(&dir, "game/foo.dat_tmp", &fx2.files[0].data[..64]);
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = girpr::RepairMode::Temp;
+    ctx.repair_mode = Some(girpr::RepairMode::Temp);
     let (summary, code) = repair::run(ctx).await.expect("resume run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
@@ -623,7 +623,7 @@ async fn the_temp_mode_is_the_shipped_path() {
     write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = girpr::RepairMode::Temp;
+    ctx.repair_mode = Some(girpr::RepairMode::Temp);
     let (summary, code) = repair::run(ctx).await.expect("temp run");
     assert_eq!(code, 0);
     assert_eq!(
@@ -657,7 +657,7 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_fresh() {
     write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = girpr::RepairMode::Discard;
+    ctx.repair_mode = Some(girpr::RepairMode::Discard);
     let (summary, code) = repair::run(ctx).await.expect("discard run");
     assert_eq!(code, 0);
     assert_eq!(
@@ -670,6 +670,106 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_fresh() {
         "nothing of the old file is reused: it was deleted"
     );
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 1);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_mode_keys_say_what_the_run_did() {
+    // The `SUMMARY` keys that describe the mode: what was asked for, how
+    // the files were actually written, and how many bytes were kept rather
+    // than rewritten.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("mode_keys");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = Some(girpr::RepairMode::Auto);
+    let (summary, code) = repair::run(ctx).await.expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(line.contains("repair_mode=auto"), "{line}");
+    assert!(line.contains("inplace=1"), "{line}");
+    assert!(line.contains("temp=0"), "{line}");
+    assert!(
+        line.contains("kept_bytes=64"),
+        "the intact chunk was kept, not written: {line}"
+    );
+
+    // The same run without the flag: the keys are absent, so an unflagged
+    // run's line stays byte-identical to one that never passes them.
+    let dir2 = temp_dir("mode_keys_absent");
+    let fx3 = build_fixture();
+    write_game_file(&dir2, &fx3.files[1].rel, &fx3.files[1].data);
+    write_game_file(&dir2, &fx3.files[0].rel, &half_intact_foo(&fx3));
+    let (summary2, code2) = repair::run(ctx_for(dir2.to_path_buf(), &mock, 1))
+        .await
+        .expect("run");
+    let line2 = girpr::report::summary_record(&summary2, code2).text();
+    for k in ["repair_mode", "inplace=", "temp=", "kept_bytes"] {
+        assert!(!line2.contains(k), "{k} must be absent when unflagged: {line2}");
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_plan_line_reports_the_disk_cost() {
+    // `PLAN est_write_bytes` / `est_extra_bytes`: what the plan would write
+    // into the install, and what it would need beyond it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_disk");
+    let fx2 = build_fixture();
+    // foo is half there (64 of its 128 bytes), bar is missing.
+    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
+
+    let out = dir.join("plan.json");
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            dir.to_str().unwrap(),
+            "--biz",
+            "hk4e_global",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+            "--print-plan",
+            "--plan-out",
+            out.to_str().unwrap(),
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "{stderr}");
+    let plan_line = stdout
+        .lines()
+        .find(|l| l.starts_with("PLAN "))
+        .expect("a PLAN line");
+    assert!(plan_line.contains("est_write_bytes=176"), "{plan_line}");
+    // foo needs its 64 missing bytes, bar its 48: the growth, not the files.
+    assert!(plan_line.contains("est_extra_bytes=112"), "{plan_line}");
+
+    // The document says the same thing, per file.
+    let written = std::fs::read_to_string(&out).expect("plan.json");
+    let v: serde_json::Value = serde_json::from_str(&written).unwrap();
+    let repair = v["repair"].as_array().unwrap();
+    let foo = repair
+        .iter()
+        .find(|e| e["rel"] == "game/foo.dat")
+        .expect("foo");
+    assert_eq!(foo["mode"], "inplace");
+    assert_eq!(foo["extra_bytes"], 64);
+    let bar = repair
+        .iter()
+        .find(|e| e["rel"] == "game/bar.dat")
+        .expect("bar");
+    assert_eq!(bar["mode"], "inplace");
+    assert_eq!(bar["extra_bytes"], 48);
 
     mock.stop();
 }

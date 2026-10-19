@@ -268,18 +268,20 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
     if ctx.print_plan {
+        let extras = scope::report::PlanExtras::new(&game_dir, ctx.effective_repair_mode());
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
+            &extras,
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
-                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
+                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes, &extras);
             doc.write_to(std::path::Path::new(out))
                 .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
         }
@@ -352,12 +354,23 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary,
         ctx.jobs,
         ctx.dry_run,
-        ctx.repair_mode,
+        ctx.effective_repair_mode(),
         ctx.output,
     )
     .await;
     if ctx.limits.write_bytes.is_some() {
         summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
+    }
+    // The mode's own keys are emitted only when the mode was asked for: an
+    // unflagged run says nothing about a mode it was never given. The
+    // counters themselves are always kept — they are what a user who *did*
+    // ask wants to see.
+    if ctx.repair_mode.is_some() {
+        summary.flags.repair_mode = Some(ctx.effective_repair_mode().as_str());
+        summary.flags.kept_bytes = Some(summary.kept_bytes.load(Ordering::Relaxed));
+    }
+    if ctx.limits.ram_bytes.is_some() {
+        summary.flags.ram_bytes = Some(summary.peak_ram_bytes());
     }
     // A runtime hard stop is the one place the run writes *some* of what it was
     // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3
