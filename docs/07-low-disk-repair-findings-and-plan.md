@@ -539,7 +539,7 @@ during the repair instead) and the reason is logged.
 | D4 | the file is grown and the volume is full | medium | file fails, counted, retried, reported; recovery is `--repair-mode temp` |
 | D5 | `est_download_bytes` becomes an **upper** bound, so `--max-download-bytes` over-refuses | medium | `--scan` (commit 10) makes it exact; documented until then |
 | D6 | cross-file reuse, if ever added, breaks in-place unless file order is topologically sorted | latent | S2 stays same-file-only; recorded here |
-| D7 | the artifact bridge asserts `download_bytes == patchmap total` | medium | that assertion becomes `≤`; `must_not_fetch` still holds. Amended in commit 11 |
+| D7 | the artifact bridge asserts `download_bytes == patchmap total` | **low** | it **still holds** under the RAM tier, and that is worth pinning rather than relaxing. The patchmap's `FETCH` set is "chunks this old file cannot supply" (`tools/capture/src/assemble/mod.rs:745-749`), and the RAM tier downloads exactly that set — a chunk whose content is absent from the old file cannot be "already correct" at its destination, so it is always fetched. The *ordered* tier can **exceed** the total (a shifted chunk it could not salvage is downloaded instead of copied), never fall below it. The bridge therefore gains a mode-vs-mode differential rather than a relaxed bound (commit 11) |
 | D8 | hard-linked game files are unlinked by an in-place write | low | no launcher creates them here; noted |
 | D9 | `--max-write-bytes` documentation says "`*_tmp`" | low | reworded to "into the install"; the arithmetic is unchanged |
 | D10 | a manifest whose chunks do not tile the file | low | validated at plan time, zero-filled, logged (P2) |
@@ -583,7 +583,114 @@ after the parts it depends on and before the parts that describe it, and so
 that every commit is useful on its own — the ordered tier arrives after the
 RAM tier, and the RAM tier is useful before it.
 
-### 1. `util`: the scan primitive — one read, every answer
+### 9.0 The working agreement: one commit, then turn around
+
+This plan is executed **one commit at a time, with a turn-around after each
+one**. The implementing agent must not begin commit *N+1* before the reviewer
+has seen commit *N*. A plan of eleven commits delivered as one branch is not
+this plan.
+
+Each turn-around is a **review packet**, and it carries all five of these:
+
+1. the commit message, in full;
+2. `git show --stat` and the complete diff;
+3. the exact commands that were run and their results — `cargo test`,
+   `cargo clippy --all-targets`, and the bundle-backed suite of §9.1;
+4. **what the commit does not verify**, stated plainly rather than left to be
+   discovered;
+5. what the reviewer should look at hardest, and why that is where the risk is.
+
+The rules that make the turn-around worth something:
+
+- **The tree is green before the commit is offered.** `cargo test` and
+  `cargo clippy --all-targets` pass, and §9.1's suite passes. A turn-around
+  that reports a red test is a turn-around asking the reviewer to debug, which
+  is not what a review is for.
+- **One commit per behaviour.** If a commit needs two behaviours, it is two
+  commits and two turn-arounds.
+- **History is not rewritten to satisfy a review.** A defect the review finds
+  in an earlier commit is fixed by a new follow-up commit, unless the reviewer
+  explicitly asks for the history to be rebased. A reviewer who cannot see the
+  defect in the diff is reviewing nothing.
+- **A commit that cannot be fully verified is offered anyway, with that said.**
+  "The bundle suite could not run because the capture needs a tag the server
+  no longer serves" is a legitimate thing to report; quietly not running it is
+  not.
+- **The reviewer may send the plan back.** Reordering, splitting a commit, or
+  dropping one is a normal outcome, not a failure of the plan.
+
+### 9.1 The bundle-backed tests are mandatory at every turn-around
+
+`tests/artifact_bridge.rs` is `#[ignore]`d, and the file says why: **cost**,
+not correctness ("~18 cases and ~2 minutes", `tests/artifact_bridge.rs:13-20`).
+That reasoning was sound when the file only had to prove the *existing*
+pipeline still worked. It stops being sound now: this change rewrites the
+repair writer **and** the data plane, so the ignored suite is the only thing
+that runs the real binary against real game bytes, real API bodies and real
+chunk blobs, and the only thing that pins the `SUMMARY`/`PLAN` contract
+against a body nobody hand-wrote.
+
+So it is **required at every turn-around**, not only at the end:
+
+```text
+cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+```
+
+**A missing bundle is a failure, not a skip.** That is the bridge's own rule
+(`tests/artifact_bridge.rs:33-50`) and it is kept: a skip on a missing
+prerequisite would turn "I ran the check and it found nothing to check" into a
+green line.
+
+Three bundles are already present, and they are the ones the plan is written
+against:
+
+```text
+artifacts/hk4e_global/7.0.0__7.1.0/20261016T002107Z
+artifacts/hk4e_global/7.0.0__7.1.0/20261017T000730Z
+artifacts/hk4e_global/7.0.0__7.1.0/20261017T123335Z
+```
+
+**Capturing a new bundle is allowed and expected.** A bundle captured before
+the change is evidence about the *old* code; if a case is missing, stale, or
+the change needs a shape the existing bundles do not have, capture a new one:
+
+```text
+cargo run -p gircap -- capture --out artifacts
+# narrower, when a specific shape is wanted:
+cargo run -p gircap -- capture --out artifacts --biz hk4e_global --files <REL_PATH>
+```
+
+That reaches the live HoYoPlay/Sophon endpoints, so it needs network. The
+bundle lands in `artifacts/<biz>/<old>__<new>/<timestamp>/` and is
+self-describing (`MANIFEST.json`), so a new capture is **additive** — the
+existing three stay, and a reviewer can compare a run against the bundle it
+was captured from.
+
+The bundle is **read-only evidence**. The bridge works on a scratch copy
+(`tests/artifact_bridge.rs:52-57`), and the bundle must still pass its own
+integrity check afterwards:
+
+```text
+cargo run -p gircap -- verify --artifact artifacts/hk4e_global/7.0.0__7.1.0/20261017T123335Z
+```
+
+**What the bridge is protecting.** Two different things, and they need
+different guards:
+
+- *The bytes.* That the patched file still hashes to `expectations.result_md5`
+  and the run still exits `0` — the bridge's existing assertions, and the
+  reason a rewrite of the writer cannot be waved through.
+- *The contract.* That `SUMMARY` and `PLAN` still say what they say. The
+  discipline that an **unflagged** run's line stays byte-identical is pinned by
+  the offline unit tests in `src/report.rs` (every conditional key is emitted
+  only when its flag is active, `report.rs:398-431`); the bridge is where an
+  accidentally *unconditional* new key would show up as a changed line, and
+  where a changed `download_bytes`/`est_download_bytes` meaning would show up
+  as a wrong number against a body nobody hand-wrote.
+
+### 9.2 The commits
+
+#### 1. `util`: the scan primitive — one read, every answer
 
 `src/util.rs`: add
 
@@ -613,7 +720,7 @@ becomes `scan.file_md5`, the "is this chunk already right" test becomes
 corrupt chunk, truncated file, absent file, unsorted ranges, a range that is
 also a destination.
 
-### 2. `plan`: a trustworthy chunk layout
+#### 2. `plan`: a trustworthy chunk layout
 
 `src/repair/plan/mod.rs`: sort `f.chunks` by `offset` in `build_plan`; drop
 zero-length chunks defensively (logged); add `PlannedFile::layout()` returning
@@ -622,7 +729,7 @@ order, and both the "already correct" test and the ordered tier's proof do.
 Unit tests: unsorted manifest input is sorted; a hole is reported; an
 overlapping pair is reported.
 
-### 3. `reuse`: the salvage order (pure, no I/O)
+#### 3. `reuse`: the salvage order (pure, no I/O)
 
 New `src/repair/reuse.rs`: `salvage_order(chunks, candidates, usable_len) ->
 Order { ascending: bool, live: Vec<bool> }`, implementing §4.4 exactly. The
@@ -631,7 +738,7 @@ makes: `r > o` counts ascending, `r < o` counts descending, `r == o` counts
 both, a source past `usable_len` counts for neither, and an empty candidate
 list yields an arbitrary-but-valid direction.
 
-### 4. the flags: `--repair-mode` and `--max-ram-bytes`
+#### 4. the flags: `--repair-mode` and `--max-ram-bytes`
 
 `src/cli.rs` (`#[arg(long, value_enum, default_value_t)]`), `src/config.rs`
 (`RepairMode` + `RunCtx::repair_mode` + `RunCtx::ram_budget`),
@@ -642,7 +749,7 @@ list yields an arbitrary-but-valid direction.
 value is exit 1 through the existing clap remap; the reservation is
 all-or-nothing and the boundary is inclusive.
 
-### 5. `inplace`: the writer — the RAM tier
+#### 5. `inplace`: the writer — the RAM tier
 
 `src/repair/file.rs`. Split `repair_attempt_inner` into `attempt_temp` (the
 current body, unchanged, still promoting `_tmp`) and `attempt_inplace` (the
@@ -663,7 +770,7 @@ bytes outside that chunk are not rewritten; a file that grows writes only the
 growth; an interrupted in-place run resumes by verification on the next run,
 with no `_tmp` anywhere.
 
-### 6. `inplace`: the ordered tier
+#### 6. `inplace`: the ordered tier
 
 The same writer, with the RAM tier bypassed: `salvage_order` picks the
 direction, the sources are read from the file at write time (which is safe
@@ -674,14 +781,14 @@ tests: a file whose content shifted one chunk to the right salvages three of
 four chunks in the descending direction and downloads the fourth; the same
 file with the RAM tier enabled salvages all four and writes them ascending.
 
-### 7. mode resolution + the counters
+#### 7. mode resolution + the counters
 
 `src/repair/file.rs`: `resolve_mode()` (missing target → create-in-place;
 existing regular file → in-place; open failure → `temp` + `warn`). `ChunkStats`
 gains `chunks_kept`, `bytes_written`, `mode`; `Summary` gains `files_inplace`,
 `files_temp` and `ram_bytes`. Unit tests for the resolution table.
 
-### 8. the data plane
+#### 8. the data plane
 
 `src/report.rs` (`SummaryFlags.repair_mode`, the two counters, `kept_bytes` and
 `ram_bytes` in `conditional_extras` at fixed positions),
@@ -690,7 +797,7 @@ gains `chunks_kept`, `bytes_written`, `mode`; `Summary` gains `files_inplace`,
 conditional keys only when their flag is passed. Unit tests for the rendering
 of each new key on both planes.
 
-### 9. the single-writer lock
+#### 9. the single-writer lock
 
 New `src/repair/lock.rs`: `{game_dir}/girpr.lock` via `create_new(true)`,
 holding pid + timestamp; a live lock refuses with exit 1 naming the file and
@@ -699,7 +806,7 @@ the pid; a lock older than 24 h is taken over. `purge::keep_set()` gains
 created when the path scope admits it — the same rule `config.ini` lives
 under. Unit tests: fresh lock, stale lock, scope-hidden path.
 
-### 10. `--scan`: an exact plan
+#### 10. `--scan`: an exact plan
 
 New `src/repair/scan.rs`: the scan pass hoisted into the plan phase, parallel
 over `jobs`, using `scan_file`. It produces per-file chunk verdicts that make
@@ -709,27 +816,57 @@ verdict map; the ceilings are checked after it. Integration tests:
 `--scan --print-plan` reports an estimate equal to the bytes the following
 repair actually downloads, which is the assertion that does not exist today.
 
-### 11. docs and the artifact bridge
+#### 11. docs and the artifact bridge
 
 `README.md` (the "How it keeps disk usage low" section, the requirements line
 `README.md:200`, the `--max-write-bytes` row, the two new flags, and the
 S1/S2/S3 "deliberate simplifications" note, which becomes S1/S2 + the weakened
 invariants of §5), `docs/02` step 6, `docs/03` §6, and `docs/06`'s
-`download_bytes == patchmap total` assertion, which becomes `≤` with the
-reason (already-correct chunks are not fetched).
+per-capture assertions.
+
+The bridge amendment is the substantive part, and it is **additive** — nothing
+is relaxed:
+
+- **`download_bytes == patchmap total` stays.** It holds under the RAM tier for
+  the reason in D7, and holding it is the point: it is what proves the new
+  writer fetches the same set the patchmap says a consumer must fetch, and not
+  one chunk more.
+- **A differential assertion is added.** Each repair capture is driven
+  **twice** — once with `--repair-mode temp` and once with the default — and
+  the two runs must agree on the file they produce (MD5 *and* size) while
+  differing on the cost: the in-place run must leave no `*_tmp` behind and
+  must report strictly fewer bytes written than the temp run, which writes the
+  whole file. **That is the space claim, asserted against real game bytes** —
+  the offline fixture is too small to distinguish "wrote 128 bytes" from
+  "wrote 64".
+- The `must_not_fetch` check is unaffected (it is about the build namespace,
+  not about reuse) and stays as it is.
+- If the bridge is ever run with `--max-ram-bytes 0`, the ordered tier is
+  selected and the `download_bytes` equality becomes an **upper** bound
+  instead; the bridge says so rather than silently asserting the wrong
+  direction.
+
+Running it twice per capture roughly doubles the suite's cost (~4 minutes
+instead of ~2). That is the price of proving the claim on real bytes, and it
+is the reason §9.1 makes the suite mandatory rather than optional.
 
 ## 10. How the result is checked
 
 - `cargo test` — 82 unit + 59 integration, all offline; the new cases ride with
   their commits.
 - `cargo clippy --all-targets`.
+- **`cargo test -p girpr --test artifact_bridge -- --ignored --nocapture` at
+  every turn-around** (§9.1). Not at the end, not "when something looks wrong":
+  every time. It is the only check that runs the real binary against real
+  game bytes, and this change rewrites both the writer and the data plane.
+  A missing bundle is a failure with instructions, and capturing a new one
+  (`cargo run -p gircap -- capture --out artifacts`) is allowed.
 - The fixture is 2 files / 3 chunks / 128 + 48 bytes, which is enough to prove
   every branch but not the *scale*. The scale claim (`S` → `G`) is arithmetic,
   and the one assertion that would catch a regression in the real world is
   `SUMMARY write_bytes` against `Σ size(repaired files)`, which the new
-  `kept_bytes` key makes visible per run.
-- `tests/artifact_bridge.rs` stays `#[ignore]`d and is re-run by hand for
-  commits 5, 6, 10 and 11 — the only ones that change what crosses the wire.
+  `kept_bytes` key makes visible per run — and which the bridge's differential
+  assertion now pins on real bytes.
 - **The RAM tier is asserted, not assumed.** The integration tests pin that a
   repair writes only the wrong chunks (the file's other bytes are byte-identical
   before and after), that the ordered tier and the RAM tier produce the *same*
