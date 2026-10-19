@@ -225,7 +225,13 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 /// All entries are `/`-separated rel paths (same normalization as
 /// [`super::build_plan`] and the purge walk).
 pub fn keep_set() -> HashSet<String> {
-    HashSet::from(["config.ini".to_string()])
+    HashSet::from([
+        "config.ini".to_string(),
+        // The single-writer lock lives at the game dir's root and is not in
+        // the manifest. The cleanup must never eat it: a run that holds it
+        // would lose its exclusion and a second run could start beside it.
+        crate::repair::lock::LOCK_FILE.to_string(),
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -600,9 +606,33 @@ mod tests {
     }
 
     #[test]
-    fn keep_set_is_config_only() {
+    fn the_keep_set_is_config_and_the_lock() {
+        // The lock file lives at the game dir's root and is not in the
+        // manifest: the cleanup must not eat it, or a run that holds it
+        // would lose its exclusion.
         let keep = keep_set();
         assert!(keep.contains("config.ini"));
-        assert_eq!(keep.len(), 1);
+        assert!(keep.contains(crate::repair::lock::LOCK_FILE));
+        assert_eq!(keep.len(), 2);
+    }
+
+    /// The classification the keep set exists for: the lock is kept, and
+    /// everything else at the root still purges.
+    #[test]
+    fn the_lock_is_kept_by_the_cleanup() {
+        let (expected, server_keep) = purge_fixture();
+        let scope = PathScope::default();
+        assert_eq!(
+            classify_purge_path("girpr.lock", &expected, &server_keep, &scope),
+            PurgeVerdict::Keep
+        );
+        assert_eq!(
+            classify_purge_path("config.ini", &expected, &server_keep, &scope),
+            PurgeVerdict::Keep
+        );
+        assert_eq!(
+            classify_purge_path("stray/orphan.dat", &expected, &server_keep, &scope),
+            PurgeVerdict::Purge
+        );
     }
 }

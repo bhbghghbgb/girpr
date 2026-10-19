@@ -41,6 +41,7 @@
 mod audio;
 mod check;
 mod file;
+pub mod lock;
 mod manifest;
 mod metadata;
 mod plan;
@@ -303,6 +304,24 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The directory may have been created by the line above, so canonicalize
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
+
+    // The single-writer lock. Two runs against one install are safe under
+    // the temp path and not under the in-place one, so a run that mutates
+    // the install takes the lock — and only such a run, and only when the
+    // path scope admits the lock file (the same rule `config.ini` lives
+    // under: a path outside the scope does not exist to the run).
+    let _lock = if !readonly
+        && !ctx.check_only
+        && !ctx.print_plan
+        && scope.is_visible(lock::LOCK_FILE)
+    {
+        let lock = lock::Lock::acquire(&game_dir)
+            .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+        tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+        Some(lock)
+    } else {
+        None
+    };
 
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`
