@@ -1134,15 +1134,27 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         capture.id
     );
 
-    // ---- 1: the byte total, exactly ------------------------------------
+    // ---- 1: the byte total, at most -------------------------------------
+    //
+    // The in-place repair (docs/07) changed this from "equal" to "at most":
+    // a chunk that is **already correct where it belongs** is kept, not
+    // fetched, so the run downloads *fewer* bytes than the patchmap's total.
+    // The patchmap's total is the sum of `compressed_size` over the chunks
+    // with no old-side match — it counts every chunk the new file is made
+    // of, including the ones the old file already had in the right place.
+    //
+    // `must_not_fetch` (assertion 3) is the other half: the bytes that are
+    // *not* fetched must not have been requested either.
     if let Some(total) = capture.download_bytes {
-        assert_eq!(
-            run.num("summary", "download_bytes"),
-            total,
-            "{}: girpr's download_bytes counts the bytes of files it promoted; the \
-             patchmap total is the sum of compressed_size over the chunks with no old-side \
-             match, and the two are equal by construction",
-            capture.id
+        let downloaded = run.num("summary", "download_bytes");
+        assert!(
+            downloaded <= total,
+            "{}: girpr's download_bytes counts the bytes of files it promoted, and the \
+             in-place repair keeps the chunks that are already correct where they belong — \
+             so it fetches at most the patchmap total ({} > {})",
+            capture.id,
+            downloaded,
+            total
         );
     }
 

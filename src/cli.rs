@@ -84,9 +84,9 @@ pub struct Args {
     pub max_download_bytes: Option<u64>,
 
     /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
-    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
-    /// the disk cost: every reuse-copy and every chunk write is counted, so a
-    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
+    /// bytes have been written into the install. Unlike `download_bytes`, this
+    /// is the disk cost: every reuse-copy and every chunk write is counted, so
+    /// a zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
     /// success is decided per chunk at runtime.
     #[arg(long, value_name = "N")]
     pub max_write_bytes: Option<u64>,
@@ -148,10 +148,11 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub scan: bool,
 
-    /// Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=…`)
-    /// to stdout and exit 0 without repairing, purging or bumping anything.
-    /// NOT an offline mode: the plan *is* the manifest, so this still fetches
-    /// the API and the manifests, exactly as any other run does.
+    /// Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=…
+    /// est_extra_bytes=… purge_files=…`) to stdout and exit 0 without repairing,
+    /// purging or bumping anything. NOT an offline mode: the plan *is* the
+    /// manifest, so this still fetches the API and the manifests, exactly as any
+    /// other run does.
     #[arg(long, default_value_t = false)]
     pub print_plan: bool,
 

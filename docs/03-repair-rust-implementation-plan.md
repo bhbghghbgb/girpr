@@ -50,6 +50,9 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--io-threads <N, default 4>]            (concurrent FILES; chunks sequential/file)
       [--purge-after] [--purge-before]          (same files-cleanup after / before; timing only)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
+      [--repair-mode <auto|inplace|temp|discard>]  (default auto = repair IN PLACE; see docs/07)
+      [--max-ram-bytes <N>]                    (staging budget for the in-place repair; default 64 MiB)
+      [--scan]                                 (read every planned file first: an exact download estimate)
       [--log-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>]
 ```
 
@@ -76,7 +79,7 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Work list + reuse map | `repair::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
 | Deprecated-file list (lazy, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::purge_extra(game_dir, plan, keep_set(), dry_run)` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
-| Per-file repair | `repair::file::repair_all` — skip check → open `_tmp` → sequential chunks: slice-reuse (md5-gated) else `GET chunk_prefix/id` → zstd decode → write at offset → final md5 → rename (6) | Starward |
+| Per-file repair | `repair::file::repair_all` — scan (one read: whole MD5 + per-chunk verdicts) → in place: write only the wrong chunks (staged in RAM, or the salvage order) else download chunk → zstd decode → MD5 → write at offset → final MD5 (a mismatch redoes the wrong chunks); `--repair-mode temp` keeps the `_tmp` + atomic promote (6) | Starward + `docs/07` |
 | Check-only | `repair::check::verify_plan` (6.5) | Starward |
 | Post deletes/config | `repair::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
 | Files-cleanup after | `repair::purge::purge_extra(game_dir, plan, keep_set(), false)` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
@@ -130,3 +133,10 @@ warning and a sink, never a failure.
 
 Chunk-repair only; no hdiff fast-update, no 7z legacy path, no SDK/WPF/plugin, no dispatcher
 persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` reuse dir not retained.
+
+**The repair is written in place** (`docs/07`): the target is patched where it lies, so a repair
+costs the file's growth rather than a second copy of it. The price is a deliberately weaker
+contract — the original is modified, and a crash leaves a file that fails the same check and
+converges on the next run (resume-by-verification). `--repair-mode temp` is the shipped
+temp-then-promote contract, kept as the escape hatch; `--repair-mode discard` deletes the target
+and writes it fresh.

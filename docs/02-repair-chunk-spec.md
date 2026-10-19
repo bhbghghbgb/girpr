@@ -123,37 +123,65 @@ Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
 Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
-(HDD-friendly; also bounds peak disk to `io_threads × largest_file`). Retries: 5× per file.
+(HDD-friendly; also bounds peak disk to `io_threads × largest_file` under the temp path, and to
+`io_threads × largest growth` under the in-place path). Retries: 5× per file.
+
+**The repair is written IN PLACE by default** (see `docs/07`): the target is patched where it
+lies, so a repair costs the file's *growth* — 0 for a same-size repair — and only the chunks
+that are wrong are written. `--repair-mode temp` selects the original temp-then-promote
+contract; `--repair-mode discard` deletes the target and writes it fresh.
 
 Per file `F`:
-1. `if exists(game_dir/F.path) and len==F.size and md5(file)==F.md5` → **skip** (log
-   `check: md5 match -> skip`, count as verified, no download). Else proceed.
-2. Ensure parent dir. Open `game_dir/F.path_tmp` (`{path}_tmp`) with `OpenOrCreate|ReadWrite`.
-   Let `have = len(tmp)`. If `have > F.size` → truncate to `F.size` (corrupt resume). Work only on
-   chunks with `offset+uncompressed_size > have` (already-complete prefix is kept; it is re-verified
-   by the final whole-file MD5).
-3. For each pending chunk `C` in offset order, seek `tmp` to `C.offset`:
-   a. If `C.reuse` set and `exists(reuse_path)` with expected length: read
-      `reuse_path[reuse_offset .. +uncompressed_size]`, MD5 it; if equals `C.uncompressed_md5` →
-      copy bytes to `tmp` at `C.offset`, continue (no network). Mismatch → fall through to (b).
-   b. `GET {chunk_prefix}/{C.id}` → response bytes are **zstd-compressed** chunk payload.
+1. `scan`: ONE read of the file that answers everything — the whole-file MD5 (the skip
+   check), "is this chunk already correct where it belongs?" and "is this reuse source
+   intact?". If `md5(file)==F.md5` → **skip** (log `check: md5 match → skip`, count as
+   verified, no download, no write). Else proceed.
+2. Ensure parent dir. Open `game_dir/F.path` read+write (clearing a read-only attribute
+   first). A target that cannot be opened falls back to the temp path below, and says so.
+3. The chunks that are **not** correct where they belong are the ones to fix. For each of
+   them, in ascending offset order:
+   a. If the chunk's reuse source lives *elsewhere* in the same file and is intact, its bytes
+      are moved within the file. Two ways to do that, and they produce the same file:
+      - **the RAM tier** (default): the moving bytes are staged in RAM (bounded by
+        `--max-ram-bytes`) *before* the first write, so both shift directions survive and the
+        writes run forward;
+      - **the ordered tier** (when the payload does not fit the budget): the write order is
+        chosen so no source is overwritten before it is read (ascending keeps the sources
+        above their destinations, descending the ones below), and the sources that order
+        destroys are downloaded instead.
+   b. Else `GET {chunk_prefix}/{C.id}` → response bytes are **zstd-compressed** chunk payload.
       v1 (S1 simplification, see README): buffer the whole chunk, `decode_all`, then verify
-      `uncompressed_md5` immediately — mismatch fails the attempt and retries the whole file
+      `uncompressed_md5` immediately - mismatch fails the attempt and retries the whole file
       (up to 5×). Only then write the bytes at `C.offset`. A streaming
       `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to
-      lower peak RAM; the final whole-file MD5 still gates promotion.
-   c. Any chunk failure → retry whole file (up to 5); resume keeps `tmp` prefix.
- 4. Close `tmp`. `if len(tmp)==F.size and md5(tmp)==F.md5` → atomic `rename(tmp → final)` (overwrite),
-   log the structured `repaired` event (`chunks_total`/`chunks_reused`/`chunks_downloaded`/
-   `chunks_resumed`, `download_bytes`, `final_md5`). Else delete `tmp`, log error, count the file as
-   failed and continue remaining files; after all files, return `Ok(summary, 3)` (skips the post-phase
-   so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
-   Never modify the original in place; never leave `tmp` behind on success.
-5. `--check-only`: perform only step 1 for all files and report; write nothing.
+      lower peak RAM; the final whole-file MD5 still gates the outcome.
+   c. Any chunk failure → retry the whole file (up to 5).
+4. The file is trimmed to `F.size` (the dead tail is released before the first write when no
+   reuse source lives in it), a hole in the chunk layout is zero-filled, and
+   `md5(file)==F.md5` decides the outcome. On a mismatch the chunks are re-verified and only
+   the ones that are still wrong are redone — one read pass, not a re-download. Log the
+   structured `repaired` event (`chunks_total`/`chunks_kept`/`chunks_reused`/`chunks_downloaded`,
+   `bytes_written`, `download_bytes`, `final_md5`).
+5. `--repair-mode temp` is the original contract: open `game_dir/F.path_tmp` (`{path}_tmp`)
+   with `OpenOrCreate|ReadWrite`. Let `have = len(tmp)`. If `have > F.size` → truncate to
+   `F.size` (corrupt resume). Work only on chunks with `offset+uncompressed_size > have` (the
+   already-complete prefix is kept; it is re-verified by the final whole-file MD5). A reuse
+   slice is copied from the same file when its MD5 matches, else the chunk downloads. The final
+   whole-file MD5 gates the atomic `rename(tmp → final)`; on a mismatch the tmp is deleted and
+   the file is retried/failed, never promoted partially.
+6. `--check-only`: perform only step 1 for all files and report; write nothing.
+
+After all files, a file that failed every attempt is counted as failed and the run returns
+`Ok(summary, 3)` (skips the post-phase so `config.ini` is not bumped while damaged) — not
+`Err(RunFailure::write)`.
 
 Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated and
-the final whole-file MD5 gates promotion. Any-version → latest works because the plan is derived
+the final whole-file MD5 gates the outcome. Any-version → latest works because the plan is derived
 from the latest manifest alone (local manifest is a pure optimization).
+
+**What the in-place path gives up** (`docs/07` § 5): the original is modified in place, so a
+crash leaves a file that fails the same check — which the next run fixes by re-verifying it
+(resume-by-verification, not resume-by-length). The `_tmp` artefact belongs to the temp path.
 
 ### Step 7 — Post-phase (deletes + config)
 
@@ -208,28 +236,34 @@ from the latest manifest alone (local manifest is a pure optimization).
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
 download_bytes, deleted_extra_bytes}` (numeric-only; the versions were already
 reported at Step 2.5). Exit code per §1. Rerun is safe
-(skips intact files, resumes partial `*_tmp`).
+(skips intact files, finishes a half-patched file by re-verifying it).
 
 ## 3. Disk-usage argument (why minimal)
 
 - Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
-- During: transient per active file = `≤ 1 × file size` (`_tmp` grows beside the old file) plus pipe
-  buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no in-game manifest cache.
-  Peak ≈ `io_threads × largest_file`. With `io_threads=1` the tool needs only
-  `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
+- During, **in place** (the default): the target is patched where it lies, so the transient cost
+  per active file is its **growth** (`0` for a same-size repair) plus pipe buffers; no
+  `chunk_collapse/` blob store, no `ldiff/` store, no zip staging, no in-game manifest cache.
+  Peak ≈ `io_threads × largest_growth`. With `io_threads=1` the tool needs no free bytes
+  beyond the game for a same-size repair.
+- During, **temp** (`--repair-mode temp`): transient per active file = `≤ 1 × file size`
+  (`_tmp` grows beside the old file). Peak ≈ `io_threads × largest_file`.
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
-  missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).
+  missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra
+  file), and — under the in-place path — chunks that are **already correct where they belong**
+  are kept rather than rewritten (so they are not fetched either).
 
 ## 4. Failure modes
 
 | Failure | Handling |
 |---|---|
 | Manifest MD5 mismatch | retry whole fetch up to 5×, then abort exit 2 (never patch from bad metadata) |
-| Chunk download corrupt (final MD5 fail) | delete `_tmp`, retry file ×5, then fail file exit 3 |
+| Chunk download corrupt (final MD5 fail) | in place: re-verify the chunks and redo only the wrong ones, retry the file ×5, then fail file exit 3; temp: delete `_tmp`, retry file ×5, then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
-| Interrupted run | `_tmp` resume by length + final MD5; leftover `*_tmp` purged only via `--purge-before`/`--purge-after` |
+| Interrupted run | in place: the file itself is the resume artefact — the next run re-verifies it and finishes it; temp: `_tmp` resume by length + final MD5, and the leftover `_tmp` is purged only via `--purge-before`/`--purge-after` |
+| A second run against the same install | refused (exit 1) by the single-writer lock `{game_dir}/girpr.lock`; a lock older than 24 h is taken over |
 
 ## 5. What was deliberately excluded (and when to add)
 
