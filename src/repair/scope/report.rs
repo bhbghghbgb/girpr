@@ -459,8 +459,9 @@ mod tests {
         );
         // The peak, times the files in flight.
         assert_eq!(disk.est_extra_bytes, 64 * 4);
-        // The bytes a full rewrite of the plan writes.
-        assert_eq!(disk.est_write_bytes, 128 + 64 + 0);
+        // The bytes a full rewrite of the plan writes: every planned file's
+        // size (the third one is empty, so it adds nothing).
+        assert_eq!(disk.est_write_bytes, 128 + 64);
 
         // The temp path duplicates every file.
         let disk = DiskPlan::new(&dir, &plan, RepairMode::Temp, 4);
