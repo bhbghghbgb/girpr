@@ -357,6 +357,157 @@ async fn partial_tmp_prefix_is_resumed() {
     mock.stop();
 }
 
+// ---------------------------------------------------------------------------
+// the in-place repair (docs/07)
+// ---------------------------------------------------------------------------
+
+/// The file that the in-place cases below work on: `foo.dat` is two 64-byte
+/// chunks, and the second one is the one that gets damaged.
+fn half_intact_foo(fx: &common::GameFixture) -> Vec<u8> {
+    let mut bad = fx.files[0].data.clone();
+    for b in bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    bad
+}
+
+#[tokio::test]
+async fn a_corrupt_chunk_is_patched_in_place_and_only_that_chunk_is_written() {
+    // The point of the in-place path: a repair writes the bytes that are
+    // wrong, not the whole file. The proof is the write counter — 64 bytes
+    // for the one corrupt chunk of a 128-byte file — and the absence of any
+    // `_tmp` at all.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_patch");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &half_intact_foo(&fx2));
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("inplace run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file is correct afterwards"
+    );
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "the in-place path writes no temp at all"
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "only the corrupt chunk was written, not the whole 128-byte file"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo1".to_string()],
+        "the intact chunk is kept, not fetched"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_file_that_grows_writes_only_the_growth() {
+    // A truncated file: the first chunk is already right, the second is
+    // missing. The repair writes the second chunk and nothing else, and the
+    // file ends up the right length.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_grow");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("inplace run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file grew to its full length"
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "only the growth was written"
+    );
+    assert!(!dir.join("game").join("foo.dat_tmp").exists());
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_interrupted_inplace_repair_resumes_by_verification() {
+    // Resume-by-verification: a file that is half right is finished by
+    // rewriting only the part that is wrong. The correct chunk is *kept* —
+    // the write counter says so — and there is no `_tmp` anywhere, because
+    // the file itself is the resume artefact.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_resume");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    // The first chunk is right, the second is half right: the shape an
+    // interrupted run leaves behind.
+    let mut half = fx2.files[0].data.clone();
+    for b in half.iter_mut().skip(64 + 32) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half);
+
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("inplace run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    assert_eq!(
+        summary.write_bytes.load(Ordering::Relaxed),
+        64,
+        "the chunk that was already right was not rewritten"
+    );
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "no temp anywhere: the file itself is the resume artefact"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_intact_file_is_still_skipped_and_never_written() {
+    // The in-place path must not touch a healthy file: the scan answers
+    // "is the file intact?" and the file is skipped before anything is
+    // opened for writing.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("inplace_skip");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("inplace run");
+    assert_eq!(code, 0);
+    let (skipped, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((skipped, repaired, failed), (2, 0, 0));
+    assert_eq!(summary.write_bytes.load(Ordering::Relaxed), 0);
+    assert!(mock.chunk_hits().is_empty());
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn explicit_audio_selection_overwrites_scan_file() {
     let fx = build_fixture();
@@ -1955,11 +2106,16 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     assert_eq!(code, 0, "the fallback is not an error");
     let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
+    // The in-place repair does not need the local manifest to fix a corrupt
+    // file: it reads the file's *own* bytes and keeps the chunks that are
+    // already right. So the download set is the same as in (a) — the intact
+    // chunk is kept, not fetched — and the `local_manifest` key is what tells
+    // the two runs apart.
     assert_eq!(
         mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
-        "with no local manifest there is nothing to reuse from, so even the \
-         half-intact file downloads both of its chunks"
+        vec!["chunk_foo1".to_string()],
+        "the intact chunk is kept, not fetched: the in-place repair reads the \
+         file's own bytes"
     );
     mock.stop();
 }
