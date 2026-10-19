@@ -70,6 +70,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         repair_mode_explicit: false,
         jobs,
         check_only: false,
+        scan: false,
         purge_only: false,
         fail_fast: false,
         dry_run: false,
@@ -726,7 +727,6 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
     ctx.print_plan = true;
     let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
     // The run reported the plan, not a repair.
     assert!(summary.files_repaired.load(Ordering::Relaxed) == 0);
 
@@ -845,6 +845,99 @@ async fn the_cleanup_never_eats_the_lock() {
         read_game_file(&dir, "stray/orphan.dat").is_none(),
         "the orphan is still purged"
     );
+
+    mock.stop();
+}
+
+/// The value of one `key=value` field on a `key=value` line.
+fn field(line: &str, name: &str) -> u64 {
+    line.split_whitespace()
+        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no {name} in {line}"))
+}
+
+#[tokio::test]
+async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
+    // The assertion that did not exist before `--scan`: the plan's estimate
+    // and the repair's actual cost are the same number.
+    //
+    // Without the scan the estimate counts every chunk the reuse map cannot
+    // supply — which is what the *temp* path downloads, but not what the
+    // in-place path does: it keeps the chunk that is already correct where
+    // it belongs. So the unscanned estimate is an upper bound, and the
+    // scanned one is the figure.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scan_exact");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    let game = dir.to_string_lossy().into_owned();
+    let base: Vec<&str> = vec![
+        "--game-path",
+        &game,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+
+    // 1. the plan, unscanned: the upper bound.
+    let mut args = base.clone();
+    args.extend_from_slice(&["--print-plan"]);
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let unscanned = field(
+        stdout
+            .lines()
+            .find(|l| l.starts_with("PLAN "))
+            .expect("the PLAN line"),
+        "est_download_bytes",
+    );
+
+    // 2. the plan, scanned: the exact figure.
+    let mut args = base.clone();
+    args.extend_from_slice(&["--scan", "--print-plan"]);
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let plan_line = stdout
+        .lines()
+        .find(|l| l.starts_with("PLAN "))
+        .expect("the PLAN line");
+    let scanned = field(plan_line, "est_download_bytes");
+    assert!(
+        scanned < unscanned,
+        "the scan knows the intact chunk is kept: {scanned} vs {unscanned}"
+    );
+    assert!(
+        plan_line.contains(&format!("scan_bytes={}", 128 + 48)),
+        "the scan reports the bytes it read: {plan_line}"
+    );
+
+    // 3. the repair: what it really downloaded.
+    let mut args = base.clone();
+    args.push("--scan");
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let summary = stdout
+        .lines()
+        .find(|l| l.starts_with("SUMMARY "))
+        .expect("the SUMMARY line");
+    let downloaded = field(summary, "download_bytes");
+    assert_eq!(
+        scanned, downloaded,
+        "the scanned estimate is the real cost: {scanned} vs {downloaded}"
+    );
+    assert!(summary.contains("damaged_chunks=1"), "{summary}");
 
     mock.stop();
 }

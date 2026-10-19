@@ -127,6 +127,9 @@ pub struct RunCtx {
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,
+    /// `--scan`: read the whole install once, in the plan phase, so the
+    /// plan's numbers are exact rather than upper bounds.
+    pub scan: bool,
     /// `--purge-only`: `check_only` inverted. Runs the files-cleanup and the
     /// post-phase, skips the repair loop.
     pub purge_only: bool,

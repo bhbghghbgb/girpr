@@ -47,6 +47,7 @@ mod metadata;
 mod plan;
 mod post;
 pub mod reuse;
+pub mod scan;
 pub mod scope;
 
 pub use metadata::Meta;
@@ -224,6 +225,22 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         Vec::new()
     };
 
+    // The scan, when it was asked for. It reads every planned file once and
+    // turns the plan's estimates from upper bounds into figures.
+    let scan = if ctx.scan {
+        Some(
+            scan::scan_plan(
+                &game_dir,
+                Arc::clone(&plan),
+                Arc::new(local_map.clone()),
+                ctx.jobs,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     // === assert: the ceilings, before anything is mutated ===
     //
     // Filter → assert → work, in that order. Checking the ceilings
@@ -237,10 +254,25 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // promise**: `try_reuse_slice` falls back to a download whenever a local
     // slice fails its MD5, so a file estimated at 0 bytes can still download its
     // whole body. That is why the runtime hard stop exists alongside this.
-    let est_download_bytes = plan.est_download_bytes(&local_map);
+    //
+    // Under `--scan` the estimate is the **exact** figure for the in-place
+    // path: the chunks that are wrong where they belong and have no intact
+    // source to copy from. The temp path's figure is the one above (it
+    // writes every chunk of a file it repairs), so the two modes are
+    // estimated by their own rules.
+    let est_download_bytes = match (&scan, ctx.repair_mode) {
+        // The temp path writes every chunk of a file it repairs, so its
+        // figure is the reuse map's one.
+        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes(&local_map),
+        (Some(s), _) => s.est_download_bytes(&plan),
+        (None, _) => plan.est_download_bytes(&local_map),
+    };
     if ctx.limits.download_bytes.is_some() {
         tracing::info!("estimated download: {est_download_bytes} bytes");
         summary.flags.plan_download_bytes = Some(est_download_bytes);
+    }
+    if let Some(s) = &scan {
+        summary.flags.damaged_chunks = Some(s.damaged_chunks);
     }
     summary.files_total = plan.files.len() as u64;
     summary.flags.limited = ctx.limits.is_active();
@@ -279,6 +311,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             est_download_bytes,
             scope.is_active(),
             &disk,
+            scan.as_ref().map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
@@ -341,7 +374,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output);
+        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }

@@ -108,6 +108,14 @@ pub struct Args {
     #[arg(long, value_enum)]
     pub repair_mode: Option<RepairMode>,
 
+    /// Read the whole install once, in the plan phase, and report the
+    /// **exact** figures: the bytes the repair will really download, the
+    /// chunks that are damaged, and the bytes the scan read. Costs a full
+    /// read of every planned file, and makes a ceiling refusal slower (the
+    /// estimate a ceiling is checked against is only exact after the scan).
+    #[arg(long, default_value_t = false)]
+    pub scan: bool,
+
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
     pub check_only: bool,
@@ -214,6 +222,7 @@ impl Args {
             repair_mode_explicit: self.repair_mode.is_some(),
             jobs: self.io_threads,
             check_only: self.check_only,
+            scan: self.scan,
             purge_only: self.purge_only,
             fail_fast: self.fail_fast,
             dry_run: self.dry_run,

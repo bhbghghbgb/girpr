@@ -203,6 +203,7 @@ fn help_text_lists_every_documented_flag() {
         "--max-write-bytes",
         "--max-ram-bytes",
         "--repair-mode",
+        "--scan",
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
     }

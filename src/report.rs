@@ -409,6 +409,10 @@ pub struct SummaryFlags {
     /// The peak staged payload — the most RAM that was staged at once.
     /// Emitted only when `--max-ram-bytes` was passed.
     pub ram_bytes: Option<u64>,
+    /// The chunks that are wrong where they belong, over the whole plan.
+    /// Emitted only when `--scan` was passed: without the scan nobody knows
+    /// which chunks are damaged, only which files are.
+    pub damaged_chunks: Option<u64>,
 }
 
 /// One conditional `SUMMARY` entry.
@@ -477,6 +481,9 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.ram_bytes {
         out.push(Extra::Num("ram_bytes", n));
+    }
+    if let Some(n) = f.damaged_chunks {
+        out.push(Extra::Num("damaged_chunks", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -740,6 +747,7 @@ mod tests {
             files_temp: Some(1),
             kept_bytes: Some(900),
             ram_bytes: Some(4096),
+            damaged_chunks: Some(7),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
@@ -747,7 +755,7 @@ mod tests {
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
              write_bytes=77 repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
-             stopped=bytes local_manifest=unavailable"
+             damaged_chunks=7 stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -761,6 +769,7 @@ mod tests {
         assert_eq!(v["temp"], 1);
         assert_eq!(v["kept_bytes"], 900);
         assert_eq!(v["ram_bytes"], 4096);
+        assert_eq!(v["damaged_chunks"], 7);
         // Key order is fixed, so two runs' lines diff cleanly.
         let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
         assert_eq!(
@@ -777,6 +786,7 @@ mod tests {
                 "temp",
                 "kept_bytes",
                 "ram_bytes",
+                "damaged_chunks",
                 "stopped",
                 "local_manifest"
             ]
