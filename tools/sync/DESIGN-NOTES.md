@@ -16,7 +16,7 @@ and not here.
 ## Load-bearing invariants, and what enforces them
 
 The dangerous edits in this crate are the ones that break an invariant nothing
-fails loudly about. Four of them.
+fails loudly about. Six of them.
 
 ### The verify needs two independent reads
 
@@ -94,11 +94,73 @@ either way. The one that does not is
 and its row in `tests/sync_plan/`. If you add a case-only fixture, give the two
 sides **different bytes at the same length** or it tests nothing.
 
+### The cache's algorithm vocabulary is open; the request's is not
+
+`HashAlg` is a closed two-variant enum and the parser refuses everything else, so
+what a run may **ask for** is settled at compile time. What a cache row **holds**
+is not: a cache written by a newer build may carry a digest under a name this one
+has never heard of, and that row has to stay readable. `cache/codec.rs` therefore
+keeps algorithm names inline rather than behind an id registry, and `decode_rec`
+never `bail!`s on one.
+
+The in-memory end of the same guarantee is `DigestSet`'s `foreign` arm, and it has
+to be more than decode-and-ignore. An unknown name is **carried**: phase A hands it
+to the planner, `merge_row` folds it into the next row, phase C writes it back. A
+scan that dropped it would quietly lose the row's contents on the next write, which
+is the failure a "we don't understand it, so we leave it alone" reading produces.
+
+A *known* name carrying an **unexpected length** is carried too, and for a
+different reason. That is a corrupt or hand-written row. It compares byte-wise
+against whatever else claims the same name and so reports a difference, and
+routing it through `foreign` preserves that; rejecting it would turn a reported
+difference into a hard failure, which is not what this format has ever done with
+one. `DigestSet::insert_named` is where the routing lives, so the rule cannot be
+spelled two ways.
+
+**Why `kind` is the opposite.** `FileRec.kind` *is* a closed registry in the codec
+and `kind_from_byte` refuses an unknown byte on purpose: a third kind would break
+older binaries that cannot represent it, so failing loudly is the right answer.
+The two look inconsistent and are not. Do not "fix" the asymmetry, and do not
+convert `kind` to an enum on the strength of `HashAlg` being one — the enum is what
+makes the *request* cheap to hold; inline names are what make the *cache* survive.
+
+**Enforced by:** `codec_preserves_unknown_algorithms`; the `blake3` cases in
+`tests/convert.rs`, which go through a conversion and a whole scan rather than a
+round trip; `merge_row_drops_a_foreign_digest_when_the_stat_changed`, which is the
+one place the rule has to be visible to `merge`; and
+`a_digest_set_is_seventy_two_bytes_and_allocates_nothing`, which fails if a later
+edit puts a map back — a map passes every other test here and costs five
+allocations per row.
+
+### A digest is looked up by name, not by slot
+
+`DigestSet` has two lookups and they are not interchangeable: `get(HashAlg)` reads
+a slot, `get_named(&str)` reads the slot *and* the foreign arm.
+
+**Every caller asking "does this row hold algorithm X" must use the by-name one** —
+`obtainable` in the planner, `hashes_differ`, `verify_digests`, and
+`HashPlan::missing`. A row whose `md5` is stored with eight bytes is not in the md5
+slot, and a slot lookup reports that row as holding nothing at all.
+
+The consequences are not cosmetic, and they point in opposite directions.
+`plan_pairs`'s coverage check would fail a run that is perfectly answerable, so the
+user is refused work they could have had. Worse, `hashes_differ` is *silent* on a
+missing digest — bounded only because the planner chose those algorithms — so a
+slot lookup would report a corrupt row as clean. That is the false clean, reached
+from the other side, and the coverage check cannot see it because the row genuinely
+does hold a digest under that name.
+
+**Enforced by:** `tests/why/disagreement.rs`, whose fixtures deliberately give
+`sha256` a six-byte digest so the row really does carry a known name in the foreign
+arm, and which asserts the comparison still finds it; and
+`a_known_name_with_the_wrong_length_routes_to_foreign`.
+
 ---
 
 ## Not on the table
 
-Each of these looks like an opportunity to remove duplication. None of them is one.
+Each of these looks like an obvious tidy-up — a duplication, or a type that could be
+the tidier shape. None of them is one.
 
 **Do not merge `scan_stat_only` and `load_record_side_from`.** They are not two
 variants of one walk: one reads a directory, the other reads a table. Merging
@@ -114,6 +176,18 @@ implementor, and the enum's shape is what makes the two spellings in
 **Do not touch the `--rw-threads*` family, `RwLimiter`, or the lock order.** See
 the lock-ordering section above. The tests are good (`rw/gate.rs`'s unit tests
 plus `tests/rw_threads/limiter.rs`); leave them alone.
+
+**Do not convert `FileRec.kind` to an enum.** It is the obvious companion to
+`HashAlg`, and it is the wrong direction: `kind` is a closed registry *in the
+codec* by design, so that a third kind breaks old binaries loudly instead of
+quietly. See the fifth invariant for why algorithms are not the same case.
+
+**Do not add `bitflags` (or any dependency) for `AlgoSet`.** `bitflags` is already
+in `Cargo.lock` transitively, so it would cost nothing to compile — which is
+exactly why it is worth refusing. `AlgoSet` is fifty lines of newtype whose `Debug`
+has to be hand-written anyway to keep printing `["md5", "sha256"]`, and this crate
+hand-rolls `RwLimits`, `StatTrust` and `CasePairing` in preference to derives.
+Consistency wins, and a bitset crate is not a rule the crate can enforce for us.
 
 **Do not weaken `plan_pairs`' coverage check or `pair_verdict`'s `unverifiable`
 clause.** Together they close the last path by which a run can report a confident
@@ -173,3 +247,22 @@ a pair the planner called settled turns out to have needed a digest nobody
 computed. There is deliberately no `untrusted_disagrees() -> bool` next to
 `untrusted_differs`: a second spelling of a rule is a rule that can drift, and the
 caller that wants a bool asks `.any()`.
+
+**The request and the answer must stay different shapes.** `CommonOpts.algos` is an
+ordered `Vec<HashAlg>`; every per-path and per-pair answer is an unordered
+`AlgoSet`. They look like the same thing at different sizes, and flattening either
+one is a real loss:
+
+- The **request's order is a contract with the user.** `pick_one` breaks an
+  `--hash-any-of` tie in the order the flags were typed, and
+  `planner::any_of_breaks_a_tie_by_the_flag_order` pins it. Make the request a set
+  and the tie-break silently becomes alphabetical, so `--hash-any-of sha256 md5`
+  stops meaning what it says — with no test failing, because every fixture that
+  names two algorithms happens to name them in canonical order.
+- The **answers have to be a set** because there is one per path, for every path in
+  the tree, and under `--hash-all-of` every one of them is the same value. A list
+  there is a heap allocation per path holding a fresh clone of the request; a set
+  is two bytes inside a map value that already exists.
+
+Neither shape is derivable from the other, and the reason each is right is
+opposite to the other's.

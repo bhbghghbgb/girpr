@@ -63,9 +63,11 @@ use super::side::{OpenSide, Side};
 ///   of it on disk.
 ///
 /// A window rather than one `collect()` over the whole pending set for a third
-/// reason: peak memory. Every pending file holds a live `HashMap<String,
-/// Vec<u8>>` until the batch writes it, which on a 200k-file tree is tens of MB
-/// of map structure the sequential form never allocated.
+/// reason: peak memory. Every pending file holds its digests until the batch
+/// writes them, and on a 200k-file tree an unbounded `collect()` would hold the
+/// whole hash phase at once. A [`DigestSet`] is 72 bytes and allocates nothing, so
+/// what the window bounds is that 72 bytes per pending file — and the bound is
+/// still worth having, because the *files* are what is unbounded.
 pub fn resolve_folder(
     root: &Path,
     cache: &CacheDb,

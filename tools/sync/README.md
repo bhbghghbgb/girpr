@@ -848,6 +848,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
+  Algorithm names are stored **inline, as text** — deliberately, so a cache written
+  by a newer build with an algorithm this one has never heard of stays readable: the
+  unknown digest is carried through scans and written back rather than dropped.
 - **Read-only vs read/write opens.** `open_db` takes a `CacheOpen`:
   `ReadWrite` may create the file, back it up, and reconcile `meta`;
   `ReadOnly` requires an existing, current-version cache and never opens it for
