@@ -30,7 +30,91 @@ pub struct PlannedFile {
     pub rel: String,
     pub size: i64,
     pub md5: String,
+    /// The file's chunks, **sorted by offset** (see [`build_plan`]) and with
+    /// the empty ones dropped.
     pub chunks: Vec<SophonChunk>,
+}
+
+impl PlannedFile {
+    /// The shape of this file's chunk layout.
+    ///
+    /// Computed from the chunk list alone — no I/O — so it can be asked at
+    /// plan time (before anything is written) and again by the writer.
+    ///
+    /// Two things are answered, and both matter to an in-place repair
+    /// (docs/07 §4.1, P2):
+    ///
+    /// - **do the chunks tile `[0, size)`?** A hole in the coverage would
+    ///   otherwise keep whatever the old file had there — stale bytes that
+    ///   no chunk ever wrote, and that the whole-file MD5 would then reject.
+    ///   An overlap means two chunks fighting over the same bytes, and which
+    ///   one wins is not a question the writer should have to answer.
+    /// - **where are the holes and the overlaps?** The writer needs the holes
+    ///   by offset: they are the places it has to zero-fill.
+    ///
+    /// The answer does not depend on the order the chunks are given in: the
+    /// ranges are sorted here, so a caller that builds a `PlannedFile` by
+    /// hand gets the same verdict as one that came out of [`build_plan`].
+    pub fn layout(&self) -> Layout {
+        let size = self.size.max(0) as u64;
+        let mut out = Layout {
+            tiled: true,
+            ..Default::default()
+        };
+        let mut ranges: Vec<(u64, u64)> = self
+            .chunks
+            .iter()
+            .filter_map(|c| {
+                // A negative offset or size is not a range at all; it cannot
+                // be placed, so it cannot tile anything.
+                if c.offset < 0 || c.uncompressed_size < 0 {
+                    return None;
+                }
+                Some((c.offset as u64, c.uncompressed_size as u64))
+            })
+            .collect();
+        ranges.sort_unstable();
+        // `cursor` is the end of the coverage so far: everything below it is
+        // claimed, everything above it is not.
+        let mut cursor = 0u64;
+        let mut prev_offset = 0u64;
+        for (offset, len) in ranges {
+            if offset > cursor {
+                out.gaps.push((cursor, offset - cursor));
+                out.tiled = false;
+            } else if offset < cursor {
+                out.overlaps.push((prev_offset, offset));
+                out.tiled = false;
+            }
+            if offset + len > cursor {
+                cursor = offset + len;
+                prev_offset = offset;
+            }
+        }
+        if cursor < size {
+            // The tail of the file that no chunk covers.
+            out.gaps.push((cursor, size - cursor));
+            out.tiled = false;
+        } else if cursor > size {
+            // The chunks claim more bytes than the file has.
+            out.tiled = false;
+        }
+        out
+    }
+}
+
+/// The shape of a file's chunk layout — see [`PlannedFile::layout`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Layout {
+    /// The chunks cover `[0, size)` exactly: no hole, no overlap, and the
+    /// last chunk ends exactly at the file's size.
+    pub tiled: bool,
+    /// Holes in the coverage: `(offset, len)` that no chunk covers. The
+    /// writer has to zero-fill these.
+    pub gaps: Vec<(u64, u64)>,
+    /// Overlapping chunks: `(earlier_offset, later_offset)`. Two chunks
+    /// claiming the same bytes.
+    pub overlaps: Vec<(u64, u64)>,
 }
 
 /// The sorted, deduped work list for one run.
@@ -109,12 +193,47 @@ pub fn build_plan(
                 continue;
             }
             prefix.insert(rel.clone(), url_prefix.clone());
-            files.push(PlannedFile {
+            // The chunk list is made **ascending by offset** here, once,
+            // because everything downstream depends on it and nothing
+            // upstream guarantees it: the manifest is whatever the server
+            // served. The in-place repair writes each chunk at its own
+            // offset and the ordered tier's proof (docs/07 §4.4) talks about
+            // "the bytes below the cursor", so both need the order to be a
+            // fact rather than an accident of the manifest.
+            //
+            // `sort_by_key` is stable, so two chunks at the same offset keep
+            // the manifest's relative order.
+            let mut chunks = f.chunks;
+            chunks.sort_by_key(|c| c.offset);
+            // A chunk with no content is a no-op at best and a hole in the
+            // coverage at worst: it claims an offset and covers nothing.
+            // Dropped defensively — a manifest that says so is not a manifest
+            // to trust, but the file can still be repaired without it.
+            let empty = chunks.iter().filter(|c| c.uncompressed_size <= 0).count();
+            if empty > 0 {
+                tracing::warn!(rel = %rel, empty, "dropped empty chunk(s) from the plan");
+                chunks.retain(|c| c.uncompressed_size > 0);
+            }
+            let file = PlannedFile {
                 rel,
                 size: f.size,
                 md5: f.md5.clone(),
-                chunks: f.chunks,
-            });
+                chunks,
+            };
+            // The layout is checked **at plan time**, before anything is
+            // written: a hole in the coverage is a thing the writer has to
+            // zero-fill, and an overlap is a thing it has to resolve, and
+            // both are better known before the first byte moves than after.
+            let layout = file.layout();
+            if !layout.tiled {
+                tracing::warn!(
+                    rel = %file.rel,
+                    gaps = layout.gaps.len(),
+                    overlaps = layout.overlaps.len(),
+                    "chunk layout does not tile the file"
+                );
+            }
+            files.push(file);
         }
     }
     // Stable order so log lines and the parallel spawn order are reproducible.
@@ -129,6 +248,149 @@ pub fn build_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chunk with the given offset and length.
+    fn chunk(id: &str, offset: i64, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: format!("md5-{id}"),
+            offset,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    /// A `PlannedFile` with the given chunks, built by hand — so the layout
+    /// can be asked about a chunk list no `build_plan` would produce.
+    fn file_with(size: i64, chunks: Vec<SophonChunk>) -> PlannedFile {
+        PlannedFile {
+            rel: "f.dat".into(),
+            size,
+            md5: "m".into(),
+            chunks,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // the chunk layout
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_layout_that_covers_the_file_exactly_is_tiled() {
+        let f = file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]);
+        let layout = f.layout();
+        assert!(layout.tiled);
+        assert!(layout.gaps.is_empty());
+        assert!(layout.overlaps.is_empty());
+    }
+
+    #[test]
+    fn a_hole_in_the_coverage_is_reported() {
+        // 64 bytes of hole between the two chunks.
+        let f = file_with(192, vec![chunk("a", 0, 64), chunk("b", 128, 64)]);
+        let layout = f.layout();
+        assert!(!layout.tiled);
+        assert_eq!(layout.gaps, vec![(64, 64)]);
+        assert!(layout.overlaps.is_empty());
+    }
+
+    #[test]
+    fn a_tail_no_chunk_covers_is_a_hole_too() {
+        let f = file_with(200, vec![chunk("a", 0, 64), chunk("b", 64, 64)]);
+        let layout = f.layout();
+        assert!(!layout.tiled);
+        assert_eq!(layout.gaps, vec![(128, 72)]);
+    }
+
+    #[test]
+    fn an_overlapping_pair_is_reported() {
+        let f = file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]);
+        let layout = f.layout();
+        assert!(!layout.tiled);
+        assert_eq!(layout.overlaps, vec![(0, 32)]);
+    }
+
+    #[test]
+    fn chunks_that_claim_more_than_the_file_has_is_not_tiled() {
+        let f = file_with(64, vec![chunk("a", 0, 128)]);
+        let layout = f.layout();
+        assert!(!layout.tiled);
+        assert!(layout.gaps.is_empty());
+    }
+
+    #[test]
+    fn the_layout_answer_does_not_depend_on_the_order_of_the_chunks() {
+        let a = chunk("a", 0, 64);
+        let b = chunk("b", 64, 64);
+        let forward = file_with(128, vec![a.clone(), b.clone()]).layout();
+        let backward = file_with(128, vec![b, a]).layout();
+        assert_eq!(forward, backward);
+    }
+
+    #[test]
+    fn a_file_with_no_chunks_and_no_size_is_tiled() {
+        let f = file_with(0, vec![]);
+        assert!(f.layout().tiled);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_plan
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_plan_sorts_the_chunks_by_offset() {
+        // The manifest is whatever the server served: the chunks come out in
+        // whatever order it listed them, and nothing downstream may depend on
+        // that.
+        let f = SophonChunkFile {
+            file: "a.dat".into(),
+            chunks: vec![chunk("c2", 128, 64), chunk("c0", 0, 64), chunk("c1", 64, 64)],
+            is_folder: false,
+            size: 192,
+            md5: "m1".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![f])];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let offsets: Vec<i64> = plan.files[0].chunks.iter().map(|c| c.offset).collect();
+        assert_eq!(offsets, vec![0, 64, 128]);
+    }
+
+    #[test]
+    fn the_plan_drops_empty_chunks() {
+        let f = SophonChunkFile {
+            file: "a.dat".into(),
+            chunks: vec![chunk("c0", 0, 64), chunk("empty", 64, 0)],
+            is_folder: false,
+            size: 64,
+            md5: "m1".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![f])];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        assert_eq!(plan.files[0].chunks.len(), 1);
+        assert_eq!(plan.files[0].chunks[0].id, "c0");
+    }
+
+    #[test]
+    fn a_plan_whose_chunks_do_not_tile_is_still_built() {
+        // The layout is *reported*, not enforced: the writer can zero-fill a
+        // hole, and refusing the file here would turn a repairable file into
+        // a failed one.
+        let f = SophonChunkFile {
+            file: "a.dat".into(),
+            chunks: vec![chunk("c0", 0, 64), chunk("c1", 128, 64)],
+            is_folder: false,
+            size: 192,
+            md5: "m1".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![f])];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        assert_eq!(plan.files.len(), 1);
+        let layout = plan.files[0].layout();
+        assert!(!layout.tiled);
+        assert_eq!(layout.gaps, vec![(64, 64)]);
+    }
 
     #[test]
     fn plan_sorted_dedup_blacklist() {
