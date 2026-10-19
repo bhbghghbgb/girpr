@@ -44,6 +44,6 @@ pub(crate) mod testtemp;
 
 pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang};
-pub use config::{RepairMode, RunCtx, RunFailure};
+pub use config::{RunCtx, RunFailure};
 pub use repair::run;
 pub use report::{OutputFormat, Summary};

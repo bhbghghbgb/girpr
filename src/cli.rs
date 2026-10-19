@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 
 use crate::Biz;
-use crate::config::{RepairMode, RunCtx};
+use crate::config::RunCtx;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
@@ -84,33 +84,12 @@ pub struct Args {
     pub max_download_bytes: Option<u64>,
 
     /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
-    /// bytes have been written into the install. Unlike `download_bytes`, this
-    /// is the disk cost: every reuse-copy and every chunk write is counted, so
-    /// a zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
+    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
+    /// the disk cost: every reuse-copy and every chunk write is counted, so a
+    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
     /// success is decided per chunk at runtime.
     #[arg(long, value_name = "N")]
     pub max_write_bytes: Option<u64>,
-
-    /// How the repair puts the bytes on disk. `auto` (the default) repairs
-    /// **in place** wherever the target can be opened read+write, so a repair
-    /// costs the file's growth instead of a second copy of it;
-    /// `inplace` forces that, `temp` is the shipped behaviour (write
-    /// `{path}_tmp`, then rename it over the target — the original is never
-    /// modified, and the extra space is one whole file per file in flight),
-    /// and `discard` deletes the target first and writes it fresh.
-    ///
-    /// The flag's presence is remembered: the `SUMMARY` keys that describe
-    /// the mode are emitted only when it was passed.
-    #[arg(long, value_enum)]
-    pub repair_mode: Option<RepairMode>,
-
-    /// Cap the RAM the in-place repair may use to stage the bytes that have
-    /// to move inside a file. A file whose payload does not fit in what is
-    /// left of the budget is not refused — it is repaired by the ordered
-    /// path, which writes the same file without staging anything. `0` forces
-    /// that path for every file.
-    #[arg(long, value_name = "N")]
-    pub max_ram_bytes: Option<u64>,
 
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
@@ -137,22 +116,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
 
-    /// Scan every planned file before the repair starts, and record what each
-    /// chunk looks like. The download estimate becomes **exact** (a chunk
-    /// that is already correct where it belongs is not fetched), so
-    /// `--max-download-bytes` refuses on the real figure, `--print-plan`
-    /// reports `scan_bytes`, and `--check-only` reports how many *chunks* are
-    /// damaged.
-    ///
-    /// Opt-in because it costs a full read pass before the repair starts.
-    #[arg(long, default_value_t = false)]
-    pub scan: bool,
-
-    /// Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=…
-    /// est_extra_bytes=… purge_files=…`) to stdout and exit 0 without repairing,
-    /// purging or bumping anything. NOT an offline mode: the plan *is* the
-    /// manifest, so this still fetches the API and the manifests, exactly as any
-    /// other run does.
+    /// Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=…`)
+    /// to stdout and exit 0 without repairing, purging or bumping anything.
+    /// NOT an offline mode: the plan *is* the manifest, so this still fetches
+    /// the API and the manifests, exactly as any other run does.
     #[arg(long, default_value_t = false)]
     pub print_plan: bool,
 
@@ -221,17 +188,8 @@ impl Args {
                 delete_bytes: self.max_delete_bytes,
                 download_bytes: self.max_download_bytes,
                 write_bytes: self.max_write_bytes,
-                ram_bytes: self.max_ram_bytes,
             },
-            repair_mode: self.repair_mode,
-            // The staging budget is a ceiling on the run, not on a file: the
-            // default applies whether or not the flag was passed, so a run
-            // that was never told about RAM still cannot stage a whole file
-            // by accident. `--max-ram-bytes 0` is the "never stage anything"
-            // switch.
-            ram_budget: self.max_ram_bytes.unwrap_or(crate::config::DEFAULT_RAM_BUDGET),
             jobs: self.io_threads,
-            scan: self.scan,
             check_only: self.check_only,
             purge_only: self.purge_only,
             fail_fast: self.fail_fast,
@@ -374,64 +332,5 @@ mod tests {
         assert!(!ctx.audio_explicit);
         assert!(ctx.audio.is_empty());
         assert_eq!(ctx.jobs, 4);
-    }
-
-    /// The repair mode defaults to `auto` — in place where it can be — and
-    /// the staging budget has a default even when no flag was passed, so a
-    /// run that was never told about RAM still cannot stage a whole file by
-    /// accident.
-    #[test]
-    fn the_repair_mode_defaults_to_auto_and_the_ram_budget_has_a_default() {
-        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
-        let ctx = args.into_ctx().unwrap();
-        // The flag was not passed: the mode is `auto`, and the fact that it
-        // was not passed is what the `SUMMARY` keys are gated on.
-        assert_eq!(ctx.repair_mode, None);
-        assert_eq!(ctx.effective_repair_mode(), RepairMode::Auto);
-        assert_eq!(ctx.limits.ram_bytes, None, "not requested");
-        assert_eq!(ctx.ram_budget, crate::config::DEFAULT_RAM_BUDGET);
-    }
-
-    /// The mode is a real enum on the command line, and every spelling of it
-    /// is accepted.
-    #[test]
-    fn the_repair_mode_is_parsed_from_the_command_line() {
-        for (arg, want) in [
-            ("auto", RepairMode::Auto),
-            ("inplace", RepairMode::Inplace),
-            ("temp", RepairMode::Temp),
-            ("discard", RepairMode::Discard),
-        ] {
-            let args = Args::parse_from([
-                "girpr",
-                "--game-path",
-                ".",
-                "--biz",
-                "hk4e_global",
-                "--repair-mode",
-                arg,
-            ]);
-            let ctx = args.into_ctx().unwrap();
-            assert_eq!(ctx.repair_mode, Some(want), "{arg}");
-            assert_eq!(ctx.effective_repair_mode(), want, "{arg}");
-        }
-    }
-
-    /// `--max-ram-bytes 0` is the "never stage anything" switch, not a usage
-    /// error: it forces the ordered path for every file.
-    #[test]
-    fn a_zero_ram_budget_is_a_budget_not_a_usage_error() {
-        let args = Args::parse_from([
-            "girpr",
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--max-ram-bytes",
-            "0",
-        ]);
-        let ctx = args.into_ctx().unwrap();
-        assert_eq!(ctx.limits.ram_bytes, Some(0));
-        assert_eq!(ctx.ram_budget, 0);
     }
 }

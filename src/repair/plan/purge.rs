@@ -219,21 +219,13 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 /// NOTE: the game flags unknown executables inside the game folder, so the
 /// tool binary itself must never live there; the exe needs no keep rule.
 ///
-/// `girpr.lock` is the single-writer lock (docs/07 §4.1, P5). It lives at
-/// the root of the game dir, appears in no manifest, and is **not** the
-/// tool's own bookkeeping: deleting it while a run holds it would let a
-/// second run in. It is kept for the same reason `config.ini` is.
-///
 /// `audio_lang_*` / `Audio_*_pkg_version` are matched by filename pattern in
 /// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
 /// [`super::build_plan`] and the purge walk).
 pub fn keep_set() -> HashSet<String> {
-    HashSet::from([
-        "config.ini".to_string(),
-        crate::repair::lock::LOCK_FILE.to_string(),
-    ])
+    HashSet::from(["config.ini".to_string()])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,7 +321,6 @@ mod tests {
                 })
                 .collect(),
             url_prefix_by_file: HashMap::new(),
-            verdicts: None,
         }
     }
 
@@ -609,13 +600,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_set_is_the_metadata_and_the_lock() {
+    fn keep_set_is_config_only() {
         let keep = keep_set();
         assert!(keep.contains("config.ini"));
-        assert!(
-            keep.contains(crate::repair::lock::LOCK_FILE),
-            "the single-writer lock must survive the cleanup"
-        );
-        assert_eq!(keep.len(), 2);
+        assert_eq!(keep.len(), 1);
     }
 }

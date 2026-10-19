@@ -240,17 +240,6 @@ pub struct Summary {
     pub files_skipped: AtomicU64,
     pub files_repaired: AtomicU64,
     pub files_failed: AtomicU64,
-    /// The files that were repaired **in place** — the target was written
-    /// where it lies, so the repair cost the file's growth rather than a
-    /// second copy of it.
-    pub files_inplace: AtomicU64,
-    /// The files that were repaired through `{path}_tmp` — the shipped path,
-    /// which needs one whole file of free space per file in flight.
-    pub files_temp: AtomicU64,
-    /// The bytes the in-place repairs **kept**: the chunks that were already
-    /// correct and were not written. The counterpart of `write_bytes` — the
-    /// disk the run did *not* spend.
-    pub kept_bytes: AtomicU64,
     pub download_bytes: AtomicU64,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
@@ -278,17 +267,6 @@ pub struct Summary {
     pub write_bytes: AtomicU64,
     /// Set when the runtime **write** hard stop fired (see `write_bytes`).
     pub write_stopped: AtomicBool,
-    /// `--max-ram-bytes`, same `u64::MAX` sentinel as `download_limit`. This
-    /// is the *staging* budget: how much RAM the in-place repair may use to
-    /// hold the bytes that have to move inside a file.
-    pub ram_limit: AtomicU64,
-    /// The RAM currently reserved by the files in flight. A file reserves its
-    /// whole payload before it stages any of it, so the sum is what the
-    /// process is actually holding.
-    pub ram_reserved: AtomicU64,
-    /// The peak number of bytes staged at once — the `SUMMARY ram_bytes`
-    /// figure, and the one the budget bounds.
-    pub ram_bytes: AtomicU64,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
@@ -309,9 +287,6 @@ impl Summary {
             files_skipped: AtomicU64::new(0),
             files_repaired: AtomicU64::new(0),
             files_failed: AtomicU64::new(0),
-            files_inplace: AtomicU64::new(0),
-            files_temp: AtomicU64::new(0),
-            kept_bytes: AtomicU64::new(0),
             download_bytes: AtomicU64::new(0),
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
@@ -320,9 +295,6 @@ impl Summary {
             write_limit: AtomicU64::new(u64::MAX),
             write_bytes: AtomicU64::new(0),
             write_stopped: AtomicBool::new(false),
-            ram_limit: AtomicU64::new(u64::MAX),
-            ram_reserved: AtomicU64::new(0),
-            ram_bytes: AtomicU64::new(0),
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
         }
@@ -335,9 +307,6 @@ impl Summary {
             files_skipped: AtomicU64::new(self.files_skipped.load(Ordering::Relaxed)),
             files_repaired: AtomicU64::new(self.files_repaired.load(Ordering::Relaxed)),
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
-            files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
-            files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
-            kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
             download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,
@@ -349,9 +318,6 @@ impl Summary {
             write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
             write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
             write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
-            ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
-            ram_reserved: AtomicU64::new(self.ram_reserved.load(Ordering::Relaxed)),
-            ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
         }
@@ -392,20 +358,6 @@ pub struct SummaryFlags {
     /// What a **runtime** hard stop cut short (`bytes` / `write` / `delete`), vs
     /// a pre-flight refusal which wrote nothing at all.
     pub stopped: Option<&'static str>,
-    /// `--repair-mode`, when it was passed. It gates the mode's own keys
-    /// (`repair_mode`, `inplace`, `temp`, `kept_bytes`): an unflagged run
-    /// says nothing about a mode it was never asked about.
-    pub repair_mode: Option<&'static str>,
-    /// The bytes the in-place repairs **kept** — the chunks that were
-    /// already correct and were not written. `None` unless
-    /// `--repair-mode` was passed.
-    pub kept_bytes: Option<u64>,
-    /// The peak number of bytes staged in RAM. `None` unless
-    /// `--max-ram-bytes` was passed.
-    pub ram_bytes: Option<u64>,
-    /// The chunks that are not correct where they belong. `None` unless
-    /// `--scan` was passed — the scan is what knows it.
-    pub damaged_chunks: Option<u64>,
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
     pub config_bumped_zero: bool,
@@ -466,22 +418,6 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.write_bytes {
         out.push(Extra::Num("write_bytes", n));
-    }
-    // The mode's own keys: what was asked for, how the files were actually
-    // written, and how many bytes were kept rather than rewritten.
-    if let Some(m) = f.repair_mode {
-        out.push(Extra::Word("repair_mode", m));
-        out.push(Extra::Num("inplace", sum.files_inplace.load(Ordering::Relaxed)));
-        out.push(Extra::Num("temp", sum.files_temp.load(Ordering::Relaxed)));
-        if let Some(n) = f.kept_bytes {
-            out.push(Extra::Num("kept_bytes", n));
-        }
-    }
-    if let Some(n) = f.ram_bytes {
-        out.push(Extra::Num("ram_bytes", n));
-    }
-    if let Some(n) = f.damaged_chunks {
-        out.push(Extra::Num("damaged_chunks", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -740,18 +676,13 @@ mod tests {
             stopped: Some("bytes"),
             config_bumped_zero: false,
             local_manifest: Some("unavailable"),
-            repair_mode: Some("auto"),
-            kept_bytes: Some(11),
-            ram_bytes: Some(22),
-            damaged_chunks: Some(3),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
             rec.text(),
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 repair_mode=auto inplace=0 temp=0 kept_bytes=11 ram_bytes=22 \
-             damaged_chunks=3 stopped=bytes local_manifest=unavailable"
+             write_bytes=77 stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -771,44 +702,10 @@ mod tests {
                 "plan_files",
                 "plan_download_bytes",
                 "write_bytes",
-                "repair_mode",
-                "inplace",
-                "temp",
-                "kept_bytes",
-                "ram_bytes",
-                "damaged_chunks",
                 "stopped",
                 "local_manifest"
             ]
         );
-    }
-
-    /// The mode's keys are gated on the mode having been asked for: an
-    /// unflagged run says nothing about a mode it was never given.
-    #[test]
-    fn the_mode_keys_appear_only_when_the_mode_was_asked_for() {
-        let mut s = Summary {
-            files_total: 2,
-            ..Summary::default()
-        };
-        s.files_inplace.store(2, Ordering::Relaxed);
-        let line = summary_record(&s, 0).text();
-        for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
-            assert!(!line.contains(k), "{k} must be absent when unflagged: {line}");
-        }
-        // Asked for: the mode and the two counters are there.
-        s.flags.repair_mode = Some("auto");
-        s.flags.kept_bytes = Some(64);
-        let line = summary_record(&s, 0).text();
-        assert!(line.contains("repair_mode=auto"), "{line}");
-        assert!(line.contains("inplace=2"), "{line}");
-        assert!(line.contains("temp=0"), "{line}");
-        assert!(line.contains("kept_bytes=64"), "{line}");
-        // `ram_bytes` is a different flag's key: it is not there yet.
-        assert!(!line.contains("ram_bytes"), "{line}");
-        s.flags.ram_bytes = Some(128);
-        let line = summary_record(&s, 0).text();
-        assert!(line.contains("ram_bytes=128"), "{line}");
     }
 
     /// `local_manifest` is about the run, not a verdict on it, so it must not

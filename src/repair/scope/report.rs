@@ -19,35 +19,23 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Context;
 use serde::Serialize;
 
-use crate::repair::plan::{PlannedFile, PurgePlan, RepairPlan};
+use crate::repair::plan::{PurgePlan, RepairPlan};
 use crate::report::Record;
-use crate::util;
 
 /// The aggregated numbers behind the `PLAN` line, and behind `PLAN` in JSON
 /// mode. Computed from the two finished plans; no I/O.
 pub struct PlanTotals {
     pub files: u64,
     pub est_download_bytes: u64,
-    /// The bytes the plan would write **into the install**. Without a scan
-    /// this is an upper bound: the whole file, because every chunk of it
-    /// could be wrong.
-    pub est_write_bytes: u64,
-    /// The extra free space the plan needs beyond the install. Under the
-    /// in-place path that is the files' **growth** — zero for a same-size
-    /// repair — and under the temp path it is one whole file per file in
-    /// flight.
-    pub est_extra_bytes: u64,
     pub purge_files: u64,
     pub purge_bytes: u64,
     pub max_chunk_bytes: u64,
     pub scoped: bool,
-    /// The bytes the scan pass read, when `--scan` ran.
-    pub scan_bytes: Option<u64>,
 }
 
 impl PlanTotals {
@@ -56,15 +44,10 @@ impl PlanTotals {
         purge: Option<&PurgePlan>,
         est_download_bytes: u64,
         scoped: bool,
-        extras: &PlanExtras,
-        scan_bytes: Option<u64>,
     ) -> Self {
-        let per_file: Vec<FileExtra> = plan.files.iter().map(|f| extras.for_file(f)).collect();
         Self {
             files: plan.files.len() as u64,
             est_download_bytes,
-            est_write_bytes: per_file.iter().map(|e| e.write_bytes).sum(),
-            est_extra_bytes: per_file.iter().map(|e| e.extra_bytes).sum(),
             purge_files: purge.map_or(0, |p| p.files.len() as u64),
             purge_bytes: purge.map_or(0, |p| p.total_bytes),
             // The largest single chunk is what bounds peak RAM (a whole chunk is
@@ -80,61 +63,6 @@ impl PlanTotals {
                 .max()
                 .unwrap_or(0),
             scoped,
-            scan_bytes,
-        }
-    }
-}
-
-/// What one file costs the run, on the disk axis.
-///
-/// The two numbers are different questions: `write_bytes` is what the repair
-/// writes into the install, `extra_bytes` is what it needs *beyond* the
-/// install to do it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileExtra {
-    /// Which path would write this file: `"inplace"` or `"temp"`.
-    pub mode: &'static str,
-    /// The bytes written into the install (an upper bound without a scan).
-    pub write_bytes: u64,
-    /// The extra free space the file needs: its growth under the in-place
-    /// path, its whole size under the temp path.
-    pub extra_bytes: u64,
-}
-
-/// The per-file disk estimates, computed once from the game dir and the mode.
-pub struct PlanExtras {
-    game_dir: PathBuf,
-    repair_mode: crate::config::RepairMode,
-}
-
-impl PlanExtras {
-    pub fn new(game_dir: &Path, repair_mode: crate::config::RepairMode) -> Self {
-        Self {
-            game_dir: game_dir.to_path_buf(),
-            repair_mode,
-        }
-    }
-
-    /// The disk cost of one file, under the mode that would write it.
-    pub fn for_file(&self, f: &PlannedFile) -> FileExtra {
-        let size = f.size.max(0) as u64;
-        let on_disk = util::file_len(&self.game_dir.join(util::normalize_rel(&f.rel))).unwrap_or(0);
-        // The in-place path writes the file where it lies — creating it when
-        // it is not there — so it needs the file's **growth** and nothing
-        // else; the temp path needs a whole copy of it beside the original.
-        let inplace = self.repair_mode != crate::config::RepairMode::Temp;
-        if inplace {
-            FileExtra {
-                mode: "inplace",
-                write_bytes: size,
-                extra_bytes: size.saturating_sub(on_disk.min(size)),
-            }
-        } else {
-            FileExtra {
-                mode: "temp",
-                write_bytes: size,
-                extra_bytes: size,
-            }
         }
     }
 }
@@ -148,21 +76,13 @@ impl PlanExtras {
 /// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
 /// key name carries one type across the whole stream.
 pub fn plan_record(t: &PlanTotals) -> Record {
-    let rec = Record::keyed("PLAN")
+    Record::keyed("PLAN")
         .put("files", t.files)
         .put("est_download_bytes", t.est_download_bytes)
-        .put("est_write_bytes", t.est_write_bytes)
-        .put("est_extra_bytes", t.est_extra_bytes)
         .put("purge_files", t.purge_files)
         .put("purge_bytes", t.purge_bytes)
         .put("max_chunk_bytes", t.max_chunk_bytes)
-        .put("scoped", u64::from(t.scoped));
-    // The scan's own figure, when it ran: how much the plan had to read to
-    // know what it was going to do.
-    match t.scan_bytes {
-        Some(n) => rec.put("scan_bytes", n),
-        None => rec,
-    }
+        .put("scoped", u64::from(t.scoped))
 }
 
 /// The `--plan-out` document.
@@ -187,11 +107,6 @@ pub struct RepairEntry<'a> {
     /// Chunks the local reuse map cannot supply, by compressed size — this
     /// file's half of the plan's `est_download_bytes`.
     pub est_download_bytes: u64,
-    /// Which path would write this file: `inplace` or `temp`.
-    pub mode: &'static str,
-    /// The extra free space this file needs beyond the install: its growth
-    /// under the in-place path, its whole size under the temp path.
-    pub extra_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,7 +120,6 @@ impl<'a> PlanDocument<'a> {
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
         est_download_bytes: u64,
-        extras: &PlanExtras,
     ) -> Self {
         // The per-file estimates must sum to the plan total, or the document
         // would disagree with the `PLAN` line. `est` is the caller-computed plan
@@ -232,16 +146,11 @@ impl<'a> PlanDocument<'a> {
                 .files
                 .iter()
                 .zip(per_file)
-                .map(|(f, est)| {
-                    let extra = extras.for_file(f);
-                    RepairEntry {
-                        rel: &f.rel,
-                        size: f.size,
-                        chunks_total: f.chunks.len() as u64,
-                        est_download_bytes: est,
-                        mode: extra.mode,
-                        extra_bytes: extra.extra_bytes,
-                    }
+                .map(|(f, est)| RepairEntry {
+                    rel: &f.rel,
+                    size: f.size,
+                    chunks_total: f.chunks.len() as u64,
+                    est_download_bytes: est,
                 })
                 .collect(),
             purge: purge
@@ -314,7 +223,6 @@ mod tests {
                 },
             ],
             url_prefix_by_file: HashMap::new(),
-            verdicts: None,
         }
     }
 
@@ -331,29 +239,21 @@ mod tests {
         }
     }
 
-    /// The per-file disk estimates, against a game dir with nothing in it:
-    /// every planned file is missing, so the in-place path would create it
-    /// (and need its whole size) and the temp path would need a whole copy.
-    fn extras() -> PlanExtras {
-        let dir = crate::testtemp::TempDir::new("girpr_test_plan_out", "extras");
-        PlanExtras::new(&dir, crate::config::RepairMode::Auto)
-    }
-
     #[test]
     fn the_plan_line_has_a_fixed_key_order() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras(), None);
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
         let rec = plan_record(&t);
         assert_eq!(
             rec.text(),
-            "PLAN files=3 est_download_bytes=60 est_write_bytes=192 est_extra_bytes=192 \
-             purge_files=1 purge_bytes=4096 max_chunk_bytes=30 scoped=1"
+            "PLAN files=3 est_download_bytes=60 purge_files=1 purge_bytes=4096 \
+             max_chunk_bytes=30 scoped=1"
         );
         // No purge flag: the purge fields are zero, not absent.
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false);
         assert_eq!(
             plan_record(&t).text(),
-            "PLAN files=3 est_download_bytes=60 est_write_bytes=192 est_extra_bytes=192 \
-             purge_files=0 purge_bytes=0 max_chunk_bytes=30 scoped=0"
+            "PLAN files=3 est_download_bytes=60 purge_files=0 purge_bytes=0 \
+             max_chunk_bytes=30 scoped=0"
         );
     }
 
@@ -361,19 +261,17 @@ mod tests {
     /// text line uses — `files`, not `plan` — so a parser reads one vocabulary.
     #[test]
     fn the_plan_is_one_record_on_either_plane() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &extras(), None);
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
         let rec = plan_record(&t);
         let json = rec.json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["event"], "plan");
         assert_eq!(v["files"], 3);
         assert_eq!(v["est_download_bytes"], 60);
-        assert_eq!(v["est_write_bytes"], 192);
-        assert_eq!(v["est_extra_bytes"], 192);
         assert_eq!(v["purge_files"], 1);
         assert_eq!(v["purge_bytes"], 4096);
         assert_eq!(v["max_chunk_bytes"], 30);
-        assert_eq!(v.as_object().unwrap().len(), 9, "{json}");
+        assert_eq!(v.as_object().unwrap().len(), 7, "{json}");
         // `scoped` is an integer here for the same reason it is one on
         // `SUMMARY`: one key name carries one type across the whole stream.
         assert_eq!(v["scoped"], 1);
@@ -382,7 +280,7 @@ mod tests {
 
     #[test]
     fn a_plan_that_is_not_scoped_reports_zero_not_a_boolean() {
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false);
         let v: serde_json::Value = serde_json::from_str(&plan_record(&t).json()).unwrap();
         assert_eq!(v["scoped"], 0);
         assert!(!v["scoped"].is_boolean(), "{v}");
@@ -392,7 +290,7 @@ mod tests {
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
         // peak transient disk is io_threads x that.
-        let t = PlanTotals::new(&plan(), None, 60, false, &extras(), None);
+        let t = PlanTotals::new(&plan(), None, 60, false);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
             &RepairPlan {
@@ -402,8 +300,6 @@ mod tests {
             None,
             0,
             false,
-            &extras(),
-            None,
         );
         assert_eq!(t.max_chunk_bytes, 0, "an empty plan has no chunks");
     }
@@ -411,7 +307,7 @@ mod tests {
     #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &extras());
+        let doc = PlanDocument::new(&plan, Some(&purge), 60);
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -419,9 +315,6 @@ mod tests {
         assert_eq!(doc.repair[2].est_download_bytes, 0, "no chunks, no bytes");
         let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
         assert_eq!(sum, 60, "the document must agree with the PLAN line");
-        // The disk story, per file: the mode and what it costs.
-        assert_eq!(doc.repair[0].mode, "inplace");
-        assert_eq!(doc.repair[0].extra_bytes, 128, "a missing file is created");
 
         assert_eq!(doc.purge.len(), 1);
         assert_eq!(doc.purge[0].rel, "stray/orphan.dat");
@@ -433,7 +326,7 @@ mod tests {
         // The document is written from the same estimate the `PLAN` line
         // reports; if they ever disagreed, the file would be a lie.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 100, &extras());
+        let doc = PlanDocument::new(&plan, None, 100);
         let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
         assert_eq!(sum, 100);
     }
@@ -441,7 +334,7 @@ mod tests {
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &extras());
+        let doc = PlanDocument::new(&plan, Some(&purge), 60);
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -455,7 +348,7 @@ mod tests {
         let dir = crate::testtemp::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 60, &extras());
+        let doc = PlanDocument::new(&plan, None, 60);
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");

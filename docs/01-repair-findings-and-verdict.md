@@ -1,11 +1,5 @@
 # Repair findings & verdict - Low-disk Genshin repair/patch (Starward vs Collapse)
 
-> **Note (docs/07).** This file is the *findings* behind the original
-> temp-then-promote repair. The repair is now written **in place** — see
-> [`docs/07-low-disk-repair-findings-and-plan.md`](07-low-disk-repair-findings-and-plan.md),
-> which wins where the two disagree. The findings below still describe the
-> launchers' behaviour, which did not change.
-
 Scope: Genshin Impact only (`hk4e_cn` / `hk4e_global` / `hk4e_bilibili`), Rust tool, automation-friendly
 (no UI), minimize disk usage before / during / after patching. Repair-capable: local files may be
 corrupt or any older version; after the run the game must be at the current live version.

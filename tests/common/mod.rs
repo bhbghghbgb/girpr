@@ -177,60 +177,6 @@ pub fn build_fixture() -> GameFixture {
     }
 }
 
-/// The **local** build's manifest, with every file's chunks re-flowed: the
-/// same chunks (same ids, same sizes, same MD5s) at *different* offsets.
-///
-/// This is the shape a version upgrade leaves behind: the file's content
-/// moved, so the bytes a chunk wants are somewhere else in the file. The
-/// file's own size and MD5 describe the re-flowed content, because that is
-/// what is on disk.
-pub fn build_reflowed_manifest(fx: &GameFixture) -> LocalManifest {
-    let mut pb_files: Vec<SophonChunkFile> = Vec::new();
-    for f in &fx.files {
-        let mut pb_chunks: Vec<SophonChunk> = Vec::new();
-        let mut data: Vec<u8> = Vec::new();
-        // The chunks in reverse order: the content moved down by one chunk.
-        for c in f.chunks.iter().rev() {
-            let offset = data.len() as i64;
-            data.extend_from_slice(&c.data);
-            pb_chunks.push(SophonChunk {
-                id: c.id.clone(),
-                uncompressed_md5: md5hex(&c.data),
-                offset,
-                compressed_size: c.data.len() as i64,
-                uncompressed_size: c.data.len() as i64,
-                unknown: 0,
-                compressed_md5: String::new(),
-            });
-        }
-        pb_files.push(SophonChunkFile {
-            file: f.rel.clone(),
-            chunks: pb_chunks,
-            is_folder: false,
-            size: data.len() as i64,
-            md5: md5hex(&data),
-        });
-    }
-    let manifest = SophonChunkManifest { chuncks: pb_files };
-    let mut raw = Vec::new();
-    manifest.encode(&mut raw).expect("prost encode fixture");
-    LocalManifest {
-        id: "manifest_test_game_local".to_string(),
-        bytes: raw,
-    }
-}
-
-/// The file content a reflowed manifest describes: the chunks in the order
-/// the local manifest lists them.
-pub fn reflowed_file_data(fx: &GameFixture, index: usize) -> Vec<u8> {
-    let f = &fx.files[index];
-    let mut data = Vec::new();
-    for c in f.chunks.iter().rev() {
-        data.extend_from_slice(&c.data);
-    }
-    data
-}
-
 // ---------------------------------------------------------------------------
 // temp dirs (no extra deps)
 // ---------------------------------------------------------------------------
@@ -264,29 +210,11 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-/// A manifest served for the **local** build.
-///
-/// A version upgrade re-flows a file's content: the chunks keep their ids,
-/// sizes and MD5s, but they sit at *different* offsets than the latest
-/// manifest's. That is the shape the in-place repair has to cope with, and
-/// it cannot be modelled by the latest manifest alone.
-#[derive(Clone)]
-pub struct LocalManifest {
-    pub id: String,
-    /// The raw protobuf bytes.
-    pub bytes: Vec<u8>,
-}
-
-#[derive(Default)]
 pub struct MockOpts {
     pub deprecated_files: Vec<String>,
     pub scan_dir: String,
     pub res_dir: String,
     pub cache_dir: String,
-    /// The local build's manifest, when it is not the latest one. `None` (the
-    /// default) makes every non-latest tag answer `retcode -202`, which is
-    /// what models "the server no longer serves that build".
-    pub local_manifest: Option<LocalManifest>,
     /// `getGameConfigs.default_download_mode`. `None` serves the live
     /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
     /// `Some("")` to model the API omitting the field.
@@ -404,11 +332,6 @@ struct Responses {
     deprecated: Vec<u8>,
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
-    /// The build body served for a non-latest tag, when the fixture brings a
-    /// local manifest. `None` → every non-latest tag answers `retcode -202`.
-    build_local: Option<Vec<u8>>,
-    /// The local manifest's id and bytes, when there is one.
-    local_manifest: Option<(String, Vec<u8>)>,
     latest_tag: String,
     fail_chunks: bool,
     not_found_chunks: bool,
@@ -501,52 +424,12 @@ fn build_responses(
             }]
         }
     });
-    // The local build: the same shape, its own manifest. Only served when the
-    // fixture brings one — otherwise a non-latest tag is "not found", which
-    // is what models a build the server no longer serves.
-    let (build_local, local_manifest) = match opts.local_manifest.as_ref() {
-        Some(m) => {
-            // The manifest is served zstd-compressed, and its checksum is the
-            // MD5 of the *decompressed* bytes — same as the real one.
-            let raw = m.bytes.clone();
-            let checksum = md5hex(&raw);
-            let compressed = zstd_bytes(&raw);
-            let body = serde_json::json!({
-                "retcode": 0,
-                "message": "OK",
-                "data": {
-                    "build_id": "build_test_local",
-                    "tag": "1.0.0-old",
-                    "manifests": [{
-                        "category_id": "10016",
-                        "category_name": "game-test",
-                        "matching_field": "game",
-                        "manifest": {
-                            "id": m.id,
-                            "checksum": checksum,
-                            "compressed_size": compressed.len() as i64,
-                            "uncompressed_size": raw.len() as i64
-                        },
-                        "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
-                        "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
-                    }]
-                }
-            });
-            (
-                Some(serde_json::to_vec(&body).unwrap()),
-                Some((m.id.clone(), compressed)),
-            )
-        }
-        None => (None, None),
-    };
     Responses {
         configs: serde_json::to_vec(&configs).unwrap(),
         branches: serde_json::to_vec(&branches).unwrap(),
         deprecated: serde_json::to_vec(&deprecated).unwrap(),
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
-        build_local,
-        local_manifest,
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
         not_found_chunks: opts.not_found_chunks,
@@ -607,11 +490,9 @@ async fn serve_one(
         ("200 OK", "application/json", r.deprecated.clone())
     } else if target.contains("getBuild") {
         match query_tag(&target) {
-            Some(t) if t != r.latest_tag => match &r.build_local {
-                // The fixture brings a local build: serve it.
-                Some(body) => ("200 OK", "application/json", body.clone()),
-                None => ("200 OK", "application/json", r.build_not_found.clone()),
-            },
+            Some(t) if t != r.latest_tag => {
+                ("200 OK", "application/json", r.build_not_found.clone())
+            }
             _ => ("200 OK", "application/json", r.build_latest.clone()),
         }
     } else if target.contains("/manifests/") {
@@ -629,14 +510,6 @@ async fn serve_one(
                 "200 OK",
                 "application/octet-stream",
                 fx.manifest_zstd.clone(),
-            )
-        } else if let Some((local_id, bytes)) = &r.local_manifest
-            && id == local_id
-        {
-            (
-                "200 OK",
-                "application/octet-stream",
-                bytes.clone(),
             )
         } else {
             ("404 Not Found", "text/plain", b"no such manifest".to_vec())

@@ -41,13 +41,10 @@
 mod audio;
 mod check;
 mod file;
-pub mod lock;
 mod manifest;
 mod metadata;
 mod plan;
 mod post;
-pub mod reuse;
-pub mod scan;
 pub mod scope;
 
 pub use metadata::Meta;
@@ -136,35 +133,12 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let mut plan = plan::build_plan(
+    let plan = Arc::new(plan::build_plan(
         per_manifest,
         &meta.blacklist,
         &meta.latest,
         scope,
-    );
-    // 4.0 the scan pass (`--scan`): read every planned file once and record
-    // what each chunk looks like. The download estimate becomes exact, so
-    // the ceiling below refuses on the real figure — and the repair loop
-    // starts with the same verdicts the estimate was built from.
-    //
-    // It is opt-in because it costs a full read pass before any repair
-    // starts (docs/07 §7, option I).
-    let mut scan_bytes = 0u64;
-    let mut damaged_chunks = 0u64;
-    if ctx.scan {
-        let report = scan::scan_plan(&game_dir, &plan.files, &local_map, ctx.jobs);
-        scan_bytes = report.bytes;
-        damaged_chunks = report.damaged_chunks;
-        tracing::info!(
-            files = report.verdicts.len(),
-            scan_bytes,
-            damaged_chunks,
-            damaged_files = report.damaged_files,
-            "scan: the plan now knows what every chunk looks like"
-        );
-        plan.verdicts = Some(report.verdicts);
-    }
-    let plan = Arc::new(plan);
+    ));
     tracing::info!(
         "work list: {} files{}",
         plan.files.len(),
@@ -293,21 +267,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
     if ctx.print_plan {
-        let extras = scope::report::PlanExtras::new(&game_dir, ctx.effective_repair_mode());
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
-            &extras,
-            ctx.scan.then_some(scan_bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
-                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes, &extras);
+                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
             doc.write_to(std::path::Path::new(out))
                 .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
         }
@@ -326,22 +297,6 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The directory may have been created by the line above, so canonicalize
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
-
-    // The single-writer lock (docs/07 §4.1, P5). Two runs against one
-    // install are harmless under the temp path and *not* harmless under the
-    // in-place path, so a run that is going to write takes the lock first.
-    // A read-only run takes none: it writes nothing.
-    let _lock = if readonly {
-        None
-    } else {
-        match lock::acquire(&game_dir, scope) {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::error!("{e}");
-                return Err(RunFailure::usage(anyhow::anyhow!("{e}")));
-            }
-        }
-    };
 
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`
@@ -363,11 +318,6 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     if ctx.check_only {
         let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output);
         summary.files_failed.store(bad, Ordering::Relaxed);
-        if ctx.scan {
-            // The scan knows how many *chunks* are damaged, not just how many
-            // files are.
-            summary.flags.damaged_chunks = Some(damaged_chunks);
-        }
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 
@@ -388,10 +338,6 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
-    // The staging budget is always installed, flag or not: the default
-    // applies whether or not the user asked about RAM, so a run can never
-    // stage a whole file by accident.
-    summary.set_ram_limit(Some(ctx.ram_budget));
     summary.set_fail_fast(ctx.fail_fast);
     summary = file::repair_all(
         http,
@@ -401,23 +347,11 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary,
         ctx.jobs,
         ctx.dry_run,
-        ctx.effective_repair_mode(),
         ctx.output,
     )
     .await;
     if ctx.limits.write_bytes.is_some() {
         summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
-    }
-    // The mode's own keys are emitted only when the mode was asked for: an
-    // unflagged run says nothing about a mode it was never given. The
-    // counters themselves are always kept — they are what a user who *did*
-    // ask wants to see.
-    if ctx.repair_mode.is_some() {
-        summary.flags.repair_mode = Some(ctx.effective_repair_mode().as_str());
-        summary.flags.kept_bytes = Some(summary.kept_bytes.load(Ordering::Relaxed));
-    }
-    if ctx.limits.ram_bytes.is_some() {
-        summary.flags.ram_bytes = Some(summary.peak_ram_bytes());
     }
     // A runtime hard stop is the one place the run writes *some* of what it was
     // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3

@@ -30,61 +30,7 @@ pub struct PlannedFile {
     pub rel: String,
     pub size: i64,
     pub md5: String,
-    /// The file's chunks, **sorted by offset** and without the zero-length
-    /// ones (both established in [`build_plan`]).
-    ///
-    /// The sort is not cosmetic: the in-place repair's "is this chunk already
-    /// correct where it belongs?" test and the ordered tier's proof that no
-    /// source is overwritten before it is read both assume ascending
-    /// offsets, and nothing else in the crate sorted them.
     pub chunks: Vec<SophonChunk>,
-}
-
-impl PlannedFile {
-    /// Does the chunk layout **tile** `[0, size)` exactly, and where does it
-    /// not?
-    ///
-    /// Returns `(tiled, gaps)`:
-    ///
-    /// - `tiled` — the chunks cover `[0, size)` exactly once each: no hole,
-    ///   no overlap, and nothing past the end.
-    /// - `gaps` — the ranges of `[0, size)` that are **not** covered exactly
-    ///   once: a hole (covered zero times) or an overlap (covered more than
-    ///   once), as `(offset, length)`.
-    ///
-    /// A hole is a hole in the install: the bytes there belong to no chunk,
-    /// so nothing writes them and whatever the file happened to have stays.
-    /// The in-place repair zero-fills them (and says so); the temp repair
-    /// leaves them at whatever the file had.
-    pub fn layout(&self) -> (bool, Vec<(u64, u64)>) {
-        let size = self.size.max(0) as u64;
-        let mut gaps: Vec<(u64, u64)> = Vec::new();
-        let mut covered_end = 0u64;
-        for c in &self.chunks {
-            let offset = c.offset.max(0) as u64;
-            let len = c.uncompressed_size.max(0) as u64;
-            if len == 0 {
-                continue;
-            }
-            if offset > covered_end {
-                // A hole: `[covered_end, offset)` belongs to no chunk.
-                gaps.push((covered_end, offset - covered_end));
-            } else if offset < covered_end {
-                // An overlap: `[offset, min(covered_end, offset+len))` is
-                // claimed by two chunks.
-                let end = (covered_end).min(offset + len);
-                if end > offset {
-                    gaps.push((offset, end - offset));
-                }
-            }
-            covered_end = covered_end.max(offset + len);
-        }
-        if covered_end < size {
-            // A hole at the tail: the file is longer than its chunks.
-            gaps.push((covered_end, size - covered_end));
-        }
-        (gaps.is_empty() && covered_end == size, gaps)
-    }
 }
 
 /// The sorted, deduped work list for one run.
@@ -92,12 +38,6 @@ pub struct RepairPlan {
     pub latest: String,
     pub files: Vec<PlannedFile>,
     pub url_prefix_by_file: HashMap<String, String>,
-    /// The per-file verdicts, when the scan pass ran (`--scan`).
-    ///
-    /// `None` means "not scanned", and the download estimate is the
-    /// lower bound it has always been. `Some` means the estimate is
-    /// **exact**: every chunk's verdict is known before the repair starts.
-    pub verdicts: Option<HashMap<String, super::scan::FileVerdict>>,
 }
 
 impl RepairPlan {
@@ -113,34 +53,11 @@ impl RepairPlan {
     /// at 0 bytes can still download its whole body. It is what
     /// `--max-download-bytes` refuses on, and the runtime hard stop is what
     /// actually enforces.
-    ///
-    /// **With the scan pass (`--scan`) the estimate is exact**: the
-    /// per-chunk verdicts say which chunks are already correct where they
-    /// belong (kept, not fetched) and which have a salvageable source, so
-    /// the figure is what the repair will actually download.
     pub fn est_download_bytes(&self, local_map: &LocalChunkMap) -> u64 {
-        match &self.verdicts {
-            Some(verdicts) => self
-                .files
-                .iter()
-                .map(|f| {
-                    let Some(v) = verdicts.get(&f.rel) else {
-                        // A file the scan did not reach (it failed to read):
-                        // fall back to the bound rather than to zero.
-                        return est_file_download_bytes(f, local_map.get(&f.rel));
-                    };
-                    super::scan::chunks_to_download(f, v, local_map.get(&f.rel))
-                        .iter()
-                        .map(|c| c.compressed_size.max(0) as u64)
-                        .sum()
-                })
-                .sum(),
-            None => self
-                .files
-                .iter()
-                .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
-                .sum(),
-        }
+        self.files
+            .iter()
+            .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
+            .sum()
     }
 }
 
@@ -192,31 +109,11 @@ pub fn build_plan(
                 continue;
             }
             prefix.insert(rel.clone(), url_prefix.clone());
-            // The chunk list is normalized here, once: sorted by offset, and
-            // without the zero-length chunks. Both are preconditions the
-            // in-place repair's proof rests on (P1/P2 in docs/07 §4.1), and
-            // neither is guaranteed by the manifest — a chunk with
-            // `uncompressed_size == 0` would be a range that covers nothing,
-            // and an unsorted list would make "is this chunk already correct
-            // where it belongs?" unanswerable.
-            let mut chunks = f.chunks;
-            chunks.retain(|c| {
-                let keep = c.uncompressed_size > 0;
-                if !keep {
-                    tracing::warn!(
-                        file = %rel,
-                        chunk = %c.id,
-                        "zero-length chunk dropped from the plan"
-                    );
-                }
-                keep
-            });
-            chunks.sort_by_key(|c| c.offset);
             files.push(PlannedFile {
                 rel,
                 size: f.size,
                 md5: f.md5.clone(),
-                chunks,
+                chunks: f.chunks,
             });
         }
     }
@@ -226,7 +123,6 @@ pub fn build_plan(
         latest: latest_tag.to_string(),
         files,
         url_prefix_by_file: prefix,
-        verdicts: None,
     }
 }
 
@@ -339,110 +235,5 @@ mod tests {
             !plan.url_prefix_by_file.contains_key("game/bar.dat"),
             "a dropped path must not keep a prefix entry either"
         );
-    }
-
-    fn chunk(id: &str, offset: i64, size: i64) -> SophonChunk {
-        SophonChunk {
-            id: id.into(),
-            uncompressed_md5: format!("md5-{id}"),
-            offset,
-            compressed_size: size,
-            uncompressed_size: size,
-            unknown: 0,
-            compressed_md5: String::new(),
-        }
-    }
-
-    fn planned(size: i64, chunks: Vec<SophonChunk>) -> PlannedFile {
-        PlannedFile {
-            rel: "f.dat".into(),
-            size,
-            md5: "m".into(),
-            chunks,
-        }
-    }
-
-    /// P1: the chunks come out of the plan sorted by offset, whatever order
-    /// the manifest listed them in.
-    #[test]
-    fn the_plan_sorts_a_files_chunks_by_offset() {
-        let per = vec![(
-            "http://x".to_string(),
-            vec![SophonChunkFile {
-                file: "f.dat".into(),
-                chunks: vec![chunk("c2", 64, 64), chunk("c0", 0, 64), chunk("c1", 32, 32)],
-                is_folder: false,
-                size: 128,
-                md5: "m".into(),
-            }],
-        )];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
-        let offsets: Vec<i64> = plan.files[0].chunks.iter().map(|c| c.offset).collect();
-        assert_eq!(offsets, vec![0, 32, 64], "ascending, always");
-    }
-
-    /// A zero-length chunk covers nothing, and a plan that carries one cannot
-    /// tile the file. It is dropped at plan time rather than repaired around.
-    #[test]
-    fn a_zero_length_chunk_is_dropped_from_the_plan() {
-        let per = vec![(
-            "http://x".to_string(),
-            vec![SophonChunkFile {
-                file: "f.dat".into(),
-                chunks: vec![chunk("c0", 0, 64), chunk("empty", 64, 0)],
-                is_folder: false,
-                size: 64,
-                md5: "m".into(),
-            }],
-        )];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
-        assert_eq!(plan.files[0].chunks.len(), 1);
-        assert_eq!(plan.files[0].chunks[0].id, "c0");
-    }
-
-    /// P2: the chunks tile `[0, size)` exactly — no hole, no overlap, nothing
-    /// past the end.
-    #[test]
-    fn a_tiling_layout_reports_no_gaps() {
-        let f = planned(16, vec![chunk("c0", 0, 8), chunk("c1", 8, 8)]);
-        let (tiled, gaps) = f.layout();
-        assert!(tiled, "{gaps:?}");
-        assert!(gaps.is_empty());
-    }
-
-    /// A hole is reported: the bytes there belong to no chunk.
-    #[test]
-    fn a_hole_in_the_layout_is_reported() {
-        let f = planned(16, vec![chunk("c0", 0, 4), chunk("c1", 8, 8)]);
-        let (tiled, gaps) = f.layout();
-        assert!(!tiled, "a hole is not a tiling");
-        assert_eq!(gaps, vec![(4, 4)], "the hole is [4,8)");
-    }
-
-    /// An overlapping pair is reported too: two chunks claim the same bytes.
-    #[test]
-    fn an_overlapping_pair_is_reported() {
-        let f = planned(12, vec![chunk("c0", 0, 8), chunk("c1", 4, 8)]);
-        let (tiled, gaps) = f.layout();
-        assert!(!tiled, "an overlap is not a tiling");
-        assert_eq!(gaps, vec![(4, 4)], "the overlap is [4,8)");
-    }
-
-    /// A file whose chunks stop short of its own size has a hole at the tail.
-    #[test]
-    fn a_tail_beyond_the_last_chunk_is_reported() {
-        let f = planned(16, vec![chunk("c0", 0, 8)]);
-        let (tiled, gaps) = f.layout();
-        assert!(!tiled);
-        assert_eq!(gaps, vec![(8, 8)]);
-    }
-
-    /// Chunks that reach past the file's own size are not a tiling either.
-    #[test]
-    fn chunks_past_the_end_of_the_file_are_not_a_tiling() {
-        let f = planned(8, vec![chunk("c0", 0, 16)]);
-        let (tiled, gaps) = f.layout();
-        assert!(!tiled);
-        assert!(gaps.is_empty(), "nothing is missing — it is too much");
     }
 }

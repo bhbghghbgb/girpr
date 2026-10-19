@@ -455,7 +455,7 @@ one that earns the whole exercise.
 
 | # | assertion | source |
 |---|---|---|
-| 1 | `SUMMARY download_bytes` is **at most** the patchmap's total | `patchmaps/<id>.json` |
+| 1 | `SUMMARY download_bytes` equals the patchmap's total | `patchmaps/<id>.json` |
 | 2 | the patched file's MD5 equals `expectations.result_md5` | same |
 | 3 | **no id in `expectations.must_not_fetch` was requested** | the server's request log |
 | 4 | exit `0`, `config_bumped=0`, and every path outside the scope is untouched on disk | `SUMMARY` + the per-run tree diff |
@@ -474,28 +474,21 @@ But a repeat would make the **second** run silently skip — the file is already
 the new version — and report `download_bytes=0` against a non-zero expectation,
 which is a baffling failure to diagnose from the number that is wrong.
 
-### 7.1 The figure assertion is a bound, not an equality
+### 7.1 The figure assertion is exact, not approximate
 
-`girpr`'s `download_bytes` counts the actual bytes of files that were repaired,
+`girpr`'s `download_bytes` counts the actual bytes of files that were promoted,
 giving back the bytes of any attempt that failed and was retried. The patchmap's
 total is `Σ compressed_size` over the chunks with no `(uncompressed_md5,
 uncompressed_size)` match on the old side. A6 asserts `len(blob) ==
 compressed_size`, and the runtime ledger folds the real measurement back into the
-manifest's reservation, so the two figures are **equal by construction** — under
-the temp-then-promote repair.
-
-The in-place repair (`docs/07`) changed that: a chunk that is **already correct
-where it belongs** is kept, not fetched, so the run downloads *fewer* bytes than
-the patchmap counts. The assertion is therefore `download_bytes ≤ total`: the
-patchmap's total is an upper bound on what the repair can fetch, and the
-`must_not_fetch` list (assertion 3) is the other half — the bytes that are not
-fetched must not have been requested either.
+manifest's reservation, so the two figures are equal by construction — not
+approximately equal, and not equal only when nothing retries.
 
 ### 7.2 Per-class expectations
 
 | class | what the assertion is |
 |---|---|
-| `identical` | nothing is downloaded and the file is not touched. It *is* in the manifest, so it is planned and then skipped on the scan's whole-file MD5 — `skipped=1 repaired=0 download_bytes=0`, exit `0`. The request log being empty is the assertion that carries it, since `download_bytes=0` is also what a broken run reports |
+| `identical` | nothing is downloaded and the file is not touched. It *is* in the manifest, so it is planned and then skipped on size+MD5 — `skipped=1 repaired=0 download_bytes=0`, exit `0`. The request log being empty is the assertion that carries it, since `download_bytes=0` is also what a broken run reports |
 | `partial_*`, `zero_reuse_*` | the three patchable classes and the zero-reuse ones are the load-bearing cases; assertions 1–3 all bite here |
 | `added` | the path is absent from `game/` and present in the new manifest, so it is planned and downloaded in full. Assertion 2 plus `must_not_fetch`, which is empty |
 | `removed` | no repair, so no byte total. It gets the `--purge-only` run of §5 and the purge-counter pre-pass of §6.1; the file is gone afterwards and its size is priced into `deleted_extra_bytes` |
@@ -517,10 +510,7 @@ and `class == capture_id` holds for every captured entry.
 
 - **Degraded-but-green.** A run that reused nothing because the local manifest did
   not load reports the same exit code and a plausible byte count (§4.3). The
-  byte comparison against the patchmap catches it — under the in-place repair
-  the comparison is a bound, so a run that fetched *more* than the patchmap's
-  total is caught by it, and a run that fetched less is caught by
-  `must_not_fetch`; so must the assertion that
+  byte comparison against the patchmap catches it; so must the assertion that
   `local_manifest` did not come back `unavailable`, and that the old tag was
   actually served.
 - **A glob that matches more than intended.** `*` crosses `/`, and the fixture

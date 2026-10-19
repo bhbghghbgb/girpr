@@ -1,17 +1,12 @@
 # Low-disk repair — findings, options, verdict, and implementation plan
 
-**Status: implemented.** The in-place repair, the two tiers, the mode
-resolution, the counters, the single-writer lock and the `--scan` pass are
-all in the tree; §9's eleven commits are the series that put them there.
-Where this file and `docs/02` disagree, **this file wins**.
-
 Series note: this is a **third** docs series, independent of the `repair-`
 prefix series (`docs/01`–`docs/03`, which describe the shipped whole-install
 patcher) and of `docs/04` (scope limitations) and `docs/06` (the artifact
 bridge). It describes a change to the algorithm in `docs/02` step 6, so where
-the two disagree this file wins. Every claim about the behaviour *before* the
-change is anchored to a file and line so it can be re-checked when the code
-moves.
+the two disagree this file wins once implemented; until then `docs/02` is still
+the spec. Every claim about current behaviour is anchored to a file and line so
+it can be re-checked when the code moves.
 
 ## 0. The question
 
@@ -725,7 +720,7 @@ reason (already-correct chunks are not fetched).
 
 ## 10. How the result is checked
 
-- `cargo test` — 123 unit + 67 integration, all offline; the new cases ride with
+- `cargo test` — 82 unit + 59 integration, all offline; the new cases ride with
   their commits.
 - `cargo clippy --all-targets`.
 - The fixture is 2 files / 3 chunks / 128 + 48 bytes, which is enough to prove
@@ -736,30 +731,8 @@ reason (already-correct chunks are not fetched).
 - `tests/artifact_bridge.rs` stays `#[ignore]`d and is re-run by hand for
   commits 5, 6, 10 and 11 — the only ones that change what crosses the wire.
 - **The RAM tier is asserted, not assumed.** The integration tests pin that a
-  repair writes only the wrong chunks (the write counter says 64 bytes, not
-  128, for a file with one corrupt chunk), that the ordered tier and the RAM
-  tier produce the *same* file, and that `--max-ram-bytes 0` takes the ordered
-  path. Without those three, "the payload is 0 for a corruption repair" would
-  be a claim rather than a fact.
-
-### 10.1 What the implementation changed against the plan
-
-- The **scan primitive** found a bug in itself: the range list is sorted
-  before the read pass, and the caller's indices were not remapped through
-  the sort — so a verdict could be answered from a *different* range than the
-  one that was asked about. It only showed up when the destination and the
-  source ranges interleave, which is exactly the re-flowed case. The ranges
-  now carry their original index and the verdicts are remapped through it.
-- The **ordered tier** is reached when the RAM reservation fails — *not* by
-  falling back to the temp path. The temp path is now only the mode the user
-  asks for (`--repair-mode temp`) or the fallback for a target that cannot be
-  opened read+write.
-- The **mode resolution** puts a **missing** target in the in-place path: it
-  is created and written, which needs no second copy of it. The `_tmp` resume
-  (S3) is therefore a **temp-mode** feature; the in-place path resumes by
-  verification, and the file itself is the artefact.
-- The **scan pass** runs on plain worker threads rather than on the async
-  runtime: it is blocking I/O in a phase that is not latency-critical.
-- The `--scan` estimate is the **in-place** figure (a chunk that is already
-  correct where it belongs is not fetched). Under `--repair-mode temp` it
-  stays a lower bound, and the runtime hard stop is what enforces it.
+  repair writes only the wrong chunks (the file's other bytes are byte-identical
+  before and after), that the ordered tier and the RAM tier produce the *same*
+  file, and that `--max-ram-bytes 0` takes the ordered path. Without those
+  three, "the payload is 0 for a corruption repair" would be a claim rather
+  than a fact.

@@ -53,12 +53,6 @@ pub struct Limits {
     pub download_bytes: Option<u64>,
     /// `--max-write-bytes`: cumulative bytes written into `*_tmp`.
     pub write_bytes: Option<u64>,
-    /// `--max-ram-bytes`: the staging budget for the in-place repair.
-    ///
-    /// Not a pre-flight refusal: a file that cannot get its reservation is
-    /// repaired by the ordered path instead, so the run does not fail — the
-    /// same shape as `write_bytes`, which is also a runtime bound.
-    pub ram_bytes: Option<u64>,
     /// `--max-delete-bytes`: bytes the files-cleanup would delete.
     pub delete_bytes: Option<u64>,
 }
@@ -69,7 +63,6 @@ impl Limits {
         self.files.is_some()
             || self.download_bytes.is_some()
             || self.write_bytes.is_some()
-            || self.ram_bytes.is_some()
             || self.delete_bytes.is_some()
     }
 
@@ -184,7 +177,6 @@ mod tests {
                 })
                 .collect(),
             url_prefix_by_file: HashMap::new(),
-            verdicts: None,
         }
     }
 
@@ -290,7 +282,6 @@ mod tests {
             download_bytes: Some(0),
             delete_bytes: Some(1),
             write_bytes: None,
-            ram_bytes: None,
         };
         let p = plan(5);
         let hits = l.check_preflight(pf_full(&p, 7, &purge(9)));
@@ -353,10 +344,6 @@ mod tests {
             },
             Limits {
                 write_bytes: Some(1),
-                ..Default::default()
-            },
-            Limits {
-                ram_bytes: Some(1),
                 ..Default::default()
             },
             Limits {

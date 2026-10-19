@@ -144,61 +144,6 @@ impl Summary {
         self.write_stopped.load(Ordering::Relaxed)
     }
 
-    /// `--max-ram-bytes`, or `None`.
-    pub fn max_ram_bytes(&self) -> Option<u64> {
-        let l = self.ram_limit.load(Ordering::Relaxed);
-        (l != u64::MAX).then_some(l)
-    }
-
-    /// Install the staging budget.
-    pub fn set_ram_limit(&mut self, limit: Option<u64>) {
-        self.ram_limit.store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
-    }
-
-    /// Reserve `n` bytes of staging RAM against the budget — all or nothing.
-    ///
-    /// The reservation is **per file and whole**: a file stages the bytes
-    /// that have to move inside it in one go, so a partial reservation would
-    /// not help it. When the reservation does not fit, the caller does not
-    /// fail — it repairs the file by the ordered path instead, which writes
-    /// the same file without staging anything (docs/07 §4.3).
-    ///
-    /// The peak of the reserved total is kept as `ram_bytes`, which is the
-    /// `SUMMARY` figure: how much RAM the staging actually took.
-    pub fn reserve_ram_bytes(&self, n: u64) -> bool {
-        let limit = self.ram_limit.load(Ordering::Relaxed);
-        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
-        loop {
-            let next = cur.saturating_add(n);
-            if next > limit {
-                return false;
-            }
-            match self.ram_reserved.compare_exchange_weak(
-                cur,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    self.ram_bytes.fetch_max(next, Ordering::Relaxed);
-                    return true;
-                }
-                Err(actual) => cur = actual,
-            }
-        }
-    }
-
-    /// Give a reservation back: the file is done with its staging area.
-    pub fn release_ram_bytes(&self, n: u64) {
-        self.ram_reserved
-            .fetch_sub(n.min(self.ram_reserved.load(Ordering::Relaxed)), Ordering::Relaxed);
-    }
-
-    /// The peak number of bytes staged at once.
-    pub fn peak_ram_bytes(&self) -> u64 {
-        self.ram_bytes.load(Ordering::Relaxed)
-    }
-
     /// `--fail-fast` armed?
     pub fn fail_fast(&self) -> bool {
         self.fail_fast.load(Ordering::Relaxed)
@@ -312,45 +257,5 @@ mod tests {
         assert_eq!(s.download_bytes.load(Ordering::Relaxed), 75);
         s.adjust_download_bytes(0);
         assert_eq!(s.download_bytes.load(Ordering::Relaxed), 75);
-    }
-
-    /// The staging reservation is all-or-nothing and its boundary is
-    /// inclusive, exactly like the download one: a file either gets its whole
-    /// payload or falls to the ordered path.
-    #[test]
-    fn a_ram_reservation_is_all_or_nothing_and_the_boundary_is_inclusive() {
-        let mut s = Summary::default();
-        s.set_ram_limit(Some(100));
-        assert_eq!(s.max_ram_bytes(), Some(100));
-        assert!(s.reserve_ram_bytes(60));
-        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 60);
-        // 60 + 40 == the limit: allowed.
-        assert!(s.reserve_ram_bytes(40));
-        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 100);
-        // One more byte: refused, and nothing was added.
-        assert!(!s.reserve_ram_bytes(1));
-        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 100, "no partial add");
-        // A zero budget stages nothing and refuses everything.
-        let mut s0 = Summary::default();
-        s0.set_ram_limit(Some(0));
-        assert!(s0.reserve_ram_bytes(0), "0 <= 0");
-        assert!(!s0.reserve_ram_bytes(1));
-    }
-
-    /// The peak is the high-water mark of the *reserved* total, and a
-    /// released reservation comes back out of it without lowering the peak.
-    #[test]
-    fn the_peak_is_kept_and_a_release_gives_the_room_back() {
-        let mut s = Summary::default();
-        s.set_ram_limit(Some(1000));
-        assert!(s.reserve_ram_bytes(400));
-        assert!(s.reserve_ram_bytes(300));
-        assert_eq!(s.peak_ram_bytes(), 700);
-        s.release_ram_bytes(300);
-        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 400);
-        assert_eq!(s.peak_ram_bytes(), 700, "the peak does not go down");
-        // The room that was given back can be used again.
-        assert!(s.reserve_ram_bytes(600));
-        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 1000);
     }
 }
