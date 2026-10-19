@@ -284,6 +284,10 @@ pub struct Summary {
     pub files_inplace: AtomicU64,
     /// Files repaired through `{path}_tmp`.
     pub files_temp: AtomicU64,
+    /// Bytes that were already correct where they belonged and were **not**
+    /// written. The disk claim of the run, in one number: the bytes the
+    /// repair did not have to touch.
+    pub kept_bytes: AtomicU64,
 }
 
 impl Default for Summary {
@@ -315,6 +319,7 @@ impl Summary {
             ram_bytes: AtomicU64::new(0),
             files_inplace: AtomicU64::new(0),
             files_temp: AtomicU64::new(0),
+            kept_bytes: AtomicU64::new(0),
         }
     }
 
@@ -343,6 +348,7 @@ impl Summary {
             ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
             files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
             files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
+            kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
         }
     }
 }
@@ -384,6 +390,25 @@ pub struct SummaryFlags {
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
     pub config_bumped_zero: bool,
+    /// `--repair-mode`: the mode the user asked for, and with it the
+    /// numbers that say which paths the run used. Emitted **only** when the
+    /// flag was passed — the same discipline every other conditional key
+    /// follows.
+    ///
+    /// The four keys travel together because they answer one question: "how
+    /// did this run touch the disk?". `repair_mode` says what was asked
+    /// for, `inplace` and `temp` say what actually happened, and
+    /// `kept_bytes` says how many bytes did not have to be written at all.
+    pub repair_mode: Option<&'static str>,
+    /// Files repaired in place.
+    pub files_inplace: Option<u64>,
+    /// Files repaired through `{path}_tmp`.
+    pub files_temp: Option<u64>,
+    /// Bytes that were already correct and were not rewritten.
+    pub kept_bytes: Option<u64>,
+    /// The peak staged payload — the most RAM that was staged at once.
+    /// Emitted only when `--max-ram-bytes` was passed.
+    pub ram_bytes: Option<u64>,
 }
 
 /// One conditional `SUMMARY` entry.
@@ -441,6 +466,17 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.write_bytes {
         out.push(Extra::Num("write_bytes", n));
+    }
+    // The repair-mode group: what was asked for, what happened, and how
+    // many bytes did not have to be written.
+    if let Some(mode) = f.repair_mode {
+        out.push(Extra::Word("repair_mode", mode));
+        out.push(Extra::Num("inplace", f.files_inplace.unwrap_or(0)));
+        out.push(Extra::Num("temp", f.files_temp.unwrap_or(0)));
+        out.push(Extra::Num("kept_bytes", f.kept_bytes.unwrap_or(0)));
+    }
+    if let Some(n) = f.ram_bytes {
+        out.push(Extra::Num("ram_bytes", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -699,13 +735,19 @@ mod tests {
             stopped: Some("bytes"),
             config_bumped_zero: false,
             local_manifest: Some("unavailable"),
+            repair_mode: Some("inplace"),
+            files_inplace: Some(3),
+            files_temp: Some(1),
+            kept_bytes: Some(900),
+            ram_bytes: Some(4096),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
             rec.text(),
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 stopped=bytes local_manifest=unavailable"
+             write_bytes=77 repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
+             stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -714,6 +756,11 @@ mod tests {
         assert_eq!(v["write_bytes"], 77);
         assert_eq!(v["plan_download_bytes"], 4242);
         assert_eq!(v["local_manifest"], "unavailable");
+        assert_eq!(v["repair_mode"], "inplace");
+        assert_eq!(v["inplace"], 3);
+        assert_eq!(v["temp"], 1);
+        assert_eq!(v["kept_bytes"], 900);
+        assert_eq!(v["ram_bytes"], 4096);
         // Key order is fixed, so two runs' lines diff cleanly.
         let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
         assert_eq!(
@@ -725,6 +772,11 @@ mod tests {
                 "plan_files",
                 "plan_download_bytes",
                 "write_bytes",
+                "repair_mode",
+                "inplace",
+                "temp",
+                "kept_bytes",
+                "ram_bytes",
                 "stopped",
                 "local_manifest"
             ]

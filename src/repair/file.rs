@@ -185,6 +185,13 @@ pub async fn repair_all(
                                 ctx.summary.files_temp.fetch_add(1, Ordering::Relaxed);
                             }
                         }
+                        // The bytes that did not have to be written: the file's
+                        // size minus what was written. The in-place path
+                        // leaves the correct chunks alone; the temp path
+                        // rewrites the whole file and keeps nothing.
+                        let kept = (ctx.plan.files[idx].size.max(0) as u64)
+                            .saturating_sub(stats.bytes_written);
+                        ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
                     }
                     Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
                     Err(e) => {
@@ -356,8 +363,10 @@ enum Inplace {
 /// here: the attempt finds out and answers `Inplace::Unavailable`, and the
 /// caller falls back to the temp path with a warning. Deciding it from the
 /// metadata alone would be a guess; deciding it from the open is a fact.
-fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {
-    if requested == RepairMode::Temp {
+///
+/// `pub(super)` because the plan's disk estimates ask the same question: the
+/// estimate and the repair must not disagree about which path a file takes.
+pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {    if requested == RepairMode::Temp {
         return Mode::Temp;
     }
     match std::fs::symlink_metadata(path) {
