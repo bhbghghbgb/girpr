@@ -763,6 +763,93 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
 }
 
 #[tokio::test]
+async fn a_second_run_against_the_same_install_is_refused() {
+    // The in-place path is not safe against two runs: they write into the
+    // same files. The lock is what stops the second one — and it stops it
+    // loudly, by naming the file and the pid that holds it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    // Hold the lock, as a first run would.
+    let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("the second run is refused");
+    assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
+    let msg = format!("{:#}", err.source);
+    assert!(msg.contains("girpr.lock"), "the refusal names the file: {msg}");
+    assert!(msg.contains(&std::process::id().to_string()), "{msg}");
+
+    // A **scoped** run does not take the lock — the lock's path is outside
+    // the scope, so it does not exist to the run — and is not refused.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    let (_, code) = repair::run(ctx).await.expect("a scoped run is not refused");
+    assert_eq!(code, 0);
+
+    // The lock is released when the run that holds it ends.
+    drop(_lock);
+    assert!(!dir.join("girpr.lock").exists());
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("the next run is not refused");
+    assert_eq!(code, 0);
+    // The scoped run above already repaired foo.dat, and bar.dat was intact.
+    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn the_cleanup_never_eats_the_lock() {
+    // The lock lives at the game dir's root and is not in the manifest. The
+    // files-cleanup must not eat it: a run that holds it would lose its
+    // exclusion.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock_purge");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
+    // A lock left behind by a run that was killed: old enough to be taken
+    // over, so this run takes it — and the cleanup must not eat it.
+    let lock = dir.join("girpr.lock");
+    std::fs::write(&lock, b"pid=1\n").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&lock)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(old))
+        .unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_after = true;
+    let (_, code) = repair::run(ctx).await.expect("the purge runs");
+    assert_eq!(code, 0);
+    // The run took the stale lock over and released it again on the way
+    // out, so the file is gone — but the *cleanup* did not eat it: the run
+    // that holds the lock is the only thing that removes it, and it did so
+    // at the very end. The classification that keeps it is pinned by
+    // `purge::tests::the_lock_is_kept_by_the_cleanup`.
+    assert!(
+        !dir.join("girpr.lock").exists(),
+        "the run released its own lock"
+    );
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_none(),
+        "the orphan is still purged"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn an_interrupted_in_place_run_resumes_by_verification() {
     // The state an interrupted in-place run leaves behind: some chunks
     // correct where they belong, some not. There is no artefact to resume
