@@ -1,19 +1,35 @@
-//! Per-file repair: skip check, `_tmp` resume, chunk reuse vs download, final
-//! MD5, atomic promote (docs/02 step 6).
+//! Per-file repair: skip check, in-place patch, `_tmp` resume, chunk reuse vs
+//! download, final MD5 (docs/02 step 6, docs/07 §4).
 //!
 //! Per file, in order:
 //! 1. `size + whole-file MD5` match → [`Repaired::Skipped`], 0 bytes touched.
-//! 2. Otherwise open `{path}_tmp` (kept, not truncated) and walk the manifest's
-//!    chunks in offset order:
-//!    - a completed prefix is kept (S3, gated by the final MD5),
-//!    - else copy a hash-verified slice of the same file (S2),
-//!    - else download → zstd → verify → write at the chunk offset (S1).
-//! 3. Final whole-file MD5 gates the atomic `rename(tmp → final)`; on mismatch
-//!    the tmp is deleted and the file is retried (≤5 attempts), then counted as
-//!    failed. The original is never modified in place.
+//! 2. Otherwise the file is repaired **in place**: the target is opened
+//!    `read+write` and only the bytes that are wrong are written, at the
+//!    offsets they belong at. No `_tmp` file, and the peak extra disk is the
+//!    file's *growth* rather than its size.
+//! 3. The temp path is the fallback and the escape hatch: `{path}_tmp` is
+//!    written (kept, not truncated) and renamed over the target, so the
+//!    original is never touched. It is what `--repair-mode temp` asks for.
 //!
-//! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a file
-//! are strictly sequential, which keeps peak disk ≈ `jobs × largest_file`.
+//! The in-place path, in detail:
+//! - **scan** — one read that answers everything: the whole-file MD5 (the
+//!   skip check), which chunks are already correct where they belong, and
+//!   which reuse sources are intact;
+//! - **stage** — the bytes of the chunks that have to *move* inside the file
+//!   are read into RAM, so the write order cannot destroy them;
+//! - **patch** — the wrong chunks are written, ascending: from the staged
+//!   bytes when there are any, from a download otherwise;
+//! - **verify** — one more read. The whole-file MD5 is the gate; if it does
+//!   not match, the per-chunk verdicts name the culprit and only those are
+//!   redone.
+//!
+//! Every byte written is hash-gated before it lands, whichever path wrote
+//! it: a downloaded chunk's MD5 is checked before the write, and a staged
+//! source's MD5 is checked before it is staged and again before it is
+//! written.
+//!
+//! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a
+//! file are strictly sequential.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -24,12 +40,14 @@ use std::sync::atomic::Ordering;
 use anyhow::{Context, Result};
 use tracing::Instrument;
 
+use crate::config::RepairMode;
 use crate::report::Summary;
 use crate::sophon::{self, SophonChunk};
 use crate::util;
 
 use super::manifest::LocalChunkMap;
 use super::plan::{PlannedFile, RepairPlan};
+use super::reuse;
 
 /// Max attempts per file before it is counted as failed.
 const MAX_ATTEMPTS: u32 = 5;
@@ -54,13 +72,16 @@ pub enum Repaired {
 }
 
 /// Per-file chunk accounting (logged on success, aggregated into the run).
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct ChunkStats {
     pub download_bytes: u64,
     pub chunks_total: u64,
     pub chunks_reused: u64,
     pub chunks_downloaded: u64,
     pub chunks_resumed: u64,
+    /// Chunks that were already correct where they belong and were not
+    /// written at all. The in-place path's own "kept" count.
+    pub chunks_kept: u64,
 }
 
 /// Run the repair loop over the whole plan, bounded to `jobs` concurrent files.
@@ -81,6 +102,7 @@ pub async fn repair_all(
     jobs: usize,
     dry_run: bool,
     output: crate::report::OutputFormat,
+    repair_mode: RepairMode,
 ) -> Summary {
     let summary = Arc::new(summary);
     let total_files = plan.files.len();
@@ -95,6 +117,7 @@ pub async fn repair_all(
         local_map,
         summary: summary.clone(),
         dry_run,
+        repair_mode,
     });
     let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
@@ -174,6 +197,8 @@ struct FileCtx {
     local_map: LocalChunkMap,
     summary: Arc<Summary>,
     dry_run: bool,
+    /// How each file is repaired (docs/07 §4).
+    repair_mode: RepairMode,
 }
 
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
@@ -191,25 +216,6 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         std::fs::create_dir_all(parent)?;
     }
     tracing::debug!(expect_size = file.size, expect_md5 = %file.md5, chunks = file.chunks.len(), "check start");
-    // fast skip: size + full MD5
-    match util::file_len(&final_path) {
-        None => tracing::debug!("check: missing local file"),
-        Some(n) if n != file.size as u64 => {
-            tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
-        }
-        Some(_) => match util::md5_file(&final_path) {
-            Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
-                tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
-                return Ok(Repaired::Skipped);
-            }
-            Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
-            Err(e) => tracing::debug!("check: unreadable ({e:#}) -> needs repair"),
-        },
-    }
-    if ctx.dry_run {
-        tracing::info!("would repair");
-        return Ok(Repaired::DryRun);
-    }
     let prefix = ctx
         .plan
         .url_prefix_by_file
@@ -220,9 +226,15 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // `FullPath + "_tmp"` (OpenOrCreate), verifies MD5, then `Move(tmp, final,
     // true)` and `Delete(tmp)` on mismatch — same contract here, including the
     // suffix, so foreign leftovers are swept on the next run.
+    // This is the **fallback** and the `--repair-mode temp` path; the
+    // in-place path is the default and never creates a `_tmp`.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L330-L331
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
     let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
+
+    // `--repair-mode temp` is today's behaviour, exactly. Every other mode
+    // starts with the in-place path, which is the one that saves disk.
+    let mut inplace = ctx.repair_mode != RepairMode::Temp;
 
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
@@ -236,9 +248,25 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     } else {
         MAX_ATTEMPTS
     };
-    for attempt in 1..=max_attempts {
-        match repair_attempt(ctx, file, &prefix, &tmp_path).await {
-            Ok(stats) => return Ok(Repaired::Repaired(stats)),
+    let mut attempt = 1;
+    while attempt <= max_attempts {
+        let outcome = if inplace {
+            attempt_inplace(ctx, file, &prefix, &final_path).await
+        } else {
+            attempt_temp(ctx, file, &prefix, &tmp_path, &final_path).await
+        };
+        match outcome {
+            Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
+            Ok(Inplace::DryRun) => return Ok(Repaired::DryRun),
+            Ok(Inplace::Repaired(stats)) => return Ok(Repaired::Repaired(stats)),
+            // The in-place path cannot run for this file. The temp path can:
+            // it does not need write access to the target. The switch is
+            // permanent for this file — an attempt is not spent on it.
+            Ok(Inplace::Unavailable(reason)) => {
+                tracing::warn!(file = %file.rel, reason, "in-place repair unavailable -> temp");
+                inplace = false;
+                continue;
+            }
             // The ceiling, not the file: this must not be counted as a
             // failure and must not be retried.
             Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
@@ -255,10 +283,491 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                     return Err(e);
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+                attempt += 1;
             }
         }
     }
     unreachable!("attempt loop always returns")
+}
+
+/// What one attempt at a file decided.
+///
+/// Both paths answer in the same vocabulary, so the caller does not have to
+/// know which one ran.
+enum Inplace {
+    /// The file is already correct.
+    Skipped,
+    /// A dry run: the file would be repaired, nothing was written.
+    DryRun,
+    /// The file was repaired.
+    Repaired(ChunkStats),
+    /// This path cannot run for this file; the caller should use the other
+    /// one. The reason is for the log.
+    Unavailable(&'static str),
+}
+
+/// The temp path: the original size + MD5 check, then the attempt.
+///
+/// This is today's behaviour, unchanged: the target is never modified, the
+/// work happens in `{path}_tmp`, and the final whole-file MD5 gates the
+/// atomic rename over the target.
+async fn attempt_temp(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
+) -> Result<Inplace> {
+    match util::file_len(final_path) {
+        None => tracing::debug!("check: missing local file"),
+        Some(n) if n != file.size as u64 => {
+            tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
+        }
+        Some(_) => match util::md5_file(final_path) {
+            Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
+                tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
+                return Ok(Inplace::Skipped);
+            }
+            Ok(h) => tracing::debug!(actual_md5 = %h, "check: md5 mismatch -> needs repair"),
+            Err(e) => tracing::debug!("check: unreadable ({e:#}) -> needs repair"),
+        },
+    }
+    if ctx.dry_run {
+        tracing::info!("would repair");
+        return Ok(Inplace::DryRun);
+    }
+    let stats = repair_attempt(ctx, file, prefix, tmp_path).await?;
+    Ok(Inplace::Repaired(stats))
+}
+
+/// Repair one file **in place**.
+///
+/// The file is written where it lies: only the bytes that are wrong are
+/// written, at the offsets they belong at, and no `_tmp` file is created.
+/// The peak extra disk is the file's *growth* rather than its size, which is
+/// the whole point of the path (docs/07 §4.2).
+///
+/// The steps, in order:
+///
+/// 1. **open** the target `read+write` (created when it is not there),
+///    clearing the read-only attribute if that is what stopped the open;
+/// 2. **scan** — one read that answers everything: the whole-file MD5 (the
+///    skip check), which chunks are already correct where they belong, and
+///    which reuse sources are intact;
+/// 3. **stage** — the bytes of the chunks that have to *move* inside the
+///    file are read into RAM, so the write order cannot destroy them;
+/// 4. **patch** — the wrong chunks are written, ascending: from the staged
+///    bytes when there are any, from a download otherwise;
+/// 5. **verify** — one more read. The whole-file MD5 is the gate; if it does
+///    not match, the per-chunk verdicts name the culprit and only those are
+///    redone.
+///
+/// A file that cannot be repaired in place — the target cannot be opened for
+/// writing, or its moving bytes do not fit the RAM budget — answers
+/// [`Inplace::Unavailable`] and the caller uses the temp path instead.
+async fn attempt_inplace(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    final_path: &std::path::Path,
+) -> Result<Inplace> {
+    let mut stats = ChunkStats {
+        chunks_total: file.chunks.len() as u64,
+        ..Default::default()
+    };
+    let outcome = attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats).await;
+    if outcome.is_err() {
+        // The same rule the temp path follows: an abandoned attempt gives its
+        // downloaded bytes back, so `SUMMARY download_bytes` means "the bytes
+        // of files that were actually repaired".
+        ctx.summary
+            .adjust_download_bytes(-(stats.download_bytes as i64));
+    }
+    outcome
+}
+
+/// The body of the in-place repair — see [`attempt_inplace`].
+async fn attempt_inplace_inner(
+    ctx: &FileCtx,
+    file: &PlannedFile,
+    prefix: &str,
+    final_path: &std::path::Path,
+    stats: &mut ChunkStats,
+) -> Result<Inplace> {
+    // The reuse candidates: where each chunk's bytes could be copied from.
+    let entries: &[(String, i64, i64)] = match ctx.local_map.get(&file.rel) {
+        Some(v) => v.as_slice(),
+        None => &[],
+    };
+    let sources = reuse::sources_for(&file.chunks, entries);
+
+    // The scan's two lists, both parallel to the chunks: where each chunk
+    // *belongs*, and where its bytes could be copied from. A chunk with no
+    // candidate gets an empty source range, so the two verdicts line up
+    // index for index.
+    let dest_ranges: Vec<util::ScanRange<'_>> = file
+        .chunks
+        .iter()
+        .map(|c| {
+            (
+                c.offset.max(0) as u64,
+                c.uncompressed_size.max(0) as u64,
+                c.uncompressed_md5.as_str(),
+            )
+        })
+        .collect();
+    let source_ranges: Vec<util::ScanRange<'_>> = file
+        .chunks
+        .iter()
+        .zip(sources.iter())
+        .map(|(c, src)| {
+            (
+                src.unwrap_or(0),
+                c.uncompressed_size.max(0) as u64,
+                c.uncompressed_md5.as_str(),
+            )
+        })
+        .collect();
+
+    // 1. open. A dry run changes nothing: no file is created and no
+    // attribute is cleared, so the target is only read.
+    let mut handle = match open_inplace(ctx, final_path) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            // A dry run on a file that is not there: nothing is correct, so
+            // the file would be repaired.
+            tracing::info!("would repair");
+            return Ok(Inplace::DryRun);
+        }
+        Err(e) => {
+            // The target cannot be opened for writing. That is not a failed
+            // file: the temp path does not need write access to the target,
+            // so the repair still happens — through the other path.
+            tracing::debug!(error = %format!("{e:#}"), "in-place open failed");
+            return Ok(Inplace::Unavailable(
+                "the target cannot be opened for writing",
+            ));
+        }
+    };
+
+    // 2. scan. One read: the whole-file MD5, which chunks are already
+    // correct, and which sources are intact.
+    let mut scan = util::scan_reader(&mut handle, &dest_ranges, &source_ranges)
+        .with_context(|| format!("scan {}", file.rel))?;
+    tracing::debug!(
+        actual_md5 = %scan.file_md5,
+        expect_md5 = %file.md5,
+        on_disk = scan.file_len,
+        "scanned"
+    );
+    if scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+        tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
+        return Ok(Inplace::Skipped);
+    }
+    if ctx.dry_run {
+        tracing::info!("would repair");
+        return Ok(Inplace::DryRun);
+    }
+
+    // `--repair-mode discard`: the target is deleted and written from
+    // scratch. Zero peak extra disk, and a full download for the file — the
+    // trade the mode exists to offer. The delete happens *after* the skip
+    // check, so an intact file is never deleted.
+    if ctx.repair_mode == RepairMode::Discard {
+        drop(handle);
+        std::fs::remove_file(final_path).ok();
+        handle = open_rw(final_path)
+            .with_context(|| format!("create {}", final_path.display()))?;
+        // The file is gone: every chunk has to be written, and there is
+        // nothing left to reuse from.
+        scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
+    }
+
+    // The chunks that are not correct where they belong. `file.chunks` is
+    // sorted by offset (the plan guarantees it), so this list is ascending
+    // too — which is the order the patch loop writes in.
+    let bad: Vec<usize> = (0..file.chunks.len())
+        .filter(|&i| !scan.dest_ok[i])
+        .collect();
+    stats.chunks_kept = (file.chunks.len() - bad.len()) as u64;
+    tracing::debug!(
+        bad = bad.len(),
+        kept = stats.chunks_kept,
+        "in-place plan"
+    );
+
+    // The eager trim: when no reuse candidate reaches past the target's
+    // end, the tail is dead weight and can be released before a single byte
+    // is written.
+    if trim_is_free(file, entries) {
+        let have = handle.metadata().map(|m| m.len()).unwrap_or(0);
+        if have > file.size.max(0) as u64 {
+            tracing::debug!(before = have, after = file.size, "trimming the dead tail");
+            handle.set_len(file.size.max(0) as u64)?;
+        }
+    }
+
+    // 3. stage. A chunk needs staging only if its reuse source is
+    // *elsewhere* in the file and the chunk is actually wrong: a source at
+    // the chunk's own offset is the bad chunk itself, so it is not a source
+    // at all. The common repair case therefore stages nothing.
+    let payload: u64 = bad
+        .iter()
+        .filter(|&&i| sources[i].is_some() && scan.source_ok[i])
+        .map(|&i| file.chunks[i].uncompressed_size.max(0) as u64)
+        .sum();
+    // The reservation is held until the end of the attempt: the guard gives
+    // the RAM back when it is dropped.
+    let _reservation = if payload > 0 {
+        if !ctx.summary.reserve_ram_bytes(payload) {
+            // The budget is a budget, not a refusal: the file is repaired by
+            // the other path instead. (The ordered tier replaces this
+            // fallback; until it lands, the temp path is the safe answer.)
+            return Ok(Inplace::Unavailable(
+                "the bytes to move do not fit the RAM budget",
+            ));
+        }
+        Some(RamReservation {
+            summary: &ctx.summary,
+            bytes: payload,
+        })
+    } else {
+        None
+    };
+
+    let mut captured: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
+    if payload > 0 {
+        for &i in &bad {
+            if !scan.source_ok[i] {
+                continue;
+            }
+            let Some(off) = sources[i] else { continue };
+            let c = &file.chunks[i];
+            let bytes = util::read_range(&mut handle, off, c.uncompressed_size.max(0) as u64)
+                .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
+            // Every byte written is hash-gated before it lands, and a staged
+            // source is a write's source: gate it here too.
+            let h = format!("{:x}", md5::compute(&bytes));
+            if !h.eq_ignore_ascii_case(&c.uncompressed_md5) {
+                tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
+                continue;
+            }
+            captured[i] = Some(bytes);
+        }
+    }
+
+    // A hole in the chunk coverage would keep the old file's stale bytes,
+    // so it is zero-filled. The staged bytes are already in RAM, so a hole
+    // that overlaps a source does not lose it.
+    let layout = file.layout();
+    for (offset, len) in &layout.gaps {
+        zero_fill(ctx, &mut handle, *offset, *len)?;
+    }
+
+    // 4. patch. Ascending, and only the wrong chunks.
+    for &i in &bad {
+        let c = &file.chunks[i];
+        match &captured[i] {
+            Some(bytes) => {
+                handle.seek(SeekFrom::Start(c.offset.max(0) as u64))?;
+                reserve_write(ctx, bytes.len() as u64)?;
+                handle.write_all(bytes)?;
+                stats.chunks_reused += 1;
+            }
+            None => {
+                write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
+            }
+        }
+    }
+
+    // The file must end at its manifest size: shorter means the tail is
+    // missing, longer means it is dead weight.
+    handle.set_len(file.size.max(0) as u64)?;
+    handle.flush()?;
+
+    // 5. verify. One more read: the whole-file MD5 is the gate, and the
+    // per-chunk verdicts name the culprit when it does not match.
+    let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
+    if after.file_md5.eq_ignore_ascii_case(&file.md5) {
+        tracing::info!(
+            chunks_total = stats.chunks_total,
+            chunks_kept = stats.chunks_kept,
+            chunks_reused = stats.chunks_reused,
+            chunks_downloaded = stats.chunks_downloaded,
+            download_bytes = stats.download_bytes,
+            final_md5 = %after.file_md5,
+            "repaired in place"
+        );
+        return Ok(Inplace::Repaired(stats.clone()));
+    }
+
+    // Redo only the chunks that are still wrong. A chunk that fails here
+    // passed its own MD5, so the damage is elsewhere: a second pass names
+    // it instead of re-fetching the whole file.
+    let still_bad: Vec<usize> = (0..file.chunks.len())
+        .filter(|&i| !after.dest_ok[i])
+        .collect();
+    if still_bad.is_empty() {
+        anyhow::bail!(
+            "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
+            file.rel,
+            file.md5,
+            after.file_md5
+        );
+    }
+    tracing::warn!(
+        file = %file.rel,
+        chunks = still_bad.len(),
+        "final md5 mismatch -> redoing the mismatching chunks"
+    );
+    for &i in &still_bad {
+        let c = &file.chunks[i];
+        write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
+    }
+    handle.set_len(file.size.max(0) as u64)?;
+    handle.flush()?;
+    let final_scan = util::scan_reader(&mut handle, &dest_ranges, &[])?;
+    if !final_scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+        anyhow::bail!(
+            "final md5 mismatch for {}: expect {} got {}",
+            file.rel,
+            file.md5,
+            final_scan.file_md5
+        );
+    }
+    tracing::info!(
+        chunks_total = stats.chunks_total,
+        chunks_kept = stats.chunks_kept,
+        chunks_reused = stats.chunks_reused,
+        chunks_downloaded = stats.chunks_downloaded,
+        download_bytes = stats.download_bytes,
+        final_md5 = %final_scan.file_md5,
+        "repaired in place"
+    );
+    Ok(Inplace::Repaired(stats.clone()))
+}
+
+/// A RAM reservation that gives itself back when it is dropped.
+struct RamReservation<'a> {
+    summary: &'a Summary,
+    bytes: u64,
+}
+
+impl Drop for RamReservation<'_> {
+    fn drop(&mut self) {
+        if self.bytes > 0 {
+            self.summary.release_ram_bytes(self.bytes);
+        }
+    }
+}
+
+/// Open the target for the in-place repair.
+///
+/// `read+write`, created when it is not there. `None` means "the file is not
+/// there and the run may not create it" — a dry run, which changes nothing.
+///
+/// A file that cannot be opened for writing is **not** a failure: the temp
+/// path does not need write access to the target, so the caller falls back
+/// to it. The usual reason a game file cannot be opened for writing is the
+/// read-only attribute, and that is cleared first — Starward does the same
+/// before it writes (GameInstallService.cs:232-236).
+fn open_inplace(ctx: &FileCtx, path: &std::path::Path) -> Result<Option<File>> {
+    if ctx.dry_run {
+        // A dry run changes nothing: no file is created and no attribute is
+        // cleared. Reading is all it needs.
+        if !path.exists() {
+            return Ok(None);
+        }
+        let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+        return Ok(Some(f));
+    }
+    match open_rw(path) {
+        Ok(f) => Ok(Some(f)),
+        Err(first) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %first,
+                "in-place open failed -> clearing the read-only attribute"
+            );
+            clear_readonly(path)?;
+            let f = open_rw(path).with_context(|| format!("open for writing {}", path.display()))?;
+            Ok(Some(f))
+        }
+    }
+}
+
+/// Open a file for the in-place repair: read + write, created when absent,
+/// never truncated.
+fn open_rw(path: &std::path::Path) -> std::io::Result<File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
+/// Clear the read-only attribute of a file.
+///
+/// On Windows this is the attribute that stops a write; on Unix it is the
+/// write bit, and clearing it is what makes the file writable by its owner
+/// — which it has to be for the repair to happen at all.
+fn clear_readonly(path: &std::path::Path) -> Result<()> {
+    let mut perms = std::fs::metadata(path)
+        .with_context(|| format!("stat {}", path.display()))?
+        .permissions();
+    if !perms.readonly() {
+        return Ok(());
+    }
+    // The lint is about the blanket "make it writable" reflex. This is the
+    // opposite: the file is *already* read-only, and the repair has to
+    // write to it, so the attribute is cleared and nothing else is touched.
+    #[allow(clippy::permissions_set_readonly_false)]
+    {
+        perms.set_readonly(false);
+    }
+    std::fs::set_permissions(path, perms)
+        .with_context(|| format!("clear the read-only attribute of {}", path.display()))?;
+    tracing::debug!(path = %path.display(), "read-only attribute cleared");
+    Ok(())
+}
+
+/// Is trimming the file's dead tail free?
+///
+/// The tail past the manifest's size is dead weight, and releasing it before
+/// a single byte is written is the whole point of the eager trim. It is only
+/// free when no reuse candidate reaches past the end: an entry in the local
+/// reuse map past the target's end can only ever be a source, and a source
+/// the trim would delete is a source that is gone.
+fn trim_is_free(file: &PlannedFile, entries: &[(String, i64, i64)]) -> bool {
+    let size = file.size.max(0) as u64;
+    entries.iter().all(|(_, sz, off)| {
+        let off = (*off).max(0) as u64;
+        let sz = (*sz).max(0) as u64;
+        off.checked_add(sz).is_none_or(|end| end <= size)
+    })
+}
+
+/// Write `len` zeros at `offset`.
+///
+/// A hole in the chunk coverage is a region no chunk claims, so nothing else
+/// would ever write it: without this it would keep the old file's bytes.
+fn zero_fill(ctx: &FileCtx, out: &mut File, offset: u64, len: u64) -> Result<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    // The zero-fill is a write like any other: it lands in the install and
+    // the write ceiling counts it.
+    reserve_write(ctx, len)?;
+    out.seek(SeekFrom::Start(offset))?;
+    let zeros = vec![0u8; COPY_BUF.min(len as usize)];
+    let mut left = len;
+    while left > 0 {
+        let n = (left as usize).min(zeros.len());
+        out.write_all(&zeros[..n])?;
+        left -= n as u64;
+    }
+    Ok(())
 }
 /// One full pass over a file's chunks, then verify + promote.
 async fn repair_attempt(
@@ -538,5 +1047,6 @@ fn promote_tmp(
         chunks_reused: stats.chunks_reused,
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
+        chunks_kept: stats.chunks_kept,
     })
 }
