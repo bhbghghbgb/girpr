@@ -339,7 +339,13 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_ram_limit(ctx.limits.ram_bytes);
     summary.set_fail_fast(ctx.fail_fast);
+    tracing::info!(
+        mode = ctx.repair_mode.as_str(),
+        ram_budget = ?ctx.ram_budget(),
+        "repair mode"
+    );
     summary = file::repair_all(
         http,
         game_dir.clone(),

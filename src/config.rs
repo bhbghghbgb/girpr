@@ -17,6 +17,47 @@ use crate::Biz;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
+/// How a file is repaired.
+///
+/// The mode decides **where the bytes go**, not whether the file is
+/// repaired: every mode ends with the same whole-file MD5 gate, and every
+/// mode can fail the same way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum RepairMode {
+    /// Repair in place when the target can be opened for writing, and fall
+    /// back to the temp path when it cannot. The default.
+    #[default]
+    Auto,
+    /// Repair in place: write only the bytes that are wrong, at the offsets
+    /// they belong at. No `_tmp` file, and the peak extra disk is the file's
+    /// *growth* rather than its size.
+    Inplace,
+    /// Write `{path}_tmp` and rename it over the target. The original is
+    /// never touched, and the peak extra disk is the whole file.
+    Temp,
+    /// Delete the target and write the file from scratch. Zero peak extra
+    /// disk, and a full download for every file it touches.
+    Discard,
+}
+
+impl RepairMode {
+    /// The value as it appears in `--repair-mode` and in `SUMMARY`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepairMode::Auto => "auto",
+            RepairMode::Inplace => "inplace",
+            RepairMode::Temp => "temp",
+            RepairMode::Discard => "discard",
+        }
+    }
+}
+
+impl std::fmt::Display for RepairMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Typed failure carrying the process exit code.
 /// `1` usage/config, `2` metadata/network, `3` write/verify.
 #[derive(Debug)]
@@ -75,6 +116,14 @@ pub struct RunCtx {
     /// unflagged run, which is what makes every refusal a no-op and keeps
     /// `SUMMARY limited=1` absent.
     pub limits: Limits,
+    /// `--repair-mode`: how each file is repaired. `Auto` when the flag was
+    /// not passed.
+    pub repair_mode: RepairMode,
+    /// `true` when `--repair-mode` was passed. The `SUMMARY repair_mode=`
+    /// key is emitted only when it was — the same discipline every other
+    /// conditional key follows, so an unflagged run's line stays
+    /// byte-identical.
+    pub repair_mode_explicit: bool,
     /// Concurrent **files**; guaranteed `>= 1`.
     pub jobs: usize,
     pub check_only: bool,
@@ -112,6 +161,16 @@ pub struct RunCtx {
 }
 
 impl RunCtx {
+    /// The RAM the in-place repair may stage the bytes it has to move
+    /// inside a file.
+    ///
+    /// `None` = no budget was asked for. A budget is not a refusal: a file
+    /// that cannot get its reservation is written in the other direction
+    /// instead, which produces the same file with less reuse.
+    pub fn ram_budget(&self) -> Option<u64> {
+        self.limits.ram_bytes
+    }
+
     /// Read-only modes must not write anything: `--dry-run` logs actions only,
     /// `--check-only` verifies only. Every delete/write in the pipeline is
     /// gated on this, which covers `--purge-before` as well as the phases

@@ -65,6 +65,8 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         audio_explicit: false,
         path_scope: PathScope::default(),
         limits: Limits::default(),
+        repair_mode: girpr::config::RepairMode::Auto,
+        repair_mode_explicit: false,
         jobs,
         check_only: false,
         purge_only: false,
