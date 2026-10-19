@@ -276,9 +276,14 @@ pub struct Summary {
     /// RAM currently reserved for staging the bytes a file has to move
     /// inside itself. Live, not cumulative: a file gives its reservation
     /// back when it is done.
+    pub ram_reserved: AtomicU64,
+    /// The peak staged payload of the run — the most RAM that was staged at
+    /// once. This is the number the `SUMMARY ram_bytes=` key reports.
     pub ram_bytes: AtomicU64,
-    /// The high-water mark of `ram_bytes`: the peak staged payload.
-    pub ram_peak: AtomicU64,
+    /// Files repaired **in place**: the target was written where it lies.
+    pub files_inplace: AtomicU64,
+    /// Files repaired through `{path}_tmp`.
+    pub files_temp: AtomicU64,
 }
 
 impl Default for Summary {
@@ -306,8 +311,10 @@ impl Summary {
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
             ram_limit: AtomicU64::new(u64::MAX),
+            ram_reserved: AtomicU64::new(0),
             ram_bytes: AtomicU64::new(0),
-            ram_peak: AtomicU64::new(0),
+            files_inplace: AtomicU64::new(0),
+            files_temp: AtomicU64::new(0),
         }
     }
 
@@ -332,8 +339,10 @@ impl Summary {
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
             ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
+            ram_reserved: AtomicU64::new(self.ram_reserved.load(Ordering::Relaxed)),
             ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
-            ram_peak: AtomicU64::new(self.ram_peak.load(Ordering::Relaxed)),
+            files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
+            files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
         }
     }
 }
