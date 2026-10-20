@@ -137,14 +137,29 @@ impl MatrixStatus {
 
     /// Whether A17 accepts this state.
     ///
-    /// `over_budget` is **not** accepted, for the reason
-    /// [`MatrixRow::is_satisfied`] gives: the caller was told to take the class
-    /// and this run would not pay for it. `unavailable` is accepted because it
-    /// is a fact about the manifests rather than about this run.
+    /// **All four.** A17 is about the matrix being *complete*: every class has
+    /// a row and every row says what happened. `over_budget` is one of those
+    /// answers — "a candidate existed and this run's budget would not pay for
+    /// it" — and a matrix that recorded it is *more* honest than one that
+    /// failed.
+    ///
+    /// It used to be excluded, on the reasoning that `over_budget` is "a
+    /// finding about the run rather than about the world". That reasoning has a
+    /// consequence the same module's own docs already rejected: a class the
+    /// budget refused ended the run with exit `3`, while `--require-class` —
+    /// the flag that says "the caller wanted this class" — was documented as
+    /// the only thing that turns an unmet class into a failed run. A17 was
+    /// doing `--require-class`'s job for a class nobody had required.
+    ///
+    /// The requirement is still enforced: [`MatrixRow::is_satisfied`] excludes
+    /// `over_budget`, so `--require-class` still refuses with exit `4`.
     pub const fn is_acceptable(self) -> bool {
         matches!(
             self,
-            MatrixStatus::Captured | MatrixStatus::CoveredBy | MatrixStatus::Unavailable
+            MatrixStatus::Captured
+                | MatrixStatus::CoveredBy
+                | MatrixStatus::OverBudget
+                | MatrixStatus::Unavailable
         )
     }
 }
@@ -184,15 +199,18 @@ mod status_tests {
         }
     }
 
-    /// A17 accepts three of the four; `over_budget` is a statement about this
-    /// run's flags rather than about the manifests.
+    /// A17 accepts all four states.
     #[test]
-    fn only_over_budget_is_unacceptable_to_a17() {
+    fn every_state_is_acceptable_to_a17() {
         assert!(Captured.is_acceptable());
         assert!(CoveredBy.is_acceptable());
+        assert!(OverBudget.is_acceptable());
         assert!(Unavailable.is_acceptable());
-        assert!(!OverBudget.is_acceptable());
-        // And the two spellings cannot disagree about it.
+    }
+
+    /// The two spellings cannot disagree about what A17 accepts.
+    #[test]
+    fn the_selfcheck_and_the_status_agree_on_what_is_acceptable() {
         for s in [Captured, CoveredBy, OverBudget, Unavailable] {
             assert_eq!(
                 s.is_acceptable(),
@@ -380,10 +398,10 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
 
 /// How many pool candidates satisfy each class, indexed by [`Class::ALL`].
 ///
-/// One walk of the pool instead of nine. The nine numbers are the same ones the
-/// per-class `filter().count()` produced.
-fn considered_counts(pool: &[SizedCandidate]) -> [u64; 9] {
-    let mut counts = [0_u64; 9];
+/// One walk of the pool instead of eleven. The eleven numbers are the same ones
+/// the per-class `filter().count()` produced.
+fn considered_counts(pool: &[SizedCandidate]) -> [u64; 11] {
+    let mut counts = [0_u64; 11];
     for c in pool {
         for (i, class) in Class::ALL.iter().enumerate() {
             if c.candidate.satisfies(*class) {
@@ -434,6 +452,32 @@ fn cost_then_field_then_path(a: &SizedCandidate, b: &SizedCandidate) -> std::cmp
 /// `tests/matrix.rs` instead.
 fn unfunded(cost: u64) -> String {
     format!("costs {cost} B and the budget could not fund it")
+}
+
+/// How one class was answered, before the budget had its say.
+///
+/// The budget is what turns a plan into a fate, and the two are kept apart
+/// because a `covered_by` row whose covering capture is refused has to become
+/// `over_budget` — a decision about the *budget*, not about the class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Coverage {
+    /// The class has candidates of its own.
+    Own,
+    /// The class is answered by a capture that already exists.
+    ByAdmission {
+        /// The capture's id.
+        capture_id: String,
+        /// The path it captured.
+        path: String,
+    },
+    /// The class is answered by a want of an earlier class, which the budget
+    /// may yet refuse.
+    ByWant {
+        /// The index of the covering want.
+        want: usize,
+    },
+    /// Nothing in the pool satisfies it.
+    None,
 }
 
 /// Run the three admission phases.
@@ -487,10 +531,15 @@ pub fn select(
     // The ordinal rides along because `capture_id` is `<class>` or `<class>+<n>`
     // where `n` counts *within the class*. Phase 2 re-sorts these by cost, so
     // the position a want is admitted at says nothing about which pick it was —
-    // `partial_moved_offset+7` would be a true statement about a global cost
+    // `moved_ascending+7` would be a true statement about a global cost
     // order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     let mut notes: Vec<MatrixRow> = Vec::new();
+    // How each class was answered, before the budget had its say. The budget
+    // is what turns a plan into a fate, and the two are kept apart because a
+    // `covered_by` row whose covering capture is refused has to become
+    // `over_budget` — a decision about the *budget*, not about the class.
+    let mut coverage: Vec<Coverage> = Vec::new();
     // `candidates_considered` for every class, in **one** pass over the pool.
     // It used to be nine, one per class, each re-walking 2 921 candidates; the
     // counts are the same, they were just being recomputed nine times.
@@ -503,12 +552,48 @@ pub fn select(
             notes.push(MatrixRow {
                 class,
                 status: MatrixStatus::CoveredBy,
-                capture_id: Some(cover.capture_id.clone()),
-                covered_by: Some(cover.path.clone()),
-                path: Some(cover.path.clone()),
-                reason: Some("cheapest candidate already captured for another class".into()),
+                capture_id: None,
+                covered_by: None,
+                path: None,
+                reason: None,
                 candidates_considered: considered,
             });
+            coverage.push(Coverage::ByAdmission {
+                capture_id: cover.capture_id.clone(),
+                path: cover.path.clone(),
+            });
+            continue;
+        }
+
+        // Already answered by a file an earlier class is about to capture?
+        //
+        // **This is the case that decides the bundle's size.** The cheapest
+        // `trim_deferred` candidate is the same file as the cheapest
+        // `moved_ascending` one, and buying a second copy of that shape would
+        // cost 24.9 MB for nothing: the two classes differ only in which of
+        // the two trim outcomes the file shows, and one capture shows both.
+        //
+        // The covering want is the **cheapest** one that satisfies the class,
+        // because the rule below — "a class that cannot have the covering
+        // capture cannot have a dearer one either" — is only true of the
+        // cheapest.
+        let cover = wants
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, w))| w.candidate.satisfies(class))
+            .min_by_key(|(_, (_, _, w))| w.budget_cost())
+            .map(|(i, _)| i);
+        if let Some(want) = cover {
+            notes.push(MatrixRow {
+                class,
+                status: MatrixStatus::CoveredBy,
+                capture_id: None,
+                covered_by: None,
+                path: None,
+                reason: None,
+                candidates_considered: considered,
+            });
+            coverage.push(Coverage::ByWant { want });
             continue;
         }
 
@@ -538,6 +623,7 @@ pub fn select(
                 reason: None,
                 candidates_considered: considered,
             });
+            coverage.push(Coverage::Own);
         } else {
             notes.push(MatrixRow {
                 class,
@@ -548,6 +634,7 @@ pub fn select(
                 reason: Some(unavailable_reason(class, considered)),
                 candidates_considered: considered,
             });
+            coverage.push(Coverage::None);
         }
     }
 
@@ -601,33 +688,65 @@ pub fn select(
 
     // Phase 3 — the matrix, with ids resolved.
     let mut matrix = Vec::with_capacity(notes.len());
-    for mut row in notes {
-        match row.status {
-            MatrixStatus::Unavailable => {}
-            MatrixStatus::CoveredBy => {}
-            MatrixStatus::Captured | MatrixStatus::OverBudget => {
-                let hit = admitted.iter().find(|a| a.satisfies(row.class));
-                match hit {
+    for (mut row, cover) in notes.into_iter().zip(coverage) {
+        match cover {
+            // Nothing in the pool satisfies it: the row said so in phase 1.
+            Coverage::None => {}
+            // A capture that already existed answers it.
+            Coverage::ByAdmission { capture_id, path } => {
+                row.capture_id = Some(capture_id);
+                row.covered_by = Some(path.clone());
+                row.path = Some(path);
+                row.reason = Some("cheapest candidate already captured for another class".into());
+            }
+            // A want of an earlier class answers it — **if the budget funded
+            // that want**. A class that cannot have the covering capture cannot
+            // have a dearer one either, so the row becomes `over_budget`
+            // rather than buying a second copy of the same shape.
+            Coverage::ByWant { want } => {
+                let (class, ordinal, c) = &wants[want];
+                let capture_id = c.candidate.capture_id(*class, *ordinal);
+                match admitted.iter().find(|a| a.capture_id == capture_id) {
                     Some(a) => {
-                        row.status = MatrixStatus::Captured;
+                        row.status = MatrixStatus::CoveredBy;
                         row.capture_id = Some(a.capture_id.clone());
+                        row.covered_by = Some(a.path.clone());
                         row.path = Some(a.path.clone());
+                        row.reason = Some(
+                            "the cheapest candidate is captured for another class".into(),
+                        );
                     }
                     None => {
                         row.status = MatrixStatus::OverBudget;
-                        let cheapest = wants
-                            .iter()
-                            .filter(|(c, _, _)| *c == row.class)
-                            .map(|(_, _, c)| c.budget_cost())
-                            .min()
-                            .unwrap_or(0);
                         row.reason = Some(format!(
-                            "the cheapest candidate {}",
-                            unfunded(cheapest)
+                            "the capture that would have covered it {}",
+                            unfunded(c.budget_cost())
                         ));
                     }
                 }
             }
+            // The class has candidates of its own: either one of them was
+            // admitted, or the budget refused them all.
+            Coverage::Own => match admitted.iter().find(|a| a.satisfies(row.class)) {
+                Some(a) => {
+                    row.status = MatrixStatus::Captured;
+                    row.capture_id = Some(a.capture_id.clone());
+                    row.path = Some(a.path.clone());
+                }
+                None => {
+                    row.status = MatrixStatus::OverBudget;
+                    let cheapest = wants
+                        .iter()
+                        .filter(|(c, _, _)| *c == row.class)
+                        .map(|(_, _, c)| c.budget_cost())
+                        .min()
+                        .unwrap_or(0);
+                    row.reason = Some(format!(
+                        "the cheapest candidate {}",
+                        unfunded(cheapest)
+                    ));
+                }
+            },
         }
         matrix.push(row);
     }
@@ -695,6 +814,9 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
                 "nchunks": s.nchunks,
                 "reused": s.reused,
                 "moved": s.moved,
+                "moved_up": s.moved_up,
+                "moved_down": s.moved_down,
+                "old_max_end": s.old_max_end,
                 "same_md5": s.same_md5,
                 "old_bytes": s.old_bytes,
                 "new_bytes": s.new_bytes,
@@ -709,8 +831,8 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
         "schema_version": crate::SCHEMA_VERSION,
         "columns": [
             "path", "matching_field", "old_size", "new_size", "nchunks", "reused",
-            "moved", "same_md5", "old_bytes", "new_bytes", "patch_bytes",
-            "total_cost", "classes", "rank",
+            "moved", "moved_up", "moved_down", "old_max_end", "same_md5",
+            "old_bytes", "new_bytes", "patch_bytes", "total_cost", "classes", "rank",
         ],
         "rows": rows,
     })
@@ -730,11 +852,15 @@ pub fn classes_in_order(ids: &[&str]) -> Vec<Class> {
         .collect()
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::manifest::diff::{PathRow, PathScore};
 
+    /// A scored path, with the **direction** and the **trim's input** spelled
+    /// out.
+    ///
     /// `cost` is the whole point: a common path is charged `old_bytes +
     /// new_bytes`, so two scored paths only order against each other if they
     /// actually differ — and `cost` is *not* `old_size + new_size`, which is
@@ -746,11 +872,15 @@ mod tests {
     ///
     /// * `(old_size, new_size)`
     /// * `(nchunks, reused, moved)`
-    fn scored(
+    /// * `(moved_up, moved_down)`
+    #[allow(clippy::too_many_arguments)]
+    fn shaped(
         path: &str,
         cost: u64,
         size: (i64, i64),
         chunks: (u64, u64, u64),
+        direction: (u64, u64),
+        old_max_end: u64,
         md5: bool,
     ) -> PathScore {
         let (old_size, new_size) = size;
@@ -762,12 +892,27 @@ mod tests {
             nchunks,
             reused,
             moved,
+            moved_up: direction.0,
+            moved_down: direction.1,
+            old_max_end,
             same_md5: md5,
             old_bytes: cost / 2,
             new_bytes: cost - cost / 2,
             patch_bytes: if reused == nchunks { 0 } else { cost / 4 },
             total_cost: cost,
         }
+    }
+
+    /// The simple case: every move goes **down**, and the trim is free.
+    fn scored(
+        path: &str,
+        cost: u64,
+        size: (i64, i64),
+        chunks: (u64, u64, u64),
+        md5: bool,
+    ) -> PathScore {
+        let moved = chunks.2;
+        shaped(path, cost, size, chunks, (0, moved), 0, md5)
     }
 
     fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
@@ -789,8 +934,23 @@ mod tests {
         }
     }
 
-    /// The nine classes, one candidate each, cheapest class first.
-    fn all_nine() -> Vec<SizedCandidate> {
+    /// The eleven classes, one candidate each, cheapest class first.
+    ///
+    /// **Two of the candidates answer two classes each**, and that is the whole
+    /// point of the `covered_by` admission:
+    ///
+    /// | candidate | answers | why |
+    /// |---|---|---|
+    /// | `i/trim_deferred` | `moved_ascending`, `trim_deferred` | one move down, in a file that shrinks, with a source reaching past the target |
+    /// | `h/trim_eager` | `kept_in_place`, `trim_eager` | nothing moves, in a file that shrinks, with no source reaching past the target |
+    ///
+    /// `i/trim_deferred` is the **cheapest** `moved_ascending` candidate, so
+    /// `moved_ascending` takes it and `trim_deferred` is covered by that
+    /// capture — no second file is bought for it. `e/moved_asc` is a plain
+    /// `moved_ascending` candidate that is left over, and it is what the trim
+    /// class *would* have bought if the admission did not know about
+    /// `covered_by`.
+    fn all_eleven() -> Vec<SizedCandidate> {
         candidates(&[field(
             "game",
             vec![
@@ -819,11 +979,12 @@ mod tests {
                     )),
                     1200,
                 ),
+                // partial, nothing moved, the same size: `kept_in_place`.
                 row(
-                    "d/same_offset",
+                    "d/kept",
                     State::Changed,
                     Some(scored(
-                        "d/same_offset",
+                        "d/kept",
                         1_826_067,
                         (2340264, 2340264),
                         (3, 1, 0),
@@ -831,38 +992,118 @@ mod tests {
                     )),
                     2340264,
                 ),
+                // partial, one move **down**, in a file that shrinks with a
+                // source reaching past the target: `moved_ascending` **and**
+                // `trim_deferred`.
                 row(
-                    "e/moved",
+                    "i/trim_deferred",
                     State::Changed,
-                    Some(scored("e/moved", 300, (100, 100), (3, 1, 1), false)),
+                    Some(shaped(
+                        "i/trim_deferred",
+                        2_000_000,
+                        (200, 100),
+                        (3, 2, 1),
+                        (0, 1),
+                        150,
+                        false,
+                    )),
                     100,
                 ),
+                // partial, one move **up**: `moved_descending`.
                 row(
-                    "f/size_changed",
+                    "f/moved_desc",
                     State::Changed,
-                    Some(scored("f/size_changed", 500, (100, 200), (2, 1, 0), false)),
-                    200,
+                    Some(shaped(
+                        "f/moved_desc",
+                        2_500_000,
+                        (100, 100),
+                        (3, 2, 1),
+                        (1, 0),
+                        100,
+                        false,
+                    )),
+                    100,
                 ),
-                row("g/added", State::Added, None, 114_000),
-                row("h/removed", State::Removed, None, 1_730_000),
+                // partial, moves in **both** directions: `moved_mixed`.
+                row(
+                    "g/moved_mixed",
+                    State::Changed,
+                    Some(shaped(
+                        "g/moved_mixed",
+                        2_800_000,
+                        (100, 100),
+                        (4, 3, 2),
+                        (1, 1),
+                        100,
+                        false,
+                    )),
+                    100,
+                ),
+                // partial, nothing moved, in a file that shrinks with no source
+                // reaching past the target: `kept_in_place` **and**
+                // `trim_eager`.
+                row(
+                    "h/trim_eager",
+                    State::Changed,
+                    Some(shaped(
+                        "h/trim_eager",
+                        2_600_000,
+                        (200, 100),
+                        (2, 1, 0),
+                        (0, 0),
+                        100,
+                        false,
+                    )),
+                    100,
+                ),
+                // a plain `moved_ascending`, dearer than the one above.
+                row(
+                    "e/moved_asc",
+                    State::Changed,
+                    Some(shaped(
+                        "e/moved_asc",
+                        3_000_000,
+                        (100, 100),
+                        (3, 2, 1),
+                        (0, 1),
+                        100,
+                        false,
+                    )),
+                    100,
+                ),
+                row("j/added", State::Added, None, 114_000),
+                row("k/removed", State::Removed, None, 1_730_000),
             ],
         )])
     }
 
     #[test]
     fn the_pool_is_built_from_every_row_with_its_shape_and_classes() {
-        let pool = all_nine();
-        assert_eq!(pool.len(), 8);
+        let pool = all_eleven();
+        assert_eq!(pool.len(), 11);
         let by_path = |p: &str| pool.iter().find(|c| c.candidate.path == p).unwrap();
         assert_eq!(
             by_path("a/identical").candidate.classes,
             vec![Class::Identical]
         );
-        assert_eq!(by_path("g/added").candidate.classes, vec![Class::Added]);
-        assert_eq!(by_path("h/removed").candidate.classes, vec![Class::Removed]);
+        assert_eq!(by_path("j/added").candidate.classes, vec![Class::Added]);
+        assert_eq!(by_path("k/removed").candidate.classes, vec![Class::Removed]);
         assert_eq!(
             by_path("b/zero_single").candidate.classes,
             vec![Class::ZeroReuseSingle]
+        );
+        assert_eq!(
+            by_path("d/kept").candidate.classes,
+            vec![Class::KeptInPlace]
+        );
+        assert_eq!(
+            by_path("i/trim_deferred").candidate.classes,
+            vec![Class::MovedAscending, Class::TrimDeferred],
+            "one file, two classes — and the order is the admission order"
+        );
+        assert_eq!(
+            by_path("h/trim_eager").candidate.classes,
+            vec![Class::KeptInPlace, Class::TrimEager]
         );
     }
 
@@ -870,16 +1111,13 @@ mod tests {
     /// `total_cost` to both would make `removed` free and `added` cost nothing.
     #[test]
     fn a_one_sided_path_is_charged_its_own_size() {
-        let pool = all_nine();
-        let g = pool.iter().find(|c| c.candidate.path == "g/added").unwrap();
+        let pool = all_eleven();
+        let g = pool.iter().find(|c| c.candidate.path == "j/added").unwrap();
         let h = pool
             .iter()
-            .find(|c| c.candidate.path == "h/removed")
+            .find(|c| c.candidate.path == "k/removed")
             .unwrap();
-        let d = pool
-            .iter()
-            .find(|c| c.candidate.path == "d/same_offset")
-            .unwrap();
+        let d = pool.iter().find(|c| c.candidate.path == "d/kept").unwrap();
         assert_eq!(g.budget_cost(), 114_000);
         assert_eq!(h.budget_cost(), 1_730_000);
         assert_eq!(d.budget_cost(), 1_826_067, "a common path is old + new");
@@ -887,7 +1125,10 @@ mod tests {
 
     #[test]
     fn the_pool_is_ordered_cheapest_first() {
-        let costs: Vec<u64> = all_nine().iter().map(SizedCandidate::budget_cost).collect();
+        let costs: Vec<u64> = all_eleven()
+            .iter()
+            .map(SizedCandidate::budget_cost)
+            .collect();
         let mut sorted = costs.clone();
         sorted.sort_unstable();
         assert_eq!(costs, sorted, "the budget relies on this ordering");
@@ -900,7 +1141,7 @@ mod tests {
 
     #[test]
     fn one_capture_per_class_is_the_greedy_answer() {
-        let s = select(&all_nine(), 1, Budget::unlimited(), &[]);
+        let s = select(&all_eleven(), 1, Budget::unlimited(), &[]);
         let mut got: Vec<(Class, String)> = s
             .matrix
             .iter()
@@ -911,43 +1152,149 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (Class::Added, "g/added".into()),
+                (Class::Added, "j/added".into()),
                 (Class::Identical, "a/identical".into()),
-                (Class::PartialMovedOffset, "e/moved".into()),
-                (Class::PartialSameOffset, "d/same_offset".into()),
-                (Class::PartialSizeChanged, "f/size_changed".into()),
-                (Class::Removed, "h/removed".into()),
+                (Class::KeptInPlace, "d/kept".into()),
+                (Class::MovedAscending, "i/trim_deferred".into()),
+                (Class::MovedDescending, "f/moved_desc".into()),
+                (Class::MovedMixed, "g/moved_mixed".into()),
+                (Class::Removed, "k/removed".into()),
+                (Class::TrimEager, "h/trim_eager".into()),
                 (Class::ZeroReuseMulti, "c/zero_multi".into()),
                 (Class::ZeroReuseSingle, "b/zero_single".into()),
             ]
         );
-        assert_eq!(s.admitted.len(), 8);
-        assert!(
-            s.unmet().contains(&Class::FullReuseReordered),
-            "and it has no candidate"
-        );
+        assert_eq!(s.admitted.len(), 10, "eleven classes, one of them covered");
+        assert!(s.unmet().is_empty(), "and every class answered");
     }
 
-    /// Each class gets its own cheapest because the predicates are disjoint, and
-    /// the exclusion set is what keeps it that way when they are not.
+    /// **The `covered_by` admission.** A class whose cheapest candidate an
+    /// earlier class already took is recorded as `covered_by` that capture —
+    /// and **no second file is bought for it**.
+    ///
+    /// The class here is `trim_deferred`, whose cheapest candidate is
+    /// `i/trim_deferred` — the same file `moved_ascending` took, because it is
+    /// also the cheapest `moved_ascending` candidate. The alternative was
+    /// `e/moved_asc`, a 3 000 000 B file that differs from the one already
+    /// captured only in which of the two trim outcomes it shows.
     #[test]
-    fn an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count() {
-        let s = select(&all_nine(), 1, Budget::unlimited(), &[]);
+    fn a_class_whose_cheapest_candidate_another_class_took_is_covered_by() {
+        let s = select(&all_eleven(), 1, Budget::unlimited(), &[]);
         let row = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::FullReuseReordered)
+            .find(|r| r.class == Class::TrimDeferred)
+            .expect("a row for every class");
+        assert_eq!(row.status, MatrixStatus::CoveredBy);
+        assert_eq!(
+            row.capture_id.as_deref(),
+            Some("moved_ascending"),
+            "the covering capture is the one that was admitted"
+        );
+        assert_eq!(row.covered_by.as_deref(), Some("i/trim_deferred"));
+        assert_eq!(row.path.as_deref(), Some("i/trim_deferred"));
+        assert!(row.is_satisfied(), "covered counts: the capture exists");
+        assert!(!row.unsatisfied());
+
+        // **No second file was bought for it.** The candidate it would have
+        // bought is still in the pool and still unsatisfied.
+        assert!(
+            !s.admitted.iter().any(|a| a.path == "e/moved_asc"),
+            "the dearer `moved_ascending` candidate was not bought for the trim"
+        );
+        assert!(
+            !s.admitted
+                .iter()
+                .any(|a| a.primary_class == Class::TrimDeferred),
+            "and the trim class got no capture of its own"
+        );
+        // And the covering capture says so: it is the `moved_ascending` one,
+        // and it lists the trim class as another class it answers.
+        let cover = s
+            .admitted
+            .iter()
+            .find(|a| a.capture_id == "moved_ascending")
+            .expect("the covering capture");
+        assert_eq!(cover.primary_class, Class::MovedAscending);
+        assert_eq!(cover.also_satisfies, vec![Class::TrimDeferred]);
+    }
+
+    /// The edge case: a `covered_by` row whose **covering capture** was
+    /// refused by the budget becomes `over_budget`, because a class that cannot
+    /// have the covering capture cannot have a dearer one either.
+    ///
+    /// The ceiling here is enough for the cheap captures and not enough for
+    /// `i/trim_deferred`, which is the file `moved_ascending` wants and the
+    /// file `trim_deferred` is covered by.
+    #[test]
+    fn a_covered_by_row_whose_covering_capture_was_refused_is_over_budget() {
+        let pool = all_eleven();
+        // Everything up to and including `d/kept`, but not `i/trim_deferred`.
+        let cap = 84 + 108 + 2_200 + 1_826_067 + 114_000 + 1_730_000;
+        let s = select(&pool, 1, Budget::capped(cap), &[]);
+
+        let moved = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::MovedAscending)
+            .expect("a row for every class");
+        assert_eq!(
+            moved.status,
+            MatrixStatus::OverBudget,
+            "the covering capture could not be funded"
+        );
+        assert!(moved.unsatisfied(), "and over_budget is not satisfied");
+
+        let trim = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::TrimDeferred)
+            .expect("a row for every class");
+        assert_eq!(
+            trim.status,
+            MatrixStatus::OverBudget,
+            "and the class it would have covered is over budget too"
+        );
+        assert!(
+            trim.reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("would have covered it"),
+            "the reason names what happened: {:?}",
+            trim.reason
+        );
+    }
+
+    /// A class with no candidate is recorded as `unavailable` **with a reason**,
+    /// rather than being dropped from the matrix.
+    #[test]
+    fn an_unsatisfiable_class_is_recorded_with_a_reason_and_a_count() {
+        let pool = candidates(&[field(
+            "game",
+            vec![row(
+                "a/identical",
+                State::Identical,
+                Some(scored("a/identical", 108, (54, 54), (1, 1, 0), true)),
+                54,
+            )],
+        )]);
+        let s = select(&pool, 1, Budget::unlimited(), &[]);
+        let row = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::MovedMixed)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::Unavailable);
         assert_eq!(row.candidates_considered, 0);
         let reason = row.reason.clone().unwrap();
-        assert!(reason.contains("full_reuse_reordered"), "{reason}");
+        assert!(reason.contains("moved_mixed"), "{reason}");
         assert!(reason.contains("--audio"), "the remedy: {reason}");
         assert!(
             !s.matrix
                 .iter()
                 .any(|r| r.capture_id.is_none() && r.status == MatrixStatus::Captured)
         );
+        assert_eq!(s.matrix.len(), Class::ALL.len(), "one row per class, always");
     }
 
     /// A forced capture answers its class *without* having been selected for it —
@@ -970,7 +1317,7 @@ mod tests {
         let same = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::PartialSameOffset)
+            .find(|r| r.class == Class::KeptInPlace)
             .unwrap();
         assert_eq!(same.status, MatrixStatus::CoveredBy);
         assert_eq!(same.covered_by.as_deref(), Some("x/both"));
@@ -1011,7 +1358,7 @@ mod tests {
         let for_class: Vec<&str> = s
             .admitted
             .iter()
-            .filter(|a| a.primary_class == Class::PartialSameOffset)
+            .filter(|a| a.primary_class == Class::KeptInPlace)
             .map(|a| a.path.as_str())
             .collect();
         assert_eq!(
@@ -1069,7 +1416,7 @@ mod tests {
         assert!(row.unsatisfied());
         assert!(!row.is_satisfied());
         // Both one-sided classes had a candidate and could not be funded; the
-        // other seven had none at all. `unmet` carries both, but the *reason*
+        // other nine had none at all. `unmet` carries both, but the *reason*
         // is the useful part and it differs.
         let over: Vec<Class> = s
             .matrix
@@ -1083,7 +1430,7 @@ mod tests {
             .iter()
             .filter(|r| r.status == MatrixStatus::Unavailable)
             .count();
-        assert_eq!(unavailable, 7);
+        assert_eq!(unavailable, Class::ALL.len() - 2);
         assert_eq!(s.unmet().len(), Class::ALL.len(), "nothing in this fixture is satisfied");
         assert!(s.admitted.is_empty());
         assert_eq!(s.bytes_admitted, 0);
@@ -1105,11 +1452,11 @@ mod tests {
         let covered = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::PartialSameOffset)
+            .find(|r| r.class == Class::KeptInPlace)
             .unwrap();
         assert_eq!(covered.status, MatrixStatus::CoveredBy);
         assert!(
-            !s.unmet().contains(&Class::PartialSameOffset),
+            !s.unmet().contains(&Class::KeptInPlace),
             "covered_by is never unmet: the capture exists"
         );
         assert_eq!(s.paths(), vec!["x/a"]);
@@ -1117,7 +1464,7 @@ mod tests {
 
     #[test]
     fn the_matrix_has_exactly_one_row_per_class_in_admission_order() {
-        let s = select(&all_nine(), 1, Budget::unlimited(), &[]);
+        let s = select(&all_eleven(), 1, Budget::unlimited(), &[]);
         assert_eq!(s.matrix.len(), Class::ALL.len());
         let ids: Vec<Class> = s.matrix.iter().map(|r| r.class).collect();
         assert_eq!(ids, Class::REQUIRED_ORDER.to_vec());
@@ -1127,7 +1474,7 @@ mod tests {
     /// classes, so it is asserted as an invariant over many ceilings.
     #[test]
     fn admission_is_cheapest_first_for_every_ceiling() {
-        let pool = all_nine();
+        let pool = all_eleven();
         for cap in [0, 42, 100, 1_000, 2_000, 10_000, 1_000_000, u64::MAX] {
             let s = select(&pool, 1, Budget::capped(cap), &[]);
             let mut costs: Vec<u64> = s.admitted.iter().map(|a| a.budget_cost).collect();
@@ -1152,7 +1499,7 @@ mod tests {
     #[test]
     fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
         let s = select(
-            &all_nine(),
+            &all_eleven(),
             1,
             Budget::unlimited(),
             &["nope/not/in/manifest".into()],
@@ -1162,7 +1509,7 @@ mod tests {
         // complete, because a phantom path says nothing about which classes the
         // pool can satisfy.
         assert_eq!(s.matrix.len(), Class::ALL.len());
-        assert_eq!(s.admitted.len(), 8, "the eight real ones still went in");
+        assert_eq!(s.admitted.len(), 10, "the ten real ones still went in");
     }
 
     #[test]
@@ -1191,6 +1538,9 @@ mod tests {
             "path",
             "reused",
             "moved",
+            "moved_up",
+            "moved_down",
+            "old_max_end",
             "patch_bytes",
             "total_cost",
             "classes",
@@ -1204,7 +1554,7 @@ mod tests {
         assert_eq!(rows[1]["rank"], 2);
         // Both have identical total_cost, so the path breaks the tie.
         assert_eq!(rows[0]["path"], "a");
-        assert_eq!(rows[0]["classes"][0], Class::PartialSameOffset.id());
+        assert_eq!(rows[0]["classes"][0], Class::KeptInPlace.id());
     }
 
     #[test]
@@ -1216,7 +1566,7 @@ mod tests {
     #[test]
     fn capture_ids_are_the_class_then_the_ordinal() {
         let c = SizedCandidate {
-            candidate: all_nine()[0].candidate.clone(),
+            candidate: all_eleven()[0].candidate.clone(),
             size: 54,
         };
         assert_eq!(c.candidate.capture_id(Class::Identical, 0), "identical");

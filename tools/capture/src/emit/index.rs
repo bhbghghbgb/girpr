@@ -1178,24 +1178,30 @@ impl Manifest {
         s
     }
 
-    /// A17: every required class is present and in one of the three acceptable
-    /// states.
+    /// A17: every required class is present and in one of the four states.
     ///
-    /// `over_budget` is deliberately **not** acceptable — it means a candidate
-    /// existed and the run chose not to pay for it, which is a finding about the
-    /// run rather than about the world, so it is reported but does not make the
-    /// matrix complete.
+    /// **Every state is acceptable.** A17 is about the matrix being
+    /// *complete* — every class has a row, and every row says what happened to
+    /// it. `over_budget` is one of those answers: a candidate existed and this
+    /// run's budget would not pay for it. A matrix that records it is more
+    /// honest than one that fails.
+    ///
+    /// It used to be excluded, on the reasoning that `over_budget` is "a
+    /// finding about the run rather than about the world" — which had the
+    /// consequence that a class the budget refused ended the whole capture with
+    /// exit `3`, while `--require-class` was documented as the only thing that
+    /// turns an unmet class into a failed run.
     pub fn a17(&self) -> (bool, String) {
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {
             if !matches!(
                 row.status.as_str(),
-                "captured" | "covered_by" | "unavailable"
+                "captured" | "covered_by" | "over_budget" | "unavailable"
             ) {
                 return (
                     false,
                     format!(
-                        "{} is `{}`, which is not one of captured/covered_by/unavailable",
+                        "{} is `{}`, which is not one of captured/covered_by/over_budget/unavailable",
                         row.class, row.status
                     ),
                 );

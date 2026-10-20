@@ -2,15 +2,33 @@
 //!
 //! **M5.** A class is a *branch*, not a file. Predicates overlap in general — a
 //! file can satisfy several — which is why admission is greedy with an exclusion
-//! set rather than nine independent picks, and why every captured file is
+//! set rather than eleven independent picks, and why every captured file is
 //! tagged with all the classes it satisfies.
 //!
 //! ## Why the predicates take a [`Shape`] and not a path
 //!
-//! A shape is the five numbers a decision turns on and nothing else. That keeps
+//! A shape is the numbers a decision turns on and nothing else. That keeps
 //! the predicates pure and total — no manifest, no filesystem, no network — so
-//! every one of the nine can be tested against a table of shapes in the same
-//! breath, and a future tenth class is a new arm rather than a new fixture.
+//! every one of the eleven can be tested against a table of shapes in the same
+//! breath, and a future twelfth class is a new arm rather than a new fixture.
+//!
+//! ## The six content decisions, and the classes that force them
+//!
+//! The repair spec makes six *content* decisions per file, and the class set
+//! is built so that every one of them is forced by at least one case:
+//!
+//! | decision | the classes that force it |
+//! |---|---|
+//! | skip | `identical` |
+//! | what happens to each chunk (kept / copied / fetched) | `zero_reuse_*`, `kept_in_place`, `moved_*` |
+//! | the tier (RAM-staged or ordered) | `moved_*` (the payload) |
+//! | the direction (ascending or descending) | `moved_ascending`, `moved_descending`, `moved_mixed` |
+//! | the trim (eager or deferred) | `trim_eager`, `trim_deferred` |
+//! | the growth (the file on disk is shorter than the target) | any capture whose new side is longer |
+//!
+//! The **flag axes** — the mode, the RAM budget, the resume, the zero-fill —
+//! are decisions the *flags* make, not the content, and they are not classes.
+//! `docs/00-spec.md` §4.1 says where each of them goes instead.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,14 +43,29 @@ pub enum Shape {
     Scored {
         /// The two whole-file MD5s agree.
         same_md5: bool,
-        /// The two declared sizes agree.
-        size_equal: bool,
         /// How many chunks the new entry has.
         nchunks: u64,
         /// How many of them exist in this same old file.
         reused: u64,
         /// Of those, how many sit at a different offset.
         moved: u64,
+        /// Of the moved ones, how many move **later**: the source is *before*
+        /// the destination. The descending write order keeps these alive.
+        moved_up: u64,
+        /// Of the moved ones, how many move **earlier**: the source is *after*
+        /// the destination. The ascending write order keeps these alive.
+        moved_down: u64,
+        /// The old file's declared size.
+        old_size: u64,
+        /// The new file's declared size.
+        new_size: u64,
+        /// Whether the dead tail can be released **before** the first write: no
+        /// reuse source reaches past the new size.
+        ///
+        /// The trim's other half — a source that reaches past the target's end
+        /// is a source the eager trim would delete, so the trim has to wait for
+        /// the end and the file grows during the repair.
+        trim_free: bool,
     },
     /// The path is only in the new manifest.
     Added,
@@ -49,47 +82,68 @@ impl Shape {
         match state {
             crate::manifest::diff::State::Added => Shape::Added,
             crate::manifest::diff::State::Removed => Shape::Removed,
-            _ => Shape::Scored {
-                same_md5: s.same_md5,
-                size_equal: s.old_size == s.new_size,
-                nchunks: s.nchunks,
-                reused: s.reused,
-                moved: s.moved,
-            },
+            _ => {
+                let new_size = s.new_size.max(0) as u64;
+                Shape::Scored {
+                    same_md5: s.same_md5,
+                    nchunks: s.nchunks,
+                    reused: s.reused,
+                    moved: s.moved,
+                    moved_up: s.moved_up,
+                    moved_down: s.moved_down,
+                    old_size: s.old_size.max(0) as u64,
+                    new_size,
+                    // The trim is free when no source reaches past the target's
+                    // end. `old_max_end` is the largest source end the diff
+                    // measured, and the tool under test asks the same question
+                    // of the same number.
+                    trim_free: s.old_max_end <= new_size,
+                }
+            }
         }
     }
 }
 
-/// The nine variant classes.
+/// The eleven variant classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Class {
     /// `old.md5 == new.md5`: the skip branch. Size and MD5 match, 0 bytes.
     Identical,
-    /// `reused == 0`, `nchunks == 1`: one download into an empty `_tmp`.
+    /// `reused == 0`, `nchunks == 1`: one download into an empty target.
     ZeroReuseSingle,
     /// `reused == 0`, `nchunks > 1`: N sequential downloads, no reuse.
     ZeroReuseMulti,
-    /// `0 < reused < nchunks`, `moved == 0`, size equal: the reuse happy path.
-    PartialSameOffset,
-    /// `0 < reused < nchunks`, `moved > 0`: reuse where the source offset differs.
-    PartialMovedOffset,
-    /// `0 < reused < nchunks`, `moved == 0`, size differs: oversize-`_tmp` truncate.
-    PartialSizeChanged,
+    /// `0 < reused < nchunks`, `moved == 0`: the surviving chunks are already
+    /// correct where they belong — **kept**, not copied.
+    KeptInPlace,
+    /// `moved > 0`, every move goes **down** (the source is after the
+    /// destination): the bytes move earlier.
+    MovedAscending,
+    /// `moved > 0`, every move goes **up** (the source is before the
+    /// destination): the bytes move later.
+    MovedDescending,
+    /// `moved > 0`, moves in **both** directions: the chunking re-flowed.
+    MovedMixed,
+    /// `0 < reused < nchunks`, the file on disk is longer than the target, and
+    /// no source reaches past the target: the dead tail is released before the
+    /// first write.
+    TrimEager,
+    /// `0 < reused < nchunks`, the file on disk is longer than the target, and
+    /// a source reaches past it: the trim waits for the end.
+    TrimDeferred,
     /// Only in the new manifest: the missing-local-file branch.
     Added,
     /// Only in the old manifest: not planned; a `--purge-after` target.
     Removed,
-    /// `reused == nchunks` and the MD5 differs: every chunk reused, layout changed.
-    FullReuseReordered,
 }
 
 /// Whether a shape is *partially* reusable: some chunks survive and some do not.
 ///
-/// Three of the nine classes are exactly this, differing only in whether the
-/// offset moved and whether the size changed. It was spelled out three times
-/// inside [`Class::matches`], and each spelling is a place where the definition
-/// of "partial" can drift without anything noticing — the same failure the
+/// Three of the eleven classes are exactly this — `kept_in_place` and the two
+/// trim classes — and it was spelled out several times inside
+/// [`Class::matches`]. Each spelling is a place where the definition of
+/// "partial" can drift without anything noticing — the same failure the
 /// `select` sort comparator has already had once.
 const fn is_partial(reused: u64, nchunks: u64) -> bool {
     reused > 0 && reused < nchunks
@@ -106,32 +160,34 @@ impl Class {
         matches!(self, Class::Identical)
     }
 
-    /// Every class, in no particular order.
-    pub const ALL: [Class; 9] = [
+    /// Every class, **in admission order**.
+    ///
+    /// The order is a decision, not an accident: the direction classes are
+    /// admitted **before** the trim classes, because `trim_deferred`'s cheapest
+    /// candidate is the same file as `moved_ascending`'s. Admitting the trim
+    /// first would push `moved_ascending` onto its next candidate — 24.9 MB
+    /// for a second copy of the same shape.
+    pub const ALL: [Class; 11] = [
         Class::Identical,
         Class::ZeroReuseSingle,
         Class::ZeroReuseMulti,
-        Class::PartialSameOffset,
-        Class::PartialMovedOffset,
-        Class::PartialSizeChanged,
+        Class::KeptInPlace,
+        Class::MovedAscending,
+        Class::MovedDescending,
+        Class::MovedMixed,
+        Class::TrimEager,
+        Class::TrimDeferred,
         Class::Added,
         Class::Removed,
-        Class::FullReuseReordered,
     ];
 
     /// The order admission walks them in.
-    ///
-    /// The spec's own table order, which runs cheapest-class-first and leaves
-    /// `full_reuse_reordered` last. That is the right shape for a greedy loop:
-    /// the classes that are cheap and reliably satisfiable pick first, and the
-    /// one that is usually unsatisfiable never costs a class that could use a
-    /// cheap candidate.
     ///
     /// **`= ALL`, not a second list.** The two were spelled out separately and
     /// had drifted into the same contents; the day they stop agreeing, a class
     /// added to one and not the other becomes either invisible to `parse` or
     /// invisible to admission, and neither failure names the other list.
-    pub const REQUIRED_ORDER: [Class; 9] = Class::ALL;
+    pub const REQUIRED_ORDER: [Class; 11] = Class::ALL;
 
     /// The wire spelling, and the directory name a capture is filed under.
     pub const fn id(self) -> &'static str {
@@ -139,27 +195,58 @@ impl Class {
             Class::Identical => "identical",
             Class::ZeroReuseSingle => "zero_reuse_single",
             Class::ZeroReuseMulti => "zero_reuse_multi",
-            Class::PartialSameOffset => "partial_same_offset",
-            Class::PartialMovedOffset => "partial_moved_offset",
-            Class::PartialSizeChanged => "partial_size_changed",
+            Class::KeptInPlace => "kept_in_place",
+            Class::MovedAscending => "moved_ascending",
+            Class::MovedDescending => "moved_descending",
+            Class::MovedMixed => "moved_mixed",
+            Class::TrimEager => "trim_eager",
+            Class::TrimDeferred => "trim_deferred",
             Class::Added => "added",
             Class::Removed => "removed",
-            Class::FullReuseReordered => "full_reuse_reordered",
         }
     }
 
     /// What this class exercises, for `--help` and the generated README.
+    ///
+    /// The vocabulary is the repair spec's: a chunk is **kept** (already
+    /// correct where it belongs), **copied** (its bytes live elsewhere in the
+    /// file) or **fetched** (no usable local source), and the write order is
+    /// the one that keeps the most sources alive.
     pub const fn exercises(self) -> &'static str {
         match self {
-            Class::Identical => "skip: size and MD5 both match, 0 bytes fetched",
-            Class::ZeroReuseSingle => "a single download into an empty _tmp",
-            Class::ZeroReuseMulti => "N sequential downloads with nothing reusable",
-            Class::PartialSameOffset => "verified reuse, source offset == target offset",
-            Class::PartialMovedOffset => "verified reuse, source offset != target offset",
-            Class::PartialSizeChanged => "reuse into an oversize _tmp, truncated to length",
-            Class::Added => "the missing-local-file branch",
+            Class::Identical => {
+                "the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched"
+            }
+            Class::ZeroReuseSingle => {
+                "no local source: the one chunk is fetched and written in place"
+            }
+            Class::ZeroReuseMulti => {
+                "no local source: every chunk is fetched, one at a time, into the target"
+            }
+            Class::KeptInPlace => {
+                "the surviving chunks are already correct where they belong: kept, not copied; \
+                 the rest are fetched"
+            }
+            Class::MovedAscending => {
+                "the bytes move earlier: the ascending write order keeps every source alive"
+            }
+            Class::MovedDescending => {
+                "the bytes move later: the descending write order keeps every source alive"
+            }
+            Class::MovedMixed => {
+                "the chunking re-flowed: the ordered tier keeps the larger half and fetches \
+                 the rest"
+            }
+            Class::TrimEager => {
+                "the file on disk is longer than the target and no source reaches past it: \
+                 the dead tail is released before the first write"
+            }
+            Class::TrimDeferred => {
+                "the file on disk is longer than the target and a source reaches past it: \
+                 the trim waits for the end"
+            }
+            Class::Added => "the file is created: absent locally, fetched whole",
             Class::Removed => "not planned; a --purge-after target",
-            Class::FullReuseReordered => "every chunk reused, whole-file layout changed",
         }
     }
 
@@ -174,6 +261,21 @@ impl Class {
     }
 
     /// Whether this shape satisfies the class.
+    ///
+    /// **Every content class requires `same_md5: false`.** A file whose
+    /// whole-file MD5s agree is the **skip** branch — the repair makes no
+    /// content decision about it at all, so it cannot be a statement about how
+    /// the content changed. The live pool holds one such path
+    /// (`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled,
+    /// so four chunks "move", yet the file's content is byte-identical. It
+    /// used to satisfy `moved_descending` as well as `identical`, which was
+    /// three defects in one: the published population was one too high, the
+    /// instrument could not reproduce it, and A19's "is unchanged but its
+    /// class says it should differ" was a trip-wire waiting for a cheap
+    /// candidate.
+    ///
+    /// The class set is a **partition** on the content, and `identical` is the
+    /// class that owns an unchanged file.
     pub fn matches(self, s: Shape) -> bool {
         use Shape::{Added, Removed, Scored};
         match self {
@@ -192,27 +294,80 @@ impl Class {
             Class::ZeroReuseMulti => {
                 matches!(s, Scored { same_md5: false, reused: 0, nchunks, .. } if nchunks > 1)
             }
-            Class::PartialSameOffset => matches!(
+            // The surviving chunks are already correct where they belong: a
+            // same-offset source *is* the chunk's own destination, so the
+            // chunk is kept rather than copied. The payload is 0, so the
+            // staged tier stages nothing.
+            Class::KeptInPlace => matches!(
                 s,
-                Scored { size_equal: true, moved: 0, reused, nchunks, .. }
-                    if is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    moved: 0,
+                    reused,
+                    nchunks,
+                    ..
+                } if is_partial(reused, nchunks)
             ),
-            Class::PartialMovedOffset => matches!(
+            // The direction is the *sign* of the moves, and the two direction
+            // classes are exclusive: a file whose every move goes down is not
+            // a file whose every move goes up.
+            Class::MovedAscending => matches!(
                 s,
-                Scored { moved, reused, nchunks, .. }
-                    if moved > 0 && is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_up,
+                    ..
+                } if moved > 0 && moved_up == 0
             ),
-            Class::PartialSizeChanged => matches!(
+            Class::MovedDescending => matches!(
                 s,
-                Scored { size_equal: false, moved: 0, reused, nchunks, .. }
-                    if is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_down,
+                    ..
+                } if moved > 0 && moved_down == 0
+            ),
+            Class::MovedMixed => matches!(
+                s,
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_up,
+                    moved_down,
+                    ..
+                } if moved > 0 && moved_up > 0 && moved_down > 0
+            ),
+            // The trim is eager when the dead tail can be released before the
+            // first write — which is exactly when no source reaches past the
+            // target's end — and deferred when a source does.
+            Class::TrimEager => matches!(
+                s,
+                Scored {
+                    same_md5: false,
+                    old_size,
+                    new_size,
+                    trim_free,
+                    reused,
+                    nchunks,
+                    ..
+                } if trim_free && old_size > new_size && is_partial(reused, nchunks)
+            ),
+            Class::TrimDeferred => matches!(
+                s,
+                Scored {
+                    same_md5: false,
+                    old_size,
+                    new_size,
+                    trim_free,
+                    reused,
+                    nchunks,
+                    ..
+                } if !trim_free && old_size > new_size && is_partial(reused, nchunks)
             ),
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
-            Class::FullReuseReordered => matches!(
-                s,
-                Scored { same_md5: false, reused, nchunks, .. } if nchunks > 0 && reused == nchunks
-            ),
         }
     }
 
@@ -247,29 +402,55 @@ impl std::fmt::Display for Class {
 
 /// Every class, in admission order.
 ///
-/// Not a *requirement* — the matrix reports on all nine whether or not any of
-/// them is required, because "this pair has no `full_reuse_reordered` file" is
-/// worth knowing even to a caller who asked for nothing in particular. What
+/// Not a *requirement* — the matrix reports on all eleven whether or not any
+/// of them is required, because "this pair has no `moved_mixed` file" is worth
+/// knowing even to a caller who asked for nothing in particular. What
 /// `--require-class` does is promote a subset to fatal.
 pub fn all_in_admission_order() -> Vec<Class> {
     Class::REQUIRED_ORDER.to_vec()
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A scored shape, spelled the way the predicates read it.
+    ///
+    /// `size_equal` and `moved` are the two knobs the old table had; the
+    /// direction and the trim flag are spelled separately, because they are
+    /// what the new classes turn on.
     fn scored(same_md5: bool, size_equal: bool, nchunks: u64, reused: u64, moved: u64) -> Shape {
+        shape(same_md5, nchunks, reused, moved, 0, moved, 100, if size_equal { 100 } else { 200 }, true)
+    }
+
+    /// The full shape, every field spoken for.
+    #[allow(clippy::too_many_arguments)]
+    fn shape(
+        same_md5: bool,
+        nchunks: u64,
+        reused: u64,
+        moved: u64,
+        moved_up: u64,
+        moved_down: u64,
+        old_size: u64,
+        new_size: u64,
+        trim_free: bool,
+    ) -> Shape {
         Shape::Scored {
             same_md5,
-            size_equal,
             nchunks,
             reused,
             moved,
+            moved_up,
+            moved_down,
+            old_size,
+            new_size,
+            trim_free,
         }
     }
 
-    /// The nine classes against the shapes the spec's table describes. Each
+    /// The eleven classes against the shapes the spec's table describes. Each
     /// shape here *is* one row of that table, so a predicate that drifts fails
     /// against the sentence it claims to implement.
     #[test]
@@ -281,96 +462,212 @@ mod tests {
             (Class::ZeroReuseSingle, scored(false, true, 1, 0, 0)),
             // reused == 0, nchunks > 1
             (Class::ZeroReuseMulti, scored(false, false, 3, 0, 0)),
-            // 0 < reused < nchunks, moved == 0, size equal
-            (Class::PartialSameOffset, scored(false, true, 3, 1, 0)),
-            // 0 < reused < nchunks, moved > 0
-            (Class::PartialMovedOffset, scored(false, true, 3, 1, 1)),
-            // 0 < reused < nchunks, moved == 0, size differs
-            (Class::PartialSizeChanged, scored(false, false, 2, 1, 0)),
+            // 0 < reused < nchunks, moved == 0
+            (
+                Class::KeptInPlace,
+                shape(false, 3, 1, 0, 0, 0, 100, 100, true),
+            ),
+            // moved > 0, every move goes down (the source is after the destination)
+            (
+                Class::MovedAscending,
+                shape(false, 3, 2, 1, 0, 1, 100, 100, true),
+            ),
+            // moved > 0, every move goes up (the source is before the destination)
+            (
+                Class::MovedDescending,
+                shape(false, 3, 2, 1, 1, 0, 100, 100, true),
+            ),
+            // moved > 0, moves in both directions
+            (
+                Class::MovedMixed,
+                shape(false, 4, 3, 2, 1, 1, 100, 100, true),
+            ),
+            // 0 < reused < nchunks, the file is longer than the target, no source
+            // reaches past the target
+            (
+                Class::TrimEager,
+                shape(false, 3, 2, 0, 0, 0, 200, 100, true),
+            ),
+            // ... and a source does
+            (
+                Class::TrimDeferred,
+                shape(false, 3, 2, 1, 0, 1, 200, 100, false),
+            ),
             // only in the new manifest
             (Class::Added, Shape::Added),
             // only in the old manifest
             (Class::Removed, Shape::Removed),
-            // reused == nchunks, md5 differs
-            (Class::FullReuseReordered, scored(false, true, 4, 4, 0)),
         ];
         for (class, shape) in cases {
             assert!(class.matches(shape), "{class} should match {shape:?}");
         }
     }
 
-    /// The predicates are *not* nine copies of the same test, and the boundaries
-    /// are where a bug would live. Each shape below sits exactly on a boundary.
+    /// A class that does not match its own row would be worse than no class at
+    /// all, and a predicate that matches *two* rows would make the matrix lie
+    /// about which decision a capture forces.
+    ///
+    /// The sets are not all singletons, and that is a fact about the classes
+    /// rather than about the fixture: **every trim class is also a
+    /// `kept_in_place` or a direction class**, because the trim needs a
+    /// partially-reusable file and the direction is a property of the same
+    /// file's moves. The two are what `covered_by` is built from.
     #[test]
-    fn the_boundaries_between_the_three_partial_shapes_are_exact() {
-        let same_offset = scored(false, true, 3, 1, 0);
-        assert!(Class::PartialSameOffset.matches(same_offset));
-        assert!(
-            !Class::PartialSizeChanged.matches(same_offset),
-            "size is equal"
-        );
-        assert!(
-            !Class::PartialMovedOffset.matches(same_offset),
-            "moved == 0"
-        );
-
-        let size_changed = scored(false, false, 3, 1, 0);
-        assert!(Class::PartialSizeChanged.matches(size_changed));
-        assert!(
-            !Class::PartialSameOffset.matches(size_changed),
-            "size differs"
-        );
-        assert!(
-            !Class::PartialMovedOffset.matches(size_changed),
-            "moved == 0"
-        );
-
-        let moved = scored(false, true, 3, 1, 1);
-        assert!(Class::PartialMovedOffset.matches(moved));
-        assert!(
-            !Class::PartialSameOffset.matches(moved) && !Class::PartialSizeChanged.matches(moved),
-            "a moved chunk is neither offset-stable nor size-stable"
-        );
+    fn each_documented_shape_matches_exactly_its_documented_classes() {
+        let cases: Vec<(Vec<Class>, Shape)> = vec![
+            (vec![Class::Identical], scored(true, true, 1, 1, 0)),
+            (vec![Class::ZeroReuseSingle], scored(false, true, 1, 0, 0)),
+            (vec![Class::ZeroReuseMulti], scored(false, false, 3, 0, 0)),
+            (
+                vec![Class::KeptInPlace],
+                shape(false, 3, 1, 0, 0, 0, 100, 100, true),
+            ),
+            (
+                vec![Class::MovedAscending],
+                shape(false, 3, 2, 1, 0, 1, 100, 100, true),
+            ),
+            (
+                vec![Class::MovedDescending],
+                shape(false, 3, 2, 1, 1, 0, 100, 100, true),
+            ),
+            (
+                vec![Class::MovedMixed],
+                shape(false, 4, 3, 2, 1, 1, 100, 100, true),
+            ),
+            (
+                // Nothing moves, the file shrinks, and no source reaches past
+                // the target: both the keep and the eager trim.
+                vec![Class::KeptInPlace, Class::TrimEager],
+                shape(false, 3, 2, 0, 0, 0, 200, 100, true),
+            ),
+            (
+                // One move down, the file shrinks, and a source reaches past
+                // the target: both the direction and the deferred trim.
+                vec![Class::MovedAscending, Class::TrimDeferred],
+                shape(false, 3, 2, 1, 0, 1, 200, 100, false),
+            ),
+        ];
+        for (want, shape) in cases {
+            assert_eq!(Class::all_satisfied_by(shape), want, "{shape:?}");
+        }
     }
 
-    /// `reused` must be *strictly* between 0 and `nchunks`; the ends belong to
-    /// the zero-reuse and full-reuse classes.
+    /// The two direction classes are exclusive, and the mixed one is exactly
+    /// "neither of them". A file whose every move goes one way is a file whose
+    /// chunking did not re-flow, and saying otherwise would put the same file
+    /// in two direction classes.
+    #[test]
+    fn the_direction_classes_are_exclusive() {
+        let all_down = shape(false, 4, 3, 2, 0, 2, 100, 100, true);
+        assert!(Class::MovedAscending.matches(all_down));
+        assert!(!Class::MovedDescending.matches(all_down));
+        assert!(!Class::MovedMixed.matches(all_down));
+
+        let all_up = shape(false, 4, 3, 2, 2, 0, 100, 100, true);
+        assert!(Class::MovedDescending.matches(all_up));
+        assert!(!Class::MovedAscending.matches(all_up));
+        assert!(!Class::MovedMixed.matches(all_up));
+
+        let both = shape(false, 4, 3, 2, 1, 1, 100, 100, true);
+        assert!(Class::MovedMixed.matches(both));
+        assert!(!Class::MovedAscending.matches(both));
+        assert!(!Class::MovedDescending.matches(both));
+
+        // And a file that does not move at all is none of them.
+        let still = shape(false, 4, 3, 0, 0, 0, 100, 100, true);
+        for c in [
+            Class::MovedAscending,
+            Class::MovedDescending,
+            Class::MovedMixed,
+        ] {
+            assert!(!c.matches(still), "{c} must not take moved == 0");
+        }
+    }
+
+    /// The two trim classes are exclusive, and the split is the *whole* point
+    /// of having them: the eager trim releases the dead tail before the first
+    /// write, the deferred one waits for the end.
+    #[test]
+    fn the_trim_classes_are_exclusive_and_need_a_shrinking_file() {
+        let eager = shape(false, 3, 2, 0, 0, 0, 200, 100, true);
+        assert!(Class::TrimEager.matches(eager));
+        assert!(!Class::TrimDeferred.matches(eager));
+
+        let deferred = shape(false, 3, 2, 1, 0, 1, 200, 100, false);
+        assert!(Class::TrimDeferred.matches(deferred));
+        assert!(!Class::TrimEager.matches(deferred));
+
+        // A file that does not shrink has no dead tail to release.
+        let same = shape(false, 3, 2, 0, 0, 0, 100, 100, true);
+        assert!(!Class::TrimEager.matches(same));
+        assert!(!Class::TrimDeferred.matches(same));
+
+        let grows = shape(false, 3, 2, 0, 0, 0, 100, 200, true);
+        assert!(!Class::TrimEager.matches(grows));
+        assert!(!Class::TrimDeferred.matches(grows));
+    }
+
+    /// `reused` must be *strictly* between 0 and `nchunks` for the partial
+    /// classes; the ends belong to the zero-reuse classes.
     #[test]
     fn partial_means_strictly_between_and_the_ends_belong_elsewhere() {
         let none_reused = scored(false, true, 4, 0, 0);
-        for c in [
-            Class::PartialSameOffset,
-            Class::PartialMovedOffset,
-            Class::PartialSizeChanged,
-        ] {
+        for c in [Class::KeptInPlace, Class::TrimEager, Class::TrimDeferred] {
             assert!(!c.matches(none_reused), "{c} must not take reused == 0");
         }
         assert!(Class::ZeroReuseMulti.matches(none_reused));
 
         let all_reused = scored(false, true, 4, 4, 0);
-        for c in [
-            Class::PartialSameOffset,
-            Class::PartialMovedOffset,
-            Class::PartialSizeChanged,
-        ] {
+        for c in [Class::KeptInPlace, Class::TrimEager, Class::TrimDeferred] {
             assert!(
                 !c.matches(all_reused),
                 "{c} must not take reused == nchunks"
             );
         }
-        assert!(Class::FullReuseReordered.matches(all_reused));
+        // A file whose every chunk is reused and none of them moved is the
+        // keep-in-place shape *only* when some chunk is missing — with nothing
+        // missing there is nothing to keep, so it matches no class at all.
+        assert!(Class::all_satisfied_by(all_reused).is_empty());
     }
 
-    /// `identical` and `full_reuse_reordered` are both "every chunk reused", and
-    /// the whole-file MD5 is the only thing that separates them.
+    /// `identical` is separated from everything else by the whole-file MD5: a
+    /// file whose every chunk is reused is the skip branch when the MD5s
+    /// agree and nothing else when they do not.
     #[test]
-    fn identical_and_full_reuse_differ_only_by_the_file_md5() {
+    fn identical_is_separated_from_the_rest_by_the_file_md5() {
         let identical = scored(true, true, 4, 4, 0);
+        assert_eq!(Class::all_satisfied_by(identical), vec![Class::Identical]);
         let reordered = scored(false, true, 4, 4, 0);
-        assert!(Class::Identical.matches(identical));
-        assert!(!Class::FullReuseReordered.matches(identical));
-        assert!(Class::FullReuseReordered.matches(reordered));
-        assert!(!Class::Identical.matches(reordered));
+        assert!(
+            Class::all_satisfied_by(reordered).is_empty(),
+            "a file whose every chunk is reused and none of them moved is not a \
+             class of its own: it is the shape the removed `full_reuse_reordered` \
+             used to claim, and there is no decision behind it"
+        );
+    }
+
+    /// A file whose content is **unchanged** is the skip branch, whatever its
+    /// chunking did.
+    ///
+    /// The live pool holds one such path: `StreamingAssets/AudioAssets/Music4.pck`
+    /// has 336 chunks, all of them reused, and four of them at a different
+    /// offset — the chunking was re-tiled — yet the file's whole md5 is the
+    /// same on both sides. So the file is byte-identical and the repair skips
+    /// it; there is no content decision to make a class out of.
+    ///
+    /// It used to satisfy `moved_descending` as well as `identical`, which was
+    /// a published population one too high, an instrument that could not
+    /// reproduce the crate, and A19's "is unchanged but its class says it
+    /// should differ" waiting for a cheap enough candidate to trip.
+    #[test]
+    fn an_unchanged_file_is_the_skip_branch_even_when_its_chunking_moved() {
+        let retiled = shape(true, 336, 336, 4, 4, 0, 398_535_566, 398_535_566, true);
+        assert_eq!(
+            Class::all_satisfied_by(retiled),
+            vec![Class::Identical],
+            "the class set is a partition on the content, and `identical` owns an \
+             unchanged file"
+        );
     }
 
     /// A one-sided path is exactly one class and no other. A predicate that
@@ -404,19 +701,34 @@ mod tests {
 
     /// Most shapes satisfy exactly one class. Where they do not, the tag list
     /// has to say so, because `covered_by` is built from it.
+    ///
+    /// The overlap the live pair actually has: a file whose chunking re-flowed
+    /// *and* whose file on disk is longer than the target answers both the
+    /// direction class and the trim class. That is the file
+    /// `trim_deferred` is covered by, and the reason the admission has to
+    /// learn `covered_by` at all.
     #[test]
-    fn the_common_case_is_exactly_one_class() {
+    fn the_common_case_is_exactly_one_class_and_the_overlap_is_named() {
         for shape in [
             scored(true, true, 1, 1, 0),
             scored(false, true, 1, 0, 0),
             scored(false, true, 3, 1, 0),
-            scored(false, true, 3, 1, 1),
-            scored(false, false, 2, 1, 0),
-            scored(false, true, 4, 4, 0),
+            scored(false, false, 3, 0, 0),
+            shape(false, 4, 3, 2, 0, 2, 100, 100, true),
+            shape(false, 4, 3, 2, 1, 1, 100, 100, true),
         ] {
             let all = Class::all_satisfied_by(shape);
             assert_eq!(all.len(), 1, "{shape:?} -> {all:?}");
         }
+
+        // The overlap: moves that go down, in a file that shrinks, with a
+        // source reaching past the target's end.
+        let both = shape(false, 10, 8, 4, 0, 4, 200, 100, false);
+        assert_eq!(
+            Class::all_satisfied_by(both),
+            vec![Class::MovedAscending, Class::TrimDeferred],
+            "the order is the admission order"
+        );
     }
 
     #[test]
@@ -442,14 +754,24 @@ mod tests {
         assert_eq!(sorted, Class::ALL);
     }
 
-    /// The ordering is a decision, not an accident: the usually-unsatisfiable
-    /// class goes last so it never costs a cheap one.
+    /// The order is a decision, not an accident: the **direction** classes are
+    /// admitted before the **trim** classes, because `trim_deferred`'s cheapest
+    /// candidate is the same file as `moved_ascending`'s. Admitting the trim
+    /// first would push `moved_ascending` onto its next candidate — 24.9 MB
+    /// for a second copy of the same shape.
     #[test]
-    fn full_reuse_reordered_is_admitted_last() {
-        assert_eq!(
-            Class::REQUIRED_ORDER.last().copied(),
-            Some(Class::FullReuseReordered)
+    fn the_direction_classes_are_admitted_before_the_trim_classes() {
+        let order = all_in_admission_order();
+        let at = |c: Class| order.iter().position(|x| *x == c).expect("in the order");
+        assert!(
+            at(Class::MovedAscending) < at(Class::TrimEager),
+            "the direction classes come first"
         );
+        assert!(
+            at(Class::MovedDescending) < at(Class::TrimEager),
+            "the direction classes come first"
+        );
+        assert!(at(Class::MovedMixed) < at(Class::TrimEager));
     }
 
     #[test]
@@ -462,6 +784,6 @@ mod tests {
         }
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 9);
+        assert_eq!(ids.len(), Class::ALL.len());
     }
 }

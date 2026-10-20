@@ -21,7 +21,7 @@ it; every gzipped document ships a plain-text sidecar (`*.tsv`) so an agent can
 `grep` it without decompressing.
 
 The worked values throughout are from the reference capture of `hk4e_global`
-7.0.0 → 7.1.0: 97 files, 8 captures, 38 chunk blobs, 56 request rows, 116
+7.0.0 → 7.1.0: 324 files, 10 captures, 259 chunk blobs, 277 request rows, 354
 selfcheck rows, `result: "pass"`.
 
 ---
@@ -69,8 +69,8 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
     └── selfcheck.json
 ```
 
-`capture_id` is `<class>` or `<class>+<n>` (e.g. `partial_same_offset`,
-`partial_moved_offset+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
+`capture_id` is `<class>` or `<class>+<n>` (e.g. `kept_in_place`,
+`moved_ascending+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
 Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
 
@@ -94,8 +94,8 @@ assume any document in a bundle was renamed into position.
   "schema_version": 1,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
-    "id": "20261017T123335Z",
-    "captured_at": "2026-10-17T12:33:35Z",
+    "id": "20261020T154810Z",
+    "captured_at": "2026-10-20T15:48:10Z",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
     "complete": true            // false only if interrupted; selfcheck then explains why
@@ -117,21 +117,21 @@ assume any document in a bundle was renamed into position.
     "note": "--audio widens this pool; captures may come from any listed field"
   },
   "totals": {
-    "files_captured": 8,
-    "chunks_blobs": 38,
-    "bytes_downloaded": 47592933,
-    "bytes_on_disk": 208239065
+    "files_captured": 10,
+    "chunks_blobs": 259,
+    "bytes_downloaded": 250418224,
+    "bytes_on_disk": 802823771
   },
   "matrix": [                            // one row per class, in admission order
     { "class": "identical", "status": "captured", "capture_id": "identical",
       "path": "GenshinImpact_Data/Resources/browser_assets", "matching_field": "game",
-      "also_satisfies": [] },
-    { "class": "partial_size_changed", "status": "covered_by",
-      "covered_by": "partial_same_offset",
-      "reason": "cheapest candidate already captured for a cheaper class" },
-    { "class": "full_reuse_reordered", "status": "unavailable",
-      "reason": "no path in any selected field has reused==nchunks && md5 differs",
-      "candidates_considered": 2837 }
+      "candidates_considered": 1733 },
+    { "class": "trim_deferred", "status": "covered_by",
+      "capture_id": "moved_ascending",
+      "covered_by": "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
+      "also_satisfies": ["trim_deferred"],
+      "reason": "the cheapest candidate is captured for another class",
+      "candidates_considered": 282 }
   ],
   "files": [                             // every file under the artifact root
     { "path": "game/GenshinImpact_Data/Plugins/HoYoChannel.dll",
@@ -142,7 +142,11 @@ assume any document in a bundle was renamed into position.
 ```
 
 `matrix[].status` ∈ `captured` | `covered_by` | `over_budget` | `unavailable`.
-A class is never simply absent (assertion A17). The row's optional keys
+A class is never simply absent (assertion A17). All four states are acceptable
+to A17: the assertion is about the matrix being *complete* — every class has a
+row and every row says what happened to it — and `over_budget` ("a candidate
+existed and this run's budget would not pay for it") is a complete answer. The
+refusal is `--require-class`'s job. The row's optional keys
 (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
@@ -154,12 +158,12 @@ before they are written: `MANIFEST.json` (it is being written), `README.md` and
 (its own). A document that hashes itself has no fixed point, and here the
 dependency runs both ways.
 
-`verify/checksums.json` is the complete inventory: `file_count: 96` for a 97-file
-bundle, and it covers all four.
+`verify/checksums.json` is the complete inventory: `file_count: 323` for a
+324-file bundle, and it covers all four.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
-what `du` reports (≈199 MB against ≈129 MB on disk for the reference bundle);
+what `du` reports (≈803 MB against ≈730 MB on disk for the reference bundle);
 that is the correct answer, because it is the number a reader would need to hold
 the document in memory.
 
@@ -183,8 +187,8 @@ rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5
 
 ## 4. `api/requests.ndjson`
 
-One object per HTTP request, in `seq` order. In the reference capture: 56 rows —
-6 `api`, 4 `manifest`, 38 `chunk`, 8 `probe`.
+One object per HTTP request, in `seq` order. In the reference capture: 277 rows —
+6 `api`, 4 `manifest`, 259 `chunk`, 8 `probe`.
 
 ```jsonc
 { "seq": 1, "ts": "2026-10-17T12:33:35.971Z", "kind": "api",     // api|manifest|chunk|probe
@@ -491,13 +495,15 @@ for the reference pool. Lets a later run ask "why did it pick that?"
 ```jsonc
 { "schema_version": 1,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
-              "same_md5","old_bytes","new_bytes","patch_bytes","total_cost","classes","rank"],
+              "moved_up","moved_down","old_max_end","same_md5","old_bytes","new_bytes",
+              "patch_bytes","total_cost","classes","rank"],
   "rows": [
     { "path": "…/HoYoChannel.dll", "matching_field": "game",
       "old_size": 2340264, "new_size": 2340264,
-      "nchunks": 3, "reused": 1, "moved": 0, "same_md5": false,
+      "nchunks": 3, "reused": 1, "moved": 0, "moved_up": 0, "moved_down": 0,
+      "old_max_end": 2340264, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
-      "total_cost": 1826067, "classes": ["partial_same_offset"], "rank": 1 }
+      "total_cost": 1826067, "classes": ["kept_in_place"], "rank": 1 }
   ] }
 ```
 
@@ -507,6 +513,19 @@ Column-oriented so a reader can sort without re-parsing objects.
 code). It is a row column because the same relative path can appear in more than
 one pool, and without it a reader summing `total_cost` across rows would double
 count. `rank` is 1-based, in `total_cost` order.
+
+`moved_up` and `moved_down` split `moved` by **direction**: `moved_up` counts
+the chunks whose source is *before* their destination (the bytes move later,
+and the descending write order keeps them alive), `moved_down` counts the ones
+whose source is *after* it (the bytes move earlier, and the ascending order
+keeps them alive). `moved` is their sum. The split is what makes the write
+direction a *measurement* rather than something a reader has to re-derive.
+
+`old_max_end` is the largest end (`source offset + size`) over the file's reuse
+sources. It is the **trim test's input**: the repair releases the dead tail
+before the first write only when no source reaches past the target's end, and
+the tool under test asks that same question of that same number
+(`repair::file::trim_is_free`).
 
 ## 11. `diff/reuse_pool.json`
 
@@ -528,7 +547,7 @@ simplification in the main tool; `gircap` never acts on it.
 ## 12. `chunks/index.json` and `chunks/blobs/`
 
 One blob per distinct `chunk_id`, byte-exact (zstd as served), stored once even
-when several files or both builds reference it. 38 blobs for the reference
+when several files or both builds reference it. 259 blobs for the reference
 capture.
 
 ```jsonc
@@ -547,7 +566,7 @@ capture.
       "decode_error": null,
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
-          "capture_id": "partial_moved_offset",
+          "capture_id": "moved_ascending",
           "path": "…/blocks/00/09801749.blk", "role": "materialize_old", "offset": 5502333 }
       ],
       "sets": ["materialize_old"] }
@@ -621,10 +640,10 @@ Per target chunk: where its bytes come from.
 
 ```jsonc
 { "schema_version": 1,
-  "capture_id": "partial_same_offset",
+  "capture_id": "kept_in_place",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
-  "classes": ["partial_same_offset"],
+  "classes": ["kept_in_place"],
   "old": { "tag": "7.0.0", "size": 2340264, "md5": "1e210ff1…", "nchunks": 3 },
   "new": { "tag": "7.1.0", "size": 2340264, "md5": "d992a789…", "nchunks": 3 },
   "plan": [
@@ -662,13 +681,99 @@ Per target chunk: where its bytes come from.
     "result_md5": "d992a789…",
     "absent_after": false,
     "download_bytes": 274426,
-    "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"]
+    "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"],
+    "summary": {
+      "damaged_chunks": 2, "inplace": 1, "temp": 0, "kept_bytes": 1626019,
+      "ram_bytes_ordered": 0, "ram_bytes_staged": 0, "write_bytes": 714245
+    }
+  },
+  "repair": {
+    "kept": 1, "moved": 0, "fetch": 2,
+    "kept_bytes": 1626019, "payload_bytes": 0, "write_bytes": 714245,
+    "direction": "n/a", "keeps_ascending": 0, "keeps_descending": 0,
+    "trim": "none", "growth_bytes": 0, "mode": "inplace"
   }
 }
 ```
 
 `expectations.must_not_fetch` is the negative assertion: a run that downloads
 that chunk has a broken reuse path, and it is nameable from the artifact alone.
+
+### 13.0 The `repair` block — what the in-place path would do
+
+**What the repair does with this file, computed by the capture** so a consumer
+does not have to work it out — and so the artifact and the tool cannot disagree
+about it. Every number comes from the plan and the old side's bytes.
+
+| field | what it says |
+|---|---|
+| `kept` | the chunks that are already correct where they belong: **kept**, not written |
+| `moved` | the chunks whose bytes live elsewhere in the file: copied from a source |
+| `fetch` | the chunks with no usable local source: downloaded |
+| `kept_bytes` | the bytes that did not have to be written |
+| `payload_bytes` | the RAM the **staged** tier needs: the bytes that have to move |
+| `write_bytes` | the bytes the in-place run writes |
+| `direction` | the write order the **ordered** tier would pick: `ascending`, `descending` or `n/a` |
+| `keeps_ascending` / `keeps_descending` | how many sources each order would salvage |
+| `trim` | when the dead tail is released: `eager`, `deferred` or `none` |
+| `growth_bytes` | how much the file on disk has to grow |
+| `mode` | the mode the default run takes: `inplace` |
+
+The three counts are the repair's own vocabulary — **kept**, **copied**,
+**fetched** — and they are not the same as the plan's `REUSE`/`FETCH` split: a
+chunk whose source sits at its own offset is a `REUSE` in the plan and a
+**kept** chunk here, because the repair leaves it alone.
+
+The direction is the ordered tier's rule, the one
+`repair::reuse::survives` applies: a source survives the ascending order when
+it sits at or after its destination, the descending one when it sits at or
+before it, and a source that reaches past the end of the file counts for
+neither. A tie goes to ascending, as it does in the tool — but a tie that
+keeps **nothing** is reported as `n/a`, because there is no order to name: six
+of the ten reference captures have nothing to order at all.
+
+`trim` is `eager` when the file on disk is longer than the target and **no
+reuse source reaches past the target's end** — the tail is dead weight and is
+released before the first write — and `deferred` when one does, because a
+source the trim would delete is a source that is gone. `none` means the file
+does not shrink.
+
+The block is **null** for a capture with no new side: there is nothing to
+repair. The writer emits the key either way, so a reader never has to tell
+"absent" from "not written" — and §13.1's own `removed` example uses the same
+convention for `"new": null, "plan": null, "totals": null`.
+
+### 13.0a The `expectations.summary` block — the run's counters, per flag
+
+**Every counter the repair reports is conditional on a flag** — the mode, the
+RAM budget, the scan, the write ceiling — so the expectations are stated per
+flag rather than as one flat set of numbers.
+
+| key | the flag that produces it | what it says |
+|---|---|---|
+| `damaged_chunks` | `--scan` | the chunks that are wrong where they belong |
+| `inplace` | `--repair-mode inplace` | the files the run repaired in place |
+| `temp` | `--repair-mode inplace` | the files the run repaired through the temp path — none |
+| `kept_bytes` | `--repair-mode inplace` | the bytes that did not have to be written |
+| `ram_bytes_ordered` | `--max-ram-bytes 0` | the RAM the run reserved — zero, because the ordered tier stages nothing |
+| `ram_bytes_staged` | `--max-ram-bytes` big enough for the staged tier | the RAM the run reserved |
+
+**The two RAM rows are the capture's way of stating one key.** `girpr` reports a
+single `ram_bytes` in its `SUMMARY`, and what it holds depends on the budget it
+was given: zero under `--max-ram-bytes 0`, because the ordered tier stages
+nothing, and the payload's size under a budget big enough for the staged tier.
+So a consumer compares `ram_bytes_ordered` against the run that had no budget
+and `ram_bytes_staged` against the run that had one — and the two rows are
+what let it tell those two runs apart.
+| `write_bytes` | `--max-write-bytes`, in place | the bytes the run wrote |
+
+A file that is **skipped** — already correct, so the repair never runs —
+changes every counter: `inplace` is `0` and `kept_bytes` and `write_bytes` are
+`0` too. That is the `identical` class, and it is why the expectations are
+about a *run* rather than about the file.
+
+The block is **null** for a capture with nothing to repair — the same
+convention as the `repair` block above.
 
 `source_range` is the local-file byte range the main tool would read and MD5-verify
 before copying. `moved` in `totals` counts entries where `source_range.start !=
@@ -712,8 +817,10 @@ shape:
     "result_md5":   null,
     "absent_after": true,
     "download_bytes": 0,
-    "must_not_fetch": []
-  } }
+    "must_not_fetch": [],
+    "summary": null
+  },
+  "repair": null }
 ```
 
 `download_bytes: 0` here is a **true** value, not a default: a removal downloads
@@ -812,7 +919,7 @@ The count is safe, because no file appears or disappears between the two passes.
 ```jsonc
 { "schema_version": 1,
   "result": "pass",                                  // pass | fail | incomplete
-  "counts": { "total": 116, "passed": 116, "failed": 0 },
+  "counts": { "total": 354, "passed": 354, "failed": 0 },
   "assertions": [
     { "id": "A6", "assertion": "chunk decompressed md5 matches",
       "subject": "chunks/blobs/340ca86e….zst",
@@ -824,10 +931,11 @@ The count is safe, because no file appears or disappears between the two passes.
 }
 ```
 
-One row per assertion **instance**, not per assertion kind — 38 stored chunks
-produce 38 A6 rows, so `counts.total` is much larger than the number of ids. In
-the reference capture it is 116: A1 6, A2 2, A3 4, A4 8, A6 38, A7 7, A8 7,
-A9 6, A10 4, A11 14, A12 7, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1.
+One row per assertion **instance**, not per assertion kind — 259 stored chunks
+produce 259 A6 rows, so `counts.total` is much larger than the number of ids. In
+the reference capture it is 354: A1 6, A2 2, A3 4, A4 8, A6 259, A7 9, A8 9,
+A9 8, A10 6, A11 18, A12 9, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1,
+A21 1, A22 1, A23 1.
 `ok:false` rows are never dropped; a failing capture leaves them in place so the
 failure is inspectable rather than summarized away.
 
@@ -838,8 +946,8 @@ silently narrowed, and "every reused chunk's old-file slice MD5 matches" and
 "every reused chunk's MD5 matches" are both `A10`.
 
 A skipped row is recorded too, and is **not** a failure: `ok` is absent and the
-row is listed under `skipped`. A `--no-chunk-blobs` capture skips A6–A12 and A19,
-reports `result: "incomplete"`, and exits `0`.
+row is listed under `skipped`. A `--no-chunk-blobs` capture skips A6–A12, A19 and
+A21–A23, reports `result: "incomplete"`, and exits `0`.
 
 A capture's `selfcheck.json` never contains an `A18` **or** an `A20` row: both
 are statements about the bundle rather than about the run, so only

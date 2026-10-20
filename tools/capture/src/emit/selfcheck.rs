@@ -124,7 +124,7 @@ impl Assertion {
 /// it is the converse of A14, and without it a capture whose two variant files
 /// came out identical would pass every other assertion while holding no evidence
 /// of the patch it was taken for.
-pub const WORDING: [(&str, &str); 18] = [
+pub const WORDING: [(&str, &str); 21] = [
     ("A1", "every API response captured has retcode == 0"),
     (
         "A2",
@@ -176,11 +176,23 @@ pub const WORDING: [(&str, &str); 18] = [
     ),
     (
         "A17",
-        "each required matrix class is captured | covered_by | unavailable - never absent",
+        "each required matrix class is captured | covered_by | over_budget | unavailable - never absent",
     ),
     (
         "A19",
         "each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
+    ),
+    (
+        "A21",
+        "the bundle covers both trim outcomes: at least one eager and at least one deferred",
+    ),
+    (
+        "A22",
+        "the bundle covers both write directions: at least one ascending and at least one descending",
+    ),
+    (
+        "A23",
+        "the bundle covers a file that grows: at least one capture with growth_bytes > 0",
     ),
 ];
 
@@ -202,6 +214,69 @@ pub fn wording(id: &str) -> &'static str {
 ///
 /// Next to the rows rather than in the dispatcher, so a caller cannot add a
 /// red row and forget to say so.
+/// A21, A22 and A23: the coverage the class set exists to buy.
+///
+/// The three properties are otherwise only held **by accident**. A bundle that
+/// happened to contain a file with a deferred trim would say nothing about the
+/// eager one, and a reader would have to take the class names on trust — which
+/// is exactly the trust this tool exists to replace with a measurement.
+///
+/// The coverage is read out of the patchmaps' `repair` blocks, which say what
+/// the in-place path would do with each file: its `trim`, its `direction` and
+/// its `growth_bytes`.
+///
+/// It lives here rather than in `closeout.rs` so that the two places that
+/// build these rows build the **same** rows: the capture's and the verifier's
+/// have to agree, or `check_agreement` would report a disagreement that does
+/// not exist.
+pub fn coverage(repairs: &[crate::assemble::Repair]) -> Vec<Assertion> {
+    use crate::assemble::{Direction, Trim};
+
+    let mut rows = Vec::new();
+
+    // A21 — both trim outcomes.
+    let eager = repairs.iter().filter(|r| r.trim == Trim::Eager).count();
+    let deferred = repairs.iter().filter(|r| r.trim == Trim::Deferred).count();
+    rows.push(Assertion::row(
+        "A21",
+        "patchmaps/",
+        "at least one eager trim and at least one deferred trim",
+        eager > 0 && deferred > 0,
+        &format!("{eager} eager trim(s), {deferred} deferred trim(s)"),
+    ));
+
+    // A22 — both write directions.
+    let ascending = repairs
+        .iter()
+        .filter(|r| r.direction == Direction::Ascending)
+        .count();
+    let descending = repairs
+        .iter()
+        .filter(|r| r.direction == Direction::Descending)
+        .count();
+    rows.push(Assertion::row(
+        "A22",
+        "patchmaps/",
+        "at least one ascending write order and at least one descending one",
+        ascending > 0 && descending > 0,
+        &format!("{ascending} ascending, {descending} descending"),
+    ));
+
+    // A23 — a file that grows.
+    let growing = repairs.iter().filter(|r| r.growth_bytes > 0).count();
+    rows.push(Assertion::row(
+        "A23",
+        "patchmaps/",
+        "at least one capture whose file on disk is shorter than the target",
+        growing > 0,
+        &format!("{growing} capture(s) grow"),
+    ));
+
+    rows
+}
+
+/// A21, A22 and A23 are about the **bundle's coverage**, so the close-out
+/// records them and `verify` re-derives them from the patchmaps.
 pub fn report_failed(rows: &[Assertion]) {
     for a in rows.iter().filter(|a| !a.ok) {
         tracing::error!(
@@ -417,7 +492,7 @@ pub fn closing(
     //
     // A14 asks "is `game/` free of paths the tool under test would plan
     // against", which is one direction. It cannot see the other failure: a
-    // capture admitted for `partial_same_offset` whose two variant files came
+    // capture admitted for `kept_in_place` whose two variant files came
     // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
     // side matches its own declared MD5), and be useless - the fixture would
     // hold no evidence of the patch it was captured for. M11 found the gap by
@@ -594,8 +669,9 @@ pub fn check_config_ini(
 ///
 /// `skipped_were_declared_not_asserted` is the check. It builds a selfcheck the
 /// way a `--no-chunk-blobs` run does and requires the two to be identical.
-pub const SKIPPED_WITHOUT_CHUNK_BLOBS: [&str; 8] =
-    ["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"];
+pub const SKIPPED_WITHOUT_CHUNK_BLOBS: [&str; 11] = [
+    "A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19", "A21", "A22", "A23",
+];
 
 /// Whether a failure of this assertion ends the run.
 ///
@@ -622,6 +698,9 @@ pub fn is_fatal(id: &str) -> bool {
             | "A16"
             | "A17"
             | "A19"
+            | "A21"
+            | "A22"
+            | "A23"
     )
 }
 
@@ -680,10 +759,15 @@ impl MatrixRow {
     ///
     /// Takes the string rather than a `&MatrixRow` because M9's `verify` has a
     /// status it read out of `MANIFEST.json` and no row to hang the answer on.
-    /// `over_budget` is excluded for the reason [`crate::select::MatrixRow`]
-    /// gives: the caller was told to take it and the tool could not afford to.
+    /// Every state is acceptable: A17 is about the matrix being **complete**,
+    /// and `over_budget` is a complete answer — "a candidate existed and this
+    /// run's budget would not pay for it". The *requirement* is
+    /// `--require-class`'s business, and it excludes `over_budget` on its own.
     pub fn ok_status(status: &str) -> bool {
-        matches!(status, "captured" | "covered_by" | "unavailable")
+        matches!(
+            status,
+            "captured" | "covered_by" | "over_budget" | "unavailable"
+        )
     }
 }
 
@@ -868,12 +952,12 @@ mod tests {
         assert_eq!(dedup.len(), sk.len(), "a duplicated id in the skipped list");
     }
 
-    /// The eighteen ids (seventeen from the spec plus M11's A19) each have wording
-    /// and each is fatal.
+    /// The twenty-one ids (seventeen from the spec plus M11's A19 and the three
+    /// coverage assertions) each have wording and each is fatal.
     ///
-    /// Eighteen rather than seventeen is the point of asserting the length: a new
-    /// assertion added without wording would otherwise pass, and a wording entry
-    /// added without a producer would be a promise nothing keeps.
+    /// Twenty-one rather than seventeen is the point of asserting the length: a
+    /// new assertion added without wording would otherwise pass, and a wording
+    /// entry added without a producer would be a promise nothing keeps.
     #[test]
     fn every_assertion_id_has_wording_and_is_fatal() {
         for (id, w) in WORDING {
@@ -881,8 +965,105 @@ mod tests {
             assert_eq!(wording(id), w);
             assert!(is_fatal(id), "{id}");
         }
-        assert_eq!(WORDING.len(), 18);
+        assert_eq!(WORDING.len(), 21);
         assert_eq!(wording("A99"), "an assertion this build does not describe");
+    }
+
+    /// The three coverage assertions are about the bundle, not about one file,
+    /// and they are the only ones that say so.
+    #[test]
+    fn the_three_coverage_assertions_are_present_and_named() {
+        for id in ["A21", "A22", "A23"] {
+            assert!(WORDING.iter().any(|(w, _)| *w == id), "{id}");
+            assert!(is_fatal(id), "{id} is fatal");
+        }
+        // And they are **not** the spec's own ids: A18 and A20 are the two
+        // `verify`-only ones.
+        assert!(!WORDING.iter().any(|(id, _)| *id == "A18"));
+        assert!(!WORDING.iter().any(|(id, _)| *id == "A20"));
+    }
+
+    /// **The negative case**, and the reason the three assertions exist: a
+    /// bundle that does not cover both trim outcomes **fails A21**.
+    ///
+    /// The properties the class set buys are otherwise only held *by accident*:
+    /// a bundle that happened to contain a file with a deferred trim would say
+    /// nothing about the eager one, and a reader would have to take the class
+    /// names on trust.
+    #[test]
+    fn a_bundle_without_both_trims_fails_a21() {
+        use crate::assemble::{Direction, Mode, Repair, Trim};
+
+        let repair = |trim| Repair {
+            kept: 1,
+            moved: 0,
+            fetch: 0,
+            kept_bytes: 10,
+            payload_bytes: 0,
+            write_bytes: 0,
+            direction: Direction::NotApplicable,
+            keeps_ascending: 0,
+            keeps_descending: 0,
+            trim,
+            growth_bytes: 0,
+            mode: Mode::Inplace,
+        };
+
+        // Only the eager trim: A21 is red.
+        let rows = coverage(&[repair(Trim::Eager)]);
+        let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
+        assert!(!a21.ok, "one trim outcome is not both: {a21:?}");
+        assert!(a21.actual.contains("0 deferred"), "the detail says so: {a21:?}");
+
+        // Only the deferred one: still red.
+        let rows = coverage(&[repair(Trim::Deferred)]);
+        let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
+        assert!(!a21.ok);
+
+        // Both: green.
+        let rows = coverage(&[repair(Trim::Eager), repair(Trim::Deferred)]);
+        let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
+        assert!(a21.ok, "both trims: {a21:?}");
+    }
+
+    /// The same shape for the other two: both write directions, and a file that
+    /// grows.
+    #[test]
+    fn a_bundle_without_both_directions_fails_a22_and_one_that_never_grows_fails_a23() {
+        use crate::assemble::{Direction, Mode, Repair, Trim};
+
+        let repair = |direction, growth_bytes| Repair {
+            kept: 1,
+            moved: 1,
+            fetch: 0,
+            kept_bytes: 10,
+            payload_bytes: 10,
+            write_bytes: 10,
+            direction,
+            keeps_ascending: 1,
+            keeps_descending: 0,
+            trim: Trim::None,
+            growth_bytes,
+            mode: Mode::Inplace,
+        };
+
+        let rows = coverage(&[repair(Direction::Ascending, 0)]);
+        assert!(
+            !rows.iter().find(|r| r.id == "A22").expect("a row").ok,
+            "one direction is not both"
+        );
+        assert!(
+            !rows.iter().find(|r| r.id == "A23").expect("a row").ok,
+            "and a file that does not grow is not a growth"
+        );
+
+        let rows = coverage(&[
+            repair(Direction::Ascending, 0),
+            repair(Direction::Descending, 0),
+            repair(Direction::NotApplicable, 64),
+        ]);
+        assert!(rows.iter().find(|r| r.id == "A22").expect("a row").ok);
+        assert!(rows.iter().find(|r| r.id == "A23").expect("a row").ok);
     }
 
     /// A19 and A18 are the two that are not the spec's, and both are named.

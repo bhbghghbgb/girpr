@@ -34,7 +34,7 @@ use gircap::verify::materialize;
 const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
 const OLD_TAG: &str = "7.0.0";
 const NEW_TAG: &str = "7.1.0";
-const CAPTURE: &str = "partial_same_offset";
+const CAPTURE: &str = "kept_in_place";
 
 /// A chunk and the bytes it holds.
 fn chunk(seed: u8, len: usize, prefix: u64) -> (SophonChunk, Vec<u8>, Vec<u8>) {
@@ -232,7 +232,7 @@ impl Bundle {
                 capture_id: CAPTURE.into(),
                 path: DLL.into(),
                 matching_field: "game".into(),
-                classes: vec![gircap::select::Class::PartialSameOffset],
+                classes: vec![gircap::select::Class::KeptInPlace],
                 old: Some(Side {
                     tag: OLD_TAG.into(),
                     size: old_bytes.len() as i64,
@@ -247,12 +247,14 @@ impl Bundle {
                 }),
                 plan: Some(plan),
                 totals: Some(totals),
+                repair: None,
                 expectations: gircap::assemble::Expectations {
                     result_path: Some(format!("expected/{DLL}")),
                     result_md5: Some(new_md5.clone()),
                     absent_after: false,
                     download_bytes: fetch_bytes,
                     must_not_fetch: vec![b.id.clone(), c.id.clone()],
+                    summary: None,
                 },
             },
         );
@@ -321,24 +323,14 @@ fn manifest() -> Manifest {
         ("identical", "unavailable", "identical"),
         ("zero_reuse_single", "unavailable", "zero_reuse_single"),
         ("zero_reuse_multi", "unavailable", "zero_reuse_multi"),
-        ("partial_same_offset", "captured", "partial_same_offset"),
-        (
-            "partial_moved_offset",
-            "unavailable",
-            "partial_moved_offset",
-        ),
-        (
-            "partial_size_changed",
-            "unavailable",
-            "partial_size_changed",
-        ),
+        ("kept_in_place", "captured", "kept_in_place"),
+        ("moved_ascending", "unavailable", "moved_ascending"),
+        ("moved_descending", "unavailable", "moved_descending"),
+        ("moved_mixed", "unavailable", "moved_mixed"),
+        ("trim_eager", "unavailable", "trim_eager"),
+        ("trim_deferred", "unavailable", "trim_deferred"),
         ("added", "unavailable", "added"),
         ("removed", "unavailable", "removed"),
-        (
-            "full_reuse_reordered",
-            "unavailable",
-            "full_reuse_reordered",
-        ),
     ];
     Manifest {
         schema_version: gircap::SCHEMA_VERSION,

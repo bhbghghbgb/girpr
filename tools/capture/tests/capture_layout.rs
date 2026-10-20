@@ -766,8 +766,11 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/partial_same_offset.json",
+        "patchmaps/kept_in_place.json",
+        "patchmaps/moved_ascending.json",
+        "patchmaps/moved_descending.json",
         "patchmaps/removed.json",
+        "patchmaps/trim_eager.json",
         "patchmaps/zero_reuse_multi.json",
     ];
     const CHECKSUM_DOCUMENTS: &[&str] = &[
@@ -806,8 +809,11 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/partial_same_offset.json",
+        "patchmaps/kept_in_place.json",
+        "patchmaps/moved_ascending.json",
+        "patchmaps/moved_descending.json",
         "patchmaps/removed.json",
+        "patchmaps/trim_eager.json",
         "patchmaps/zero_reuse_multi.json",
         "verify/selfcheck.json",
     ];
@@ -826,20 +832,20 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["audio"], serde_json::json!(["en-us"]));
     assert_eq!(m["gzip_threshold"], 1_048_576);
     assert_eq!(m["selection_pool"]["fields"], serde_json::json!(["game", "en-us"]));
-    assert_eq!(m["selection_pool"]["manifest_entries"], serde_json::json!({"en-us": 1, "game": 4}));
+    assert_eq!(m["selection_pool"]["manifest_entries"], serde_json::json!({"en-us": 1, "game": 7}));
     assert_eq!(m["capture"]["complete"], true);
     let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
     assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
-    assert_eq!(m["totals"]["files_captured"], 5);
-    assert_eq!(m["totals"]["chunks_blobs"], 10);
+    assert_eq!(m["totals"]["files_captured"], 8);
+    assert_eq!(m["totals"]["chunks_blobs"], 22);
 
     let mpaths: Vec<&str> = m["files"].as_array().unwrap().iter()
         .map(|f| f["path"].as_str().expect("a path")).collect();
     let (mdocs, mcounts) = split_inventory(&mpaths);
     assert_eq!(mdocs, MANIFEST_DOCUMENTS, "MANIFEST.json documents[] changed");
-    assert_eq!(mcounts.get("blob"), Some(&10), "MANIFEST.json blob rows");
-    assert_eq!(mcounts.get("game"), Some(&5), "MANIFEST.json game rows");
-    assert_eq!(mcounts.get("expected"), Some(&3), "MANIFEST.json expected rows");
+    assert_eq!(mcounts.get("blob"), Some(&22), "MANIFEST.json blob rows");
+    assert_eq!(mcounts.get("game"), Some(&8), "MANIFEST.json game rows");
+    assert_eq!(mcounts.get("expected"), Some(&6), "MANIFEST.json expected rows");
 
     let c = json("verify/checksums.json");
     assert_eq!(c["algorithm"], "sha256");
@@ -848,7 +854,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(c["file_count"], epaths.len());
     let (cdocs, ccounts) = split_inventory(&epaths);
     assert_eq!(cdocs, CHECKSUM_DOCUMENTS, "checksums.json documents[] changed");
-    assert_eq!(ccounts.get("blob"), Some(&10), "checksums.json blob rows");
+    assert_eq!(ccounts.get("blob"), Some(&22), "checksums.json blob rows");
 
     // A16's claim, restated against the projection: every file `MANIFEST.json`
     // lists is also checksummed, plus the three documents that cannot list
@@ -879,18 +885,20 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
         "| `zero_reuse_single` | unavailable | - | `-` | - | - |",
         "| `zero_reuse_multi` | captured | zero_reuse_multi | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
-        "| `partial_same_offset` | captured | partial_same_offset | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
-        "| `partial_moved_offset` | unavailable | - | `-` | - | - |",
-        "| `partial_size_changed` | unavailable | - | `-` | - | - |",
+        "| `kept_in_place` | captured | kept_in_place | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
+        "| `moved_ascending` | captured | moved_ascending | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
+        "| `moved_descending` | captured | moved_descending | `GenshinImpact_Data/StreamingAssets/blocks/grow.blk` | game | #    |",
+        "| `moved_mixed` | unavailable | - | `-` | - | - |",
+        "| `trim_eager` | captured | trim_eager | `GenshinImpact_Data/StreamingAssets/blocks/eager.blk` | game | #    |",
+        "| `trim_deferred` | covered_by | moved_ascending | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
         "| `added` | captured | added | `GenshinImpact_Data/Plugins/libNew.dll` | game | - |",
-        "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #    |",
-        "| `full_reuse_reordered` | unavailable | - | `-` | - | - |",
+        "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #     |",
         "## Totals",
         "- # files captured, #  chunk blobs stored",
-        "- #     B downloaded, #     B on disk",
+        "- #     B downloaded, #      B on disk",
         "- selection pool: `game`, `en-us`",
-        "- `materialize_new`: # chunks",
-        "- `materialize_old`: # chunks",
+        "- `materialize_new`: #  chunks",
+        "- `materialize_old`: #  chunks",
         "- `patch_fetch`: # chunks",
         "## Re-verifying",
         "```",
@@ -943,7 +951,7 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
     assert_eq!(
         ids,
         vec!["A1", "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17", "A19",
-             "A2", "A3", "A4", "A6", "A7", "A8", "A9"],
+             "A2", "A21", "A22", "A23", "A3", "A4", "A6", "A7", "A8", "A9"],
         "the set of assertions a capture makes changed; A5, A18 and A20 are \
          verify-only or absent by design and must stay that way"
     );
@@ -963,9 +971,12 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
         "A14 game/ contains no path outside expected/'s manifest set + the tool-read config files",
         "A15 diff/ counts equal the recomputed set differences",
         "A16 checksums.json covers every file written under the artifact root, and re-hashing matches",
-        "A17 each required matrix class is captured | covered_by | unavailable - never absent",
+        "A17 each required matrix class is captured | covered_by | over_budget | unavailable - never absent",
         "A19 each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
         "A2 getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
+        "A21 the bundle covers both trim outcomes: at least one eager and at least one deferred",
+        "A22 the bundle covers both write directions: at least one ascending and at least one descending",
+        "A23 the bundle covers a file that grows: at least one capture with growth_bytes > 0",
         "A3 manifest blob md5(decompressed) == manifest.checksum",
         "A4 manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque",
         "A6 len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
@@ -989,35 +1000,49 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         .expect("api/requests.ndjson");
 
     const EXPECTED: &[&str] = &[
-"1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
-"2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
-"3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
-"4 api GET /hyp/getGamePackages?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 103 1 api/getGamePackages.json -",
-"5 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.1.0 200 1344 1 api/getBuild.7.1.0.json -",
-"6 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.0.0 200 1344 1 api/getBuild.7.0.0.json -",
-"7 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=6.7.0 200 50 1 - -",
-"8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_abf47822fe1d2cab22e470e6a2b43a09 200 706 1 manifests/7.0.0/game.manifest.zst -",
-"9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_412a9dbff152a4f482b470a8c466a1e8 200 719 1 manifests/7.1.0/game.manifest.zst -",
-"10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
-"11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
-"12 probe GET /cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000 404 276 1 - -",
-"13 probe GET /cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000 404 273 1 - -",
-"14 probe GET /cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 404 273 1 - -",
-"15 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=null 200 50 1 - -",
-"16 probe GET /sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword 200 55 1 - -",
-"17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
-"18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
-"19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
-"20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
-"21 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
-"22 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
-"23 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
-"24 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
-"25 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
-"26 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747 200 1033 1 chunks/blobs/d3263f518c944d35_5f37fc15a53060db835c98ae5f3af747.zst -",
-"27 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
-"28 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
-    ];
+        // The fixture grew three files (the eager trim, the deferred trim and
+        // the growing one) and the `removed` one got big, so the log has
+        // more rows and different chunk ids.
+        "1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
+        "2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
+        "3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
+        "4 api GET /hyp/getGamePackages?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 103 1 api/getGamePackages.json -",
+        "5 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.1.0 200 1348 1 api/getBuild.7.1.0.json -",
+        "6 api GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=7.0.0 200 1348 1 api/getBuild.7.0.0.json -",
+        "7 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=6.7.0 200 50 1 - -",
+        "8 manifest GET /cdn/sMOCKold00/manifest/manifest_2771a8e0cdb7b707_70ef994bc1c8a1a3f8bae061f3173a59 200 1302 1 manifests/7.0.0/game.manifest.zst -",
+        "9 manifest GET /cdn/sMOCKnew00/manifest/manifest_3fc907e1b5db4352_3004baafaed168985353c643b2daa6f4 200 1249 1 manifests/7.1.0/game.manifest.zst -",
+        "10 manifest GET /cdn/sMOCKold00/manifest/manifest_f56ab1254eaa50c8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.0.0/en-us.manifest.zst -",
+        "11 manifest GET /cdn/sMOCKnew00/manifest/manifest_82e9a75baad12ba8_5018981248fba1a947670fa7daffc756 200 252 1 manifests/7.1.0/en-us.manifest.zst -",
+        "12 probe GET /cdn/sMOCKnew00/manifest/0000000000000000_00000000000000000000000000000000 404 276 1 - -",
+        "13 probe GET /cdn/sMOCKnew00/chunk/0000000000000000_00000000000000000000000000000000 404 273 1 - -",
+        "14 probe GET /cdn/sMOCKold00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 404 273 1 - -",
+        "15 probe GET /sophon/getBuild?branch=main&package_id=ScSYQBFhu9&password=sMOCKpassword&tag=null 200 50 1 - -",
+        "16 probe GET /sophon/getBuild?branch=main&package_id=undefined&password=sMOCKpassword 200 55 1 - -",
+        "17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+        "18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
+        "19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
+        "20 chunk GET /cdn/sMOCKold00/chunk/24e99fcb0359f3fb_3d0838c26d10d17bd1714fae25fac45c 200 2057 1 chunks/blobs/24e99fcb0359f3fb_3d0838c26d10d17bd1714fae25fac45c.zst -",
+        "21 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
+        "22 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1033 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
+        "23 chunk GET /cdn/sMOCKnew00/chunk/6789fad3caf3fb1a_ee0ef7aefe4efdab5c25aa0f3894cb34 200 1033 1 chunks/blobs/6789fad3caf3fb1a_ee0ef7aefe4efdab5c25aa0f3894cb34.zst -",
+        "24 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+        "25 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+        "26 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
+        "27 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+        "28 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
+        "29 chunk GET /cdn/sMOCKold00/chunk/81cb3c6b453257d4_b9d4f8d6da7e69a1de630211b23c5ebd 200 2057 1 chunks/blobs/81cb3c6b453257d4_b9d4f8d6da7e69a1de630211b23c5ebd.zst -",
+        "30 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
+        "31 chunk GET /cdn/sMOCKnew00/chunk/982f9a91afccd519_f2b42080304278b2760f7954a2659275 200 2057 1 chunks/blobs/982f9a91afccd519_f2b42080304278b2760f7954a2659275.zst -",
+        "32 chunk GET /cdn/sMOCKnew00/chunk/a598e647b6df4268_4ba362f130b9615b2a3b733313f198d5 200 1033 1 chunks/blobs/a598e647b6df4268_4ba362f130b9615b2a3b733313f198d5.zst -",
+        "33 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+        "34 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+        "35 chunk GET /cdn/sMOCKnew00/chunk/bd9b67a9dc35093c_e2a2e62035e8cff44c8346b4583fba39 200 2057 1 chunks/blobs/bd9b67a9dc35093c_e2a2e62035e8cff44c8346b4583fba39.zst -",
+        "36 chunk GET /cdn/sMOCKnew00/chunk/c13c9adf4fc994be_a4a093e638464814ba68155fb8bc4862 200 1033 1 chunks/blobs/c13c9adf4fc994be_a4a093e638464814ba68155fb8bc4862.zst -",
+        "37 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
+        "38 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+        "39 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
+        "40 chunk GET /cdn/sMOCKnew00/chunk/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781 200 2057 1 chunks/blobs/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781.zst -",    ];
 
     let mut got: Vec<(u64, String)> = log
         .lines()
@@ -1354,7 +1379,7 @@ fn the_captured_bundle_is_found_by_list() {
 
 // ------------------------------------------------------------ the matrix
 
-/// The five classes the synthetic world publishes are found, and the four it
+/// The five classes the synthetic world publishes are found, and the six it
 /// does not are `unavailable` rather than absent.
 #[test]
 fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
@@ -1362,7 +1387,7 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
     let raw = std::fs::read(bundle.join("MANIFEST.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let rows = doc["matrix"].as_array().expect("a matrix");
-    assert_eq!(rows.len(), 9, "one row per required class");
+    assert_eq!(rows.len(), 11, "one row per required class");
     let by = |c: &str| {
         rows.iter()
             .find(|r| r["class"] == c)
@@ -1374,16 +1399,19 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
         "added",
         "removed",
         "zero_reuse_multi",
-        "partial_same_offset",
+        "kept_in_place",
+        "moved_ascending",
+        "moved_descending",
+        "trim_eager",
     ] {
         assert_eq!(by(c)["status"], "captured", "{c}: {}", by(c));
     }
-    for c in [
-        "zero_reuse_single",
-        "partial_moved_offset",
-        "partial_size_changed",
-        "full_reuse_reordered",
-    ] {
+    // The deferred trim has no capture of its own: the file that shows it is
+    // the `moved_ascending` one, so the class is **covered by** that capture.
+    let deferred = by("trim_deferred");
+    assert_eq!(deferred["status"], "covered_by");
+    assert_eq!(deferred["capture_id"], "moved_ascending");
+    for c in ["zero_reuse_single", "moved_mixed"] {
         assert_eq!(by(c)["status"], "unavailable", "{c}: {}", by(c));
         assert!(
             !by(c)["reason"].as_str().unwrap_or_default().is_empty(),
@@ -1447,13 +1475,13 @@ fn requiring_an_unavailable_class_is_exit_four() {
     let r = capture(
         &mock,
         &scratch,
-        &["--require-class", "full_reuse_reordered"],
+        &["--require-class", "moved_mixed"],
     );
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
     let detail = percent_decode(&r.summary()["detail"]);
-    assert!(detail.contains("full_reuse_reordered"), "{detail}");
+    assert!(detail.contains("moved_mixed"), "{detail}");
 }
 
 /// The six `api` rows in `requests.ndjson` carry the path their body was
@@ -1601,7 +1629,8 @@ fn no_chunk_blobs_still_writes_the_launcher_metadata() {
 /// `--no-chunk-blobs` stores no blobs, and the result is `incomplete` rather
 /// than `pass`: a skip is not a success.
 #[test]
-fn no_chunk_blobs_is_incomplete_not_pass() {    let mock = Mock::start(World::five_classes());
+fn no_chunk_blobs_is_incomplete_not_pass() {
+    let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1747,3 +1776,4 @@ fn a_chunk_shared_by_both_builds_is_fetched_once() {
         "{stored} stored vs {patch_fetch} patch fetches"
     );
 }
+

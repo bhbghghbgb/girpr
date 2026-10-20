@@ -210,22 +210,112 @@ repeat the mistake.
 targets a *distinct* decision the main tool makes. `--per-class N` raises the
 count; there are no per-variant flags.
 
+#### The case space: what the repair decides, and what a class can force
+
+The repair spec (2026-10-20, merge `f9e6f6a`) makes the repair **in place** by
+default, in two tiers, with a trim that is sometimes eager and sometimes
+deferred. Per file, it decides nine things. Six of them are **content**
+decisions — a function of how the file changed — and those six are what the
+class set has to cover. The other three come from a flag, a filesystem or an
+interruption, and no class can force them; §7.3 of `girpr`'s bridge spec
+says where each one goes instead.
+
+| # | decision | what it depends on | a class can force it? |
+|---|---|---|---|
+| D1 | **skip** — the file is already correct | the whole-file MD5 | yes |
+| D2 | **what happens to each chunk**: *kept* (already correct where it belongs), *copied* (its bytes live elsewhere in the file), *fetched* (no usable local source) | the old/new chunk layouts | yes |
+| D3 | **the tier** — RAM-staged (the moving bytes fit the budget) or ordered (they do not) | the payload size vs `--max-ram-bytes` | the payload is content; the budget is a flag |
+| D4 | **the direction** — ascending or descending, whichever keeps more reuse | the *sign* of the moves | yes |
+| D5 | **the trim** — eager (the dead tail is released before the first write) or deferred (the tail waits for the end) | the old size vs the new size, and **where the sources are** | yes |
+| D6 | **the growth** — the file on disk is shorter than the target, so the in-place path has to extend it | the two sizes | yes (as a property) |
+| D7 | **the mode** — in place / temp / discard, and the fallback when the target cannot be opened for writing | a flag, and the filesystem | no — a flag axis |
+| D8 | **the resume** — in place re-verifies and continues; temp resumes by length | an interrupted run | no — a fault injection |
+| D9 | **the zero-fill** of a hole in the chunk coverage | a manifest that does not tile its file | no — a malformed manifest |
+
+**A class is a statement about the content, so it is a class over D1–D6.** A
+flag axis is a different kind of thing: the same file answers it whatever the
+flag says, so a class over it would be a class over nothing.
+
+#### The classes
+
 | class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
-| `identical` | `old.md5 == new.md5` | skip: size+MD5 match, 0 bytes | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | single download into empty `_tmp` | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
-| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | N sequential downloads, no reuse | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `partial_same_offset` | `0 < reused < nchunks`, `moved == 0`, `size equal` | S2 reuse happy path | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `partial_moved_offset` | `0 < reused < nchunks`, `moved > 0` | S2 reuse where the source offset ≠ target offset | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `partial_size_changed` | `0 < reused < nchunks`, `moved == 0`, `size differs` | oversize-`_tmp` truncate + length gate | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
-| `added` | path only in the new manifest | "missing local file" branch | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
-| `removed` | path only in the old manifest | not planned; `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
-| `full_reuse_reordered` | `reused == nchunks`, `md5 differs` | every chunk reused, layout rearranged | **none in this pair** — recorded `unavailable` | — |
+| `identical` | `old.md5 == new.md5` | the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
+| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | no local source: the one chunk is fetched and written in place | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
+| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | no local source: every chunk is fetched, one at a time, into the target | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
+| `kept_in_place` | `0 < reused < nchunks`, `moved == 0` | the surviving chunks are already correct where they belong: kept, not copied; the rest are fetched | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `moved_ascending` | `moved > 0`, every move goes **down** (source after destination) | the bytes move earlier: the ascending write order keeps every source alive | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `moved_descending` | `moved > 0`, every move goes **up** (source before destination) | the bytes move later: the descending write order keeps every source alive | `GenshinImpact_Data/resources.assets` | 40.3 MB |
+| `moved_mixed` | `moved > 0`, moves in **both** directions | the chunking re-flowed: the ordered tier keeps the larger half and fetches the rest | `…/StreamingAssets/AudioAssets/Banks25.pck` | 243 MB |
+| `trim_eager` | `0 < reused < nchunks`, `old.size > new.size`, no source reaches past `new.size` | the file on disk is longer than the target and no source reaches past it: the dead tail is released before the first write | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
+| `trim_deferred` | `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `added` | path only in the new manifest | the file is created: absent locally, fetched whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
+| `removed` | path only in the old manifest | not planned; a `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
 
-*(measured)* population over the `game` field's 2 662 common paths: `identical`
-1 592, `partial_same_offset` 29, `partial_moved_offset` 430,
-`partial_size_changed` 447, `zero_reuse_single` 120, `zero_reuse_multi` 491,
-`added` 82, `removed` 11.
+**`kept_in_place` is not a reuse class.** A same-offset source *is* the chunk's
+own destination, so the chunk is **kept**, not copied: the payload is 0 and the
+staged tier stages nothing. The old name (`partial_same_offset`) said "reuse"
+and the behaviour is not a reuse.
+
+**`moved_ascending` and `moved_descending` are the direction, not the shift.**
+The direction is the *sign* of the moves: the bytes move **earlier** (the source
+is after the destination) and the ascending order keeps every source alive, or
+the bytes move **later** (the source is before the destination) and the
+descending one does. `moved_mixed` is the chunking re-flowing, and the ordered
+tier keeps the larger half.
+
+**The two trim classes split what one class used to cover.** The trim is
+**eager** when the file on disk is longer than the target and no reuse source
+reaches past the target's end — the tail is dead weight, and it is released
+before the first write. It is **deferred** when a source does reach past it: a
+source the trim would delete is a source that is gone, so the trim waits for the
+end and the file grows during the repair.
+
+*(measured)* population over the pool the capture selects (`game` ∪ `en-us`,
+2 932 paths): `identical` 1 733, `zero_reuse_single` 121, `zero_reuse_multi` 491,
+`kept_in_place` 29, `moved_ascending` 321, `moved_descending` 139,
+`moved_mixed` 3, `trim_eager` 56, `trim_deferred` 282, `added` 84, `removed` 11.
+
+**The admission order is a decision.** The direction classes are admitted
+**before** the trim classes, because `trim_deferred`'s cheapest candidate is the
+same file as `moved_ascending`'s: admitting the trim first would push
+`moved_ascending` onto its next candidate — 24.9 MB for a second copy of the
+same shape. The order is
+
+```
+identical, zero_reuse_single, zero_reuse_multi, kept_in_place,
+moved_ascending, moved_descending, moved_mixed, trim_eager, trim_deferred,
+added, removed
+```
+
+#### What the reference bundle exercises
+
+*(measured)* against the reference bundle. The three counts are the repair's own
+vocabulary: **kept** (already correct where it belongs), **copied** (its bytes
+live elsewhere in the file) and **fetched** (no usable local source).
+
+| capture | kept | copied | fetched | payload (RAM) | the ordered tier's direction | the trim |
+|---|---|---|---|---|---|---|
+| `identical` | 1 | 0 | 0 | 0 | — (skipped) | — |
+| `zero_reuse_single` | 0 | 0 | 1 | 0 | — | — (same size) |
+| `zero_reuse_multi` | 0 | 0 | 2 | 0 | — | — (grows 192 924 B) |
+| `kept_in_place` | 1 | 0 | 2 | 0 | — | — (same size) |
+| `moved_ascending` | 4 | 4 | 2 | **5 892 269** | **ascending** | **deferred** |
+| `moved_descending` | 0 | 27 | 7 | **38 150 367** | **descending** | — (grows 5 094 416 B) |
+| `moved_mixed` | 0 | 67 | 60 | **70 736 576** | **descending** (60 of 67) | — (grows 3 429 518 B) |
+| `trim_eager` | 9 | 0 | 1 | 0 | — | **eager** (24 067 B released) |
+| `added` | 0 | 0 | 1 | 0 | — | — (created) |
+| `removed` | — | — | — | — | — | — (purged) |
+
+Three rows carry the load. `moved_ascending` is the only capture that reaches
+the **deferred** trim — a reuse source reaches past the target's end, so the
+tail is not dead weight, the trim waits for the end and the file grows during
+the repair — and its every move goes the same way, so the ordered tier's
+direction rule has an unambiguous answer. `moved_descending` is its mirror: the
+content moves the other way, so the descending order is the one that keeps the
+sources alive. And `moved_mixed` is the case the rule exists for: the moves go
+**both** ways, so neither order keeps every source, and the ordered tier has to
+fetch the ones it cannot salvage.
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
@@ -238,15 +328,81 @@ came from. Audio files are real game files and are materialised exactly like
 `game` ones when selected — the only difference is that they are, on average,
 ~80 MB each, so cost ranking matters there.
 
+#### The candidates, and what each class costs
+
+*(measured)* over the pool the capture selects (`game` ∪ `en-us`, 2 932 paths).
+The ranking key is `gircap`'s own: `total_cost` = the compressed bytes of the old
+and the new file, because the old file has to be materialized in full for the
+fixture to be real.
+
+| class | candidates | cheapest candidate | `total_cost` | on disk |
+|---|---|---|---|---|
+| `identical` | 1 733 | `…/Resources/browser_assets` | 54 | 28 B |
+| `zero_reuse_single` | 121 | `…/AssetBundles/data_revision` | 42 | 16 B |
+| `zero_reuse_multi` | 491 | `…/Resources/unity default resources` | 633 588 | 9.9 MB |
+| `kept_in_place` | 29 | `…/Plugins/HoYoChannel.dll` | 1 826 067 | 4.7 MB |
+| `moved_ascending` | 321 | `…/blocks/00/09801749.blk` | 22 662 068 | 23.8 MB |
+| `moved_descending` | 139 | `GenshinImpact_Data/resources.assets` | 40 280 151 | 100.5 MB |
+| `moved_mixed` | 3 | `…/AudioAssets/Banks25.pck` | 243 016 539 | 290.4 MB |
+| `trim_eager` | 56 | `…/blocks/00/00981562.blk` | 21 679 587 | 21.8 MB |
+| `trim_deferred` | 282 | `…/blocks/00/09801749.blk` | 22 662 068 | — (the same file as `moved_ascending`) |
+| `added` | 84 | `…/Plugins/libHttpClient.GDK.dll` | 114 357 | 249 KB |
+| `removed` | 11 | `…/blocks/00/00664172.blk` | 1 731 133 | 1.7 MB |
+
+**`moved_mixed` is the expensive one.** The rule's "keep the larger half"
+branch deserves a case, and it has one — but its cheapest candidate is 243 MB
+of compressed bytes and 290 MB of fixture, so it is the last capture admitted
+and by far the largest in the bundle. `gircap` has the mechanism for a capture
+that cannot afford one: `--max-download-bytes` refuses a class it cannot pay for
+and the matrix records it as `over_budget` with its reason. The reference bundle
+is captured **without** a ceiling, so every class is funded; a capture with a
+ceiling records the truth instead of pretending.
+
+#### What the bundle cannot cover
+
+Two things are out of the bundle's reach, and both are said here rather than
+left to be discovered.
+
+**The corruption-repair input state.** The new repair spec opens with two
+regimes, and the first one is the common case: the file is the right size and
+most chunks are intact, so a chunk's reuse source is at *its own offset* and the
+bad chunk is simply overwritten where it lies. In a real corruption repair the
+install is at the **current** version and the *bytes* are damaged; the bundle
+cannot produce that state, because `game/` is always materialized from the
+**old** manifest, so a chunk that is reused at its own offset is already
+correct by construction.
+
+What the bundle *does* cover is the **behaviour** that regime produces: the
+payload is 0, the wrong chunks are written in place and the good ones are kept
+(`kept_in_place`). What it does not cover is the **input** — the case where the
+local map has an entry for the damaged chunk and the source check is what
+rejects it. A second fixture flavour, a "damaged current install" capture, is a
+real feature and not a flag: the class model would need a second dimension and
+the manifest diff would have to be scored against the damage rather than
+against the old version. It is its own change, with its own cost.
+
+**The malformed-manifest cases.** A hole in the chunk coverage, or an overlap,
+cannot come from a real capture: the server's manifests tile their files. They
+are only reachable with a synthetic manifest, which is a **bridge** fixture
+rather than a bundle case.
+
 Predicates overlap in general (a file can satisfy several). The admission step
 is **greedy by cost with an exclusion set**:
 
 ```
 for class in REQUIRED_ORDER:
-    if any already-captured file satisfies class:  record covered_by=<path>; continue
+    if any file an earlier class already wants satisfies class:
+        record capture_id=<that capture's id>               # the capture that answers it
+        record covered_by=<that capture's path>; continue    # and no second file
     pick the cheapest candidate satisfying class that is not already captured
     if none:                                      record status="unavailable" + reason
 ```
+
+The second rule is what stops the bundle paying twice for one shape: a class
+whose cheapest candidate an earlier class already took is **covered by** that
+capture. The one edge case: a `covered_by` row whose covering capture was
+refused by the budget becomes `over_budget`, because a class that cannot have
+the covering capture cannot have a dearer one either.
 
 Every captured file is tagged with **all** classes it satisfies, so
 `candidates.json` + `MANIFEST.json` always answer "which variant does this file
@@ -442,13 +598,35 @@ Each row is `{id, assertion, subject, expected, actual, ok}`.
 | A14 | `game/` contains no path outside `expected/`'s manifest set + the tool-read config files |
 | A15 | `diff/` counts equal the recomputed set differences |
 | A16 | `checksums.json` covers every file written under the artifact root, and re-hashing matches |
-| A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` - never absent |
+| A17 | each required matrix class is `captured` \| `covered_by` \| `over_budget` \| `unavailable` - never absent |
 | A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
 | A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
 | A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
+| A21 | the bundle covers both trim outcomes: at least one eager and at least one deferred |
+| A22 | the bundle covers both write directions: at least one ascending and at least one descending |
+| A23 | the bundle covers a file that grows: at least one capture with `growth_bytes > 0` |
 
-There are **twenty** ids: seventeen from this spec (A1–A17), A19 from a capture,
-and A18 and A20 from `verify` only.
+There are **twenty-three** ids: seventeen from this spec (A1–A17), A19 and the
+three coverage assertions (A21–A23) from a capture, and A18 and A20 from
+`verify` only.
+
+### A21, A22 and A23 — the coverage the class set exists to buy
+
+The three properties the new classes were built for are otherwise only held
+**by accident**: a bundle that happened to contain a file with a deferred trim
+would say nothing about the eager one, and a reader would have to take the class
+names on trust. The three assertions read the patchmaps' `repair` blocks —
+their `trim`, their `direction` and their `growth_bytes` — and say whether the
+bundle covers both trim outcomes, both write directions and a file that grows.
+
+**They are fatal in a capture and a finding in a `verify`,** and the difference
+is the point. A capture's contract is "a bundle that covers the repair spec's
+decisions", so a capture that does not cover them fails its own run and names
+the assertion. A bundle's *coverage* is a design property, not an integrity
+one: a narrow bundle (a tight `--max-download-bytes`) or a hand-built one is
+still internally consistent, so `verify` reports the shortfall as a **finding**
+and the bundle still verifies. `verify`'s job is to prove the bundle still says
+what it said — and "this bundle does not cover both trims" is a thing it said.
 
 **Which ids a `capture` records, and which fail the run.** `capture` records
 **A1–A17 and A19** — A18 and A20 are statements about the bundle rather than
@@ -458,9 +636,18 @@ id is fatal: a failure in any of them ends the run with exit `3`, because a
 failure in A15–A17 (the documents this tool just wrote) means the bundle is
 internally inconsistent, which is as untrustworthy as a wrong digest. A row that
 was **skipped** rather than failed is a different verdict and exits `0` with
-`result: "incomplete"`: a `--no-chunk-blobs` run cannot prove A6–A12 or A19,
+`result: "incomplete"`: a `--no-chunk-blobs` run cannot prove A6–A12, A19 or
+A21–A23,
 records those ids as skipped, and says so rather than claiming a pass. A caller
 that cares must read `result`, not just the exit code.
+
+**A17 is about the matrix being *complete*.** Every class has a row, and every
+row says what happened to it — `captured`, `covered_by` (another capture answers
+it), `over_budget` (a candidate existed and this run's budget would not pay for
+it) or `unavailable` (no path in the pool satisfies it). None of those four is a
+failure of the bundle: a matrix that records `over_budget` is *more* honest than
+one that fails. The refusal is `--require-class`'s job, and a class the caller
+named and did not get is exit `4`.
 
 ### A18 — and what `verify` does *not* re-derive
 
@@ -473,7 +660,7 @@ statement about the bundle rather than about the run.
 
 A14 asks one direction: is `game/` free of paths the tool under test would build
 a plan against? It cannot see the other failure — a capture admitted for
-`partial_same_offset` whose two variant files came out byte-identical. That
+`kept_in_place` whose two variant files came out byte-identical. That
 bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared MD5),
 and be useless, because the fixture would hold no evidence of the patch it was
 captured for.
@@ -496,11 +683,13 @@ dropped.
 
 ### What `verify` re-derives, and what it does not
 
-`gircap verify` re-derives **nine** of the twenty — A6, A7, A8, A11, A13, A16,
-A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15 or A19:
-those are statements about the API bodies, the manifests and the diff, and
-re-running them inside the bundle would be re-running the capture's own algorithm
-against the capture's own output, which can only ever agree.
+`gircap verify` re-derives **nine** of the twenty-one — A6, A7, A8, A11, A13,
+A16, A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15, A19
+or A21–A23: the first **eight** are statements about the API bodies, the
+manifests and the diff, and re-running them inside the bundle would be re-running
+the capture's own algorithm against the capture's own output, which can only ever
+agree; the last three are the bundle's **coverage**, which `verify` reports as
+a finding rather than as a failed check (see A21 above).
 
 The nine are split in two, and `SUMMARY` names both as `checks_derived=`:
 
@@ -527,10 +716,10 @@ An empty `--require-class` is **not** "every required class". The implementation
 requires nothing unless a class is named, so a capture whose matrix leaves a
 class `unavailable` still exits `0`; the unavailable row is the finding, not the
 exit code. That is a deliberate reversal of "all required classes", and the live
-pair is why: 7.0.0 → 7.1.0 has no `full_reuse_reordered` file, so requiring all
-nine by default would make *every* run of it exit `4`. `unavailable` is a fact
-about the manifests; `over_budget` is a fact about this run's flags; only a class
-the caller named is fatal. A caller that needs the stronger rule asks for it:
+pair is why: requiring all eleven by default would make *every* run of a pair
+that lacks one of them exit `4`. `unavailable` is a fact about the manifests;
+`over_budget` is a fact about this run's flags; only a class the caller named
+is fatal. A caller that needs the stronger rule asks for it:
 
 ```
 gircap capture … --require-class identical --require-class added
@@ -579,9 +768,22 @@ gircap list        --root <DIR>               # index every capture under a root
 Codes `3` and `4` are the two that leave a tree behind, and they are the two the
 failure summary marks `artifact_trustworthy=false`. Exit `0` with `result:
 incomplete` is not a pass: a `--no-chunk-blobs` capture provably cannot establish
-A6–A12 or A19, so it exits `0` and records them as skipped; a harness that treats
-"exited 0" as "every claim in this bundle is proven" will be wrong about exactly
-the bundles that prove least.
+A6–A12, A19 or A21–A23, so it exits `0` and records them as skipped; a harness
+that treats "exited 0" as "every claim in this bundle is proven" will be wrong
+about exactly the bundles that prove least.
+
+**A class the budget refused is not a failure, and that is a change worth
+stating.** `--max-download-bytes` can refuse a class the capture cannot afford;
+the matrix records it as `over_budget` with its reason, and the run exits `0`.
+A17 accepts that row, because a matrix that says "a candidate existed and this
+run's budget would not pay for it" is *more* honest than one that fails — and
+the information is not lost: the row's reason, the `SUMMARY` line's
+`captures_over_budget=` and the `budget` block in `diff/matrix.json` all carry
+it. The guard rail is `--require-class`: naming a class makes it fatal, and an
+unmet one is exit `4`. Before this, A17 failed on `over_budget` and the run
+exited `3`, which made a capture that had dropped most of its classes look
+untrustworthy rather than incomplete. The row is a fact about the run; the
+exit code is a verdict on the bundle.
 
 ### Output
 
@@ -717,7 +919,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
-   makes `download_bytes` attributable; a single run over all eight sums to the
+   makes `download_bytes` attributable; a single run over all ten sums to the
    same total but cannot be compared per capture. `removed` is the exception and
    takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
@@ -779,7 +981,7 @@ two figures worth checking are `deleted_extra_bytes=1731133`, which is the
 patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
 says exactly this, so the artifact's contract and the run's output agree.
 
-Only the `--include` glob is shared with the other seven; `--purge-only` is the
+Only the `--include` glob is shared with the other eight; `--purge-only` is the
 one flag that makes this capture different, and leaving it off would make the run
 exit non-zero for the same reason a repair run would.
 
@@ -826,18 +1028,27 @@ artifact's own patchmap rather than against this table:
 | `identical` | `identical` | 0 | 1 / 0 / 0 | 1 |
 | `zero_reuse_single` | `zero_reuse_single` | 21 | 0 / 1 / 0 | 0 |
 | `zero_reuse_multi` | `zero_reuse_multi` | 336 852 | 0 / 2 / 0 | 0 |
-| `partial_same_offset` | `partial_same_offset` | 274 426 | 1 / 2 / 0 | 1 |
-| `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
-| `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
+| `kept_in_place` | `kept_in_place` | 274 426 | 1 / 2 / 0 | 1 |
+| `moved_ascending` | `moved_ascending`, `trim_deferred` | 1 564 894 | 8 / 2 / 4 | 8 |
+| `moved_descending` | `moved_descending` | 2 480 175 | 27 / 7 / 27 | 27 |
+| `moved_mixed` | `moved_mixed` | 64 139 674 | 67 / 60 / 67 | 67 |
+| `trim_eager` | `kept_in_place`, `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
-All eight exit `0`. **2 487 742 B in total**, which is the sum of the patchmaps'
-figures to the byte. 19 reused chunks across the four captures that declare them,
-none of them downloaded. Only the eight captures' own paths changed on the
-scratch copy — the `added` file appeared, the `removed` file disappeared, and the
-other seven were modified in place — so the scope held across all eight runs. The
-bundle itself was never a working tree and still verifies.
+All ten exit `0`. **69 107 591 B in total**, which is the sum of the patchmaps'
+figures to the byte. 113 reused chunks across the six captures that declare them,
+none of them downloaded. Only the ten captures' own paths changed on the
+scratch copy — the `added` file appeared, the `removed` file disappeared, the
+`identical` one was left alone, and the other seven were modified in place — so
+the scope held across all ten runs. The bundle itself was never a working tree
+and still verifies.
+
+**Two captures carry two classes each.** `moved_ascending`'s file is also the
+`trim_deferred` one — the same file shows the deferred trim and the ascending
+shift — and `trim_eager`'s file is also a `kept_in_place` one. That is the
+`covered_by` admission at work, and it is why the bundle holds ten captures for
+eleven classes.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -851,8 +1062,8 @@ the rest, so read them with §13.1 of the schema:
   nothing. The run that produces it is a cleanup run, and the size it reports is
   `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
-The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
-**2 487 742 B**.
+The seven that carry a total of their own sum to **68 993 234 B**; adding
+`added` makes it **69 107 591 B**.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 

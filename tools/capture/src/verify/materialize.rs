@@ -142,9 +142,12 @@ impl<'i> ChunksByFile<'i> {
 
     /// The chunks that make up one file on one side, in offset order.
     ///
-    /// The same answer as [`chunks_for`], including its refusal: one blob placed
-    /// at two offsets in one file is a manifest that repeats itself, and taking
-    /// the first would produce a file with a hole. Recorded, not resolved.
+    /// **The same chunk id may appear more than once**, and it is not an
+    /// error: a file may place the same content at more than one offset — a
+    /// Unity asset with repeated blocks does, and the live `resources.assets`
+    /// has five chunk ids that appear two or three times each. The blob is
+    /// stored once and *placed* at every offset it is referenced at, which is
+    /// what the capture's own assembly does with the manifest.
     pub fn get(
         &self,
         tag: &str,
@@ -158,26 +161,8 @@ impl<'i> ChunksByFile<'i> {
         let end = run.iter().position(|r| r.key() != key).unwrap_or(run.len());
         let mut hits = run[..end].to_vec();
 
-        // One blob referenced at two offsets for one file is a manifest that
-        // places the same bytes twice. Taking the first would silently drop the
-        // second and produce a file with a hole; recorded, not resolved.
-        //
-        // `hits` is grouped by chunk id, so the duplicates are adjacent.
-        for pair in hits.windows(2) {
-            if pair[0].chunk_id == pair[1].chunk_id {
-                let offsets: Vec<String> = hits
-                    .iter()
-                    .filter(|r| r.chunk_id == pair[0].chunk_id)
-                    .map(|r| r.offset.to_string())
-                    .collect();
-                return Err(format!(
-                    "chunk {} is referenced {} times by {tag} {path} ({role}), at offsets {}",
-                    pair[0].chunk_id,
-                    offsets.len(),
-                    offsets.join(", ")
-                ));
-            }
-        }
+        // The offsets are what places the bytes, and two references to the same
+        // chunk id at two offsets are two placements of the same content.
         hits.sort_by_key(|r| r.offset);
         Ok(hits.into_iter().map(|r| (r.chunk_id, r.offset)).collect())
     }
@@ -704,22 +689,27 @@ mod tests {
         assert!(e.contains("references no chunks"), "{e}");
     }
 
-    /// A chunk named twice at two offsets would silently drop one of them.
+    /// The same chunk at two offsets is **not** an error: a file may place the
+    /// same content twice — a Unity asset with repeated blocks does — and the
+    /// blob is placed at both offsets. The live `resources.assets` has five
+    /// chunk ids that appear two or three times each, so this is the ordinary
+    /// case, not an edge one.
     #[test]
-    fn a_chunk_referenced_twice_for_one_file_is_refused() {
+    fn a_chunk_referenced_twice_for_one_file_is_placed_at_both_offsets() {
         let f = Fixture::build("twice");
         let mut index = f.index.clone();
         let id = index.blobs[1].props.chunk_id.clone();
         index.blobs[1]
             .referenced_by
             .push(reference("7.0.0", "c", DLL, Set::MaterializeOld, 999));
-        let e = chunks_for(&index, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap_err();
-        assert!(e.contains("referenced 2 times"), "{e}");
-        assert!(
-            e.contains("at offsets 64, 999"),
-            "and names both offsets: {e}"
+        let hits = chunks_for(&index, "7.0.0", "c", DLL, Set::MaterializeOld).expect("both");
+        let offsets: Vec<i64> = hits.iter().map(|(_, o)| *o).collect();
+        assert_eq!(offsets, vec![0, 64, 192, 999], "every offset is kept");
+        assert_eq!(
+            hits.iter().filter(|(c, _)| *c == id).count(),
+            2,
+            "and the repeated chunk is placed twice"
         );
-        assert!(e.contains(&id), "and the chunk: {e}");
     }
 
     /// A bundle whose index lists a blob that is not on disk is not closed, and
@@ -825,12 +815,14 @@ mod tests {
             new: side(new),
             plan: None,
             totals: None,
+            repair: None,
             expectations: crate::assemble::Expectations {
                 result_path: Some(format!("expected/{DLL}")),
                 result_md5: None,
                 absent_after: new.is_none(),
                 download_bytes: 0,
                 must_not_fetch: Vec::new(),
+                summary: None,
             },
         }
     }

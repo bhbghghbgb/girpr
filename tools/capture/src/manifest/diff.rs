@@ -85,6 +85,20 @@ pub struct PathScore {
     pub reused: u64,
     /// Of those, how many sit at a different offset in the old file.
     pub moved: u64,
+    /// Of the moved ones, how many move **later**: the source is *before* the
+    /// destination. The descending write order keeps these alive.
+    pub moved_up: u64,
+    /// Of the moved ones, how many move **earlier**: the source is *after* the
+    /// destination. The ascending write order keeps these alive.
+    pub moved_down: u64,
+    /// The largest end (`source offset + size`) over the file's reuse sources.
+    ///
+    /// **The trim test's input.** The repair releases the dead tail *before*
+    /// the first write only when no reuse source reaches past the target's end
+    /// — a source the trim would delete is a source that is gone. The tool
+    /// under test asks the same question of the same number
+    /// (`repair::file::trim_is_free`).
+    pub old_max_end: u64,
     /// Whether the whole-file MD5s agree.
     pub same_md5: bool,
     /// `Σ compressed_size` over the old entry's chunks.
@@ -350,8 +364,15 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
     })
 }
 
-/// Where each identity sits in one old file.
-type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
+/// Where each identity sits in one old file: the **first** chunk with that
+/// identity, in manifest order.
+///
+/// One offset per identity rather than a list of them, because the repair reads
+/// the *first* match and only the first match: `girpr`'s
+/// `repair::reuse::sources_for` and this crate's own patch flow
+/// (`assemble::patch_flow`) both take the first occurrence, and a list would
+/// invite a second definition of "where the bytes are".
+type FileIndex<'a> = HashMap<ChunkKey<'a>, i64>;
 
 /// One old file's chunk index, plus the sum `score` would otherwise walk its
 /// chunks again to compute.
@@ -362,31 +383,31 @@ type FileIndex<'a> = HashMap<ChunkKey<'a>, Vec<i64>>;
 ///
 /// Public because [`score`] is, and a public function cannot take a private
 /// type. Nothing outside this module should build one: `index_file` is the
-/// only way, and it is what guarantees the offset lists are sorted.
+/// only way, and it is what guarantees the offsets are the *first* ones.
 pub struct OldFileIndex<'a> {
-    /// Where each identity sits in the old file.
-    offsets: FileIndex<'a>,
+    /// The first chunk of each identity, in manifest order.
+    sources: FileIndex<'a>,
     /// `Σ compressed_size` over the old file's chunks.
     compressed_bytes: u64,
 }
 
-/// `(key) -> [offsets]` for one file's chunks, and its compressed byte total.
+/// `(key) -> [offset]` for one file's chunks, and its compressed byte total.
 ///
-/// The offset lists are **sorted**, because the only thing done with them is a
-/// membership test and a linear `Vec::contains` is O(n) per chunk — quadratic
-/// in the chunks of one file, for a file with 400 of them.
+/// The offset kept for an identity is the **first** one, because that is the
+/// source the repair would copy from — the same rule `girpr` applies in
+/// `repair::reuse::sources_for`, and the same rule the patchmap's
+/// `source_range` records. Keeping the *earliest* offset instead would agree
+/// with it only because the manifests' chunks are in ascending offset order,
+/// which is a property of the data rather than of the rule.
 fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
-    let mut offsets: FileIndex<'_> = HashMap::with_capacity(e.chunks.len());
+    let mut sources: FileIndex<'_> = HashMap::with_capacity(e.chunks.len());
     let mut compressed_bytes = 0_u64;
     for c in &e.chunks {
-        offsets.entry(c.identity()).or_default().push(c.offset);
+        sources.entry(c.identity()).or_insert(c.offset);
         compressed_bytes += c.compressed_size.max(0) as u64;
     }
-    for v in offsets.values_mut() {
-        v.sort_unstable();
-    }
     OldFileIndex {
-        offsets,
+        sources,
         compressed_bytes,
     }
 }
@@ -408,6 +429,16 @@ fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
 }
 
 /// Score one common path (spec §5).
+///
+/// **"Moved" is one fact, and this is where it is decided.** A chunk is moved
+/// when the *source* it would be copied from does not sit at its destination —
+/// and the source is the **first** old chunk with that identity, which is what
+/// `girpr` reads (`repair::reuse::sources_for`) and what this crate's own
+/// patch flow records (`assemble::patch_flow`). It used to be "the new offset
+/// is not among *any* of the old file's offsets for that identity", which
+/// disagrees with the patchmap's own `source_range` whenever an identity occurs
+/// more than once in the old file — and a class is a statement about the
+/// content, so the two have to be the same statement.
 pub fn score(
     new: &SophonChunkFile,
     old: &SophonChunkFile,
@@ -415,16 +446,33 @@ pub fn score(
 ) -> PathScore {
     let mut reused = 0_u64;
     let mut moved = 0_u64;
+    let mut moved_up = 0_u64;
+    let mut moved_down = 0_u64;
+    let mut old_max_end = 0_u64;
     let mut patch_bytes = 0_u64;
     let mut new_bytes = 0_u64;
     for c in &new.chunks {
         new_bytes += c.compressed_size.max(0) as u64;
-        match old_index.offsets.get(&c.identity()) {
-            Some(offsets) => {
+        match old_index.sources.get(&c.identity()) {
+            Some(&src) => {
                 reused += 1;
-                // Binary search: `offsets` is sorted by `index_file`.
-                if offsets.binary_search(&c.offset).is_err() {
+                // The source's end: the input to the trim test. Only the
+                // *sources* count, because only a source the trim would delete
+                // is a source that is gone.
+                let end = src.max(0) as u64 + c.uncompressed_size.max(0) as u64;
+                if end > old_max_end {
+                    old_max_end = end;
+                }
+                if src != c.offset {
                     moved += 1;
+                    if src > c.offset {
+                        // The bytes move earlier: the source is after the
+                        // destination, and the ascending order keeps it alive.
+                        moved_down += 1;
+                    } else {
+                        // The bytes move later: the descending order keeps it.
+                        moved_up += 1;
+                    }
                 }
             }
             None => patch_bytes += c.compressed_size.max(0) as u64,
@@ -440,12 +488,25 @@ pub fn score(
         nchunks: new.chunks.len() as u64,
         reused,
         moved,
+        moved_up,
+        moved_down,
+        old_max_end,
         same_md5: old.md5 == new.md5,
         old_bytes,
         new_bytes,
         patch_bytes,
         total_cost: old_bytes + new_bytes,
     }
+}
+
+/// Score one old/new entry pair, without a whole manifest.
+///
+/// The public face of [`score`]: it builds the old file's index and scores the
+/// new entry against it. [`diff_field`] uses the index it already has; a caller
+/// that holds only two entries — the patchmap's own consistency check, or a
+/// test — needs this.
+pub fn score_pair(old: &SophonChunkFile, new: &SophonChunkFile) -> PathScore {
+    score(new, old, &index_file(old))
 }
 
 /// Measure what same-file-only reuse forgoes.
@@ -479,7 +540,7 @@ fn reuse_pool<'a>(
             }
             // Reachable from this same file?
             let in_same_file =
-                file_index.is_some_and(|idx| idx.offsets.contains_key(&c.identity()));
+                file_index.is_some_and(|idx| idx.sources.contains_key(&c.identity()));
             if in_manifest && !in_same_file {
                 pool.cross_file_only_chunks += 1;
                 pool.cross_file_only_bytes_forgone += c.compressed_size.max(0) as u64;
@@ -872,6 +933,45 @@ mod tests {
         assert_eq!(d.scores[0].patch_bytes, 5);
     }
 
+    /// A digest is an **identity, not a spelling**.
+    ///
+    /// `girpr` compares chunk identities case-insensitively
+    /// (`repair::reuse::sources_for`), so a pair of manifests that spell one
+    /// chunk's md5 `AABB` and `aabb` describes the same content to the tool.
+    /// The crate has to agree: on the pair below the chunk is **reused**, not
+    /// fetched, and the file's whole md5 matches, so the file is **identical**.
+    ///
+    /// The normalisation happens where the manifest enters the crate — see
+    /// `proto::SophonChunk::normalise` — and the diff is where its effect is
+    /// observable.
+    #[test]
+    fn a_digest_spelled_in_different_cases_is_the_same_identity() {
+        let mut old = manifest(
+            "7.0.0",
+            vec![file("f", "aa11", vec![chunk("a", "aabb", 0, 10, 5)])],
+        );
+        let mut new = manifest(
+            "7.1.0",
+            vec![file("f", "AA11", vec![chunk("a", "AABB", 0, 10, 5)])],
+        );
+        for e in &mut old.entries {
+            e.normalise();
+        }
+        for e in &mut new.entries {
+            e.normalise();
+        }
+        let d = diff_field(&old, &new).unwrap();
+        assert_eq!(
+            d.scores[0].reused, 1,
+            "the same content, whatever its spelling"
+        );
+        assert_eq!(d.scores[0].patch_bytes, 0, "so nothing has to be fetched");
+        assert!(
+            d.scores[0].same_md5,
+            "and the whole file is the same content too"
+        );
+    }
+
     /// The §10 measurement: content reachable from *anywhere* in the old
     /// manifest, versus from this file only.
     ///
@@ -1025,6 +1125,9 @@ mod tests {
                 nchunks: 0,
                 reused,
                 moved,
+                moved_up: 0,
+                moved_down: moved,
+                old_max_end: 0,
                 same_md5: false,
                 old_bytes: cost / 2,
                 new_bytes: cost / 2,
@@ -1084,6 +1187,9 @@ mod tests {
                 nchunks: 0,
                 reused: 0,
                 moved: 0,
+                moved_up: 0,
+                moved_down: 0,
+                old_max_end: 0,
                 same_md5: false,
                 old_bytes: c,
                 new_bytes: 0,

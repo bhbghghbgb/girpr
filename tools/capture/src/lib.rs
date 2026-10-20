@@ -78,4 +78,16 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// A reader must reject an unknown value rather than guess
 /// (`docs/01-artifact-schema.md`). It is bumped only for a breaking change to
 /// the bundle's byte layout.
+///
+/// **The class ids were renamed and the version did not move, and that is
+/// deliberate.** A *schema* is the shape of the documents, and no shape
+/// changed: the `repair` block and the `expectations.summary` block are
+/// additions, and they are `null` where they do not apply, so a reader that
+/// knows the old shape still reads the old fields correctly. The class ids are
+/// *values*, and one set of them was replaced by another — a breaking change to
+/// the bundle's **contents**, which is what the class set is and what the
+/// bundle's own matrix records. A consumer that hard-codes
+/// `patchmaps/partial_same_offset.json` breaks, and the fix is to read the
+/// matrix rather than to guess a file name; a consumer that reads the matrix
+/// does not notice.
 pub const SCHEMA_VERSION: u32 = 1;

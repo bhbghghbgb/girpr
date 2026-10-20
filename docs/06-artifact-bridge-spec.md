@@ -95,7 +95,7 @@ it is small. This one is not small and neither test wants it.
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
 four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
-The suite is eighteen cases and ~2 minutes. That is worth paying when something
+The suite is twenty-six cases and ~21 minutes. That is worth paying when something
 has gone wrong and not worth paying on every `cargo test`.
 
 So it runs **by hand, deliberately, and only when the repair spec is suspected
@@ -131,11 +131,18 @@ Resolution order:
 4. otherwise **fail**, naming the reason and the exact command:
    `cargo run -p gircap -- capture --out artifacts`.
 
-The same rule applies one level down: a capture the suite names must exist in the
-bundle. A class the bundle's own matrix records as *not captured, with a reason*
-is a **fact** rather than a missing prerequisite — the case stands down out
-loud (`full_reuse_reordered` has no path for 7.0.0 → 7.1.0 and `MANIFEST.json`
-says so) — but a capture that is simply missing fails.
+The same rule applies one level down: a class the suite names must be answered
+by the bundle. **The class is resolved through the matrix**, not by looking for
+a patchmap named after it: `MANIFEST.json → matrix[]` is the only place that
+knows which capture answers which class, and the two are not the same thing. A
+class the matrix records as `covered_by` has **no capture of its own** — the
+file that shows it is another capture's (`trim_deferred` is answered by
+`moved_ascending`'s capture).
+
+A class the matrix records as *not answered*, with a reason, is a **fact** rather
+than a missing prerequisite — the case stands down out loud (`moved_mixed` has
+no candidate the budget could pay for and `MANIFEST.json` says so) — but a
+class the matrix does not mention at all is a missing prerequisite and fails.
 
 **Precondition.** Before any run, the bundle's own integrity is established —
 `gircap verify --artifact <dir>`, exit `0`. It makes a failing check rule the
@@ -308,9 +315,9 @@ visibly rather than after fifteen seconds of silence.
 
 ### 4.6 Cache served manifest bytes
 
-Each run fetches four manifests and the `manifests/` directory is ~40 MB of the
-~130 MB bundle; across eight runs that is ~320 MB re-read for nothing. They are
-immutable per bundle, so cache them.
+Each run fetches four manifests and the `manifests/` directory is ~41 MiB of the
+~696 MiB bundle; across the suite's runs that is over a gigabyte re-read for
+nothing. They are immutable per bundle, so cache them.
 
 The cache is process-global, keyed by `(bundle, tag, field)`, and shared by every
 listener: it holds bytes that are a function of the bundle alone, so nothing
@@ -359,6 +366,10 @@ Per capture, against a **fresh scratch copy of that capture's `game/` tree** and
 | `--max-files 1` | the backstop against a glob that matched more than intended — `*` crosses `/` | all but `removed` |
 | `--fail-fast` | a shim fault should stop the run, not spend the budget discovering the same 404 on every remaining file: 17.6 s with it, 88.5 s without | all |
 | `--output json` | NDJSON, so the driver reads records by name — `report`, `plan`, `summary` — rather than scraping `key=value` | all |
+| `--repair-mode inplace` | the mode is **asked for**, so the run reports `inplace` / `temp` / `kept_bytes` — the counters that say which path ran | all but `removed` |
+| `--scan` | the scan is what makes `damaged_chunks` appear, and it turns the download estimate from an approximation into the precise sum | all but `removed` |
+| `--max-ram-bytes 1 GiB` | the budget is what makes `ram_bytes` appear; the value is large enough for the staged tier, which is the default | all but `removed` |
+| `--max-write-bytes 1 TiB` | the ceiling is what makes `write_bytes` appear; the value never trips | all but `removed` |
 
 **Every capture gets `--include`, `removed` included.** `--purge-only --include
 <that path>` is precisely the request that deletes a path the new manifest
@@ -397,6 +408,13 @@ arrive tangled in one red run:
 - the real run's `SUMMARY download_bytes` equal to the same figure → **the repair
   did the right thing**.
 
+With `--scan` the estimate is not an estimate. It is the precise sum over the
+chunks that are **wrong where they belong** *and* have **no intact source** —
+the two conditions together, because a chunk that is wrong but has a source is
+copied rather than downloaded. For the bundle's fixture that is exactly the
+patchmap's `totals.download_bytes`, so the pre-pass asserts an **equality**
+rather than an approximation.
+
 When the first fails, the glob is wrong. When the second fails, reuse is wrong.
 `--plan-out` gives the per-file JSON for the same run.
 
@@ -425,8 +443,8 @@ bug.
 So, **per capture:**
 
 - a **fresh copy of the whole fixture `game/`** — not just the capture's path,
-  because a capture is one path *out of* the fixture and the other seven are what
-  "outside the scope is untouched" is measured against. ~32 MB per run, removed on
+  because a capture is one path *out of* the fixture and the other nine are what
+  "outside the scope is untouched" is measured against. ~213 MiB per run, removed on
   `Drop`;
 - **its own listeners** (its own manifest and chunk ports, its own hyp/sophon
   origins), so the `build_id` invariant of §4.1 is per-capture too;
@@ -450,8 +468,8 @@ at it in place is what turns a cleanup flag into a way to destroy the evidence.
 
 ## 7. The assertions
 
-Three per capture, plus two structural. None of them is optional; the third is the
-one that earns the whole exercise.
+Three per capture, plus a structural set and the axes. None of them is optional;
+the third is the one that earns the whole exercise.
 
 | # | assertion | source |
 |---|---|---|
@@ -459,8 +477,12 @@ one that earns the whole exercise.
 | 2 | the patched file's MD5 equals `expectations.result_md5` | same |
 | 3 | **no id in `expectations.must_not_fetch` was requested** | the server's request log |
 | 4 | exit `0`, `config_bumped=0`, and every path outside the scope is untouched on disk | `SUMMARY` + the per-run tree diff |
-| 5 | **the eight capture paths are pairwise distinct** | `patchmaps/*.json` |
+| 5 | **the capture paths are pairwise distinct** | `patchmaps/*.json` |
 | 6 | **the two repair modes produce the same file, and the in-place one writes less** | a second run over a second copy |
+| 7 | **the `expectations.summary` counters are what the run reports** | `patchmaps/<id>.json` |
+| 8 | **the ordered tier downloads exactly the patchmap's total** | a run with `--max-ram-bytes 0` |
+| 9 | **the discard mode produces the same file, and downloads all of it that the patch could have reused** | a run with `--repair-mode discard` |
+| 10 | **the in-place path re-verifies: a damaged file is fixed, and only the damaged chunk is** | a second run over a damaged file |
 
 Assertion 4's `config_bumped=0` is the tool stating that a scoped run
 deliberately did not put the bytes in place; the tree diff is what proves it did
@@ -470,7 +492,7 @@ this run against after this run — because §6.2 gives every capture its own co
 and a shared baseline would compare two different trees.
 
 Assertion 5 is a cheap guard rather than a known bug: it is true for the
-reference bundle (8 distinct paths) and `select`'s exclusion set keeps it true.
+reference bundle (9 distinct paths) and `select`'s exclusion set keeps it true.
 But a repeat would make the **second** run silently skip — the file is already at
 the new version — and report `download_bytes=0` against a non-zero expectation,
 which is a baffling failure to diagnose from the number that is wrong.
@@ -483,6 +505,11 @@ not of what to produce — and the in-place run must write **strictly fewer**
 bytes than the temp run, which writes the whole file. The offline fixture is
 128 bytes, too small to tell "wrote 128" from "wrote 64"; here the difference
 is megabytes, and the bridge is the only place that can show it.
+
+The strict inequality is keyed on the run's own `kept_bytes`, not on the class's
+name: a `moved_*` capture whose file keeps **nothing** (every chunk moves or is
+fetched — `resources.assets` does) writes as much as the temp path does, and a
+class-name rule would have said otherwise.
 
 Nothing is relaxed for it. Assertion 1 still holds for **both** modes: a chunk
 whose content the old file cannot supply cannot be "already correct" at its
@@ -506,30 +533,125 @@ the equality holds for the in-place mode too, and it is worth pinning rather
 than relaxing: it is what proves the new writer fetches the same set the patchmap
 says a consumer must fetch, and not one chunk more.
 
-If the bridge is ever run with `--max-ram-bytes 0`, the **ordered** tier is
-selected, and a shifted chunk it could not salvage is downloaded instead of
-copied — so `download_bytes` becomes an **upper** bound rather than an equality.
-The bridge says so rather than silently asserting the wrong direction.
+### 7.1a The ordered tier, and the direction it picks
+
+The staged tier stages the moving bytes, so **every** source survives and both
+directions download the same bytes: the direction rule is invisible there. The
+**ordered** tier stages nothing — each source is read from the file at the
+moment it is written, and the write order is what keeps the sources alive.
+`--max-ram-bytes 0` forces it ("stage nothing at all" is a mode, not a
+shortage).
+
+With the **right** direction the ordered tier downloads exactly the patchmap's
+total, because every movable chunk's source survives. With a **wrong** one the
+figure is larger: the chunks whose source the wrong order destroys have to be
+downloaded too. That single equality is what pins the direction, and it is the
+only place the rule is observable at all.
+
+The two captures that carry a uniform shift are the load-bearing ones. On
+`09801749.blk` the ascending order keeps all four movable chunks and the
+descending one none; on `resources.assets` it is the other way round, with 27
+kept. The bridge asserts the equality for every capture, because a wrong
+direction turns it into a larger number and a failure that says so is the point.
+
+**The mixed shift is the case the rule exists for**, and it is the one capture
+where the equality does *not* hold: `moved_mixed`'s moves go both ways, so
+neither order keeps every source — the descending one keeps 60 of the 67
+movable chunks and the ascending one keeps 7 — and the ordered tier has to
+fetch the seven it cannot salvage. So the assertion is an equality where the
+direction keeps every source and a **strictly larger** figure where it cannot,
+and the artifact's `keeps_ascending` / `keeps_descending` say which case each
+capture is.
+
+The ordered tier also reserves **no** RAM — it stages nothing — so
+`ram_bytes` is `0`, against the patchmap's `ram_bytes_ordered`.
 
 ### 7.2 Per-class expectations
 
 | class | what the assertion is |
 |---|---|
 | `identical` | nothing is downloaded and the file is not touched. It *is* in the manifest, so it is planned and then skipped on size+MD5 — `skipped=1 repaired=0 download_bytes=0`, exit `0`. The request log being empty is the assertion that carries it, since `download_bytes=0` is also what a broken run reports |
-| `partial_*`, `zero_reuse_*` | the three patchable classes and the zero-reuse ones are the load-bearing cases; assertions 1–3 all bite here |
+| `kept_in_place`, `moved_*`, `trim_*`, `zero_reuse_*` | the patchable classes and the zero-reuse ones are the load-bearing cases; assertions 1–3 all bite here |
 | `added` | the path is absent from `game/` and present in the new manifest, so it is planned and downloaded in full. Assertion 2 plus `must_not_fetch`, which is empty |
 | `removed` | no repair, so no byte total. It gets the `--purge-only` run of §5 and the purge-counter pre-pass of §6.1; the file is gone afterwards and its size is priced into `deleted_extra_bytes` |
 
+The vocabulary is the repair spec's: a chunk is **kept** (already correct where
+it belongs), **copied** (its bytes live elsewhere in the file) or **fetched**
+(no usable local source). `kept_in_place` is not a reuse class — a same-offset
+source *is* the chunk's own destination, so the chunk is kept rather than
+copied, the payload is 0 and the staged tier stages nothing.
+
 These live in `drive_capture` rather than in the tests, so a new capture id needs
-no new assertion code. The five patchable/zero-reuse classes must be **repaired**
+no new assertion code. The patchable and zero-reuse classes must be **repaired**
 (never skipped) and must show their bytes moving on disk.
 
-The matrix and the patchmaps are also checked to agree **in both directions**:
-a `captured` entry has a patchmap, a non-`captured` entry has a reason and no
-patchmap, and no patchmap exists without a matrix entry. The key to match on is
-`class`, not `capture_id` — the matrix's `capture_id` is present only on
-`captured` entries, because an entry that never materialised has no capture id —
-and `class == capture_id` holds for every captured entry.
+**The `expectations.summary` block is asserted too.** The new repair spec
+reports counters that are *conditional on a flag* — `inplace` / `temp` /
+`kept_bytes` with `--repair-mode`, `ram_bytes` with `--max-ram-bytes`,
+`damaged_chunks` with `--scan` and `write_bytes` with `--max-write-bytes` — so
+the patchmap states them per flag and the run asks for all of them. The
+patchmap's own `repair` block is the same numbers seen twice, and the bridge
+asserts that the two agree.
+
+**And the `repair` block is asserted against the run, field by field.** The
+counts (`kept` + `copied` + `fetched` is the plan's length), the growth (the
+difference between the file's two sizes) and the direction (the order that
+keeps more sources alive) are all cross-checked. The **trim** is the one that
+needed the log rather than a counter: the file ends at the target size either
+way, so the outcome is invisible in the file's bytes and in the summary, and
+the log is the only place it shows. So `trim_eager` must log "trimming the
+dead tail" and must **not** log the deferred line, `trim_deferred` the other
+way round, and the artifact's `repair.trim` says which one it expects.
+
+The matrix and the patchmaps are also checked to agree **in both directions**,
+and the `covered_by` row needs care: a class the matrix records as `covered_by`
+has **no patchmap of its own**, and the row names the *covering* capture's id —
+which must be a capture that does have one. A `captured` row names its own
+capture; an `over_budget` or `unavailable` row has no capture id and carries a
+reason; and no patchmap exists without a matrix entry.
+
+### 7.3 The flag axes and the fault injections
+
+Three of the repair spec's per-file decisions are **not** content decisions:
+they come from a flag, a filesystem or an interruption, so the same file answers
+them whatever the content is, and no capture class can force them. They are
+covered here instead, and this is the list of where each one lives.
+
+| what | how the bridge reaches it | what it proves |
+|---|---|---|
+| `--repair-mode temp` | the differential (§7, assertion 6) | the same file, the whole file written |
+| `--repair-mode discard` | `the_discard_mode_downloads_the_whole_file_and_still_produces_it` | the same file, a full download, zero peak extra disk |
+| `--max-ram-bytes 0` | `the_ordered_tier_downloads_exactly_the_patchmap_total` | the ordered tier, and the direction it picks |
+| `--max-ram-bytes <small>` | `a_ram_budget_too_small_for_the_payload_degrades_to_the_ordered_tier` | a file that cannot get its reservation degrades to the ordered tier instead of failing, and says so |
+| the target cannot be opened for writing | **not covered** — see below | the fallback to the temp path, and the same bytes |
+| the in-place resume | `the_in_place_path_re_verifies_and_continues` | in place re-verifies and continues, and only the damaged chunk is redone |
+| the temp resume by length | **not covered** — see below | a temp file that is already partly written is resumed, not restarted |
+| the "redo the mismatching chunks" second pass | **not covered** — see below | only the named chunk is redone |
+| the zero-fill of a hole | **not covered** — see below | the hole is zero-filled, and the file still verifies |
+
+**Why four of them are not covered here.** Each needs something the bundle
+cannot provide, and saying so is better than a case that pretends:
+
+- **The target cannot be opened for writing.** The mechanism is not the
+  read-only attribute: `girpr` **clears** that attribute and retries the open
+  (the same thing Starward does), so a read-only file is repaired in place, by
+  design. The fallback needs an open that fails for a reason clearing the
+  attribute cannot fix — an exclusive lock, which is a Windows fixture rather
+  than a bundle case.
+- **The temp resume by length.** The temp path resumes by the length of the
+  `{path}_tmp` file it left behind, and a run that was killed mid-write is the
+  only thing that leaves one. The bridge has no way to kill a run at a chosen
+  byte offset, and a fixture that fakes it would test the fake rather than the
+  resume.
+- **The "redo the mismatching chunks" second pass.** It fires when the
+  whole-file MD5 disagrees but every chunk's own MD5 agrees, which needs a
+  manifest whose coverage does not tile its file. The server's manifests always
+  do.
+- **The zero-fill of a hole.** The same thing: a hole is a manifest that does
+  not tile, and the server's manifests do not have holes.
+
+The last two are the plan's **D9** — a malformed manifest rather than a
+malformed file — and they belong to a synthetic manifest, not to a bundle.
 
 ---
 
