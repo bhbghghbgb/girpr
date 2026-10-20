@@ -1,6 +1,8 @@
 use anyhow::Result;
+use futures::StreamExt;
 use prost::Message;
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 
@@ -225,6 +227,271 @@ async fn try_fetch_chunk(
     }
 }
 
+// ---------------------------------------------------------------------------
+// The streaming path
+//
+// The chunk never exists in memory as a whole: the compressed body is decoded
+// as it arrives and the decoded bytes are written into the sink as they are
+// produced, digested on the way past. What it costs is one thing — the digest
+// of a decoded stream is known only when the stream ends, and the stream ends
+// *after* the last byte has been written. The check therefore happens one byte
+// too late to gate the write, which is the invariant the streaming path
+// changes (see `docs/02` step 6).
+// ---------------------------------------------------------------------------
+
+/// What a streamed blob produced: how many bytes came down, how many landed,
+/// and the digest of what landed.
+///
+/// The digest is of the **decompressed** bytes — the quantity a chunk's
+/// `uncompressed_md5` and a manifest's `checksum` name — so it is the same
+/// number the buffered path computed, and it is compared against the same
+/// thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkDigest {
+    /// Compressed bytes that came off the wire.
+    pub compressed_bytes: u64,
+    /// Decompressed bytes that reached the sink.
+    pub bytes: u64,
+    /// The MD5 of the decompressed bytes, lowercase hex.
+    pub md5: String,
+}
+
+/// A writer that hashes what passes through it, counts it, and refuses to pass
+/// more than a limit.
+///
+/// This is the sink of the streaming path: the decoded bytes are hashed on the
+/// way past into the file, so the chunk is never resident as a whole.
+///
+/// **The limit is checked as the bytes go**, which is stricter than the
+/// buffered path's "compare the lengths after the decode" and not looser: a
+/// body that decodes to more than the chunk claims is refused at the byte that
+/// crosses the line rather than after the whole thing has been written.
+pub struct HashingWriter<W: Write> {
+    inner: W,
+    hasher: md5::Context,
+    written: u64,
+    limit: Option<u64>,
+}
+
+impl<W: Write> HashingWriter<W> {
+    /// A hashing writer over `inner`, with an optional ceiling.
+    ///
+    /// `limit` is `None` for a blob whose length is not known ahead of the
+    /// decode — the manifest's, where the reported size is a capacity hint
+    /// rather than a promise.
+    pub fn new(inner: W, limit: Option<u64>) -> Self {
+        Self {
+            inner,
+            hasher: md5::Context::new(),
+            written: 0,
+            limit,
+        }
+    }
+
+    /// How many bytes have passed through.
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// The MD5 of the bytes that passed through, lowercase hex.
+    pub fn md5(&self) -> String {
+        format!("{:x}", self.hasher.clone().compute())
+    }
+
+    /// The writer underneath, for the caller that wants it back.
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // The ceiling is checked *before* the bytes are forwarded: a writer
+        // that takes them and complains afterwards has already landed them.
+        if let Some(limit) = self.limit
+            && self.written.saturating_add(buf.len() as u64) > limit
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("more than the {limit} bytes this blob may hold"),
+            ));
+        }
+        let n = self.inner.write(buf)?;
+        // Only the bytes that were really taken are hashed: a short write is
+        // the inner writer's business, and the caller retries with the rest.
+        self.hasher.consume(&buf[..n]);
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Where a streamed blob's decoded bytes land.
+///
+/// The trait exists for one requirement: **a retry has to start the blob over.**
+/// A streamed body is written as it decodes, so a failed attempt can leave half
+/// a chunk in the sink, and the next attempt must not append to it.
+/// [`stream_chunk_to`] therefore asks the sink to restart before it tries
+/// again.
+pub trait ChunkSink: Write {
+    /// Throw away what the failed attempt wrote and start the blob again.
+    fn restart(&mut self) -> std::io::Result<()>;
+}
+
+impl ChunkSink for Vec<u8> {
+    fn restart(&mut self) -> std::io::Result<()> {
+        // `clear` keeps the capacity, so a retried blob does not pay for the
+        // buffer twice.
+        self.clear();
+        Ok(())
+    }
+}
+
+/// Why a streamed body could not be delivered.
+#[derive(Debug)]
+enum StreamError {
+    /// The transport failed. Worth another try.
+    Transport(anyhow::Error),
+    /// The body arrived but is not what it should be. The origin has answered
+    /// definitively: a second identical request would answer identically.
+    Content(anyhow::Error),
+}
+
+/// Stream one chunk's compressed body, decode it, and write the decoded bytes
+/// into `sink` — digested on the way past.
+///
+/// The chunk is never resident as a whole: the compressed body is decoded as
+/// it arrives and the decoded bytes are written into the sink as they are
+/// produced. `expected` is the chunk's `uncompressed_size`, and it is enforced
+/// as the bytes go.
+///
+/// The digest is known when the stream ends, which is one byte too late to
+/// gate the write — the one thing the streaming path gives up. The file-level
+/// gate (the whole-file MD5) is what decides whether the file is good.
+pub async fn stream_chunk_to(
+    client: &reqwest::Client,
+    url_prefix: &str,
+    id: &str,
+    expected: u64,
+    sink: &mut impl ChunkSink,
+) -> Result<ChunkDigest> {
+    let url = join_url(url_prefix, id);
+    let mut last_err = anyhow::anyhow!("no attempts");
+    for attempt in 1..=ATTEMPTS {
+        match try_stream_chunk(client, &url, id, attempt, expected, sink).await {
+            Attempt::Ok(d) => return Ok(d),
+            Attempt::Fatal(e) => {
+                tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
+                return Err(e);
+            }
+            Attempt::Retry(e) => {
+                tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
+                last_err = e;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+    }
+    Err(last_err)
+}
+
+/// One attempt at a streamed chunk fetch.
+///
+/// The retry split is the buffered path's: a transport failure is worth
+/// another try, a status that says so is worth another try, and a body that is
+/// not what it should be is the origin's definitive answer — the file-level
+/// retry is what asks for it again.
+async fn try_stream_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    id: &str,
+    attempt: u64,
+    expected: u64,
+    sink: &mut impl ChunkSink,
+) -> Attempt<ChunkDigest> {
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => return Attempt::Retry(anyhow::anyhow!("GET chunk: {}", e)),
+    };
+    let status = resp.status();
+    if let Some(e) = status_failure(status, url) {
+        return verdict(e, retryable(status.as_u16()));
+    }
+    // A retry starts the chunk over: the decoded bytes are written as they are
+    // produced, so a failed attempt may have left half a chunk behind.
+    if let Err(e) = sink.restart() {
+        return Attempt::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
+    }
+    let (compressed, digest) = match stream_body(resp.bytes_stream(), Some(expected), sink).await {
+        Ok(v) => v,
+        Err(StreamError::Transport(e)) => return Attempt::Retry(e),
+        Err(StreamError::Content(e)) => return Attempt::Fatal(e),
+    };
+    // NOTE: the bridge parses this line to work out what was *downloaded*
+    // rather than reused, so it has to say which chunk it was about.
+    tracing::trace!(chunk = %id, compressed_bytes = compressed, attempt, "chunk downloaded");
+    Attempt::Ok(ChunkDigest {
+        compressed_bytes: compressed,
+        ..digest
+    })
+}
+
+/// Feed a compressed body through the decoder into `sink`, hashing on the way
+/// past.
+///
+/// The body is a **stream of pieces**, not a buffer: the compressed bytes are
+/// decoded as they arrive and the decoded bytes leave as they are produced, so
+/// neither the compressed body nor the decoded blob is ever resident as a
+/// whole. `expected` is the ceiling on the decoded size, and `None` means "no
+/// ceiling" — the case for a blob whose length is not promised by the API.
+async fn stream_body<S, B, E>(
+    mut body: S,
+    expected: Option<u64>,
+    sink: &mut impl ChunkSink,
+) -> Result<(u64, ChunkDigest), StreamError>
+where
+    S: futures::Stream<Item = Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+{
+    let mut hashing = HashingWriter::new(&mut *sink, expected);
+    let mut compressed = 0u64;
+    {
+        // The write-side decoder, built on the zio writer rather than
+        // `stream::write::Decoder`: the zio writer's `finish` is what tells a
+        // complete frame from a truncated one, and the wrapper does not expose
+        // it.
+        let raw = zstd::stream::raw::Decoder::new()
+            .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")))?;
+        let mut dec = zstd::stream::zio::Writer::new(&mut hashing, raw);
+        while let Some(piece) = body.next().await {
+            let bytes = match piece {
+                Ok(b) => b,
+                Err(e) => return Err(StreamError::Transport(anyhow::anyhow!("read body: {e}"))),
+            };
+            compressed += bytes.as_ref().len() as u64;
+            if let Err(e) = dec.write_all(bytes.as_ref()) {
+                return Err(StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")));
+            }
+        }
+        // The frame has to be *complete*: a truncated body decodes to a short
+        // result without an error of its own, and a short result must not
+        // pass for a successful download.
+        dec.finish()
+            .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")))?;
+    }
+    Ok((
+        compressed,
+        ChunkDigest {
+            compressed_bytes: compressed,
+            bytes: hashing.written(),
+            md5: hashing.md5(),
+        },
+    ))
+}
+
 /// Attempts per blob fetch, and the backoff is `attempt` seconds: 1+2+3+4 s.
 const ATTEMPTS: u64 = 5;
 
@@ -317,6 +584,131 @@ mod tests {
     use super::*;
     use crate::hyp::{ManifestFile, ManifestUrl};
 
+    // --- the streaming path -------------------------------------------------
+
+    /// A frame the differential runs over.
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        zstd::encode_all(payload, 3).expect("encode")
+    }
+
+    /// The body as the transport delivers it: pieces, not one buffer.
+    fn pieces(bytes: &[u8], size: usize) -> Vec<Result<Vec<u8>, std::io::Error>> {
+        bytes.chunks(size).map(|c| Ok(c.to_vec())).collect()
+    }
+
+    /// The streamed decode of a frame, into a fresh sink.
+    async fn stream(
+        compressed: &[u8],
+        expected: Option<u64>,
+    ) -> Result<(Vec<u8>, ChunkDigest), StreamError> {
+        let mut sink: Vec<u8> = Vec::new();
+        let body = futures::stream::iter(pieces(compressed, 4096));
+        let (compressed_bytes, digest) = stream_body(body, expected, &mut sink).await?;
+        Ok((
+            sink,
+            ChunkDigest {
+                compressed_bytes,
+                ..digest
+            },
+        ))
+    }
+
+    /// The differential: the streamed decode and the buffered decode of the
+    /// same frame agree — on the bytes, on the length and on the digest.
+    ///
+    /// This is the test that keeps the streaming path honest. It hashes what
+    /// it wrote and compares against the same MD5 the buffered path computed,
+    /// so "the same digest" is a fact about the bytes and not about two
+    /// agreeing implementations of the same idea.
+    #[tokio::test]
+    async fn the_streamed_decode_agrees_with_the_buffered_one() {
+        let payload: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let (sink, digest) = stream(&compressed, Some(payload.len() as u64))
+            .await
+            .expect("the frame decodes");
+        let buffered = zstd::decode_all(&compressed[..]).expect("buffered decode");
+        assert_eq!(sink, payload, "the sink got the decoded bytes");
+        assert_eq!(sink, buffered, "and they are the buffered decode's bytes");
+        assert_eq!(digest.bytes, buffered.len() as u64);
+        assert_eq!(
+            digest.md5,
+            format!("{:x}", md5::compute(&buffered)),
+            "the same digest as the buffered path"
+        );
+        assert_eq!(
+            digest.compressed_bytes,
+            compressed.len() as u64,
+            "the compressed count is what came off the wire"
+        );
+    }
+
+    /// A payload that decodes to the wrong bytes is caught by the digest: the
+    /// streaming path hashes what it wrote, so the comparison is the same one
+    /// the buffered path made — and it is the digest, not the length, that
+    /// catches it.
+    #[tokio::test]
+    async fn a_corrupt_payload_is_detected() {
+        let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
+        let mut corrupt = payload.clone();
+        corrupt[100] ^= 0xFF;
+        let compressed = frame(&corrupt);
+        let (sink, digest) = stream(&compressed, Some(payload.len() as u64))
+            .await
+            .expect("the frame decodes");
+        assert_eq!(sink, corrupt, "the bytes are the corrupt ones");
+        assert_eq!(
+            digest.bytes,
+            payload.len() as u64,
+            "and the length is right"
+        );
+        assert_ne!(
+            digest.md5,
+            format!("{:x}", md5::compute(&payload)),
+            "a corrupt payload must not carry the wanted digest"
+        );
+    }
+
+    /// A truncated frame is an error and not a short success.
+    ///
+    /// Half a frame decodes into bytes without complaining, so the length
+    /// check alone would let a torn body through as a smaller chunk. The
+    /// decode has to insist that the frame is *complete*.
+    #[tokio::test]
+    async fn a_truncated_frame_is_an_error_and_not_a_short_success() {
+        let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let truncated = &compressed[..compressed.len() / 2];
+        let err = stream(truncated, Some(payload.len() as u64))
+            .await
+            .expect_err("a truncated frame is not a download");
+        assert!(matches!(err, StreamError::Content(_)), "{err:?}");
+    }
+
+    /// The ceiling is enforced as the bytes go: a body that decodes to more
+    /// than the chunk claims is refused, rather than written and complained
+    /// about afterwards.
+    #[tokio::test]
+    async fn a_body_longer_than_its_claim_is_refused() {
+        let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let err = stream(&compressed, Some(1024))
+            .await
+            .expect_err("too many bytes is a refusal");
+        assert!(matches!(err, StreamError::Content(_)), "{err:?}");
+    }
+
+    /// A retry starts the blob over: the sink is asked to restart, and the
+    /// bytes of the failed attempt do not survive into the next one.
+    #[tokio::test]
+    async fn a_restart_throws_the_failed_attempt_away() {
+        let mut sink: Vec<u8> = Vec::new();
+        sink.extend_from_slice(b"half a chunk");
+        sink.restart().expect("restart");
+        assert!(sink.is_empty(), "the failed attempt's bytes are gone");
+    }
+
+    // --- the policy ---------------------------------------------------------
     /// The policy, pinned as a table rather than a prose claim: a retryable
     /// status must be one where a second identical request could come back
     /// different.
