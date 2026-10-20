@@ -25,10 +25,26 @@
 //!   not match, the per-chunk verdicts name the culprit and only those are
 //!   redone.
 //!
-//! Every byte written is hash-gated before it lands, whichever path wrote
-//! it: a downloaded chunk's MD5 is checked before the write, and a staged
-//! source's MD5 is checked before it is staged and again before it is
-//! written.
+//! Every byte written lands in a region that was **already wrong at the
+//! moment of the write**, and the whole-file MD5 decides whether the file is
+//! good.
+//!
+//! A *downloaded* chunk cannot be hash-gated before it lands: the digest of a
+//! decoded stream is only known when the stream ends, and the stream ends
+//! after the last byte has been written. What replaces the gate is checkable
+//! in the code rather than hopeful:
+//!
+//! - the in-place path writes only to the chunks the scan found wrong, and to
+//!   the ones the whole-file MD5 still finds wrong after a re-do — so the
+//!   bytes it lands replace bytes that were already bad;
+//! - a downloaded chunk's bytes come from the network, not from the file, so
+//!   they consume no source region and the ordered tier's salvage rule is
+//!   untouched;
+//! - the temp path is safe by construction: the `_tmp` is promoted only after
+//!   the whole-file MD5 passes.
+//!
+//! A staged source's MD5 is still checked before it is staged, so that path
+//! keeps the stronger property it always had.
 //!
 //! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a
 //! file are strictly sequential.
@@ -1158,12 +1174,75 @@ fn try_reuse_slice(
     }
 }
 
-/// Download → zstd decode → size/MD5 verify → write at the chunk offset.
+/// The sink of a streamed chunk: the decoded bytes go straight into the
+/// target file, at the chunk's offset.
 ///
-/// V1-SIMPLIFICATION (S1, see README): whole-chunk buffering (`fetch` +
-/// `decode_all`) instead of Starward's streaming `Pipe +
-/// DecompressionStream` pipeline. Simpler and avoids any retained blob store;
-/// costs higher peak RAM per active chunk.
+/// **The write ceiling is charged per piece**, the way the reuse copy charges
+/// it (`copy_within`): a chunk is no longer one indivisible write, so a
+/// ceiling that trips in the middle of a chunk stops the run in the middle of
+/// a chunk. The README already documents that a runtime hard stop leaves the
+/// work done in place, and the next run re-verifies and continues.
+struct ChunkFileSink<'a> {
+    ctx: &'a FileCtx,
+    file: &'a mut File,
+    offset: u64,
+    written: u64,
+}
+
+impl<'a> ChunkFileSink<'a> {
+    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> Self {
+        Self {
+            ctx,
+            file,
+            offset,
+            written: 0,
+        }
+    }
+
+    /// How many bytes have landed in the file.
+    fn written(&self) -> u64 {
+        self.written
+    }
+}
+
+impl Write for ChunkFileSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // The write ceiling counts this piece: it goes into the install, and
+        // the ceiling counts what lands there.
+        reserve_write(self.ctx, buf.len() as u64).map_err(std::io::Error::other)?;
+        self.file
+            .seek(SeekFrom::Start(self.offset + self.written))?;
+        self.file.write_all(buf)?;
+        self.written += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl sophon::ChunkSink for ChunkFileSink<'_> {
+    fn restart(&mut self) -> std::io::Result<()> {
+        // A retry starts the chunk over. The failed attempt's bytes are in the
+        // file, and they are about to be overwritten by the same chunk's
+        // bytes — the region was wrong before the write and it is wrong now.
+        self.written = 0;
+        self.file.seek(SeekFrom::Start(self.offset))?;
+        Ok(())
+    }
+}
+
+/// Download → zstd decode → digest → write at the chunk offset.
+///
+/// The chunk is **streamed**: the compressed body is decoded as it arrives and
+/// the decoded bytes are written into the target as they are produced, so the
+/// chunk is never resident as a whole. The digest is therefore known when the
+/// stream ends — one byte too late to gate the write, which is the invariant
+/// this path changes (see the module doc).
+///
+/// NOTE(starward-parity): Starward writes the decompressed chunk straight into
+/// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
 async fn write_downloaded_chunk(
     ctx: &FileCtx,
@@ -1176,7 +1255,7 @@ async fn write_downloaded_chunk(
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
     // compare-and-swap is what actually bounds the run. Reserving the manifest's
     // `compressed_size` keeps the stop exact under `--io-threads N` instead of
-    // overshooting by up to N-1 chunks, and the real `blob.len()` is folded back
+    // overshooting by up to N-1 chunks, and the real byte count is folded back
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;
     if !ctx.summary.reserve_download_bytes(reserved) {
@@ -1188,41 +1267,41 @@ async fn write_downloaded_chunk(
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
+    let expected = c.uncompressed_size.max(0) as u64;
+    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
     // A failed fetch delivers nothing, so the reservation goes straight back.
     // Without this the `?` below would leak `compressed_size` per attempt, for
     // bytes that never arrived — and with no ceiling set the sentinel is
     // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
-    let blob = match sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id).await {
-        Ok(b) => b,
+    let digest = match sophon::stream_chunk_to(&ctx.http, prefix, &c.id, expected, &mut sink).await
+    {
+        Ok(d) => d,
         Err(e) => {
             ctx.summary.adjust_download_bytes(-(reserved as i64));
             return Err(e).with_context(|| format!("chunk {}", c.id));
         }
     };
-    let actual = blob.len() as u64;
+    let actual = digest.compressed_bytes;
     ctx.summary
         .adjust_download_bytes(actual as i64 - reserved as i64);
     stats.download_bytes += actual;
-    let decoded = zstd::stream::decode_all(std::io::Cursor::new(&blob))
-        .with_context(|| format!("zstd chunk {}", c.id))?;
-    tracing::trace!(chunk = %c.id, compressed_bytes = blob.len(), decompressed_bytes = decoded.len(), "chunk decoded");
-    if decoded.len() as i64 != c.uncompressed_size {
+    tracing::trace!(chunk = %c.id, compressed_bytes = actual, decompressed_bytes = digest.bytes, "chunk decoded");
+    // The size and the digest are checked **after** the stream ends, which is
+    // after the last byte has been written. A mismatch fails the attempt, and
+    // the attempt's bytes are handed back by the caller.
+    if digest.bytes != expected {
         anyhow::bail!(
             "chunk {} size mismatch: expect {} got {}",
             c.id,
             c.uncompressed_size,
-            decoded.len()
+            digest.bytes
         );
     }
-    let dh = format!("{:x}", md5::compute(&decoded));
-    if !dh.eq_ignore_ascii_case(&c.uncompressed_md5) {
-        tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %dh, "chunk md5 mismatch");
+    if !digest.md5.eq_ignore_ascii_case(&c.uncompressed_md5) {
+        tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
-    out.seek(SeekFrom::Start(c.offset as u64))?;
-    reserve_write(ctx, decoded.len() as u64)?;
-    out.write_all(&decoded)?;
-    stats.bytes_written += decoded.len() as u64;
+    stats.bytes_written += sink.written();
     stats.chunks_downloaded += 1;
     Ok(())
 }

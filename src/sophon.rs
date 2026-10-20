@@ -177,56 +177,6 @@ async fn try_fetch_manifest(
     }
 }
 
-/// Download one chunk's compressed bytes.
-pub async fn fetch_chunk_bytes(
-    client: &reqwest::Client,
-    url_prefix: &str,
-    id: &str,
-) -> Result<Vec<u8>> {
-    let url = join_url(url_prefix, id);
-    let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=ATTEMPTS {
-        match try_fetch_chunk(client, &url, id, attempt).await {
-            Attempt::Ok(b) => return Ok(b),
-            Attempt::Fatal(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
-                return Err(e);
-            }
-            Attempt::Retry(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
-                last_err = e;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
-    }
-    Err(last_err)
-}
-
-async fn try_fetch_chunk(
-    client: &reqwest::Client,
-    url: &str,
-    id: &str,
-    attempt: u64,
-) -> Attempt<Vec<u8>> {
-    let resp = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(e) => return Attempt::Retry(anyhow::anyhow!("GET chunk: {}", e)),
-    };
-    let status = resp.status();
-    if let Some(e) = status_failure(status, url) {
-        return verdict(e, retryable(status.as_u16()));
-    }
-    match resp.bytes().await {
-        Ok(b) => {
-            // NOTE: the bridge parses this line to work out what was *downloaded*
-            // rather than reused, so it has to say which chunk it was about.
-            tracing::trace!(chunk = %id, compressed_bytes = b.len(), attempt, "chunk downloaded");
-            Attempt::Ok(b.to_vec())
-        }
-        Err(e) => Attempt::Retry(anyhow::anyhow!("read chunk body: {}", e)),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The streaming path
 //
