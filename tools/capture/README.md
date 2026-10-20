@@ -31,6 +31,7 @@ the chunks the artifact says it must fetch.
 | [`docs/02-plan.md`](docs/02-plan.md) | the crate's shape, its test strategy and its risks |
 | [`docs/03-design-notes.md`](docs/03-design-notes.md) | why the awkward parts are the way they are |
 | [`docs/04-bundle-differ.md`](docs/04-bundle-differ.md) | the cross-commit bundle comparison, and what it can and cannot see |
+| [`docs/05-case-coverage-findings.md`](docs/05-case-coverage-findings.md) | **findings, not implemented**: the capture classes vs. the new `girpr` repair spec — which cases are stale, which are missing, and what the ids should say |
 
 Start with the spec.
 
