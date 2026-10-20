@@ -375,7 +375,8 @@ enum Inplace {
 ///
 /// `pub(super)` because the plan's disk estimates ask the same question: the
 /// estimate and the repair must not disagree about which path a file takes.
-pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {    if requested == RepairMode::Temp {
+pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {
+    if requested == RepairMode::Temp {
         return Mode::Temp;
     }
     match std::fs::symlink_metadata(path) {

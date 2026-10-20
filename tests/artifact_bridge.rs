@@ -1491,6 +1491,106 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         }
     }
 
+    // The **trim's** outcome — the one content decision that had a class and no
+    // assertion.
+    //
+    // The trim is the difference between releasing the file's dead tail before
+    // the first write and waiting for the end, and nothing about the file's
+    // *content* says which one happened: the file ends at the target size
+    // either way. The difference is the **peak disk usage**, which nothing
+    // reports. The log is the only place the outcome is visible, so the log is
+    // where the assertion has to be — and the patchmap's `repair.trim` is what
+    // says which one the artifact expects.
+    //
+    // `trim_eager` and `trim_deferred` are the classes this branch split
+    // `partial_size_changed` into, so this is the assertion that gives the
+    // split something to say.
+    if let Some(repair) = capture.repair.as_ref() {
+        let log = std::fs::read_to_string(scratch.log_file()).unwrap_or_default();
+        let eager = log.contains("trimming the dead tail");
+        let deferred = log.contains("a reuse candidate reaches past the target's end");
+        match repair.trim.as_str() {
+            "eager" => {
+                assert!(
+                    eager,
+                    "{}: the dead tail was released before the first write, and the log \
+                     says so\n{log}",
+                    capture.id
+                );
+                assert!(
+                    !deferred,
+                    "{}: and it was not deferred as well\n{log}",
+                    capture.id
+                );
+            }
+            "deferred" => {
+                assert!(
+                    deferred,
+                    "{}: a reuse candidate reaches past the target's end, so the trim \
+                     waited for the end, and the log says so\n{log}",
+                    capture.id
+                );
+                assert!(
+                    !eager,
+                    "{}: and it was not released eagerly as well\n{log}",
+                    capture.id
+                );
+            }
+            "none" => {
+                assert!(
+                    !eager && !deferred,
+                    "{}: the file does not shrink, so no trim happened\n{log}",
+                    capture.id
+                );
+            }
+            other => panic!(
+                "{}: the patchmap names a trim outcome this bridge does not know: {other:?}",
+                capture.id
+            ),
+        }
+
+        // And the block's own numbers hang together: every chunk of the plan is
+        // kept, copied or fetched, and the growth is the difference between
+        // the file's two sizes.
+        assert_eq!(
+            repair.kept + repair.moved + repair.fetch,
+            capture.chunks.len() as u64,
+            "{}: every chunk of the plan is kept, copied or fetched",
+            capture.id
+        );
+        assert_eq!(
+            repair.growth_bytes,
+            capture.new_size.saturating_sub(capture.old_size),
+            "{}: the growth is the difference between the two sizes",
+            capture.id
+        );
+
+        // And the direction the block names is the one that keeps more sources
+        // alive — the rule the tool applies (`repair::reuse::salvage_order`).
+        match repair.direction.as_str() {
+            "ascending" => assert!(
+                repair.keeps_ascending >= repair.keeps_descending,
+                "{}: the ascending order must be the one that keeps more",
+                capture.id
+            ),
+            "descending" => assert!(
+                repair.keeps_descending >= repair.keeps_ascending,
+                "{}: the descending order must be the one that keeps more",
+                capture.id
+            ),
+            "n/a" => assert_eq!(
+                (repair.keeps_ascending, repair.keeps_descending),
+                (0, 0),
+                "{}: there is nothing to order, so neither order keeps anything",
+                capture.id
+            ),
+            other => panic!(
+                "{}: the patchmap names a direction this bridge does not know: {other:?}",
+                capture.id
+            ),
+        }
+    }
+
     println!(
         "bridge {:<24} plan files={} est={} | run total={} skipped={} repaired={} failed={} \
          dl={} deleted={} | chunks requested={} | tree +{} -{} ~{}",
@@ -1845,11 +1945,13 @@ capture_test!(
      one — so the case is resolved through the matrix."
 );
 capture_test!(
-    capture_moved_mixed_is_refused_out_loud,
+    capture_moved_mixed_keeps_the_larger_half,
     "moved_mixed",
-    "`moved_mixed`: the class the budget could not pay for. The matrix records\n\
-     it as `over_budget` with its reason, and the case stands down out loud —\n\
-     a fact, not a missing prerequisite."
+    "`moved_mixed`: the case the direction rule exists for. The moves go **both**\n\
+     ways, so neither write order keeps every source: the descending one keeps\n\
+     60 of the 67 movable chunks and the ascending one keeps 7, and the ordered\n\
+     tier fetches the seven it cannot salvage. The reference bundle funds the\n\
+     class, so the case drives a real capture rather than standing down."
 );
 capture_test!(
     capture_added_is_downloaded_in_full,
@@ -1916,23 +2018,58 @@ async fn the_ordered_tier_downloads_exactly_the_patchmap_total() {
             "{}: the ordered run must exit 0\n{}\n{}",
             capture.id, run.stdout, run.stderr
         );
-        // The ordered tier stages nothing, so it reserves nothing.
-        assert_eq!(
-            run.num("summary", "ram_bytes"),
-            0,
-            "{}: the ordered tier stages nothing",
-            capture.id
-        );
-        // And the direction is the one that keeps the most sources alive, so
-        // the download is exactly the patchmap's total.
+        // The ordered tier stages nothing, so it reserves nothing — the
+        // patchmap's `ram_bytes_ordered`.
+        if let Some(n) = capture
+            .summary
+            .as_ref()
+            .and_then(|s| s.ram_bytes_ordered)
+        {
+            assert_eq!(
+                run.num("summary", "ram_bytes"),
+                n,
+                "{}: the ordered tier stages nothing",
+                capture.id
+            );
+        }
+        // And the direction is the one that keeps the most sources alive.
+        //
+        // When that direction keeps **every** movable source, the ordered tier
+        // downloads exactly the patchmap's total. When it cannot — the mixed
+        // shift, where no order keeps every source — the sources the order
+        // loses have to be downloaded as well, and the figure is larger. That
+        // is the difference between a direction rule and a coincidence, and it
+        // is why the assertion is not a bare equality.
+        let repair = capture.repair.as_ref().expect("a repair block");
+        let keeps_every_source = match repair.direction.as_str() {
+            "ascending" => repair.keeps_ascending == repair.moved,
+            "descending" => repair.keeps_descending == repair.moved,
+            // Nothing to order, so nothing to lose.
+            _ => true,
+        };
         let total = capture.download_bytes.expect("a byte total");
-        assert_eq!(
-            run.num("summary", "download_bytes"),
-            total,
-            "{}: the ordered tier downloaded more than the patchmap's total, so the \
-             write order destroyed a source it should have kept",
-            capture.id
-        );
+        let downloaded = run.num("summary", "download_bytes");
+        if keeps_every_source {
+            assert_eq!(
+                downloaded, total,
+                "{}: the ordered tier downloaded more than the patchmap's total, so the \
+                 write order destroyed a source it should have kept",
+                capture.id
+            );
+        } else {
+            assert!(
+                downloaded > total,
+                "{}: the direction keeps only {} of the {} movable sources, so the \
+                 ordered tier must have fetched the rest as well (downloaded \
+                 {downloaded}, the patchmap's total is {total})",
+                capture.id,
+                match repair.direction.as_str() {
+                    "ascending" => repair.keeps_ascending,
+                    _ => repair.keeps_descending,
+                },
+                repair.moved
+            );
+        }
         // The file is still the ground truth.
         let bytes = std::fs::read(scratch.game().join(&capture.path))
             .unwrap_or_else(|e| panic!("{}: read the ordered run's file: {e}", capture.id));
@@ -1943,6 +2080,89 @@ async fn the_ordered_tier_downloads_exactly_the_patchmap_total() {
             capture.id
         );
     }
+}
+
+/// A **RAM budget too small for the payload**: the reservation is refused and
+/// the file degrades to the ordered tier.
+///
+/// `--max-ram-bytes 0` and a refused reservation both end up in the ordered
+/// tier, but they are **different branches** in the tool: the first is a
+/// *mode* — "stage nothing at all" — and the second is a *shortage*. The
+/// difference matters, because a shortage is a fact about the budget the
+/// caller gave, and the tool has to say so rather than quietly producing a
+/// worse repair.
+///
+/// The observable is the line the refusal writes, and the file's bytes
+/// afterwards: the degraded path has to produce the same file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn a_ram_budget_too_small_for_the_payload_degrades_to_the_ordered_tier() {
+    let bridge = bridge().await;
+    let bundle = bridge.bundle().clone();
+    // The subject: the capture with the **smallest** payload that is not zero.
+    // A payload of zero stages nothing and asks for no reservation at all, and
+    // the smallest non-zero one keeps the case quick.
+    let Some(capture) = bundle
+        .captures
+        .iter()
+        .filter(|c| {
+            c.repair
+                .as_ref()
+                .is_some_and(|r| r.payload_bytes > 0)
+        })
+        .min_by_key(|c| c.repair.as_ref().map(|r| r.payload_bytes).unwrap_or(0))
+    else {
+        println!("no capture moves bytes, so there is no reservation to refuse");
+        return;
+    };
+    let scratch = Scratch::new(&bundle);
+    let mut args = base_args(
+        &scratch.game(),
+        &bundle,
+        bridge.origins(),
+        &scratch.log_file(),
+    );
+    args.push("--include".into());
+    args.push(capture.path.clone());
+    args.push("--fail-fast".into());
+    args.push("--repair-mode".into());
+    args.push("inplace".into());
+    args.push("--scan".into());
+    // A budget that cannot hold the payload: the reservation is refused.
+    args.push("--max-ram-bytes".into());
+    args.push("1024".into());
+    args.push("--max-files".into());
+    args.push("1".into());
+    let run = girpr(&args).await;
+    assert_eq!(
+        run.code, 0,
+        "{}: the degraded run must exit 0\n{}\n{}",
+        capture.id, run.stdout, run.stderr
+    );
+    // The log says the reservation was refused, which is the branch — and it is
+    // not the `--max-ram-bytes 0` mode, which logs nothing here.
+    let log = std::fs::read_to_string(scratch.log_file()).unwrap_or_default();
+    assert!(
+        log.contains("the moving bytes do not fit the RAM budget"),
+        "{}: the refused reservation must be logged\n{log}",
+        capture.id
+    );
+    // And nothing was staged, so no RAM was reserved.
+    assert_eq!(
+        run.num("summary", "ram_bytes"),
+        0,
+        "{}: the degraded run staged nothing",
+        capture.id
+    );
+    // And the degraded path produced the same file.
+    let bytes = std::fs::read(scratch.game().join(&capture.path))
+        .unwrap_or_else(|e| panic!("{}: read the degraded run's file: {e}", capture.id));
+    assert_eq!(
+        format!("{:x}", md5::compute(&bytes)),
+        capture.result_md5,
+        "{}: the degraded run must equal expectations.result_md5",
+        capture.id
+    );
 }
 
 /// The **discard** mode: the same file, written whole.
