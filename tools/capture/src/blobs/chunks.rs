@@ -383,10 +383,17 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
                     });
                 }
             }
+            // **The offset is part of the key.** A file may place the same
+            // content at more than one offset — a Unity asset with repeated
+            // blocks does, and the live `resources.assets` has five chunk ids
+            // that appear two or three times each. Keying the reference on
+            // `(role, path)` alone kept only the first of them, so the index
+            // described a file with holes in it and the bundle could not be
+            // rebuilt from its own blobs.
             let already = w
                 .references
                 .iter()
-                .any(|r| r.role == role && r.path == pair.path);
+                .any(|r| r.role == role && r.path == pair.path && r.offset == c.offset);
             if !already {
                 w.references.push(Reference {
                     tag: tag.to_string(),
@@ -863,6 +870,41 @@ mod tests {
                 .iter()
                 .all(|r| r.role == Set::MaterializeOld)
         );
+    }
+
+    /// The **same chunk** at two offsets in one file is one blob with **two
+    /// references**, not one.
+    ///
+    /// A file may place the same content at more than one offset — a Unity
+    /// asset with repeated blocks does, and the live `resources.assets` has
+    /// five chunk ids that appear two or three times each. Keying the reference
+    /// on `(role, path)` alone kept only the first offset, so the index
+    /// described a file with holes in it and the bundle could not be rebuilt
+    /// from its own blobs.
+    #[test]
+    fn a_chunk_at_two_offsets_in_one_file_gets_two_references() {
+        let shared = chunk(b"repeated", 0, 0xabcd);
+        let mut second = shared.clone();
+        second.offset = 512;
+        let pair = FilePair {
+            capture_id: "c".into(),
+            path: "repeated.bin".into(),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry("repeated.bin", vec![shared.clone(), second.clone()]),
+            }),
+            new: None,
+        };
+        let w = wants(&[pair]);
+        assert_eq!(w.len(), 1, "one blob, one fetch");
+        assert_eq!(
+            w[0].references.len(),
+            2,
+            "but two placements: the content is at two offsets"
+        );
+        let offsets: Vec<i64> = w[0].references.iter().map(|r| r.offset).collect();
+        assert_eq!(offsets, vec![0, 512]);
     }
 
     #[test]
