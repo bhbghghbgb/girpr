@@ -2476,6 +2476,35 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
 }
 
 #[tokio::test]
+async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
+    // The checksum is the MD5 of the **decompressed** bytes, and it is
+    // verified before the protobuf parse. A manifest that does not match it
+    // cannot be planned from: the run fails as metadata, before a single byte
+    // is written.
+    //
+    // The blob the mock serves is unchanged — only the checksum the API
+    // advertises is wrong — so the checksum gate is the only thing that can
+    // catch it, and the decompressed bytes are the only thing it can be
+    // compared against.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            wrong_manifest_checksum: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("manifest_checksum");
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a manifest that does not match its checksum cannot be planned from");
+    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
+    assert!(!dir.join("config.ini").exists(), "nothing was written");
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     // The temp mode resumes by **length**: a chunk whose end is inside the
     // `_tmp` is taken as done, with no hash check of its own. A streamed

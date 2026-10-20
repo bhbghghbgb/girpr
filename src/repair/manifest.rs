@@ -6,8 +6,9 @@
 //!    unchanged chunk can be copied from the file already on disk instead of
 //!    downloaded.
 //!
-//! Manifests are never cached inside `game_dir` (V1-SIMPLIFICATION S1: the whole
-//! blob is buffered and parsed in memory) — see [`crate::sophon::fetch_manifest`].
+//! Manifests are never cached inside `game_dir` (V1-SIMPLIFICATION S1: the
+//! blob is streamed and parsed in memory, and nothing is kept) — see
+//! [`crate::sophon::fetch_manifest`].
 
 use std::collections::HashMap;
 

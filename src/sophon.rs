@@ -94,18 +94,28 @@ pub fn select_manifests<'a>(
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
 /// verified case-insensitively before parsing, like `EnsureSophonManifestFileAsync`.
 /// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864>
-/// V1-SIMPLIFICATION (S1, see README): the whole blob is buffered in memory
-/// (`decode_all`) and manifests are never cached inside `game_dir`, instead of
-/// Starward's file cache + streaming decompression. Simpler + lower disk use at
-/// the cost of higher peak RAM on large manifests.
+///
+/// The blob is **streamed**: the compressed body never sits in memory whole,
+/// and the decoded bytes land in a buffer that is already the size the API
+/// reported (`manifest.uncompressed_size`), so the decode does not have to
+/// grow it.
+///
+/// Manifests are still never cached inside `game_dir` (V1-SIMPLIFICATION S1,
+/// see README). Starward caches the *compressed* manifest under the app
+/// cache; `girpr` does not — lower disk use, and the manifest is fetched once
+/// per run.
 pub async fn fetch_manifest(
     client: &reqwest::Client,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
+    // The decoded manifest is exactly the size the API reported, so the
+    // buffer is allocated once and the decode never has to grow it. It lives
+    // across the attempts, because a retry reuses the same allocation.
+    let mut decoded: Vec<u8> = Vec::with_capacity(meta.manifest.uncompressed_size.max(0) as usize);
     let mut last_err = anyhow::anyhow!("no attempts");
     for attempt in 1..=ATTEMPTS {
-        match try_fetch_manifest(client, &url, meta, attempt).await {
+        match try_fetch_manifest(client, &url, meta, attempt, &mut decoded).await {
             Attempt::Ok(v) => return Ok(v),
             Attempt::Fatal(e) => {
                 tracing::debug!(
@@ -130,6 +140,7 @@ async fn try_fetch_manifest(
     url: &str,
     meta: &ChunkManifestMeta,
     attempt: u64,
+    decoded: &mut Vec<u8>,
 ) -> Attempt<Vec<SophonChunkFile>> {
     tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
     let resp = match client.get(url).send().await {
@@ -142,26 +153,29 @@ async fn try_fetch_manifest(
     if let Some(e) = status_failure(status, url) {
         return verdict(e, retryable(status.as_u16()));
     }
-    let bytes = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return Attempt::Retry(anyhow::anyhow!("read manifest body: {}", e)),
+    // A retry starts the manifest over: the decoded bytes of the failed
+    // attempt are in the buffer, and they are about to be replaced.
+    if let Err(e) = decoded.restart() {
+        return Attempt::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
+    }
+    // The whole blob is zstd-compressed; the checksum is the MD5 of the
+    // DECOMPRESSED bytes. There is no ceiling on the decode: the reported
+    // size sizes the buffer, it does not promise the length.
+    let (compressed, digest) = match stream_body(resp.bytes_stream(), None, decoded).await {
+        Ok(v) => v,
+        Err(StreamError::Transport(e)) => return Attempt::Retry(e),
+        Err(StreamError::Content(e)) => return Attempt::Retry(e),
     };
-    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = bytes.len(), "manifest downloaded");
-    // Entire blob is zstd-compressed; checksum = MD5 of DECOMPRESSED bytes.
-    let decoded = match zstd::stream::decode_all(std::io::Cursor::new(&bytes)) {
-        Ok(d) => d,
-        Err(e) => return Attempt::Retry(anyhow::Error::new(e).context("zstd decompress manifest")),
-    };
-    let digest = format!("{:x}", md5::compute(&decoded));
-    tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = decoded.len(), expect_md5 = %meta.manifest.checksum, actual_md5 = %digest, "manifest checksum check");
+    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = compressed, "manifest downloaded");
+    tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = digest.bytes, expect_md5 = %meta.manifest.checksum, actual_md5 = %digest.md5, "manifest checksum check");
     // A checksum mismatch is worth another try: the origin may have served a
     // torn body, and the next attempt is a fresh one.
-    if !digest.eq_ignore_ascii_case(&meta.manifest.checksum) {
+    if !digest.md5.eq_ignore_ascii_case(&meta.manifest.checksum) {
         return Attempt::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             meta.manifest.id,
             meta.manifest.checksum,
-            digest
+            digest.md5
         ));
     }
     match SophonChunkManifest::decode(decoded.as_slice()) {
@@ -297,6 +311,12 @@ impl ChunkSink for Vec<u8> {
         // buffer twice.
         self.clear();
         Ok(())
+    }
+}
+
+impl<T: ChunkSink + ?Sized> ChunkSink for &mut T {
+    fn restart(&mut self) -> std::io::Result<()> {
+        (**self).restart()
     }
 }
 
@@ -656,6 +676,63 @@ mod tests {
         sink.extend_from_slice(b"half a chunk");
         sink.restart().expect("restart");
         assert!(sink.is_empty(), "the failed attempt's bytes are gone");
+    }
+
+    /// The manifest's differential: the streamed decode of a manifest frame
+    /// yields the same bytes the buffered decode did, the same MD5 of the
+    /// **decompressed** bytes, and the same parsed message.
+    ///
+    /// The buffer is the size the API reported, and the decode fits in it —
+    /// which is the whole point of sizing it: a buffer that had to grow would
+    /// have doubled the peak.
+    #[tokio::test]
+    async fn the_streamed_manifest_parses_like_the_buffered_one() {
+        let manifest = SophonChunkManifest {
+            chuncks: vec![SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![SophonChunk {
+                    id: "abc".into(),
+                    uncompressed_md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
+                    offset: 0,
+                    compressed_size: 10,
+                    uncompressed_size: 20,
+                    unknown: 0,
+                    compressed_md5: "x".into(),
+                }],
+                is_folder: false,
+                size: 20,
+                md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
+            }],
+        };
+        let mut raw = Vec::new();
+        manifest.encode(&mut raw).expect("prost encode");
+        let compressed = frame(&raw);
+        // The buffer the API's `uncompressed_size` sizes.
+        let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
+        let body = futures::stream::iter(pieces(&compressed, 4096));
+        let (compressed_bytes, digest) = stream_body(body, None, &mut sink)
+            .await
+            .expect("the frame decodes");
+        assert_eq!(sink, raw, "the decoded bytes are the manifest");
+        assert_eq!(
+            sink,
+            zstd::decode_all(&compressed[..]).expect("buffered decode"),
+            "and they are the buffered decode's bytes"
+        );
+        assert_eq!(
+            digest.md5,
+            format!("{:x}", md5::compute(&raw)),
+            "the checksum is of the decompressed bytes"
+        );
+        assert_eq!(digest.bytes, raw.len() as u64);
+        assert_eq!(compressed_bytes, compressed.len() as u64);
+        assert_eq!(
+            sink.capacity(),
+            raw.len(),
+            "the decode fitted the buffer the API's size asked for"
+        );
+        let parsed = SophonChunkManifest::decode(sink.as_slice()).expect("parse");
+        assert_eq!(parsed, manifest, "the same message as the buffered one");
     }
 
     // --- the policy ---------------------------------------------------------

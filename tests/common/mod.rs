@@ -402,6 +402,10 @@ pub struct MockOpts {
     /// which is what makes a file retry — and therefore what distinguishes
     /// "bytes of promoted files" from "bytes that crossed the wire".
     pub corrupt_first_chunks: u32,
+    /// Advertise a manifest checksum the blob does not have. The blob itself
+    /// is served unchanged, so the only thing that can catch it is the
+    /// checksum gate — the MD5 of the **decompressed** bytes.
+    pub wrong_manifest_checksum: bool,
 }
 
 pub struct MockServer {
@@ -581,7 +585,13 @@ fn build_responses(
                 "matching_field": "game",
                 "manifest": {
                     "id": fx.manifest_id,
-                    "checksum": fx.manifest_checksum,
+                    "checksum": if opts.wrong_manifest_checksum {
+                        // A checksum no blob can have: the manifest must be
+                        // refused, and the run must fail as metadata.
+                        "00000000000000000000000000000000".to_string()
+                    } else {
+                        fx.manifest_checksum.clone()
+                    },
                     "compressed_size": fx.manifest_zstd.len() as i64,
                     "uncompressed_size": raw_manifest_len as i64
                 },
