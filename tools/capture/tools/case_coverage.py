@@ -92,8 +92,20 @@ def identity(chunk):
 
 
 def read_manifest(bundle, tag, field):
-    path = os.path.join(bundle, "manifests", tag, f"{field}.manifest.json.gz")
-    with gzip.open(path, "rt", encoding="utf-8") as fh:
+    """The decoded manifest for one tag and field.
+
+    **The dump is gzipped only when it is big.** `--gzip-threshold` decides,
+    so a small bundle's dump is the plain `<field>.manifest.json` and a large
+    one's is `<field>.manifest.json.gz`. The instrument reads both, or it only
+    works on the reference bundle.
+    """
+    root = os.path.join(bundle, "manifests", tag)
+    gz = os.path.join(root, f"{field}.manifest.json.gz")
+    if os.path.isfile(gz):
+        with gzip.open(gz, "rt", encoding="utf-8") as fh:
+            return json.load(fh)
+    plain = os.path.join(root, f"{field}.manifest.json")
+    with open(plain, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -103,8 +115,9 @@ def fields_of(bundle):
     out = []
     for tag in sorted(os.listdir(root)):
         for name in sorted(os.listdir(os.path.join(root, tag))):
-            if name.endswith(".manifest.json.gz"):
-                out.append(name[: -len(".manifest.json.gz")])
+            for suffix in (".manifest.json.gz", ".manifest.json"):
+                if name.endswith(suffix):
+                    out.append(name[: -len(suffix)])
     seen = []
     for f in out:
         if f not in seen:
@@ -184,7 +197,12 @@ def proposed_class_of(row, side):
     out = set()
     partial = 0 < row["reused"] < row["n"]
     if row["reused"] == 0:
-        out.add("zero_reuse_single" if row["n"] == 1 else "zero_reuse_multi")
+        # The crate's rule: `nchunks == 1` is the single-chunk class and
+        # `nchunks > 1` the multi one, so an empty file is neither.
+        if row["n"] == 1:
+            out.add("zero_reuse_single")
+        elif row["n"] > 1:
+            out.add("zero_reuse_multi")
     if partial and row["moved"] == 0:
         out.add("kept_in_place")
     if row["moved"] > 0:
@@ -254,6 +272,22 @@ def collect(bundle):
     return rows
 
 
+def population_counts(rows):
+    """How many paths satisfy each class, per class set."""
+    counts = {}
+    for label, classifier, names in (
+        ("current", old_class_of, OLD_CLASSES),
+        ("proposed", proposed_class_of, PROPOSED_CLASSES),
+    ):
+        c = Counter()
+        for r in rows:
+            for name in classifier(r, r["side"]):
+                c[name] += 1
+        counts[label] = {name: c.get(name, 0) for name in names}
+    counts["pool"] = len(rows)
+    return counts
+
+
 def section_population(rows):
     print("== population ==")
     print(f"pool: {len(rows)} paths\n")
@@ -302,22 +336,70 @@ def md5(data):
     return hashlib.md5(data).hexdigest()
 
 
-def section_outcome(bundle):
-    print("== outcome (what the in-place repair would do) ==")
+def outcome_rows(bundle):
+    """What the in-place repair would do with each capture's file.
+
+    **The rules are the artifact's** (`assemble::repair_of` in the crate), not a
+    second opinion, and the differences matter:
+
+    - a chunk that is already correct where it belongs is **kept**, and it is
+      not a candidate for either write order. The salvage counts run over the
+      *damaged* chunks only, exactly as `repair::reuse::salvage_order` does.
+    - a source that reaches past the end of the file is not there to be
+      copied, so it salvages nothing in either order.
+    - a tie keeps nothing at all, so there is no direction to name.
+
+    A file that is absent from `game/` is the *created* case: every chunk is
+    fetched and nothing is kept.
+    """
     pmdir = os.path.join(bundle, "patchmaps")
+    out = []
     for name in sorted(os.listdir(pmdir)):
         if not name.endswith(".json"):
             continue
         j = json.load(open(os.path.join(pmdir, name), encoding="utf-8"))
         cid = j["capture_id"]
         if not j.get("plan"):
-            print(f"{cid:<24} (no plan: {j['path']})")
+            out.append(
+                dict(
+                    capture_id=cid,
+                    path=j["path"],
+                    note="no plan",
+                    kept=0,
+                    moved=0,
+                    fetched=0,
+                    payload=0,
+                    keeps_ascending=0,
+                    keeps_descending=0,
+                    direction="n/a",
+                    trim="none",
+                    growth=0,
+                )
+            )
             continue
         game = os.path.join(bundle, "game", j["path"].replace("/", os.sep))
+        new_size = j["new"]["size"]
         if not os.path.isfile(game):
-            print(f"{cid:<24} (absent from game/: {j['path']})")
+            # The file is created: absent locally, so every chunk is fetched.
+            out.append(
+                dict(
+                    capture_id=cid,
+                    path=j["path"],
+                    note="absent from game/: the file is created",
+                    kept=0,
+                    moved=0,
+                    fetched=len(j["plan"]),
+                    payload=0,
+                    keeps_ascending=0,
+                    keeps_descending=0,
+                    direction="n/a",
+                    trim="none",
+                    growth=new_size,
+                )
+            )
             continue
         data = open(game, "rb").read()
+        old_size = len(data)
         kept = moved = fetched = 0
         payload = 0
         asc = desc = 0
@@ -335,9 +417,10 @@ def section_outcome(bundle):
             intact = md5(data[s0 : s0 + (t1 - t0)]) == want
             max_src_end = max(max_src_end, s0 + (t1 - t0))
             if at_dest:
+                # Kept: already correct where it belongs. Not a candidate for
+                # either write order - the salvage counts are over the damaged
+                # chunks only.
                 kept += 1
-                asc += 1
-                desc += 1
                 continue
             if not intact:
                 fetched += 1
@@ -348,26 +431,61 @@ def section_outcome(bundle):
                 down += 1
             elif s0 < t0:
                 up += 1
-            # the ordered tier's rule, on the wrong chunks only
-            if s0 >= t0:
-                asc += 1
-            if s0 <= t0:
-                desc += 1
-        new_size = j["new"]["size"]
-        if len(data) > new_size:
-            trim = (
-                "eager"
-                if max_src_end <= new_size
-                else "deferred (a source reaches past the target's end)"
-            )
+            # The ordered tier's rule, on the wrong chunks only, and only for
+            # a source that is inside the file being read from.
+            inside = s0 + (t1 - t0) <= old_size
+            if inside:
+                if s0 >= t0:
+                    asc += 1
+                if s0 <= t0:
+                    desc += 1
+        if new_size >= old_size:
+            trim = "none"
+        elif max_src_end <= new_size:
+            trim = "eager"
         else:
-            trim = "none (the file does not shrink)"
-        direction = "ascending" if asc >= desc else "descending"
+            trim = "deferred"
+        if asc == 0 and desc == 0:
+            direction = "n/a"
+        elif desc > asc:
+            direction = "descending"
+        else:
+            direction = "ascending"
+        out.append(
+            dict(
+                capture_id=cid,
+                path=j["path"],
+                note=None,
+                kept=kept,
+                moved=moved,
+                fetched=fetched,
+                payload=payload,
+                keeps_ascending=asc,
+                keeps_descending=desc,
+                direction=direction,
+                trim=trim,
+                growth=max(0, new_size - old_size),
+            )
+        )
+    return out
+
+
+def section_outcome(rows):
+    print("== outcome (what the in-place repair would do) ==")
+    for r in rows:
+        if r["note"]:
+            print(f"{r['capture_id']:<24} ({r['note']}: {r['path']})")
+            continue
+        trim = {
+            "eager": "eager (the dead tail is released before the first write)",
+            "deferred": "deferred (a source reaches past the target's end)",
+            "none": "none (the file does not shrink)",
+        }[r["trim"]]
         print(
-            f"{cid:<24} disk={len(data):>9} target={new_size:>9} "
-            f"kept={kept} moved={moved} fetched={fetched} payload={payload:>9} "
-            f"up={up} down={down} asc_keeps={asc} desc_keeps={desc} -> {direction} "
-            f"| trim: {trim}"
+            f"{r['capture_id']:<24} kept={r['kept']} moved={r['moved']} "
+            f"fetched={r['fetched']} payload={r['payload']:>9} "
+            f"asc_keeps={r['keeps_ascending']} desc_keeps={r['keeps_descending']} "
+            f"-> {r['direction']} | trim: {trim}"
         )
     print()
 
@@ -380,19 +498,32 @@ def main():
         choices=["population", "outcome", "ranking", "all"],
         default="all",
     )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="print the sections as JSON instead of as tables (for the gate)",
+    )
     args = ap.parse_args()
     bundle = args.bundle
     if not os.path.isfile(os.path.join(bundle, "MANIFEST.json")):
         print(f"{bundle} is not a bundle (no MANIFEST.json)", file=sys.stderr)
         return 1
+    doc = {}
     if args.section in ("population", "ranking", "all"):
         rows = collect(bundle)
         if args.section in ("population", "all"):
-            section_population(rows)
-        if args.section in ("ranking", "all"):
+            doc["population"] = population_counts(rows)
+            if not args.json:
+                section_population(rows)
+        if args.section in ("ranking", "all") and not args.json:
             section_ranking(rows)
     if args.section in ("outcome", "all"):
-        section_outcome(bundle)
+        out = outcome_rows(bundle)
+        doc["outcome"] = out
+        if not args.json:
+            section_outcome(out)
+    if args.json:
+        print(json.dumps(doc, indent=2, sort_keys=True))
     return 0
 
 

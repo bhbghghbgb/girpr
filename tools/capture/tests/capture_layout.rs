@@ -1629,7 +1629,8 @@ fn no_chunk_blobs_still_writes_the_launcher_metadata() {
 /// `--no-chunk-blobs` stores no blobs, and the result is `incomplete` rather
 /// than `pass`: a skip is not a success.
 #[test]
-fn no_chunk_blobs_is_incomplete_not_pass() {    let mock = Mock::start(World::five_classes());
+fn no_chunk_blobs_is_incomplete_not_pass() {
+    let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
