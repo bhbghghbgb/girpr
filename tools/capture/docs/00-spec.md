@@ -210,6 +210,34 @@ repeat the mistake.
 targets a *distinct* decision the main tool makes. `--per-class N` raises the
 count; there are no per-variant flags.
 
+#### The case space: what the repair decides, and what a class can force
+
+The repair spec (2026-10-20, merge `f9e6f6a`) makes the repair **in place** by
+default, in two tiers, with a trim that is sometimes eager and sometimes
+deferred. Per file, it decides nine things. Six of them are **content**
+decisions — a function of how the file changed — and those six are what the
+class set has to cover. The other three come from a flag, a filesystem or an
+interruption, and no class can force them; §6 of `girpr`'s bridge spec
+says where each one goes instead.
+
+| # | decision | what it depends on | a class can force it? |
+|---|---|---|---|
+| D1 | **skip** — the file is already correct | the whole-file MD5 | yes |
+| D2 | **what happens to each chunk**: *kept* (already correct where it belongs), *copied* (its bytes live elsewhere in the file), *fetched* (no usable local source) | the old/new chunk layouts | yes |
+| D3 | **the tier** — RAM-staged (the moving bytes fit the budget) or ordered (they do not) | the payload size vs `--max-ram-bytes` | the payload is content; the budget is a flag |
+| D4 | **the direction** — ascending or descending, whichever keeps more reuse | the *sign* of the moves | yes |
+| D5 | **the trim** — eager (the dead tail is released before the first write) or deferred (the tail waits for the end) | the old size vs the new size, and **where the sources are** | yes |
+| D6 | **the growth** — the file on disk is shorter than the target, so the in-place path has to extend it | the two sizes | yes (as a property) |
+| D7 | **the mode** — in place / temp / discard, and the fallback when the target cannot be opened for writing | a flag, and the filesystem | no — a flag axis |
+| D8 | **the resume** — in place re-verifies and continues; temp resumes by length | an interrupted run | no — a fault injection |
+| D9 | **the zero-fill** of a hole in the chunk coverage | a manifest that does not tile its file | no — a malformed manifest |
+
+**A class is a statement about the content, so it is a class over D1–D6.** A
+flag axis is a different kind of thing: the same file answers it whatever the
+flag says, so a class over it would be a class over nothing.
+
+#### The classes
+
 | class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
 | `identical` | `old.md5 == new.md5` | the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
@@ -223,6 +251,25 @@ count; there are no per-variant flags.
 | `trim_deferred` | `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
 | `added` | path only in the new manifest | the file is created: absent locally, fetched whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
 | `removed` | path only in the old manifest | not planned; a `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
+
+**`kept_in_place` is not a reuse class.** A same-offset source *is* the chunk's
+own destination, so the chunk is **kept**, not copied: the payload is 0 and the
+staged tier stages nothing. The old name (`partial_same_offset`) said "reuse"
+and the behaviour is not a reuse.
+
+**`moved_ascending` and `moved_descending` are the direction, not the shift.**
+The direction is the *sign* of the moves: the bytes move **earlier** (the source
+is after the destination) and the ascending order keeps every source alive, or
+the bytes move **later** (the source is before the destination) and the
+descending one does. `moved_mixed` is the chunking re-flowing, and the ordered
+tier keeps the larger half.
+
+**The two trim classes split what one class used to cover.** The trim is
+**eager** when the file on disk is longer than the target and no reuse source
+reaches past the target's end — the tail is dead weight, and it is released
+before the first write. It is **deferred** when a source does reach past it: a
+source the trim would delete is a source that is gone, so the trim waits for the
+end and the file grows during the repair.
 
 *(measured)* population over the pool the capture selects (`game` ∪ `en-us`,
 2 932 paths): `identical` 1 733, `zero_reuse_single` 121, `zero_reuse_multi` 491,
@@ -241,7 +288,65 @@ moved_ascending, moved_descending, moved_mixed, trim_eager, trim_deferred,
 added, removed
 ```
 
-**Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
+#### The candidates, and what each class costs
+
+*(measured)* over the pool the capture selects (`game` ∪ `en-us`, 2 932 paths).
+The ranking key is `gircap`'s own: `total_cost` = the compressed bytes of the old
+and the new file, because the old file has to be materialized in full for the
+fixture to be real.
+
+| class | candidates | cheapest candidate | `total_cost` | on disk |
+|---|---|---|---|---|
+| `identical` | 1 733 | `…/Resources/browser_assets` | 54 | 28 B |
+| `zero_reuse_single` | 121 | `…/AssetBundles/data_revision` | 42 | 16 B |
+| `zero_reuse_multi` | 491 | `…/Resources/unity default resources` | 633 588 | 9.9 MB |
+| `kept_in_place` | 29 | `…/Plugins/HoYoChannel.dll` | 1 826 067 | 4.7 MB |
+| `moved_ascending` | 321 | `…/blocks/00/09801749.blk` | 22 662 068 | 23.8 MB |
+| `moved_descending` | 139 | `GenshinImpact_Data/resources.assets` | 40 280 151 | 100.5 MB |
+| `moved_mixed` | 3 | `…/AudioAssets/Banks25.pck` | 243 016 539 | 290.4 MB |
+| `trim_eager` | 56 | `…/blocks/00/00981562.blk` | 21 679 587 | 21.8 MB |
+| `trim_deferred` | 282 | `…/blocks/00/09801749.blk` | 22 662 068 | — (the same file as `moved_ascending`) |
+| `added` | 84 | `…/Plugins/libHttpClient.GDK.dll` | 114 357 | 249 KB |
+| `removed` | 11 | `…/blocks/00/00664172.blk` | 1 731 133 | 1.7 MB |
+
+**`moved_mixed` is expected to be unfunded.** The rule's "keep the larger half"
+branch deserves a case, but its cheapest candidate is 243 MB of compressed bytes
+and 290 MB of fixture. `gircap` already has the mechanism:
+`--max-download-bytes` refuses a class it cannot afford and the matrix records it
+as `over_budget` with its reason. The capture's ceiling is set so that
+`moved_descending` is funded and `moved_mixed` is not, and **the bundle records
+the truth instead of pretending**: the class is there, with the reason it was
+not taken.
+
+#### What the bundle cannot cover
+
+Two things are out of the bundle's reach, and both are said here rather than
+left to be discovered.
+
+**The corruption-repair input state.** The new repair spec opens with two
+regimes, and the first one is the common case: the file is the right size and
+most chunks are intact, so a chunk's reuse source is at *its own offset* and the
+bad chunk is simply overwritten where it lies. In a real corruption repair the
+install is at the **current** version and the *bytes* are damaged; the bundle
+cannot produce that state, because `game/` is always materialized from the
+**old** manifest, so a chunk that is reused at its own offset is already
+correct by construction.
+
+What the bundle *does* cover is the **behaviour** that regime produces: the
+payload is 0, the wrong chunks are written in place and the good ones are kept
+(`kept_in_place`). What it does not cover is the **input** — the case where the
+local map has an entry for the damaged chunk and the source check is what
+rejects it. A second fixture flavour, a "damaged current install" capture, is a
+real feature and not a flag: the class model would need a second dimension and
+the manifest diff would have to be scored against the damage rather than
+against the old version. It is its own change, with its own cost.
+
+**The malformed-manifest cases.** A hole in the chunk coverage, or an overlap,
+cannot come from a real capture: the server's manifests tile their files. They
+are only reachable with a synthetic manifest, which is a **bridge** fixture
+rather than a bundle case.
+
+#### Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
 *(measured)* each audio manifest carries 177 further file entries for ~1 MB
 compressed. Widening `--audio` therefore widens the candidate corpus, which is

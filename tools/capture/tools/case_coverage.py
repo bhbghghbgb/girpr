@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""The instrument behind `../docs/05-case-coverage-plan.md`.
+"""The instrument behind `../docs/00-spec.md` section 4.1.
 
 Standard library only, like every other script in this directory. It reads a
 bundle and nothing else: no network, no writes, no `gircap` binary.
+
+It is worth re-running after any change to the class set: the populations it
+measures are the ones `docs/00-spec.md` section 4.1 publishes, and a class
+added or a predicate moved makes them stale.
 
 Three sections, one per question the findings ask:
 
@@ -41,10 +45,11 @@ from collections import Counter, defaultdict
 
 # The class sets, as predicates over the old and the new manifest entries.
 #
-# `Shape` in `src/select/classes.rs` is deliberately lossy ("the five numbers a
-# decision turns on and nothing else"); the findings say it has to grow the
-# axes below. They are spelled out here rather than imported, because the
-# findings are about a class set that does not exist in the crate yet.
+# `Shape` in `src/select/classes.rs` is deliberately lossy ("the numbers a
+# decision turns on and nothing else"); the axes below are what it carries.
+# They are spelled out here rather than imported, because the script must be
+# able to measure a class set the crate does not have — that is how a gap is
+# found in the first place.
 #
 # A path is described by:
 #   reused   - new chunks whose identity is in this same old file
