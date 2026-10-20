@@ -169,7 +169,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     i.rows.push(Assertion::row(
         "A17",
         "MANIFEST.json matrix",
-        "every class captured | covered_by | unavailable",
+        "every class captured | covered_by | over_budget | unavailable",
         a17_ok,
         &a17_detail,
     ));

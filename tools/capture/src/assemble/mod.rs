@@ -1134,7 +1134,8 @@ fn build_map(
     old: Option<&FileResult>,
     new: Option<&FileResult>,
     plan: Option<Vec<PlanEntry>>,
-) -> Result<PatchMap, String> {    let side = |r: &FileResult| Side {
+) -> Result<PatchMap, String> {
+    let side = |r: &FileResult| Side {
         tag: r.tag.clone(),
         size: r.bytes.len() as i64,
         md5: r.declared_md5.clone(),
@@ -2426,7 +2427,8 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
     }
 
     #[test]
-    fn decisions_serialise_the_way_the_schema_doc_writes_them() {        assert_eq!(
+    fn decisions_serialise_the_way_the_schema_doc_writes_them() {
+        assert_eq!(
             serde_json::to_string(&Decision::Reuse).unwrap(),
             "\"REUSE\""
         );

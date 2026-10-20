@@ -955,9 +955,9 @@ mod tests {
     /// The twenty-one ids (seventeen from the spec plus M11's A19 and the three
     /// coverage assertions) each have wording and each is fatal.
     ///
-    /// Twenty-one rather than twenty is the point of asserting the length: a new
-    /// assertion added without wording would otherwise pass, and a wording entry
-    /// added without a producer would be a promise nothing keeps.
+    /// Twenty-one rather than seventeen is the point of asserting the length: a
+    /// new assertion added without wording would otherwise pass, and a wording
+    /// entry added without a producer would be a promise nothing keeps.
     #[test]
     fn every_assertion_id_has_wording_and_is_fatal() {
         for (id, w) in WORDING {

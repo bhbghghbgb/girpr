@@ -405,7 +405,7 @@ pub fn reverify(bundle: Bundle) -> Report {
             "A17",
             crate::emit::selfcheck::wording("A17"),
             "MANIFEST.json matrix",
-            "every class captured | covered_by | unavailable",
+            "every class captured | covered_by | over_budget | unavailable",
             &a17_detail,
         )
     });

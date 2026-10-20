@@ -261,6 +261,21 @@ impl Class {
     }
 
     /// Whether this shape satisfies the class.
+    ///
+    /// **Every content class requires `same_md5: false`.** A file whose
+    /// whole-file MD5s agree is the **skip** branch — the repair makes no
+    /// content decision about it at all, so it cannot be a statement about how
+    /// the content changed. The live pool holds one such path
+    /// (`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled,
+    /// so four chunks "move", yet the file's content is byte-identical. It
+    /// used to satisfy `moved_descending` as well as `identical`, which was
+    /// three defects in one: the published population was one too high, the
+    /// instrument could not reproduce it, and A19's "is unchanged but its
+    /// class says it should differ" was a trip-wire waiting for a cheap
+    /// candidate.
+    ///
+    /// The class set is a **partition** on the content, and `identical` is the
+    /// class that owns an unchanged file.
     pub fn matches(self, s: Shape) -> bool {
         use Shape::{Added, Removed, Scored};
         match self {
@@ -285,34 +300,71 @@ impl Class {
             // staged tier stages nothing.
             Class::KeptInPlace => matches!(
                 s,
-                Scored { moved: 0, reused, nchunks, .. } if is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    moved: 0,
+                    reused,
+                    nchunks,
+                    ..
+                } if is_partial(reused, nchunks)
             ),
             // The direction is the *sign* of the moves, and the two direction
             // classes are exclusive: a file whose every move goes down is not
             // a file whose every move goes up.
-            Class::MovedAscending => {
-                matches!(s, Scored { moved, moved_up, .. } if moved > 0 && moved_up == 0)
-            }
-            Class::MovedDescending => {
-                matches!(s, Scored { moved, moved_down, .. } if moved > 0 && moved_down == 0)
-            }
+            Class::MovedAscending => matches!(
+                s,
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_up,
+                    ..
+                } if moved > 0 && moved_up == 0
+            ),
+            Class::MovedDescending => matches!(
+                s,
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_down,
+                    ..
+                } if moved > 0 && moved_down == 0
+            ),
             Class::MovedMixed => matches!(
                 s,
-                Scored { moved, moved_up, moved_down, .. }
-                    if moved > 0 && moved_up > 0 && moved_down > 0
+                Scored {
+                    same_md5: false,
+                    moved,
+                    moved_up,
+                    moved_down,
+                    ..
+                } if moved > 0 && moved_up > 0 && moved_down > 0
             ),
             // The trim is eager when the dead tail can be released before the
             // first write — which is exactly when no source reaches past the
             // target's end — and deferred when a source does.
             Class::TrimEager => matches!(
                 s,
-                Scored { old_size, new_size, trim_free, reused, nchunks, .. }
-                    if trim_free && old_size > new_size && is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    old_size,
+                    new_size,
+                    trim_free,
+                    reused,
+                    nchunks,
+                    ..
+                } if trim_free && old_size > new_size && is_partial(reused, nchunks)
             ),
             Class::TrimDeferred => matches!(
                 s,
-                Scored { old_size, new_size, trim_free, reused, nchunks, .. }
-                    if !trim_free && old_size > new_size && is_partial(reused, nchunks)
+                Scored {
+                    same_md5: false,
+                    old_size,
+                    new_size,
+                    trim_free,
+                    reused,
+                    nchunks,
+                    ..
+                } if !trim_free && old_size > new_size && is_partial(reused, nchunks)
             ),
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
@@ -591,6 +643,30 @@ mod tests {
             "a file whose every chunk is reused and none of them moved is not a \
              class of its own: it is the shape the removed `full_reuse_reordered` \
              used to claim, and there is no decision behind it"
+        );
+    }
+
+    /// A file whose content is **unchanged** is the skip branch, whatever its
+    /// chunking did.
+    ///
+    /// The live pool holds one such path: `StreamingAssets/AudioAssets/Music4.pck`
+    /// has 336 chunks, all of them reused, and four of them at a different
+    /// offset — the chunking was re-tiled — yet the file's whole md5 is the
+    /// same on both sides. So the file is byte-identical and the repair skips
+    /// it; there is no content decision to make a class out of.
+    ///
+    /// It used to satisfy `moved_descending` as well as `identical`, which was
+    /// a published population one too high, an instrument that could not
+    /// reproduce the crate, and A19's "is unchanged but its class says it
+    /// should differ" waiting for a cheap enough candidate to trip.
+    #[test]
+    fn an_unchanged_file_is_the_skip_branch_even_when_its_chunking_moved() {
+        let retiled = shape(true, 336, 336, 4, 4, 0, 398_535_566, 398_535_566, true);
+        assert_eq!(
+            Class::all_satisfied_by(retiled),
+            vec![Class::Identical],
+            "the class set is a partition on the content, and `identical` owns an \
+             unchanged file"
         );
     }
 
