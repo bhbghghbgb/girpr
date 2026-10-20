@@ -15,7 +15,7 @@
 //! Not "it would be rude under `cargo test`". These cases are **expensive**.
 //! One capture is a `--print-plan` pre-pass plus a real run, and each run
 //! fetches four manifests — ~20 MB of real bundle bytes — before it can plan a
-//! single file. The whole suite is ~18 cases and **~2 minutes**, which is a
+//! single file. The whole suite is 25 cases and **~2 minutes**, which is a
 //! price worth paying *when something has gone wrong* and not worth paying on
 //! every `cargo test`.
 //!
@@ -1000,7 +1000,12 @@ fn base_args(game: &Path, bundle: &Bundle, o: &Origins, log: &Path) -> Vec<Strin
 }
 
 /// The flags one capture's runs carry, on top of [`base_args`].
-fn capture_args(capture: &Capture) -> Vec<String> {
+///
+/// **The repair-mode group and the two ceilings are asked for on purpose.**
+/// Every counter the new repair spec reports is *conditional on a flag* — the
+/// mode, the RAM budget, the scan, the write ceiling — so a run that does not
+/// ask for them cannot be checked against the patchmap's `expectations`.
+fn capture_args(capture: &Capture, mode: &str) -> Vec<String> {
     let mut args = vec![
         // Exactly one path: the patchmap's own `path` field.
         "--include".into(),
@@ -1015,6 +1020,22 @@ fn capture_args(capture: &Capture) -> Vec<String> {
         // ceiling would be vacuous and `limited=1` would be a lie about it.
         args.push("--purge-only".into());
     } else {
+        args.push("--repair-mode".into());
+        args.push(mode.into());
+        // The scan: it is what makes `damaged_chunks` appear, and it turns
+        // the download estimate from an approximation into the precise sum
+        // over the chunks that are wrong where they belong and have no
+        // intact source.
+        args.push("--scan".into());
+        // The RAM budget, so `ram_bytes` appears. The value is large enough
+        // for the staged tier, which is the default — the ordered tier is
+        // `--max-ram-bytes 0` and has a case of its own.
+        args.push("--max-ram-bytes".into());
+        args.push((1_u64 << 30).to_string());
+        // The write ceiling, so `write_bytes` appears. Large enough that it
+        // never trips.
+        args.push("--max-write-bytes".into());
+        args.push((1_u64 << 40).to_string());
         args.push("--max-files".into());
         args.push("1".into());
     }
@@ -1046,7 +1067,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     pre.push("--print-plan".into());
     pre.push("--plan-out".into());
     pre.push(scratch.plan_out().display().to_string());
-    pre.extend(capture_args(capture));
+    pre.extend(capture_args(capture, "inplace"));
     let plan = girpr(&pre).await;
     assert_eq!(plan.code, 0, "--print-plan must exit 0\n{}", plan.stderr);
     assert_eq!(
@@ -1106,7 +1127,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         bridge.origins(),
         &scratch.log_file(),
     );
-    args.extend(capture_args(capture));
+    args.extend(capture_args(capture, "inplace"));
     let run = girpr(&args).await;
 
     // ---- 4: exit 0, config_bumped=0, nothing else touched --------------
@@ -1325,13 +1346,20 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
                 assert!(added.is_empty() && changed.is_empty(), "{}", capture.id);
                 assert!(asked.is_empty(), "{}: nothing is downloaded", capture.id);
             }
-            // The three patchable classes and the two zero-reuse classes are
-            // the load-bearing ones, and assertions 1-3 above already bite on
+            // The patchable classes and the two zero-reuse classes are the
+            // load-bearing ones, and assertions 1-3 above already bite on
             // them: the byte total is the patchmap's, the result MD5 is the
             // ground truth, and `must_not_fetch` is non-empty for every partial.
-            "partial_same_offset"
-            | "partial_moved_offset"
-            | "partial_size_changed"
+            //
+            // The vocabulary is the new repair spec's: a chunk is **kept**
+            // (already correct where it belongs), **copied** (its bytes live
+            // elsewhere in the file) or **fetched** (no usable local source).
+            "kept_in_place"
+            | "moved_ascending"
+            | "moved_descending"
+            | "moved_mixed"
+            | "trim_eager"
+            | "trim_deferred"
             | "zero_reuse_single"
             | "zero_reuse_multi" => {
                 assert_eq!(
@@ -1368,6 +1396,100 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         "{}",
         capture.id
     );
+
+    // The patchmap's `expectations.summary`, asserted against the run.
+    //
+    // These are the numbers the new repair spec reports, and each one is
+    // **conditional on a flag** — the mode, the RAM budget, the scan, the write
+    // ceiling — so the run asks for all of them and each is checked under the
+    // flag that produces it.
+    if let Some(want) = capture.summary.as_ref() {
+        if let Some(n) = want.damaged_chunks {
+            assert_eq!(
+                run.num("summary", "damaged_chunks"),
+                n,
+                "{}: the chunks that are wrong where they belong",
+                capture.id
+            );
+        }
+        if let Some(n) = want.inplace {
+            assert_eq!(
+                run.num("summary", "inplace"),
+                n,
+                "{}: the files repaired in place",
+                capture.id
+            );
+        }
+        if let Some(n) = want.temp {
+            assert_eq!(
+                run.num("summary", "temp"),
+                n,
+                "{}: the files repaired through the temp path",
+                capture.id
+            );
+        }
+        if let Some(n) = want.kept_bytes {
+            assert_eq!(
+                run.num("summary", "kept_bytes"),
+                n,
+                "{}: the bytes that did not have to be written",
+                capture.id
+            );
+        }
+        if let Some(n) = want.ram_bytes_staged {
+            assert_eq!(
+                run.num("summary", "ram_bytes"),
+                n,
+                "{}: the RAM the staged tier reserved",
+                capture.id
+            );
+        }
+        if let Some(n) = want.write_bytes {
+            assert_eq!(
+                run.num("summary", "write_bytes"),
+                n,
+                "{}: the bytes the in-place run wrote",
+                capture.id
+            );
+        }
+        // And the patchmap's own `repair` block agrees with them: the block is
+        // where the numbers come from, so a bundle whose block and whose
+        // expectations disagree is a bundle that says two things.
+        if let Some(repair) = capture.repair.as_ref() {
+            assert_eq!(
+                Some(repair.moved + repair.fetch),
+                want.damaged_chunks,
+                "{}: the repair block's damaged chunks and the expectation",
+                capture.id
+            );
+            assert_eq!(
+                Some(repair.payload_bytes),
+                want.ram_bytes_staged,
+                "{}: the repair block's payload and the expectation",
+                capture.id
+            );
+            // The two byte figures differ in exactly one case: a file that is
+            // **skipped**. The block says how many bytes of the file are
+            // already correct where they belong; the expectation says how many
+            // bytes the *run* did not have to write, and a run that skipped the
+            // file wrote nothing and kept nothing.
+            let repaired = want.inplace.unwrap_or(0) + want.temp.unwrap_or(0) > 0;
+            if repaired {
+                assert_eq!(
+                    Some(repair.kept_bytes),
+                    want.kept_bytes,
+                    "{}: the repair block's kept bytes and the expectation",
+                    capture.id
+                );
+                assert_eq!(
+                    Some(repair.write_bytes),
+                    want.write_bytes,
+                    "{}: the repair block's written bytes and the expectation",
+                    capture.id
+                );
+            }
+        }
+    }
 
     println!(
         "bridge {:<24} plan files={} est={} | run total={} skipped={} repaired={} failed={} \
@@ -1424,11 +1546,7 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
         bridge.origins(),
         &temp_scratch.log_file(),
     );
-    temp_args.extend(capture_args(capture));
-    temp_args.push("--repair-mode".into());
-    temp_args.push("temp".into());
-    temp_args.push("--max-write-bytes".into());
-    temp_args.push((1u64 << 40).to_string());
+    temp_args.extend(capture_args(capture, "temp"));
     let temp = girpr(&temp_args).await;
     assert_eq!(
         temp.code, 0,
@@ -1442,9 +1560,7 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
         bridge.origins(),
         &inplace_scratch.log_file(),
     );
-    inplace_args.extend(capture_args(capture));
-    inplace_args.push("--max-write-bytes".into());
-    inplace_args.push((1u64 << 40).to_string());
+    inplace_args.extend(capture_args(capture, "inplace"));
     let inplace = girpr(&inplace_args).await;
     assert_eq!(
         inplace.code, 0,
@@ -1482,19 +1598,26 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
     // ---- and a different cost --------------------------------------------
     let temp_written = temp.num("summary", "write_bytes");
     let inplace_written = inplace.num("summary", "write_bytes");
+    let inplace_kept_bytes = inplace.num("summary", "kept_bytes");
     assert!(
         inplace_written <= temp_written,
         "{}: the in-place run cannot write more than the temp one \
          (inplace {inplace_written}, temp {temp_written})",
         capture.id
     );
-    // The temp path writes the whole file; the in-place path writes only the
-    // bytes that are wrong. A capture whose file is *entirely* wrong (or
-    // absent) costs the same either way — there is nothing to keep — so the
-    // strict inequality is for the classes where part of the file was
-    // already right.
-    let partial = capture.classes.iter().any(|c| c.starts_with("partial"));
-    if partial {
+    // The in-place path leaves the correct chunks alone; the temp path
+    // rewrites the whole file and keeps nothing. A capture whose file has
+    // **nothing** to keep costs the same either way — every chunk is written
+    // one way or the other — so the strict inequality is for the captures
+    // where part of the file was already right.
+    //
+    // The test is the run's own figure, not the class's name: the bytes the
+    // run did not have to write. A `moved_*` capture whose file keeps
+    // **nothing** (every chunk moves or is fetched — `resources.assets` does)
+    // writes as much as the temp path does, and the class name would have said
+    // otherwise.
+    let kept_something = inplace_kept_bytes > 0;
+    if kept_something {
         assert!(
             inplace_written < temp_written,
             "{}: the in-place run must write strictly fewer bytes \
@@ -1569,19 +1692,20 @@ fn find_files_named(dir: &Path, suffix: &str) -> Vec<String> {
 
 /// One capture, end to end, against real bundle bytes.
 ///
-/// `partial_same_offset` is the load-bearing first case: it is the one
-/// `docs/06` quotes a figure for (`download_bytes=274426`), and it is a
-/// three-chunk file where two chunks must come from the local reuse map and one
-/// pair must come off the network — so assertions 1, 2 and 3 all bite at once.
+/// `kept_in_place` is the load-bearing first case: it is the one `docs/06`
+/// quotes a figure for (`download_bytes=274426`), and it is a three-chunk file
+/// where two chunks must come from the local reuse map and one pair must come
+/// off the network — so assertions 1, 2 and 3 all bite at once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn one_capture_patches_to_the_new_version() {
     let bridge = bridge().await;
     let capture = bridge
-        .capture("partial_same_offset")
+        .bundle()
+        .capture_for_class("kept_in_place")
         .unwrap_or_else(|| {
             panic!(
-                "this bundle has no partial_same_offset capture: {:?}",
+                "this bundle has no kept_in_place capture: {:?}",
                 bridge
                     .bundle()
                     .captures
@@ -1611,17 +1735,22 @@ async fn one_capture_patches_to_the_new_version() {
 // One run per capture is kept regardless, because it is what makes
 // `download_bytes` attributable to a single capture.
 
-/// Drive one named capture.
+/// Drive one named class.
 ///
-/// A class the bundle's own matrix records as **not captured, with a reason** is
-/// a fact rather than a missing prerequisite — `full_reuse_reordered` has no
-/// path for 7.0.0 -> 7.1.0 and `MANIFEST.json` says so — so it stands down out
-/// loud. A capture that is missing with no such record is a **missing
-/// prerequisite** and fails: this suite only runs deliberately, so it must never
-/// report "checked nothing" as a pass.
+/// **The class is resolved through the matrix**, not by looking for a patchmap
+/// named after it. A class the matrix records as `covered_by` has **no capture
+/// of its own**: the file that shows it is another capture's, and the matrix is
+/// the only place that says which. `trim_deferred` is answered by
+/// `moved_ascending`'s capture.
+///
+/// A class the matrix records as **not** answered — `over_budget` or
+/// `unavailable` — is a fact rather than a missing prerequisite, so the case
+/// stands down out loud. A class the matrix does not mention at all is a
+/// **missing prerequisite** and fails: this suite only runs deliberately, so it
+/// must never report "checked nothing" as a pass.
 async fn drive_named(bridge: &Bridge, id: &str) {
     let bundle = bridge.bundle();
-    let Some(capture) = bridge.capture(id).cloned() else {
+    let Some(capture) = bundle.capture_for_class(id).cloned() else {
         match bundle.matrix_class(id) {
             Some(m) if m.absent_by_record() => {
                 println!("{id}: not captured by this bundle — {}", m.reason);
@@ -1679,17 +1808,48 @@ capture_test!(
      space in it, which the `--include` glob has to carry verbatim."
 );
 capture_test!(
-    capture_partial_moved_offset_reuses_the_nine_it_can,
-    "partial_moved_offset",
-    "`partial_moved_offset`: the load-bearing reuse case at scale — 10 chunks,\n\
-     8 reused locally and 2 fetched. `must_not_fetch` names all 8."
+    capture_kept_in_place_reuses_the_nine_it_can,
+    "kept_in_place",
+    "`kept_in_place`: the load-bearing reuse case — three chunks, one of them\n\
+     already correct where it belongs and two fetched. `must_not_fetch` names\n\
+     the kept chunk, and the in-place run writes strictly fewer bytes than the\n\
+     temp one."
 );
 capture_test!(
-    capture_partial_size_changed_reuses_the_nine_it_can,
-    "partial_size_changed",
-    "`partial_size_changed`: 10 chunks, 9 reused, 1 fetched (197192 bytes). The\n\
-     file also changes size, so the result MD5 is not reachable by reusing the\n\
-     old file whole."
+    capture_moved_ascending_reuses_the_nine_it_can,
+    "moved_ascending",
+    "`moved_ascending`: the load-bearing reuse case at scale — 10 chunks,\n\
+     8 reused locally and 2 fetched, and the 4 that move go *earlier*.\n\
+     `must_not_fetch` names all 8. The same capture also shows the deferred\n\
+     trim, which is why `trim_deferred` is covered by it."
+);
+capture_test!(
+    capture_moved_descending_keeps_every_source,
+    "moved_descending",
+    "`moved_descending`: the other direction — 34 chunks, 27 reused and 7\n\
+     fetched, and every move goes *later*, so the descending write order keeps\n\
+     every source alive. The file also grows."
+);
+capture_test!(
+    capture_trim_eager_releases_the_dead_tail,
+    "trim_eager",
+    "`trim_eager`: 10 chunks, 9 reused, 1 fetched (197192 bytes), and the file\n\
+     on disk is longer than the target with no source past the target's end —\n\
+     so the dead tail is released before the first write."
+);
+capture_test!(
+    capture_trim_deferred_is_covered_by_the_moved_capture,
+    "trim_deferred",
+    "`trim_deferred`: the other half of the trim. The class has **no capture of\n\
+     its own** — the file that shows the deferred trim is the `moved_ascending`\n\
+     one — so the case is resolved through the matrix."
+);
+capture_test!(
+    capture_moved_mixed_is_refused_out_loud,
+    "moved_mixed",
+    "`moved_mixed`: the class the budget could not pay for. The matrix records\n\
+     it as `over_budget` with its reason, and the case stands down out loud —\n\
+     a fact, not a missing prerequisite."
 );
 capture_test!(
     capture_added_is_downloaded_in_full,
@@ -1708,33 +1868,78 @@ capture_test!(
 
 /// The matrix and the patchmaps must agree in **both** directions.
 ///
-/// `MANIFEST.json` records one row per class: `captured`, or not captured with
-/// a reason. The patchmap set is the same fact on disk. A disagreement in
-/// either direction means the bundle's own records do not describe each other,
-/// and every capture case below is standing on sand.
+/// `MANIFEST.json` records one row per class: `captured`, `covered_by`,
+/// `over_budget` or `unavailable`. The patchmap set is the same fact on disk. A
+/// disagreement in either direction means the bundle's own records do not
+/// describe each other, and every capture case below is standing on sand.
+///
+/// **The `covered_by` row is the one that needs care.** A class the matrix
+/// records as `covered_by` has **no capture of its own**: the file that shows
+/// it is another capture's, and the row names that capture's id. So the row's
+/// `capture_id` must be a capture that *does* have a patchmap, and the class
+/// itself must not have one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
 async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
     let bundle = bundle();
     for m in &bundle.matrix {
-        let present = bundle.captures.iter().any(|c| c.id == m.class);
-        if m.captured {
-            assert!(
-                present,
-                "{}: recorded captured, but there is no patchmaps/{}.json",
-                m.class, m.class
-            );
-        } else {
-            assert!(
-                !m.reason.is_empty(),
-                "{}: recorded not captured but gives no reason",
-                m.class
-            );
-            assert!(
-                !present,
-                "{}: recorded not captured, yet the bundle carries a patchmap for it",
-                m.class
-            );
+        match m.status.as_str() {
+            "captured" => {
+                // The row names its **own** capture, and that capture is on disk.
+                assert_eq!(
+                    m.capture_id.as_deref(),
+                    Some(m.class.as_str()),
+                    "{}: a captured row names its own capture",
+                    m.class
+                );
+                assert!(
+                    bundle.captures.iter().any(|c| c.id == m.class),
+                    "{}: recorded captured, but there is no patchmaps/{}.json",
+                    m.class, m.class
+                );
+            }
+            "covered_by" => {
+                // The row names **another** capture's id, that capture is on
+                // disk, and the class has no capture of its own.
+                let id = m
+                    .capture_id
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{}: a covered_by row names no capture", m.class));
+                assert_ne!(
+                    id, m.class,
+                    "{}: a covered_by row must not name its own class",
+                    m.class
+                );
+                assert!(
+                    bundle.captures.iter().any(|c| c.id == id),
+                    "{}: covered by {id}, which has no patchmap",
+                    m.class
+                );
+                assert!(
+                    !bundle.captures.iter().any(|c| c.id == m.class),
+                    "{}: recorded covered by another capture, yet the bundle carries a \
+                     patchmap for it",
+                    m.class
+                );
+            }
+            other => {
+                // Not answered: no capture, and a reason.
+                assert!(
+                    !m.reason.is_empty(),
+                    "{}: recorded {other} but gives no reason",
+                    m.class
+                );
+                assert!(
+                    m.capture_id.is_none(),
+                    "{}: recorded {other} yet names a capture",
+                    m.class
+                );
+                assert!(
+                    !bundle.captures.iter().any(|c| c.id == m.class),
+                    "{}: recorded {other}, yet the bundle carries a patchmap for it",
+                    m.class
+                );
+            }
         }
     }
     // ...and nothing on disk that the matrix does not mention.
@@ -1746,10 +1951,16 @@ async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
         );
     }
     let captured = bundle.matrix.iter().filter(|m| m.captured).count();
+    let covered = bundle
+        .matrix
+        .iter()
+        .filter(|m| m.status == "covered_by")
+        .count();
     println!(
-        "matrix: {} class(es), {} captured, {} patchmap(s) on disk",
+        "matrix: {} class(es), {} captured, {} covered by another capture, {} patchmap(s) on disk",
         bundle.matrix.len(),
         captured,
+        covered,
         bundle.captures.len()
     );
     assert_eq!(
