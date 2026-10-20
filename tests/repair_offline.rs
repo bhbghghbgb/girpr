@@ -13,7 +13,7 @@
 //! 4. `--purge-after` / `--purge-before` delete orphans into one counter
 //! 5. deprecated files deleted in the post phase
 //! 6. verified local-slice reuse downloads only the bad chunk (S2)
-//! 7. partial `_tmp` prefix resumed by length, gated by final MD5 (S3)
+//! 7. partial `_tmp` prefix resumed by length, gated by final MD5
 //! 8. explicit audio selection overwrites the scan file
 //! 9. a non-chunk `default_download_mode` is refused with exit 1
 //! 10. the deprecated-files call carries the per-launcher channel
@@ -331,7 +331,7 @@ async fn verified_local_slice_is_reused_without_redownload() {
 
 #[tokio::test]
 async fn partial_tmp_prefix_is_resumed() {
-    // S3: resume-by-length. This is the **temp** path's resume mechanism, so
+    // Resume-by-length: the **temp** path's resume mechanism, so
     // it is asked for explicitly: `--repair-mode temp` is the mode that
     // writes `{path}_tmp` at all. foo missing but foo_tmp holds the first
     // chunk; only the second chunk is downloaded, then tmp is promoted.
@@ -1213,8 +1213,8 @@ async fn an_unscoped_purge_still_deletes_orphans() {
     );
     assert!(!summary.flags.scoped);
     assert!(!summary.flags.limited);
-    // And the conditional keys are absent, so an unflagged SUMMARY is
-    // byte-identical to today's.
+    // And the conditional keys are absent, so an unflagged `SUMMARY` carries
+    // only the always-on ones.
     let line = girpr::report::summary_record(&summary, code).text();
     for k in ["scoped", "config_bumped", "plan_files", "limited"] {
         assert!(
@@ -1690,7 +1690,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
         summary.download_bytes.load(Ordering::Relaxed) <= limit,
         "the ceiling must not be overshot"
     );
-    // The stopped file keeps its `_tmp`; S3 means the next run resumes it.
+    // The stopped file keeps its `_tmp`, and the next run resumes it.
     assert_ne!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         fx2.files[0].data,
@@ -2074,12 +2074,9 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
     //
     // A 404 cannot be fixed by asking again: the chunk id came out of this
     // build's own `getBuild` body, and the live blob routes answer a missing
-    // object with 404 + `application/xml`, never 200-with-a-code. A 500 is a
-    // server that may come back, so it is retried on the linear backoff.
-    //
-    // Measured against a real bundle before this policy existed: one 404'd chunk
-    // cost 88.5 s and 25 requests, and still exited `3` — the same exit code it
-    // reaches now without waiting at all, having asked once.
+    // object with 404 + `application/xml`, never 200-with-a-code. So the
+    // request is made once and the run moves on. A 500 is a server that may
+    // come back, so it is retried on the linear backoff.
     //
     // `fail_fast` gives a file one attempt, so the two branches are directly
     // comparable: the 500 spends the chunk fetch's 5 retries on that one attempt,
@@ -2188,10 +2185,10 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     // work that can touch it is the cleanup — which is exactly what
     // `--purge-only --include <that path>` asks for.
     //
-    // The guard that says "an `--include` matching nothing is a typo" used to
-    // test `plan.files.is_empty()` and run *before* the purge plan existed, so
-    // it refused this as a typo. Empty repair plan + non-empty purge candidates
-    // is a legitimate request, not a typo.
+    // An empty repair plan with non-empty purge candidates is a legitimate
+    // request, not a typo: the guard that says "an `--include` matching
+    // nothing is a typo" tests the *repair* plan's emptiness, and
+    // `--purge-only` has no repair plan to be empty.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("purge_only_removed");
@@ -2319,11 +2316,11 @@ async fn purge_only_cleans_up_without_repairing() {
 
 #[tokio::test]
 async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
-    // `--dry-run` is documented as writing nothing, and `post::run` used to
-    // rely on `repair::run` reaching it only through `if !readonly`. The
-    // `--purge-only` early return is a second call site that is not behind that
-    // gate, so the three destructive steps of the post-phase — deprecated
-    // deletes, the audio cache move, the cleanup pass — all ran for real.
+    // `--dry-run` is documented as writing nothing. `post::run` has two call
+    // sites: the repair run, which reaches it only through `if !readonly`, and
+    // the `--purge-only` early return, which is not behind that gate — so the
+    // three destructive steps of the post-phase (deprecated deletes, the audio
+    // cache move, the cleanup pass) have to check the flag themselves.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -2590,8 +2587,8 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     );
     // The estimate is what still moves: with no local manifest the plan's
     // estimate is every chunk, while the run only fetched the corrupt one.
-    // That is the "the estimate is an upper bound" property docs/07 D5
-    // records, and it is why the `local_manifest` key has to be there.
+    // That is the "the estimate is an upper bound" property, and it is why the
+    // `local_manifest` key has to be there.
     assert_eq!(
         summary.flags.plan_download_bytes,
         None,

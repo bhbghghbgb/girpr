@@ -24,10 +24,11 @@
 //!
 //! # What the rule assumes, and what it survives
 //!
-//! The rule assumes the destinations are disjoint (P2), so "the region
+//! The rule assumes the destinations are disjoint (the layout is validated at
+//! plan time), so "the region
 //! already written" is the whole prefix (ascending) or the whole suffix
 //! (descending) of the file. When the layout has a hole, the region actually
-//! written is a *subset* of that — so a source the rule rejects may really
+//! written is a *subset* of that - so a source the rule rejects may really
 //! have survived. The rule is therefore **conservative**: never wrong,
 //! occasionally pessimistic.
 //!
@@ -48,9 +49,9 @@
 //!
 //! # The deferred optimum
 //!
-//! A full interval-graph optimum — a topological order over "chunk `j`'s
-//! write clobbers chunk `i`'s source", breaking cycles by downloading — is
-//! possible and is not implemented (docs/07 §8). The order is produced by
+//! A full interval-graph optimum - a topological order over "chunk `j`'s
+//! write clobbers chunk `i`'s source", breaking cycles by downloading - is
+//! possible and is not implemented. The order is produced by
 //! this one pure function precisely so that it can be swapped without
 //! touching the writer.
 

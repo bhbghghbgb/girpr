@@ -255,8 +255,9 @@ pub struct Summary {
     /// [`Summary::set_download_limit`].
     pub download_limit: AtomicU64,
     /// Set when the runtime download hard stop fired. An aborted run leaves
-    /// `*_tmp` files behind by design: S3 resume-by-length makes the next run a
-    /// smaller run, not a corrupt one.
+    /// the work it had done in place: the temp path's `_tmp` is resumed by
+    /// length, and the in-place path's chunks that are already correct stay
+    /// correct. Either way the next run is a smaller run, not a corrupt one.
     pub download_stopped: AtomicBool,
     /// `--max-write-bytes`, same `u64::MAX` sentinel as `download_limit`.
     pub write_limit: AtomicU64,

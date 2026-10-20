@@ -305,9 +305,9 @@ mod tests {
     #[test]
     fn check_delete_is_the_same_predicate_the_preflight_uses() {
         // The post-repair pass re-checks the ceiling against its own re-plan.
-        // That re-plan can only shrink today (a successful repair promotes every
+        // That re-plan can only shrink (a successful repair promotes every
         // `_tmp` it creates), so there is no integration case that can drive
-        // this branch — the predicate itself is pinned here instead, and
+        // this branch - the predicate itself is pinned here instead, and
         // `post::run` carries the reasoning in a comment.
         let l = Limits {
             delete_bytes: Some(10),

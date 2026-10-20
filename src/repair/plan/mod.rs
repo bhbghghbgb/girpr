@@ -42,8 +42,7 @@ impl PlannedFile {
     /// Computed from the chunk list alone — no I/O — so it can be asked at
     /// plan time (before anything is written) and again by the writer.
     ///
-    /// Two things are answered, and both matter to an in-place repair
-    /// (docs/07 §4.1, P2):
+    /// Two things are answered, and both matter to an in-place repair:
     ///
     /// - **do the chunks tile `[0, size)`?** A hole in the coverage would
     ///   otherwise keep whatever the old file had there — stale bytes that
@@ -198,7 +197,7 @@ pub fn build_plan(
             // because everything downstream depends on it and nothing
             // upstream guarantees it: the manifest is whatever the server
             // served. The in-place repair writes each chunk at its own
-            // offset and the ordered tier's proof (docs/07 §4.4) talks about
+            // offset and the ordered tier's proof talks about
             // "the bytes below the cursor", so both need the order to be a
             // fact rather than an accident of the manifest.
             //

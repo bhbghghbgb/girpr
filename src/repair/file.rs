@@ -1,5 +1,5 @@
 //! Per-file repair: skip check, in-place patch, chunk reuse vs download,
-//! final MD5 (docs/02 step 6, docs/07 §4).
+//! final MD5 (docs/02 step 6).
 //!
 //! Per file, in order:
 //! 1. `size + whole-file MD5` match → [`Repaired::Skipped`], 0 bytes touched.
@@ -234,7 +234,7 @@ struct FileCtx {
     local_map: LocalChunkMap,
     summary: Arc<Summary>,
     dry_run: bool,
-    /// How each file is repaired (docs/07 §4).
+    /// How each file is repaired.
     repair_mode: RepairMode,
 }
 
@@ -356,7 +356,7 @@ enum Inplace {
 
 /// How one file will be repaired.
 ///
-/// The table (docs/07 §4.4):
+/// The table:
 ///
 /// | the target              | mode                          |
 /// |-------------------------|-------------------------------|
@@ -431,7 +431,7 @@ async fn attempt_temp(
 /// The file is written where it lies: only the bytes that are wrong are
 /// written, at the offsets they belong at, and no `_tmp` file is created.
 /// The peak extra disk is the file's *growth* rather than its size, which is
-/// the whole point of the path (docs/07 §4.2).
+/// the whole point of the path.
 ///
 /// The steps, in order:
 ///
@@ -598,7 +598,7 @@ async fn attempt_inplace_inner(
     // `Staged` reads the bytes that have to move into RAM, so **every**
     // source survives and the writes run forward. `Ordered` reads each
     // source from the file at the moment it is written, and the write
-    // order is the one that keeps the most of them alive (docs/07 §4.4).
+    // order is the one that keeps the most of them alive.
     //
     // The budget picks the tier; it never refuses the file. A file that
     // cannot get its reservation is written in the ordered direction, which

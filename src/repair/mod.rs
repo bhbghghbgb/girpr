@@ -432,9 +432,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary.flags.ram_bytes = Some(summary.ram_bytes.load(Ordering::Relaxed));
     }
     // A runtime hard stop is the one place the run writes *some* of what it was
-    // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3
-    // resume-by-length makes the next run resume rather than restart — but it is
-    // state, so `SUMMARY` says so rather than leaving it to be discovered.
+    // asked to do and then stops. It leaves the work it had done in place —
+    // the temp path's `_tmp` is resumed by length, the in-place path's
+    // correct chunks stay correct — but it is state, so `SUMMARY` says so
+    // rather than leaving it to be discovered.
     if summary.download_stopped() {
         tracing::error!(
             "stopped after {} downloaded bytes: --max-download-bytes is a hard stop; \
