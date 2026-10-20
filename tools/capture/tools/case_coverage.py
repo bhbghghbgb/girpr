@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The instrument behind `../docs/05-case-coverage-findings.md`.
+"""The instrument behind `../docs/05-case-coverage-plan.md`.
 
 Standard library only, like every other script in this directory. It reads a
 bundle and nothing else: no network, no writes, no `gircap` binary.
