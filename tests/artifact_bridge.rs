@@ -1866,6 +1866,241 @@ capture_test!(
      where `files=0` and `purge_files=1 purge_bytes=1731133` are the assertion."
 );
 
+/// The **ordered tier**, and the direction rule it applies.
+///
+/// The staged tier stages the moving bytes, so every source survives and both
+/// directions download the same bytes — the rule is invisible there. The
+/// ordered tier stages nothing: each source is read from the file at the
+/// moment it is written, and the write order is what keeps the sources alive.
+/// `--max-ram-bytes 0` forces it.
+///
+/// With the **right** direction the ordered tier downloads exactly the
+/// patchmap's total — the chunks with no local source — because every movable
+/// chunk's source survives. A **wrong** direction makes the figure larger:
+/// the chunks whose source the wrong order destroys have to be downloaded
+/// too. That single equality is what pins the direction, and it is the only
+/// place the rule is observable.
+///
+/// The two captures that carry a shift are the load-bearing ones: on
+/// `09801749.blk` the ascending order keeps all four movable chunks and the
+/// descending one none, and on `resources.assets` it is the other way round.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn the_ordered_tier_downloads_exactly_the_patchmap_total() {
+    let bridge = bridge().await;
+    let bundle = bridge.bundle().clone();
+    for capture in &bundle.captures {
+        if capture.is_purge_only() {
+            continue;
+        }
+        let scratch = Scratch::new(&bundle);
+        let mut args = base_args(
+            &scratch.game(),
+            &bundle,
+            bridge.origins(),
+            &scratch.log_file(),
+        );
+        args.push("--include".into());
+        args.push(capture.path.clone());
+        args.push("--fail-fast".into());
+        args.push("--repair-mode".into());
+        args.push("inplace".into());
+        // Zero: "stage nothing at all" is a mode, not a shortage.
+        args.push("--max-ram-bytes".into());
+        args.push("0".into());
+        args.push("--max-files".into());
+        args.push("1".into());
+        let run = girpr(&args).await;
+        assert_eq!(
+            run.code, 0,
+            "{}: the ordered run must exit 0\n{}\n{}",
+            capture.id, run.stdout, run.stderr
+        );
+        // The ordered tier stages nothing, so it reserves nothing.
+        assert_eq!(
+            run.num("summary", "ram_bytes"),
+            0,
+            "{}: the ordered tier stages nothing",
+            capture.id
+        );
+        // And the direction is the one that keeps the most sources alive, so
+        // the download is exactly the patchmap's total.
+        let total = capture.download_bytes.expect("a byte total");
+        assert_eq!(
+            run.num("summary", "download_bytes"),
+            total,
+            "{}: the ordered tier downloaded more than the patchmap's total, so the \
+             write order destroyed a source it should have kept",
+            capture.id
+        );
+        // The file is still the ground truth.
+        let bytes = std::fs::read(scratch.game().join(&capture.path))
+            .unwrap_or_else(|e| panic!("{}: read the ordered run's file: {e}", capture.id));
+        assert_eq!(
+            format!("{:x}", md5::compute(&bytes)),
+            capture.result_md5,
+            "{}: the ordered run must equal expectations.result_md5",
+            capture.id
+        );
+    }
+}
+
+/// The **discard** mode: the same file, written whole.
+///
+/// `--repair-mode discard` deletes the target and writes it from scratch, so
+/// nothing can be reused and the whole file comes off the network. It is the
+/// mode that trades bandwidth for disk — the peak extra disk is zero, because
+/// there is no `_tmp` beside the target.
+///
+/// The file it produces is the same file: the mode is a choice of *how* to get
+/// there, not of what to produce.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn the_discard_mode_downloads_the_whole_file_and_still_produces_it() {
+    let bridge = bridge().await;
+    let bundle = bridge.bundle().clone();
+    for capture in &bundle.captures {
+        if capture.is_purge_only() {
+            continue;
+        }
+        let scratch = Scratch::new(&bundle);
+        let mut args = base_args(
+            &scratch.game(),
+            &bundle,
+            bridge.origins(),
+            &scratch.log_file(),
+        );
+        args.push("--include".into());
+        args.push(capture.path.clone());
+        args.push("--fail-fast".into());
+        args.push("--repair-mode".into());
+        args.push("discard".into());
+        args.push("--max-files".into());
+        args.push("1".into());
+        let run = girpr(&args).await;
+        assert_eq!(
+            run.code, 0,
+            "{}: the discard run must exit 0\n{}\n{}",
+            capture.id, run.stdout, run.stderr
+        );
+        // The file is the ground truth: the mode changes how it is produced,
+        // not what it is.
+        let bytes = std::fs::read(scratch.game().join(&capture.path))
+            .unwrap_or_else(|e| panic!("{}: read the discard run's file: {e}", capture.id));
+        assert_eq!(
+            format!("{:x}", md5::compute(&bytes)),
+            capture.result_md5,
+            "{}: the discard run must equal expectations.result_md5",
+            capture.id
+        );
+        // And it kept nothing: the whole file came off the network, so the
+        // download is at least the patchmap's total, and **more** whenever the
+        // patch could have reused something.
+        let total = capture.download_bytes.expect("a byte total");
+        assert!(
+            run.num("summary", "download_bytes") >= total,
+            "{}: the discard mode must not download less than the patch",
+            capture.id
+        );
+        if capture
+            .summary
+            .as_ref()
+            .and_then(|s| s.kept_bytes)
+            .is_some_and(|n| n > 0)
+        {
+            assert!(
+                run.num("summary", "download_bytes") > total,
+                "{}: the discard mode keeps nothing, so it must download more than \
+                 the patch would",
+                capture.id
+            );
+        }
+        // And there is no temp file beside the target: the mode is the one
+        // that needs no extra disk.
+        let leftovers = find_files_named(&scratch.game(), "_tmp");
+        assert!(
+            leftovers.is_empty(),
+            "{}: the discard mode must leave no temp file: {leftovers:?}",
+            capture.id
+        );
+    }
+}
+
+/// The **in-place re-verify**: a second run over a damaged file fixes only
+/// what is damaged.
+///
+/// The in-place path has no artefact to resume from and needs none: the scan
+/// finds the chunks that are already correct where they belong, so the next
+/// run rewrites only the rest — and a corrupt prefix is not something it can
+/// inherit.
+///
+/// The damage is one chunk's bytes, flipped in the file the first run
+/// produced. The second run must find it, rewrite it, and leave the rest
+/// alone: it keeps every other byte and writes only the damaged chunk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "expensive: ~2 min of real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+async fn the_in_place_path_re_verifies_and_continues() {
+    let bridge = bridge().await;
+    let bundle = bridge.bundle().clone();
+    for capture in &bundle.captures {
+        if capture.is_purge_only() {
+            continue;
+        }
+        let Some((_, offset, len)) = capture.chunks.last() else {
+            continue;
+        };
+        let scratch = Scratch::new(&bundle);
+        let mut args = base_args(
+            &scratch.game(),
+            &bundle,
+            bridge.origins(),
+            &scratch.log_file(),
+        );
+        args.extend(capture_args(capture, "inplace"));
+        let first = girpr(&args).await;
+        assert_eq!(
+            first.code, 0,
+            "{}: the first run must exit 0\n{}\n{}",
+            capture.id, first.stdout, first.stderr
+        );
+
+        // Damage one chunk's bytes.
+        let target = scratch.game().join(&capture.path);
+        let mut bytes = std::fs::read(&target).expect("the repaired file");
+        let at = *offset as usize;
+        bytes[at] ^= 0xff;
+        std::fs::write(&target, &bytes).expect("write the damaged file");
+
+        // The second run finds it — and only it.
+        let second = girpr(&args).await;
+        assert_eq!(
+            second.code, 0,
+            "{}: the second run must exit 0\n{}\n{}",
+            capture.id, second.stdout, second.stderr
+        );
+        assert_eq!(
+            second.num("summary", "damaged_chunks"),
+            1,
+            "{}: the second run must find exactly the damaged chunk",
+            capture.id
+        );
+        assert_eq!(
+            second.num("summary", "kept_bytes"),
+            capture.new_size.saturating_sub(*len),
+            "{}: the second run must keep every other byte",
+            capture.id
+        );
+        // And the file is the ground truth again.
+        let after = std::fs::read(&target).expect("the repaired file");
+        assert_eq!(
+            format!("{:x}", md5::compute(&after)),
+            capture.result_md5,
+            "{}: the second run must restore the file",
+            capture.id
+        );
+    }
+}
+
 /// The matrix and the patchmaps must agree in **both** directions.
 ///
 /// `MANIFEST.json` records one row per class: `captured`, `covered_by`,
