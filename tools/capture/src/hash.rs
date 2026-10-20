@@ -30,6 +30,25 @@ pub fn md5_hex(bytes: &[u8]) -> String {
     hex_bytes(&md5::compute(bytes).0)
 }
 
+/// Whether two spellings of an MD5 are the same digest.
+///
+/// **Case-insensitive, on purpose.** The tool under test compares MD5s
+/// case-insensitively — `repair::reuse::sources_for` and the scan's
+/// whole-file check both use `eq_ignore_ascii_case` — and this crate has to
+/// compare *the same pair of manifests* the same way. A manifest that spells
+/// one digest `DE1CFE69...` and another that spells it `de1cfe69...` describes
+/// the same chunk: `girpr` would find the reuse and copy the bytes, while a
+/// case-sensitive comparison here would call it a fetch, and the bundle would
+/// publish the wrong numbers for a pair that is really a reuse.
+///
+/// Every comparison of two MD5 spellings in this crate goes through here, so
+/// the rule is written down once instead of being re-derived at each site —
+/// and a site that spells it out by hand is a site that can disagree with the
+/// tool.
+pub fn md5_eq(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
 /// Hex SHA-256 of `bytes`, lowercase.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};

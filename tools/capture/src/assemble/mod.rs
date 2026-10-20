@@ -348,8 +348,12 @@ pub struct FileResult {
 
 impl FileResult {
     /// A7 / A8: `assemble(side)` has `md5 == entry.md5`.
+    ///
+    /// Case-insensitively: the tool under test compares the whole-file MD5
+    /// the same way, and a manifest that spells its digest in upper case must
+    /// not read as a mismatch.
     pub fn md5_matches(&self) -> bool {
-        self.md5 == self.declared_md5
+        crate::hash::md5_eq(&self.md5, &self.declared_md5)
     }
 }
 
@@ -591,9 +595,8 @@ impl<'i> ChunkSource<'i> {
                 .filter(|b| b.props.stored_path.is_some())
                 .map(|b| (b.props.chunk_id.clone(), OnceLock::new()))
                 .collect();
-            let Inner::Disk {
-                root, index, ..
-            } = std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
+            let Inner::Disk { root, index, .. } =
+                std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
             else {
                 unreachable!("just matched on Disk")
             };
@@ -788,9 +791,11 @@ pub fn tile<'a>(
     }
     let mut bytes = vec![0_u8; total as usize];
     for (id, r) in ids.iter().zip(&layout.ranges) {
-        let dst = bytes.get_mut(r.start as usize..r.end as usize).ok_or_else(|| {
-            format!("{label}: chunk {id} range {r} is outside the {total} B file")
-        })?;
+        let dst = bytes
+            .get_mut(r.start as usize..r.end as usize)
+            .ok_or_else(|| {
+                format!("{label}: chunk {id} range {r} is outside the {total} B file")
+            })?;
         let d = decoded(id)?;
         if d.len() as i64 != r.len() {
             return Err(format!(
@@ -814,10 +819,7 @@ fn assemble_side(
     src: &ChunkSource,
 ) -> Result<FileResult, String> {
     let layout = Layout::of(
-        entry
-            .chunks
-            .iter()
-            .map(|c| (c.offset, c.uncompressed_size)),
+        entry.chunks.iter().map(|c| (c.offset, c.uncompressed_size)),
         entry.size,
     );
     let ids: Vec<&str> = entry.chunks.iter().map(|c| c.id.as_str()).collect();
@@ -962,17 +964,25 @@ fn patch_flow(
     // lookup rather than a scan per chunk. `or_insert` keeps the *first* one:
     // two chunks of the same file with the same content are interchangeable,
     // and taking the earliest keeps the choice deterministic.
-    let mut old_by_identity: BTreeMap<(String, i64), &crate::manifest::proto::SophonChunk> =
-        BTreeMap::new();
+    let mut old_by_identity: BTreeMap<
+        (crate::manifest::proto::Md5Key<'_>, i64),
+        &crate::manifest::proto::SophonChunk,
+    > = BTreeMap::new();
     for c in &old_entry.entry.chunks {
         old_by_identity
-            .entry((c.uncompressed_md5.clone(), c.uncompressed_size))
+            .entry((
+                crate::manifest::proto::Md5Key(&c.uncompressed_md5),
+                c.uncompressed_size,
+            ))
             .or_insert(c);
     }
 
     for (i, c) in new_entry.chunks.iter().enumerate() {
         let target = Range::at(c.offset, c.uncompressed_size);
-        let key = (c.uncompressed_md5.clone(), c.uncompressed_size);
+        let key = (
+            crate::manifest::proto::Md5Key(&c.uncompressed_md5),
+            c.uncompressed_size,
+        );
 
         // Each arm yields (decision, source_range, note, body). The REUSE arm is
         // tried whenever the old file holds the same content; whether it is
@@ -992,7 +1002,7 @@ fn patch_flow(
                     .ok_or_else(|| format!("old slice {src_range} is outside the old file"))
                     .and_then(|slice| {
                         let got = hash::md5_hex(slice);
-                        if got == c.uncompressed_md5 {
+                        if hash::md5_eq(&got, &c.uncompressed_md5) {
                             Ok(slice.to_vec())
                         } else {
                             Err(format!(
@@ -1134,7 +1144,8 @@ fn build_map(
     old: Option<&FileResult>,
     new: Option<&FileResult>,
     plan: Option<Vec<PlanEntry>>,
-) -> Result<PatchMap, String> {    let side = |r: &FileResult| Side {
+) -> Result<PatchMap, String> {
+    let side = |r: &FileResult| Side {
         tag: r.tag.clone(),
         size: r.bytes.len() as i64,
         md5: r.declared_md5.clone(),
@@ -1210,7 +1221,7 @@ fn build_map(
     // hashes to the target's MD5. That is the `identical` case, and it changes
     // every counter the run reports: nothing is written and nothing is kept.
     let skipped = match (old, new) {
-        (Some(o), Some(n)) => o.declared_md5 == n.declared_md5,
+        (Some(o), Some(n)) => hash::md5_eq(&o.declared_md5, &n.declared_md5),
         _ => false,
     };
     let summary = repair.map(|r| SummaryExpectations {
@@ -1288,17 +1299,23 @@ fn identity_sources(
     let (Some(old), Some(new)) = (old, new) else {
         return Vec::new();
     };
-    let mut first: BTreeMap<(String, i64), i64> = BTreeMap::new();
+    let mut first: BTreeMap<(crate::manifest::proto::Md5Key<'_>, i64), i64> = BTreeMap::new();
     for c in &old.chunks {
         first
-            .entry((c.uncompressed_md5.clone(), c.uncompressed_size))
+            .entry((
+                crate::manifest::proto::Md5Key(&c.uncompressed_md5),
+                c.uncompressed_size,
+            ))
             .or_insert(c.offset);
     }
     new.chunks
         .iter()
         .map(|c| {
             first
-                .get(&(c.uncompressed_md5.clone(), c.uncompressed_size))
+                .get(&(
+                    crate::manifest::proto::Md5Key(&c.uncompressed_md5),
+                    c.uncompressed_size,
+                ))
                 .copied()
         })
         .collect()
@@ -1338,7 +1355,7 @@ fn repair_of(
         let at_dest = e
             .target_range
             .slice(old_bytes)
-            .is_some_and(|s| hash::md5_hex(s) == e.uncompressed_md5);
+            .is_some_and(|s| hash::md5_eq(&hash::md5_hex(s), &e.uncompressed_md5));
         if at_dest {
             kept += 1;
             kept_bytes += len;
@@ -1376,9 +1393,7 @@ fn repair_of(
     let max_source_end = sources
         .iter()
         .zip(plan)
-        .filter_map(|(s, e)| {
-            s.map(|r| r.max(0) as u64 + e.uncompressed_size.max(0) as u64)
-        })
+        .filter_map(|(s, e)| s.map(|r| r.max(0) as u64 + e.uncompressed_size.max(0) as u64))
         .max()
         .unwrap_or(0);
     let trim = if new_size >= old_size {
@@ -1436,44 +1451,34 @@ mod tests {
 
         // 1. The layout itself breaks A11 — a gap between the chunks.
         let holed = Layout::of([(0, 10), (20, 10)], 30);
-        let e = tile(
-            "7.0.0 a/b.dll",
-            &holed,
-            30,
-            &["x", "y"],
-            |_| Ok(Cow::Borrowed(&b""[..])),
-        )
+        let e = tile("7.0.0 a/b.dll", &holed, 30, &["x", "y"], |_| {
+            Ok(Cow::Borrowed(&b""[..]))
+        })
         .unwrap_err();
         assert!(
             e.starts_with("7.0.0 a/b.dll: does not satisfy A11 — "),
             "{e}"
         );
-        assert!(e.contains("a gap of 10 B between chunk 0"), "and says where: {e}");
+        assert!(
+            e.contains("a gap of 10 B between chunk 0"),
+            "and says where: {e}"
+        );
 
         // 2. A range outside the file. `total` is its own parameter, so a clean
         //    layout can still describe a range the file cannot hold.
-        let e = tile(
-            "7.0.0 a/b.dll (materialize_old)",
-            &clean,
-            4,
-            &["x"],
-            |_| Ok(Cow::Borrowed(&b""[..])),
-        )
+        let e = tile("7.0.0 a/b.dll (materialize_old)", &clean, 4, &["x"], |_| {
+            Ok(Cow::Borrowed(&b""[..]))
+        })
         .unwrap_err();
         assert_eq!(
-            e,
-            "7.0.0 a/b.dll (materialize_old): chunk x range [0, 10) is outside the 4 B file",
+            e, "7.0.0 a/b.dll (materialize_old): chunk x range [0, 10) is outside the 4 B file",
             "the label is the only thing that says which caller this is"
         );
 
         // 3. A chunk that decoded to the wrong length.
-        let e = tile(
-            "7.0.0 a/b.dll",
-            &clean,
-            10,
-            &["x"],
-            |_| Ok(Cow::Borrowed(&b"short"[..])),
-        )
+        let e = tile("7.0.0 a/b.dll", &clean, 10, &["x"], |_| {
+            Ok(Cow::Borrowed(&b"short"[..]))
+        })
         .unwrap_err();
         assert_eq!(
             e,
@@ -1482,58 +1487,61 @@ mod tests {
     }
 
     /// The range check is a refusal, not a panic.
-///
-/// `vec![0u8; size.max(0) as usize]` guarded the sign and nothing else, so a
-/// manifest declaring `size = 2^40` attempted a 1 TB allocation — an abort the
-/// tool cannot report and cannot recover from, because it is not a panic. The
-/// limit turns that into the tool's normal "this is a finding" answer.
-#[test]
-fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
-    let clean = Layout::of([(0, 10)], 10);
-    for (total, what) in [
-        (1_i64 << 40, "2^40 B"),
-        (i64::MAX, "i64::MAX B"),
-        (-1, "a negative size"),
-    ] {
-        let e = tile("7.0.0 a/b.dll", &clean, total, &["x"], |_| {
-            Ok(std::borrow::Cow::Borrowed(&b""[..]))
-        })
-        .unwrap_err();
-        assert!(
-            e.contains("past the 1073741824 B this tool will assemble"),
-            "{total} ({what}): {e}"
+    ///
+    /// `vec![0u8; size.max(0) as usize]` guarded the sign and nothing else, so a
+    /// manifest declaring `size = 2^40` attempted a 1 TB allocation — an abort the
+    /// tool cannot report and cannot recover from, because it is not a panic. The
+    /// limit turns that into the tool's normal "this is a finding" answer.
+    #[test]
+    fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
+        let clean = Layout::of([(0, 10)], 10);
+        for (total, what) in [
+            (1_i64 << 40, "2^40 B"),
+            (i64::MAX, "i64::MAX B"),
+            (-1, "a negative size"),
+        ] {
+            let e = tile("7.0.0 a/b.dll", &clean, total, &["x"], |_| {
+                Ok(std::borrow::Cow::Borrowed(&b""[..]))
+            })
+            .unwrap_err();
+            assert!(
+                e.contains("past the 1073741824 B this tool will assemble"),
+                "{total} ({what}): {e}"
+            );
+            assert!(e.starts_with("7.0.0 a/b.dll: "), "and names the file: {e}");
+        }
+        // One byte over the limit is still over; exactly at it is allowed through to
+        // the ordinary allocation, which is what makes the boundary a stated rule
+        // rather than a round number.
+        let ok = tile(
+            "L",
+            &Layout::of([(0, 10)], 10),
+            MAX_ASSEMBLY_BYTES as i64,
+            &["x"],
+            |_| Ok(std::borrow::Cow::Borrowed(&b""[..])),
         );
-        assert!(e.starts_with("7.0.0 a/b.dll: "), "and names the file: {e}");
+        assert!(
+            ok.is_err(),
+            "a clean layout of that size still fails A11 first"
+        );
+
+        // And the real thing still goes through: the reference bundle's largest
+        // file is 22 662 068 B, which is 47x under the limit. Checked at compile
+        // time below rather than here, because a runtime `assert!` on two constants
+        // is a value the optimiser already knows.
     }
-    // One byte over the limit is still over; exactly at it is allowed through to
-    // the ordinary allocation, which is what makes the boundary a stated rule
-    // rather than a round number.
-    let ok = tile(
-        "L",
-        &Layout::of([(0, 10)], 10),
-        MAX_ASSEMBLY_BYTES as i64,
-        &["x"],
-        |_| Ok(std::borrow::Cow::Borrowed(&b""[..])),
-    );
-    assert!(ok.is_err(), "a clean layout of that size still fails A11 first");
 
-    // And the real thing still goes through: the reference bundle's largest
-    // file is 22 662 068 B, which is 47x under the limit. Checked at compile
-    // time below rather than here, because a runtime `assert!` on two constants
-    // is a value the optimiser already knows.
-}
+    /// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
+    /// file in the reference bundle (`moved_ascending`), and 40x is slack
+    /// well below the 1 GiB the limit is set at. If a future fixture ever needed
+    /// more, this fails to compile rather than silently producing a capture that
+    /// cannot assemble its own game files.
+    const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
 
-/// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
-/// file in the reference bundle (`moved_ascending`), and 40x is slack
-/// well below the 1 GiB the limit is set at. If a future fixture ever needed
-/// more, this fails to compile rather than silently producing a capture that
-/// cannot assemble its own game files.
-const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
-
-/// The range is checked *before* the chunk is decoded.
-///
-/// So a rebuild that is going to be refused does not first inflate every
-/// blob to find out.
+    /// The range is checked *before* the chunk is decoded.
+    ///
+    /// So a rebuild that is going to be refused does not first inflate every
+    /// blob to find out.
     #[test]
     fn a_range_that_does_not_fit_is_refused_without_decoding_it() {
         use std::borrow::Cow;
@@ -1776,7 +1784,11 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         // comparison is by bytes — see the note below, which is why that could not
         // be done here.
         let good = assemble_pair(&same_offset_pair()).expect("assembles");
-        assert!(good.all_green(), "the honest pair is green: {:?}", good.selfcheck_rows());
+        assert!(
+            good.all_green(),
+            "the honest pair is green: {:?}",
+            good.selfcheck_rows()
+        );
 
         let mut bad = assemble_pair(&same_offset_pair()).expect("assembles");
         // One byte different on the direct side, so its digest moves and stops
@@ -1788,7 +1800,8 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         n.md5 = hash::md5_hex(&n.bytes);
         let p = bad.patch.as_mut().expect("a patch");
         assert_eq!(
-            p.md5, good.new.as_ref().unwrap().md5,
+            p.md5,
+            good.new.as_ref().unwrap().md5,
             "before the disagreement both sides agreed"
         );
         p.equals_new = false;
@@ -1949,12 +1962,18 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             old: Some(OldFile {
                 tag: "7.0.0".into(),
                 build_id: "3XnPviMfoILi".into(),
-                entry: file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)]),
+                entry: file(
+                    "blk",
+                    vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)],
+                ),
             }),
             new: Some(NewFile {
                 tag: "7.1.0".into(),
                 build_id: "sMXGW2ll3Fuu".into(),
-                entry: file("blk", vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)]),
+                entry: file(
+                    "blk",
+                    vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
+                ),
             }),
         };
 
@@ -2354,7 +2373,11 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         assert_eq!(s.inplace, Some(1));
         assert_eq!(s.temp, Some(0));
         assert_eq!(s.kept_bytes, Some(64));
-        assert_eq!(s.ram_bytes_ordered, Some(0), "the ordered tier stages nothing");
+        assert_eq!(
+            s.ram_bytes_ordered,
+            Some(0),
+            "the ordered tier stages nothing"
+        );
         assert_eq!(s.ram_bytes_staged, Some(32));
         assert_eq!(s.write_bytes, Some(160));
     }
@@ -2389,9 +2412,16 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             }),
         };
         let a = assemble_pair(&added).expect("assembles");
-        assert!(a.map.repair.is_some(), "there is a new side, so there is a repair");
+        assert!(
+            a.map.repair.is_some(),
+            "there is a new side, so there is a repair"
+        );
         let r = a.map.repair.unwrap();
-        assert_eq!((r.kept, r.moved, r.fetch), (0, 0, 1), "every chunk is fetched");
+        assert_eq!(
+            (r.kept, r.moved, r.fetch),
+            (0, 0, 1),
+            "every chunk is fetched"
+        );
         assert_eq!(r.trim, Trim::None, "there is no old side to shrink");
         assert_eq!(r.growth_bytes, 64, "the file is created whole");
         assert!(a.map.expectations.summary.is_some());
@@ -2426,7 +2456,8 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
     }
 
     #[test]
-    fn decisions_serialise_the_way_the_schema_doc_writes_them() {        assert_eq!(
+    fn decisions_serialise_the_way_the_schema_doc_writes_them() {
+        assert_eq!(
             serde_json::to_string(&Decision::Reuse).unwrap(),
             "\"REUSE\""
         );

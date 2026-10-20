@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::manifest::CapturedManifest;
+use crate::manifest::proto::Md5Key;
 use crate::manifest::proto::SophonChunkFile;
 
 /// One path's state in the diff.
@@ -68,7 +69,11 @@ impl State {
 /// helper, so every chunk lookup allocated a `String` for a key that already
 /// existed inside the manifest — roughly 454 000 of them for a `game` field
 /// diff. `(&str, i64)` is already `Hash + Eq`, so the helper is gone.
-type ChunkKey<'a> = (&'a str, i64);
+///
+/// **And case-insensitive.** The MD5 half is an [`Md5Key`], which compares
+/// without regard to case — the tool under test's rule, and the reason the
+/// diff must not call a chunk *fetched* where `girpr` finds a *reuse`.
+type ChunkKey<'a> = (Md5Key<'a>, i64);
 
 /// One common path's score (spec §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -295,7 +300,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
         .collect();
 
     // Old manifest-wide set of MD5s that appear anywhere, for the reuse pool.
-    let old_md5_paths: HashSet<&str> = build_md5_path_index(&old.entries);
+    let old_md5_paths: HashSet<Md5Key<'_>> = build_md5_path_index(&old.entries);
 
     let new_paths: HashSet<&str> = new.entries.iter().map(|e| e.file.as_str()).collect();
 
@@ -308,7 +313,9 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
         match old_by_path.get(e.file.as_str()) {
             Some((old_entry, file_index)) => {
                 counts.common += 1;
-                let same_md5 = old_entry.md5 == e.md5;
+                // Case-insensitively: the tool under test's rule, and the
+                // whole-file MD5 is what decides `identical`.
+                let same_md5 = crate::hash::md5_eq(&old_entry.md5, &e.md5);
                 if same_md5 {
                     counts.identical += 1;
                 }
@@ -418,11 +425,11 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
 /// built for 113 610 old chunks and then never read — the one consumer asks
 /// `contains_key`, so every one of those inner sets was allocated to be
 /// discarded.
-fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
-    let mut m: HashSet<&str> = HashSet::with_capacity(entries.len());
+fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<Md5Key<'_>> {
+    let mut m: HashSet<Md5Key<'_>> = HashSet::with_capacity(entries.len());
     for e in entries {
         for c in &e.chunks {
-            m.insert(c.uncompressed_md5.as_str());
+            m.insert(Md5Key(c.uncompressed_md5.as_str()));
         }
     }
     m
@@ -491,7 +498,7 @@ pub fn score(
         moved_up,
         moved_down,
         old_max_end,
-        same_md5: old.md5 == new.md5,
+        same_md5: crate::hash::md5_eq(&old.md5, &new.md5),
         old_bytes,
         new_bytes,
         patch_bytes,
@@ -518,7 +525,7 @@ pub fn score_pair(old: &SophonChunkFile, new: &SophonChunkFile) -> PathScore {
 fn reuse_pool<'a>(
     new: &CapturedManifest,
     old_by_path: &HashMap<&'a str, (&'a SophonChunkFile, OldFileIndex<'a>)>,
-    old_md5_paths: &HashSet<&'a str>,
+    old_md5_paths: &HashSet<Md5Key<'a>>,
 ) -> ReusePool {
     let mut pool = ReusePool {
         new_chunks_total: 0,
@@ -534,7 +541,7 @@ fn reuse_pool<'a>(
         let mut file_has_cross = false;
         for c in &e.chunks {
             pool.new_chunks_total += 1;
-            let in_manifest = old_md5_paths.contains(c.uncompressed_md5.as_str());
+            let in_manifest = old_md5_paths.contains(&Md5Key(c.uncompressed_md5.as_str()));
             if in_manifest {
                 pool.new_chunks_md5_present_in_old_manifest += 1;
             }
@@ -635,7 +642,9 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
         "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
     // Sized from the header and the row count rather than `String::from`,
     // which starts at zero and reallocates as a 2 744-row table lands.
-    let mut s = String::with_capacity(HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>());
+    let mut s = String::with_capacity(
+        HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>(),
+    );
     s.push_str(HEADER);
     for f in diffs {
         for row in &f.rows {
@@ -653,7 +662,12 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
                     let _ = write!(
                         s,
                         "{}\t{}\t{}\t{}\t{}\t{}",
-                        sc.old_size, sc.new_size, sc.reused, sc.moved, sc.patch_bytes, sc.total_cost
+                        sc.old_size,
+                        sc.new_size,
+                        sc.reused,
+                        sc.moved,
+                        sc.patch_bytes,
+                        sc.total_cost
                     );
                 }
                 None => s.push_str("\t\t0\t0\t0\t0"),
@@ -848,6 +862,73 @@ mod tests {
             ],
         );
         diff_field(&old, &new).expect("same field")
+    }
+
+    /// **The MD5 comparison is case-insensitive**, because the tool under
+    /// test's is: `girpr` compares with `eq_ignore_ascii_case`
+    /// (`repair::reuse::sources_for`, and the scan's whole-file check).
+    ///
+    /// A manifest pair that spells one digest `DE1CFE69…` on one side and
+    /// `de1cfe69…` on the other describes **the same chunk**, and the repair
+    /// would copy the bytes. A case-sensitive comparison here would call it a
+    /// fetch — and the bundle would publish, for that file, a download total
+    /// the repair never spends and a reuse it never takes.
+    #[test]
+    fn an_md5_spelled_in_two_cases_is_the_same_chunk() {
+        let old = manifest(
+            "7.0.0",
+            vec![file(
+                "f",
+                "md5-old",
+                vec![chunk("a", "DE1CFE6927DACBC58D2D55A0B45EA0F3", 0, 10, 5)],
+            )],
+        );
+        // The same digest, lower-cased, at the same offset.
+        let new = manifest(
+            "7.1.0",
+            vec![file(
+                "f",
+                "md5-new",
+                vec![chunk("a", "de1cfe6927dacbc58d2d55a0b45ea0f3", 0, 10, 5)],
+            )],
+        );
+        let d = diff_field(&old, &new).expect("same field");
+        let row = d.rows.iter().find(|r| r.path == "f").expect("a row");
+        let score = row.score.as_ref().expect("a score");
+        assert_eq!(score.reused, 1, "the chunk is reused, not fetched");
+        assert_eq!(score.moved, 0, "and it has not moved");
+        assert_eq!(score.patch_bytes, 0, "so nothing is fetched for it");
+    }
+
+    /// The whole-file MD5 is case-insensitive too, and it is the one that
+    /// decides `identical`: a file whose two digests are spelled in different
+    /// cases is the **same file**, and the repair skips it.
+    #[test]
+    fn a_whole_file_md5_spelled_in_two_cases_is_the_same_file() {
+        let old = manifest(
+            "7.0.0",
+            vec![file(
+                "f",
+                "DEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+                vec![chunk("a", "aa", 0, 10, 5)],
+            )],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![file(
+                "f",
+                "deadbeefdeadbeefdeadbeefdeadbeef",
+                vec![chunk("a", "aa", 0, 10, 5)],
+            )],
+        );
+        let d = diff_field(&old, &new).expect("same field");
+        let row = d.rows.iter().find(|r| r.path == "f").expect("a row");
+        assert_eq!(
+            row.state,
+            State::Identical,
+            "the same file, spelled two ways"
+        );
+        assert_eq!(d.counts.identical, 1);
     }
 
     #[test]

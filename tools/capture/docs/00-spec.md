@@ -241,16 +241,32 @@ flag says, so a class over it would be a class over nothing.
 | class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
 | `identical` | `old.md5 == new.md5` | the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | no local source: the one chunk is fetched and written in place | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
-| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | no local source: every chunk is fetched, one at a time, into the target | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `kept_in_place` | `0 < reused < nchunks`, `moved == 0` | the surviving chunks are already correct where they belong: kept, not copied; the rest are fetched | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `moved_ascending` | `moved > 0`, every move goes **down** (source after destination) | the bytes move earlier: the ascending write order keeps every source alive | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `moved_descending` | `moved > 0`, every move goes **up** (source before destination) | the bytes move later: the descending write order keeps every source alive | `GenshinImpact_Data/resources.assets` | 40.3 MB |
-| `moved_mixed` | `moved > 0`, moves in **both** directions | the chunking re-flowed: the ordered tier keeps the larger half and fetches the rest | `…/StreamingAssets/AudioAssets/Banks25.pck` | 243 MB |
-| `trim_eager` | `0 < reused < nchunks`, `old.size > new.size`, no source reaches past `new.size` | the file on disk is longer than the target and no source reaches past it: the dead tail is released before the first write | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
-| `trim_deferred` | `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `zero_reuse_single` | `old.md5 != new.md5`, `reused == 0`, `nchunks == 1` | no local source: the one chunk is fetched and written in place | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
+| `zero_reuse_multi` | `old.md5 != new.md5`, `reused == 0`, `nchunks > 1` | no local source: every chunk is fetched, one at a time, into the target | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
+| `kept_in_place` | `old.md5 != new.md5`, `0 < reused < nchunks`, `moved == 0` | the surviving chunks are already correct where they belong: kept, not copied; the rest are fetched | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `moved_ascending` | `old.md5 != new.md5`, `moved > 0`, every move goes **down** (source after destination) | the bytes move earlier: the ascending write order keeps every source alive | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `moved_descending` | `old.md5 != new.md5`, `moved > 0`, every move goes **up** (source before destination) | the bytes move later: the descending write order keeps every source alive | `GenshinImpact_Data/resources.assets` | 40.3 MB |
+| `moved_mixed` | `old.md5 != new.md5`, `moved > 0`, moves in **both** directions | the chunking re-flowed: the ordered tier keeps the larger half and fetches the rest | `…/StreamingAssets/AudioAssets/Banks25.pck` | 243 MB |
+| `trim_eager` | `old.md5 != new.md5`, `0 < reused < nchunks`, `old.size > new.size`, no source reaches past `new.size` | the file on disk is longer than the target and no source reaches past it: the dead tail is released before the first write | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
+| `trim_deferred` | `old.md5 != new.md5`, `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
 | `added` | path only in the new manifest | the file is created: absent locally, fetched whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
 | `removed` | path only in the old manifest | not planned; a `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
+
+**`identical` is exclusive with every other class.** A file whose two
+whole-file MD5s agree is *skipped*: the repair reads the MD5, sees the target
+is already there, and touches nothing. It makes **no content decision at
+all**, so it cannot also be a statement about what the repair would do to its
+chunks — every other class therefore requires `old.md5 != new.md5`.
+
+The live pair holds one file that would otherwise be in two classes at once:
+`…/AudioAssets/Music4.pck` has 336 chunks, all of them reused, four of them
+moved, and the same whole-file MD5 on both sides. Its chunking was re-tiled and
+the file's *content* did not change, so it is the skip branch and nothing else.
+Without the exclusion it would also satisfy `moved_descending`, and three
+things would go wrong: that class's published population would be one too high,
+the instrument (which short-circuits on the MD5) would stop agreeing with the
+crate, and A19 would fail a capture that admitted it — *"is unchanged but its
+class says it should differ"*.
 
 **`kept_in_place` is not a reuse class.** A same-offset source *is* the chunk's
 own destination, so the chunk is **kept**, not copied: the payload is 0 and the

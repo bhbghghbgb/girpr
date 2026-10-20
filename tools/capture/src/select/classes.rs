@@ -261,6 +261,21 @@ impl Class {
     }
 
     /// Whether this shape satisfies the class.
+    ///
+    /// **`identical` is exclusive with everything else.** A file whose two
+    /// whole-file MD5s agree is *skipped* — the repair reads its MD5, sees the
+    /// target is already there, and touches nothing. It makes no content
+    /// decision at all, so it cannot also be a statement about what the
+    /// repair would do to its chunks. Every other class therefore requires
+    /// `same_md5: false`, and the live pair does contain a file that would
+    /// otherwise be in two classes at once: `Music4.pck` has 336 chunks, all
+    /// of them reused, four of them moved, and the same whole-file MD5 on both
+    /// sides. Its chunking was re-tiled and the file's *content* did not
+    /// change, so it is the skip branch and nothing else.
+    ///
+    /// The exclusion is not cosmetic: A19 says a captured file differs between
+    /// `game/` and `expected/` exactly when its class says it should, so a
+    /// same-MD5 file admitted for a content class would fail the capture.
     pub fn matches(self, s: Shape) -> bool {
         use Shape::{Added, Removed, Scored};
         match self {
@@ -285,20 +300,21 @@ impl Class {
             // staged tier stages nothing.
             Class::KeptInPlace => matches!(
                 s,
-                Scored { moved: 0, reused, nchunks, .. } if is_partial(reused, nchunks)
+                Scored { same_md5: false, moved: 0, reused, nchunks, .. }
+                    if is_partial(reused, nchunks)
             ),
             // The direction is the *sign* of the moves, and the two direction
             // classes are exclusive: a file whose every move goes down is not
             // a file whose every move goes up.
             Class::MovedAscending => {
-                matches!(s, Scored { moved, moved_up, .. } if moved > 0 && moved_up == 0)
+                matches!(s, Scored { same_md5: false, moved, moved_up, .. } if moved > 0 && moved_up == 0)
             }
             Class::MovedDescending => {
-                matches!(s, Scored { moved, moved_down, .. } if moved > 0 && moved_down == 0)
+                matches!(s, Scored { same_md5: false, moved, moved_down, .. } if moved > 0 && moved_down == 0)
             }
             Class::MovedMixed => matches!(
                 s,
-                Scored { moved, moved_up, moved_down, .. }
+                Scored { same_md5: false, moved, moved_up, moved_down, .. }
                     if moved > 0 && moved_up > 0 && moved_down > 0
             ),
             // The trim is eager when the dead tail can be released before the
@@ -306,12 +322,12 @@ impl Class {
             // target's end — and deferred when a source does.
             Class::TrimEager => matches!(
                 s,
-                Scored { old_size, new_size, trim_free, reused, nchunks, .. }
+                Scored { same_md5: false, old_size, new_size, trim_free, reused, nchunks, .. }
                     if trim_free && old_size > new_size && is_partial(reused, nchunks)
             ),
             Class::TrimDeferred => matches!(
                 s,
-                Scored { old_size, new_size, trim_free, reused, nchunks, .. }
+                Scored { same_md5: false, old_size, new_size, trim_free, reused, nchunks, .. }
                     if !trim_free && old_size > new_size && is_partial(reused, nchunks)
             ),
             Class::Added => matches!(s, Added),
@@ -358,7 +374,6 @@ pub fn all_in_admission_order() -> Vec<Class> {
     Class::REQUIRED_ORDER.to_vec()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,7 +384,17 @@ mod tests {
     /// direction and the trim flag are spelled separately, because they are
     /// what the new classes turn on.
     fn scored(same_md5: bool, size_equal: bool, nchunks: u64, reused: u64, moved: u64) -> Shape {
-        shape(same_md5, nchunks, reused, moved, 0, moved, 100, if size_equal { 100 } else { 200 }, true)
+        shape(
+            same_md5,
+            nchunks,
+            reused,
+            moved,
+            0,
+            moved,
+            100,
+            if size_equal { 100 } else { 200 },
+            true,
+        )
     }
 
     /// The full shape, every field spoken for.
@@ -592,6 +617,58 @@ mod tests {
              class of its own: it is the shape the removed `full_reuse_reordered` \
              used to claim, and there is no decision behind it"
         );
+    }
+
+    /// **The live pair's one file that would be in two classes at once.**
+    ///
+    /// `Music4.pck`: 336 chunks, all reused, four moved up, and the same
+    /// whole-file MD5 on both sides. The chunking was re-tiled; the file's
+    /// *content* did not change, so the repair skips it and it makes no
+    /// content decision at all.
+    ///
+    /// Without the exclusion it satisfies `moved_descending` as well, and
+    /// three things go wrong: the published population for that class is one
+    /// too high, the instrument (which short-circuits on the MD5) stops
+    /// agreeing with the crate, and A19 would fail a capture that admitted it
+    /// — "is unchanged but its class says it should differ".
+    #[test]
+    fn a_file_whose_md5s_agree_is_only_the_skip_branch() {
+        // The shape of `Music4.pck`, as `diff/candidates.json` records it.
+        let music4 = shape(true, 336, 336, 4, 4, 0, 398_535_566, 398_535_566, true);
+        assert_eq!(
+            Class::all_satisfied_by(music4),
+            vec![Class::Identical],
+            "the whole-file MD5 is the skip branch, and nothing else"
+        );
+        // And the class it would have joined says so about itself.
+        assert!(!Class::MovedDescending.matches(music4));
+        assert!(!Class::MovedAscending.matches(music4));
+        assert!(!Class::MovedMixed.matches(music4));
+        assert!(!Class::KeptInPlace.matches(music4));
+        assert!(!Class::TrimEager.matches(music4));
+        assert!(!Class::TrimDeferred.matches(music4));
+        assert!(!Class::ZeroReuseSingle.matches(music4));
+        assert!(!Class::ZeroReuseMulti.matches(music4));
+    }
+
+    /// Every content class refuses a file whose two MD5s agree, and the
+    /// skip branch is the only one that accepts it.
+    ///
+    /// The exclusion is a property of the *class set*, not of one class, so it
+    /// is asserted for all of them at once: a class added later without the
+    /// exclusion would put a skipped file into a content class and A19 would
+    /// catch it in a capture rather than here.
+    #[test]
+    fn every_content_class_excludes_the_skip_branch() {
+        let same = scored(true, true, 4, 2, 1);
+        for c in Class::ALL {
+            let matched = c.matches(same);
+            assert_eq!(
+                matched,
+                c == Class::Identical,
+                "{c} vs a file whose two MD5s agree: {matched}"
+            );
+        }
     }
 
     /// A one-sided path is exactly one class and no other. A predicate that

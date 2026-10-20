@@ -74,11 +74,77 @@ pub struct SophonChunk {
     pub compressed_md5: ::prost::alloc::string::String,
 }
 
+/// An MD5 spelling, compared **without regard to case**.
+///
+/// A map key, so the comparison rule travels with the key and a caller cannot
+/// forget it: `Md5Key("DE1CFE69…")` and `Md5Key("de1cfe69…")` are the same
+/// key, and the hash and the order agree with that.
+///
+/// The rule is the tool under test's: `girpr` compares MD5s with
+/// `eq_ignore_ascii_case` (`repair::reuse::sources_for`, and the scan's
+/// whole-file check), so a crate that compared them case-sensitively would
+/// call a chunk *fetched* where the repair finds a *reuse* — and the bundle
+/// would publish the wrong numbers.
+///
+/// Borrowed, not owned: the digest is already in memory, and the diff scores
+/// 113 610 old chunks per field. Lower-casing into an owned `String` per key
+/// would allocate once per chunk to compare two things that are already
+/// there.
+#[derive(Debug, Clone, Copy)]
+pub struct Md5Key<'a>(pub &'a str);
+
+impl PartialEq for Md5Key<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(other.0)
+    }
+}
+
+impl Eq for Md5Key<'_> {}
+
+impl PartialOrd for Md5Key<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Md5Key<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Over the lower-cased bytes, so two spellings of one digest compare
+        // equal *and* order the same way — which is what a `BTreeMap` key
+        // needs, and what `str` gives for two already-lower-case spellings.
+        self.0
+            .bytes()
+            .map(|b| b.to_ascii_lowercase())
+            .cmp(other.0.bytes().map(|b| b.to_ascii_lowercase()))
+    }
+}
+
+impl std::hash::Hash for Md5Key<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // The hash has to agree with the equality, so it is over the
+        // lower-cased bytes — and it writes them one at a time rather than
+        // allocating a lower-cased copy of the digest.
+        for b in self.0.as_bytes() {
+            state.write_u8(b.to_ascii_lowercase());
+        }
+        state.write_u8(0xff);
+    }
+}
+
+impl std::fmt::Display for Md5Key<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
 impl SophonChunk {
     /// The key two chunks are compared by to decide they are the same content:
     /// MD5 alone is not enough, because a truncated chunk can share one.
-    pub fn identity(&self) -> (&str, i64) {
-        (&self.uncompressed_md5, self.uncompressed_size)
+    ///
+    /// The MD5 half is an [`Md5Key`], so the case-insensitive rule comes with
+    /// it — see [`crate::hash::md5_eq`] for why it is there.
+    pub fn identity(&self) -> (Md5Key<'_>, i64) {
+        (Md5Key(&self.uncompressed_md5), self.uncompressed_size)
     }
 }
 

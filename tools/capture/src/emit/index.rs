@@ -392,7 +392,10 @@ impl Checksums {
             Some(f) => (false, f),
             None => (
                 true,
-                format!("{} files, every digest re-hashed and matched", self.file_count),
+                format!(
+                    "{} files, every digest re-hashed and matched",
+                    self.file_count
+                ),
             ),
         }
     }
@@ -441,7 +444,10 @@ impl Checksums {
                 continue;
             }
             match digest_file(&root.join(&e.path), e.encoding) {
-                Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
+                Ok(got)
+                    if crate::hash::md5_eq(&got.md5, &e.md5)
+                        && got.sha256 == e.sha256
+                        && got.bytes == e.bytes => {}
                 Ok(got) => out.push(format!(
                     "{}: listed {} B md5 {}, on disk {} B md5 {}",
                     e.path, e.bytes, e.md5, got.bytes, got.md5
@@ -584,11 +590,7 @@ mod tests {
         let reused = Checksums::scan_reusing(&root, &seeded.entries, &["a.bin"]).unwrap();
         let fresh = Checksums::scan(&root).unwrap();
         assert_eq!(reused, fresh, "the rewritten file's digest must be fresh");
-        assert_ne!(
-            reused.entries,
-            seeded.entries,
-            "and it really did change"
-        );
+        assert_ne!(reused.entries, seeded.entries, "and it really did change");
 
         // A file appeared that the seed never saw: the walk decides membership,
         // not the caller's list, so it is digested rather than missed. The seed
@@ -838,7 +840,11 @@ mod tests {
         let f = Fixture::new();
         // Uneven, and deliberately not summing to a round number: 1 + 2 048 + 33
         // = 2 082, which a hardcoded total would not match by accident.
-        let files = vec![entry("a/one.bin", 1), entry("b/two.bin", 2_048), entry("c", 33)];
+        let files = vec![
+            entry("a/one.bin", 1),
+            entry("b/two.bin", 2_048),
+            entry("c", 33),
+        ];
 
         let m = build_manifest(&f.input(), &files).expect("manifest");
 
@@ -1171,9 +1177,7 @@ impl Manifest {
         // The flag is spelled, because a reader who types the sentence above it
         // verbatim gets a usage error: `--artifact` is how `verify` is told
         // which directory it is verifying.
-        s.push_str(
-            "\n## Re-verifying\n\n```\ngircap verify --artifact <this directory>\n```\n\n",
-        );
+        s.push_str("\n## Re-verifying\n\n```\ngircap verify --artifact <this directory>\n```\n\n");
         s.push_str("Offline: no network, no writes. Exit 0 if every assertion still holds.\n");
         s
     }
