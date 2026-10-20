@@ -25,14 +25,29 @@ pub enum Shape {
     Scored {
         /// The two whole-file MD5s agree.
         same_md5: bool,
-        /// The two declared sizes agree.
-        size_equal: bool,
         /// How many chunks the new entry has.
         nchunks: u64,
         /// How many of them exist in this same old file.
         reused: u64,
         /// Of those, how many sit at a different offset.
         moved: u64,
+        /// Of the moved ones, how many move **later**: the source is *before*
+        /// the destination. The descending write order keeps these alive.
+        moved_up: u64,
+        /// Of the moved ones, how many move **earlier**: the source is *after*
+        /// the destination. The ascending write order keeps these alive.
+        moved_down: u64,
+        /// The old file's declared size.
+        old_size: u64,
+        /// The new file's declared size.
+        new_size: u64,
+        /// Whether the dead tail can be released **before** the first write: no
+        /// reuse source reaches past the new size.
+        ///
+        /// The trim's other half — a source that reaches past the target's end
+        /// is a source the eager trim would delete, so the trim has to wait for
+        /// the end and the file grows during the repair.
+        trim_free: bool,
     },
     /// The path is only in the new manifest.
     Added,
@@ -49,13 +64,24 @@ impl Shape {
         match state {
             crate::manifest::diff::State::Added => Shape::Added,
             crate::manifest::diff::State::Removed => Shape::Removed,
-            _ => Shape::Scored {
-                same_md5: s.same_md5,
-                size_equal: s.old_size == s.new_size,
-                nchunks: s.nchunks,
-                reused: s.reused,
-                moved: s.moved,
-            },
+            _ => {
+                let new_size = s.new_size.max(0) as u64;
+                Shape::Scored {
+                    same_md5: s.same_md5,
+                    nchunks: s.nchunks,
+                    reused: s.reused,
+                    moved: s.moved,
+                    moved_up: s.moved_up,
+                    moved_down: s.moved_down,
+                    old_size: s.old_size.max(0) as u64,
+                    new_size,
+                    // The trim is free when no source reaches past the target's
+                    // end. `old_max_end` is the largest source end the diff
+                    // measured, and the tool under test asks the same question
+                    // of the same number.
+                    trim_free: s.old_max_end <= new_size,
+                }
+            }
         }
     }
 }
@@ -194,8 +220,8 @@ impl Class {
             }
             Class::PartialSameOffset => matches!(
                 s,
-                Scored { size_equal: true, moved: 0, reused, nchunks, .. }
-                    if is_partial(reused, nchunks)
+                Scored { moved: 0, reused, nchunks, old_size, new_size, .. }
+                    if old_size == new_size && is_partial(reused, nchunks)
             ),
             Class::PartialMovedOffset => matches!(
                 s,
@@ -204,8 +230,8 @@ impl Class {
             ),
             Class::PartialSizeChanged => matches!(
                 s,
-                Scored { size_equal: false, moved: 0, reused, nchunks, .. }
-                    if is_partial(reused, nchunks)
+                Scored { moved: 0, reused, nchunks, old_size, new_size, .. }
+                    if old_size != new_size && is_partial(reused, nchunks)
             ),
             Class::Added => matches!(s, Added),
             Class::Removed => matches!(s, Removed),
@@ -262,10 +288,17 @@ mod tests {
     fn scored(same_md5: bool, size_equal: bool, nchunks: u64, reused: u64, moved: u64) -> Shape {
         Shape::Scored {
             same_md5,
-            size_equal,
             nchunks,
             reused,
             moved,
+            // The direction is not read by the predicates this commit keeps, so
+            // every move is counted as "earlier" — one direction, chosen so the
+            // fixture cannot accidentally read as a mixed one.
+            moved_up: 0,
+            moved_down: moved,
+            old_size: 100,
+            new_size: if size_equal { 100 } else { 200 },
+            trim_free: true,
         }
     }
 

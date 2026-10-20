@@ -1531,6 +1531,91 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         assert_eq!(a.map.totals.as_ref().unwrap().moved, 1);
     }
 
+    /// **"Moved" is one fact.** The diff's `moved` and the patchmap's own
+    /// `is_moved()` have to be the same number for the same path, or a class is
+    /// a statement about a different thing than the patchmap's plan.
+    ///
+    /// They used to disagree. The diff counted a chunk as moved when the new
+    /// offset was not among *any* of the old file's offsets for that identity;
+    /// the patch flow took the **first** old chunk with that identity as the
+    /// source. When an identity occurs twice in the old file the two answers
+    /// were different numbers — and `girpr` reads the *first* match
+    /// (`repair::reuse::sources_for`), so the first match is the rule that has
+    /// to win.
+    #[test]
+    fn the_diffs_moved_count_and_the_patchmaps_own_are_the_same_number() {
+        // The pair where the two used to disagree: the old file holds the same
+        // content **twice**, at 0 and at 64. The new file wants it at 64 — an
+        // offset the old file *does* have — so the old rule called it "not
+        // moved", while the repair would read it from 0 and call it moved.
+        let duplicated = FilePair {
+            capture_id: "kept_in_place".into(),
+            path: "blk".into(),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: file("blk", vec![chunk(1, 0, 64), chunk(1, 64, 64)]),
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: file("blk", vec![chunk(2, 0, 64), chunk(1, 64, 64)]),
+            }),
+        };
+        // The moved case, for the other side of the comparison.
+        let moved = FilePair {
+            capture_id: "moved_ascending".into(),
+            path: "blk".into(),
+            old: Some(OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 128), chunk(3, 192, 32)]),
+            }),
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: file("blk", vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)]),
+            }),
+        };
+
+        for pair in [same_offset_pair(), duplicated.clone(), moved] {
+            let a = assemble_pair(&pair).expect("assembles");
+            let plan = a.map.plan.as_ref().expect("a plan");
+            let plan_moved = plan.iter().filter(|e| e.is_moved()).count() as u64;
+            let diff = crate::manifest::diff::score_pair(
+                &pair.old.as_ref().expect("an old side").entry,
+                &pair.new.as_ref().expect("a new side").entry,
+            );
+            assert_eq!(
+                diff.moved, plan_moved,
+                "{}: the diff and the patchmap disagree about what moved",
+                pair.capture_id
+            );
+            assert_eq!(
+                diff.moved,
+                diff.moved_up + diff.moved_down,
+                "{}: every move has a direction",
+                pair.capture_id
+            );
+        }
+
+        // And the duplicated pair is the one that used to disagree: the diff
+        // says the chunk moved, because the source the repair would read is at
+        // 0 while the chunk lands at 64.
+        let a = assemble_pair(&duplicated).expect("assembles");
+        let plan = a.map.plan.as_ref().expect("a plan");
+        let moved_entry = plan.iter().find(|e| e.is_moved()).expect("a moved entry");
+        assert_eq!(moved_entry.source_range.as_ref().unwrap().start, 0);
+        assert_eq!(moved_entry.target_range.start, 64);
+        let diff = crate::manifest::diff::score_pair(
+            &duplicated.old.as_ref().unwrap().entry,
+            &duplicated.new.as_ref().unwrap().entry,
+        );
+        assert_eq!(diff.moved, 1, "the first match is the source");
+        assert_eq!(diff.moved_up, 1, "and the bytes move later");
+        assert_eq!(diff.moved_down, 0);
+    }
+
     /// Every chunk reused and the file laid out differently is the reorder case:
     /// nothing is fetched at all, and A9 still has to hold.
     #[test]

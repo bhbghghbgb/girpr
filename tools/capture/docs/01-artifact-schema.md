@@ -491,11 +491,13 @@ for the reference pool. Lets a later run ask "why did it pick that?"
 ```jsonc
 { "schema_version": 1,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
-              "same_md5","old_bytes","new_bytes","patch_bytes","total_cost","classes","rank"],
+              "moved_up","moved_down","old_max_end","same_md5","old_bytes","new_bytes",
+              "patch_bytes","total_cost","classes","rank"],
   "rows": [
     { "path": "…/HoYoChannel.dll", "matching_field": "game",
       "old_size": 2340264, "new_size": 2340264,
-      "nchunks": 3, "reused": 1, "moved": 0, "same_md5": false,
+      "nchunks": 3, "reused": 1, "moved": 0, "moved_up": 0, "moved_down": 0,
+      "old_max_end": 2340264, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
       "total_cost": 1826067, "classes": ["partial_same_offset"], "rank": 1 }
   ] }
@@ -507,6 +509,19 @@ Column-oriented so a reader can sort without re-parsing objects.
 code). It is a row column because the same relative path can appear in more than
 one pool, and without it a reader summing `total_cost` across rows would double
 count. `rank` is 1-based, in `total_cost` order.
+
+`moved_up` and `moved_down` split `moved` by **direction**: `moved_up` counts
+the chunks whose source is *before* their destination (the bytes move later,
+and the descending write order keeps them alive), `moved_down` counts the ones
+whose source is *after* it (the bytes move earlier, and the ascending order
+keeps them alive). `moved` is their sum. The split is what makes the write
+direction a *measurement* rather than something a reader has to re-derive.
+
+`old_max_end` is the largest end (`source offset + size`) over the file's reuse
+sources. It is the **trim test's input**: the repair releases the dead tail
+before the first write only when no source reaches past the target's end, and
+the tool under test asks that same question of that same number
+(`repair::file::trim_is_free`).
 
 ## 11. `diff/reuse_pool.json`
 
