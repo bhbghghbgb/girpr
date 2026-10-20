@@ -11,7 +11,10 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World, tempdir::{TempDir, unique_path}};
+use common::{
+    Mock, World,
+    tempdir::{TempDir, unique_path},
+};
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("the test binary has a path");

@@ -316,7 +316,12 @@ impl<'a> HypClient<'a> {
         let plain: Vec<(String, &'static str)> = PLAIN
             .iter()
             .zip(PLAIN_ENDPOINTS)
-            .map(|(path, e)| (self.endpoints.hyp_url(&self.biz, e, CAPTURE_LANGUAGE), *path))
+            .map(|(path, e)| {
+                (
+                    self.endpoints.hyp_url(&self.biz, e, CAPTURE_LANGUAGE),
+                    *path,
+                )
+            })
             .collect();
 
         let mut got = self
@@ -340,10 +345,22 @@ impl<'a> HypClient<'a> {
             .into_iter();
 
         let err = |what: &str, e: String| ApiError::shape(what, e);
-        let configs = got.next().expect("four bodies").map_err(|e| err("getGameConfigs", e))?;
-        let branches = got.next().expect("four bodies").map_err(|e| err("getGameBranches", e))?;
-        let deprecated = got.next().expect("four bodies").map_err(|e| err("getGameDeprecatedFileConfigs", e))?;
-        let packages = got.next().expect("four bodies").map_err(|e| err("getGamePackages", e))?;
+        let configs = got
+            .next()
+            .expect("four bodies")
+            .map_err(|e| err("getGameConfigs", e))?;
+        let branches = got
+            .next()
+            .expect("four bodies")
+            .map_err(|e| err("getGameBranches", e))?;
+        let deprecated = got
+            .next()
+            .expect("four bodies")
+            .map_err(|e| err("getGameDeprecatedFileConfigs", e))?;
+        let packages = got
+            .next()
+            .expect("four bodies")
+            .map_err(|e| err("getGamePackages", e))?;
 
         let params = BranchParams::from_branches(&branches.bytes)?;
 
@@ -448,8 +465,8 @@ pub fn render_json(value: &impl serde::Serialize) -> Result<String, ApiError> {
 #[cfg(test)]
 mod attach_seq_tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::http::RequestRecord;
+    use std::collections::BTreeMap;
 
     fn body(endpoint: &'static str, file: &str) -> CapturedBody {
         CapturedBody {
@@ -535,7 +552,11 @@ mod attach_seq_tests {
         ];
         let mut view: Vec<&mut CapturedBody> = b.iter_mut().collect();
         attach_seq(&log, &mut view);
-        assert_eq!((b[0].seq, b[1].seq), (1, 2), "neither body takes the probe's row");
+        assert_eq!(
+            (b[0].seq, b[1].seq),
+            (1, 2),
+            "neither body takes the probe's row"
+        );
     }
 
     #[test]
@@ -550,7 +571,10 @@ mod attach_seq_tests {
         attach_seq(&log, &mut view);
         attach_seq(&log, &mut view2);
         assert_eq!(b[0].seq, 1);
-        assert_eq!(c.seq, 0, "no getBuild row exists, so the body stays at zero");
+        assert_eq!(
+            c.seq, 0,
+            "no getBuild row exists, so the body stays at zero"
+        );
     }
 }
 

@@ -103,8 +103,7 @@ pub fn write(
         // the write starts. Hence the counting pass: a second walk over the decode
         // that allocates nothing, in exchange for not holding a ~27 MB `String`
         // plus its ~7 MB compressed copy alive at once for every manifest.
-        let uncompressed_bytes =
-            crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
+        let uncompressed_bytes = crate::emit::json_len(&full, &full_prefix(&tag, &field))?;
         let gzipped = hash::should_gzip(uncompressed_bytes, gzip_threshold);
         let (rel, encoding) = if gzipped {
             (

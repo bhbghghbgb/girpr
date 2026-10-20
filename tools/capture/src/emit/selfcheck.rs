@@ -387,9 +387,10 @@ pub fn api_and_manifest(
     // or a declared gap reads as a broken artifact.
     if !no_chunk_blobs {
         for b in &index.blobs {
-            let subject = b.props.stored_path.clone().unwrap_or_else(|| {
-                format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
-            });
+            let subject =
+                b.props.stored_path.clone().unwrap_or_else(|| {
+                    format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
+                });
             let v = b.props.verified;
             rows.push(match v {
                 Some(v) if v.all_green() && b.props.decode_error.is_none() => {
@@ -559,7 +560,12 @@ pub fn closing(
         let recomputed_common = f
             .rows
             .iter()
-            .filter(|r| matches!(r.state, crate::manifest::diff::State::Identical | crate::manifest::diff::State::Changed))
+            .filter(|r| {
+                matches!(
+                    r.state,
+                    crate::manifest::diff::State::Identical | crate::manifest::diff::State::Changed
+                )
+            })
             .count() as u64;
         let recomputed_identical = f
             .rows
@@ -605,7 +611,6 @@ pub fn closing(
     rows
 }
 
-
 /// A13: read `game/config.ini` back and check the version a reader would find.
 ///
 /// **One implementation, two callers.** `verify` ran its own copy — same file,
@@ -618,10 +623,7 @@ pub fn closing(
 /// has already seen. `verify` no longer says `readable` where the capture says
 /// `game_version == <tag>`, nor `game_version == v` where the capture writes
 /// `game_version is v`.
-pub fn check_config_ini(
-    dir: &std::path::Path,
-    old_tag: &str,
-) -> Assertion {
+pub fn check_config_ini(dir: &std::path::Path, old_tag: &str) -> Assertion {
     const SUBJECT: &str = "game/config.ini";
     let cfg = dir.join("game").join("config.ini");
     let expected = format!("game_version == {old_tag}");
@@ -851,10 +853,12 @@ mod tests {
         // Both directions, because either alone passes on a one-sided change: a
         // constant that gained an id the rows still assert, and a `WORDING` that
         // gained an id the constant never learned about.
-        let asserted: Vec<Assertion> = ["A1", "A2", "A3", "A4", "A5", "A13", "A14", "A15", "A16", "A17"]
-            .iter()
-            .map(|id| Assertion::row(id, "s", "e", true, "a"))
-            .collect();
+        let asserted: Vec<Assertion> = [
+            "A1", "A2", "A3", "A4", "A5", "A13", "A14", "A15", "A16", "A17",
+        ]
+        .iter()
+        .map(|id| Assertion::row(id, "s", "e", true, "a"))
+        .collect();
         let s = Selfcheck::build(asserted, Vec::new(), &SKIPPED_WITHOUT_CHUNK_BLOBS);
 
         assert_eq!(
@@ -1013,7 +1017,10 @@ mod tests {
         let rows = coverage(&[repair(Trim::Eager)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
         assert!(!a21.ok, "one trim outcome is not both: {a21:?}");
-        assert!(a21.actual.contains("0 deferred"), "the detail says so: {a21:?}");
+        assert!(
+            a21.actual.contains("0 deferred"),
+            "the detail says so: {a21:?}"
+        );
 
         // Only the deferred one: still red.
         let rows = coverage(&[repair(Trim::Deferred)]);

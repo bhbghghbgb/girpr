@@ -405,8 +405,10 @@ pub fn write_json_gz(
         // in the buffer lets deflate see 8 KB at a time; buffering the encoder's
         // *output* instead leaves deflate being called once per token, which
         // costs about 4x the wall clock for the same bytes. Measured, not assumed.
-        let mut w =
-            std::io::BufWriter::new(flate2::write::GzEncoder::new(file, flate2::Compression::default()));
+        let mut w = std::io::BufWriter::new(flate2::write::GzEncoder::new(
+            file,
+            flate2::Compression::default(),
+        ));
         serde_json::to_writer_pretty(&mut w, value)
             .map_err(|e| std::io::Error::other(format!("serialise {rel}: {e}")))?;
         // `into_inner` flushes the buffer and hands the encoder back; it is where
@@ -682,7 +684,8 @@ mod tests {
     #[test]
     fn the_eight_api_documents_are_written_byte_exact() {
         let dir = crate::testtemp::TempDir::new("gircap-api", "byte_exact");
-        let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
+        let written =
+            write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
 
         assert_eq!(
             written,
@@ -714,7 +717,8 @@ mod tests {
     #[test]
     fn the_error_shapes_document_is_returned_so_it_reaches_files_and_checksums() {
         let dir = crate::testtemp::TempDir::new("gircap-api-shapes", "reaches_files");
-        let written = write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
+        let written =
+            write_api(&dir, &captured(), &probe(), &shapes(), &RequestLog::new()).unwrap();
         assert!(
             written.contains(&"api/error_shapes.json".to_string()),
             "not in the returned list, so it would not be checksummed: {written:?}"

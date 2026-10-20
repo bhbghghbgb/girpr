@@ -131,7 +131,10 @@ mod tests {
     fn the_choice_does_not_depend_on_which_build_is_passed_first() {
         // A swapped pair would still find *an* id whenever the sets differ, so
         // "did it return something" would not catch it. The id's value does.
-        assert_eq!(new_only_chunk_id(["shared"], ["shared", "only_in_new"]).unwrap(), "only_in_new");
+        assert_eq!(
+            new_only_chunk_id(["shared"], ["shared", "only_in_new"]).unwrap(),
+            "only_in_new"
+        );
         assert!(
             new_only_chunk_id(["shared", "only_in_new"], ["shared"]).is_err(),
             "with the pair swapped there is no id exclusive to the second build"

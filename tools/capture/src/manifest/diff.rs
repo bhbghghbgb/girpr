@@ -635,7 +635,9 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
         "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost\n";
     // Sized from the header and the row count rather than `String::from`,
     // which starts at zero and reallocates as a 2 744-row table lands.
-    let mut s = String::with_capacity(HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>());
+    let mut s = String::with_capacity(
+        HEADER.len() + diffs.iter().map(|f| f.rows.len() * 96).sum::<usize>(),
+    );
     s.push_str(HEADER);
     for f in diffs {
         for row in &f.rows {
@@ -653,7 +655,12 @@ pub fn paths_tsv(diffs: &[FieldDiff]) -> String {
                     let _ = write!(
                         s,
                         "{}\t{}\t{}\t{}\t{}\t{}",
-                        sc.old_size, sc.new_size, sc.reused, sc.moved, sc.patch_bytes, sc.total_cost
+                        sc.old_size,
+                        sc.new_size,
+                        sc.reused,
+                        sc.moved,
+                        sc.patch_bytes,
+                        sc.total_cost
                     );
                 }
                 None => s.push_str("\t\t0\t0\t0\t0"),

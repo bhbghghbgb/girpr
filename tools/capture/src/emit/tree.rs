@@ -26,8 +26,8 @@
 use std::path::Path;
 
 use crate::failure::{Failure, write_err};
-use crate::http::probe::{ErrorShapes, TagProbe};
 use crate::http::RequestLog;
+use crate::http::probe::{ErrorShapes, TagProbe};
 use crate::hyp::Captured;
 use crate::manifest::{self, CapturedManifest, diff};
 
@@ -88,9 +88,8 @@ pub fn write(i: TreeInput<'_>) -> Result<Tree, Failure> {
     let manifests = i.manifests;
     for pair in manifests.iter_mut() {
         for m in pair.iter_mut() {
-            let stored =
-                manifest::dump::write(i.dir, m, i.gzip_threshold, i.manifest_detail)
-                    .map_err(|e| write_err(i.dir, e))?;
+            let stored = manifest::dump::write(i.dir, m, i.gzip_threshold, i.manifest_detail)
+                .map_err(|e| write_err(i.dir, e))?;
             // `stored_as` is filled in here rather than by the writer: only now is
             // it known where the archive ended up, and only the request log can
             // say it.
@@ -134,4 +133,3 @@ pub fn write(i: TreeInput<'_>) -> Result<Tree, Failure> {
 // `include_str!` and asserted a particular line was present. That is not a test
 // of behaviour; it is a test that the file was not edited, dressed up as one,
 // and it would have passed against a `write` that wrote nothing at all.
-

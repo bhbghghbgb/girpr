@@ -31,7 +31,7 @@ pub struct PlannedFile {
     pub rel: String,
     pub size: i64,
     pub md5: String,
-    /// The file's chunks, **sorted by offset** (see [`build_plan`]) and with
+    /// The file's chunks, **sorted by offset** (see `build_plan`) and with
     /// the empty ones dropped.
     pub chunks: Vec<SophonChunk>,
 }
@@ -54,7 +54,7 @@ impl PlannedFile {
     ///
     /// The answer does not depend on the order the chunks are given in: the
     /// ranges are sorted here, so a caller that builds a `PlannedFile` by
-    /// hand gets the same verdict as one that came out of [`build_plan`].
+    /// hand gets the same verdict as one that came out of `build_plan`.
     pub fn layout(&self) -> Layout {
         let size = self.size.max(0) as u64;
         let mut out = Layout {
@@ -346,7 +346,11 @@ mod tests {
         // that.
         let f = SophonChunkFile {
             file: "a.dat".into(),
-            chunks: vec![chunk("c2", 128, 64), chunk("c0", 0, 64), chunk("c1", 64, 64)],
+            chunks: vec![
+                chunk("c2", 128, 64),
+                chunk("c0", 0, 64),
+                chunk("c1", 64, 64),
+            ],
             is_folder: false,
             size: 192,
             md5: "m1".into(),

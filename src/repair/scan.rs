@@ -115,14 +115,17 @@ pub async fn scan_plan(
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
 ) -> ScanReport {
-    let mut stream = futures::stream::iter(plan.files.iter().cloned().map(|f| {
-        let game_dir = game_dir.to_path_buf();
-        let local_map = Arc::clone(&local_map);
-        async move {
-            tokio::task::spawn_blocking(move || scan_one(&game_dir, &f, &local_map)).await
-        }
-    }))
-    .buffer_unordered(jobs.max(1));
+    let mut stream =
+        futures::stream::iter(
+            plan.files.iter().cloned().map(|f| {
+                let game_dir = game_dir.to_path_buf();
+                let local_map = Arc::clone(&local_map);
+                async move {
+                    tokio::task::spawn_blocking(move || scan_one(&game_dir, &f, &local_map)).await
+                }
+            }),
+        )
+        .buffer_unordered(jobs.max(1));
 
     let mut out = ScanReport::default();
     while let Some(res) = stream.next().await {
@@ -144,10 +147,7 @@ pub async fn scan_plan(
 fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> Scanned {
     let path = game_dir.join(util::normalize_rel(&file.rel));
     let entries = local_map.get(&file.rel);
-    let sources = reuse::sources_for(
-        &file.chunks,
-        entries.map(|v| v.as_slice()).unwrap_or(&[]),
-    );
+    let sources = reuse::sources_for(&file.chunks, entries.map(|v| v.as_slice()).unwrap_or(&[]));
     let dest_ranges: Vec<util::ScanRange<'_>> = file
         .chunks
         .iter()

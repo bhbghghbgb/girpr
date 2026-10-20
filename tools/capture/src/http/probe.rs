@@ -555,13 +555,17 @@ pub async fn probe_error_shapes(
     // propagates — and it propagates against its own URL, because input order
     // means `observed[k]` is `wanted[k]`'s and no other.
     let observed = fetcher
-        .map_concurrently(&wanted, jobs, |fetcher, i, (id, family, request, url, error)| async move {
-            let o = match fetcher.observe(&url, Kind::Probe).await {
-                Ok(o) => o,
-                Err(e) => return (i, Err(e.to_string())),
-            };
-            (i, Ok(shape_from(id, family, request, url, error, &o)))
-        })
+        .map_concurrently(
+            &wanted,
+            jobs,
+            |fetcher, i, (id, family, request, url, error)| async move {
+                let o = match fetcher.observe(&url, Kind::Probe).await {
+                    Ok(o) => o,
+                    Err(e) => return (i, Err(e.to_string())),
+                };
+                (i, Ok(shape_from(id, family, request, url, error, &o)))
+            },
+        )
         .await;
     let mut shapes = Vec::with_capacity(wanted.len());
     for (r, w) in observed.into_iter().zip(&wanted) {
@@ -728,7 +732,10 @@ mod tests {
         );
 
         // And a URL with no query is returned untouched rather than gaining one.
-        assert_eq!(with_param("https://x.example/y", "k", "v"), "https://x.example/y");
+        assert_eq!(
+            with_param("https://x.example/y", "k", "v"),
+            "https://x.example/y"
+        );
     }
 
     #[test]
@@ -753,7 +760,11 @@ mod tests {
         assert_eq!(s.status, 404);
         assert_eq!(s.content_type.as_deref(), Some("application/xml"));
         assert!(s.error);
-        assert!(s.body.contains("NoSuchKey"), "the body is byte-exact: {}", s.body);
+        assert!(
+            s.body.contains("NoSuchKey"),
+            "the body is byte-exact: {}",
+            s.body
+        );
         assert_eq!(
             s.volatile_fields,
             vec!["RequestId", "HostId", "Key", "body length (follows Key)"],

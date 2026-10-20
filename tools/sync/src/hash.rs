@@ -23,7 +23,7 @@ pub const CHUNK: usize = 512 * 1024;
 /// **It is not what a cache row stores.** A row may carry a digest under a name
 /// this build has never heard of — a cache written by a newer binary with
 /// `--hash blake3` has to stay readable here — so the persistence layer cannot be
-/// an enum without giving that up. See [`crate::cache::codec`], which keeps names
+/// an enum without giving that up. See `crate::cache::codec`, which keeps names
 /// inline for exactly that reason, and [`DigestSet`]'s `foreign` arm for the
 /// in-memory end of the same guarantee. A closed enum here and an open set there
 /// is the whole design; the two are deliberately not reconciled.
@@ -160,7 +160,7 @@ impl std::str::FromStr for HashAlg {
 ///
 /// A set has no order to preserve, so [`Self::iter`] yields [`HashAlg::ALL`]
 /// order and *that* is what everything downstream relies on. The one place where
-/// a user's ordering genuinely matters — [`crate::planner::pick_one`]'s `--hash-any-of`
+/// a user's ordering genuinely matters — `crate::planner::pick_one`'s `--hash-any-of`
 /// tie-break — reads the **request** (`&[HashAlg]`), not a set. If a set were
 /// ever allowed to stand in for the request, the tie-break would silently become
 /// "alphabetical" and the flag would quietly stop honouring the order the user
@@ -322,7 +322,7 @@ pub fn parse_any_of(input: &[String]) -> Result<Vec<HashAlg>> {
 ///
 /// `HashAlg` is a closed enum, and this is where that stops being the whole truth. A
 /// cache written by a newer build may carry a digest under a name this one has never
-/// heard of, and [`crate::cache::codec`] keeps names inline precisely so that row stays
+/// heard of, and `crate::cache::codec` keeps names inline precisely so that row stays
 /// readable. `foreign` is where such a name lives in memory, and it is **carried,
 /// merged and written back** rather than merely decoded — a scan that dropped it would
 /// lose the row's contents on the next write.
@@ -441,7 +441,7 @@ impl DigestSet {
     ///
     /// That direction is the merge-write rule: this run's computed digests replace the
     /// prior row's, and everything the prior row held that this run did not compute
-    /// rides along. See [`crate::effective::merge_row`].
+    /// rides along. See `crate::effective::merge_row`.
     pub fn merge(&mut self, other: &DigestSet) {
         if let Some(d) = other.md5 {
             self.md5 = Some(d);

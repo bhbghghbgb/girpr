@@ -694,10 +694,7 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
         ("chunk_a6_failing", Val::from(s.chunks.a6_failing)),
         ("patch_fetch_chunks", Val::from(s.chunks.patch_fetch_chunks)),
         // Assembly.
-        (
-            "patchmaps_written",
-            Val::from(s.assembly.patchmaps_written),
-        ),
+        ("patchmaps_written", Val::from(s.assembly.patchmaps_written)),
         (
             "assembly_selfcheck_rows",
             Val::from(s.assembly.selfcheck_rows),
@@ -724,10 +721,7 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
             "capture_bytes_admitted",
             Val::from(s.selection.capture_bytes_admitted),
         ),
-        (
-            "budget_unlimited",
-            Val::from(s.selection.budget_unlimited),
-        ),
+        ("budget_unlimited", Val::from(s.selection.budget_unlimited)),
         ("budget_limit", Val::from(s.selection.budget_limit)),
         (
             "classes_satisfied",
@@ -764,15 +758,9 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
             Val::from(s.reuse.cross_file_bytes_forgone),
         ),
         // Close-out and transport.
-        (
-            "documents_written",
-            Val::from(s.http.documents_written),
-        ),
+        ("documents_written", Val::from(s.http.documents_written)),
         ("requests", Val::from(s.http.requests)),
-        (
-            "bytes_downloaded",
-            Val::from(s.http.bytes_downloaded),
-        ),
+        ("bytes_downloaded", Val::from(s.http.bytes_downloaded)),
         // The tag probe.
         ("tags_probed", Val::from(s.probe.probed)),
         ("tags_served", Val::from(s.probe.served)),
@@ -1314,7 +1302,8 @@ mod tests {
         );
         assert_eq!(STAGE_CAPTURE, "artifact");
         assert!(
-            !STAGE_CAPTURE.starts_with('m') || !STAGE_CAPTURE.contains(|c: char| c.is_ascii_digit()),
+            !STAGE_CAPTURE.starts_with('m')
+                || !STAGE_CAPTURE.contains(|c: char| c.is_ascii_digit()),
             "a milestone label has crept back into the data plane: {STAGE_CAPTURE:?}"
         );
     }
@@ -1342,8 +1331,11 @@ mod tests {
         // `set_all` takes an ordered iterable on purpose. Had it taken a map, a
         // `BTreeMap` would have silently rewritten the reader-visible order -
         // which is the one thing `set_all` exists to preserve.
-        let r = Record::summary("x")
-            .set_all([("z", Val::Int(1)), ("a", Val::Int(2)), ("m", Val::Int(3))]);
+        let r = Record::summary("x").set_all([
+            ("z", Val::Int(1)),
+            ("a", Val::Int(2)),
+            ("m", Val::Int(3)),
+        ]);
         // `summary`'s own preamble comes first; the point is that `z, a, m`
         // survive in that order rather than being sorted to `a, m, z`.
         assert_eq!(

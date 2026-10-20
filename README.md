@@ -282,7 +282,7 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 136 unit + 73 integration, all offline
+cargo test            # 137 unit + 73 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
 
@@ -297,13 +297,13 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
   resolved in `RunCtx::api_bases`).
-- **What the tests actually drive.** `tests/repair_offline.rs` is 53 cases, and
+- **What the tests actually drive.** `tests/repair_offline.rs` is 66 cases, and
   most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
-  — that exercises the library, not the flag surface. Five of them (the
-  endpoint-override cases and the `--output` format case) spawn the
-  real binary through
-  `CARGO_BIN_EXE_girpr`, which is how the `--hyp-base` / `--sophon-base`
-  precedence is pinned; they still run against the mock, not against real bytes.
+  — that exercises the library, not the flag surface. Six of them (the
+  endpoint-override cases, the `--output` format case, the scan estimate and the
+  scoped cleanup) spawn the real binary through `CARGO_BIN_EXE_girpr`, which is
+  how the `--hyp-base` / `--sophon-base` precedence is pinned; they still run
+  against the mock, not against real bytes.
   `tests/cli_contract.rs` is the other file that spawns the binary, and it never
   reaches the API at all — it is argument handling and exit codes only.
 - **Real bytes, real flags — and expensive.** `tests/artifact_bridge.rs` runs

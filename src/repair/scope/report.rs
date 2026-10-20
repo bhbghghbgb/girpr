@@ -83,10 +83,7 @@ impl DiskPlan {
                 Mode::Temp => (Mode::Temp, size),
                 // The in-place path only needs the file's *growth*; a file
                 // that is already the right size needs nothing at all.
-                Mode::Inplace => (
-                    Mode::Inplace,
-                    size.saturating_sub(on_disk.unwrap_or(0)),
-                ),
+                Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk.unwrap_or(0))),
             };
             out.est_write_bytes += size;
             peak = peak.max(extra);
@@ -368,7 +365,14 @@ mod tests {
 
     #[test]
     fn the_plan_line_has_a_fixed_key_order() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &DiskPlan::default(), None);
+        let t = PlanTotals::new(
+            &plan(),
+            Some(&purge_plan()),
+            60,
+            true,
+            &DiskPlan::default(),
+            None,
+        );
         let rec = plan_record(&t);
         assert_eq!(
             rec.text(),
@@ -388,7 +392,14 @@ mod tests {
     /// text line uses — `files`, not `plan` — so a parser reads one vocabulary.
     #[test]
     fn the_plan_is_one_record_on_either_plane() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &DiskPlan::default(), None);
+        let t = PlanTotals::new(
+            &plan(),
+            Some(&purge_plan()),
+            60,
+            true,
+            &DiskPlan::default(),
+            None,
+        );
         let rec = plan_record(&t);
         let json = rec.json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();

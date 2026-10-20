@@ -368,7 +368,9 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         "the limit is recorded"
     );
     assert_eq!(c.summary["budget_unlimited"], "false");
-    let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");
+    let over = c.summary["captures_over_budget"]
+        .parse::<u64>()
+        .expect("a count");
     assert!(
         over > 0,
         "a budget of {keeps_the_coverage} out of {total} refused nothing; the \

@@ -791,7 +791,10 @@ mod tests {
         // file as tiled when nothing had been checked.
         let entries = vec![file("huge", vec![chunk(i64::MAX, 4096)], 4096)];
         let d = decode_counts(&entries);
-        assert_eq!(d.structure.non_gapless_files, 1, "an unaddable offset is not a tiling");
+        assert_eq!(
+            d.structure.non_gapless_files, 1,
+            "an unaddable offset is not a tiling"
+        );
         assert_eq!(d.total_chunks, 1, "and the entry is still counted");
 
         // And the reverse: a huge declared size must not become 18.4 quintillion
@@ -805,7 +808,10 @@ mod tests {
         let mut c = chunk(0, 10);
         c.compressed_size = -1;
         let d = decode_counts(&[file("neg", vec![c], 10)]);
-        assert_eq!(d.max_chunk_compressed_bytes, 0, "and -1 B is not the maximum");
+        assert_eq!(
+            d.max_chunk_compressed_bytes, 0,
+            "and -1 B is not the maximum"
+        );
 
         // A positive measurement still works, which is the half of this that has
         // to keep working.
@@ -836,7 +842,11 @@ mod tests {
             e.detail.starts_with("verify the 7.0.0 game manifest:"),
             "{e:?}"
         );
-        assert!(e.detail.contains("decompressed md5 matches checksum: false"), "{e}");
+        assert!(
+            e.detail
+                .contains("decompressed md5 matches checksum: false"),
+            "{e}"
+        );
 
         // 2. A5 failed: every disagreeing stat named with both numbers.
         let d = decode_counts(&[file("a", vec![chunk(0, 150)], 150)]);
@@ -848,9 +858,13 @@ mod tests {
         });
         let e = verify(&good(d, wrong), "7.0.0", "game").unwrap_err();
         assert_eq!(e.code, crate::exit::ExitCode::AssertionFailed, "{e:?}");
-        assert!(e.detail.starts_with("reconcile the 7.0.0 game manifest:"), "{e}");
         assert!(
-            e.detail.contains("uncompressed_size: declared Some(999), decoded 150"),
+            e.detail.starts_with("reconcile the 7.0.0 game manifest:"),
+            "{e}"
+        );
+        assert!(
+            e.detail
+                .contains("uncompressed_size: declared Some(999), decoded 150"),
             "{e}"
         );
         assert!(

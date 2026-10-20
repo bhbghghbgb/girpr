@@ -534,10 +534,7 @@ impl RequestLog {
 
     /// Every record, in `seq` order.
     pub fn records(&self) -> Vec<RequestRecord> {
-        let mut v = self
-            .lock()
-            .records
-            .clone();
+        let mut v = self.lock().records.clone();
         // Sorted here, not appended in order. `reserve()` assigns `seq` at issue
         // time, so a `--jobs 8` capture reserves 1..N and then *lands* them in
         // whatever order the network finished; appending would leave the file's
@@ -562,18 +559,12 @@ impl RequestLog {
 
     /// Total bytes received across the run.
     pub fn bytes_in(&self) -> u64 {
-        self.lock()
-            .records
-            .iter()
-            .map(|r| r.bytes_in)
-            .sum()
+        self.lock().records.iter().map(|r| r.bytes_in).sum()
     }
 
     /// How many requests were made.
     pub fn len(&self) -> usize {
-        self.lock()
-            .records
-            .len()
+        self.lock().records.len()
     }
 
     /// Whether nothing was requested.
@@ -587,7 +578,7 @@ impl RequestLog {
     /// requested twice and the two requests are not the same request.
     ///
     /// **O(log n), holding the lock only long enough to look up an index** — see
-    /// [`LogState::by_seq`].
+    /// `LogState::by_seq`.
     pub fn set_stored_as(&self, seq: u64, path: impl Into<String>) {
         let mut s = self.lock();
         if let Some(&i) = s.by_seq.get(&seq) {
@@ -631,7 +622,10 @@ impl RequestLog {
                     // says it has one. `RequestRecord` is all primitives, so this
                     // is unreachable; the line says so rather than being dropped.
                     Err(e) => {
-                        format!("{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}", r.seq)
+                        format!(
+                            "{{\"seq\":{},\"error\":\"unserializable record: {e}\"}}",
+                            r.seq
+                        )
                     }
                 }
             };
@@ -746,12 +740,7 @@ struct Run {
 /// This was a branch inside the pump, and then a test that needed a genuinely
 /// full disk to reach it. Extracted so the decision can be read in one place and
 /// tested without contriving a filesystem failure.
-fn body_failure(
-    url: &str,
-    attempts: u32,
-    reading: bool,
-    detail: impl fmt::Display,
-) -> ApiError {
+fn body_failure(url: &str, attempts: u32, reading: bool, detail: impl fmt::Display) -> ApiError {
     let detail = format!(
         "{} the body: {detail}",
         if reading { "reading" } else { "writing" }
@@ -792,7 +781,6 @@ async fn drain_capped<W: std::io::Write>(
     url: &str,
     attempts: u32,
 ) -> Result<u64, ApiError> {
-
     let declared = resp.content_length();
     if let Some(d) = declared
         && d > cap
@@ -1127,15 +1115,7 @@ impl Fetcher {
         // an empty shape for that would put a falsehood in
         // `api/error_shapes.json`.
         let mut body: Vec<u8> = Vec::new();
-        let bytes_in = match drain_capped(
-            resp,
-            &mut body,
-            self.max_response_bytes,
-            url,
-            1,
-        )
-        .await
-        {
+        let bytes_in = match drain_capped(resp, &mut body, self.max_response_bytes, url, 1).await {
             Ok(n) => n,
             Err(e) if is_read_failure(&e) => {
                 body = Vec::new();
@@ -1233,8 +1213,7 @@ impl Fetcher {
         })
     }
 
-
-/// The retry loop, the status check and the record — for both destinations.
+    /// The retry loop, the status check and the record — for both destinations.
     async fn run(
         &self,
         url: &str,
@@ -1254,7 +1233,10 @@ impl Fetcher {
                 self.sleeper.sleep(waiting).await;
             }
 
-            match self.attempt(url, kind, range, attempts, started, &mut dest).await {
+            match self
+                .attempt(url, kind, range, attempts, started, &mut dest)
+                .await
+            {
                 Ok((body, record)) => {
                     // Only the sequence number and the byte count are read off
                     // `record` once it is logged -- by `blobs` and `manifest`, to
@@ -1468,9 +1450,8 @@ impl Fetcher {
                     );
                     (err, record)
                 };
-                let mut buf: Vec<u8> = Vec::with_capacity(
-                    resp.content_length().unwrap_or(0) as usize,
-                );
+                let mut buf: Vec<u8> =
+                    Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
                 match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
                     Ok(n) => {
                         bytes_in = n;
@@ -1503,7 +1484,12 @@ impl Fetcher {
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
                     // not truncate is a disk that will not write either.
-                    return Err(fail(body_failure(url, attempts, false, format!("preparing the body file: {e}"))));
+                    return Err(fail(body_failure(
+                        url,
+                        attempts,
+                        false,
+                        format!("preparing the body file: {e}"),
+                    )));
                 }
                 match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
                     Ok(n) => bytes_in = n,
@@ -1908,152 +1894,152 @@ mod tests {
     }
 
     /// A writer that announces it has started writing, then stays inside
-/// `write` for long enough that a lock held across the write is observable.
-struct SlowWrite {
-    started: std::sync::mpsc::Sender<()>,
-}
-
-impl std::io::Write for SlowWrite {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // One signal, however many times `write` is called.
-        // Unbounded std channel: `send` only fails if the receiver is gone, and
-        // the receiver is alive here. Only the first call matters; the rest are
-        // buffered and never read.
-        let _ = self.started.send(());
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        Ok(buf.len())
+    /// `write` for long enough that a lock held across the write is observable.
+    struct SlowWrite {
+        started: std::sync::mpsc::Sender<()>,
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
-/// A writer that accepts `ok` bytes, then fails.
-struct FailsAfter {
-    left: usize,
-}
-
-impl std::io::Write for FailsAfter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.left == 0 {
-            return Err(std::io::Error::other("no space left on device"));
+    impl std::io::Write for SlowWrite {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            // One signal, however many times `write` is called.
+            // Unbounded std channel: `send` only fails if the receiver is gone, and
+            // the receiver is alive here. Only the first call matters; the rest are
+            // buffered and never read.
+            let _ = self.started.send(());
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Ok(buf.len())
         }
-        let n = self.left.min(buf.len());
-        self.left -= n;
-        Ok(n)
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 
-/// A disk that fills mid-write must **not** be reported as a successful log.
-///
-/// The log is streamed, which introduces a hazard a whole-document write does not
-/// have: a partially written `requests.ndjson` is a file that exists and is
-/// short. `write_ndjson_to` propagates the write error instead of returning a
-/// count, so the run fails loudly — and the count it *would* have returned is
-/// exactly the number of records that made it to disk, which is why the error
-/// must not be swallowed.
-#[test]
-fn a_write_that_fails_mid_stream_is_an_error_not_a_short_log() {
-    let log = RequestLog::new();
-    for _ in 0..20 {
-        let seq = log.reserve();
-        log.push(RequestRecord {
-            seq,
-            ts: now_rfc3339(),
-            kind: Kind::Chunk,
-            method: "GET",
-            url: "/x".into(),
-            range: None,
-            status: 200,
-            final_url: "/x".into(),
-            redirected: false,
-            elapsed_ms: 1,
-            req_headers: BTreeMap::new(),
-            resp_headers: BTreeMap::new(),
-            bytes_in: 1,
-            stored_as: None,
-            attempts: 1,
+    /// A writer that accepts `ok` bytes, then fails.
+    struct FailsAfter {
+        left: usize,
+    }
+
+    impl std::io::Write for FailsAfter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.left == 0 {
+                return Err(std::io::Error::other("no space left on device"));
+            }
+            let n = self.left.min(buf.len());
+            self.left -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A disk that fills mid-write must **not** be reported as a successful log.
+    ///
+    /// The log is streamed, which introduces a hazard a whole-document write does not
+    /// have: a partially written `requests.ndjson` is a file that exists and is
+    /// short. `write_ndjson_to` propagates the write error instead of returning a
+    /// count, so the run fails loudly — and the count it *would* have returned is
+    /// exactly the number of records that made it to disk, which is why the error
+    /// must not be swallowed.
+    #[test]
+    fn a_write_that_fails_mid_stream_is_an_error_not_a_short_log() {
+        let log = RequestLog::new();
+        for _ in 0..20 {
+            let seq = log.reserve();
+            log.push(RequestRecord {
+                seq,
+                ts: now_rfc3339(),
+                kind: Kind::Chunk,
+                method: "GET",
+                url: "/x".into(),
+                range: None,
+                status: 200,
+                final_url: "/x".into(),
+                redirected: false,
+                elapsed_ms: 1,
+                req_headers: BTreeMap::new(),
+                resp_headers: BTreeMap::new(),
+                bytes_in: 1,
+                stored_as: None,
+                attempts: 1,
+            });
+        }
+
+        // Enough for a few rows, nowhere near all twenty.
+        let mut w = FailsAfter { left: 40 };
+        let err = log
+            .write_ndjson_to(&mut w)
+            .expect_err("a failing writer must not look like a short success");
+        assert!(
+            err.to_string().contains("no space left"),
+            "the OS error must survive, not be replaced: {err}"
+        );
+
+        // And a sink that never fails still gets everything.
+        let mut ok: Vec<u8> = Vec::new();
+        assert_eq!(log.write_ndjson_to(&mut ok).unwrap(), 20);
+        assert_eq!(ok.iter().filter(|&&b| b == b'\n').count(), 20);
+    }
+
+    /// The write happens **outside** the lock.
+    ///
+    /// A byte-for-byte test cannot see this — moving the `write_all` calls inside
+    /// the locked scope produces identical output — and it matters because the log
+    /// is shared with the fetchers: a slow disk holding the log lock would stall
+    /// every in-flight request's bookkeeping.
+    ///
+    /// So it is checked directly. The writer is held inside `write` for 150 ms; if
+    /// the lock were held across that window, `try_lock` could not succeed for any
+    /// of it. Correct code releases the lock before writing, so `try_lock` succeeds
+    /// on the first attempt.
+    #[test]
+    fn the_write_happens_with_the_log_lock_released() {
+        use std::sync::mpsc;
+
+        let log = RequestLog::new();
+        for _ in 0..4 {
+            let seq = log.reserve();
+            log.push(RequestRecord {
+                seq,
+                ts: now_rfc3339(),
+                kind: Kind::Chunk,
+                method: "GET",
+                url: "/x".into(),
+                range: None,
+                status: 200,
+                final_url: "/x".into(),
+                redirected: false,
+                elapsed_ms: 1,
+                req_headers: BTreeMap::new(),
+                resp_headers: BTreeMap::new(),
+                bytes_in: 1,
+                stored_as: None,
+                attempts: 1,
+            });
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let writer_log = log.clone();
+        let handle = std::thread::spawn(move || {
+            let mut w = SlowWrite { started: tx };
+            writer_log.write_ndjson_to(&mut w).expect("write");
         });
-    }
 
-    // Enough for a few rows, nowhere near all twenty.
-    let mut w = FailsAfter { left: 40 };
-    let err = log
-        .write_ndjson_to(&mut w)
-        .expect_err("a failing writer must not look like a short success");
-    assert!(
-        err.to_string().contains("no space left"),
-        "the OS error must survive, not be replaced: {err}"
-    );
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("the writer should have reached write()");
 
-    // And a sink that never fails still gets everything.
-    let mut ok: Vec<u8> = Vec::new();
-    assert_eq!(log.write_ndjson_to(&mut ok).unwrap(), 20);
-    assert_eq!(ok.iter().filter(|&&b| b == b'\n').count(), 20);
-}
+        // We are now inside the writer's sleep, on the other thread.
+        let free = log.0.try_lock().is_ok();
+        handle.join().expect("writer thread");
 
-/// The write happens **outside** the lock.
-///
-/// A byte-for-byte test cannot see this — moving the `write_all` calls inside
-/// the locked scope produces identical output — and it matters because the log
-/// is shared with the fetchers: a slow disk holding the log lock would stall
-/// every in-flight request's bookkeeping.
-///
-/// So it is checked directly. The writer is held inside `write` for 150 ms; if
-/// the lock were held across that window, `try_lock` could not succeed for any
-/// of it. Correct code releases the lock before writing, so `try_lock` succeeds
-/// on the first attempt.
-#[test]
-fn the_write_happens_with_the_log_lock_released() {
-    use std::sync::mpsc;
-
-    let log = RequestLog::new();
-    for _ in 0..4 {
-        let seq = log.reserve();
-        log.push(RequestRecord {
-            seq,
-            ts: now_rfc3339(),
-            kind: Kind::Chunk,
-            method: "GET",
-            url: "/x".into(),
-            range: None,
-            status: 200,
-            final_url: "/x".into(),
-            redirected: false,
-            elapsed_ms: 1,
-            req_headers: BTreeMap::new(),
-            resp_headers: BTreeMap::new(),
-            bytes_in: 1,
-            stored_as: None,
-            attempts: 1,
-        });
-    }
-
-    let (tx, rx) = mpsc::channel();
-    let writer_log = log.clone();
-    let handle = std::thread::spawn(move || {
-        let mut w = SlowWrite { started: tx };
-        writer_log.write_ndjson_to(&mut w).expect("write");
-    });
-
-    rx.recv_timeout(Duration::from_secs(5))
-        .expect("the writer should have reached write()");
-
-    // We are now inside the writer's sleep, on the other thread.
-    let free = log.0.try_lock().is_ok();
-    handle.join().expect("writer thread");
-
-    assert!(
-        free,
-        "the log lock is held across the write, so a slow disk would stall \
+        assert!(
+            free,
+            "the log lock is held across the write, so a slow disk would stall \
          every fetch that is still logging"
-    );
-}
+        );
+    }
 
-#[test]
+    #[test]
     fn an_empty_log_is_an_empty_file() {
         let log = RequestLog::new();
         assert!(log.is_empty());
@@ -2096,13 +2082,7 @@ fn the_write_happens_with_the_log_lock_released() {
             attempts: 1,
         };
         // Push order is the reverse of seq order, plus a three-way seq collision.
-        for (seq, url) in [
-            (3_u64, "/c"),
-            (2, "/a"),
-            (1, "/z"),
-            (2, "/b"),
-            (2, "/d"),
-        ] {
+        for (seq, url) in [(3_u64, "/c"), (2, "/a"), (1, "/z"), (2, "/b"), (2, "/d")] {
             log.push(mk(seq, url));
         }
 
@@ -2246,7 +2226,15 @@ fn the_write_happens_with_the_log_lock_released() {
                         return;
                     };
                     h.fetch_add(1, Ordering::SeqCst);
-                    serve_one(stream, a.status, a.body, a.claim, a.omit_length, extra_body, &r);
+                    serve_one(
+                        stream,
+                        a.status,
+                        a.body,
+                        a.claim,
+                        a.omit_length,
+                        extra_body,
+                        &r,
+                    );
                 }
             });
             Mock {
@@ -2340,60 +2328,60 @@ fn the_write_happens_with_the_log_lock_released() {
         v.into_iter().next_back().expect("at least one row")
     }
 
-/// A panic in one fetch must not take the log — or the run — with it.
-///
-/// Poisoning was genuinely reachable, not theoretical: the log's lock sits
-/// inside the concurrent chunk fetcher, so one task panicking while it holds
-/// this lock poisons it for every other task. The old
-/// `.expect("request log is not poisoned")` at eight sites then made every
-/// later writer panic too, so a single panic anywhere turned into a run that
-/// could not even record its own failure — while `Store::one` was explicitly
-/// built to tolerate a panicking fetch task and carry on.
-#[test]
-fn a_poisoned_request_log_still_takes_records() {
-    let other = RequestLog::new();
-    let log = RequestLog::new();
-    assert_eq!(log.reserve(), 1, "issue order starts at 1");
+    /// A panic in one fetch must not take the log — or the run — with it.
+    ///
+    /// Poisoning was genuinely reachable, not theoretical: the log's lock sits
+    /// inside the concurrent chunk fetcher, so one task panicking while it holds
+    /// this lock poisons it for every other task. The old
+    /// `.expect("request log is not poisoned")` at eight sites then made every
+    /// later writer panic too, so a single panic anywhere turned into a run that
+    /// could not even record its own failure — while `Store::one` was explicitly
+    /// built to tolerate a panicking fetch task and carry on.
+    #[test]
+    fn a_poisoned_request_log_still_takes_records() {
+        let other = RequestLog::new();
+        let log = RequestLog::new();
+        assert_eq!(log.reserve(), 1, "issue order starts at 1");
 
-    // Poison it exactly the way a panicking fetch task would.
-    let panicker = log.clone();
-    let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _held = panicker.0.lock().expect("held only in order to poison");
-        panic!("a fetch task died holding the log");
-    }));
-    assert!(died.is_err(), "the panic is the point");
-    assert!(log.0.is_poisoned(), "and it did poison the lock");
+        // Poison it exactly the way a panicking fetch task would.
+        let panicker = log.clone();
+        let died = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = panicker.0.lock().expect("held only in order to poison");
+            panic!("a fetch task died holding the log");
+        }));
+        assert!(died.is_err(), "the panic is the point");
+        assert!(log.0.is_poisoned(), "and it did poison the lock");
 
-    // Which is the whole claim: the next writer carries on.
-    let seq = log.reserve();
-    assert_eq!(seq, 2, "a poisoned log still numbers");
-    let r = RequestRecord {
-        seq,
-        ts: "2026-01-01T00:00:00.000Z".into(),
-        kind: Kind::Chunk,
-        method: "GET",
-        url: "https://example.invalid/x".into(),
-        range: None,
-        status: 200,
-        final_url: String::new(),
-        redirected: false,
-        elapsed_ms: 1,
-        req_headers: BTreeMap::new(),
-        resp_headers: BTreeMap::new(),
-        bytes_in: 0,
-        stored_as: None,
-        attempts: 1,
-    };
-    log.push(r);
-    log.set_stored_as(seq, "somewhere");
-    assert_eq!(log.len(), 1, "and still records");
-    assert_eq!(log.bytes_in(), 0);
-    let back = log.records();
-    assert_eq!(back.len(), 1);
-    assert_eq!(back[0].stored_as.as_deref(), Some("somewhere"));
-    // Poisoning is per-lock, not global: an unrelated log is unaffected.
-    assert_eq!(other.len(), 0);
-}
+        // Which is the whole claim: the next writer carries on.
+        let seq = log.reserve();
+        assert_eq!(seq, 2, "a poisoned log still numbers");
+        let r = RequestRecord {
+            seq,
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: Kind::Chunk,
+            method: "GET",
+            url: "https://example.invalid/x".into(),
+            range: None,
+            status: 200,
+            final_url: String::new(),
+            redirected: false,
+            elapsed_ms: 1,
+            req_headers: BTreeMap::new(),
+            resp_headers: BTreeMap::new(),
+            bytes_in: 0,
+            stored_as: None,
+            attempts: 1,
+        };
+        log.push(r);
+        log.set_stored_as(seq, "somewhere");
+        assert_eq!(log.len(), 1, "and still records");
+        assert_eq!(log.bytes_in(), 0);
+        let back = log.records();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].stored_as.as_deref(), Some("somewhere"));
+        // Poisoning is per-lock, not global: an unrelated log is unaffected.
+        assert_eq!(other.len(), 0);
+    }
     #[tokio::test]
     async fn waiting_for_a_retry_yields_the_runtime_rather_than_blocking_it() {
         // `#[tokio::test]` runs a current-thread runtime: one worker, and
@@ -2463,7 +2451,8 @@ fn a_poisoned_request_log_still_takes_records() {
 
         assert_eq!(got.body, b"recovered");
         assert_eq!(
-            recorded(&f).attempts, 3,
+            recorded(&f).attempts,
+            3,
             "the provenance row must show the retries"
         );
         assert_eq!(mock.hits.load(Ordering::SeqCst), 3);
@@ -2600,30 +2589,30 @@ fn a_poisoned_request_log_still_takes_records() {
 
     #[tokio::test]
     async fn observe_refuses_a_body_over_the_ceiling_rather_than_recording_an_empty_shape() {
-    // The probe path is the one a hostile origin can most cheaply provoke — it is
-    // a single unauthenticated GET — and its reads were unbounded. Over the
-    // ceiling it must **fail**, not record an empty shape: an empty shape in
-    // `api/error_shapes.json` would be a falsehood about what the origin did.
-    //
-    // Contrast with an *unreadable* body, which `observe` deliberately turns into
-    // an empty body rather than an error. That asymmetry is the point, so it is
-    // what the assertion pins.
-    let body = big_body(4096);
-    let mock = spawn(vec![(200, leak(&body))], "");
-    let f = fetcher_with(
-        1,
-        Arc::new(RecordingSleep::default()),
-        body.len() as u64 - 1,
-    );
+        // The probe path is the one a hostile origin can most cheaply provoke — it is
+        // a single unauthenticated GET — and its reads were unbounded. Over the
+        // ceiling it must **fail**, not record an empty shape: an empty shape in
+        // `api/error_shapes.json` would be a falsehood about what the origin did.
+        //
+        // Contrast with an *unreadable* body, which `observe` deliberately turns into
+        // an empty body rather than an error. That asymmetry is the point, so it is
+        // what the assertion pins.
+        let body = big_body(4096);
+        let mock = spawn(vec![(200, leak(&body))], "");
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            body.len() as u64 - 1,
+        );
 
-    let err = f
-        .observe(&url(&mock, "/shape"), Kind::Probe)
-        .await
-        .expect_err("over the ceiling is a failure, not a shape");
-    assert!(err.to_string().contains("ceiling"), "{err}");
-}
+        let err = f
+            .observe(&url(&mock, "/shape"), Kind::Probe)
+            .await
+            .expect_err("over the ceiling is a failure, not a shape");
+        assert!(err.to_string().contains("ceiling"), "{err}");
+    }
 
-#[tokio::test]
+    #[tokio::test]
     async fn a_body_over_the_ceiling_is_refused_rather_than_buffered() {
         // **The whole point of the ceiling.** Without one, a broken or hostile
         // origin that keeps sending fills RAM until the process dies. A timeout
@@ -2642,8 +2631,14 @@ fn a_poisoned_request_log_still_takes_records() {
             .await
             .expect_err("a body over the ceiling must not be buffered");
         let text = err.to_string();
-        assert!(text.contains("ceiling"), "the message must name the ceiling: {text}");
-        assert!(text.contains("--max-response-bytes"), "and how to raise it: {text}");
+        assert!(
+            text.contains("ceiling"),
+            "the message must name the ceiling: {text}"
+        );
+        assert!(
+            text.contains("--max-response-bytes"),
+            "and how to raise it: {text}"
+        );
         // **Not retried.** An origin that sent too much will send too much again,
         // and the mock had a second answer that must not have been consumed.
         assert_eq!(
@@ -2660,11 +2655,7 @@ fn a_poisoned_request_log_still_takes_records() {
         // through `drain_capped` did not alter what a caller receives.
         let body = big_body(4096);
         let mock = spawn(vec![(200, leak(&body))], "");
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            body.len() as u64,
-        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
         let got = f
             .get(&url(&mock, "/ok"), Kind::Chunk, None)
@@ -2693,11 +2684,7 @@ fn a_poisoned_request_log_still_takes_records() {
             }],
             "",
         );
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            body.len() as u64,
-        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
         let err = f
             .get(&url(&mock, "/lying"), Kind::Chunk, None)
@@ -2719,11 +2706,7 @@ fn a_poisoned_request_log_still_takes_records() {
         let dir = scratch("file-cap");
         let path = dir.join("blob.bin");
         let mut out = crate::hash::HashingFile::create(&path).expect("create");
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            16,
-        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 16);
 
         let err = f
             .get_to_file(&url(&mock, "/big"), Kind::Chunk, &mut out)
@@ -2735,71 +2718,77 @@ fn a_poisoned_request_log_still_takes_records() {
 
     #[tokio::test]
     async fn a_body_over_the_ceiling_is_stopped_even_with_no_content_length() {
-    // **The second check, on its own.** Found by mutation: with an accurate
-    // `Content-Length` the pre-check always fires first, so disabling the running
-    // total changed nothing — all 37 http tests passed. An origin that omits the
-    // header is the only shape the pre-check cannot see, and without the running
-    // total it is unbounded exactly as before this change.
-    let body = big_body(4096);
-    let mock = spawn_answers(
-        vec![Answer {
-            status: 200,
-            body: leak(&body),
-            claim: None,
-            omit_length: true,
-        }],
-        "",
-    );
-    let f = fetcher_with(
-        1,
-        Arc::new(RecordingSleep::default()),
-        body.len() as u64 - 1,
-    );
+        // **The second check, on its own.** Found by mutation: with an accurate
+        // `Content-Length` the pre-check always fires first, so disabling the running
+        // total changed nothing — all 37 http tests passed. An origin that omits the
+        // header is the only shape the pre-check cannot see, and without the running
+        // total it is unbounded exactly as before this change.
+        let body = big_body(4096);
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 200,
+                body: leak(&body),
+                claim: None,
+                omit_length: true,
+            }],
+            "",
+        );
+        let f = fetcher_with(
+            1,
+            Arc::new(RecordingSleep::default()),
+            body.len() as u64 - 1,
+        );
 
-    let err = f
-        .get(&url(&mock, "/no-length"), Kind::Chunk, None)
-        .await
-        .expect_err("with no Content-Length the running total is the only defence");
-    assert!(
-        err.to_string().contains("ceiling"),
-        "the message must name the ceiling: {err}"
-    );
-}
+        let err = f
+            .get(&url(&mock, "/no-length"), Kind::Chunk, None)
+            .await
+            .expect_err("with no Content-Length the running total is the only defence");
+        assert!(
+            err.to_string().contains("ceiling"),
+            "the message must name the ceiling: {err}"
+        );
+    }
 
-#[tokio::test]
+    #[tokio::test]
     async fn observe_records_a_server_error_once_and_never_retries() {
-    // `kind: "probe"` covers two paths with different retry behaviour: the tag
-    // probe goes through `get` and the retry policy, the negative probes go
-    // through `observe`, which sends once and records `attempts: 1`
-    // unconditionally.
-    //
-    // All 8 probe rows in the reference bundle have `attempts = 1`, so a reader
-    // cannot tell the two apart from the log — which is why that is documented
-    // rather than split into two kinds. What *can* be pinned is the asymmetry the
-    // documentation asserts, and this is it: a `500`, which the retry policy
-    // treats as retryable, is still recorded once by `observe`.
-    let mock = spawn(vec![(503, b"<Error><Code>Busy</Code></Error>"), (200, b"unused")], "");
-    let f = fetcher(3, Arc::new(RecordingSleep::default()));
+        // `kind: "probe"` covers two paths with different retry behaviour: the tag
+        // probe goes through `get` and the retry policy, the negative probes go
+        // through `observe`, which sends once and records `attempts: 1`
+        // unconditionally.
+        //
+        // All 8 probe rows in the reference bundle have `attempts = 1`, so a reader
+        // cannot tell the two apart from the log — which is why that is documented
+        // rather than split into two kinds. What *can* be pinned is the asymmetry the
+        // documentation asserts, and this is it: a `500`, which the retry policy
+        // treats as retryable, is still recorded once by `observe`.
+        let mock = spawn(
+            vec![(503, b"<Error><Code>Busy</Code></Error>"), (200, b"unused")],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
 
-    let o = f
-        .observe(&url(&mock, "/shape"), Kind::Probe)
-        .await
-        .expect("a 5xx is data for a probe, not a failure");
-    assert_eq!(o.status, 503, "the status is recorded as received");
-    assert!(o.text().contains("Busy"), "and so is the body");
-    assert_eq!(
-        mock.hits.load(Ordering::SeqCst),
-        1,
-        "observe must not retry: the mock only had one answer for it to consume"
-    );
+        let o = f
+            .observe(&url(&mock, "/shape"), Kind::Probe)
+            .await
+            .expect("a 5xx is data for a probe, not a failure");
+        assert_eq!(o.status, 503, "the status is recorded as received");
+        assert!(o.text().contains("Busy"), "and so is the body");
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            1,
+            "observe must not retry: the mock only had one answer for it to consume"
+        );
 
-    let rows: Vec<_> = f.log().records();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].attempts, 1, "`attempts: 1` is hardcoded, and is the claim");
-    assert_eq!(rows[0].kind, Kind::Probe);
-}
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].attempts, 1,
+            "`attempts: 1` is hardcoded, and is the claim"
+        );
+        assert_eq!(rows[0].kind, Kind::Probe);
+    }
 
-#[tokio::test]
+    #[tokio::test]
     async fn a_failed_request_counts_the_body_it_threw_away() {
         // `bytes_in` must price every request, not only the successful ones: a
         // `429` carrying a few KB of XML envelope is transferred, and the requests
@@ -2814,7 +2803,10 @@ fn a_poisoned_request_log_still_takes_records() {
             .get(&url(&mock, "/blob"), Kind::Chunk, None)
             .await
             .expect_err("429 is not a success");
-        assert!(matches!(err, ApiError::Status { status: 429, .. }), "{err:?}");
+        assert!(
+            matches!(err, ApiError::Status { status: 429, .. }),
+            "{err:?}"
+        );
 
         let rows: Vec<_> = f.log().records();
         assert_eq!(rows.len(), 1, "the failure must still be recorded");
@@ -2835,9 +2827,24 @@ fn a_poisoned_request_log_still_takes_records() {
         let payload = b"the blob, at last";
         let mock = spawn_answers(
             vec![
-                Answer { status: 429, body: envelope, claim: None, omit_length: false },
-                Answer { status: 503, body: envelope, claim: None, omit_length: false },
-                Answer { status: 200, body: leak(payload), claim: None, omit_length: false },
+                Answer {
+                    status: 429,
+                    body: envelope,
+                    claim: None,
+                    omit_length: false,
+                },
+                Answer {
+                    status: 503,
+                    body: envelope,
+                    claim: None,
+                    omit_length: false,
+                },
+                Answer {
+                    status: 200,
+                    body: leak(payload),
+                    claim: None,
+                    omit_length: false,
+                },
             ],
             "",
         );
@@ -2898,7 +2905,10 @@ fn a_poisoned_request_log_still_takes_records() {
 
         let on_disk = std::fs::read(&path).expect("read back");
         assert_eq!(on_disk.len(), body.len(), "length moved");
-        assert!(on_disk == body, "the bytes on disk are not the bytes served");
+        assert!(
+            on_disk == body,
+            "the bytes on disk are not the bytes served"
+        );
         assert_eq!(streamed.bytes_in, buffered.body.len() as u64);
         assert_eq!(streamed.status, buffered.status);
         assert_eq!(digests, crate::hash::md5_sha256(&body));
@@ -2952,8 +2962,16 @@ fn a_poisoned_request_log_still_takes_records() {
             .expect("the retry should succeed");
         let digests = out.finish().expect("finish");
 
-        assert_eq!(mock.hits.load(Ordering::SeqCst), 2, "it should have retried");
-        assert_eq!(digests, crate::hash::md5_sha256(&second), "digests must be the second body");
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            2,
+            "it should have retried"
+        );
+        assert_eq!(
+            digests,
+            crate::hash::md5_sha256(&second),
+            "digests must be the second body"
+        );
         assert_eq!(digests.bytes, second.len() as u64);
         assert_eq!(got.bytes_in, second.len() as u64);
 
@@ -3063,10 +3081,7 @@ fn a_poisoned_request_log_still_takes_records() {
                 .all(|k| k.chars().all(|c| !c.is_ascii_uppercase()))
         );
         assert_eq!(got.resp_headers["server"], "MockOSS");
-        assert_eq!(
-            got.resp_headers["etag"], "\"abc\"",
-            "quotes are kept"
-        );
+        assert_eq!(got.resp_headers["etag"], "\"abc\"", "quotes are kept");
     }
 
     #[tokio::test]

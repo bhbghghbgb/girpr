@@ -25,7 +25,7 @@ pub struct Meta {
 /// sha256 — never hex), under an algorithm this build may or may not recognise.
 ///
 /// `PartialEq` is what lets a codec round-trip be asserted as a whole, and what
-/// [`crate::effective::merge_row`]'s rule is checked against.
+/// `crate::effective::merge_row`'s rule is checked against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileRec {
     /// "file" or "dir"

@@ -354,8 +354,7 @@ pub fn zstd_decompress_from<R: std::io::Read>(
     // The magic is read up front so a refusal can quote it — a reader being
     // consumed cannot be re-read. Same shape as `zstd_measure_from`.
     let mut first = [0_u8; 4];
-    let n = read_upto(&mut reader, &mut first)
-        .map_err(|e| zstd_error_streamed(&[], what, e))?;
+    let n = read_upto(&mut reader, &mut first).map_err(|e| zstd_error_streamed(&[], what, e))?;
     let head: &[u8] = &first[..n];
     if !is_zstd(head) {
         return Err(zstd_error_streamed(head, what, "not a zstd frame"));
@@ -407,14 +406,13 @@ pub struct Measure {
 /// buffer, [`zstd_measure_from`], whose error text is deliberately shorter.
 pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
     use std::io::Read as _;
-    let mut dec = zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
+    let mut dec =
+        zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
     let mut hasher = md5::Context::new();
     let mut len = 0_u64;
     let mut buf = [0_u8; 16 * 1024];
     loop {
-        let n = dec
-            .read(&mut buf)
-            .map_err(|e| zstd_error(bytes, what, e))?;
+        let n = dec.read(&mut buf).map_err(|e| zstd_error(bytes, what, e))?;
         if n == 0 {
             break;
         }
@@ -434,7 +432,7 @@ pub fn zstd_measure(bytes: &[u8], what: &str) -> Result<Measure, String> {
 /// a 3.7 MB `Vec`.
 ///
 /// **The same answers, and the same refusals — one deliberate difference in the
-/// error text.** [`zstd_error`] quotes the blob's total length, and a reader
+/// error text.** `zstd_error` quotes the blob's total length, and a reader
 /// being consumed cannot supply that without reading all of it, which is the thing
 /// being avoided. So the message names what *is* known: the first four bytes, and
 /// whether they were a frame's magic. That is the part a reader of the error
@@ -616,13 +614,15 @@ mod tests {
         let payload = gzip_probe_payload();
         let mut sink: Vec<u8> = Vec::new();
         {
-            let mut enc =
-                flate2::write::GzEncoder::new(&mut sink, flate2::Compression::default());
+            let mut enc = flate2::write::GzEncoder::new(&mut sink, flate2::Compression::default());
             enc.write_all(&payload).expect("write");
             // dropped here, without `finish`
         }
         assert_eq!(sink, gzip(&payload).expect("one-shot"));
-        assert_eq!(gunzip(&sink).expect("dropped stream still decodes"), payload);
+        assert_eq!(
+            gunzip(&sink).expect("dropped stream still decodes"),
+            payload
+        );
     }
 
     fn tmp(name: &str) -> crate::testtemp::TempDir {
@@ -792,8 +792,8 @@ mod tests {
         // `Cursor` so the reader is genuinely a reader and not a slice in disguise.
         use std::io::Cursor;
 
-        let payload = b"the quick brown fox jumps over the lazy dog, repeatedly and at length"
-            .repeat(400);
+        let payload =
+            b"the quick brown fox jumps over the lazy dog, repeatedly and at length".repeat(400);
         let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
 
         let from_slice = zstd_measure(&frame, "blob").expect("slice");
@@ -883,8 +883,11 @@ mod tests {
             zstd::encode_all(vec![0x5a_u8; 100_000].as_slice(), 1).expect("large"),
             // Two frames back to back: a reader must concatenate, not stop at
             // the first one.
-            [zstd::encode_all(b"first".as_slice(), 1).unwrap(),
-             zstd::encode_all(b"second".as_slice(), 1).unwrap()].concat(),
+            [
+                zstd::encode_all(b"first".as_slice(), 1).unwrap(),
+                zstd::encode_all(b"second".as_slice(), 1).unwrap(),
+            ]
+            .concat(),
         ];
         for raw in &cases {
             let body = zstd_decompress(raw, "x").expect("decodes");
@@ -950,7 +953,10 @@ mod tests {
     fn hex_covers_every_byte_value_in_both_cases() {
         let all: Vec<u8> = (0..=255u8).collect();
         assert_eq!(hex_bytes(&all).len(), 512);
-        assert_eq!(hex_bytes(&all), all.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        assert_eq!(
+            hex_bytes(&all),
+            all.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         assert_eq!(
             hex_bytes_upper(&all),
             all.iter().map(|b| format!("{b:02X}")).collect::<String>()

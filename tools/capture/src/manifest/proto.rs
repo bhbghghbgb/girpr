@@ -100,7 +100,11 @@ impl SophonChunk {
     /// digests in lower case already, and `to_ascii_lowercase` would allocate
     /// for every one of the ~454 000 chunks regardless.
     pub fn normalise(&mut self) {
-        if self.uncompressed_md5.bytes().any(|b| b.is_ascii_uppercase()) {
+        if self
+            .uncompressed_md5
+            .bytes()
+            .any(|b| b.is_ascii_uppercase())
+        {
             self.uncompressed_md5 = self.uncompressed_md5.to_ascii_lowercase();
         }
         if self.compressed_md5.bytes().any(|b| b.is_ascii_uppercase()) {

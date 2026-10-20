@@ -20,9 +20,9 @@
 //!   code under test;
 //! - a directory left behind by a run that was killed mid-test is inherited by
 //!   the next run, so the second run asserts against the first run's leftovers.
-//! That is not hypothetical: a `temp_dir` the tests removed by hand on the happy
-//! path and not at all when a case panicked was found leaving one directory per
-//! run behind in the system temp dir.
+//!   That is not hypothetical: a `temp_dir` the tests removed by hand on the happy
+//!   path and not at all when a case panicked was found leaving one directory per
+//!   run behind in the system temp dir.
 //!
 //! So the name carries the process id, a wall-clock timestamp and a
 //! per-process counter — the three things that, together, separate two tests

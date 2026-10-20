@@ -690,7 +690,10 @@ mod tests {
         // `plan.per_class` now gets a value that is already floored, and cannot
         // disagree with the other consumer about what `--per-class 0` means.
         let p = plan(|a| a.per_class = 0).expect("zero is floored, not rejected");
-        assert_eq!(p.per_class, 1, "the plan must carry the floor, not the request");
+        assert_eq!(
+            p.per_class, 1,
+            "the plan must carry the floor, not the request"
+        );
 
         // And it is the *same* reading for every other value, so nothing else
         // moved.

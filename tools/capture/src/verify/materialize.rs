@@ -198,7 +198,10 @@ pub fn rebuild(
             "{tag} {path} ({role}): the index references no chunks for it"
         ));
     }
-    let parts: Vec<(i64, i64)> = chunks.iter().map(|(id, o)| (*o, by_file.size(id))).collect();
+    let parts: Vec<(i64, i64)> = chunks
+        .iter()
+        .map(|(id, o)| (*o, by_file.size(id)))
+        .collect();
     let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
     // `parts` is still needed for `declared_size`; `Layout::of` takes it by
     // value so the one-vector-holds-both property holds at the call site too.
@@ -208,9 +211,7 @@ pub fn rebuild(
     // function. See `assemble::tile`.
     let label = format!("{tag} {path} ({role})");
     let ids: Vec<&str> = chunks.iter().map(|(id, _)| *id).collect();
-    let bytes = crate::assemble::tile(&label, &layout, declared_size, &ids, |id| {
-        src.decoded(id)
-    })?;
+    let bytes = crate::assemble::tile(&label, &layout, declared_size, &ids, |id| src.decoded(id))?;
     Ok(Rebuilt {
         tag: tag.to_string(),
         path: path.to_string(),
@@ -538,12 +539,19 @@ mod tests {
             let many = chunks_for(&f.index, tag, "c", DLL, role).unwrap();
             assert_eq!(one.len(), want, "{tag} {role}");
             assert_eq!(
-                one.iter().map(|(i, o)| (i.to_string(), *o)).collect::<Vec<_>>(),
+                one.iter()
+                    .map(|(i, o)| (i.to_string(), *o))
+                    .collect::<Vec<_>>(),
                 many,
                 "{tag} {role}"
             );
         }
-        assert!(by_file.get("6.7.0", "c", DLL, Set::MaterializeOld).unwrap().is_empty());
+        assert!(
+            by_file
+                .get("6.7.0", "c", DLL, Set::MaterializeOld)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// The closure check: the blobs alone reproduce the file. Read from disk,
@@ -552,29 +560,15 @@ mod tests {
     fn both_sides_rebuild_from_the_blobs_alone() {
         let f = Fixture::build("rebuild");
         let src = f.source();
-        let old = rebuild(
-            &f.by_file(),
-            &src,
-            "7.0.0",
-            "c",
-            DLL,
-            Set::MaterializeOld,
-        )
-        .expect("old side");
+        let old =
+            rebuild(&f.by_file(), &src, "7.0.0", "c", DLL, Set::MaterializeOld).expect("old side");
         assert_eq!(old.bytes.len(), 224, "64 + 128 + 32");
         assert_eq!(old.md5, hash::md5_hex(&old.bytes));
         assert_eq!(old.nchunks, 3);
         assert!(old.layout.is_clean());
         assert_eq!(old.layout.ranges[1], Range::at(64, 128));
-        let new = rebuild(
-            &f.by_file(),
-            &src,
-            "7.1.0",
-            "c",
-            DLL,
-            Set::MaterializeNew,
-        )
-        .expect("new side");
+        let new =
+            rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).expect("new side");
         assert_eq!(new.bytes.len(), 224, "the same three ranges");
         // Offset 0 now holds different content, which is the whole point: a
         // rebuild that ignored the new chunk would still be 224 B and would
@@ -589,10 +583,7 @@ mod tests {
         let f = Fixture::build("match");
         let old = f.bodies("7.0.0");
         let new = f.bodies("7.1.0");
-        let (o_path, n_path) = (
-            format!("game/{DLL}"),
-            format!("expected/{DLL}"),
-        );
+        let (o_path, n_path) = (format!("game/{DLL}"), format!("expected/{DLL}"));
         // The tree the bundle would have written alongside the blobs.
         for (label, bytes, rel) in [("game", &old, &o_path), ("expected", &new, &n_path)] {
             let shipped = f.root.join(rel);

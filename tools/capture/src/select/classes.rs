@@ -410,7 +410,6 @@ pub fn all_in_admission_order() -> Vec<Class> {
     Class::REQUIRED_ORDER.to_vec()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,7 +420,17 @@ mod tests {
     /// direction and the trim flag are spelled separately, because they are
     /// what the new classes turn on.
     fn scored(same_md5: bool, size_equal: bool, nchunks: u64, reused: u64, moved: u64) -> Shape {
-        shape(same_md5, nchunks, reused, moved, 0, moved, 100, if size_equal { 100 } else { 200 }, true)
+        shape(
+            same_md5,
+            nchunks,
+            reused,
+            moved,
+            0,
+            moved,
+            100,
+            if size_equal { 100 } else { 200 },
+            true,
+        )
     }
 
     /// The full shape, every field spoken for.

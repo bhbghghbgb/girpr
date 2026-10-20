@@ -16,7 +16,7 @@
 //! | [`report`] | the stdout data plane; the only `println!` in the crate |
 //! | [`logging`] | stderr narration via `tracing`, plus `--log-file` |
 //! | [`config`] | the resolved run plan every command works from |
-//! | [`failure`] | [`Failure`] and the four ways a command can say it failed |
+//! | [`failure`] | [`failure::Failure`] and the four ways a command can say it failed |
 //! | [`run`] | command dispatch: the four entry points |
 //! | [`biz`] | launcher/game ids, API bases, the channel tuple |
 //! | [`http`] | [`http::Fetcher`]: retries, timeout, headers, request log |

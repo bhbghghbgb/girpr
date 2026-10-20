@@ -58,7 +58,11 @@ fn python() -> Option<&'static str> {
             .output()
             .is_ok_and(|o| o.status.success())
         {
-            return Some(if name == "python" { "python" } else { "python3" });
+            return Some(if name == "python" {
+                "python"
+            } else {
+                "python3"
+            });
         }
     }
     None
@@ -257,7 +261,10 @@ fn the_instrument_reproduces_the_artifacts_repair_block() {
         );
         checked += 1;
     }
-    assert!(checked > 0, "no capture carried a repair block, so nothing was checked");
+    assert!(
+        checked > 0,
+        "no capture carried a repair block, so nothing was checked"
+    );
 }
 
 /// **The instrument reproduces the crate's class populations.**
@@ -300,15 +307,20 @@ fn the_instrument_reproduces_the_crates_class_populations() {
         let considered = row["candidates_considered"].as_u64().expect("a count");
         let ours = proposed[class].as_u64().expect("the instrument counts it");
         assert_eq!(
-            ours, considered,
+            ours,
+            considered,
             "{class}: the instrument counts {ours} paths and the crate considered \
              {considered}\n--- the instrument says ---\n{}\n--- the bundle's manifests ---\n{:?}",
             doc["population"],
             std::fs::read_dir(bundle.join("manifests").join("7.0.0")).map(|d| {
-                d.filter_map(|e| e.ok().map(|e| e.path().display().to_string())).collect::<Vec<_>>()
+                d.filter_map(|e| e.ok().map(|e| e.path().display().to_string()))
+                    .collect::<Vec<_>>()
             })
         );
         checked += 1;
     }
-    assert!(checked > 0, "the matrix had no rows, so nothing was checked");
+    assert!(
+        checked > 0,
+        "the matrix had no rows, so nothing was checked"
+    );
 }

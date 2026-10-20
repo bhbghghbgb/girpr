@@ -220,7 +220,10 @@ impl BlobProps {
     ) -> Result<BlobProps, ApiError> {
         let what = format!("chunk {}", chunk.id);
         let file = std::fs::File::open(path).map_err(|e| {
-            ApiError::shape("chunk", format!("{what}: reopening what was just written: {e}"))
+            ApiError::shape(
+                "chunk",
+                format!("{what}: reopening what was just written: {e}"),
+            )
         })?;
         let mut reader = std::io::BufReader::new(file);
         let mut head = [0_u8; 4];
@@ -234,9 +237,9 @@ impl BlobProps {
         // Rewind rather than chain the head back: `zstd_measure_from` reads its
         // own four bytes to sniff with, so the file must start at zero.
         use std::io::Seek as _;
-        reader.rewind().map_err(|e| {
-            ApiError::shape("chunk", format!("{what}: rewinding to decode: {e}"))
-        })?;
+        reader
+            .rewind()
+            .map_err(|e| ApiError::shape("chunk", format!("{what}: rewinding to decode: {e}")))?;
         let measured = hash::zstd_measure_from(reader, &what);
         Ok(Self::assemble(compressed, measured, chunk))
     }
@@ -296,39 +299,44 @@ impl BlobProps {
     }
 
     /// The row, from the two things that were measured.
-///
-/// **The tail shared by [`BlobProps::measure`] and [`BlobProps::measure_file`]**,
-/// and the reason they cannot disagree about a field: a decode that failed leaves
-/// the two decode-dependent checks false and records why, rather than taking the
-/// whole blob down with it.
-///
-/// `measured` being `Err` is a *recorded* state, not a propagated one, so the
-/// compressed digests and `bytes` still land in the row — they were computed over
-/// bytes that exist on disk.
-fn assemble(compressed: hash::Digests, measured: Result<hash::Measure, String>, chunk: &SophonChunk) -> BlobProps {
-    let decoded_size = measured.as_ref().ok().map(|m| m.len);
-    let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
-    BlobProps {
-        chunk_id: chunk.id.clone(),
-        stored_path: None,
-        bytes: compressed.bytes,
-        container: "zstd".to_string(),
-        sha256_compressed: compressed.sha256,
-        md5_compressed: compressed.md5.clone(),
-        md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
-        uncompressed_size: decoded_size.unwrap_or(0),
-        unknown_field6: chunk.unknown_field6,
-        decode_error: measured.as_ref().err().cloned(),
-        verified: Some(Verified {
-            raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
-            md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
-            md5_decompressed_matches: md5_decompressed.as_deref() == Some(&chunk.uncompressed_md5),
-            decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
-        }),
+    ///
+    /// **The tail shared by [`BlobProps::measure`] and [`BlobProps::measure_file`]**,
+    /// and the reason they cannot disagree about a field: a decode that failed leaves
+    /// the two decode-dependent checks false and records why, rather than taking the
+    /// whole blob down with it.
+    ///
+    /// `measured` being `Err` is a *recorded* state, not a propagated one, so the
+    /// compressed digests and `bytes` still land in the row — they were computed over
+    /// bytes that exist on disk.
+    fn assemble(
+        compressed: hash::Digests,
+        measured: Result<hash::Measure, String>,
+        chunk: &SophonChunk,
+    ) -> BlobProps {
+        let decoded_size = measured.as_ref().ok().map(|m| m.len);
+        let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
+        BlobProps {
+            chunk_id: chunk.id.clone(),
+            stored_path: None,
+            bytes: compressed.bytes,
+            container: "zstd".to_string(),
+            sha256_compressed: compressed.sha256,
+            md5_compressed: compressed.md5.clone(),
+            md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
+            uncompressed_size: decoded_size.unwrap_or(0),
+            unknown_field6: chunk.unknown_field6,
+            decode_error: measured.as_ref().err().cloned(),
+            verified: Some(Verified {
+                raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
+                md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
+                md5_decompressed_matches: md5_decompressed.as_deref()
+                    == Some(&chunk.uncompressed_md5),
+                decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
+            }),
+        }
     }
-}
 
-/// The entry for a blob that was never fetched.
+    /// The entry for a blob that was never fetched.
     ///
     /// `--no-chunk-blobs` produces these. The declared sizes come from the
     /// manifest and the digests are **empty strings rather than zeros**,
@@ -472,7 +480,10 @@ mod tests {
             "and the declared digest is kept as declared - there is nothing to compare it against"
         );
         assert!(
-            p.decode_error.as_deref().unwrap_or_default().contains("not a zstd frame"),
+            p.decode_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("not a zstd frame"),
             "the row says why it will not decode: {:?}",
             p.decode_error
         );

@@ -64,7 +64,8 @@
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
-#[allow(dead_code)]
+// `tests/common/tempdir.rs` carries its own `#![allow(dead_code)]`, so the
+// module needs no allowance here: adding one would only duplicate it.
 #[path = "common/tempdir.rs"]
 mod tempdir;
 
@@ -1354,14 +1355,8 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
             // The vocabulary is the new repair spec's: a chunk is **kept**
             // (already correct where it belongs), **copied** (its bytes live
             // elsewhere in the file) or **fetched** (no usable local source).
-            "kept_in_place"
-            | "moved_ascending"
-            | "moved_descending"
-            | "moved_mixed"
-            | "trim_eager"
-            | "trim_deferred"
-            | "zero_reuse_single"
-            | "zero_reuse_multi" => {
+            "kept_in_place" | "moved_ascending" | "moved_descending" | "moved_mixed"
+            | "trim_eager" | "trim_deferred" | "zero_reuse_single" | "zero_reuse_multi" => {
                 assert_eq!(
                     run.num("summary", "repaired"),
                     1,
@@ -1754,10 +1749,7 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
     println!(
         "bridge {:<24} differential: temp wrote {} bytes, in-place wrote {} bytes \
          (same file, md5 {})",
-        capture.id,
-        temp_written,
-        inplace_written,
-        capture.result_md5,
+        capture.id, temp_written, inplace_written, capture.result_md5,
     );
 }
 
@@ -2020,11 +2012,7 @@ async fn the_ordered_tier_downloads_exactly_the_patchmap_total() {
         );
         // The ordered tier stages nothing, so it reserves nothing — the
         // patchmap's `ram_bytes_ordered`.
-        if let Some(n) = capture
-            .summary
-            .as_ref()
-            .and_then(|s| s.ram_bytes_ordered)
-        {
+        if let Some(n) = capture.summary.as_ref().and_then(|s| s.ram_bytes_ordered) {
             assert_eq!(
                 run.num("summary", "ram_bytes"),
                 n,
@@ -2105,11 +2093,7 @@ async fn a_ram_budget_too_small_for_the_payload_degrades_to_the_ordered_tier() {
     let Some(capture) = bundle
         .captures
         .iter()
-        .filter(|c| {
-            c.repair
-                .as_ref()
-                .is_some_and(|r| r.payload_bytes > 0)
-        })
+        .filter(|c| c.repair.as_ref().is_some_and(|r| r.payload_bytes > 0))
         .min_by_key(|c| c.repair.as_ref().map(|r| r.payload_bytes).unwrap_or(0))
     else {
         println!("no capture moves bytes, so there is no reservation to refuse");
@@ -2350,7 +2334,8 @@ async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
                 assert!(
                     bundle.captures.iter().any(|c| c.id == m.class),
                     "{}: recorded captured, but there is no patchmaps/{}.json",
-                    m.class, m.class
+                    m.class,
+                    m.class
                 );
             }
             "covered_by" => {

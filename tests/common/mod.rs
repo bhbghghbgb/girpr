@@ -284,7 +284,11 @@ pub fn build_moved_fixture() -> GameFixture {
     old_data.extend_from_slice(&q);
     old_data.extend_from_slice(&r);
     let mut old_chunks: Vec<SophonChunk> = Vec::new();
-    for (id, data, offset) in [("local_p", &p, 0i64), ("local_q", &q, 64), ("local_r", &r, 128)] {
+    for (id, data, offset) in [
+        ("local_p", &p, 0i64),
+        ("local_q", &q, 64),
+        ("local_r", &r, 128),
+    ] {
         let compressed = zstd_bytes(data);
         old_chunks.push(SophonChunk {
             id: id.to_string(),

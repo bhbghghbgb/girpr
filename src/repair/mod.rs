@@ -317,8 +317,12 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
-            let doc =
-                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes, &disk);
+            let doc = scope::report::PlanDocument::new(
+                &plan,
+                purge_plan.as_ref(),
+                est_download_bytes,
+                &disk,
+            );
             doc.write_to(std::path::Path::new(out))
                 .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
         }
@@ -343,18 +347,15 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // install takes the lock — and only such a run, and only when the
     // path scope admits the lock file (the same rule `config.ini` lives
     // under: a path outside the scope does not exist to the run).
-    let _lock = if !readonly
-        && !ctx.check_only
-        && !ctx.print_plan
-        && scope.is_visible(lock::LOCK_FILE)
-    {
-        let lock = lock::Lock::acquire(&game_dir)
-            .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
-        tracing::info!(path = %lock.path().display(), "single-writer lock taken");
-        Some(lock)
-    } else {
-        None
-    };
+    let _lock =
+        if !readonly && !ctx.check_only && !ctx.print_plan && scope.is_visible(lock::LOCK_FILE) {
+            let lock = lock::Lock::acquire(&game_dir)
+                .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+            tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+            Some(lock)
+        } else {
+            None
+        };
 
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`

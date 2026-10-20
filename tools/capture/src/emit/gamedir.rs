@@ -221,8 +221,7 @@ pub fn write_gamedir(
         expected: Vec::new(),
     };
     for f in old_files {
-        w.game
-            .push(write_variant(root, super::GAME_TREE, f)?);
+        w.game.push(write_variant(root, super::GAME_TREE, f)?);
     }
     for f in new_files {
         w.expected

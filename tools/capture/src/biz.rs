@@ -413,11 +413,23 @@ mod tests {
         // returned a pointer into a shared buffer, or if the first call's strings
         // were freed, the second would read something else — and since both are
         // `&'static str` nothing would complain about the type.
-        let a = Endpoints::owned("https://a.example".to_string(), "https://b.example".to_string());
-        let b = Endpoints::owned("https://c.example".to_string(), "https://d.example".to_string());
+        let a = Endpoints::owned(
+            "https://a.example".to_string(),
+            "https://b.example".to_string(),
+        );
+        let b = Endpoints::owned(
+            "https://c.example".to_string(),
+            "https://d.example".to_string(),
+        );
 
-        assert_eq!((a.hyp, a.sophon), ("https://a.example", "https://b.example"));
-        assert_eq!((b.hyp, b.sophon), ("https://c.example", "https://d.example"));
+        assert_eq!(
+            (a.hyp, a.sophon),
+            ("https://a.example", "https://b.example")
+        );
+        assert_eq!(
+            (b.hyp, b.sophon),
+            ("https://c.example", "https://d.example")
+        );
 
         // And the borrowed constructor agrees with the owned one for a real base,
         // so the seam cannot quietly change which address a capture talks to.
@@ -425,7 +437,10 @@ mod tests {
         let bases = resolved.bases();
         assert_eq!(bases.hyp, GLOBAL);
         let from_string = Endpoints::owned(GLOBAL.to_string(), bases.sophon.to_string());
-        assert_eq!(from_string.hyp, bases.hyp, "the override path must not rewrite the base");
+        assert_eq!(
+            from_string.hyp, bases.hyp,
+            "the override path must not rewrite the base"
+        );
     }
 
     #[test]

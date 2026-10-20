@@ -62,9 +62,7 @@ pub fn wants(
 ) -> Vec<Want> {
     let mut out = Vec::with_capacity(fields.len() * 2);
     for (i, field) in fields.iter().enumerate() {
-        for (tag, build, is_new) in
-            [(old_tag, old_build, false), (new_tag, new_build, true)]
-        {
+        for (tag, build, is_new) in [(old_tag, old_build, false), (new_tag, new_build, true)] {
             out.push(Want {
                 field: i,
                 field_name: field.clone(),
@@ -198,7 +196,16 @@ mod tests {
     fn every_field_gets_a_slot_even_when_the_list_is_empty() {
         // Zero fields is a run that cannot proceed, but the shape function must
         // not panic on it and must not invent a slot.
-        assert!(wants(&[], "7.0.0", "7.1.0", &build("o", "7.0.0"), &build("n", "7.1.0")).is_empty());
+        assert!(
+            wants(
+                &[],
+                "7.0.0",
+                "7.1.0",
+                &build("o", "7.0.0"),
+                &build("n", "7.1.0")
+            )
+            .is_empty()
+        );
         // One field is the common case and must still produce exactly two.
         assert_eq!(
             wants(
@@ -244,7 +251,10 @@ mod tests {
             &build("o", "7.0.0"),
             &build("n", "7.1.0"),
         );
-        assert_eq!(w.iter().map(|x| x.field).collect::<Vec<_>>(), vec![0, 0, 1, 1]);
+        assert_eq!(
+            w.iter().map(|x| x.field).collect::<Vec<_>>(),
+            vec![0, 0, 1, 1]
+        );
     }
 
     #[test]

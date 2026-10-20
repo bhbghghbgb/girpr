@@ -613,10 +613,10 @@ fn both_timestamp_precisions_are_scrubbed() {
 #[test]
 fn something_that_merely_looks_like_a_timestamp_is_left_alone() {
     for keep in [
-        "2026-10-16",                        // a date
-        "2026-10-16T18:05",                  // no seconds
-        "2026-10-16 18:05:34Z",              // no `T`
-        "2026-10-16T18:05:34.48Z", // two fractional digits
+        "2026-10-16",                // a date
+        "2026-10-16T18:05",          // no seconds
+        "2026-10-16 18:05:34Z",      // no `T`
+        "2026-10-16T18:05:34.48Z",   // two fractional digits
         "2026-10-16T18:05:34.4822Z", // four
     ] {
         assert_eq!(norm(keep), keep, "must not be scrubbed: {keep}");
@@ -638,10 +638,7 @@ fn the_digest_and_duration_fields_are_scrubbed() {
         r#"{"seq":8,"elapsed_ms":<MS>,"n":7}"#
     );
     // Variable width on purpose: `elapsed_ms` is 1 digit as often as 4.
-    assert_eq!(
-        norm(r#"{"elapsed_ms":8}"#),
-        r#"{"elapsed_ms":<MS>}"#
-    );
+    assert_eq!(norm(r#"{"elapsed_ms":8}"#), r#"{"elapsed_ms":<MS>}"#);
 }
 
 #[test]
@@ -683,7 +680,10 @@ fn an_exemption_that_stops_matching_is_a_failure_not_a_silent_hole() {
   ]
 }"#;
     let r = std::panic::catch_unwind(|| blank_derived_rows(doc, &["api/requests.ndjson"]));
-    assert!(r.is_err(), "a blank that matches nothing must fail the harness");
+    assert!(
+        r.is_err(),
+        "a blank that matches nothing must fail the harness"
+    );
 }
 
 /// The other half: an exemption that *does* match must blank exactly the three
@@ -709,11 +709,23 @@ fn a_matched_exemption_blanks_only_the_derived_fields() {
   ]
 }"#;
     let out = blank_derived_rows(doc, &["api/requests.ndjson"]);
-    assert!(out.contains(r#""path": "README.md""#), "untouched row:\n{out}");
+    assert!(
+        out.contains(r#""path": "README.md""#),
+        "untouched row:\n{out}"
+    );
     assert!(out.contains(r#""bytes": 10"#), "untouched row:\n{out}");
-    assert!(out.contains(r#""encoding": "identity""#), "encoding must survive:\n{out}");
+    assert!(
+        out.contains(r#""encoding": "identity""#),
+        "encoding must survive:\n{out}"
+    );
     assert!(out.contains(r#""bytes": <blank>"#), "derived bytes:\n{out}");
     assert!(out.contains(r#""md5": <blank>"#), "derived md5:\n{out}");
-    assert!(out.contains(r#""sha256": <blank>"#), "derived sha256:\n{out}");
-    assert!(!out.contains(r#""bytes": 20"#), "derived size leaked:\n{out}");
+    assert!(
+        out.contains(r#""sha256": <blank>"#),
+        "derived sha256:\n{out}"
+    );
+    assert!(
+        !out.contains(r#""bytes": 20"#),
+        "derived size leaked:\n{out}"
+    );
 }

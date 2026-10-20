@@ -89,11 +89,7 @@ impl Order {
 /// A tie goes to **ascending**: both directions are valid then, and the
 /// ascending one writes forward, which is the friendlier pattern for a
 /// spinning disk.
-pub fn salvage_order(
-    chunks: &[SophonChunk],
-    sources: &[Option<u64>],
-    usable_len: u64,
-) -> Order {
+pub fn salvage_order(chunks: &[SophonChunk], sources: &[Option<u64>], usable_len: u64) -> Order {
     let ascending = survives(chunks, sources, usable_len, true);
     let descending = survives(chunks, sources, usable_len, false);
     let kept_ascending = ascending.iter().filter(|b| **b).count();
@@ -149,10 +145,7 @@ fn survives(
 /// disagree about where a chunk's bytes are.
 ///
 /// A chunk with no matching entry has no source: it has to be downloaded.
-pub fn sources_for(
-    chunks: &[SophonChunk],
-    entries: &[(String, i64, i64)],
-) -> Sources {
+pub fn sources_for(chunks: &[SophonChunk], entries: &[(String, i64, i64)]) -> Sources {
     chunks
         .iter()
         .map(|c| {

@@ -420,7 +420,10 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
     std::fs::remove_file(bundle.join("api/error_shapes.json")).unwrap();
     let dir = bundle.to_string_lossy().to_string();
 
-    for cmd in [vec!["verify", "--artifact", &dir], vec!["materialize", "--artifact", &dir]] {
+    for cmd in [
+        vec!["verify", "--artifact", &dir],
+        vec!["materialize", "--artifact", &dir],
+    ] {
         let out = run(&cmd);
         assert_ne!(
             out.code, 0,
@@ -430,7 +433,9 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
         assert!(
             format!("{}{}", out.stdout, out.stderr).contains("error_shapes.json"),
             "{} must name the document:\n{}{}",
-            cmd[0], out.stdout, out.stderr
+            cmd[0],
+            out.stdout,
+            out.stderr
         );
     }
 }
@@ -831,29 +836,53 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["field"], "game");
     assert_eq!(m["audio"], serde_json::json!(["en-us"]));
     assert_eq!(m["gzip_threshold"], 1_048_576);
-    assert_eq!(m["selection_pool"]["fields"], serde_json::json!(["game", "en-us"]));
-    assert_eq!(m["selection_pool"]["manifest_entries"], serde_json::json!({"en-us": 1, "game": 7}));
+    assert_eq!(
+        m["selection_pool"]["fields"],
+        serde_json::json!(["game", "en-us"])
+    );
+    assert_eq!(
+        m["selection_pool"]["manifest_entries"],
+        serde_json::json!({"en-us": 1, "game": 7})
+    );
     assert_eq!(m["capture"]["complete"], true);
     let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
     assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
     assert_eq!(m["totals"]["files_captured"], 8);
     assert_eq!(m["totals"]["chunks_blobs"], 22);
 
-    let mpaths: Vec<&str> = m["files"].as_array().unwrap().iter()
-        .map(|f| f["path"].as_str().expect("a path")).collect();
+    let mpaths: Vec<&str> = m["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().expect("a path"))
+        .collect();
     let (mdocs, mcounts) = split_inventory(&mpaths);
-    assert_eq!(mdocs, MANIFEST_DOCUMENTS, "MANIFEST.json documents[] changed");
+    assert_eq!(
+        mdocs, MANIFEST_DOCUMENTS,
+        "MANIFEST.json documents[] changed"
+    );
     assert_eq!(mcounts.get("blob"), Some(&22), "MANIFEST.json blob rows");
     assert_eq!(mcounts.get("game"), Some(&8), "MANIFEST.json game rows");
-    assert_eq!(mcounts.get("expected"), Some(&6), "MANIFEST.json expected rows");
+    assert_eq!(
+        mcounts.get("expected"),
+        Some(&6),
+        "MANIFEST.json expected rows"
+    );
 
     let c = json("verify/checksums.json");
     assert_eq!(c["algorithm"], "sha256");
-    let epaths: Vec<&str> = c["entries"].as_array().unwrap().iter()
-        .map(|f| f["path"].as_str().expect("a path")).collect();
+    let epaths: Vec<&str> = c["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().expect("a path"))
+        .collect();
     assert_eq!(c["file_count"], epaths.len());
     let (cdocs, ccounts) = split_inventory(&epaths);
-    assert_eq!(cdocs, CHECKSUM_DOCUMENTS, "checksums.json documents[] changed");
+    assert_eq!(
+        cdocs, CHECKSUM_DOCUMENTS,
+        "checksums.json documents[] changed"
+    );
     assert_eq!(ccounts.get("blob"), Some(&22), "checksums.json blob rows");
 
     // A16's claim, restated against the projection: every file `MANIFEST.json`
@@ -906,7 +935,11 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "```",
         "Offline: no network, no writes. Exit # if every assertion still holds.",
     ];
-    let lines: Vec<&str> = skel.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = skel
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     assert_eq!(lines, README_SKELETON, "README.md prose changed");
 
     // The skeleton's counts are blanked, so the *agreement* between the two
@@ -936,9 +969,10 @@ fn the_inventory_documents_describe_the_same_bundle() {
 #[test]
 fn the_selfcheck_document_asserts_what_it_always_asserted() {
     let (_m, _s, _r, bundle) = capture_ok("sc");
-    let s: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(bundle.join("verify/selfcheck.json")).unwrap())
-            .expect("verify/selfcheck.json");
+    let s: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(bundle.join("verify/selfcheck.json")).unwrap(),
+    )
+    .expect("verify/selfcheck.json");
 
     assert_eq!(s["result"], "pass");
     assert_eq!(s["counts"]["failed"], 0);
@@ -950,15 +984,23 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
     ids.dedup();
     assert_eq!(
         ids,
-        vec!["A1", "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17", "A19",
-             "A2", "A21", "A22", "A23", "A3", "A4", "A6", "A7", "A8", "A9"],
+        vec![
+            "A1", "A10", "A11", "A12", "A13", "A14", "A15", "A16", "A17", "A19", "A2", "A21",
+            "A22", "A23", "A3", "A4", "A6", "A7", "A8", "A9"
+        ],
         "the set of assertions a capture makes changed; A5, A18 and A20 are \
          verify-only or absent by design and must stay that way"
     );
 
     let mut worded: Vec<String> = rows
         .iter()
-        .map(|r| format!("{} {}", r["id"].as_str().unwrap(), r["assertion"].as_str().unwrap()))
+        .map(|r| {
+            format!(
+                "{} {}",
+                r["id"].as_str().unwrap(),
+                r["assertion"].as_str().unwrap()
+            )
+        })
         .collect();
     worded.sort();
     worded.dedup();
@@ -1042,7 +1084,8 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         "37 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
         "38 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
         "39 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
-        "40 chunk GET /cdn/sMOCKnew00/chunk/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781 200 2057 1 chunks/blobs/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781.zst -",    ];
+        "40 chunk GET /cdn/sMOCKnew00/chunk/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781 200 2057 1 chunks/blobs/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781.zst -",
+    ];
 
     let mut got: Vec<(u64, String)> = log
         .lines()
@@ -1055,8 +1098,7 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
     let got_keys: Vec<&str> = got.iter().map(|(_, k)| k.as_str()).collect();
 
     assert_eq!(
-        got_keys,
-        EXPECTED,
+        got_keys, EXPECTED,
         "api/requests.ndjson changed. Left is the run, right is the pin.\n\
          A changed `bytes_in`, `stored_as` or `attempts` is a real behaviour \
          change and needs a band-3 note; a changed `seq` means the log is no \
@@ -1110,17 +1152,28 @@ fn a_retried_request_is_recorded_as_retried() {
          chunk_requests={}",
         rows.len(),
         statuses,
-        mock.requests().iter().filter(|r| r.path.contains("/chunk/")).count()
+        mock.requests()
+            .iter()
+            .filter(|r| r.path.contains("/chunk/"))
+            .count()
     );
 
     let row = retried[0];
-    assert_eq!(row["attempts"], 2, "one failure then one success is two attempts");
-    assert_eq!(row["status"], 200, "the retried request succeeded in the end");
+    assert_eq!(
+        row["attempts"], 2,
+        "one failure then one success is two attempts"
+    );
+    assert_eq!(
+        row["status"], 200,
+        "the retried request succeeded in the end"
+    );
     assert_eq!(row["kind"], "chunk", "the armed route was a chunk route");
 
     // And the body it retried for is actually in the bundle. A retry that
     // recorded itself but dropped the bytes would pass every assertion above.
-    let stored = row["stored_as"].as_str().expect("a retried chunk is stored");
+    let stored = row["stored_as"]
+        .as_str()
+        .expect("a retried chunk is stored");
     assert!(
         bundle.join(stored).is_file(),
         "the retried chunk's body is missing: {stored}"
@@ -1472,11 +1525,7 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
 fn requiring_an_unavailable_class_is_exit_four() {
     let mock = Mock::start(World::five_classes());
     let scratch = Scratch::new("require");
-    let r = capture(
-        &mock,
-        &scratch,
-        &["--require-class", "moved_mixed"],
-    );
+    let r = capture(&mock, &scratch, &["--require-class", "moved_mixed"]);
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
@@ -1527,15 +1576,12 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         .flatten()
         .map(|e| format!("api/{}", e.file_name().to_string_lossy()))
         .filter(|p| p.ends_with(".json"))
-        .filter(|p| {
-            !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json")
-        })
+        .filter(|p| !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json"))
         .collect();
     on_disk.sort();
 
     assert_eq!(
-        marked,
-        on_disk,
+        marked, on_disk,
         "the marked api rows must be exactly the bodies on disk, and each must exist"
     );
     assert_eq!(
@@ -1553,10 +1599,15 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         }
     }
     for (p, n) in &counts {
-        assert_eq!(*n, 1, "each stored path is recorded once, not per request: {p}");
+        assert_eq!(
+            *n, 1,
+            "each stored path is recorded once, not per request: {p}"
+        );
     }
     assert!(
-        !marked.iter().any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
+        !marked
+            .iter()
+            .any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
         "a probe row is not a stored body: {marked:?}"
     );
 }
@@ -1776,4 +1827,3 @@ fn a_chunk_shared_by_both_builds_is_fetched_once() {
         "{stored} stored vs {patch_fetch} patch fetches"
     );
 }
-

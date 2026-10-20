@@ -95,11 +95,7 @@ impl RangeState {
 /// A file that is not there is **not** an error: the scan says nothing is
 /// correct (see [`Scan::absent`]). A file that is shorter than a range makes
 /// that range incorrect, because a short range cannot hash to anything.
-pub fn scan_file(
-    path: &Path,
-    dest: &[ScanRange<'_>],
-    source: &[ScanRange<'_>],
-) -> Result<Scan> {
+pub fn scan_file(path: &Path, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
     let mut f = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -119,11 +115,7 @@ pub fn scan_file(
 /// The scan always starts at the beginning of the file: the handle's current
 /// position is whatever the caller's last read or write left it at, and a
 /// scan that started there would hash half a file.
-pub fn scan_reader(
-    f: &mut File,
-    dest: &[ScanRange<'_>],
-    source: &[ScanRange<'_>],
-) -> Result<Scan> {
+pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
     f.seek(SeekFrom::Start(0))?;
     let mut ranges: Vec<RangeState> = Vec::new();
     let mut index: HashMap<(u64, u64, String), usize> = HashMap::new();

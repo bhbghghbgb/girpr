@@ -171,7 +171,10 @@ mod tests {
         // rows, so `pool_len` was 0 and the assertions below were true of a
         // function that did nothing.
         let d = decide(&one_changed(), 1, None, &[]);
-        assert_eq!(d.pool_len, 1, "the fixture must offer exactly one candidate");
+        assert_eq!(
+            d.pool_len, 1,
+            "the fixture must offer exactly one candidate"
+        );
         assert_eq!(
             d.selection.admitted.len(),
             1,
@@ -199,11 +202,17 @@ mod tests {
         // measures the store's real bytes against the same flag. Both hold, and
         // this is the one that decides admission.
         assert_eq!(
-            decide(&one_changed(), 1, Some(5_000), &[]).selection.budget.limit(),
+            decide(&one_changed(), 1, Some(5_000), &[])
+                .selection
+                .budget
+                .limit(),
             Some(5_000)
         );
         assert_eq!(
-            decide(&one_changed(), 1, None, &[]).selection.budget.limit(),
+            decide(&one_changed(), 1, None, &[])
+                .selection
+                .budget
+                .limit(),
             None
         );
     }
