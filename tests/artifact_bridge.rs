@@ -15,7 +15,7 @@
 //! Not "it would be rude under `cargo test`". These cases are **expensive**.
 //! One capture is a `--print-plan` pre-pass plus a real run, and each run
 //! fetches four manifests — ~20 MB of real bundle bytes — before it can plan a
-//! single file. The whole suite is 25 cases and **~2 minutes**, which is a
+//! single file. The whole suite is 26 cases and **~21 minutes**, which is a
 //! price worth paying *when something has gone wrong* and not worth paying on
 //! every `cargo test`.
 //!

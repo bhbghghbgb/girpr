@@ -34,7 +34,7 @@ use gircap::verify::materialize;
 const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
 const OLD_TAG: &str = "7.0.0";
 const NEW_TAG: &str = "7.1.0";
-const CAPTURE: &str = "partial_same_offset";
+const CAPTURE: &str = "kept_in_place";
 
 /// A chunk and the bytes it holds.
 fn chunk(seed: u8, len: usize, prefix: u64) -> (SophonChunk, Vec<u8>, Vec<u8>) {

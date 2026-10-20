@@ -59,7 +59,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "aaaa",
             vec![chunk("aaaa", 0, 54, 54)],
         ),
-        // common + changed, same offsets -> `partial_same_offset`
+        // common + changed, same offsets -> `kept_in_place`
         file(
             "GenshinImpact_Data/Plugins/HoYoChannel.dll",
             "bbbb-old",
@@ -69,11 +69,13 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
                 chunk("dddd", 2_316_738, 23_526, 14_631),
             ],
         ),
-        // common + changed, one chunk moved and one brand new -> `partial_moved_offset`
+        // common + changed, one chunk moved and one brand new ->
+        // `moved_ascending`
         //
-        // `reused` is 2 of 3, not 3 of 3: modelling this as a pure reorder made
-        // it `full_reuse_reordered`, which the live pair does not have at all
-        // (`docs/00-spec.md` §4.1 records that class as having no candidate).
+        // `reused` is 2 of 3, not 3 of 3: a file whose every chunk is reused
+        // and none of them moved is the shape the removed
+        // `full_reuse_reordered` class used to claim, and it is not a class of
+        // its own — there is no decision behind it.
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
             "eeee-old",
@@ -191,8 +193,9 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "GenshinImpact_Data/AssetBundles/data_revision",
             "iiii-new",
             // A different chunk entirely. Reusing `iiii` here would make this a
-            // whole-file reorder — `full_reuse_reordered` — rather than the
-            // single fresh download the class is about.
+            // file whose every chunk is reused and none of them moved — the
+            // shape the removed `full_reuse_reordered` class used to claim —
+            // rather than the single fresh download the class is about.
             vec![chunk("qqqq", 0, 42, 42)],
         ),
         file(
@@ -386,8 +389,8 @@ fn a_moved_chunk_is_reused_and_counted_as_moved() {
     assert_eq!(blk.patch_bytes, 100, "only `pppp` has to be fetched");
     assert!(
         blk.new_size > blk.old_size,
-        "the move came with a new chunk, so the file grew — a pure reorder would \
-         keep the size and land in `full_reuse_reordered` instead"
+        "the move came with a new chunk, so the file grew — a move with nothing \
+         new would keep the size"
     );
     assert_eq!(blk.old_bytes, 100 + 90 + 100);
     assert_eq!(blk.new_bytes, 100 + 90 + 100);
@@ -913,7 +916,7 @@ mod m5_matrix {
     ///
     /// Phase 2 re-sorts the wants by cost, so the position a capture is admitted
     /// at is unrelated to which pick it was. Reading the suffix as a global
-    /// position would have produced `partial_moved_offset+7` for a
+    /// position would have produced `moved_ascending+7` for a
     /// `--per-class 1` run, which is true about the cost order and useless
     /// about the flag.
     #[test]
@@ -1111,7 +1114,7 @@ mod m6_chunk_store {
             ),
         ];
         FilePair {
-            capture_id: "partial_same_offset".into(),
+            capture_id: "kept_in_place".into(),
             path: HOYO.into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1357,7 +1360,7 @@ mod m7_assembly {
             ],
         );
         FilePair {
-            capture_id: "partial_same_offset".into(),
+            capture_id: "kept_in_place".into(),
             path: HOYO.into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),

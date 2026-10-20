@@ -42,8 +42,8 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈243 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`expected/` is ≈79 MiB, `game/` ≈76 MiB, `chunks/` ≈44 MiB and `manifests/`
+bundles are large (≈696 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`expected/` is ≈220 MiB, `game/` ≈213 MiB, `chunks/` ≈220 MiB and `manifests/`
 ≈41 MiB) and regenerable, so they belong on disk, not in history. **This is the
 project location**: anything a test or another tool is expected to rely on lives
 here.
@@ -110,14 +110,20 @@ them, and assembles a **complete artifact**:
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
 The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
-`20261020T100659Z`, the one the tool writes today — **verifies 130/130, exit
-`0`**, and its own selfcheck is **159/159, `pass`**.
+`20261020T154810Z`, the one the tool writes today — **verifies 325/325, exit
+`0`**, and its own selfcheck is **354/354, `pass`**.
 
-It holds **nine** captures, one per class the class set answers, and the matrix
-says so: `trim_deferred` is **`covered_by`** `moved_ascending`'s capture (the
-file that shows the deferred trim is that capture's), and `moved_mixed` is
-**`over_budget`** with its reason (its cheapest candidate is 243 MB, which the
-100 MiB ceiling would not pay for).
+It holds **ten** captures and answers **all eleven** classes, and the matrix
+says how: nine classes are `captured` — one capture each — and `trim_deferred`
+is **`covered_by`** `moved_ascending`'s capture, because the file that shows the
+deferred trim is that capture's. So ten captures answer eleven classes.
+
+**A class the budget refused is recorded, not dropped.** `--max-download-bytes`
+refuses a class it cannot pay for and the matrix row says `over_budget` with
+the reason; A17 accepts that row, because a matrix that records it is more
+honest than one that fails, and `--require-class` is the lever that turns an
+unmet class into exit `4`. The reference bundle is captured without a ceiling,
+so every class is funded.
 
 The end-to-end check is **automated but expensive**: the bundle is replayed over
 loopback and the real `girpr` binary is run against it, once per capture, by

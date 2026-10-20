@@ -217,7 +217,7 @@ default, in two tiers, with a trim that is sometimes eager and sometimes
 deferred. Per file, it decides nine things. Six of them are **content**
 decisions — a function of how the file changed — and those six are what the
 class set has to cover. The other three come from a flag, a filesystem or an
-interruption, and no class can force them; §6 of `girpr`'s bridge spec
+interruption, and no class can force them; §7.3 of `girpr`'s bridge spec
 says where each one goes instead.
 
 | # | decision | what it depends on | a class can force it? |
@@ -297,21 +297,36 @@ live elsewhere in the file) and **fetched** (no usable local source).
 | capture | kept | copied | fetched | payload (RAM) | the ordered tier's direction | the trim |
 |---|---|---|---|---|---|---|
 | `identical` | 1 | 0 | 0 | 0 | — (skipped) | — |
-| `zero_reuse_single` | 0 | 0 | 1 | 0 | — | — (grows) |
-| `zero_reuse_multi` | 0 | 0 | 2 | 0 | — | — (grows) |
+| `zero_reuse_single` | 0 | 0 | 1 | 0 | — | — (same size) |
+| `zero_reuse_multi` | 0 | 0 | 2 | 0 | — | — (grows 192 924 B) |
 | `kept_in_place` | 1 | 0 | 2 | 0 | — | — (same size) |
 | `moved_ascending` | 4 | 4 | 2 | **5 892 269** | **ascending** | **deferred** |
-| `moved_descending` | 0 | 27 | 7 | **38 150 367** | **descending** | — (grows) |
+| `moved_descending` | 0 | 27 | 7 | **38 150 367** | **descending** | — (grows 5 094 416 B) |
+| `moved_mixed` | 0 | 67 | 60 | **70 736 576** | **descending** (60 of 67) | — (grows 3 429 518 B) |
 | `trim_eager` | 9 | 0 | 1 | 0 | — | **eager** (24 067 B released) |
-| `added` | — | — | 1 | 0 | — | — (created) |
+| `added` | 0 | 0 | 1 | 0 | — | — (created) |
 | `removed` | — | — | — | — | — | — (purged) |
 
-Two rows carry the load. `moved_ascending` is the only capture that exercises
-the **moving-bytes** path at all, the only one that reaches the ordered
-tier's rule, and the only one that reaches the **deferred** trim — so the
-bundle would have nothing to say about the spec's central change without it.
-And `moved_descending` is its mirror: the content moves the other way, so the
-descending order is the one that keeps the sources alive.
+Three rows carry the load. `moved_ascending` is the only capture that reaches
+the **deferred** trim — a reuse source reaches past the target's end, so the
+tail is not dead weight, the trim waits for the end and the file grows during
+the repair — and its every move goes the same way, so the ordered tier's
+direction rule has an unambiguous answer. `moved_descending` is its mirror: the
+content moves the other way, so the descending order is the one that keeps the
+sources alive. And `moved_mixed` is the case the rule exists for: the moves go
+**both** ways, so neither order keeps every source, and the ordered tier has to
+fetch the ones it cannot salvage.
+
+**Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
+a `matching_field` pool, and every pool is scored and diffed, not just `game`:
+*(measured)* each audio manifest carries 177 further file entries for ~1 MB
+compressed. Widening `--audio` therefore widens the candidate corpus, which is
+the backstop when a class has no `game`-field candidate in a given version pair.
+Ranking prefers `game` on a cost tie (`field` asc after `total_cost`, so the
+choice stays deterministic), and every capture records which `matching_field` it
+came from. Audio files are real game files and are materialised exactly like
+`game` ones when selected — the only difference is that they are, on average,
+~80 MB each, so cost ranking matters there.
 
 #### The candidates, and what each class costs
 
@@ -334,14 +349,14 @@ fixture to be real.
 | `added` | 84 | `…/Plugins/libHttpClient.GDK.dll` | 114 357 | 249 KB |
 | `removed` | 11 | `…/blocks/00/00664172.blk` | 1 731 133 | 1.7 MB |
 
-**`moved_mixed` is expected to be unfunded.** The rule's "keep the larger half"
-branch deserves a case, but its cheapest candidate is 243 MB of compressed bytes
-and 290 MB of fixture. `gircap` already has the mechanism:
-`--max-download-bytes` refuses a class it cannot afford and the matrix records it
-as `over_budget` with its reason. The capture's ceiling is set so that
-`moved_descending` is funded and `moved_mixed` is not, and **the bundle records
-the truth instead of pretending**: the class is there, with the reason it was
-not taken.
+**`moved_mixed` is the expensive one.** The rule's "keep the larger half"
+branch deserves a case, and it has one — but its cheapest candidate is 243 MB
+of compressed bytes and 290 MB of fixture, so it is the last capture admitted
+and by far the largest in the bundle. `gircap` has the mechanism for a capture
+that cannot afford one: `--max-download-bytes` refuses a class it cannot pay for
+and the matrix records it as `over_budget` with its reason. The reference bundle
+is captured **without** a ceiling, so every class is funded; a capture with a
+ceiling records the truth instead of pretending.
 
 #### What the bundle cannot cover
 
@@ -371,25 +386,14 @@ cannot come from a real capture: the server's manifests tile their files. They
 are only reachable with a synthetic manifest, which is a **bridge** fixture
 rather than a bundle case.
 
-#### Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
-a `matching_field` pool, and every pool is scored and diffed, not just `game`:
-*(measured)* each audio manifest carries 177 further file entries for ~1 MB
-compressed. Widening `--audio` therefore widens the candidate corpus, which is
-the backstop when a class has no `game`-field candidate in a given version pair.
-Ranking prefers `game` on a cost tie (`field` asc after `total_cost`, so the
-choice stays deterministic), and every capture records which `matching_field` it
-came from. Audio files are real game files and are materialised exactly like
-`game` ones when selected — the only difference is that they are, on average,
-~80 MB each, so cost ranking matters there.
-
 Predicates overlap in general (a file can satisfy several). The admission step
 is **greedy by cost with an exclusion set**:
 
 ```
 for class in REQUIRED_ORDER:
-    if any already-captured file satisfies class:  record covered_by=<path>; continue
     if any file an earlier class already wants satisfies class:
-        record covered_by=<that capture>; continue          # no second file
+        record capture_id=<that capture's id>               # the capture that answers it
+        record covered_by=<that capture's path>; continue    # and no second file
     pick the cheapest candidate satisfying class that is not already captured
     if none:                                      record status="unavailable" + reason
 ```
@@ -632,7 +636,8 @@ id is fatal: a failure in any of them ends the run with exit `3`, because a
 failure in A15–A17 (the documents this tool just wrote) means the bundle is
 internally inconsistent, which is as untrustworthy as a wrong digest. A row that
 was **skipped** rather than failed is a different verdict and exits `0` with
-`result: "incomplete"`: a `--no-chunk-blobs` run cannot prove A6–A12 or A19,
+`result: "incomplete"`: a `--no-chunk-blobs` run cannot prove A6–A12, A19 or
+A21–A23,
 records those ids as skipped, and says so rather than claiming a pass. A caller
 that cares must read `result`, not just the exit code.
 
@@ -678,11 +683,11 @@ dropped.
 
 ### What `verify` re-derives, and what it does not
 
-`gircap verify` re-derives **nine** of the twenty-three — A6, A7, A8, A11, A13,
+`gircap verify` re-derives **nine** of the twenty-one — A6, A7, A8, A11, A13,
 A16, A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15, A19
-or A21–A23: the first seven are statements about the API bodies, the manifests
-and the diff, and re-running them inside the bundle would be re-running the
-capture's own algorithm against the capture's own output, which can only ever
+or A21–A23: the first **eight** are statements about the API bodies, the
+manifests and the diff, and re-running them inside the bundle would be re-running
+the capture's own algorithm against the capture's own output, which can only ever
 agree; the last three are the bundle's **coverage**, which `verify` reports as
 a finding rather than as a failed check (see A21 above).
 
@@ -763,9 +768,22 @@ gircap list        --root <DIR>               # index every capture under a root
 Codes `3` and `4` are the two that leave a tree behind, and they are the two the
 failure summary marks `artifact_trustworthy=false`. Exit `0` with `result:
 incomplete` is not a pass: a `--no-chunk-blobs` capture provably cannot establish
-A6–A12 or A19, so it exits `0` and records them as skipped; a harness that treats
-"exited 0" as "every claim in this bundle is proven" will be wrong about exactly
-the bundles that prove least.
+A6–A12, A19 or A21–A23, so it exits `0` and records them as skipped; a harness
+that treats "exited 0" as "every claim in this bundle is proven" will be wrong
+about exactly the bundles that prove least.
+
+**A class the budget refused is not a failure, and that is a change worth
+stating.** `--max-download-bytes` can refuse a class the capture cannot afford;
+the matrix records it as `over_budget` with its reason, and the run exits `0`.
+A17 accepts that row, because a matrix that says "a candidate existed and this
+run's budget would not pay for it" is *more* honest than one that fails — and
+the information is not lost: the row's reason, the `SUMMARY` line's
+`captures_over_budget=` and the `budget` block in `diff/matrix.json` all carry
+it. The guard rail is `--require-class`: naming a class makes it fatal, and an
+unmet one is exit `4`. Before this, A17 failed on `over_budget` and the run
+exited `3`, which made a capture that had dropped most of its classes look
+untrustworthy rather than incomplete. The row is a fact about the run; the
+exit code is a verdict on the bundle.
 
 ### Output
 
@@ -901,7 +919,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
-   makes `download_bytes` attributable; a single run over all eight sums to the
+   makes `download_bytes` attributable; a single run over all ten sums to the
    same total but cannot be compared per capture. `removed` is the exception and
    takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
@@ -963,7 +981,7 @@ two figures worth checking are `deleted_extra_bytes=1731133`, which is the
 patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
 says exactly this, so the artifact's contract and the run's output agree.
 
-Only the `--include` glob is shared with the other seven; `--purge-only` is the
+Only the `--include` glob is shared with the other eight; `--purge-only` is the
 one flag that makes this capture different, and leaving it off would make the run
 exit non-zero for the same reason a repair run would.
 
@@ -1013,22 +1031,23 @@ artifact's own patchmap rather than against this table:
 | `kept_in_place` | `kept_in_place` | 274 426 | 1 / 2 / 0 | 1 |
 | `moved_ascending` | `moved_ascending`, `trim_deferred` | 1 564 894 | 8 / 2 / 4 | 8 |
 | `moved_descending` | `moved_descending` | 2 480 175 | 27 / 7 / 27 | 27 |
+| `moved_mixed` | `moved_mixed` | 64 139 674 | 67 / 60 / 67 | 67 |
 | `trim_eager` | `kept_in_place`, `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
-All nine exit `0`. **4 967 917 B in total**, which is the sum of the patchmaps'
-figures to the byte. 46 reused chunks across the five captures that declare them,
-none of them downloaded. Only the nine captures' own paths changed on the
+All ten exit `0`. **69 107 591 B in total**, which is the sum of the patchmaps'
+figures to the byte. 113 reused chunks across the six captures that declare them,
+none of them downloaded. Only the ten captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
-`identical` one was left alone, and the other six were modified in place — so
-the scope held across all nine runs. The bundle itself was never a working tree
+`identical` one was left alone, and the other seven were modified in place — so
+the scope held across all ten runs. The bundle itself was never a working tree
 and still verifies.
 
 **Two captures carry two classes each.** `moved_ascending`'s file is also the
 `trim_deferred` one — the same file shows the deferred trim and the ascending
 shift — and `trim_eager`'s file is also a `kept_in_place` one. That is the
-`covered_by` admission at work, and it is why the bundle holds nine captures for
+`covered_by` admission at work, and it is why the bundle holds ten captures for
 eleven classes.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
@@ -1043,8 +1062,8 @@ the rest, so read them with §13.1 of the schema:
   nothing. The run that produces it is a cleanup run, and the size it reports is
   `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
-The six that carry `totals` sum to **2 373 385 B**; adding `added` makes it
-**2 487 742 B**.
+The seven that carry a total of their own sum to **68 993 234 B**; adding
+`added` makes it **69 107 591 B**.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 

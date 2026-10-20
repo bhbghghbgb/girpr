@@ -126,7 +126,7 @@ quietly comparing nothing (`--strict`).
 
 For a gzipped document, `files[].bytes` and its digests are the
 **decompressed** size and digest, not the `.gz` bytes on disk. Measured on
-`artifacts/hk4e_global/7.0.0__7.1.0/20261017T123335Z`:
+`artifacts/hk4e_global/7.0.0__7.1.0/20261020T154810Z`:
 
 ```
   manifests/7.0.0/en-us.manifest.json.gz   on disk 1 356 632 B
@@ -179,17 +179,17 @@ failure mode where one commit looks like it changed the output because its
 
 ## 6. Profiles, and what each one can and cannot see
 
-One profile, `World::five_classes()`, produces a **58-file** bundle covering
+One profile, `World::five_classes()`, produces a **79-file** bundle covering
 every document type the tool writes:
 
-| | mock | reference (`20261017T123335Z`) |
+| | mock | reference (`20261020T154810Z`) |
 |---|---|---|
-| files | 58 | 97 |
+| files | 79 | 324 |
 | `api/` | 9 | 9 |
 | `manifests/` | 16 | 16 |
 | `diff/` | 5 | 5 |
-| `patchmaps/` | 5 | 8 |
-| chunk blobs | 10 | 38 |
+| `patchmaps/` | 8 | 10 |
+| chunk blobs | 22 | 259 |
 
 It is small, deterministic, offline, and produces the whole document surface —
 which is what makes a commit-by-commit search affordable. It is also a *healthy*
@@ -282,7 +282,12 @@ reads. So the same differ is run over the reference bundles in
 | comparison | identical | changed |
 |---|---|---|
 | `20261016T002107Z` vs `20261017T000730Z` — two captures of the same world, days apart | 93 of 97 | 4 |
-| `20261017T000730Z` vs `20261017T123335Z` — the older against the current reference | 93 of 97 | 4 |
+| `20261017T000730Z` vs `20261017T123335Z` — the older against the then-current reference | 93 of 97 | 4 |
+
+Those two rows are a recorded result, not a recipe: the bundles they compared
+have since been replaced, and the reference bundle under `artifacts/` is now
+the one `docs/00-spec.md` §4.1 describes. The number to beat is the same one
+either way — **four** documents move on a capture of the same world.
 
 The first row is a result in its own right: two captures of the same world, from
 different days, differ in **four** documents. That is the volatility floor of a

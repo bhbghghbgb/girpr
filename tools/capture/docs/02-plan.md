@@ -90,7 +90,7 @@ tools/capture/
 │   │   └── diff.rs       # path diff, reuse pool, scoring, stats reconciliation
 │   ├── select/
 │   │   ├── mod.rs        # scoring + admission
-│   │   ├── classes.rs    # the nine class predicates
+│   │   ├── classes.rs    # the eleven class predicates
 │   │   ├── budget.rs     # smallest-first under --max-download-bytes
 │   │   ├── decide.rs     # the selection decision, and the narration that reports it
 │   │   └── require.rs    # --require-class, and the one pass that builds its detail
@@ -241,7 +241,7 @@ says which is which.
 | HoYo retires a tag mid-run | manifest 404s partway | exit `2`, `MANIFEST.json` `complete:false`, selfcheck names the missing tag; partial artifacts are never presented as good |
 | A future version violates the structural invariants of spec §3.6 (non-gapless chunks, unsorted offsets, folders) | assembly or diff logic silently wrong | they are **assertions** (A11) and recorded per manifest in `decoded.structure`; a violation exits `3`, it does not pass quietly |
 | A matrix class has no candidate | incomplete test matrix | `status:"unavailable"` + reason, run still exits `0`; `--require-class` turns it into exit `4` |
-| `moved_ascending` and `trim_eager` are ~22 MB each | a default capture is ~130 MB | `--max-download-bytes`, smallest-first admission, and the exact cost is printed *before* fetching so a run is never a surprise |
+| `moved_ascending` and `trim_eager` are ~22 MB each | a default capture is ~696 MiB | `--max-download-bytes`, smallest-first admission, and the exact cost is printed *before* fetching so a run is never a surprise |
 | gzip hurts agent readability | an agent tries to `cat` a `.gz` | the threshold is a flag, every gzipped doc ships a plain `.tsv` sidecar, and `MANIFEST.json → files[].encoding` is authoritative |
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` records the *decompressed* digest for gzipped files, so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | assembly exists purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
