@@ -676,18 +676,90 @@ Per target chunk: where its bytes come from.
   "totals": { "chunks": 3, "reuse": 1, "fetch": 2, "moved": 0,
               "download_bytes": 274426,
               "materialize_old_bytes": 2340264, "materialize_new_bytes": 2340264 },
+  "repair": {
+    "kept": 1, "moved": 0, "fetch": 2,
+    "kept_bytes": 1626019, "payload_bytes": 0, "write_bytes": 713245,
+    "direction": "n/a", "keeps_ascending": 0, "keeps_descending": 0,
+    "trim": "none", "growth_bytes": 0, "mode": "inplace"
+  },
   "expectations": {
     "result_path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
     "result_md5": "d992a789…",
     "absent_after": false,
     "download_bytes": 274426,
-    "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"]
+    "must_not_fetch": ["f5dc3ca1f3a0ba3d_291a7719a4a23664d37825a41fad3c5b"],
+    "summary": {
+      "damaged_chunks": 2, "inplace": 1, "temp": 0, "kept_bytes": 1626019,
+      "ram_bytes_ordered": 0, "ram_bytes_staged": 0, "write_bytes": 713245
+    }
   }
 }
 ```
 
 `expectations.must_not_fetch` is the negative assertion: a run that downloads
 that chunk has a broken reuse path, and it is nameable from the artifact alone.
+
+### 13.0 The `repair` block — what the in-place path would do
+
+**What the repair does with this file, computed by the capture** so a consumer
+does not have to work it out — and so the artifact and the tool cannot disagree
+about it. Every number comes from the plan and the old side's bytes.
+
+| field | what it says |
+|---|---|
+| `kept` | the chunks that are already correct where they belong: **kept**, not written |
+| `moved` | the chunks whose bytes live elsewhere in the file: copied from a source |
+| `fetch` | the chunks with no usable local source: downloaded |
+| `kept_bytes` | the bytes that did not have to be written |
+| `payload_bytes` | the RAM the **staged** tier needs: the bytes that have to move |
+| `write_bytes` | the bytes the in-place run writes |
+| `direction` | the write order the **ordered** tier would pick: `ascending`, `descending` or `n/a` |
+| `keeps_ascending` / `keeps_descending` | how many sources each order would salvage |
+| `trim` | when the dead tail is released: `eager`, `deferred` or `none` |
+| `growth_bytes` | how much the file on disk has to grow |
+| `mode` | the mode the default run takes: `inplace` |
+
+The three counts are the repair's own vocabulary — **kept**, **copied**,
+**fetched** — and they are not the same as the plan's `REUSE`/`FETCH` split: a
+chunk whose source sits at its own offset is a `REUSE` in the plan and a
+**kept** chunk here, because the repair leaves it alone.
+
+The direction is the ordered tier's rule, the one
+`repair::reuse::survives` applies: a source survives the ascending order when
+it sits at or after its destination, the descending one when it sits at or
+before it, and a source that reaches past the end of the file counts for
+neither. A tie goes to ascending, as it does in the tool.
+
+`trim` is `eager` when the file on disk is longer than the target and **no
+reuse source reaches past the target's end** — the tail is dead weight and is
+released before the first write — and `deferred` when one does, because a
+source the trim would delete is a source that is gone. `none` means the file
+does not shrink.
+
+The block is absent for a capture with no new side: there is nothing to repair.
+
+### 13.0a The `expectations.summary` block — the `SUMMARY` keys, per flag
+
+**Every counter the repair reports is conditional on a flag** — the mode, the
+RAM budget, the scan, the write ceiling — so the expectations are stated per
+flag rather than as one flat set of numbers.
+
+| key | the flag that produces it | what it says |
+|---|---|---|
+| `damaged_chunks` | `--scan` | the chunks that are wrong where they belong |
+| `inplace` | `--repair-mode inplace` | the files the run repaired in place |
+| `temp` | `--repair-mode inplace` | the files the run repaired through the temp path — none |
+| `kept_bytes` | `--repair-mode inplace` | the bytes that did not have to be written |
+| `ram_bytes_ordered` | `--max-ram-bytes 0` | the RAM the run reserved — zero, because the ordered tier stages nothing |
+| `ram_bytes_staged` | `--max-ram-bytes` big enough for the staged tier | the RAM the run reserved |
+| `write_bytes` | `--max-write-bytes`, in place | the bytes the run wrote |
+
+A file that is **skipped** — already correct, so the repair never runs —
+changes every counter: `inplace` is `0` and `kept_bytes` and `write_bytes` are
+`0` too. That is the `identical` class, and it is why the expectations are
+about a *run* rather than about the file.
+
+The block is absent for a capture with nothing to repair.
 
 `source_range` is the local-file byte range the main tool would read and MD5-verify
 before copying. `moved` in `totals` counts entries where `source_range.start !=

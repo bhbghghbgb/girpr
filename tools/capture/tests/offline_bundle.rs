@@ -247,12 +247,14 @@ impl Bundle {
                 }),
                 plan: Some(plan),
                 totals: Some(totals),
+                repair: None,
                 expectations: gircap::assemble::Expectations {
                     result_path: Some(format!("expected/{DLL}")),
                     result_md5: Some(new_md5.clone()),
                     absent_after: false,
                     download_bytes: fetch_bytes,
                     must_not_fetch: vec![b.id.clone(), c.id.clone()],
+                    summary: None,
                 },
             },
         );

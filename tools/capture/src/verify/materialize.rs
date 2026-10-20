@@ -825,12 +825,14 @@ mod tests {
             new: side(new),
             plan: None,
             totals: None,
+            repair: None,
             expectations: crate::assemble::Expectations {
                 result_path: Some(format!("expected/{DLL}")),
                 result_md5: None,
                 absent_after: new.is_none(),
                 download_bytes: 0,
                 must_not_fetch: Vec::new(),
+                summary: None,
             },
         }
     }
