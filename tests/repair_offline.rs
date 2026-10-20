@@ -2476,6 +2476,62 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
 }
 
 #[tokio::test]
+async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
+    // The temp mode resumes by **length**: a chunk whose end is inside the
+    // `_tmp` is taken as done, with no hash check of its own. A streamed
+    // chunk's bytes are written before its digest is known, so a chunk that
+    // fails its digest leaves a `_tmp` that has grown past it — and the next
+    // attempt would keep the corrupt bytes and call the file complete.
+    //
+    // The rollback truncates the `_tmp` back to the chunk's offset, so the
+    // next attempt downloads *that* chunk again and keeps the good prefix
+    // before it. The mock serves one corrupt-but-well-formed chunk, so the
+    // first attempt really does write bad bytes and then fail its digest.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            corrupt_first_chunks: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("tmp_rollback");
+    let fx2 = build_fixture();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    // Only foo.dat: its first chunk is the corrupt one, and its second chunk
+    // is the one that must **not** be downloaded twice.
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    let (summary, code) = repair::run(ctx).await.expect("the retry must recover");
+    assert_eq!(code, 0, "the file was repaired on the second attempt");
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file is correct"
+    );
+    // The corrupt chunk was asked for twice — once for the attempt that
+    // failed its digest, once for the attempt that repaired it — and the good
+    // chunk only once. Without the rollback the whole `_tmp` would be thrown
+    // away when the final MD5 failed, and the good chunk would be downloaded
+    // twice as well.
+    assert_eq!(
+        mock.chunk_hits(),
+        vec![
+            "chunk_foo0".to_string(),
+            "chunk_foo0".to_string(),
+            "chunk_foo1".to_string()
+        ],
+        "the corrupt chunk was re-downloaded, the good one was not"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
     // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
     // rules, and neither repairs.

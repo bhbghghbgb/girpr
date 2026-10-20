@@ -41,7 +41,8 @@
 //!   they consume no source region and the ordered tier's salvage rule is
 //!   untouched;
 //! - the temp path is safe by construction: the `_tmp` is promoted only after
-//!   the whole-file MD5 passes.
+//!   the whole-file MD5 passes, and a chunk that fails its digest is rolled
+//!   back to its offset so the resume stays honest.
 //!
 //! A staged source's MD5 is still checked before it is staged, so that path
 //! keeps the stronger property it always had.
@@ -1077,7 +1078,18 @@ async fn repair_attempt_inner(
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
-                write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await?;
+                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await {
+                    // The chunk's bytes may have landed in the `_tmp` before
+                    // its digest was known, and the temp mode resumes by
+                    // **length**: a `_tmp` that grew past this chunk would be
+                    // taken as "already complete" by the next run, and the
+                    // corrupt bytes would be kept. Truncating back to the
+                    // chunk's offset makes the resume honest — the chunks
+                    // before it were each digest-checked when they were
+                    // written, and everything from it on is gone.
+                    rollback_tmp(&mut f, c.offset.max(0) as u64)?;
+                    return Err(e);
+                }
             }
         }
     }
@@ -1093,6 +1105,38 @@ enum ChunkOutcome {
     Resumed,
     Reused,
     Download,
+}
+
+/// Truncate the `_tmp` back to `offset`, so a chunk that failed cannot be
+/// resumed as "already complete".
+///
+/// **Why the temp mode needs this and the in-place path does not.** The temp
+/// mode resumes by **length**: a chunk whose end is inside the `_tmp` is
+/// taken as done, with no hash check. A streamed chunk's bytes are written
+/// before its digest is known, so a chunk that fails its digest leaves a
+/// `_tmp` that has grown past it — and the next attempt would keep the
+/// corrupt bytes and call the file complete. The rollback makes the resume
+/// point honest.
+///
+/// The truncation is exact because the plan sorts a file's chunks by offset:
+/// the `_tmp` is valid up to the start of the failed chunk and nothing after
+/// it, and the chunks before it were each digest-checked when they were
+/// written.
+///
+/// A `_tmp` shorter than `offset` is left alone — the rollback truncates, it
+/// never extends.
+fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= offset {
+        return Ok(());
+    }
+    f.set_len(offset)?;
+    tracing::debug!(
+        tmp_bytes = len,
+        offset,
+        "the failed chunk is rolled back out of the tmp"
+    );
+    Ok(())
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
