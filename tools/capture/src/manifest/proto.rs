@@ -80,6 +80,59 @@ impl SophonChunk {
     pub fn identity(&self) -> (&str, i64) {
         (&self.uncompressed_md5, self.uncompressed_size)
     }
+
+    /// Lower-case the declared digests.
+    ///
+    /// **A digest is an identity, not a spelling.** `girpr` compares chunk
+    /// identities case-insensitively (`repair::reuse::sources_for`,
+    /// `repair::plan::Plan`), so a pair of manifests that spell one chunk's
+    /// md5 `AB…` and `ab…` describes the same content to the tool. This crate
+    /// used to compare them exactly, which made the two tools disagree *by
+    /// construction*: `gircap` would call such a chunk fetched where `girpr`
+    /// calls it reused, and the bundle would publish the wrong numbers.
+    ///
+    /// The fix is here rather than at each comparison: normalising once, where
+    /// the manifest enters the crate, makes the identity keys, the declared
+    /// whole-file md5s and the digest checks agree with the tool by
+    /// construction instead of by every site remembering to.
+    ///
+    /// **No allocation in the normal case.** The live manifests spell their
+    /// digests in lower case already, and `to_ascii_lowercase` would allocate
+    /// for every one of the ~454 000 chunks regardless.
+    pub fn normalise(&mut self) {
+        if self.uncompressed_md5.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.uncompressed_md5 = self.uncompressed_md5.to_ascii_lowercase();
+        }
+        if self.compressed_md5.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.compressed_md5 = self.compressed_md5.to_ascii_lowercase();
+        }
+    }
+}
+
+impl SophonChunkFile {
+    /// Lower-case this entry's declared digests — the whole-file one and every
+    /// chunk's. See [`SophonChunk::normalise`] for why.
+    pub fn normalise(&mut self) {
+        if self.md5.bytes().any(|b| b.is_ascii_uppercase()) {
+            self.md5 = self.md5.to_ascii_lowercase();
+        }
+        for c in &mut self.chunks {
+            c.normalise();
+        }
+    }
+}
+
+impl SophonChunkManifest {
+    /// Lower-case every declared digest in the manifest.
+    ///
+    /// The one place a manifest enters the crate, and therefore the one place
+    /// the normalisation has to happen for every later comparison to be
+    /// right. See [`SophonChunk::normalise`].
+    pub fn normalise(&mut self) {
+        for e in &mut self.chuncks {
+            e.normalise();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,6 +169,35 @@ mod tests {
                 md5: "d992a789".into(),
             }],
         }
+    }
+
+    /// The digests are normalised once, where the manifest enters the crate,
+    /// so that every later comparison agrees with `girpr`'s case-insensitive
+    /// one by construction.
+    #[test]
+    fn normalising_lowercases_the_declared_digests() {
+        let mut m = sample();
+        m.chuncks[0].md5 = "D992A789".into();
+        m.chuncks[0].chunks[0].uncompressed_md5 = "DE1CFE6927DACBC58D2D55A0B45EA0F3".into();
+        m.chuncks[0].chunks[0].compressed_md5 = "06BA73BB".into();
+        m.normalise();
+        assert_eq!(m.chuncks[0].md5, "d992a789");
+        assert_eq!(
+            m.chuncks[0].chunks[0].uncompressed_md5,
+            "de1cfe6927dacbc58d2d55a0b45ea0f3"
+        );
+        assert_eq!(m.chuncks[0].chunks[0].compressed_md5, "06ba73bb");
+    }
+
+    /// **No allocation in the normal case.** The live manifests spell their
+    /// digests in lower case already, and `to_ascii_lowercase` would allocate
+    /// for every one of the ~454 000 chunks regardless.
+    #[test]
+    fn normalising_an_already_lower_case_manifest_changes_nothing() {
+        let want = sample();
+        let mut got = want.clone();
+        got.normalise();
+        assert_eq!(got, want);
     }
 
     #[test]

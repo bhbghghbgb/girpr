@@ -430,16 +430,21 @@ pub async fn capture(
     let checksum = &declared.manifest.checksum;
     let suffix = declared.manifest.id_suffix().unwrap_or("").to_string();
     let verified = Verified {
-        decompressed_md5_matches_checksum: md5_decompressed == *checksum,
-        checksum_matches_id_suffix: !suffix.is_empty() && suffix == *checksum,
+        decompressed_md5_matches_checksum: md5_decompressed.eq_ignore_ascii_case(checksum),
+        checksum_matches_id_suffix: !suffix.is_empty() && suffix.eq_ignore_ascii_case(checksum),
         id_prefix_verified: false,
     };
 
     let entries = {
         use prost::Message as _;
-        proto::SophonChunkManifest::decode(decompressed.as_slice())
-            .map_err(|e| ApiError::shape(&url, format!("protobuf decode: {e}")))?
-            .chuncks
+        let mut m = proto::SophonChunkManifest::decode(decompressed.as_slice())
+            .map_err(|e| ApiError::shape(&url, format!("protobuf decode: {e}")))?;
+        // A digest is an identity, not a spelling, and `girpr` compares them
+        // case-insensitively. Normalising here — the one place a manifest
+        // enters the crate — makes every later comparison agree with the tool
+        // by construction. See `proto::SophonChunk::normalise`.
+        m.normalise();
+        m.chuncks
     };
     let decoded = decode_counts(&entries);
     // One pass over the archive for both digests it records.

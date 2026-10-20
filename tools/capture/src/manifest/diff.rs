@@ -933,6 +933,45 @@ mod tests {
         assert_eq!(d.scores[0].patch_bytes, 5);
     }
 
+    /// A digest is an **identity, not a spelling**.
+    ///
+    /// `girpr` compares chunk identities case-insensitively
+    /// (`repair::reuse::sources_for`), so a pair of manifests that spell one
+    /// chunk's md5 `AABB` and `aabb` describes the same content to the tool.
+    /// The crate has to agree: on the pair below the chunk is **reused**, not
+    /// fetched, and the file's whole md5 matches, so the file is **identical**.
+    ///
+    /// The normalisation happens where the manifest enters the crate — see
+    /// `proto::SophonChunk::normalise` — and the diff is where its effect is
+    /// observable.
+    #[test]
+    fn a_digest_spelled_in_different_cases_is_the_same_identity() {
+        let mut old = manifest(
+            "7.0.0",
+            vec![file("f", "aa11", vec![chunk("a", "aabb", 0, 10, 5)])],
+        );
+        let mut new = manifest(
+            "7.1.0",
+            vec![file("f", "AA11", vec![chunk("a", "AABB", 0, 10, 5)])],
+        );
+        for e in &mut old.entries {
+            e.normalise();
+        }
+        for e in &mut new.entries {
+            e.normalise();
+        }
+        let d = diff_field(&old, &new).unwrap();
+        assert_eq!(
+            d.scores[0].reused, 1,
+            "the same content, whatever its spelling"
+        );
+        assert_eq!(d.scores[0].patch_bytes, 0, "so nothing has to be fetched");
+        assert!(
+            d.scores[0].same_md5,
+            "and the whole file is the same content too"
+        );
+    }
+
     /// The §10 measurement: content reachable from *anywhere* in the old
     /// manifest, versus from this file only.
     ///
