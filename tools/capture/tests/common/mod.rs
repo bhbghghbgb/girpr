@@ -212,7 +212,7 @@ pub struct World {
 }
 
 impl World {
-    /// A world whose `game` field exercises five of the nine classes.
+    /// A world whose `game` field exercises eight of the eleven classes.
     ///
     /// | file                 | old → new                            | class                |
     /// |----------------------|--------------------------------------|----------------------|
@@ -220,11 +220,20 @@ impl World {
     /// | `libNew.dll`         | absent → one new chunk              | `added`              |
     /// | `old.blk`            | one old chunk → absent              | `removed`            |
     /// | `zero.blk`           | all chunks replaced                 | `zero_reuse_multi`   |
-    /// | `HoYoChannel.dll`    | first chunk replaced, rest shared   | `partial_same_offset`|
+    /// | `HoYoChannel.dll`    | first chunk replaced, rest shared   | `kept_in_place`      |
+    /// | `eager.blk`          | the file shrinks, no source past the end | `trim_eager`     |
+    /// | `deferred.blk`       | the file shrinks, a source past the end | `trim_deferred`  |
+    /// | `grow.blk`           | the file grows, the content moves later | `moved_descending` |
     ///
-    /// The remaining four are `unavailable`, which is the honest answer for a
+    /// The last three are there for the **coverage** assertions (A21-A23):
+    /// a bundle that does not show both trim outcomes, both write directions
+    /// and a file that grows cannot claim to cover the repair spec's
+    /// decisions, and the capture says so — which means the fixture has to
+    /// show them or every capture against this world would be red.
+    ///
+    /// The remaining three are `unavailable`, which is the honest answer for a
     /// synthetic world and matches the live 7.0.0 → 7.1.0 finding that
-    /// `full_reuse_reordered` has no candidate at all.
+    /// `moved_mixed` has no candidate at all.
     ///
     /// **`en-us` is published too**, because `--audio` defaults to `en-us` and
     /// the capture then fetches that manifest from *both* builds. A world that
@@ -245,10 +254,14 @@ impl World {
                     "game".into(),
                     vec![
                         File::new("GenshinImpact_Data/Resources/browser_assets", &[1, 2], 512),
+                        // The **dearest** capture on purpose: it is the one a
+                        // budget can refuse without taking the coverage with
+                        // it, because a `removed` capture contributes nothing
+                        // to A21-A23.
                         File::new(
                             "GenshinImpact_Data/StreamingAssets/blocks/old.blk",
                             &[91],
-                            1024,
+                            32768,
                         ),
                         File::new(
                             "GenshinImpact_Data/StreamingAssets/blocks/zero.blk",
@@ -258,6 +271,30 @@ impl World {
                         File::new(
                             "GenshinImpact_Data/Plugins/HoYoChannel.dll",
                             &[10, 11, 12],
+                            1024,
+                        ),
+                        // The eager trim: the file on disk is longer than the
+                        // target and no reuse source reaches past the target's
+                        // end, so the tail is dead weight.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/eager.blk",
+                            &[301, 302, 303, 304],
+                            2048,
+                        ),
+                        // The deferred trim: the file on disk is longer than the
+                        // target and the reused chunk's source reaches past the
+                        // target's end, so the trim has to wait for the end.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/deferred.blk",
+                            &[311, 312, 313],
+                            1024,
+                        ),
+                        // The content moves **later** and the file grows: the
+                        // descending write order, and a file the repair has to
+                        // extend.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/grow.blk",
+                            &[321, 322],
                             1024,
                         ),
                     ],
@@ -283,6 +320,28 @@ impl World {
                         File::new(
                             "GenshinImpact_Data/Plugins/HoYoChannel.dll",
                             &[99, 11, 12],
+                            1024,
+                        ),
+                        // One chunk shorter, and the one it drops is not a
+                        // source: nothing the repair reads lives in the tail.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/eager.blk",
+                            &[301, 302, 305],
+                            2048,
+                        ),
+                        // The reused chunk moves **earlier** — its source is at
+                        // the old file's end, past the target's end — and the
+                        // file is one chunk shorter.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/deferred.blk",
+                            &[313, 314],
+                            1024,
+                        ),
+                        // One chunk longer, and the two that survive move
+                        // **later**: the content shifts up the file.
+                        File::new(
+                            "GenshinImpact_Data/StreamingAssets/blocks/grow.blk",
+                            &[323, 321, 322],
                             1024,
                         ),
                     ],

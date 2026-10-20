@@ -304,6 +304,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let rows = fixture.rows;
     let assembled_ids = fixture.assembled_ids;
     let side_digests = fixture.side_digests;
+    let repairs = fixture.repairs;
     let (reused_total, fetched_total, moved_total) =
         (fixture.reused, fixture.fetched, fixture.moved);
     let assembly_failures = fixture.failures;
@@ -356,6 +357,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         selection: &selection,
         diffs: &diffs,
         side_digests: &side_digests,
+        repairs: &repairs,
         written,
         no_chunk_blobs: plan.no_chunk_blobs,
     })?;

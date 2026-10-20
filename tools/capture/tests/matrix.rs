@@ -187,13 +187,22 @@ fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
     let rows = c.matrix();
     assert_eq!(rows.len(), 11, "one row per required class");
     for r in &rows {
-        // A fulfilled row has nothing to explain; an unfulfilled one must say why.
+        // An unfulfilled row must say why. A `covered_by` row says which
+        // capture covers it, so it carries a reason too — it is the *captured*
+        // row that has nothing to explain.
         let satisfied = matches!(r["status"].as_str(), Some("captured" | "covered_by"));
-        assert_eq!(
-            r["reason"].as_str().is_some_and(|s| !s.is_empty()),
-            !satisfied,
-            "{r}: a reason is required exactly when the class was not answered"
-        );
+        if !satisfied {
+            assert!(
+                r["reason"].as_str().is_some_and(|s| !s.is_empty()),
+                "{r}: a reason is required exactly when the class was not answered"
+            );
+        }
+        if r["status"] == "captured" {
+            assert!(
+                r["reason"].as_str().is_none_or(|s| s.is_empty()),
+                "{r}: a captured row has nothing to explain"
+            );
+        }
         assert!(
             r["status"].as_str().is_some_and(|s| {
                 matches!(s, "captured" | "covered_by" | "over_budget" | "unavailable")
@@ -223,7 +232,7 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
     let c = captured("greedy", World::five_classes(), &[]);
     let s = &c.summary;
     let admitted = s["captures_admitted"].parse::<u64>().expect("a count");
-    assert_eq!(admitted, 5, "five classes are satisfiable in this world");
+    assert_eq!(admitted, 8, "eight classes are satisfiable in this world");
 
     let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
     // The admission total is the sum of what the admitted captures cost, and a
@@ -268,7 +277,15 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 
     // The admission charge is at most the sum of every candidate, and at least
     // the cheapest one - the first thing a greedy loop admits.
-    let sum_all: u64 = costs.iter().sum();
+    //
+    // The sum covers the **one-sided** paths too, which the candidates
+    // document does not carry: an `added` path is charged its whole size and a
+    // `removed` path is charged the bytes it occupies, and neither has a
+    // `total_cost` to be summed.
+    let diff = c.diff();
+    let one_sided = diff["byte_counts"]["added"].as_u64().expect("a size")
+        + diff["byte_counts"]["removed"].as_u64().expect("a size");
+    let sum_all: u64 = costs.iter().sum::<u64>() + one_sided;
     assert!(
         bytes_admitted <= sum_all,
         "charged {bytes_admitted} but every candidate together costs {sum_all}"
@@ -292,17 +309,18 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// `unavailable` here would be claiming the world cannot supply the file when
 /// the truth is that this run would not pay for it.
 ///
-/// **The run ends `0`, not `3`.** A17 is about the matrix being *complete* —
-/// every class has a row and every row says what happened — and `over_budget`
-/// is a complete answer: "a candidate existed and this run's budget would not
-/// pay for it". The refusal is `--require-class`'s job, and the case below
+/// **Two budgets, two verdicts.**
+///
+/// A budget that refuses a capture the *coverage* does not depend on leaves the
+/// bundle covering the repair spec's decisions, and the run succeeds: the
+/// matrix is complete and honest about what the budget would not pay for.
+/// A budget that takes the coverage with it does not: the bundle no longer
+/// shows both trim outcomes, and the run **fails** and says so (A21). A
+/// narrower bundle is not a bundle this tool should hand over as trustworthy.
+///
+/// The refusal is `--require-class`'s job either way, and the case below
 /// asserts that too: a class the caller *named* and did not get is exit `4`,
 /// which is the failure the operator has to see.
-///
-/// That is a change to what a budgeted capture *means* to a caller, and it is
-/// worth being explicit that it is one: `--max-download-bytes` is a supported
-/// flag, and a caller who sets it too low now gets a bundle that says which
-/// class it could not afford rather than a failed run.
 ///
 /// The run's own numbers are still on stdout, because the capture summary is
 /// emitted *before* the failure's: a caller who set a budget it could not afford
@@ -310,7 +328,7 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// bundle records the matrix either way — it is written before the verdict.
 #[test]
 fn a_budget_turns_a_satisfiable_class_into_over_budget() {
-    // The budget is derived from a first, unlimited run rather than guessed: a
+    // The budgets are derived from a first, unlimited run rather than guessed: a
     // hard-coded number would silently stop testing anything the moment the
     // world's bytes changed, and "the budget happened to be larger than
     // everything" looks exactly like "the budget did nothing".
@@ -318,12 +336,19 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     let total = full.summary["capture_bytes_admitted"]
         .parse::<u64>()
         .expect("a size");
+    let costs = admitted_costs(&full.bundle);
+    // The dearest capture is the `removed` one, and a `removed` capture
+    // contributes nothing to the coverage — so a budget that refuses it leaves
+    // the bundle covering the spec's decisions.
+    let dearest = *costs.iter().max().expect("a cost");
+    let keeps_the_coverage = total - dearest;
     let half = (total / 2).max(1);
 
+    // ---- the budget that keeps the coverage ------------------------------
     let c = captured(
         "budget",
         World::five_classes(),
-        &["--max-download-bytes", &half.to_string()],
+        &["--max-download-bytes", &keeps_the_coverage.to_string()],
     );
     // The run **succeeds**: the matrix is complete and honest about what the
     // budget would not pay for.
@@ -337,16 +362,21 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // **And the run's own numbers survive.** This is the reason the capture
     // summary is printed before the failure's: a caller who set a budget it
     // could not afford wants to know what it did afford most precisely.
-    assert_eq!(c.summary["budget_limit"], half.to_string(), "the limit is recorded");
+    assert_eq!(
+        c.summary["budget_limit"],
+        keeps_the_coverage.to_string(),
+        "the limit is recorded"
+    );
     assert_eq!(c.summary["budget_unlimited"], "false");
     let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");
     assert!(
         over > 0,
-        "half of {total} refused nothing; the budget did not bind: {:?}",
+        "a budget of {keeps_the_coverage} out of {total} refused nothing; the \
+         budget did not bind: {:?}",
         c.summary
     );
     assert!(
-        c.summary["capture_bytes_admitted"].parse::<u64>().unwrap() <= half,
+        c.summary["capture_bytes_admitted"].parse::<u64>().unwrap() <= keeps_the_coverage,
         "and admission did not exceed it"
     );
     // The run's own record still calls itself a success: it is a record of what
@@ -386,7 +416,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     //
     // The class named is the one the budget actually refused, read out of the
     // matrix rather than guessed: a requirement for a class the run *did*
-    // afford is met, and the run would exit `0` — which is the whole point of
+    // afford is met, and the run would exit `0` - which is the whole point of
     // `--require-class` being about the classes the caller names.
     let refused = c
         .matrix()
@@ -410,7 +440,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         "--sophon-base".into(),
         mock.sophon_base(),
         "--max-download-bytes".into(),
-        half.to_string(),
+        keeps_the_coverage.to_string(),
         "--require-class".into(),
         refused.clone(),
     ];
@@ -425,7 +455,11 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         .filter(|l| l.starts_with("SUMMARY "))
         .find_map(|l| {
             let m = parse_summary(l);
-            if m.contains_key("exit_code") { Some(m) } else { None }
+            if m.contains_key("exit_code") {
+                Some(m)
+            } else {
+                None
+            }
         })
         .expect("a summary");
     assert_eq!(record["exit_code"], "4");
@@ -434,6 +468,43 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         detail.contains(&refused),
         "the refusal names the class: {detail}"
     );
+
+    // ---- the budget that takes the coverage with it ----------------------
+    //
+    // A bundle that no longer shows both trim outcomes is not a bundle this
+    // tool should hand over as trustworthy, and the run says which assertion
+    // says so.
+    let narrow = captured(
+        "budget-narrow",
+        World::five_classes(),
+        &["--max-download-bytes", &half.to_string()],
+    );
+    assert_eq!(
+        narrow.code, 3,
+        "a budget that takes the coverage with it is a failed run\n{}\n{}",
+        narrow.summary["exit_code"], narrow.failure["detail"]
+    );
+    assert!(
+        narrow.failure["detail"].contains("A21"),
+        "and the failure names the coverage assertion: {:?}",
+        narrow.failure["detail"]
+    );
+}
+
+/// The cost of each admitted capture, from the bundle's own matrix.
+///
+/// Read out of the artifact rather than hard-coded: the numbers move with the
+/// world, and a hard-coded one would silently stop testing anything the moment
+/// they did.
+fn admitted_costs(bundle: &std::path::Path) -> Vec<u64> {
+    let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("diff/matrix.json");
+    let doc: serde_json::Value = serde_json::from_slice(&raw).expect("diff/matrix.json");
+    doc["admitted"]
+        .as_array()
+        .expect("admitted[]")
+        .iter()
+        .map(|r| r["budget_cost"].as_u64().expect("budget_cost"))
+        .collect()
 }
 
 /// The diff the run computed, read back off disk, agrees with the rows.
@@ -451,8 +522,9 @@ fn the_diff_on_disk_matches_the_files_the_captures_name() {
     // The world publishes 4 files on the new side across both fields: three `game`
     // files plus the one `en-us` file, which is identical across the pair.
     assert_eq!(
-        common, 4,
-        "browser_assets, zero.blk, HoYoChannel.dll, vo_all"
+        common, 7,
+        "browser_assets, zero.blk, HoYoChannel.dll, vo_all, eager.blk, \
+         deferred.blk, grow.blk"
     );
     assert_eq!(added, 1, "libNew.dll");
     assert_eq!(removed, 1, "old.blk");

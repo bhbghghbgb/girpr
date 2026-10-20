@@ -468,9 +468,31 @@ Each row is `{id, assertion, subject, expected, actual, ok}`.
 | A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
 | A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
 | A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
+| A21 | the bundle covers both trim outcomes: at least one eager and at least one deferred |
+| A22 | the bundle covers both write directions: at least one ascending and at least one descending |
+| A23 | the bundle covers a file that grows: at least one capture with `growth_bytes > 0` |
 
-There are **twenty** ids: seventeen from this spec (A1–A17), A19 from a capture,
-and A18 and A20 from `verify` only.
+There are **twenty-three** ids: seventeen from this spec (A1–A17), A19 and the
+three coverage assertions (A21–A23) from a capture, and A18 and A20 from
+`verify` only.
+
+### A21, A22 and A23 — the coverage the class set exists to buy
+
+The three properties the new classes were built for are otherwise only held
+**by accident**: a bundle that happened to contain a file with a deferred trim
+would say nothing about the eager one, and a reader would have to take the class
+names on trust. The three assertions read the patchmaps' `repair` blocks —
+their `trim`, their `direction` and their `growth_bytes` — and say whether the
+bundle covers both trim outcomes, both write directions and a file that grows.
+
+**They are fatal in a capture and a finding in a `verify`,** and the difference
+is the point. A capture's contract is "a bundle that covers the repair spec's
+decisions", so a capture that does not cover them fails its own run and names
+the assertion. A bundle's *coverage* is a design property, not an integrity
+one: a narrow bundle (a tight `--max-download-bytes`) or a hand-built one is
+still internally consistent, so `verify` reports the shortfall as a **finding**
+and the bundle still verifies. `verify`'s job is to prove the bundle still says
+what it said — and "this bundle does not cover both trims" is a thing it said.
 
 **Which ids a `capture` records, and which fail the run.** `capture` records
 **A1–A17 and A19** — A18 and A20 are statements about the bundle rather than
@@ -526,11 +548,13 @@ dropped.
 
 ### What `verify` re-derives, and what it does not
 
-`gircap verify` re-derives **nine** of the twenty — A6, A7, A8, A11, A13, A16,
-A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15 or A19:
-those are statements about the API bodies, the manifests and the diff, and
-re-running them inside the bundle would be re-running the capture's own algorithm
-against the capture's own output, which can only ever agree.
+`gircap verify` re-derives **nine** of the twenty-three — A6, A7, A8, A11, A13,
+A16, A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15, A19
+or A21–A23: the first seven are statements about the API bodies, the manifests
+and the diff, and re-running them inside the bundle would be re-running the
+capture's own algorithm against the capture's own output, which can only ever
+agree; the last three are the bundle's **coverage**, which `verify` reports as
+a finding rather than as a failed check (see A21 above).
 
 The nine are split in two, and `SUMMARY` names both as `checks_derived=`:
 

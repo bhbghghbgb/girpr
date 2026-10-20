@@ -410,6 +410,34 @@ pub fn reverify(bundle: Bundle) -> Report {
         )
     });
 
+    // 4b. The bundle's **coverage**: whether it shows both trim outcomes, both
+    // write directions and a file that grows.
+    //
+    // A **finding**, not a failed check, and that is the whole distinction.
+    // The coverage is a design property of the bundle - it is what the class
+    // set was captured for - and a bundle that does not cover everything (a
+    // narrow one, or a hand-built one) is still internally consistent. The
+    // *capture* is where the coverage is a contract: a capture that does not
+    // cover the spec's decisions fails its own run (A21-A23 are fatal there).
+    // The verifier's job is to prove the bundle still says what it said, and
+    // "this bundle does not cover both trims" is a thing it said.
+    let repairs: Vec<crate::assemble::Repair> = bundle
+        .patchmaps
+        .values()
+        .filter_map(|m| m.repair)
+        .collect();
+    for row in crate::emit::selfcheck::coverage(&repairs) {
+        if !row.ok {
+            findings.push(format!("{}: {}", row.id, row.actual));
+            tracing::error!(
+                assertion = %row.id,
+                subject = %row.subject,
+                actual = %row.actual,
+                "the bundle does not cover the repair spec's decisions"
+            );
+        }
+    }
+
     // 5. The recording, last.
     let agrees = check_agreement(&bundle, &rows);
     Report {
