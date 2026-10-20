@@ -585,11 +585,27 @@ async fn attempt_inplace_inner(
     // The eager trim: when no reuse candidate reaches past the target's
     // end, the tail is dead weight and can be released before a single byte
     // is written.
-    if trim_is_free(file, entries) {
-        let have = handle.metadata().map(|m| m.len()).unwrap_or(0);
-        if have > file.size.max(0) as u64 {
+    //
+    // **The other half is logged too.** The trim's outcome is not in the
+    // output contract — the file ends at the target size either way, and the
+    // difference is the *peak* disk usage, which nothing reports. The log is
+    // the only place the outcome is visible, so both branches say which one
+    // they took.
+    let have = handle.metadata().map(|m| m.len()).unwrap_or(0);
+    if have > file.size.max(0) as u64 {
+        if trim_is_free(file, &file.chunks, &sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
             handle.set_len(file.size.max(0) as u64)?;
+        } else {
+            // The deferred trim: a reuse candidate reaches past the target's
+            // end, so the tail is not dead weight. The trim waits for the end
+            // and the file grows during the repair instead.
+            tracing::debug!(
+                before = have,
+                after = file.size,
+                "a reuse candidate reaches past the target's end: the trim is \
+                 deferred to the end (the file grows during the repair)"
+            );
         }
     }
 
@@ -935,15 +951,35 @@ fn clear_readonly(path: &std::path::Path) -> Result<()> {
 ///
 /// The tail past the manifest's size is dead weight, and releasing it before
 /// a single byte is written is the whole point of the eager trim. It is only
-/// free when no reuse candidate reaches past the end: an entry in the local
-/// reuse map past the target's end can only ever be a source, and a source
+/// free when no **reuse candidate** reaches past the target's end: a source
 /// the trim would delete is a source that is gone.
-fn trim_is_free(file: &PlannedFile, entries: &[(String, i64, i64)]) -> bool {
+///
+/// **The candidates are the plan's sources, not every entry in the local reuse
+/// map.** The map carries one entry per *distinct chunk identity* of the file,
+/// so an entry the repair never reads is in it too — and the map's last entry
+/// always ends at the old file's end, because the file's chunks tile it. With
+/// the map's rule the tail is therefore never dead weight: the eager trim
+/// could not fire for **any** file, and the branch was dead code.
+///
+/// The plan's sources are the map entries the repair actually reads — one per
+/// chunk, the first match for its identity — and a chunk with no candidate has
+/// none. That is the same set the salvage rule uses, and it is exactly what
+/// "no reuse candidate has `r + s > size`" says.
+///
+/// The test is still **conservative** where it matters: the sources are read
+/// from the file the trim shortens, so every one of them has to be inside the
+/// target's end, and a candidate that is not is a candidate the trim would
+/// destroy.
+fn trim_is_free(
+    file: &PlannedFile,
+    chunks: &[SophonChunk],
+    sources: &[Option<u64>],
+) -> bool {
     let size = file.size.max(0) as u64;
-    entries.iter().all(|(_, sz, off)| {
-        let off = (*off).max(0) as u64;
-        let sz = (*sz).max(0) as u64;
-        off.checked_add(sz).is_none_or(|end| end <= size)
+    chunks.iter().zip(sources).all(|(c, src)| {
+        let Some(r) = *src else { return true };
+        let s = c.uncompressed_size.max(0) as u64;
+        r.checked_add(s).is_none_or(|end| end <= size)
     })
 }
 
@@ -1320,5 +1356,45 @@ mod tests {
         s.mode = Mode::Temp;
         assert_eq!(s.mode, Mode::Temp);
         assert_ne!(Mode::Inplace, Mode::Temp);
+    }
+
+    /// The trim's test: no **reuse candidate** reaches past the target's end.
+    ///
+    /// The candidates are the plan's **sources** — one per chunk, the first
+    /// match for its identity — and not every entry in the local reuse map. The
+    /// map's last entry always ends at the old file's end, because the file's
+    /// chunks tile it, so with the map's rule the eager trim could never fire
+    /// for any file at all.
+    #[test]
+    fn the_trim_is_free_when_no_reuse_candidate_reaches_past_the_target() {
+        let chunk = |offset: i64, size: i64| SophonChunk {
+            id: format!("c{offset}"),
+            uncompressed_md5: format!("m{offset}"),
+            offset,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        };
+        let chunks = vec![chunk(0, 10), chunk(10, 10)];
+        let file = PlannedFile {
+            rel: "f.bin".into(),
+            size: 20,
+            md5: "m".into(),
+            chunks: chunks.clone(),
+        };
+
+        // Both candidates inside the target's end: the tail is dead weight.
+        assert!(trim_is_free(&file, &chunks, &[Some(0), Some(10)]));
+        // The second one reaches past it: the tail is not dead weight.
+        assert!(!trim_is_free(&file, &chunks, &[Some(0), Some(15)]));
+        // A chunk with no candidate at all: nothing to lose.
+        assert!(trim_is_free(&file, &chunks, &[None, Some(10)]));
+        // The test is against the **target's** end, so a bigger target frees it.
+        let bigger = PlannedFile {
+            size: 40,
+            ..file.clone()
+        };
+        assert!(trim_is_free(&bigger, &chunks, &[Some(0), Some(30)]));
     }
 }
