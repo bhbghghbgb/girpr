@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 
 use crate::Biz;
-use crate::config::RunCtx;
+use crate::config::{RepairMode, RunCtx};
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
@@ -90,6 +90,31 @@ pub struct Args {
     /// success is decided per chunk at runtime.
     #[arg(long, value_name = "N")]
     pub max_write_bytes: Option<u64>,
+
+    /// Cap the RAM the in-place repair may use to stage the bytes it has to
+    /// move inside a file. A file that cannot get its reservation is written
+    /// in the other direction instead of failing — the same file, with less
+    /// reuse. `0` forces that path.
+    #[arg(long, value_name = "N")]
+    pub max_ram_bytes: Option<u64>,
+
+    /// How each file is repaired.
+    /// `auto` (the default) repairs in place when the target can be opened
+    /// for writing, and writes it the `temp` way when it cannot; `inplace`
+    /// forces the in-place path; `temp` assembles the repair in `{path}_tmp`
+    /// and renames it over the target — **the target file is never modified**
+    /// and the swap is atomic, at the cost of the whole file existing twice;
+    /// `discard` deletes the target and writes it from scratch.
+    #[arg(long, value_enum)]
+    pub repair_mode: Option<RepairMode>,
+
+    /// Read the whole install once, in the plan phase, and report the
+    /// **exact** figures: the bytes the repair will really download, the
+    /// chunks that are damaged, and the bytes the scan read. Costs a full
+    /// read of every planned file, and makes a ceiling refusal slower (the
+    /// estimate a ceiling is checked against is only exact after the scan).
+    #[arg(long, default_value_t = false)]
+    pub scan: bool,
 
     /// Only verify (size+md5) and report; writes nothing
     #[arg(long, default_value_t = false)]
@@ -188,9 +213,16 @@ impl Args {
                 delete_bytes: self.max_delete_bytes,
                 download_bytes: self.max_download_bytes,
                 write_bytes: self.max_write_bytes,
+                ram_bytes: self.max_ram_bytes,
             },
+            repair_mode: self.repair_mode.unwrap_or_default(),
+            // The flag's *presence* is what the `SUMMARY repair_mode=` key
+            // reports, so it is tracked next to the value: an unflagged run
+            // must not grow a key.
+            repair_mode_explicit: self.repair_mode.is_some(),
             jobs: self.io_threads,
             check_only: self.check_only,
+            scan: self.scan,
             purge_only: self.purge_only,
             fail_fast: self.fail_fast,
             dry_run: self.dry_run,
@@ -332,5 +364,77 @@ mod tests {
         assert!(!ctx.audio_explicit);
         assert!(ctx.audio.is_empty());
         assert_eq!(ctx.jobs, 4);
+    }
+
+    #[test]
+    fn the_repair_mode_defaults_to_auto_and_is_not_reported_as_asked_for() {
+        // The default is `auto`, and the *absence* of the flag is tracked
+        // separately: the `SUMMARY repair_mode=` key is emitted only when
+        // the flag was passed.
+        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
+        let ctx = args.into_ctx().unwrap();
+        assert_eq!(ctx.repair_mode, RepairMode::Auto);
+        assert!(!ctx.repair_mode_explicit);
+    }
+
+    #[test]
+    fn every_repair_mode_is_carried_and_marked_explicit() {
+        for (flag, want) in [
+            ("auto", RepairMode::Auto),
+            ("inplace", RepairMode::Inplace),
+            ("temp", RepairMode::Temp),
+            ("discard", RepairMode::Discard),
+        ] {
+            let args = Args::parse_from([
+                "girpr",
+                "--game-path",
+                ".",
+                "--biz",
+                "hk4e_global",
+                "--repair-mode",
+                flag,
+            ]);
+            let ctx = args.into_ctx().unwrap();
+            assert_eq!(ctx.repair_mode, want, "{flag}");
+            assert!(ctx.repair_mode_explicit, "{flag}");
+            assert_eq!(ctx.repair_mode.as_str(), flag);
+        }
+    }
+
+    #[test]
+    fn an_unknown_repair_mode_is_rejected_by_the_parser() {
+        assert!(
+            Args::try_parse_from([
+                "girpr",
+                "--game-path",
+                ".",
+                "--biz",
+                "hk4e_global",
+                "--repair-mode",
+                "sideways",
+            ])
+            .is_err(),
+            "an unknown mode is an argument-level failure"
+        );
+    }
+
+    #[test]
+    fn the_ram_budget_is_none_unless_it_was_asked_for() {
+        let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
+        let ctx = args.into_ctx().unwrap();
+        assert_eq!(ctx.ram_budget(), None);
+
+        let args = Args::parse_from([
+            "girpr",
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--max-ram-bytes",
+            "1048576",
+        ]);
+        let ctx = args.into_ctx().unwrap();
+        assert_eq!(ctx.ram_budget(), Some(1_048_576));
+        assert!(ctx.limits.is_active());
     }
 }

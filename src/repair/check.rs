@@ -16,32 +16,59 @@ use crate::report::{self, Summary};
 use crate::util;
 
 use super::plan::RepairPlan;
+use super::scan::ScanReport;
 
 /// Verify the whole plan; returns the number of damaged files.
+///
+/// When the run carried a `--scan`, the scan's verdicts are used instead of
+/// reading the files again: the scan already read them, and the answer it
+/// carries is the same one. That is what makes `--check-only --scan` a
+/// single read of the install.
 pub fn verify_plan(
     game_dir: &Path,
     plan: &RepairPlan,
     summary: &Summary,
     output: report::OutputFormat,
+    scan: Option<&ScanReport>,
 ) -> u64 {
     let mut bad = 0u64;
+    let mut damaged_chunks = 0u64;
     let mut last_emit = std::time::Instant::now();
     for (i, f) in plan.files.iter().enumerate() {
-        let p = game_dir.join(util::normalize_rel(&f.rel));
-        let actual_len = util::file_len(&p);
-        if actual_len != Some(f.size as u64) {
-            bad += 1;
-            tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
-        } else {
-            match util::md5_file(&p) {
-                Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
-                Ok(h) => {
+        match scan.and_then(|s| s.files.get(&f.rel)) {
+            Some(v) => {
+                if v.file_md5.eq_ignore_ascii_case(&f.md5) {
+                    // intact
+                } else {
                     bad += 1;
-                    tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
+                    damaged_chunks += v.damaged_chunks();
+                    tracing::warn!(
+                        file = %f.rel,
+                        expect_md5 = %f.md5,
+                        actual_md5 = %v.file_md5,
+                        damaged_chunks = v.damaged_chunks(),
+                        "CHECK fail: md5"
+                    );
                 }
-                Err(e) => {
+            }
+            None => {
+                let p = game_dir.join(util::normalize_rel(&f.rel));
+                let actual_len = util::file_len(&p);
+                if actual_len != Some(f.size as u64) {
                     bad += 1;
-                    tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
+                    tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
+                } else {
+                    match util::md5_file(&p) {
+                        Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
+                        Ok(h) => {
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
+                        }
+                        Err(e) => {
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
+                        }
+                    }
                 }
             }
         }
@@ -55,6 +82,11 @@ pub fn verify_plan(
             last_emit = std::time::Instant::now();
         }
     }
-    tracing::info!("check-only: total={} bad={}", plan.files.len(), bad);
+    tracing::info!(
+        "check-only: total={} bad={} damaged_chunks={}",
+        plan.files.len(),
+        bad,
+        damaged_chunks
+    );
     bad
 }

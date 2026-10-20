@@ -41,10 +41,13 @@
 mod audio;
 mod check;
 mod file;
+pub mod lock;
 mod manifest;
 mod metadata;
 mod plan;
 mod post;
+pub mod reuse;
+pub mod scan;
 pub mod scope;
 
 pub use metadata::Meta;
@@ -222,6 +225,22 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         Vec::new()
     };
 
+    // The scan, when it was asked for. It reads every planned file once and
+    // turns the plan's estimates from upper bounds into figures.
+    let scan = if ctx.scan {
+        Some(
+            scan::scan_plan(
+                &game_dir,
+                Arc::clone(&plan),
+                Arc::new(local_map.clone()),
+                ctx.jobs,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     // === assert: the ceilings, before anything is mutated ===
     //
     // Filter → assert → work, in that order. Checking the ceilings
@@ -235,10 +254,25 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // promise**: `try_reuse_slice` falls back to a download whenever a local
     // slice fails its MD5, so a file estimated at 0 bytes can still download its
     // whole body. That is why the runtime hard stop exists alongside this.
-    let est_download_bytes = plan.est_download_bytes(&local_map);
+    //
+    // Under `--scan` the estimate is the **exact** figure for the in-place
+    // path: the chunks that are wrong where they belong and have no intact
+    // source to copy from. The temp path's figure is the one above (it
+    // writes every chunk of a file it repairs), so the two modes are
+    // estimated by their own rules.
+    let est_download_bytes = match (&scan, ctx.repair_mode) {
+        // The temp path writes every chunk of a file it repairs, so its
+        // figure is the reuse map's one.
+        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes(&local_map),
+        (Some(s), _) => s.est_download_bytes(&plan),
+        (None, _) => plan.est_download_bytes(&local_map),
+    };
     if ctx.limits.download_bytes.is_some() {
         tracing::info!("estimated download: {est_download_bytes} bytes");
         summary.flags.plan_download_bytes = Some(est_download_bytes);
+    }
+    if let Some(s) = &scan {
+        summary.flags.damaged_chunks = Some(s.damaged_chunks);
     }
     summary.files_total = plan.files.len() as u64;
     summary.flags.limited = ctx.limits.is_active();
@@ -267,18 +301,24 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
     if ctx.print_plan {
+        // The disk figures: one `stat` per planned file, and the same
+        // resolution table the repair uses — so the plan and the repair
+        // cannot disagree about which path a file takes.
+        let disk = scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs);
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
+            &disk,
+            scan.as_ref().map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
         if let Some(out) = ctx.plan_out.as_deref() {
             let doc =
-                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes);
+                scope::report::PlanDocument::new(&plan, purge_plan.as_ref(), est_download_bytes, &disk);
             doc.write_to(std::path::Path::new(out))
                 .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
         }
@@ -298,6 +338,24 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
 
+    // The single-writer lock. Two runs against one install can write
+    // conflicting bytes into the same file, so a run that mutates the
+    // install takes the lock — and only such a run, and only when the
+    // path scope admits the lock file (the same rule `config.ini` lives
+    // under: a path outside the scope does not exist to the run).
+    let _lock = if !readonly
+        && !ctx.check_only
+        && !ctx.print_plan
+        && scope.is_visible(lock::LOCK_FILE)
+    {
+        let lock = lock::Lock::acquire(&game_dir)
+            .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+        tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+        Some(lock)
+    } else {
+        None
+    };
+
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`
     // (verification reports damage; it must not delete). In `--dry-run` it runs
@@ -316,7 +374,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output);
+        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
@@ -338,7 +396,13 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_ram_limit(ctx.limits.ram_bytes);
     summary.set_fail_fast(ctx.fail_fast);
+    tracing::info!(
+        mode = ctx.repair_mode.as_str(),
+        ram_budget = ?ctx.ram_budget(),
+        "repair mode"
+    );
     summary = file::repair_all(
         http,
         game_dir.clone(),
@@ -348,15 +412,30 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.jobs,
         ctx.dry_run,
         ctx.output,
+        ctx.repair_mode,
     )
     .await;
     if ctx.limits.write_bytes.is_some() {
         summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
     }
+    // The repair-mode group: what was asked for, what happened, and how many
+    // bytes did not have to be written. Emitted only when the flag was
+    // passed, so an unflagged run's `SUMMARY` stays byte-identical.
+    if ctx.repair_mode_explicit {
+        summary.flags.repair_mode = Some(ctx.repair_mode.as_str());
+        summary.flags.files_inplace = Some(summary.files_inplace.load(Ordering::Relaxed));
+        summary.flags.files_temp = Some(summary.files_temp.load(Ordering::Relaxed));
+        summary.flags.kept_bytes = Some(summary.kept_bytes.load(Ordering::Relaxed));
+    }
+    // The peak staged payload, when a RAM budget was asked for.
+    if ctx.limits.ram_bytes.is_some() {
+        summary.flags.ram_bytes = Some(summary.ram_bytes.load(Ordering::Relaxed));
+    }
     // A runtime hard stop is the one place the run writes *some* of what it was
-    // asked to do and then stops. It leaves `*_tmp` behind — safe, because S3
-    // resume-by-length makes the next run resume rather than restart — but it is
-    // state, so `SUMMARY` says so rather than leaving it to be discovered.
+    // asked to do and then stops. It leaves the work it had done in place —
+    // the temp path's `_tmp` is resumed by length, the in-place path's
+    // correct chunks stay correct — but it is state, so `SUMMARY` says so
+    // rather than leaving it to be discovered.
     if summary.download_stopped() {
         tracing::error!(
             "stopped after {} downloaded bytes: --max-download-bytes is a hard stop; \

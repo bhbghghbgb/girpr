@@ -106,6 +106,10 @@ Starward (`GameInstallHelper.cs`, `GameInstallService.cs:ClearDeprecatedFiles` L
 
 Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall.cs:GetUnusedFileInfoList`):
 - Quota gate `EnsureDiskSpaceSufficiencyAsync` (volume free space + dialog) — UI-oriented, skip for CLI.
+- **Writes in place for its plain-HTTP repair path** (`DownloadClient.cs:234-241` opens the final
+  path directly, and `ChunkSession.cs:71-100` deletes before writing when `overwrite` is on — the
+  default, `ProgressBase.cs:1309`). "Write the broken file where it lies" is therefore a
+  shipped launcher behaviour, not an invention: the chunk path below is the one that stages.
 - Temps: `*_tempSophon`, `*_tempUpdate`, `*.temp`, plus retained `GamePath/chunk_collapse/` (preload
   compressed blobs + `.verified` + `preload.verified` flag) and `GamePath/ldiff/` (patch blobs),
   plus `%LocalLow%/_sophonMetadataCache/` manifests. Preload phase downloads compressed blobs **before**
@@ -153,11 +157,14 @@ Reasons:
    verification; corrupt/unknown-version files converge by re-fetching full chunks). It never requires an
    intact source file, unlike hdiff/patch paths which both launchers only use for *update* with fallback.
    Collapse's repair is equally capable but wrapped in version gating + dispatcher/persistent overhead.
-2. Lowest disk usage during patching: per-file `<file>_tmp` streaming (resume by length) + local-chunk
-   slice reuse (verified) + final atomic move; no retained `chunk_collapse/` preload store, no `ldiff/`
-   store, no manifest cache inside the game dir, no multi-GB zip staging. Peak ≈ largest single file
-   ×2 transient, processed with bounded file parallelism (HDD-safe). Collapse's preload-then-apply and
-   patch-blob retention use strictly more transient space.
+2. Lowest disk usage during patching: write the broken file **where it lies** — only the bytes
+   that are wrong, at the offsets they belong at — plus local-chunk slice reuse (verified) and
+   a whole-file MD5 gate; no retained `chunk_collapse/` preload store, no `ldiff/` store, no
+   manifest cache inside the game dir, no multi-GB zip staging, and no per-file `_tmp` beside
+   the file being repaired. Peak transient is the file's *growth*, not its size, and the
+   chunk path's `*_tmp` staging is available as a mode for an install that wants the target
+   left untouched. Collapse's preload-then-apply and patch-blob retention use strictly more
+   transient space.
 3. Smallest implementation: HoYoPlay `getGameBranches` → `getBuild(latest)` [+ `getBuild(local)` for
    dedup] → manifest download/verify/parse → per-file repair → **Starward-handling post-phase**
    (`getGameDeprecatedFileConfigs` delete + audio cache→res move + `config.ini` bump).

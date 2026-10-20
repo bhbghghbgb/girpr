@@ -4,15 +4,16 @@ Brings a possibly-corrupt, possibly-any-older-version Genshin install to the
 current live version with minimal extra disk. **Unattended by design:**
 args in, exit code + `REPORT`/`SUMMARY` stdout lines out, no UI.
 
-Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
-`{path}_tmp` streaming repair, verified local-chunk reuse, atomic promote)
-**+ Collapse's extra-file purge** as a pre/post phase.
-**Docs are two series.** The `repair-` prefix is load-bearing:
+Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file repair that
+writes only the bytes that are wrong, verified local-chunk reuse, a whole-file MD5
+gate) **+ Collapse's extra-file purge** as a pre/post phase.
+**Docs are several series.** The `repair-` prefix is load-bearing:
 
 | series | docs | describes |
 |---|---|---|
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
 | **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
+| **artifact bridge** (shipped) | [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md) | the `#[ignore]`d end-to-end test against a real bundle |
 
 The repair-spec series describes the whole-install patcher and is unaffected by
 the scope-limitations tier: a flag list and a byte ceiling are not a change to
@@ -41,10 +42,13 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile` |
+| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
 | `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file.rs` | per-file repair: reuse vs download, promote (6) | `repair_all`, `ChunkStats`, `Repaired` |
+| `src/repair/file.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
+| `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
+| `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
+| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire`, `LOCK_FILE` |
 | `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
@@ -52,7 +56,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `reserve_write_bytes`, `adjust_download_bytes`, `stop_downloads`, `stop_writes`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
-| `src/util.rs` | MD5, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
+| `src/util.rs` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `scan_file`, `scan_reader`, `read_range`, `Scan`, `ScanRange`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + deterministic fixture | `MockServer`, `build_fixture`, `MockOpts` |
@@ -74,6 +78,8 @@ flowchart TD
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
     E2 -->|"--print-plan"| P["emit PLAN … (+ --plan-out JSON)<br/>exit 0, writes nothing"]
+    E -->|"--scan"| SCAN["scan::scan_plan: one read per planned file<br/>exact download estimate + damaged chunks"]
+    SCAN --> E2
     F -->|yes, not check-only| G["purge::plan_purge → apply_purge<br/>count → deleted_extra_bytes"]
     F -->|no| H{"check-only?"}
     G --> H
@@ -82,13 +88,20 @@ flowchart TD
     J -->|yes| MP["post::run, no repair loop<br/>cleanup + post-phase<br/>exit 0, config.ini not bumped"]
     J -->|no| J2["file::repair_all: ≤jobs files in parallel<br/>chunks sequential per file"]
     subgraph perfile ["per file"]
-        J1["skip if size+MD5 match"] --> J2a["reuse verified local slice (S2)<br/>else resume _tmp prefix by length (S3)<br/>else download chunk → zstd → MD5 → write at offset"]
-        J2a --> J3["final whole-file MD5 gates<br/>rename _tmp → final (atomic)"]
-        J3 -->|mismatch after 5 tries| J4["count failed, continue"]
+        J1["scan: ONE read → whole-file MD5,<br/>which chunks are already correct,<br/>which reuse sources are intact"] --> J1b{"size+MD5 match?"}
+        J1b -->|yes| J9["skip (counted as verified)"]
+        J1b -->|no| J2a["stage the bytes that must MOVE inside the file<br/>(RAM tier) — else pick the salvage order"]
+        J2a --> J3["write only the WRONG chunks:<br/>staged copy, or download → zstd → MD5 → write at offset"]
+        J3 --> J5["final whole-file MD5 gates"]
+        J5 -->|mismatch| J5b["redo only the chunks the verdicts name"]
+        J5b --> J5
+        J5 -->|ok| J3b["in place: done, no _tmp<br/>temp: rename _tmp → final"]
+        J5 -->|mismatch after 5 tries| J4["count failed, continue"]
+        J2a -->|"the target cannot be opened"| J2b["write it the temp way<br/>(the target is never modified)"]
     end
     J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
-    J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=bytes\|write<br/>exit 5, *_tmp left for the next run"]
+    J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=bytes\|write<br/>exit 5, the next run re-verifies"]
     K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
     M -->|"delete ceiling hit"| X6["SUMMARY stopped=delete<br/>exit 5, that pass deleted nothing"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
@@ -109,6 +122,11 @@ flowchart TD
   emitted when a local `config.ini` version was known and `getBuild(local)` was
   attempted, because that lookup is the one thing that moves both byte counts
   while still exiting `0` — see below. Absent on a fresh install.
+  The repair-mode group (`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`) is
+  emitted only when `--repair-mode` was passed; `ram_bytes=` (the peak staged
+  payload) only when `--max-ram-bytes` was; `damaged_chunks=` only when
+  `--scan` was. `kept_bytes` is the disk claim in one number: the bytes that
+  were already correct and did not have to be written.
 - **The binary cannot report which chunks were requested.** `SUMMARY` is
   byte-level by design. Per-chunk request detail exists only as `trace` lines in
   `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never
@@ -130,15 +148,18 @@ flowchart TD
   work list; under `--include` they are a *check on* the selection, which is why
   the two flags are not redundant. `--max-files N` with exactly N planned files
   passes (`> N`, not `>= N`). One exception to "nothing is written": a
-  **runtime** hard stop, which fires mid-flight by definition. It leaves `*_tmp`
-  files behind — safe, because resume-by-length makes the next run resume rather
-  than restart — and `SUMMARY stopped=` says which ceiling bound and that it
-  happened at all: `stopped=bytes` (`--max-download-bytes`), `stopped=write`
-  (`--max-write-bytes`), `stopped=delete` (a cleanup pass refused). That key is
+  **runtime** hard stop, which fires mid-flight by definition. It leaves the work
+  it had already done in place — under `--repair-mode temp` that is a `*_tmp`
+  file, and resume-by-length makes the next run resume rather than restart; in
+  place, the chunks that were already correct stay correct and the next run
+  re-verifies and continues — and `SUMMARY stopped=` says which ceiling bound and
+  that it happened at all: `stopped=bytes` (`--max-download-bytes`),
+  `stopped=write` (`--max-write-bytes`), `stopped=delete` (a cleanup pass
+  refused). That key is
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
-  promoted**. An attempt that fails and is retried hands its
+  repaired**. An attempt that fails and is retried hands its
   bytes back, so a run that had to retry does not report what the network cost
   the retries. The counter is nevertheless live during the repair, which is what
   `--max-download-bytes` needs to stop mid-flight.
@@ -149,11 +170,13 @@ flowchart TD
   `download_bytes` will be far above what a run with reuse available costs, and
   a `--max-download-bytes` ceiling is measured against the same empty map, so it
   moves. Check this key before comparing byte totals.
-- exit codes: `0` ok (check-only: intact) · `1` usage/config · `2` metadata/network ·
+- exit codes: `0` ok (check-only: intact) · `1` usage/config (including a
+  refusal because another `girpr` run holds the lock) · `2` metadata/network ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
   exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
-  part of the work and leaves `*_tmp` behind (`SUMMARY stopped=…`). Either way
+  part of the work, and the next run re-verifies and continues (`SUMMARY
+  stopped=…`). Either way
   `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
@@ -180,24 +203,39 @@ flowchart TD
   `--print-plan`. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `plan::purge::plan_purge` decides, `plan::purge::apply_purge` acts —
-  (expected set = live-manifest paths + `config.ini` + `audio_lang_*`/`Audio_*_pkg_version`
-  patterns; **everything else purges**, incl. temps, exe, logs, `ScreenShot/`).
-  The whole plan is built before the first delete.
+  (expected set = live-manifest paths + `config.ini` + the single-writer lock
+  + `audio_lang_*`/`Audio_*_pkg_version` patterns; **everything else purges**,
+  incl. temps, exe, logs, `ScreenShot/`). The whole plan is built before the
+  first delete.
+- single-writer lock: a run that mutates the install takes `{game_dir}/girpr.lock`
+  (`create_new`, so the creation *is* the exclusion). A live lock refuses the
+  second run with **exit `1`**, naming the file and the pid; a lock older than
+  24 h is taken over. A read-only run (`--check-only`, `--dry-run`,
+  `--print-plan`) never takes it, and a **scoped** run does not either — the
+  lock's path is outside the scope, so it does not exist to the run.
 - audio: omitted flag = keep scan file (default `en-us` if unreadable); explicit list/`none`
   overwrites the scan file. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
 S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chunk reuse
-(`repair/file.rs`, `sophon::build_local_chunk_map`) · S3 resume-by-length + final-MD5 gate
-(`repair/file.rs`). Purge keep-set is `config.ini`-only (`plan::purge::keep_set`).
-Version parse is last-match-wins (`util::read_game_version`, Starward parity).
+(`repair/file.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
+single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
+(`util::read_game_version`, Starward parity).
+
+**Resume.** The two write modes resume differently, and each in the way that suits it:
+the in-place path resumes by **verification** — the scan finds the chunks that are already
+correct where they belong, and the next run rewrites only the rest, which cannot inherit a
+corrupt prefix and needs no artefact at all; the temp mode resumes by **length**, keeping
+the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
 - Rust 1.85+ (the crate is `edition = "2024"`); network to HoYoPlay + Sophon
   CDNs (production runs only).
-- Game dir (read/write); free bytes ≈ `io_threads × largest file` beyond the game.
+- Game dir (read/write); free bytes ≈ `io_threads × largest file` **growth**
+  beyond the game (0 for a same-size repair — the in-place path writes only
+  the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
 ```powershell
 cargo build --release
@@ -220,13 +258,16 @@ cargo build --release
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
 | `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=delete`); out-of-scope paths are never candidates |
-| `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. Does **not** bound metadata or manifest traffic |
-| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into `*_tmp`. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees |
+| `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. The estimate is an **upper bound** without `--scan` (it counts every chunk the local reuse map cannot supply, while the in-place path keeps the ones that are already correct); with `--scan` it is the figure the repair will really spend. Does **not** bound metadata or manifest traffic |
+| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong |
+| `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
+| `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
+| `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
 | `--check-only` | off | Verify size+MD5; writes nothing |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
 | `--dry-run` | off | Log actions; writes nothing |
-| `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
+| `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | `error`/`warn`/`info`/`debug`/`trace` (`RUST_LOG` also honored) |
@@ -241,7 +282,7 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 82 unit + 59 integration, all offline
+cargo test            # 136 unit + 73 integration, all offline
 cargo test --test repair_offline
 cargo clippy --all-targets
 
@@ -292,11 +333,21 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
     outside the scope touched on disk, and `local_manifest` did not come back
     `unavailable` (a run with no local manifest still exits `0`, downloads
     everything, and is the failure mode byte counts alone will not catch).
+  - **And it drives every repair capture twice** — once with `--repair-mode
+    temp`, once with the default — and asserts the two runs produce the
+    **same file** while the in-place one writes **strictly fewer** bytes.
+    That is the space claim asserted against real game bytes: the offline
+    fixture is 128 bytes, too small to tell "wrote 128" from "wrote 64". On
+    the reference bundle the in-place run writes 714 KB where the temp path
+    writes 2.3 MB, and 199 KB where the temp path writes 10.9 MB.
 - Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.
-- Fixture: 2 files / 3 chunks with fixed bytes (`build_fixture`); chunk fetches are
-  logged (`mock.chunk_hits()`) so reuse/resume tests assert exact download sets.
+- Fixture: 2 files / 3 chunks with fixed bytes (`build_fixture`), plus a
+  **moved** fixture (`build_moved_fixture`) whose old file has a different
+  chunk layout from the new one — the case where the bytes have to move
+  *inside* the file. Chunk fetches are logged (`mock.chunk_hits()`) so
+  reuse/resume tests assert exact download sets.
 - Unit tests sit next to the code they cover, one `mod tests` per module: pure
   phases only (plan, purge classification, audio scan file, `config.ini`, URL and
   query building, REPORT/SUMMARY formatting, flag validation, manifest filter,
@@ -309,15 +360,34 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 
 ## How it keeps disk usage low
 
-1. Files-cleanup (`--purge-before`/`--purge-after`): delete everything not in the live manifest.
-2. Skip intact files (size + full MD5): 0 bytes for healthy files.
-3. Chunk-level repair: only missing/corrupt chunks fetched; unchanged chunks copied from
-   verified local slices (hash-gated, network fallback).
-4. Per-file temp + atomic move: transient cost is one `_tmp` beside the file — no
-   game duplicate, no blob store, no zip staging.
-5. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
+1. **In-place repair (the default).** A repair writes only the bytes that are wrong, at the
+   offsets they belong at, into the file itself. The peak extra disk is the file's
+   **growth**, not its size — so a same-size repair of a 2 GB file needs **0** extra bytes.
+2. Files-cleanup (`--purge-before`/`--purge-after`): delete everything not in the live manifest.
+3. Skip intact files (size + full MD5): 0 bytes for healthy files.
+4. Chunk-level repair: only missing/corrupt chunks fetched; unchanged chunks kept in place, or
+   copied from a verified local slice (hash-gated, network fallback).
+5. **Resume by verification**: an interrupted run leaves a file that fails the same check, and
+   the next run finds the chunks that are already right and rewrites only the rest. No
+   `_tmp` artefact, no blob store, no zip staging.
+6. Post-phase: deprecated files, audio cache→res move, optional purge, `config.ini` bump.
+
+**Two ways to write a file — two ways to spend disk, and each with a property of its own:**
+
+| mode | how the file is written | peak extra disk | the property it gives you |
+|---|---|---|---|
+| `inplace` (default) | the wrong bytes are written into the file, at the offsets they belong at | the file's **growth** (0 for a same-size repair) | the least disk and the least writing, and a rerun that re-verifies and continues |
+| `temp` (`--repair-mode temp`) | the repair is assembled in `{path}_tmp` and swapped over the target with an atomic rename | the whole file | **the target file is never modified** — a repair that fails leaves it exactly as it was, and the swap is atomic |
+| `discard` (`--repair-mode discard`) | the target is deleted and written from scratch | 0 | a file with nothing reusable in it, written without asking the network twice |
+
+The whole-file MD5 is the gate in every mode, `config.ini` advances only when every planned
+file verified, and `--scan` reports the exact figures before any of it starts. The two modes
+also resume differently, and each in the way that suits it: the in-place path finds the
+chunks that are already right and rewrites only the rest, so it has no artefact to resume
+from and cannot inherit a corrupt prefix; the temp mode keeps the completed `*_tmp` prefix
+and continues it.
 
 v1 gap: expected set = latest Sophon manifest paths only (no dispatcher union, no
 SDK/WPF/plugin zips — game launches without them). Chunk-repair only: no hdiff,
 no 7z legacy path, no predownload, no speed limiter. Reruns are idempotent
-(intact skipped, partial `_tmp` resumed by length, final MD5 re-verified).
+(intact skipped, partial files finished by verification, final MD5 re-verified).

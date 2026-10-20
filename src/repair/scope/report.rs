@@ -19,13 +19,102 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
 use serde::Serialize;
 
+use crate::config::RepairMode;
+use crate::repair::file::{Mode, resolve_mode};
 use crate::repair::plan::{PurgePlan, RepairPlan};
 use crate::report::Record;
+use crate::util;
+
+/// How one planned file would be written, and what it costs in disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileDisk {
+    /// `inplace` or `temp`.
+    pub mode: &'static str,
+    /// The extra disk this file needs beyond the install.
+    pub extra_bytes: u64,
+}
+
+/// The disk figures behind the `PLAN` line and the `--plan-out` document.
+///
+/// Two numbers and a per-file table:
+///
+/// - `est_write_bytes` — the bytes a repair of the whole plan writes into
+///   the install. An **upper bound**: the in-place path writes only the
+///   wrong chunks, and which chunks those are is known only by reading the
+///   files (that is what `--scan` is for). For the temp path it is exact.
+/// - `est_extra_bytes` — the free space the run needs **beyond** the
+///   install: the peak extra disk of a single file, times the number of
+///   files in flight. Zero for a same-size in-place repair; `jobs × largest
+///   file` for the temp path.
+///
+/// The per-file table is what the two modes really differ on, and it is what
+/// the `--plan-out` document carries.
+#[derive(Debug, Clone, Default)]
+pub struct DiskPlan {
+    /// The bytes a repair of the whole plan writes into the install.
+    pub est_write_bytes: u64,
+    /// The free space the run needs beyond the install.
+    pub est_extra_bytes: u64,
+    per_file: HashMap<String, FileDisk>,
+}
+
+impl DiskPlan {
+    /// The disk figures for a plan, against what is on disk.
+    ///
+    /// One `stat` per planned file: the on-disk length is what turns "the
+    /// file is this big" into "the file has to *grow* by this much", which is
+    /// the whole difference between the two modes.
+    pub fn new(game_dir: &Path, plan: &RepairPlan, requested: RepairMode, jobs: usize) -> Self {
+        let mut out = DiskPlan::default();
+        let mut peak = 0u64;
+        for f in &plan.files {
+            let path = game_dir.join(util::normalize_rel(&f.rel));
+            let on_disk = std::fs::metadata(&path).ok().map(|m| m.len());
+            let size = f.size.max(0) as u64;
+            let (mode, extra) = match resolve_mode(requested, &path) {
+                // The temp path duplicates the whole file: the target and the
+                // temp exist side by side for as long as the repair takes.
+                Mode::Temp => (Mode::Temp, size),
+                // The in-place path only needs the file's *growth*; a file
+                // that is already the right size needs nothing at all.
+                Mode::Inplace => (
+                    Mode::Inplace,
+                    size.saturating_sub(on_disk.unwrap_or(0)),
+                ),
+            };
+            out.est_write_bytes += size;
+            peak = peak.max(extra);
+            out.per_file.insert(
+                f.rel.clone(),
+                FileDisk {
+                    mode: match mode {
+                        Mode::Inplace => "inplace",
+                        Mode::Temp => "temp",
+                    },
+                    extra_bytes: extra,
+                },
+            );
+        }
+        // The peak is per file, and `jobs` files are in flight at once.
+        out.est_extra_bytes = peak.saturating_mul(jobs.max(1) as u64);
+        out
+    }
+
+    /// The figures for one file. A file the plan does not know about has no
+    /// figures — the plan is the only input.
+    pub fn for_file(&self, rel: &str) -> FileDisk {
+        self.per_file.get(rel).copied().unwrap_or(FileDisk {
+            mode: "inplace",
+            extra_bytes: 0,
+        })
+    }
+}
 
 /// The aggregated numbers behind the `PLAN` line, and behind `PLAN` in JSON
 /// mode. Computed from the two finished plans; no I/O.
@@ -36,6 +125,20 @@ pub struct PlanTotals {
     pub purge_bytes: u64,
     pub max_chunk_bytes: u64,
     pub scoped: bool,
+    /// The bytes a repair of the whole plan writes into the install. An
+    /// **upper bound**: the in-place path writes only the wrong chunks, and
+    /// which chunks those are is known only by reading the files (`--scan`).
+    pub est_write_bytes: u64,
+    /// The free space the run needs **beyond** the install: the peak extra
+    /// disk, times the number of files in flight.
+    ///
+    /// Zero for a same-size in-place repair, and `jobs × largest file` for
+    /// the temp path — which is the number the README has always stated.
+    pub est_extra_bytes: u64,
+    /// The bytes the `--scan` read. `None` when no scan was asked for, and
+    /// the key is then absent: the figure is the scan's own, and a run that
+    /// did not scan has none to report.
+    pub scan_bytes: Option<u64>,
 }
 
 impl PlanTotals {
@@ -44,6 +147,8 @@ impl PlanTotals {
         purge: Option<&PurgePlan>,
         est_download_bytes: u64,
         scoped: bool,
+        disk: &DiskPlan,
+        scan_bytes: Option<u64>,
     ) -> Self {
         Self {
             files: plan.files.len() as u64,
@@ -63,6 +168,9 @@ impl PlanTotals {
                 .max()
                 .unwrap_or(0),
             scoped,
+            est_write_bytes: disk.est_write_bytes,
+            est_extra_bytes: disk.est_extra_bytes,
+            scan_bytes,
         }
     }
 }
@@ -76,10 +184,18 @@ impl PlanTotals {
 /// `scoped` is an integer here for the same reason it is one on `SUMMARY`: one
 /// key name carries one type across the whole stream.
 pub fn plan_record(t: &PlanTotals) -> Record {
-    Record::keyed("PLAN")
+    let rec = Record::keyed("PLAN")
         .put("files", t.files)
         .put("est_download_bytes", t.est_download_bytes)
-        .put("purge_files", t.purge_files)
+        .put("est_write_bytes", t.est_write_bytes)
+        .put("est_extra_bytes", t.est_extra_bytes);
+    // The scan's own figure, and only when there was a scan: a run that did
+    // not read the install has no bytes to report.
+    let rec = match t.scan_bytes {
+        Some(n) => rec.put("scan_bytes", n),
+        None => rec,
+    };
+    rec.put("purge_files", t.purge_files)
         .put("purge_bytes", t.purge_bytes)
         .put("max_chunk_bytes", t.max_chunk_bytes)
         .put("scoped", u64::from(t.scoped))
@@ -107,6 +223,11 @@ pub struct RepairEntry<'a> {
     /// Chunks the local reuse map cannot supply, by compressed size — this
     /// file's half of the plan's `est_download_bytes`.
     pub est_download_bytes: u64,
+    /// How this file would be written: `inplace` or `temp`.
+    pub mode: &'static str,
+    /// The extra disk this file needs beyond the install: the growth for an
+    /// in-place repair, the whole file for the temp path.
+    pub extra_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +241,7 @@ impl<'a> PlanDocument<'a> {
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
         est_download_bytes: u64,
+        disk: &DiskPlan,
     ) -> Self {
         // The per-file estimates must sum to the plan total, or the document
         // would disagree with the `PLAN` line. `est` is the caller-computed plan
@@ -146,11 +268,16 @@ impl<'a> PlanDocument<'a> {
                 .files
                 .iter()
                 .zip(per_file)
-                .map(|(f, est)| RepairEntry {
-                    rel: &f.rel,
-                    size: f.size,
-                    chunks_total: f.chunks.len() as u64,
-                    est_download_bytes: est,
+                .map(|(f, est)| {
+                    let d = disk.for_file(&f.rel);
+                    RepairEntry {
+                        rel: &f.rel,
+                        size: f.size,
+                        chunks_total: f.chunks.len() as u64,
+                        est_download_bytes: est,
+                        mode: d.mode,
+                        extra_bytes: d.extra_bytes,
+                    }
                 })
                 .collect(),
             purge: purge
@@ -241,19 +368,19 @@ mod tests {
 
     #[test]
     fn the_plan_line_has_a_fixed_key_order() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &DiskPlan::default(), None);
         let rec = plan_record(&t);
         assert_eq!(
             rec.text(),
-            "PLAN files=3 est_download_bytes=60 purge_files=1 purge_bytes=4096 \
-             max_chunk_bytes=30 scoped=1"
+            "PLAN files=3 est_download_bytes=60 est_write_bytes=0 est_extra_bytes=0 \
+             purge_files=1 purge_bytes=4096 max_chunk_bytes=30 scoped=1"
         );
         // No purge flag: the purge fields are zero, not absent.
-        let t = PlanTotals::new(&plan(), None, 60, false);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         assert_eq!(
             plan_record(&t).text(),
-            "PLAN files=3 est_download_bytes=60 purge_files=0 purge_bytes=0 \
-             max_chunk_bytes=30 scoped=0"
+            "PLAN files=3 est_download_bytes=60 est_write_bytes=0 est_extra_bytes=0 \
+             purge_files=0 purge_bytes=0 max_chunk_bytes=30 scoped=0"
         );
     }
 
@@ -261,17 +388,19 @@ mod tests {
     /// text line uses — `files`, not `plan` — so a parser reads one vocabulary.
     #[test]
     fn the_plan_is_one_record_on_either_plane() {
-        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true);
+        let t = PlanTotals::new(&plan(), Some(&purge_plan()), 60, true, &DiskPlan::default(), None);
         let rec = plan_record(&t);
         let json = rec.json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["event"], "plan");
         assert_eq!(v["files"], 3);
         assert_eq!(v["est_download_bytes"], 60);
+        assert_eq!(v["est_write_bytes"], 0);
+        assert_eq!(v["est_extra_bytes"], 0);
         assert_eq!(v["purge_files"], 1);
         assert_eq!(v["purge_bytes"], 4096);
         assert_eq!(v["max_chunk_bytes"], 30);
-        assert_eq!(v.as_object().unwrap().len(), 7, "{json}");
+        assert_eq!(v.as_object().unwrap().len(), 9, "{json}");
         // `scoped` is an integer here for the same reason it is one on
         // `SUMMARY`: one key name carries one type across the whole stream.
         assert_eq!(v["scoped"], 1);
@@ -280,7 +409,7 @@ mod tests {
 
     #[test]
     fn a_plan_that_is_not_scoped_reports_zero_not_a_boolean() {
-        let t = PlanTotals::new(&plan(), None, 60, false);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         let v: serde_json::Value = serde_json::from_str(&plan_record(&t).json()).unwrap();
         assert_eq!(v["scoped"], 0);
         assert!(!v["scoped"].is_boolean(), "{v}");
@@ -290,7 +419,7 @@ mod tests {
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
         // peak transient disk is io_threads x that.
-        let t = PlanTotals::new(&plan(), None, 60, false);
+        let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
             &RepairPlan {
@@ -300,14 +429,65 @@ mod tests {
             None,
             0,
             false,
+            &DiskPlan::default(),
+            None,
         );
         assert_eq!(t.max_chunk_bytes, 0, "an empty plan has no chunks");
     }
 
     #[test]
+    fn the_disk_plan_says_what_each_file_costs() {
+        // A file that is already the right size needs nothing beyond the
+        // install; a file that is not there needs all of it; the temp path
+        // always needs all of it.
+        let dir = crate::testtemp::TempDir::new("girpr_test_disk", "plan");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
+
+        let plan = plan();
+        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 4);
+        assert_eq!(disk.for_file("game/foo.dat").mode, "inplace");
+        assert_eq!(
+            disk.for_file("game/foo.dat").extra_bytes,
+            0,
+            "a file that is already the right size needs nothing"
+        );
+        assert_eq!(
+            disk.for_file("game/bar.dat").extra_bytes,
+            64,
+            "a file that is not there has to be created"
+        );
+        // The peak, times the files in flight.
+        assert_eq!(disk.est_extra_bytes, 64 * 4);
+        // The bytes a full rewrite of the plan writes: every planned file's
+        // size (the third one is empty, so it adds nothing).
+        assert_eq!(disk.est_write_bytes, 128 + 64);
+
+        // The temp path duplicates every file.
+        let disk = DiskPlan::new(&dir, &plan, RepairMode::Temp, 4);
+        assert_eq!(disk.for_file("game/foo.dat").mode, "temp");
+        assert_eq!(disk.for_file("game/foo.dat").extra_bytes, 128);
+        assert_eq!(disk.est_extra_bytes, 128 * 4);
+    }
+
+    #[test]
+    fn the_document_carries_the_mode_and_the_extra_bytes_of_each_file() {
+        let dir = crate::testtemp::TempDir::new("girpr_test_disk", "document");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
+        let plan = plan();
+        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 1);
+        let doc = PlanDocument::new(&plan, None, 60, &disk);
+        assert_eq!(doc.repair[0].mode, "inplace");
+        assert_eq!(doc.repair[0].extra_bytes, 0);
+        assert_eq!(doc.repair[1].mode, "inplace");
+        assert_eq!(doc.repair[1].extra_bytes, 64);
+    }
+
+    #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60);
+        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -326,7 +506,7 @@ mod tests {
         // The document is written from the same estimate the `PLAN` line
         // reports; if they ever disagreed, the file would be a lie.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 100);
+        let doc = PlanDocument::new(&plan, None, 100, &DiskPlan::default());
         let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
         assert_eq!(sum, 100);
     }
@@ -334,7 +514,7 @@ mod tests {
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60);
+        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -348,7 +528,7 @@ mod tests {
         let dir = crate::testtemp::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 60);
+        let doc = PlanDocument::new(&plan, None, 60, &DiskPlan::default());
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");

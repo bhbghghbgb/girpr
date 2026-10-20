@@ -1386,6 +1386,185 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         removed.len(),
         changed.len(),
     );
+
+    // The differential, on real bytes: the same capture repaired twice.
+    drive_capture_differential(bridge, capture).await;
+}
+
+/// The differential: the same capture, repaired **twice** — once in place and
+/// once through the temp path — on two copies of the same fixture.
+///
+/// The two runs must produce the **same file**: the mode is a choice of how
+/// to get there, not of what to produce. And they must differ in the cost:
+/// the in-place run writes only the bytes that are wrong, so it writes
+/// strictly fewer bytes than the temp run, which writes the whole file.
+///
+/// This is the space claim asserted against **real game bytes**. The offline
+/// fixture is 128 bytes, too small to tell "wrote 128" from "wrote 64";
+/// here the difference is megabytes.
+///
+/// Nothing is relaxed: `download_bytes == patchmap total` still holds for
+/// both modes, because a chunk whose content the old file cannot supply
+/// cannot be "already correct" at its destination, so it is always fetched —
+/// and a chunk it *can* supply is copied, by either mode.
+async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
+    // `removed` has no repair to compare: it is a cleanup.
+    if capture.is_purge_only() {
+        return;
+    }
+    let bundle = bridge.bundle().clone();
+    let temp_scratch = Scratch::new(&bundle);
+    let inplace_scratch = Scratch::new(&bundle);
+
+    // The write counter is only reported when a ceiling was asked for, and a
+    // generous one never trips.
+    let mut temp_args = base_args(
+        &temp_scratch.game(),
+        &bundle,
+        bridge.origins(),
+        &temp_scratch.log_file(),
+    );
+    temp_args.extend(capture_args(capture));
+    temp_args.push("--repair-mode".into());
+    temp_args.push("temp".into());
+    temp_args.push("--max-write-bytes".into());
+    temp_args.push((1u64 << 40).to_string());
+    let temp = girpr(&temp_args).await;
+    assert_eq!(
+        temp.code, 0,
+        "{}: the temp run must exit 0\n{}\n{}",
+        capture.id, temp.stdout, temp.stderr
+    );
+
+    let mut inplace_args = base_args(
+        &inplace_scratch.game(),
+        &bundle,
+        bridge.origins(),
+        &inplace_scratch.log_file(),
+    );
+    inplace_args.extend(capture_args(capture));
+    inplace_args.push("--max-write-bytes".into());
+    inplace_args.push((1u64 << 40).to_string());
+    let inplace = girpr(&inplace_args).await;
+    assert_eq!(
+        inplace.code, 0,
+        "{}: the in-place run must exit 0\n{}\n{}",
+        capture.id, inplace.stdout, inplace.stderr
+    );
+
+    // ---- the same file ---------------------------------------------------
+    let temp_bytes = std::fs::read(temp_scratch.game().join(&capture.path))
+        .unwrap_or_else(|e| panic!("{}: read the temp run's file: {e}", capture.id));
+    let inplace_bytes = std::fs::read(inplace_scratch.game().join(&capture.path))
+        .unwrap_or_else(|e| panic!("{}: read the in-place run's file: {e}", capture.id));
+    assert_eq!(
+        temp_bytes.len(),
+        inplace_bytes.len(),
+        "{}: the two modes must produce the same size",
+        capture.id
+    );
+    assert_eq!(
+        format!("{:x}", md5::compute(&temp_bytes)),
+        format!("{:x}", md5::compute(&inplace_bytes)),
+        "{}: the two modes must produce the same bytes",
+        capture.id
+    );
+    // And the same bytes the ground truth names.
+    if !capture.absent_after {
+        assert_eq!(
+            format!("{:x}", md5::compute(&inplace_bytes)),
+            capture.result_md5,
+            "{}: the in-place run must equal expectations.result_md5",
+            capture.id
+        );
+    }
+
+    // ---- and a different cost --------------------------------------------
+    let temp_written = temp.num("summary", "write_bytes");
+    let inplace_written = inplace.num("summary", "write_bytes");
+    assert!(
+        inplace_written <= temp_written,
+        "{}: the in-place run cannot write more than the temp one \
+         (inplace {inplace_written}, temp {temp_written})",
+        capture.id
+    );
+    // The temp path writes the whole file; the in-place path writes only the
+    // bytes that are wrong. A capture whose file is *entirely* wrong (or
+    // absent) costs the same either way — there is nothing to keep — so the
+    // strict inequality is for the classes where part of the file was
+    // already right.
+    let partial = capture.classes.iter().any(|c| c.starts_with("partial"));
+    if partial {
+        assert!(
+            inplace_written < temp_written,
+            "{}: the in-place run must write strictly fewer bytes \
+             (inplace {inplace_written}, temp {temp_written})",
+            capture.id
+        );
+    }
+
+    // The in-place run leaves no temp file behind: it never creates one.
+    let leftovers: Vec<String> = find_files_named(&inplace_scratch.game(), "_tmp");
+    assert!(
+        leftovers.is_empty(),
+        "{}: the in-place run must not leave a temp file behind: {leftovers:?}",
+        capture.id
+    );
+
+    // Both modes fetch exactly the patchmap's set: a chunk the old file
+    // cannot supply is always fetched, and one it can is copied.
+    if let Some(total) = capture.download_bytes {
+        assert_eq!(
+            temp.num("summary", "download_bytes"),
+            total,
+            "{}: the temp run's download_bytes must equal the patchmap total",
+            capture.id
+        );
+        assert_eq!(
+            inplace.num("summary", "download_bytes"),
+            total,
+            "{}: the in-place run's download_bytes must equal the patchmap total",
+            capture.id
+        );
+    }
+
+    println!(
+        "bridge {:<24} differential: temp wrote {} bytes, in-place wrote {} bytes \
+         (same file, md5 {})",
+        capture.id,
+        temp_written,
+        inplace_written,
+        capture.result_md5,
+    );
+}
+
+/// Every file under `dir` whose name ends with `suffix`, as rel paths.
+fn find_files_named(dir: &Path, suffix: &str) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, suffix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, base, suffix, out);
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.ends_with(suffix) {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, suffix, &mut out);
+    out.sort();
+    out
 }
 
 /// One capture, end to end, against real bundle bytes.

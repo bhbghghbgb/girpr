@@ -144,6 +144,62 @@ impl Summary {
         self.write_stopped.load(Ordering::Relaxed)
     }
 
+    /// `--max-ram-bytes`, or `None`.
+    pub fn max_ram_bytes(&self) -> Option<u64> {
+        let l = self.ram_limit.load(Ordering::Relaxed);
+        (l != u64::MAX).then_some(l)
+    }
+
+    /// Install the RAM ceiling.
+    pub fn set_ram_limit(&mut self, limit: Option<u64>) {
+        self.ram_limit
+            .store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Reserve `n` bytes of staging RAM — all or nothing.
+    ///
+    /// The same reservation shape as [`Self::reserve_write_bytes`]: a
+    /// compare-and-swap against a `u64::MAX` sentinel, so the hot path is a
+    /// number and not an `Option` check. A refused reservation adds nothing,
+    /// and the caller degrades to the other write order rather than failing
+    /// the file.
+    ///
+    /// The peak is tracked separately from the live total: the live total
+    /// goes back down when a file is done, and the interesting number is how
+    /// much was staged at once.
+    pub fn reserve_ram_bytes(&self, n: u64) -> bool {
+        let limit = self.ram_limit.load(Ordering::Relaxed);
+        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_add(n);
+            if next > limit {
+                return false;
+            }
+            match self.ram_reserved.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.ram_bytes.fetch_max(next, Ordering::Relaxed);
+                    return true;
+                }
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    /// Give a reservation back: the file that held it is done.
+    pub fn release_ram_bytes(&self, n: u64) {
+        self.ram_reserved.fetch_sub(n, Ordering::Relaxed);
+    }
+
+    /// The peak staged payload of the run.
+    pub fn ram_peak_bytes(&self) -> u64 {
+        self.ram_bytes.load(Ordering::Relaxed)
+    }
+
     /// `--fail-fast` armed?
     pub fn fail_fast(&self) -> bool {
         self.fail_fast.load(Ordering::Relaxed)
@@ -257,5 +313,69 @@ mod tests {
         assert_eq!(s.download_bytes.load(Ordering::Relaxed), 75);
         s.adjust_download_bytes(0);
         assert_eq!(s.download_bytes.load(Ordering::Relaxed), 75);
+    }
+
+    /// The RAM reservation has the same shape as the write reservation: all
+    /// or nothing, and the boundary is inclusive. A file that cannot get its
+    /// reservation degrades to the other write order — it never fails — so
+    /// the refusal has to be exact.
+    #[test]
+    fn a_ram_reservation_is_all_or_nothing_and_the_boundary_is_inclusive() {
+        let mut s = Summary::default();
+        s.set_ram_limit(Some(100));
+        assert_eq!(s.max_ram_bytes(), Some(100));
+        assert!(s.reserve_ram_bytes(60));
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 60);
+        // 60 + 40 == the limit: allowed.
+        assert!(s.reserve_ram_bytes(40));
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 100);
+        // One more byte: refused, and nothing was added.
+        assert!(!s.reserve_ram_bytes(1));
+        assert_eq!(
+            s.ram_reserved.load(Ordering::Relaxed),
+            100,
+            "no partial add"
+        );
+        // The peak remembers what was staged at once, even after it is given
+        // back.
+        assert_eq!(s.ram_peak_bytes(), 100);
+        s.release_ram_bytes(100);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 0);
+        assert_eq!(s.ram_peak_bytes(), 100, "the peak is not a live total");
+    }
+
+    #[test]
+    fn an_unlimited_summary_accepts_any_ram_reservation() {
+        let s = Summary::default();
+        assert_eq!(s.max_ram_bytes(), None);
+        assert!(s.reserve_ram_bytes(1 << 30));
+        assert!(s.reserve_ram_bytes(u64::MAX / 2));
+    }
+
+    #[test]
+    fn concurrent_ram_reservations_never_exceed_the_budget() {
+        let mut s = Summary::default();
+        s.set_ram_limit(Some(1000));
+        let s = Arc::new(s);
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    let mut taken = 0u64;
+                    for _ in 0..100 {
+                        if s.reserve_ram_bytes(100) {
+                            taken += 1;
+                        }
+                    }
+                    taken
+                })
+            })
+            .collect();
+        let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        assert_eq!(total * 100, s.ram_reserved.load(Ordering::Relaxed));
+        assert!(
+            s.ram_reserved.load(Ordering::Relaxed) <= 1000,
+            "eight racing reservations overshot"
+        );
     }
 }

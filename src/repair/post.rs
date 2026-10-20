@@ -54,7 +54,7 @@ pub async fn run(
         let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set(), &ctx.path_scope);
         // The post-repair re-plan is the only purge pass whose candidates were
         // not computed at assert time, so `--max-delete-bytes` is checked
-        // against it again here. Today it can only be *smaller* than the
+        // against it again here. It can only be *smaller* than the
         // up-front plan — a successful repair promotes every `*_tmp` it
         // creates, and a run that leaves one behind has already failed (`3`) or
         // stopped (`5`), both of which skip this phase. That is a property of

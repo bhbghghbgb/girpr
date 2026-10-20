@@ -255,8 +255,9 @@ pub struct Summary {
     /// [`Summary::set_download_limit`].
     pub download_limit: AtomicU64,
     /// Set when the runtime download hard stop fired. An aborted run leaves
-    /// `*_tmp` files behind by design: S3 resume-by-length makes the next run a
-    /// smaller run, not a corrupt one.
+    /// the work it had done in place: the temp path's `_tmp` is resumed by
+    /// length, and the in-place path's chunks that are already correct stay
+    /// correct. Either way the next run is a smaller run, not a corrupt one.
     pub download_stopped: AtomicBool,
     /// `--max-write-bytes`, same `u64::MAX` sentinel as `download_limit`.
     pub write_limit: AtomicU64,
@@ -271,6 +272,23 @@ pub struct Summary {
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
     pub aborted: AtomicBool,
+    /// `--max-ram-bytes`, same `u64::MAX` sentinel as `download_limit`.
+    pub ram_limit: AtomicU64,
+    /// RAM currently reserved for staging the bytes a file has to move
+    /// inside itself. Live, not cumulative: a file gives its reservation
+    /// back when it is done.
+    pub ram_reserved: AtomicU64,
+    /// The peak staged payload of the run — the most RAM that was staged at
+    /// once. This is the number the `SUMMARY ram_bytes=` key reports.
+    pub ram_bytes: AtomicU64,
+    /// Files repaired **in place**: the target was written where it lies.
+    pub files_inplace: AtomicU64,
+    /// Files repaired through `{path}_tmp`.
+    pub files_temp: AtomicU64,
+    /// Bytes that were already correct where they belonged and were **not**
+    /// written. The disk claim of the run, in one number: the bytes the
+    /// repair did not have to touch.
+    pub kept_bytes: AtomicU64,
 }
 
 impl Default for Summary {
@@ -297,6 +315,12 @@ impl Summary {
             write_stopped: AtomicBool::new(false),
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
+            ram_limit: AtomicU64::new(u64::MAX),
+            ram_reserved: AtomicU64::new(0),
+            ram_bytes: AtomicU64::new(0),
+            files_inplace: AtomicU64::new(0),
+            files_temp: AtomicU64::new(0),
+            kept_bytes: AtomicU64::new(0),
         }
     }
 
@@ -320,6 +344,12 @@ impl Summary {
             write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
+            ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
+            ram_reserved: AtomicU64::new(self.ram_reserved.load(Ordering::Relaxed)),
+            ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
+            files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
+            files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
+            kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
         }
     }
 }
@@ -361,6 +391,29 @@ pub struct SummaryFlags {
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
     pub config_bumped_zero: bool,
+    /// `--repair-mode`: the mode the user asked for, and with it the
+    /// numbers that say which paths the run used. Emitted **only** when the
+    /// flag was passed — the same discipline every other conditional key
+    /// follows.
+    ///
+    /// The four keys travel together because they answer one question: "how
+    /// did this run touch the disk?". `repair_mode` says what was asked
+    /// for, `inplace` and `temp` say what actually happened, and
+    /// `kept_bytes` says how many bytes did not have to be written at all.
+    pub repair_mode: Option<&'static str>,
+    /// Files repaired in place.
+    pub files_inplace: Option<u64>,
+    /// Files repaired through `{path}_tmp`.
+    pub files_temp: Option<u64>,
+    /// Bytes that were already correct and were not rewritten.
+    pub kept_bytes: Option<u64>,
+    /// The peak staged payload — the most RAM that was staged at once.
+    /// Emitted only when `--max-ram-bytes` was passed.
+    pub ram_bytes: Option<u64>,
+    /// The chunks that are wrong where they belong, over the whole plan.
+    /// Emitted only when `--scan` was passed: without the scan nobody knows
+    /// which chunks are damaged, only which files are.
+    pub damaged_chunks: Option<u64>,
 }
 
 /// One conditional `SUMMARY` entry.
@@ -418,6 +471,20 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     }
     if let Some(n) = f.write_bytes {
         out.push(Extra::Num("write_bytes", n));
+    }
+    // The repair-mode group: what was asked for, what happened, and how
+    // many bytes did not have to be written.
+    if let Some(mode) = f.repair_mode {
+        out.push(Extra::Word("repair_mode", mode));
+        out.push(Extra::Num("inplace", f.files_inplace.unwrap_or(0)));
+        out.push(Extra::Num("temp", f.files_temp.unwrap_or(0)));
+        out.push(Extra::Num("kept_bytes", f.kept_bytes.unwrap_or(0)));
+    }
+    if let Some(n) = f.ram_bytes {
+        out.push(Extra::Num("ram_bytes", n));
+    }
+    if let Some(n) = f.damaged_chunks {
+        out.push(Extra::Num("damaged_chunks", n));
     }
     if let Some(s) = f.stopped {
         out.push(Extra::Word("stopped", s));
@@ -676,13 +743,20 @@ mod tests {
             stopped: Some("bytes"),
             config_bumped_zero: false,
             local_manifest: Some("unavailable"),
+            repair_mode: Some("inplace"),
+            files_inplace: Some(3),
+            files_temp: Some(1),
+            kept_bytes: Some(900),
+            ram_bytes: Some(4096),
+            damaged_chunks: Some(7),
         };
         let rec = summary_record(&s, 5);
         assert_eq!(
             rec.text(),
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 stopped=bytes local_manifest=unavailable"
+             write_bytes=77 repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
+             damaged_chunks=7 stopped=bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
@@ -691,6 +765,12 @@ mod tests {
         assert_eq!(v["write_bytes"], 77);
         assert_eq!(v["plan_download_bytes"], 4242);
         assert_eq!(v["local_manifest"], "unavailable");
+        assert_eq!(v["repair_mode"], "inplace");
+        assert_eq!(v["inplace"], 3);
+        assert_eq!(v["temp"], 1);
+        assert_eq!(v["kept_bytes"], 900);
+        assert_eq!(v["ram_bytes"], 4096);
+        assert_eq!(v["damaged_chunks"], 7);
         // Key order is fixed, so two runs' lines diff cleanly.
         let keys: Vec<&str> = conditional_extras(&s).iter().map(Extra::key).collect();
         assert_eq!(
@@ -702,6 +782,12 @@ mod tests {
                 "plan_files",
                 "plan_download_bytes",
                 "write_bytes",
+                "repair_mode",
+                "inplace",
+                "temp",
+                "kept_bytes",
+                "ram_bytes",
+                "damaged_chunks",
                 "stopped",
                 "local_manifest"
             ]

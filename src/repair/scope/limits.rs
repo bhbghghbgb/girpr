@@ -55,6 +55,14 @@ pub struct Limits {
     pub write_bytes: Option<u64>,
     /// `--max-delete-bytes`: bytes the files-cleanup would delete.
     pub delete_bytes: Option<u64>,
+    /// `--max-ram-bytes`: the RAM the in-place repair may stage the bytes
+    /// it has to move inside a file.
+    ///
+    /// Not a refusal: a file that cannot get its reservation is written in
+    /// the other direction instead, which produces the same file with less
+    /// reuse. It is a ceiling all the same — a *requested* one — so it
+    /// counts towards `limited=1`.
+    pub ram_bytes: Option<u64>,
 }
 
 impl Limits {
@@ -64,6 +72,7 @@ impl Limits {
             || self.download_bytes.is_some()
             || self.write_bytes.is_some()
             || self.delete_bytes.is_some()
+            || self.ram_bytes.is_some()
     }
 
     /// Every tripped **pre-flight** ceiling, in flag order.
@@ -282,6 +291,7 @@ mod tests {
             download_bytes: Some(0),
             delete_bytes: Some(1),
             write_bytes: None,
+            ram_bytes: None,
         };
         let p = plan(5);
         let hits = l.check_preflight(pf_full(&p, 7, &purge(9)));
@@ -295,9 +305,9 @@ mod tests {
     #[test]
     fn check_delete_is_the_same_predicate_the_preflight_uses() {
         // The post-repair pass re-checks the ceiling against its own re-plan.
-        // That re-plan can only shrink today (a successful repair promotes every
+        // That re-plan can only shrink (a successful repair promotes every
         // `_tmp` it creates), so there is no integration case that can drive
-        // this branch — the predicate itself is pinned here instead, and
+        // this branch - the predicate itself is pinned here instead, and
         // `post::run` carries the reasoning in a comment.
         let l = Limits {
             delete_bytes: Some(10),
@@ -348,6 +358,10 @@ mod tests {
             },
             Limits {
                 delete_bytes: Some(1),
+                ..Default::default()
+            },
+            Limits {
+                ram_bytes: Some(1),
                 ..Default::default()
             },
         ] {
