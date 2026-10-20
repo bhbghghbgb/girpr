@@ -212,20 +212,34 @@ count; there are no per-variant flags.
 
 | class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
-| `identical` | `old.md5 == new.md5` | skip: size+MD5 match, 0 bytes | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | single download into empty `_tmp` | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
-| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | N sequential downloads, no reuse | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `partial_same_offset` | `0 < reused < nchunks`, `moved == 0`, `size equal` | S2 reuse happy path | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `partial_moved_offset` | `0 < reused < nchunks`, `moved > 0` | S2 reuse where the source offset ≠ target offset | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `partial_size_changed` | `0 < reused < nchunks`, `moved == 0`, `size differs` | oversize-`_tmp` truncate + length gate | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
-| `added` | path only in the new manifest | "missing local file" branch | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
-| `removed` | path only in the old manifest | not planned; `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
-| `full_reuse_reordered` | `reused == nchunks`, `md5 differs` | every chunk reused, layout rearranged | **none in this pair** — recorded `unavailable` | — |
+| `identical` | `old.md5 == new.md5` | the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
+| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | no local source: the one chunk is fetched and written in place | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
+| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | no local source: every chunk is fetched, one at a time, into the target | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
+| `kept_in_place` | `0 < reused < nchunks`, `moved == 0` | the surviving chunks are already correct where they belong: kept, not copied; the rest are fetched | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `moved_ascending` | `moved > 0`, every move goes **down** (source after destination) | the bytes move earlier: the ascending write order keeps every source alive | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `moved_descending` | `moved > 0`, every move goes **up** (source before destination) | the bytes move later: the descending write order keeps every source alive | `GenshinImpact_Data/resources.assets` | 40.3 MB |
+| `moved_mixed` | `moved > 0`, moves in **both** directions | the chunking re-flowed: the ordered tier keeps the larger half and fetches the rest | `…/StreamingAssets/AudioAssets/Banks25.pck` | 243 MB |
+| `trim_eager` | `0 < reused < nchunks`, `old.size > new.size`, no source reaches past `new.size` | the file on disk is longer than the target and no source reaches past it: the dead tail is released before the first write | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
+| `trim_deferred` | `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `added` | path only in the new manifest | the file is created: absent locally, fetched whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
+| `removed` | path only in the old manifest | not planned; a `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
 
-*(measured)* population over the `game` field's 2 662 common paths: `identical`
-1 592, `partial_same_offset` 29, `partial_moved_offset` 430,
-`partial_size_changed` 447, `zero_reuse_single` 120, `zero_reuse_multi` 491,
-`added` 82, `removed` 11.
+*(measured)* population over the pool the capture selects (`game` ∪ `en-us`,
+2 932 paths): `identical` 1 733, `zero_reuse_single` 121, `zero_reuse_multi` 491,
+`kept_in_place` 29, `moved_ascending` 321, `moved_descending` 139,
+`moved_mixed` 3, `trim_eager` 56, `trim_deferred` 282, `added` 84, `removed` 11.
+
+**The admission order is a decision.** The direction classes are admitted
+**before** the trim classes, because `trim_deferred`'s cheapest candidate is the
+same file as `moved_ascending`'s: admitting the trim first would push
+`moved_ascending` onto its next candidate — 24.9 MB for a second copy of the
+same shape. The order is
+
+```
+identical, zero_reuse_single, zero_reuse_multi, kept_in_place,
+moved_ascending, moved_descending, moved_mixed, trim_eager, trim_deferred,
+added, removed
+```
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
@@ -244,9 +258,17 @@ is **greedy by cost with an exclusion set**:
 ```
 for class in REQUIRED_ORDER:
     if any already-captured file satisfies class:  record covered_by=<path>; continue
+    if any file an earlier class already wants satisfies class:
+        record covered_by=<that capture>; continue          # no second file
     pick the cheapest candidate satisfying class that is not already captured
     if none:                                      record status="unavailable" + reason
 ```
+
+The second rule is what stops the bundle paying twice for one shape: a class
+whose cheapest candidate an earlier class already took is **covered by** that
+capture. The one edge case: a `covered_by` row whose covering capture was
+refused by the budget becomes `over_budget`, because a class that cannot have
+the covering capture cannot have a dearer one either.
 
 Every captured file is tagged with **all** classes it satisfies, so
 `candidates.json` + `MANIFEST.json` always answer "which variant does this file
@@ -442,7 +464,7 @@ Each row is `{id, assertion, subject, expected, actual, ok}`.
 | A14 | `game/` contains no path outside `expected/`'s manifest set + the tool-read config files |
 | A15 | `diff/` counts equal the recomputed set differences |
 | A16 | `checksums.json` covers every file written under the artifact root, and re-hashing matches |
-| A17 | each required matrix class is `captured` \| `covered_by` \| `unavailable` - never absent |
+| A17 | each required matrix class is `captured` \| `covered_by` \| `over_budget` \| `unavailable` - never absent |
 | A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
 | A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
 | A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
@@ -462,6 +484,14 @@ was **skipped** rather than failed is a different verdict and exits `0` with
 records those ids as skipped, and says so rather than claiming a pass. A caller
 that cares must read `result`, not just the exit code.
 
+**A17 is about the matrix being *complete*.** Every class has a row, and every
+row says what happened to it — `captured`, `covered_by` (another capture answers
+it), `over_budget` (a candidate existed and this run's budget would not pay for
+it) or `unavailable` (no path in the pool satisfies it). None of those four is a
+failure of the bundle: a matrix that records `over_budget` is *more* honest than
+one that fails. The refusal is `--require-class`'s job, and a class the caller
+named and did not get is exit `4`.
+
 ### A18 — and what `verify` does *not* re-derive
 
 None of the seventeen asks whether `game/` is what the retained blobs say it is.
@@ -473,7 +503,7 @@ statement about the bundle rather than about the run.
 
 A14 asks one direction: is `game/` free of paths the tool under test would build
 a plan against? It cannot see the other failure — a capture admitted for
-`partial_same_offset` whose two variant files came out byte-identical. That
+`kept_in_place` whose two variant files came out byte-identical. That
 bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared MD5),
 and be useless, because the fixture would hold no evidence of the patch it was
 captured for.
@@ -527,10 +557,10 @@ An empty `--require-class` is **not** "every required class". The implementation
 requires nothing unless a class is named, so a capture whose matrix leaves a
 class `unavailable` still exits `0`; the unavailable row is the finding, not the
 exit code. That is a deliberate reversal of "all required classes", and the live
-pair is why: 7.0.0 → 7.1.0 has no `full_reuse_reordered` file, so requiring all
-nine by default would make *every* run of it exit `4`. `unavailable` is a fact
-about the manifests; `over_budget` is a fact about this run's flags; only a class
-the caller named is fatal. A caller that needs the stronger rule asks for it:
+pair is why: requiring all eleven by default would make *every* run of a pair
+that lacks one of them exit `4`. `unavailable` is a fact about the manifests;
+`over_budget` is a fact about this run's flags; only a class the caller named
+is fatal. A caller that needs the stronger rule asks for it:
 
 ```
 gircap capture … --require-class identical --require-class added
@@ -826,9 +856,9 @@ artifact's own patchmap rather than against this table:
 | `identical` | `identical` | 0 | 1 / 0 / 0 | 1 |
 | `zero_reuse_single` | `zero_reuse_single` | 21 | 0 / 1 / 0 | 0 |
 | `zero_reuse_multi` | `zero_reuse_multi` | 336 852 | 0 / 2 / 0 | 0 |
-| `partial_same_offset` | `partial_same_offset` | 274 426 | 1 / 2 / 0 | 1 |
-| `partial_moved_offset` | `partial_moved_offset` | 1 564 894 | 8 / 2 / 4 | 8 |
-| `partial_size_changed` | `partial_size_changed` | 197 192 | 9 / 1 / 0 | 9 |
+| `kept_in_place` | `kept_in_place` | 274 426 | 1 / 2 / 0 | 1 |
+| `moved_ascending` | `moved_ascending` | 1 564 894 | 8 / 2 / 4 | 8 |
+| `trim_eager` | `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 

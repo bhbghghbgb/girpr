@@ -119,6 +119,42 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "kkkk",
             vec![chunk("kkkk", 0, 887_872, 887_872)],
         ),
+        // common + changed, the content shifted **later** by one chunk ->
+        // `moved_descending`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
+            "vvv-old",
+            vec![
+                chunk("vvv1", 0, 1024, 110),
+                chunk("vvv2", 1024, 1024, 110),
+                chunk("vvv3", 2048, 1024, 110),
+            ],
+        ),
+        // common + changed, the chunking **re-flowed**: one chunk moved later
+        // and one moved earlier -> `moved_mixed`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
+            "www-old",
+            vec![
+                chunk("www1", 0, 1024, 120),
+                chunk("www2", 1024, 1024, 120),
+                chunk("www3", 2048, 1024, 120),
+            ],
+        ),
+        // common + changed, the file on disk is **longer** than the target and
+        // no reuse source reaches past the target's end -> `trim_eager`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
+            "xxx-old",
+            vec![chunk("xxx1", 0, 2048, 200), chunk("xxx2", 2048, 2048, 200)],
+        ),
+        // common + changed, the file on disk is longer than the target and a
+        // reuse source **does** reach past the target's end -> `trim_deferred`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
+            "yyy-old",
+            vec![chunk("yyy1", 0, 2048, 260), chunk("yyy2", 2048, 2048, 260)],
+        ),
     ];
     let new = vec![
         file(
@@ -172,6 +208,42 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "kkkk",
             vec![chunk("kkkk", 0, 887_872, 887_872)],
         ),
+        // the content shifted **later** by one chunk: `moved_descending`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
+            "vvv-new",
+            vec![
+                chunk("vvv9", 0, 1024, 110),
+                chunk("vvv1", 1024, 1024, 110),
+                chunk("vvv2", 2048, 1024, 110),
+            ],
+        ),
+        // the chunking re-flowed: `www2` moved **earlier** and `www1` moved
+        // **later** -> `moved_mixed`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
+            "www-new",
+            vec![
+                chunk("www2", 0, 1024, 120),
+                chunk("www1", 1024, 1024, 120),
+                chunk("www9", 2048, 1024, 120),
+            ],
+        ),
+        // the file on disk is longer than the target and nothing moves ->
+        // `trim_eager`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
+            "xxx-new",
+            vec![chunk("xxx1", 0, 2048, 200), chunk("xxx9", 2048, 1024, 150)],
+        ),
+        // the file on disk is longer than the target and `yyy2` moves
+        // **earlier**, so its source reaches past the target's end ->
+        // `trim_deferred`
+        file(
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
+            "yyy-new",
+            vec![chunk("yyy2", 0, 2048, 260), chunk("yyy9", 2048, 1024, 150)],
+        ),
         // added
         file(
             "GenshinImpact_Data/Plugins/libHttpClient.GDK.dll",
@@ -213,7 +285,7 @@ fn the_five_path_counts_are_what_the_live_capture_measured() {
             d.counts.added,
             d.counts.removed
         ),
-        (7, 2, 5, 2, 1),
+        (11, 2, 9, 2, 1),
         "{MEASURED}: live hk4e_global 7.0.0 -> 7.1.0 gave common=2662 \
          identical=1592 changed=1070 added=82 removed=11. The fixture is scaled \
          down but must produce the same arithmetic, and 2662 + 82 = 2744 entries \
@@ -252,13 +324,13 @@ fn the_reuse_pool_separates_manifest_wide_reach_from_same_file_reach() {
     let d = game();
     let p: &ReusePool = &d.pool;
     assert_eq!(
-        p.new_chunks_total, 15,
+        p.new_chunks_total, 25,
         "{MEASURED}: 113610 in the live 7.1.0"
     );
     // Seven of the fifteen new chunks are brand new: `llll`, `pppp`, `mmmm`,
     // `qqqq`, the voice pack's pair and `nnnn`. The other eight — including the
     // two `aaaa` and two `kkkk` — have their md5 somewhere in the old manifest.
-    assert_eq!(p.new_chunks_md5_present_in_old_manifest, 8);
+    assert_eq!(p.new_chunks_md5_present_in_old_manifest, 14);
     // And exactly one is cross-file-only: `kkkk`, which lives in a different
     // old file. `aaaa` appears in two new files but is in each of its own old
     // files, so it is not cross-file-only.
@@ -343,8 +415,16 @@ fn cost_ordering_puts_the_cheapest_usable_files_first() {
             "GenshinImpact_Data/Resources/browser_assets",
             // 290 + 290 = 580 B
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
+            // 330 + 330 = 660 B: the content shifted later (`moved_descending`)
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
+            // 360 + 360 = 720 B: the chunking re-flowed (`moved_mixed`)
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
+            // 400 + 350 = 750 B: the eager trim (`trim_eager`)
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
             // 400 + 500 = 900 B
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00981562.blk",
+            // 520 + 410 = 930 B: the deferred trim (`trim_deferred`)
+            "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
             // 580 000 + 600 000 = 1 180 000 B
             "GenshinImpact_Data/StreamingAssets/unity default resources",
             // 887 872 + 887 872 = 1 775 744 B
@@ -354,7 +434,7 @@ fn cost_ordering_puts_the_cheapest_usable_files_first() {
         ],
         "ordered by total_cost = old_bytes + new_bytes, never by patch_bytes — which \
          is why HoYoChannel.dll, the file a patch actually has the most to do to, \
-         is the *last* of the seven rather than the first"
+         is the *last* of the eleven rather than the first"
     );
     // Re-running gives the identical order.
     let again: Vec<String> = diff::by_cost(&[game()])
@@ -373,7 +453,7 @@ fn aggregation_keeps_the_counts_and_names_the_field() {
     assert_eq!(agg.old_tag, "7.0.0");
     assert_eq!(agg.new_tag, "7.1.0");
     assert_eq!(agg.fields, vec!["game"]);
-    assert_eq!(agg.counts.common, 7);
+    assert_eq!(agg.counts.common, 11);
     assert_eq!(agg.by_field["game"].added, 2);
     assert!(agg.added.iter().all(|p| p.starts_with("game:")));
     assert_eq!(agg.added.len(), 2);
@@ -384,11 +464,12 @@ fn aggregation_keeps_the_counts_and_names_the_field() {
         agg.byte_counts.patch,
         // llll (the DLL) + pppp (the moved block) + mmmm (the grown block) +
         // qqqq (the single fresh download) + the whole voice pack, which is
-        // what a `zero_reuse_multi` patch fetches.
-        274_426 + 100 + 300 + 42 + 290_000 + 310_000,
+        // what a `zero_reuse_multi` patch fetches + the four new blocks' one
+        // fresh chunk each.
+        274_426 + 100 + 300 + 42 + 290_000 + 310_000 + 110 + 120 + 150 + 150,
         "only what a patch would actually fetch"
     );
-    assert_eq!(agg.new_chunks_reusable_at_all, 8);
+    assert_eq!(agg.new_chunks_reusable_at_all, 14);
     assert!(agg.is_a_real_upgrade());
 }
 
@@ -403,10 +484,10 @@ fn the_flat_tsv_carries_every_row_of_both_sides() {
         lines[0],
         "field\tpath\tstate\told_size\tnew_size\treused\tmoved\tpatch_bytes\ttotal_cost"
     );
-    // 8 old entries + 9 new entries, minus the 7 common counted once.
+    // 12 old entries + 13 new entries, minus the 11 common counted once.
     assert_eq!(
         lines.len(),
-        1 + 7 + 2 + 1,
+        1 + 11 + 2 + 1,
         "header plus every path in either side"
     );
     assert!(!tsv.contains('\r'));
@@ -421,6 +502,10 @@ fn the_flat_tsv_carries_every_row_of_both_sides() {
         vec![
             "added",
             "added",
+            "changed",
+            "changed",
+            "changed",
+            "changed",
             "changed",
             "changed",
             "changed",
@@ -444,12 +529,12 @@ mod m5_matrix {
     use gircap::select::{self, Budget, Class, MatrixStatus};
 
     /// The §4.1 table, on the frozen pair: the cheapest candidate for each of
-    /// the nine classes, with the byte figure the spec records beside it.
+    /// the eleven classes, with the byte figure the spec records beside it.
     ///
-    /// `full_reuse_reordered` is the one row with no candidate — the live pair
-    /// has no file whose every chunk is reused and whose whole-file MD5 still
-    /// moved, and inventing one here would hide the very case the matrix has to
-    /// be able to say "unavailable" about.
+    /// **Two classes share a file**, and that is the point of the `covered_by`
+    /// admission: `trim_eager`'s cheapest candidate is also the cheapest
+    /// `kept_in_place` one, so the eager trim is *covered by* the capture the
+    /// keep class took rather than bought a second time.
     const CHEAPEST: &[(Class, Option<&str>, u64)] = &[
         (
             Class::Identical,
@@ -467,19 +552,34 @@ mod m5_matrix {
             1_180_000,
         ),
         (
-            Class::PartialSameOffset,
-            Some("GenshinImpact_Data/Plugins/HoYoChannel.dll"),
-            2_085_875,
+            Class::KeptInPlace,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
+            750,
         ),
         (
-            Class::PartialMovedOffset,
+            Class::MovedAscending,
             Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"),
             580,
         ),
         (
-            Class::PartialSizeChanged,
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00981562.blk"),
-            900,
+            Class::MovedDescending,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk"),
+            660,
+        ),
+        (
+            Class::MovedMixed,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk"),
+            720,
+        ),
+        (
+            Class::TrimEager,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
+            750,
+        ),
+        (
+            Class::TrimDeferred,
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk"),
+            930,
         ),
         (
             Class::Added,
@@ -491,7 +591,6 @@ mod m5_matrix {
             Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00664172.blk"),
             1_048_576,
         ),
-        (Class::FullReuseReordered, None, 0),
     ];
 
     /// The cheapest *path*, per class, straight out of the pool.
@@ -513,9 +612,10 @@ mod m5_matrix {
     }
 
     /// The greedy admission's answer per class, which is a different question
-    /// from "which candidate is cheapest" only once two classes can reach the
-    /// same file. Here they cannot, so each gets its own — and the matrix says
-    /// so rather than reporting a class as satisfied by a coincidence.
+    /// from "which candidate is cheapest" once two classes can reach the same
+    /// file. Here one pair can — `trim_eager` and `kept_in_place` share a file
+    /// — and the matrix says so rather than reporting the class as satisfied by
+    /// a coincidence.
     #[test]
     fn greedy_admission_captures_the_expected_file_per_class() {
         let pool = select::candidates(&[game()]);
@@ -533,21 +633,36 @@ mod m5_matrix {
                 (r.class, a.path.clone(), a.budget_cost)
             })
             .collect();
+        // The eager trim is **covered by** the keep class's capture, so it has
+        // no capture of its own and is not in the list of captures.
         let mut want: Vec<(Class, String, u64)> = CHEAPEST
             .iter()
+            .filter(|(c, p, _)| p.is_some() && *c != Class::TrimEager)
             .filter_map(|(c, p, cost)| p.map(|p| (*c, p.to_string(), *cost)))
             .collect();
         got.sort_by_key(|(c, _, _)| c.id());
         want.sort_by_key(|(c, _, _)| c.id());
         assert_eq!(got, want, "{MEASURED}");
 
-        // Eight admitted, one unavailable, and each admission is its own
-        // class's primary — nothing is covering anything.
-        assert_eq!(s.admitted.len(), 8);
-        assert_eq!(s.unmet(), vec![Class::FullReuseReordered]);
+        // Ten admitted, eleven classes, and the one class without a capture of
+        // its own is covered by another capture.
+        assert_eq!(s.admitted.len(), 10);
+        assert!(s.unmet().is_empty(), "every class answered");
+        let covered = s
+            .matrix
+            .iter()
+            .find(|r| r.class == Class::TrimEager)
+            .expect("a row for every class");
+        assert_eq!(covered.status, MatrixStatus::CoveredBy);
+        assert_eq!(
+            covered.covered_by.as_deref(),
+            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
+        );
         assert!(
-            s.admitted.iter().all(|a| a.also_satisfies.is_empty()),
-            "no file in this pair answers two classes, so nothing is `also_satisfies`"
+            s.admitted
+                .iter()
+                .any(|a| !a.also_satisfies.is_empty()),
+            "the covering capture says which other class it answers"
         );
         assert!(
             s.admitted.iter().all(|a| {
@@ -561,25 +676,44 @@ mod m5_matrix {
             s.bytes_admitted,
             CHEAPEST
                 .iter()
-                .filter(|(_, p, _)| p.is_some())
+                .filter(|(c, p, _)| p.is_some() && *c != Class::TrimEager)
                 .map(|(_, _, c)| c)
                 .sum::<u64>()
         );
     }
 
-    /// The ninth row is not missing — it is *recorded*, with the reason and the
-    /// count of candidates that were looked at and found wanting. A matrix that
-    /// simply omitted an unsatisfiable class would be indistinguishable from a
-    /// bug in the loop that walks them.
+    /// A class with **no** candidate is not missing from the matrix — it is
+    /// *recorded*, with the reason and the count of candidates that were looked
+    /// at and found wanting. A matrix that simply omitted an unsatisfiable
+    /// class would be indistinguishable from a bug in the loop that walks them.
     #[test]
     fn the_class_with_no_candidate_is_recorded_as_unavailable_not_dropped() {
+        // A pool with one candidate in it, so ten of the eleven classes have
+        // none.
         let pool = select::candidates(&[game()]);
         let s = select::select(&pool, 1, Budget::unlimited(), &[]);
-        assert_eq!(s.matrix.len(), 9, "one row per class, always");
+        assert_eq!(s.matrix.len(), Class::ALL.len(), "one row per class, always");
+        // Every class of the frozen pair has a candidate, so every row is
+        // answered — `captured` or `covered_by`.
+        assert!(
+            s.matrix.iter().all(|r| r.is_satisfied()),
+            "{:?}",
+            s.matrix
+        );
+        // And the row that *would* be unavailable says why, when the pool has
+        // nothing for it.
+        let bare = select::candidates(&[gircap::manifest::diff::FieldDiff {
+            field: "game".into(),
+            counts: Default::default(),
+            scores: Vec::new(),
+            rows: Vec::new(),
+            pool: Default::default(),
+        }]);
+        let s = select::select(&bare, 1, Budget::unlimited(), &[]);
         let row = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::FullReuseReordered)
+            .find(|r| r.class == Class::TrimDeferred)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::Unavailable);
         assert_eq!(
@@ -588,7 +722,7 @@ mod m5_matrix {
         );
         assert!(row.path.is_none() && row.capture_id.is_none());
         let reason = row.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("full_reuse_reordered"), "{reason}");
+        assert!(reason.contains("trim_deferred"), "{reason}");
         assert!(
             reason.contains("--audio"),
             "the remedy, not just the fact: {reason}"
@@ -700,14 +834,16 @@ mod m5_matrix {
             "{}",
             everything.rejected.len()
         );
-        // Eight one-per-class captures, plus the second `identical`
-        // (00000001.blk) and the second `added` (00000002.blk) that
-        // `--per-class 2` asks for.
-        assert_eq!(everything.admitted.len(), 10);
+        // Ten one-per-class captures, plus the second `identical`
+        // (00000001.blk), the second `kept_in_place` (00981562.blk), the second
+        // `moved_ascending` (00000006.blk) and the second `added`
+        // (00000002.blk) that `--per-class 2` asks for. The two trim classes
+        // get **none**: their cheapest candidates are already captured.
+        assert_eq!(everything.admitted.len(), 13);
         assert_eq!(
             everything.bytes_admitted,
-            4_432_923 + 1_775_744 + 887_872,
-            "4 432 923 is the eight §4.1 rows above, summed"
+            5_013_724,
+            "the thirteen rows above, summed"
         );
     }
 
@@ -723,7 +859,7 @@ mod m5_matrix {
         let row = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::PartialSameOffset)
+            .find(|r| r.class == Class::KeptInPlace)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::CoveredBy);
         assert_eq!(row.covered_by.as_deref(), Some(dll));
@@ -753,8 +889,24 @@ mod m5_matrix {
         assert_eq!(ranks, (1..=rows.len() as u64).collect::<Vec<_>>());
         for r in rows {
             let classes = r["classes"].as_array().expect("classes");
-            assert_eq!(classes.len(), 1, "{} -> {classes:?}", r["path"]);
+            assert!(!classes.is_empty(), "{} -> {classes:?}", r["path"]);
         }
+        // Two of the paths answer **two** classes each: the file that shows the
+        // eager trim is also a `kept_in_place` file, and the file that shows the
+        // deferred trim is also a `moved_ascending` one. That overlap is what
+        // `covered_by` is built from.
+        let two: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["classes"].as_array().expect("classes").len() == 2)
+            .map(|r| r["path"].as_str().expect("path"))
+            .collect();
+        assert_eq!(
+            two,
+            vec![
+                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
+                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
+            ]
+        );
     }
 
     /// The `+n` suffix counts *within a class*, not across the run.
@@ -810,45 +962,41 @@ mod m5_matrix {
         }
         // `--per-class 3` does not invent candidates: the matrix still admits
         // exactly the files that exist.
-        assert_eq!(three.admitted.len(), 10);
+        assert_eq!(three.admitted.len(), 14);
     }
 
     /// An `unavailable` class is a fact about the manifests and an `over_budget`
     /// one is a fact about this run's flags. `--require-class` turns both into
     /// exit `4`; nothing else does.
     ///
-    /// This is the 7.0.0 → 7.1.0 pair, which genuinely has no
-    /// `full_reuse_reordered` file, so a default that required every class would
-    /// make every run of it fail.
+    /// Every class of the frozen pair has a candidate, so a default that
+    /// required every class would have nothing to complain about here — and
+    /// that is the point: the requirement is about the classes the caller
+    /// names, not about the ones nobody did.
     #[test]
     fn an_unavailable_class_is_recorded_and_never_pretends_to_be_a_failure() {
         let pool = select::candidates(&[game()]);
         let open = select::select(&pool, 1, Budget::unlimited(), &[]);
         let tight = select::select(&pool, 1, Budget::capped(0), &[]);
 
-        // Unavailable: nothing in the pool satisfies it, and raising the ceiling
-        // does not help.
-        assert_eq!(
-            open.unmet(),
-            vec![Class::FullReuseReordered],
-            "the ninth row is the only shortfall"
+        // Nothing is missing: every class is answered, ten of them by a
+        // capture of their own and one (`trim_eager`) by another capture.
+        assert!(
+            open.unmet().is_empty(),
+            "every class of this pair is answered: {:?}",
+            open.matrix
         );
         assert!(
             open.admitted
                 .iter()
-                .all(|a| a.primary_class != Class::FullReuseReordered)
+                .all(|a| a.primary_class != Class::TrimEager),
+            "the eager trim is covered, not captured"
         );
 
-        // Over budget: nine shortfalls, and the eight that had a candidate each
-        // name its cost. The ninth stays `Unavailable` — no ceiling could fund
-        // a file that is not there.
-        assert_eq!(tight.unmet().len(), 9);
+        // Over budget: eleven shortfalls, and every one of them names its
+        // cost — including the two whose covering capture was refused.
+        assert_eq!(tight.unmet().len(), Class::ALL.len());
         for row in &tight.matrix {
-            if row.class == Class::FullReuseReordered {
-                assert_eq!(row.status, MatrixStatus::Unavailable);
-                assert_eq!(row.candidates_considered, 0);
-                continue;
-            }
             assert_eq!(row.status, MatrixStatus::OverBudget, "{row:?}");
             assert!(
                 row.reason
@@ -862,7 +1010,7 @@ mod m5_matrix {
         assert_eq!(tight.bytes_admitted, 0);
         assert_eq!(
             tight.rejected.len(),
-            8,
+            10,
             "every wanted candidate is accounted for"
         );
     }
@@ -1243,7 +1391,7 @@ mod m7_assembly {
             ("7.0.0".to_string(), "https://cdn/old".to_string()),
             ("7.1.0".to_string(), "https://cdn/new".to_string()),
         ]);
-        let classes = [Class::PartialSameOffset];
+        let classes = [Class::KeptInPlace];
         assemble::assemble(&AssemblyInput {
             pair,
             matching_field: "game",

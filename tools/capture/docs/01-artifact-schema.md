@@ -69,8 +69,8 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
     └── selfcheck.json
 ```
 
-`capture_id` is `<class>` or `<class>+<n>` (e.g. `partial_same_offset`,
-`partial_moved_offset+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
+`capture_id` is `<class>` or `<class>+<n>` (e.g. `kept_in_place`,
+`moved_ascending+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
 Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
 
@@ -126,10 +126,10 @@ assume any document in a bundle was renamed into position.
     { "class": "identical", "status": "captured", "capture_id": "identical",
       "path": "GenshinImpact_Data/Resources/browser_assets", "matching_field": "game",
       "also_satisfies": [] },
-    { "class": "partial_size_changed", "status": "covered_by",
-      "covered_by": "partial_same_offset",
+    { "class": "trim_deferred", "status": "covered_by",
+      "covered_by": "moved_ascending",
       "reason": "cheapest candidate already captured for a cheaper class" },
-    { "class": "full_reuse_reordered", "status": "unavailable",
+    { "class": "moved_mixed", "status": "over_budget",
       "reason": "no path in any selected field has reused==nchunks && md5 differs",
       "candidates_considered": 2837 }
   ],
@@ -142,7 +142,11 @@ assume any document in a bundle was renamed into position.
 ```
 
 `matrix[].status` ∈ `captured` | `covered_by` | `over_budget` | `unavailable`.
-A class is never simply absent (assertion A17). The row's optional keys
+A class is never simply absent (assertion A17). All four states are acceptable
+to A17: the assertion is about the matrix being *complete* — every class has a
+row and every row says what happened to it — and `over_budget` ("a candidate
+existed and this run's budget would not pay for it") is a complete answer. The
+refusal is `--require-class`'s job. The row's optional keys
 (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
@@ -499,7 +503,7 @@ for the reference pool. Lets a later run ask "why did it pick that?"
       "nchunks": 3, "reused": 1, "moved": 0, "moved_up": 0, "moved_down": 0,
       "old_max_end": 2340264, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
-      "total_cost": 1826067, "classes": ["partial_same_offset"], "rank": 1 }
+      "total_cost": 1826067, "classes": ["kept_in_place"], "rank": 1 }
   ] }
 ```
 
@@ -562,7 +566,7 @@ capture.
       "decode_error": null,
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
-          "capture_id": "partial_moved_offset",
+          "capture_id": "moved_ascending",
           "path": "…/blocks/00/09801749.blk", "role": "materialize_old", "offset": 5502333 }
       ],
       "sets": ["materialize_old"] }
@@ -636,10 +640,10 @@ Per target chunk: where its bytes come from.
 
 ```jsonc
 { "schema_version": 1,
-  "capture_id": "partial_same_offset",
+  "capture_id": "kept_in_place",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
-  "classes": ["partial_same_offset"],
+  "classes": ["kept_in_place"],
   "old": { "tag": "7.0.0", "size": 2340264, "md5": "1e210ff1…", "nchunks": 3 },
   "new": { "tag": "7.1.0", "size": 2340264, "md5": "d992a789…", "nchunks": 3 },
   "plan": [

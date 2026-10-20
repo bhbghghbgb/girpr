@@ -465,7 +465,7 @@ mod tests {
     /// ones — five distinct chunk ids in all.
     fn hoyo() -> FilePair {
         FilePair {
-            capture_id: "partial_same_offset".into(),
+            capture_id: "kept_in_place".into(),
             path: "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -743,7 +743,7 @@ mod tests {
     fn a_reference_written_before_build_id_existed_still_reads() {
         let old_document = r#"{
             "tag": "7.0.0",
-            "capture_id": "partial_same_offset",
+            "capture_id": "kept_in_place",
             "path": "dll",
             "role": "materialize_old",
             "offset": 0
@@ -756,7 +756,7 @@ mod tests {
         let now = Reference {
             tag: "7.0.0".into(),
             build_id: Some("3XnPviMfoILi".into()),
-            capture_id: "partial_same_offset".into(),
+            capture_id: "kept_in_place".into(),
             path: "dll".into(),
             role: Set::MaterializeOld,
             offset: 0,

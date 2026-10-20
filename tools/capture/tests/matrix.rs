@@ -96,7 +96,7 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
     ];
     args.extend(extra.iter().map(|s| s.to_string()));
     let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, stdout, stderr) = run(&borrowed);
+    let (code, stdout, _stderr) = run(&borrowed);
     // A failing capture prints two records: the run's own numbers, then the
     // failure's. The run's is the one carrying `stage=artifact`, which the
     // failure's never does — so the two are told apart by shape rather than by
@@ -110,7 +110,12 @@ fn captured(name: &str, world: World, extra: &[&str]) -> Captured {
         .iter()
         .find(|l| l.contains(" stage="))
         .map(|l| parse_summary(l))
-        .unwrap_or_else(|| panic!("no capture SUMMARY:\n{stdout}\n{stderr}"));
+        // **Empty when the run never got that far.** A refusal that happens
+        // before the capture has measured anything (`--require-class` unmet)
+        // prints only the failure's record, so there is no run summary to read.
+        // The failure's own record is `failure` below, and it is the one that
+        // says what went wrong.
+        .unwrap_or_default();
     let failure = records
         .iter()
         .find(|l| l.contains("artifact_trustworthy="))
@@ -180,7 +185,7 @@ impl Captured {
 fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
     let c = captured("classes", World::five_classes(), &[]);
     let rows = c.matrix();
-    assert_eq!(rows.len(), 9, "one row per required class");
+    assert_eq!(rows.len(), 11, "one row per required class");
     for r in &rows {
         // A fulfilled row has nothing to explain; an unfulfilled one must say why.
         let satisfied = matches!(r["status"].as_str(), Some("captured" | "covered_by"));
@@ -287,15 +292,17 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// `unavailable` here would be claiming the world cannot supply the file when
 /// the truth is that this run would not pay for it.
 ///
-/// **The run ends `3`, not `0`.** A17's own doc has always said `over_budget` is
-/// *deliberately* not an acceptable matrix state — "a finding about the run
-/// rather than about the world" — so A17 fails here, and a failed row ends the
-/// run. The process exit agrees with the bundle's own account of itself.
+/// **The run ends `0`, not `3`.** A17 is about the matrix being *complete* —
+/// every class has a row and every row says what happened — and `over_budget`
+/// is a complete answer: "a candidate existed and this run's budget would not
+/// pay for it". The refusal is `--require-class`'s job, and the case below
+/// asserts that too: a class the caller *named* and did not get is exit `4`,
+/// which is the failure the operator has to see.
 ///
 /// That is a change to what a budgeted capture *means* to a caller, and it is
 /// worth being explicit that it is one: `--max-download-bytes` is a supported
-/// flag, and a caller who sets it too low now gets exit 3 rather than exit 0
-/// with `result: fail`.
+/// flag, and a caller who sets it too low now gets a bundle that says which
+/// class it could not afford rather than a failed run.
 ///
 /// The run's own numbers are still on stdout, because the capture summary is
 /// emitted *before* the failure's: a caller who set a budget it could not afford
@@ -318,23 +325,18 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         World::five_classes(),
         &["--max-download-bytes", &half.to_string()],
     );
-    // The run fails, and says which assertion: A17, on the matrix.
+    // The run **succeeds**: the matrix is complete and honest about what the
+    // budget would not pay for.
     assert_eq!(
-        c.code, 3,
-        "a class the budget refused makes A17 fail, and a failed row ends the run"
+        c.code, 0,
+        "a budget the run could not afford is recorded, not fatal\n{}\n{}",
+        c.summary["exit_code"], c.failure["detail"]
     );
-    assert_eq!(c.failure["result"], "error");
-    assert_eq!(c.failure["exit_code"], "3");
-    assert!(
-        c.failure["detail"].contains("A17"),
-        "the failure names the assertion: {:?}",
-        c.failure["detail"]
-    );
+    assert_eq!(c.summary["exit_code"], "0");
 
-    // **And the run's own numbers survive the failure.** This is the reason the
-    // capture summary is printed before the failure's: a caller who set a budget
-    // it could not afford wants to know what it did afford most precisely when
-    // the run failed.
+    // **And the run's own numbers survive.** This is the reason the capture
+    // summary is printed before the failure's: a caller who set a budget it
+    // could not afford wants to know what it did afford most precisely.
     assert_eq!(c.summary["budget_limit"], half.to_string(), "the limit is recorded");
     assert_eq!(c.summary["budget_unlimited"], "false");
     let over = c.summary["captures_over_budget"].parse::<u64>().expect("a count");
@@ -378,6 +380,60 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
             );
         }
     }
+
+    // **And a class the caller named is still refused.** The requirement is the
+    // thing that turns "this run would not pay for it" into a failure.
+    //
+    // The class named is the one the budget actually refused, read out of the
+    // matrix rather than guessed: a requirement for a class the run *did*
+    // afford is met, and the run would exit `0` — which is the whole point of
+    // `--require-class` being about the classes the caller names.
+    let refused = c
+        .matrix()
+        .iter()
+        .find(|r| r["status"] == "over_budget")
+        .and_then(|r| r["class"].as_str())
+        .expect("the budget refused something")
+        .to_string();
+    //
+    // Run through the binary directly, because the requirement is checked
+    // **before** the bundle is written: a run that refuses a class the caller
+    // named has nothing to write, and there is no bundle to read.
+    let mock = Mock::start(World::five_classes());
+    let scratch = Scratch::new("budget-required");
+    let args: Vec<String> = vec![
+        "capture".into(),
+        "--out".into(),
+        scratch.out().to_string_lossy().into_owned(),
+        "--hyp-base".into(),
+        mock.hyp_base(),
+        "--sophon-base".into(),
+        mock.sophon_base(),
+        "--max-download-bytes".into(),
+        half.to_string(),
+        "--require-class".into(),
+        refused.clone(),
+    ];
+    let borrowed: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let (code, stdout, _stderr) = run(&borrowed);
+    assert_eq!(
+        code, 4,
+        "a required class the budget refused is exit 4\n{stdout}"
+    );
+    let record = stdout
+        .lines()
+        .filter(|l| l.starts_with("SUMMARY "))
+        .find_map(|l| {
+            let m = parse_summary(l);
+            if m.contains_key("exit_code") { Some(m) } else { None }
+        })
+        .expect("a summary");
+    assert_eq!(record["exit_code"], "4");
+    let detail = record["detail"].replace("%20", " ");
+    assert!(
+        detail.contains(&refused),
+        "the refusal names the class: {detail}"
+    );
 }
 
 /// The diff the run computed, read back off disk, agrees with the rows.

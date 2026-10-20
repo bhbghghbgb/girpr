@@ -80,7 +80,7 @@ impl PlanEntry {
     /// Whether this chunk's bytes come from a **different offset** in the old
     /// file than where they land in the new one.
     ///
-    /// One definition for the `partial_moved_offset` class, the `Totals::moved`
+    /// One definition for the `moved_ascending` class, the `Totals::moved`
     /// count and the per-entry note. It was spelled out three times, and the
     /// three had to agree or the note would contradict the count.
     pub fn is_moved(&self) -> bool {
@@ -1233,7 +1233,7 @@ fn a_file_past_the_assembly_limit_is_refused_rather_than_allocated() {
 }
 
 /// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
-/// file in the reference bundle (`partial_moved_offset`), and 40x is slack
+/// file in the reference bundle (`moved_ascending`), and 40x is slack
 /// well below the 1 GiB the limit is set at. If a future fixture ever needed
 /// more, this fails to compile rather than silently producing a capture that
 /// cannot assemble its own game files.
@@ -1334,7 +1334,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         .flatten()
         .collect();
         let src = ChunkSource::from_memory(memory_of(&entries));
-        let classes = [Class::PartialSameOffset];
+        let classes = [Class::KeptInPlace];
         assemble(&AssemblyInput {
             pair,
             matching_field: "game",
@@ -1355,7 +1355,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             vec![chunk(9, 0, 64), chunk(2, 64, 128), chunk(8, 192, 40)],
         );
         FilePair {
-            capture_id: "partial_same_offset".into(),
+            capture_id: "kept_in_place".into(),
             path: "dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1497,7 +1497,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "partial_moved_offset".into(),
+            capture_id: "moved_ascending".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1629,7 +1629,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
             vec![chunk(3, 0, 32), chunk(1, 32, 64), chunk(2, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "full_reuse_reordered".into(),
+            capture_id: "moved_mixed".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1818,7 +1818,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
         .into();
         let mut mem = memory_of(&entries);
         mem.insert(shared.id.clone(), payload(200, 128)); // wrong content, same id
-        let classes = [Class::PartialSameOffset];
+        let classes = [Class::KeptInPlace];
         let src = ChunkSource::from_memory(mem);
         let mut a = assemble(&AssemblyInput {
             pair: &pair,
@@ -1877,7 +1877,7 @@ const _: () = assert!(MAX_ASSEMBLY_BYTES > 22_662_068 * 40);
     fn a_missing_chunk_is_named_and_stops_the_assembly() {
         let pair = same_offset_pair();
         let src = ChunkSource::from_memory(BTreeMap::new());
-        let classes = [Class::PartialSameOffset];
+        let classes = [Class::KeptInPlace];
         let e = assemble(&AssemblyInput {
             pair: &pair,
             matching_field: "game",

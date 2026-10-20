@@ -176,7 +176,7 @@ pub const WORDING: [(&str, &str); 18] = [
     ),
     (
         "A17",
-        "each required matrix class is captured | covered_by | unavailable - never absent",
+        "each required matrix class is captured | covered_by | over_budget | unavailable - never absent",
     ),
     (
         "A19",
@@ -417,7 +417,7 @@ pub fn closing(
     //
     // A14 asks "is `game/` free of paths the tool under test would plan
     // against", which is one direction. It cannot see the other failure: a
-    // capture admitted for `partial_same_offset` whose two variant files came
+    // capture admitted for `kept_in_place` whose two variant files came
     // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
     // side matches its own declared MD5), and be useless - the fixture would
     // hold no evidence of the patch it was captured for. M11 found the gap by
@@ -680,10 +680,15 @@ impl MatrixRow {
     ///
     /// Takes the string rather than a `&MatrixRow` because M9's `verify` has a
     /// status it read out of `MANIFEST.json` and no row to hang the answer on.
-    /// `over_budget` is excluded for the reason [`crate::select::MatrixRow`]
-    /// gives: the caller was told to take it and the tool could not afford to.
+    /// Every state is acceptable: A17 is about the matrix being **complete**,
+    /// and `over_budget` is a complete answer — "a candidate existed and this
+    /// run's budget would not pay for it". The *requirement* is
+    /// `--require-class`'s business, and it excludes `over_budget` on its own.
     pub fn ok_status(status: &str) -> bool {
-        matches!(status, "captured" | "covered_by" | "unavailable")
+        matches!(
+            status,
+            "captured" | "covered_by" | "over_budget" | "unavailable"
+        )
     }
 }
 

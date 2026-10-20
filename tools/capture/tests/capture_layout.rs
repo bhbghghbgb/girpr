@@ -766,7 +766,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/partial_same_offset.json",
+        "patchmaps/kept_in_place.json",
         "patchmaps/removed.json",
         "patchmaps/zero_reuse_multi.json",
     ];
@@ -806,7 +806,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/partial_same_offset.json",
+        "patchmaps/kept_in_place.json",
         "patchmaps/removed.json",
         "patchmaps/zero_reuse_multi.json",
         "verify/selfcheck.json",
@@ -879,12 +879,14 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
         "| `zero_reuse_single` | unavailable | - | `-` | - | - |",
         "| `zero_reuse_multi` | captured | zero_reuse_multi | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
-        "| `partial_same_offset` | captured | partial_same_offset | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
-        "| `partial_moved_offset` | unavailable | - | `-` | - | - |",
-        "| `partial_size_changed` | unavailable | - | `-` | - | - |",
+        "| `kept_in_place` | captured | kept_in_place | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
+        "| `moved_ascending` | unavailable | - | `-` | - | - |",
+        "| `moved_descending` | unavailable | - | `-` | - | - |",
+        "| `moved_mixed` | unavailable | - | `-` | - | - |",
+        "| `trim_eager` | unavailable | - | `-` | - | - |",
+        "| `trim_deferred` | unavailable | - | `-` | - | - |",
         "| `added` | captured | added | `GenshinImpact_Data/Plugins/libNew.dll` | game | - |",
         "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #    |",
-        "| `full_reuse_reordered` | unavailable | - | `-` | - | - |",
         "## Totals",
         "- # files captured, #  chunk blobs stored",
         "- #     B downloaded, #     B on disk",
@@ -963,7 +965,7 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
         "A14 game/ contains no path outside expected/'s manifest set + the tool-read config files",
         "A15 diff/ counts equal the recomputed set differences",
         "A16 checksums.json covers every file written under the artifact root, and re-hashing matches",
-        "A17 each required matrix class is captured | covered_by | unavailable - never absent",
+        "A17 each required matrix class is captured | covered_by | over_budget | unavailable - never absent",
         "A19 each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
         "A2 getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
         "A3 manifest blob md5(decompressed) == manifest.checksum",
@@ -1354,7 +1356,7 @@ fn the_captured_bundle_is_found_by_list() {
 
 // ------------------------------------------------------------ the matrix
 
-/// The five classes the synthetic world publishes are found, and the four it
+/// The five classes the synthetic world publishes are found, and the six it
 /// does not are `unavailable` rather than absent.
 #[test]
 fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
@@ -1362,7 +1364,7 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
     let raw = std::fs::read(bundle.join("MANIFEST.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let rows = doc["matrix"].as_array().expect("a matrix");
-    assert_eq!(rows.len(), 9, "one row per required class");
+    assert_eq!(rows.len(), 11, "one row per required class");
     let by = |c: &str| {
         rows.iter()
             .find(|r| r["class"] == c)
@@ -1374,15 +1376,17 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
         "added",
         "removed",
         "zero_reuse_multi",
-        "partial_same_offset",
+        "kept_in_place",
     ] {
         assert_eq!(by(c)["status"], "captured", "{c}: {}", by(c));
     }
     for c in [
         "zero_reuse_single",
-        "partial_moved_offset",
-        "partial_size_changed",
-        "full_reuse_reordered",
+        "moved_ascending",
+        "moved_descending",
+        "moved_mixed",
+        "trim_eager",
+        "trim_deferred",
     ] {
         assert_eq!(by(c)["status"], "unavailable", "{c}: {}", by(c));
         assert!(
@@ -1447,13 +1451,13 @@ fn requiring_an_unavailable_class_is_exit_four() {
     let r = capture(
         &mock,
         &scratch,
-        &["--require-class", "full_reuse_reordered"],
+        &["--require-class", "moved_mixed"],
     );
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
     let detail = percent_decode(&r.summary()["detail"]);
-    assert!(detail.contains("full_reuse_reordered"), "{detail}");
+    assert!(detail.contains("moved_mixed"), "{detail}");
 }
 
 /// The six `api` rows in `requests.ndjson` carry the path their body was

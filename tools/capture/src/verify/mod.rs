@@ -1008,8 +1008,8 @@ mod tests {
     fn a_status_the_reader_cannot_agree_with_is_not_counted_as_ok() {
         assert!(crate::emit::selfcheck::MatrixRow::ok_status("captured"));
         assert!(crate::emit::selfcheck::MatrixRow::ok_status("covered_by"));
+        assert!(crate::emit::selfcheck::MatrixRow::ok_status("over_budget"));
         assert!(crate::emit::selfcheck::MatrixRow::ok_status("unavailable"));
-        assert!(!crate::emit::selfcheck::MatrixRow::ok_status("over_budget"));
         assert!(!crate::emit::selfcheck::MatrixRow::ok_status(
             "something else"
         ));
