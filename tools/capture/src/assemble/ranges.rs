@@ -131,14 +131,8 @@ impl Layout {
     /// meant every caller built a `Vec` of tuples only for this to convert it
     /// into a `Vec<Range>` and drop the first one — two vectors where one would
     /// do, for every file assembled.
-    pub fn of(
-        parts: impl IntoIterator<Item = (i64, i64)>,
-        declared_size: i64,
-    ) -> Layout {
-        let ranges: Vec<Range> = parts
-            .into_iter()
-            .map(|(o, l)| Range::at(o, l))
-            .collect();
+    pub fn of(parts: impl IntoIterator<Item = (i64, i64)>, declared_size: i64) -> Layout {
+        let ranges: Vec<Range> = parts.into_iter().map(|(o, l)| Range::at(o, l)).collect();
         let total: i64 = ranges.iter().map(Range::len).sum();
         let mut violations = Vec::new();
 

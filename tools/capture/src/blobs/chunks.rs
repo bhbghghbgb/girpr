@@ -276,8 +276,11 @@ impl Retention {
     /// One set over `materialize_new`, built once: both conditions are
     /// membership tests against it, and the naive form is O(new²) per file.
     pub fn a12_failure(&self) -> Option<&'static str> {
-        let new: std::collections::HashSet<&str> =
-            self.ids(Set::MaterializeNew).iter().map(String::as_str).collect();
+        let new: std::collections::HashSet<&str> = self
+            .ids(Set::MaterializeNew)
+            .iter()
+            .map(String::as_str)
+            .collect();
         let reuse: std::collections::HashSet<&str> =
             self.reuse.iter().map(String::as_str).collect();
         for id in self.ids(Set::PatchFetch) {

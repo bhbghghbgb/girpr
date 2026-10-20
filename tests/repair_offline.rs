@@ -676,7 +676,10 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     assert_eq!(code, 0);
     let line = girpr::report::summary_record(&summary, code).text();
     for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
-        assert!(!line.contains(k), "{k} must be absent when unflagged: {line}");
+        assert!(
+            !line.contains(k),
+            "{k} must be absent when unflagged: {line}"
+        );
     }
 
     // Flagged: the mode, the paths it used, and the bytes it kept.
@@ -780,7 +783,10 @@ async fn a_second_run_against_the_same_install_is_refused() {
         .expect_err("the second run is refused");
     assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
     let msg = format!("{:#}", err.source);
-    assert!(msg.contains("girpr.lock"), "the refusal names the file: {msg}");
+    assert!(
+        msg.contains("girpr.lock"),
+        "the refusal names the file: {msg}"
+    );
     assert!(msg.contains(&std::process::id().to_string()), "{msg}");
 
     // A **scoped** run does not take the lock — the lock's path is outside
@@ -2590,8 +2596,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     // That is the "the estimate is an upper bound" property, and it is why the
     // `local_manifest` key has to be there.
     assert_eq!(
-        summary.flags.plan_download_bytes,
-        None,
+        summary.flags.plan_download_bytes, None,
         "the estimate is only reported when the ceiling asked for it"
     );
     assert!(

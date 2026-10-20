@@ -646,9 +646,7 @@ pub fn select(
     // positions admitted an 108 B candidate under a 100 B ceiling, because the
     // two orders were silently out of step.
     let mut ordered: Vec<usize> = (0..wants.len()).collect();
-    ordered.sort_by(|&a, &b| {
-        cost_then_field_then_path(&wants[a].2, &wants[b].2)
-    });
+    ordered.sort_by(|&a, &b| cost_then_field_then_path(&wants[a].2, &wants[b].2));
     let costs: Vec<u64> = ordered.iter().map(|&i| wants[i].2.budget_cost()).collect();
     let (fates, final_budget) =
         budget::admit_in_order(&costs, Budget::with_spent(budget.limit(), initial));
@@ -712,9 +710,8 @@ pub fn select(
                         row.capture_id = Some(a.capture_id.clone());
                         row.covered_by = Some(a.path.clone());
                         row.path = Some(a.path.clone());
-                        row.reason = Some(
-                            "the cheapest candidate is captured for another class".into(),
-                        );
+                        row.reason =
+                            Some("the cheapest candidate is captured for another class".into());
                     }
                     None => {
                         row.status = MatrixStatus::OverBudget;
@@ -741,10 +738,7 @@ pub fn select(
                         .map(|(_, _, c)| c.budget_cost())
                         .min()
                         .unwrap_or(0);
-                    row.reason = Some(format!(
-                        "the cheapest candidate {}",
-                        unfunded(cheapest)
-                    ));
+                    row.reason = Some(format!("the cheapest candidate {}", unfunded(cheapest)));
                 }
             },
         }
@@ -851,7 +845,6 @@ pub fn classes_in_order(ids: &[&str]) -> Vec<Class> {
         .filter(|c| ids.contains(&c.id()))
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1294,7 +1287,11 @@ mod tests {
                 .iter()
                 .any(|r| r.capture_id.is_none() && r.status == MatrixStatus::Captured)
         );
-        assert_eq!(s.matrix.len(), Class::ALL.len(), "one row per class, always");
+        assert_eq!(
+            s.matrix.len(),
+            Class::ALL.len(),
+            "one row per class, always"
+        );
     }
 
     /// A forced capture answers its class *without* having been selected for it —
@@ -1431,7 +1428,11 @@ mod tests {
             .filter(|r| r.status == MatrixStatus::Unavailable)
             .count();
         assert_eq!(unavailable, Class::ALL.len() - 2);
-        assert_eq!(s.unmet().len(), Class::ALL.len(), "nothing in this fixture is satisfied");
+        assert_eq!(
+            s.unmet().len(),
+            Class::ALL.len(),
+            "nothing in this fixture is satisfied"
+        );
         assert!(s.admitted.is_empty());
         assert_eq!(s.bytes_admitted, 0);
     }

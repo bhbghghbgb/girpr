@@ -166,12 +166,17 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
             // A caller that could reorder them would produce a bundle that
             // satisfied A14 and had no patchmap, which is the exact shape of
             // "looks fine, is useless".
-            record(i.dir, a, got.map_err(|e| {
-                assertion(
-                    &format!("assemble {}", a.path),
-                    &ApiError::shape("assemble", e),
-                )
-            })?, &mut out)?;
+            record(
+                i.dir,
+                a,
+                got.map_err(|e| {
+                    assertion(
+                        &format!("assemble {}", a.path),
+                        &ApiError::shape("assemble", e),
+                    )
+                })?,
+                &mut out,
+            )?;
         }
     }
 
@@ -183,14 +188,8 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
     // re-parses with `game_version == --old-tag`" - failed on a tree that simply
     // had no config in it, and reported a missing file as a broken assertion.
     // The flag suppresses *chunk blobs*, not the launcher metadata.
-    let mut prelude = gamedir::write_prelude(
-        i.dir,
-        i.biz,
-        i.old_tag,
-        &out.scan_dir,
-        i.audio,
-    )
-    .map_err(|e| write_err(i.dir, e))?;
+    let mut prelude = gamedir::write_prelude(i.dir, i.biz, i.old_tag, &out.scan_dir, i.audio)
+        .map_err(|e| write_err(i.dir, e))?;
     out.written.append(&mut prelude);
 
     let failures = out.rows.iter().filter(|a| !a.ok).count();
@@ -206,10 +205,7 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
             "assemble the admitted captures",
             &ApiError::shape(
                 "A7-A12",
-                format!(
-                    "{failures} of {} selfcheck rows failed",
-                    out.rows.len()
-                ),
+                format!("{failures} of {} selfcheck rows failed", out.rows.len()),
             ),
         ));
     }
@@ -262,9 +258,8 @@ fn record(
             got.new.as_ref().map(|s| s.md5.clone()).unwrap_or_default(),
         ),
     );
-    out.written.push(
-        super::write_patchmap(dir, &a.capture_id, &got.map).map_err(|e| write_err(dir, e))?,
-    );
+    out.written
+        .push(super::write_patchmap(dir, &a.capture_id, &got.map).map_err(|e| write_err(dir, e))?);
     // `game/` is the fixture, `expected/` the ground truth. A `removed` capture
     // contributes only to the first.
     if let Some(o) = &got.old {

@@ -175,10 +175,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     reachable by running a capture against the live API.
     let game_pair = negative::game_pair(&fields, &manifests)?;
     let (old_game, new_game) = manifest::fetch::pair_sides(game_pair, "the game manifest pair")?;
-    let new_only_chunk_id = negative::new_only_chunk_id(
-        negative::chunk_ids(old_game),
-        negative::chunk_ids(new_game),
-    )?;
+    let new_only_chunk_id =
+        negative::new_only_chunk_id(negative::chunk_ids(old_game), negative::chunk_ids(new_game))?;
     let error_shapes = probe::probe_error_shapes(
         &fetcher,
         &endpoints,
@@ -209,7 +207,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // 6c. Score, classify, admit. Pure arithmetic over `diffs` - the only work
     //     this adds to the run is the audio manifests fetched above. The decision
     //     and the account of it moved together into `select::decide`.
-    let decided = select::decide::decide(&diffs, plan.per_class, plan.max_download_bytes, &plan.files);
+    let decided =
+        select::decide::decide(&diffs, plan.per_class, plan.max_download_bytes, &plan.files);
     let (selection, candidates_scored) = (decided.selection, decided.pool_len);
 
     // 6d. `--require-class` is the only thing that turns an absent class into a
@@ -859,4 +858,3 @@ mod tests {
         assert!(line.contains("retcode%20-202"), "{line}");
     }
 }
-

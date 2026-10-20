@@ -375,7 +375,8 @@ enum Inplace {
 ///
 /// `pub(super)` because the plan's disk estimates ask the same question: the
 /// estimate and the repair must not disagree about which path a file takes.
-pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {    if requested == RepairMode::Temp {
+pub(super) fn resolve_mode(requested: RepairMode, path: &std::path::Path) -> Mode {
+    if requested == RepairMode::Temp {
         return Mode::Temp;
     }
     match std::fs::symlink_metadata(path) {
@@ -562,8 +563,7 @@ async fn attempt_inplace_inner(
     if ctx.repair_mode == RepairMode::Discard {
         drop(handle);
         std::fs::remove_file(final_path).ok();
-        handle = open_rw(final_path)
-            .with_context(|| format!("create {}", final_path.display()))?;
+        handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
         // The file is gone: every chunk has to be written, and there is
         // nothing left to reuse from.
         scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
@@ -576,11 +576,7 @@ async fn attempt_inplace_inner(
         .filter(|&i| !scan.dest_ok[i])
         .collect();
     stats.chunks_kept = (file.chunks.len() - bad.len()) as u64;
-    tracing::debug!(
-        bad = bad.len(),
-        kept = stats.chunks_kept,
-        "in-place plan"
-    );
+    tracing::debug!(bad = bad.len(), kept = stats.chunks_kept, "in-place plan");
 
     // The eager trim: when no reuse candidate reaches past the target's
     // end, the tail is dead weight and can be released before a single byte
@@ -675,8 +671,7 @@ async fn attempt_inplace_inner(
     let order = match tier {
         Tier::Staged => None,
         Tier::Ordered => {
-            let chunks: Vec<SophonChunk> =
-                bad.iter().map(|&i| file.chunks[i].clone()).collect();
+            let chunks: Vec<SophonChunk> = bad.iter().map(|&i| file.chunks[i].clone()).collect();
             let srcs: Vec<Option<u64>> = bad
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
@@ -905,7 +900,8 @@ fn open_inplace(ctx: &FileCtx, path: &std::path::Path) -> Result<Option<File>> {
                 "in-place open failed -> clearing the read-only attribute"
             );
             clear_readonly(path)?;
-            let f = open_rw(path).with_context(|| format!("open for writing {}", path.display()))?;
+            let f =
+                open_rw(path).with_context(|| format!("open for writing {}", path.display()))?;
             Ok(Some(f))
         }
     }
@@ -970,11 +966,7 @@ fn clear_readonly(path: &std::path::Path) -> Result<()> {
 /// from the file the trim shortens, so every one of them has to be inside the
 /// target's end, and a candidate that is not is a candidate the trim would
 /// destroy.
-fn trim_is_free(
-    file: &PlannedFile,
-    chunks: &[SophonChunk],
-    sources: &[Option<u64>],
-) -> bool {
+fn trim_is_free(file: &PlannedFile, chunks: &[SophonChunk], sources: &[Option<u64>]) -> bool {
     let size = file.size.max(0) as u64;
     chunks.iter().zip(sources).all(|(c, src)| {
         let Some(r) = *src else { return true };
@@ -1317,10 +1309,7 @@ mod tests {
         // Not there: the in-place path creates it.
         let missing = dir.join("missing.dat");
         assert_eq!(resolve_mode(RepairMode::Auto, &missing), Mode::Inplace);
-        assert_eq!(
-            resolve_mode(RepairMode::Inplace, &missing),
-            Mode::Inplace
-        );
+        assert_eq!(resolve_mode(RepairMode::Inplace, &missing), Mode::Inplace);
 
         // An existing regular file: in place.
         let file = dir.join("f.dat");

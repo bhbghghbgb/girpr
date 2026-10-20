@@ -659,9 +659,7 @@ mod m5_matrix {
             Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
         );
         assert!(
-            s.admitted
-                .iter()
-                .any(|a| !a.also_satisfies.is_empty()),
+            s.admitted.iter().any(|a| !a.also_satisfies.is_empty()),
             "the covering capture says which other class it answers"
         );
         assert!(
@@ -692,14 +690,14 @@ mod m5_matrix {
         // none.
         let pool = select::candidates(&[game()]);
         let s = select::select(&pool, 1, Budget::unlimited(), &[]);
-        assert_eq!(s.matrix.len(), Class::ALL.len(), "one row per class, always");
+        assert_eq!(
+            s.matrix.len(),
+            Class::ALL.len(),
+            "one row per class, always"
+        );
         // Every class of the frozen pair has a candidate, so every row is
         // answered — `captured` or `covered_by`.
-        assert!(
-            s.matrix.iter().all(|r| r.is_satisfied()),
-            "{:?}",
-            s.matrix
-        );
+        assert!(s.matrix.iter().all(|r| r.is_satisfied()), "{:?}", s.matrix);
         // And the row that *would* be unavailable says why, when the pool has
         // nothing for it.
         let bare = select::candidates(&[gircap::manifest::diff::FieldDiff {
@@ -841,8 +839,7 @@ mod m5_matrix {
         // get **none**: their cheapest candidates are already captured.
         assert_eq!(everything.admitted.len(), 13);
         assert_eq!(
-            everything.bytes_admitted,
-            5_013_724,
+            everything.bytes_admitted, 5_013_724,
             "the thirteen rows above, summed"
         );
     }

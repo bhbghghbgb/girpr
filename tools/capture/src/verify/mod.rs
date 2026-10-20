@@ -421,11 +421,8 @@ pub fn reverify(bundle: Bundle) -> Report {
     // cover the spec's decisions fails its own run (A21-A23 are fatal there).
     // The verifier's job is to prove the bundle still says what it said, and
     // "this bundle does not cover both trims" is a thing it said.
-    let repairs: Vec<crate::assemble::Repair> = bundle
-        .patchmaps
-        .values()
-        .filter_map(|m| m.repair)
-        .collect();
+    let repairs: Vec<crate::assemble::Repair> =
+        bundle.patchmaps.values().filter_map(|m| m.repair).collect();
     for row in crate::emit::selfcheck::coverage(&repairs) {
         if !row.ok {
             findings.push(format!("{}: {}", row.id, row.actual));
@@ -530,11 +527,7 @@ fn describe_bytes(raw: &[u8]) -> String {
     match hash::zstd_measure(raw, "stored blob") {
         Ok(m) => format!(
             "{} B md5 {} sha256 {} -> {} B md5 {}",
-            compressed.bytes,
-            compressed.md5,
-            compressed.sha256,
-            m.len,
-            m.md5
+            compressed.bytes, compressed.md5, compressed.sha256, m.len, m.md5
         ),
         Err(e) => format!(
             "{} B md5 {} sha256 {}, {e}",
@@ -752,7 +745,10 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
 /// against the capture's recorded ones, two spellings means the check can
 /// disagree with the record it is supposed to be re-deriving.
 fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
-    vec![crate::emit::selfcheck::check_config_ini(root, &manifest.versions.old.tag)]
+    vec![crate::emit::selfcheck::check_config_ini(
+        root,
+        &manifest.versions.old.tag,
+    )]
 }
 
 /// Does the recomputation agree with what the capture recorded?

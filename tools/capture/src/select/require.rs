@@ -139,10 +139,12 @@ mod tests {
         // The flag's default. `unmet` over an empty requirement must be empty
         // even when the matrix is full of unmet rows, or every run without the
         // flag would fail.
-        let sel = selection_with(all_classes()
-            .into_iter()
-            .map(|c| row(c, MatrixStatus::Unavailable, Some("no candidates")))
-            .collect());
+        let sel = selection_with(
+            all_classes()
+                .into_iter()
+                .map(|c| row(c, MatrixStatus::Unavailable, Some("no candidates")))
+                .collect(),
+        );
         assert!(unmet(&[], &sel).is_empty());
         check(&[], &sel).expect("no requirement, no failure");
     }
@@ -195,11 +197,8 @@ mod tests {
             row(Class::Added, MatrixStatus::Unavailable, Some("b")),
             row(Class::Removed, MatrixStatus::Captured, None),
         ]);
-        let e = check(
-            &[Class::Identical, Class::Added, Class::Removed],
-            &sel,
-        )
-        .expect_err("two unmet");
+        let e =
+            check(&[Class::Identical, Class::Added, Class::Removed], &sel).expect_err("two unmet");
         for want in ["identical", "added", "a", "b"] {
             assert!(e.detail.contains(want), "{want} missing from: {}", e.detail);
         }

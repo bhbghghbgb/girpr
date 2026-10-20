@@ -1354,14 +1354,8 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
             // The vocabulary is the new repair spec's: a chunk is **kept**
             // (already correct where it belongs), **copied** (its bytes live
             // elsewhere in the file) or **fetched** (no usable local source).
-            "kept_in_place"
-            | "moved_ascending"
-            | "moved_descending"
-            | "moved_mixed"
-            | "trim_eager"
-            | "trim_deferred"
-            | "zero_reuse_single"
-            | "zero_reuse_multi" => {
+            "kept_in_place" | "moved_ascending" | "moved_descending" | "moved_mixed"
+            | "trim_eager" | "trim_deferred" | "zero_reuse_single" | "zero_reuse_multi" => {
                 assert_eq!(
                     run.num("summary", "repaired"),
                     1,
@@ -1654,10 +1648,7 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
     println!(
         "bridge {:<24} differential: temp wrote {} bytes, in-place wrote {} bytes \
          (same file, md5 {})",
-        capture.id,
-        temp_written,
-        inplace_written,
-        capture.result_md5,
+        capture.id, temp_written, inplace_written, capture.result_md5,
     );
 }
 
@@ -2130,7 +2121,8 @@ async fn the_matrix_and_the_patchmaps_agree_in_both_directions() {
                 assert!(
                     bundle.captures.iter().any(|c| c.id == m.class),
                     "{}: recorded captured, but there is no patchmaps/{}.json",
-                    m.class, m.class
+                    m.class,
+                    m.class
                 );
             }
             "covered_by" => {

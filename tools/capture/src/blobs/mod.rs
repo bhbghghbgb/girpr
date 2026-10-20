@@ -100,10 +100,8 @@ impl ChunkIndex {
         // Two passes: the first borrows, the second consumes. That is strictly
         // less work than the one pass it replaces, which cloned every blob in
         // order to move it into `blobs` a few lines later.
-        let mut sets: BTreeMap<&str, Vec<&str>> = Set::ALL
-            .iter()
-            .map(|s| (s.id(), Vec::new()))
-            .collect();
+        let mut sets: BTreeMap<&str, Vec<&str>> =
+            Set::ALL.iter().map(|s| (s.id(), Vec::new())).collect();
         for (blob, roles) in &entries {
             for role in roles {
                 sets.entry(role.id())
@@ -451,12 +449,11 @@ impl Store {
         })?;
 
         let path = final_path;
-        let props = tokio::task::spawn_blocking(move || {
-            BlobProps::measure_file(&path, &chunk, digests)
-        })
-        .await
-        .map_err(|e| format!("{id}: measure task panicked: {e}"))?
-        .map_err(|e| e.to_string())?;
+        let props =
+            tokio::task::spawn_blocking(move || BlobProps::measure_file(&path, &chunk, digests))
+                .await
+                .map_err(|e| format!("{id}: measure task panicked: {e}"))?
+                .map_err(|e| e.to_string())?;
 
         Ok((props, rel, seq))
     }
@@ -540,7 +537,10 @@ pub fn file_pairs(
     let old_by_path = index(old_tag);
     let new_by_path = index(new_tag);
     let build_id = |tag: &str| -> &str {
-        manifests.get(tag).map(|m| m.build_id.as_str()).unwrap_or_default()
+        manifests
+            .get(tag)
+            .map(|m| m.build_id.as_str())
+            .unwrap_or_default()
     };
     let old_build_id = build_id(old_tag);
     let new_build_id = build_id(new_tag);
@@ -633,10 +633,7 @@ mod tests {
     #[test]
     fn renaming_a_blob_over_an_existing_one_replaces_it() {
         let dir = scratch("rename-over");
-        let (final_path, tmp) = (
-            dir.join("blob.zst"),
-            dir.join(".blob.zst.tmp"),
-        );
+        let (final_path, tmp) = (dir.join("blob.zst"), dir.join(".blob.zst.tmp"));
         std::fs::write(&final_path, b"the older and longer blob").expect("seed destination");
         std::fs::write(&tmp, b"NEW").expect("write tmp");
 
@@ -748,7 +745,11 @@ mod tests {
         let sorted = build(&ids);
         let reversed = build(&ids.iter().rev().copied().collect::<Vec<_>>());
         assert_eq!(
-            sorted.blobs.iter().map(|b| &b.props.chunk_id).collect::<Vec<_>>(),
+            sorted
+                .blobs
+                .iter()
+                .map(|b| &b.props.chunk_id)
+                .collect::<Vec<_>>(),
             ids,
             "build orders by id, which is what the lookup assumes"
         );

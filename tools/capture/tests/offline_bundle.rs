@@ -267,10 +267,7 @@ impl Bundle {
         // it was building a bundle that no capture could produce, and `verify`
         // said so. A hand-built fixture that is easier than the real thing will
         // always find a way to be easier.
-        write_json(
-            &root.join("api/error_shapes.json"),
-            &error_shapes(),
-        );
+        write_json(&root.join("api/error_shapes.json"), &error_shapes());
 
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();

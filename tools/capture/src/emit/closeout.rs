@@ -158,10 +158,8 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // always did — but the manifest is now built whole, instead of being handed
     // back with an empty `files[]` for two later statements to fill in.
     let (listed, seeded) = super::write_manifest_files(i.dir).map_err(|e| write_err(i.dir, e))?;
-    let manifest =
-        index::build_manifest(&i.manifest, &listed).map_err(|e| {
-            apierr("build MANIFEST.json", &ApiError::shape("manifest", e))
-        })?;
+    let manifest = index::build_manifest(&i.manifest, &listed)
+        .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
 
     // A17 is about the matrix this document carries, so it is settled here and
     // appended to the rows the rest of the close-out will write.
@@ -206,9 +204,8 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     let mut selfcheck = Selfcheck::build(i.rows, matrix_rows, &skipped);
     super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
     written.push(super::write_manifest(i.dir, &manifest).map_err(|e| write_err(i.dir, e))?);
-    written.push(
-        super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?,
-    );
+    written
+        .push(super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?);
     let (_, checksums) =
         super::write_checksums_reusing(i.dir, &seeded, &[]).map_err(|e| write_err(i.dir, e))?;
     // The independent half of A16: re-reads every listed file from disk and
@@ -331,11 +328,7 @@ mod tests {
         std::fs::write(root.join("scan").join("scan.txt"), "game\n").unwrap();
     }
 
-
-
-    fn manifest_input<'a>(
-        fixture: &'a Fixture,
-    ) -> index::ManifestInput<'a> {
+    fn manifest_input<'a>(fixture: &'a Fixture) -> index::ManifestInput<'a> {
         index::ManifestInput {
             started: fixture.started,
             biz: &fixture.biz,
@@ -506,7 +499,10 @@ mod tests {
 
         // (1) The recorded digests match what is on disk.
         let (ok, detail) = closed.checksums.a16(&root);
-        assert!(ok, "the second pass recorded digests that do not match disk: {detail}");
+        assert!(
+            ok,
+            "the second pass recorded digests that do not match disk: {detail}"
+        );
 
         // (2) Hashing the tree from scratch reproduces the recorded entries.
         let fresh = index::Checksums::scan(&root).expect("independent rescan");
@@ -607,11 +603,7 @@ mod tests {
             .iter()
             .map(|e| e.path.as_str())
             .collect();
-        for required in [
-            "verify/selfcheck.json",
-            "MANIFEST.json",
-            "README.md",
-        ] {
+        for required in ["verify/selfcheck.json", "MANIFEST.json", "README.md"] {
             assert!(
                 listed.contains(&required),
                 "checksums.json omits {required}; it lists {listed:?}"
@@ -665,7 +657,13 @@ mod tests {
         // in the document, exit `0` from the process. A caller reading only the
         // exit code was told the capture worked.
         let s = Selfcheck::build(
-            vec![Assertion::row("A14", "game/", "nothing else", false, "a stray file")],
+            vec![Assertion::row(
+                "A14",
+                "game/",
+                "nothing else",
+                false,
+                "a stray file",
+            )],
             Vec::new(),
             &[],
         );
@@ -685,7 +683,13 @@ mod tests {
         // here: if the table stopped being consulted and the code became
         // `!a.ok`, this test fails.
         let s = Selfcheck::build(
-            vec![Assertion::row("A18", "verify-only", "nothing", false, "did not hold")],
+            vec![Assertion::row(
+                "A18",
+                "verify-only",
+                "nothing",
+                false,
+                "did not hold",
+            )],
             Vec::new(),
             &[],
         );
@@ -705,7 +709,11 @@ mod tests {
             .iter()
             .map(|id| Assertion::row(id, "s", "e", true, "a"))
             .collect();
-        let s = Selfcheck::build(asserted, Vec::new(), &super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS);
+        let s = Selfcheck::build(
+            asserted,
+            Vec::new(),
+            &super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS,
+        );
         assert!(fatal_failure(&s).is_none());
         assert_eq!(s.result, super::super::selfcheck::Result_::Incomplete);
     }

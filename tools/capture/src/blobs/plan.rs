@@ -107,7 +107,12 @@ pub fn plan(
     new_tag: &str,
     max_download_bytes: Option<u64>,
 ) -> Result<ChunkPlan, Failure> {
-    let pairs = file_pairs(selection, &game_manifests_by_tag(fields, manifests), old_tag, new_tag);
+    let pairs = file_pairs(
+        selection,
+        &game_manifests_by_tag(fields, manifests),
+        old_tag,
+        new_tag,
+    );
 
     for (a, p) in selection.admitted.iter().zip(&pairs) {
         let r = retention(p);

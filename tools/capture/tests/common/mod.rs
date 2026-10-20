@@ -511,7 +511,12 @@ impl Mock {
             }
         });
 
-        Mock { base, stop, log, table }
+        Mock {
+            base,
+            stop,
+            log,
+            table,
+        }
     }
 
     /// Answer the next request whose path contains `needle` with `503`, once.
@@ -1080,9 +1085,13 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
             // `api/error_shapes.json` records and a replayer will replay. A
             // `text/plain` stand-in would let the mock agree with itself about a
             // detail the mock cannot know.
-            None if is_blob_route(&path) => {
-                write_response(&mut stream, 404, "application/xml", &no_such_key(&path), keep_alive)
-            }
+            None if is_blob_route(&path) => write_response(
+                &mut stream,
+                404,
+                "application/xml",
+                &no_such_key(&path),
+                keep_alive,
+            ),
             None => write_response(
                 &mut stream,
                 404,
@@ -1090,7 +1099,9 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
                 format!("no route for {path}").as_bytes(),
                 keep_alive,
             ),
-            Some(bytes) => write_response(&mut stream, 200, content_type(&path), &bytes, keep_alive),
+            Some(bytes) => {
+                write_response(&mut stream, 200, content_type(&path), &bytes, keep_alive)
+            }
         };
 
         outcome?;
