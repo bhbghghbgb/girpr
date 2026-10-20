@@ -591,6 +591,43 @@ which must be a capture that does have one. A `captured` row names its own
 capture; an `over_budget` or `unavailable` row has no capture id and carries a
 reason; and no patchmap exists without a matrix entry.
 
+### 7.3 The flag axes and the fault injections
+
+Three of the repair spec's per-file decisions are **not** content decisions:
+they come from a flag, a filesystem or an interruption, so the same file answers
+them whatever the content is, and no capture class can force them. They are
+covered here instead, and this is the list of where each one lives.
+
+| what | how the bridge reaches it | what it proves |
+|---|---|---|
+| `--repair-mode temp` | the differential (§7, assertion 6) | the same file, the whole file written |
+| `--repair-mode discard` | `the_discard_mode_downloads_the_whole_file_and_still_produces_it` | the same file, a full download, zero peak extra disk |
+| `--max-ram-bytes 0` | `the_ordered_tier_downloads_exactly_the_patchmap_total` | the ordered tier, and the direction it picks |
+| `--max-ram-bytes <small>` | the same case, with a budget that cannot hold the payload | a file that cannot get its reservation degrades to the ordered tier instead of failing |
+| the target cannot be opened for writing | **not covered** — see below | the fallback to the temp path, and the same bytes |
+| the resume paths | `the_in_place_path_re_verifies_and_continues` | in place re-verifies and continues, and only the damaged chunk is redone |
+| the "redo the mismatching chunks" second pass | **not covered** — see below | only the named chunk is redone |
+| the zero-fill of a hole | **not covered** — see below | the hole is zero-filled, and the file still verifies |
+
+**Why three of them are not covered here.** Each needs something the bundle
+cannot provide, and saying so is better than a case that pretends:
+
+- **The target cannot be opened for writing.** The mechanism is not the
+  read-only attribute: `girpr` **clears** that attribute and retries the open
+  (the same thing Starward does), so a read-only file is repaired in place, by
+  design. The fallback needs an open that fails for a reason clearing the
+  attribute cannot fix — an exclusive lock, which is a Windows fixture rather
+  than a bundle case.
+- **The "redo the mismatching chunks" second pass.** It fires when the
+  whole-file MD5 disagrees but every chunk's own MD5 agrees, which needs a
+  manifest whose coverage does not tile its file. The server's manifests always
+  do.
+- **The zero-fill of a hole.** The same thing: a hole is a manifest that does
+  not tile, and the server's manifests do not have holes.
+
+The last two are the plan's **D9** — a malformed manifest rather than a
+malformed file — and they belong to a synthetic manifest, not to a bundle.
+
 ---
 
 ## 8. Failure modes this design must not have

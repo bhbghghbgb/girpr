@@ -31,7 +31,6 @@ the chunks the artifact says it must fetch.
 | [`docs/02-plan.md`](docs/02-plan.md) | the crate's shape, its test strategy and its risks |
 | [`docs/03-design-notes.md`](docs/03-design-notes.md) | why the awkward parts are the way they are |
 | [`docs/04-bundle-differ.md`](docs/04-bundle-differ.md) | the cross-commit bundle comparison, and what it can and cannot see |
-| [`docs/05-case-coverage-plan.md`](docs/05-case-coverage-plan.md) | **plan, in progress**: the capture classes vs. the new `girpr` repair spec — the new class set, the commits, and the capture that follows |
 
 Start with the spec.
 
@@ -43,10 +42,11 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈129 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`manifests/` is ≈41 MiB and `chunks/` ≈26 MiB) and regenerable, so they belong on
-disk, not in history. **This is the project location**: anything a test or
-another tool is expected to rely on lives here.
+bundles are large (≈243 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`expected/` is ≈79 MiB, `game/` ≈76 MiB, `chunks/` ≈44 MiB and `manifests/`
+≈41 MiB) and regenerable, so they belong on disk, not in history. **This is the
+project location**: anything a test or another tool is expected to rely on lives
+here.
 
 **When to re-capture.** A bundle is out of date when the world moved or when
 this tool moved:
@@ -109,9 +109,15 @@ them, and assembles a **complete artifact**:
 | commands | `capture`, `verify`, `materialize`, `list` |
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
-The three reference bundles under `artifacts/hk4e_global/7.0.0__7.1.0/` — the
-newest, `20261017T123335Z`, is the one the tool writes today — **verify 90/90,
-exit `0`**.
+The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
+`20261020T100659Z`, the one the tool writes today — **verifies 130/130, exit
+`0`**, and its own selfcheck is **159/159, `pass`**.
+
+It holds **nine** captures, one per class the class set answers, and the matrix
+says so: `trim_deferred` is **`covered_by`** `moved_ascending`'s capture (the
+file that shows the deferred trim is that capture's), and `moved_mixed` is
+**`over_budget`** with its reason (its cheapest candidate is 243 MB, which the
+100 MiB ceiling would not pay for).
 
 The end-to-end check is **automated but expensive**: the bundle is replayed over
 loopback and the real `girpr` binary is run against it, once per capture, by

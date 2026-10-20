@@ -288,6 +288,31 @@ moved_ascending, moved_descending, moved_mixed, trim_eager, trim_deferred,
 added, removed
 ```
 
+#### What the reference bundle exercises
+
+*(measured)* against the reference bundle. The three counts are the repair's own
+vocabulary: **kept** (already correct where it belongs), **copied** (its bytes
+live elsewhere in the file) and **fetched** (no usable local source).
+
+| capture | kept | copied | fetched | payload (RAM) | the ordered tier's direction | the trim |
+|---|---|---|---|---|---|---|
+| `identical` | 1 | 0 | 0 | 0 | — (skipped) | — |
+| `zero_reuse_single` | 0 | 0 | 1 | 0 | — | — (grows) |
+| `zero_reuse_multi` | 0 | 0 | 2 | 0 | — | — (grows) |
+| `kept_in_place` | 1 | 0 | 2 | 0 | — | — (same size) |
+| `moved_ascending` | 4 | 4 | 2 | **5 892 269** | **ascending** | **deferred** |
+| `moved_descending` | 0 | 27 | 7 | **38 150 367** | **descending** | — (grows) |
+| `trim_eager` | 9 | 0 | 1 | 0 | — | **eager** (24 067 B released) |
+| `added` | — | — | 1 | 0 | — | — (created) |
+| `removed` | — | — | — | — | — | — (purged) |
+
+Two rows carry the load. `moved_ascending` is the only capture that exercises
+the **moving-bytes** path at all, the only one that reaches the ordered
+tier's rule, and the only one that reaches the **deferred** trim — so the
+bundle would have nothing to say about the spec's central change without it.
+And `moved_descending` is its mirror: the content moves the other way, so the
+descending order is the one that keeps the sources alive.
+
 #### The candidates, and what each class costs
 
 *(measured)* over the pool the capture selects (`game` ∪ `en-us`, 2 932 paths).
@@ -986,17 +1011,25 @@ artifact's own patchmap rather than against this table:
 | `zero_reuse_single` | `zero_reuse_single` | 21 | 0 / 1 / 0 | 0 |
 | `zero_reuse_multi` | `zero_reuse_multi` | 336 852 | 0 / 2 / 0 | 0 |
 | `kept_in_place` | `kept_in_place` | 274 426 | 1 / 2 / 0 | 1 |
-| `moved_ascending` | `moved_ascending` | 1 564 894 | 8 / 2 / 4 | 8 |
-| `trim_eager` | `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
+| `moved_ascending` | `moved_ascending`, `trim_deferred` | 1 564 894 | 8 / 2 / 4 | 8 |
+| `moved_descending` | `moved_descending` | 2 480 175 | 27 / 7 / 27 | 27 |
+| `trim_eager` | `kept_in_place`, `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
-All eight exit `0`. **2 487 742 B in total**, which is the sum of the patchmaps'
-figures to the byte. 19 reused chunks across the four captures that declare them,
-none of them downloaded. Only the eight captures' own paths changed on the
-scratch copy — the `added` file appeared, the `removed` file disappeared, and the
-other seven were modified in place — so the scope held across all eight runs. The
-bundle itself was never a working tree and still verifies.
+All nine exit `0`. **4 967 917 B in total**, which is the sum of the patchmaps'
+figures to the byte. 46 reused chunks across the five captures that declare them,
+none of them downloaded. Only the nine captures' own paths changed on the
+scratch copy — the `added` file appeared, the `removed` file disappeared, the
+`identical` one was left alone, and the other six were modified in place — so
+the scope held across all nine runs. The bundle itself was never a working tree
+and still verifies.
+
+**Two captures carry two classes each.** `moved_ascending`'s file is also the
+`trim_deferred` one — the same file shows the deferred trim and the ascending
+shift — and `trim_eager`'s file is also a `kept_in_place` one. That is the
+`covered_by` admission at work, and it is why the bundle holds nine captures for
+eleven classes.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
