@@ -383,7 +383,7 @@ so that one invocation works against either tool.
 
 **The caveat is the important part.** `--sophon-base` redirects **`getBuild`
 only**. Manifest and chunk URLs are not built from the configured base at all —
-`sophon::fetch_manifest` and `sophon::fetch_chunk_bytes` both call
+`sophon::fetch_manifest` and `sophon::stream_chunk_to` both call
 `sophon::join_url(prefix, id)` on a `url_prefix` read out of the **response
 body** (`manifest_download.url_prefix`, `chunk_download.url_prefix`). Pointing
 the flag at a mock therefore redirects the metadata call and leaves every
@@ -430,19 +430,23 @@ so.
 
 ### E3 · `--max-chunk-bytes <N>` — **P2**
 
-Two jobs in one flag, both real:
+One job left, and it is real:
 
-- **Memory.** S1 buffers whole chunks (`fetch_chunk_bytes` → `decode_all`,
-  `write_downloaded_chunk`). Peak RAM per active chunk is roughly `compressed +
-  uncompressed`, and the capture measured the largest real Genshin chunk at
-  **3 689 476 B compressed**. At `--io-threads 8` that is a real number. Skipping
-  files whose largest chunk exceeds `N` bounds it.
-- **Targeting.** The same measurement makes the flag a way to *deliberately
-  exercise* the largest-chunk branch, which no small synthetic fixture reaches.
+- **Targeting.** The capture measured the largest real Genshin chunk at
+  **3 689 476 B compressed**, and the same measurement makes the flag a way to
+  *deliberately* exercise the largest-chunk branch, which no small synthetic
+  fixture reaches.
+
+**The memory half is gone.** It used to be the flag's reason to exist: S1
+buffered whole chunks (fetch → decode → write), so the peak RAM per active
+chunk was roughly `compressed + uncompressed` — at `--io-threads 8`, a real
+number. The chunk path is **streamed** now: the body is decoded as it arrives
+and the decoded bytes are written into the target as they are produced, so the
+peak per active chunk is one read window, not the chunk. Skipping files whose
+largest chunk exceeds `N` bounds nothing about RAM any more.
 
 `PLAN max_chunk_bytes=` reports this number today without enforcing it — it is
-the one that bounds peak RAM, and it is printed because printing it costs one
-line.
+printed because printing it costs one line.
 
 ### E4 · `--no-skip-intact` — **P2**
 

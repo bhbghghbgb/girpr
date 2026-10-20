@@ -342,7 +342,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                 tracing::warn!(attempt, "attempt failed: {e:#}");
                 // `--fail-fast` cuts the backoff short. Without it, one bad
                 // file spends 5 × linear sleep (and each of those attempts has
-                // its own 5× chunk retry inside `fetch_chunk_bytes`) before the
+                // its own 5× chunk retry inside `stream_chunk_to`) before the
                 // run even starts on the next file.
                 if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);

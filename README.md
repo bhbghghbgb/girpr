@@ -14,7 +14,6 @@ gate) **+ Collapse's extra-file purge** as a pre/post phase.
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
 | **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 | **artifact bridge** (shipped) | [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md) | the `#[ignore]`d end-to-end test against a real bundle |
-| **streaming zstd decode** (a plan, not shipped) | [`docs/07-streaming-zst-decode-implementation-plan.md`](docs/07-streaming-zst-decode-implementation-plan.md) | lifting S1's whole-blob buffering: the worklist, the invariant that changes, and the fold |
 
 The repair-spec series describes the whole-install patcher and is unaffected by
 the scope-limitations tier: a flag list and a byte ceiling are not a change to
@@ -39,7 +38,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `fetch_chunk_bytes`, `build_local_chunk_map`, `join_url` |
+| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -92,7 +91,7 @@ flowchart TD
         J1["scan: ONE read → whole-file MD5,<br/>which chunks are already correct,<br/>which reuse sources are intact"] --> J1b{"size+MD5 match?"}
         J1b -->|yes| J9["skip (counted as verified)"]
         J1b -->|no| J2a["stage the bytes that must MOVE inside the file<br/>(RAM tier) — else pick the salvage order"]
-        J2a --> J3["write only the WRONG chunks:<br/>staged copy, or download → zstd → MD5 → write at offset"]
+        J2a --> J3["write only the WRONG chunks:<br/>staged copy, or download → zstd (streamed)<br/>→ write at offset, MD5 when the stream ends"]
         J3 --> J5["final whole-file MD5 gates"]
         J5 -->|mismatch| J5b["redo only the chunks the verdicts name"]
         J5b --> J5
@@ -219,7 +218,7 @@ flowchart TD
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chunk reuse
+S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
 single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).

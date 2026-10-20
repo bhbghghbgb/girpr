@@ -94,8 +94,11 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 `*-??` audio field except selected audio langs; keep `game` + selected):
 1. `manifest{id,checksum,compressed_size}` + `manifest_download{url_prefix}`, `chunk_download{url_prefix}`.
 2. Download `GET {manifest_prefix}/{id}` (single GET, retry ×5 linear backoff).
-3. Zstd-decompress entire blob → compute MD5 of **decompressed** bytes → must equal `checksum`
-   (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still mismatch → abort (exit 2).
+3. The blob is **streamed**: it is zstd-decoded as it arrives into a buffer sized by the
+   API's `uncompressed_size`, so the compressed body is never resident and the decode never
+   has to grow the buffer → compute MD5 of **decompressed** bytes → must equal `checksum`
+   (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still
+   mismatch → abort (exit 2).
  4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
    compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}], is_folder, size, md5}]}`
    (keep opaque field 6; `compressed_md5` is tag 7).
@@ -187,12 +190,11 @@ Per file `F`:
 3. **Patch** — the wrong chunks are written, ascending in the RAM-staged tier and in the
    salvage direction in the ordered tier: from the staged bytes when there are
    any, from a download otherwise. A download is `GET {chunk_prefix}/{C.id}` → response bytes
-   are **zstd-compressed** chunk payload → v1 (S1 simplification, see README): buffer the
-   whole chunk, `decode_all`, then verify `uncompressed_md5` immediately — mismatch fails the
-   attempt and retries the whole file (up to 5×). Only then write the bytes at `C.offset`.
-   Every byte written is hash-gated before it lands. A streaming
-   `Pipe + DecompressionStream` pipeline (8–512 KiB buffer) may replace this later to lower
-   peak RAM.
+   are **zstd-compressed** chunk payload → the body is **streamed**: it is decoded as it
+   arrives and the decoded bytes are written at `C.offset` as they are produced, digested on
+   the way past, so the chunk is never resident as a whole. `uncompressed_size` is enforced
+   as the bytes go, and `uncompressed_md5` is verified when the stream ends — mismatch fails
+   the attempt and retries the whole file (up to 5×).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
 5. **Verify** — one more read: `if md5==F.md5` the file is good, and the structured `repaired`
@@ -256,12 +258,33 @@ reason is logged.
 needed: the scan of step 1 finds the chunks that are already correct where they belong, so
 the next run rewrites only the rest — and a corrupt prefix is not something it can inherit.
 The temp mode resumes by **length**: the completed prefix of `{path}_tmp` is kept and the
-next run continues it. The whole-file MD5 is the gate in both, and the version in
-`config.ini` is advanced only by a run in which every planned file verified.
+next run continues it. A chunk that fails its digest is **rolled back**: the `_tmp` is
+truncated to that chunk's offset, so the resume point stays honest — the bytes before it
+were each digest-checked when they were written, and everything from it on is gone. The
+whole-file MD5 is the gate in both, and the version in `config.ini` is advanced only by a
+run in which every planned file verified.
 
-Why this is "repair": no step assumes the old bytes are intact — reused slices are hash-gated
-and the final whole-file MD5 gates the file. Any-version → latest works because the plan is
-derived from the latest manifest alone (local manifest is a pure optimization).
+**The invariant.** Every byte written lands in a region that was **already wrong at the
+moment of the write**, and the whole-file MD5 decides whether the file is good.
+
+A *downloaded* chunk cannot be hash-gated before it lands: the digest of a decoded stream is
+only known when the stream ends, and the stream ends after the last byte has been written.
+What replaces the gate is checkable in the code rather than hopeful:
+
+- the in-place path writes only to the chunks the scan found wrong, and to the ones the
+  whole-file MD5 still finds wrong after a re-do — so the bytes it lands replace bytes that
+  were already bad;
+- a downloaded chunk's bytes come from the network, not from the file, so they consume no
+  source region and the ordered tier's salvage rule is untouched;
+- the temp path is safe by construction: the `_tmp` is promoted only after the whole-file
+  MD5 passes, and the rollback above keeps its *resume* honest;
+- a staged source's MD5 is still checked before it is staged, so that path keeps the
+  stronger property it always had.
+
+Why this is "repair": no step assumes the old bytes are intact — a staged source is
+hash-gated, and the final whole-file MD5 gates the file. Any-version → latest works
+because the plan is derived from the latest manifest alone (local manifest is a pure
+optimization).
 
 ### Step 7 — Post-phase (deletes + config)
 
@@ -353,7 +376,8 @@ nothing is on disk to save.
 | Failure | Handling |
 |---|---|
 | Manifest MD5 mismatch | retry whole fetch up to 5×, then abort exit 2 (never patch from bad metadata) |
-| Chunk download corrupt (final MD5 fail) | the temp path deletes `_tmp` and retries the file ×5; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
+| Chunk download corrupt (chunk MD5 fail) | the attempt fails and the file is retried (×5): the in-place path re-scans, finds the chunk wrong and rewrites it; the temp path rolls the chunk back to its offset and re-downloads it, keeping the good prefix. The file is then gated by the whole-file MD5, and a file that still fails is counted and the run exits 3 |
+| Whole-file MD5 mismatch | the temp path deletes `_tmp` and retries the file ×5; the in-place path redoes only the chunks the verdicts name; then fail file exit 3 |
 | Reused slice mismatch | treat as cache miss → download that chunk |
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |

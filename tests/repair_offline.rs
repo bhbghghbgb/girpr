@@ -2004,7 +2004,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
 #[tokio::test]
 async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the
-    // 5× retry with 1-5 s sleeps inside `fetch_chunk_bytes` + 1-4 s of
+    // 5× retry with 1-5 s sleeps inside `stream_chunk_to` + 1-4 s of
     // file-level backoff) ≈ **125 s of pure sleeping**, measured — and that is
     // before `HypClient::new_with_bases` is even given a connect timeout. With
     // it, a file gets one attempt and the abort spares every file behind it.
@@ -2142,7 +2142,7 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
     }
 }
 
-/// How many times `fetch_chunk_bytes` asks a *retryable* origin — the linear
+/// How many times `stream_chunk_to` asks a *retryable* origin — the linear
 /// 1+2+3+4 s backoff, five attempts. Kept next to the test that depends on it so
 /// the two cannot drift.
 const ATTEMPTS: usize = 5;

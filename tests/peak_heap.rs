@@ -1,7 +1,8 @@
 //! The chunk path's **peak live heap**, measured.
 //!
-//! Spec: [`docs/07-streaming-zst-decode-implementation-plan.md`](../docs/07-streaming-zst-decode-implementation-plan.md)
-//! §1.1 and C5.
+//! Spec: [`docs/02-repair-chunk-spec.md`](../docs/02-repair-chunk-spec.md)
+//! step 6 (the streamed chunk write) and `docs/03` §6 (the RAM a repair
+//! holds).
 //!
 //! # Why this file exists
 //!
