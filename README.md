@@ -4,9 +4,9 @@ Brings a possibly-corrupt, possibly-any-older-version Genshin install to the
 current live version with minimal extra disk. **Unattended by design:**
 args in, exit code + `REPORT`/`SUMMARY` stdout lines out, no UI.
 
-Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
-`{path}_tmp` streaming repair, verified local-chunk reuse, atomic promote)
-**+ Collapse's extra-file purge** as a pre/post phase.
+Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file repair that
+writes only the bytes that are wrong, verified local-chunk reuse, a whole-file MD5
+gate) **+ Collapse's extra-file purge** as a pre/post phase.
 **Docs are several series.** The `repair-` prefix is load-bearing:
 
 | series | docs | describes |
@@ -14,7 +14,6 @@ Core = **Starward's repair-in-chunk-mode** (version-agnostic, per-file
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
 | **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 | **artifact bridge** (shipped) | [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md) | the `#[ignore]`d end-to-end test against a real bundle |
-| **low-disk repair** (shipped) | [`docs/07-low-disk-repair-findings-and-plan.md`](docs/07-low-disk-repair-findings-and-plan.md) | why a repair rewrote every file, the disk model per write mode, and the in-place repair that made the rewrite unnecessary |
 
 The repair-spec series describes the whole-install patcher and is unaffected by
 the scope-limitations tier: a flag list and a byte ceiling are not a change to
@@ -224,12 +223,11 @@ S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chu
 single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
-**S3 was a property of the temp path, and it is now the mode's own.** Resume-by-length
-(a `*_tmp` prefix) is how `--repair-mode temp` resumes: the completed prefix is kept and the
-next run continues it. The in-place path has no artefact to resume from and needs none — it
-resumes by **verification**: the scan finds the chunks that are already correct where they
-belong, and the next run rewrites only the rest, which cannot inherit a corrupt prefix. The
-two modes' properties are side by side in docs/07 §5.
+**Resume.** The two write modes resume differently, and each in the way that suits it:
+the in-place path resumes by **verification** — the scan finds the chunks that are already
+correct where they belong, and the next run rewrites only the rest, which cannot inherit a
+corrupt prefix and needs no artefact at all; the temp mode resumes by **length**, keeping
+the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 

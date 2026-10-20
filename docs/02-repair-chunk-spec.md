@@ -136,6 +136,33 @@ Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
   when the target must not be touched, and the way a file is written when its target cannot
   be opened for writing.
 
+**Two regimes.** The in-place path is not a defragmentation, and the difference decides the
+design. There is no staging area anywhere in it — a reuse source and its destination are
+both inside the same file, and the copy between them uses the existing 512 KiB `COPY_BUF`
+and nothing else.
+
+- **Corruption repair** — the file is the right size and most chunks are intact. A chunk's
+  reuse source is at *its own offset* (`r_i == o_i`), so the bad chunk is simply overwritten
+  where it lies. **No bytes move.** There is no ordering constraint and nothing to stage:
+  this is a patch, not a relocation.
+- **Version upgrade** — the file's content shifted, so a chunk's source is elsewhere and its
+  bytes have to physically move from `r_i` to `o_i`. *This* is the defrag-shaped case.
+
+The second regime is the classic "relocate blocks inside a file without a staging area"
+problem, and it has exactly two answers: **order the relocations** so no source is
+overwritten before it is read, or **stage the moving bytes in RAM**. The first is free and
+forces the writes into one direction (a backwards-seek pattern); the second costs RAM and
+buys everything else. Which one a file gets is decided per file, so the in-place path is
+not one algorithm but two tiers:
+
+| tier | when | extra disk | RAM | reuse | writes | direction |
+|---|---|---|---|---|---|---|
+| **RAM-staged** | the moving payload fits `--max-ram-bytes` | `0` | the payload | 100 % | only the wrong chunks | ascending |
+| **ordered** | the payload does not fit | `0` | `0` | one direction | the wrong chunks | ascending *or* descending |
+
+Both tiers produce **the same file**; they differ in how much reuse they keep and in which
+direction they write.
+
 Per file `F`:
 1. **Scan** — one read of `game_dir/F.path` that answers everything: the whole-file MD5 (the
    skip check), which chunks are already correct where they belong, and which reuse sources
@@ -145,9 +172,20 @@ Per file `F`:
    (bounded by `--max-ram-bytes`), so the write order cannot destroy them. A chunk needs
    staging only if its reuse source is *elsewhere* in the file and the chunk is actually
    wrong: a source at the chunk's own offset is the bad chunk itself, so it is not a source
-   at all. A file whose payload does not fit the budget is written in the other direction
-   instead (docs/07 §4.4), which produces the same file with less reuse.
-3. **Patch** — the wrong chunks are written, ascending: from the staged bytes when there are
+   at all.
+
+   | regime | wrong chunks | sources elsewhere? | payload |
+   |---|---|---|---|
+   | corruption repair | a few | no — normally `r_i == o_i`, and that source *is* the bad chunk | **0** |
+   | version upgrade | most | yes | ~`S` |
+   | mixed re-flow | some | some | the sum over those chunks |
+
+   So the common repair case stages **nothing**. The budget is **run-level**, reserved per
+   file the way `--max-write-bytes` reserves, because `io_threads` files are in flight at
+   once. A file that cannot get its reservation does not fail: it is written in the ordered
+   direction instead, which produces the same file with less reuse.
+3. **Patch** — the wrong chunks are written, ascending in the RAM-staged tier and in the
+   salvage direction in the ordered tier: from the staged bytes when there are
    any, from a download otherwise. A download is `GET {chunk_prefix}/{C.id}` → response bytes
    are **zstd-compressed** chunk payload → v1 (S1 simplification, see README): buffer the
    whole chunk, `decode_all`, then verify `uncompressed_md5` immediately — mismatch fails the
@@ -170,6 +208,49 @@ Per file `F`:
    `rename(tmp → final)` (overwrite), else delete `tmp`, log error, count the file as failed
    and continue.
 7. `--check-only`: perform only step 1 for all files and report; write nothing.
+
+**The ordered tier's rule.** Write chunk `i`'s destination `W_i = [o_i, o_i+s_i)` from its
+reuse source `R_i = [r_i, r_i+s_i)` in the same file. The `W`s are disjoint and, after the
+zero-fill, tile `[0, size)`. So:
+
+- **ascending order** (smallest `o` first): before chunk `i` the written region is
+  `[0, o_i)`. `R_i` survives ⟺ `r_i ≥ o_i` (and `r_i+s_i` is inside the file).
+- **descending order**: before chunk `i` the written region is `(o_i+s_i, size)`. `R_i`
+  survives ⟺ `r_i ≤ o_i` (and `r_i+s_i` is inside the file).
+
+Neither condition mentions any other chunk, so both are **exactly computable at plan
+time** — no simulation, no heuristic. A pure function picks whichever direction preserves
+more reuse and marks the surviving chunks; the rest download. `r_i == o_i` counts for both.
+If the layout has holes, the zero-fill happens *after* the ordered loop, so during the loop
+the written region is a subset of the one the rule assumes and both conditions stay
+conservative — never wrong, occasionally pessimistic.
+
+A uniform upward shift of a file's content (everything moved later) is the descending case;
+a downward shift is the ascending case. A file whose chunking re-flowed has sources in both
+directions and keeps the larger half.
+
+Illustration — content shifted one chunk to the right:
+
+```
+on disk (old):      [0,4)=AAAA  [4,8)=BBBB  [8,12)=CCCC  [12,16)=DDDD
+target  (manifest): [0,4)=0000  [4,8)=AAAA  [8,12)=BBBB  [16-)=CCCC
+reuse sources:        none        r=0        r=4          r=8
+
+descending: CCCC@12 <- @8   ✓  r=8  <= o=12
+            BBBB@8  <- @4   ✓  r=4  <= o=8
+            AAAA@4  <- @0   ✓  r=0  <= o=4
+            0000@0  <- --      no source -> download          3/4 salvaged
+ascending:  AAAA@4  <- @0   x  r=0  <  o=4  (already overwritten by 0000)
+            BBBB@8  <- @4   x
+            CCCC@12 <- @8   x                                        0/4
+```
+
+**The eager trim.** `trim_is_free(file)` = "no reuse candidate has `r + s > size`". That is
+the whole test: an entry in the local reuse map past the target's end can only ever be a
+source, and only if the file shrinks a lot. When it is true the tail is dead weight and
+`set_len` releases it before a single byte is written. When it is false and `O − S` is
+large, the trim is deferred to the end (the file grows during the repair instead) and the
+reason is logged.
 
 **How the two modes resume.** In place there is no artefact to resume from and none is
 needed: the scan of step 1 finds the chunks that are already correct where they belong, so
@@ -251,6 +332,22 @@ are already right where they belong, the temp path resumes the `*_tmp` prefix).
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
   missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).
 
+The per-mode model, with `S` = target size, `O` = current on-disk size (0 if absent) and
+`G` = growth:
+
+| mode | bytes written per repaired file | peak extra free space | if the run is interrupted |
+|---|---|---|---|
+| `inplace` (default) | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | a mixed file, re-verified next run |
+| `temp` | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file untouched + a partial `*_tmp` |
+| `discard` | `S` | `0` | a partial file |
+
+The rows are two ways to spend disk, not two rungs of a safety ladder: `inplace` spends the
+least and writes the least, and `temp` spends the whole file in exchange for the target
+never being modified. For a corrupt-but-right-sized file — the common repair case —
+`inplace` needs **zero** extra space and writes only the corrupt bytes. For a file that
+grows by `Δ`, `inplace` needs `Δ`, not `S`. For a fresh install nothing is saved because
+nothing is on disk to save.
+
 ## 4. Failure modes
 
 | Failure | Handling |
@@ -261,6 +358,11 @@ are already right where they belong, the temp path resumes the `*_tmp` prefix).
 | Unknown local version | `local=null` → all chunks download-on-demand; still correct |
 | Missing server diff support (-202) | abort (Genshin is chunk-only; no legacy path in v1) |
 | Interrupted run | the in-place path re-verifies and continues (the chunks that are already right stay right); the temp path resumes by length; a leftover `*_tmp` is purged only via `--purge-before`/`--purge-after` |
+| A manifest whose chunks do not tile the file | validated at plan time; the hole is zero-filled and logged |
+| Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |
+| The volume fills while a file grows | the file fails, is counted, retried and reported; `--repair-mode temp` is the mode for a volume with no room for the growth |
+| A read-only attribute on a game file | cleared before the write, the way the launcher does it |
+| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 1) by name and by pid |
 
 ## 5. What was deliberately excluded (and when to add)
 
