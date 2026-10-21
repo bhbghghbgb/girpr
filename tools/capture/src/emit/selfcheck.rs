@@ -498,7 +498,7 @@ pub fn closing(
     //
     // A14 asks "is `game/` free of paths the tool under test would plan
     // against", which is one direction. It cannot see the other failure: a
-    // capture admitted for `kept_in_place` whose two variant files came
+    // capture admitted for `reuse_in_place` whose two variant files came
     // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
     // side matches its own declared MD5), and be useless - the fixture would
     // hold no evidence of the patch it was captured for. M11 found the gap by

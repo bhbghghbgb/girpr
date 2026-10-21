@@ -80,7 +80,7 @@ impl PlanEntry {
     /// Whether this chunk's bytes come from a **different offset** in the old
     /// file than where they land in the new one.
     ///
-    /// One definition for the `moved_ascending` class, the `Totals::moved`
+    /// One definition for the `reuse_moved` class, the `Totals::moved`
     /// count and the per-entry note. It was spelled out three times, and the
     /// three had to agree or the note would contradict the count.
     pub fn is_moved(&self) -> bool {
@@ -1269,7 +1269,7 @@ mod tests {
     }
 
     /// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
-    /// file in the reference bundle (`moved_ascending`), and 40x is slack
+    /// file in the reference bundle (`reuse_moved`), and 40x is slack
     /// well below the 1 GiB the limit is set at. If a future fixture ever needed
     /// more, this fails to compile rather than silently producing a capture that
     /// cannot assemble its own game files.
@@ -1433,7 +1433,7 @@ mod tests {
             vec![chunk(9, 0, 64), chunk(2, 64, 128), chunk(8, 192, 40)],
         );
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1480,7 +1480,7 @@ mod tests {
             vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
         );
         FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1627,7 +1627,7 @@ mod tests {
             vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1679,7 +1679,7 @@ mod tests {
         // offset the old file *does* have — so the old rule called it "not
         // moved", while the repair would read it from 0 and call it moved.
         let duplicated = FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1694,7 +1694,7 @@ mod tests {
         };
         // The moved case, for the other side of the comparison.
         let moved = FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1765,7 +1765,7 @@ mod tests {
             vec![chunk(3, 0, 32), chunk(1, 32, 64), chunk(2, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "moved_mixed".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),

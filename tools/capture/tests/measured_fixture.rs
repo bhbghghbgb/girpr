@@ -59,7 +59,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "aaaa",
             vec![chunk("aaaa", 0, 54, 54)],
         ),
-        // common + changed, same offsets -> `kept_in_place`
+        // common + changed, same offsets -> `reuse_in_place`
         file(
             "GenshinImpact_Data/Plugins/HoYoChannel.dll",
             "bbbb-old",
@@ -70,7 +70,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             ],
         ),
         // common + changed, one chunk moved and one brand new ->
-        // `moved_ascending`
+        // `reuse_moved`
         //
         // `reused` is 2 of 3, not 3 of 3: a file whose every chunk is reused
         // and none of them moved is the shape the removed
@@ -91,16 +91,16 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "gggg-old",
             vec![chunk("gggg", 0, 2048, 200), chunk("hhhh", 2048, 2048, 200)],
         ),
-        // common + changed, single chunk, nothing reusable -> `zero_reuse_single`
+        // common + changed, single chunk, nothing reusable -> no shape: a one-chunk`r`n        // file with nothing reusable is a degenerate patch
         file(
             "GenshinImpact_Data/AssetBundles/data_revision",
             "iiii-old",
             vec![chunk("iiii", 0, 42, 42)],
         ),
-        // common + changed, several chunks, nothing reusable -> `zero_reuse_multi`
+        // common + changed, several chunks, nothing reusable -> `no_reuse`
         //
         // 634 000 B uncompressed is the measured size of the live
-        // `unity default resources`, the cheapest `zero_reuse_multi` in §4.1.
+        // `unity default resources`, the cheapest `no_reuse` in §4.1.
         file(
             "GenshinImpact_Data/StreamingAssets/unity default resources",
             "rrrr-old",
@@ -122,7 +122,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             vec![chunk("kkkk", 0, 887_872, 887_872)],
         ),
         // common + changed, the content shifted **later** by one chunk ->
-        // `moved_descending`
+        // `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
             "vvv-old",
@@ -133,7 +133,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             ],
         ),
         // common + changed, the chunking **re-flowed**: one chunk moved later
-        // and one moved earlier -> `moved_mixed`
+        // and one moved earlier -> `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
             "www-old",
@@ -144,14 +144,14 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             ],
         ),
         // common + changed, the file on disk is **longer** than the target and
-        // no reuse source reaches past the target's end -> `trim_eager`
+        // no reuse source reaches past the target's end -> `reuse_in_place`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
             "xxx-old",
             vec![chunk("xxx1", 0, 2048, 200), chunk("xxx2", 2048, 2048, 200)],
         ),
         // common + changed, the file on disk is longer than the target and a
-        // reuse source **does** reach past the target's end -> `trim_deferred`
+        // reuse source **does** reach past the target's end -> `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
             "yyy-old",
@@ -211,7 +211,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "kkkk",
             vec![chunk("kkkk", 0, 887_872, 887_872)],
         ),
-        // the content shifted **later** by one chunk: `moved_descending`
+        // the content shifted **later** by one chunk: `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
             "vvv-new",
@@ -222,7 +222,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             ],
         ),
         // the chunking re-flowed: `www2` moved **earlier** and `www1` moved
-        // **later** -> `moved_mixed`
+        // **later** -> `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
             "www-new",
@@ -233,7 +233,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             ],
         ),
         // the file on disk is longer than the target and nothing moves ->
-        // `trim_eager`
+        // `reuse_in_place`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
             "xxx-new",
@@ -241,7 +241,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
         ),
         // the file on disk is longer than the target and `yyy2` moves
         // **earlier**, so its source reaches past the target's end ->
-        // `trim_deferred`
+        // `reuse_moved`
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
             "yyy-new",
@@ -418,15 +418,15 @@ fn cost_ordering_puts_the_cheapest_usable_files_first() {
             "GenshinImpact_Data/Resources/browser_assets",
             // 290 + 290 = 580 B
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
-            // 330 + 330 = 660 B: the content shifted later (`moved_descending`)
+            // 330 + 330 = 660 B: the content shifted later (`reuse_moved`)
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk",
-            // 360 + 360 = 720 B: the chunking re-flowed (`moved_mixed`)
+            // 360 + 360 = 720 B: the chunking re-flowed (`reuse_moved`)
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk",
-            // 400 + 350 = 750 B: the eager trim (`trim_eager`)
+            // 400 + 350 = 750 B: the file shrinks (`reuse_in_place`)
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
             // 400 + 500 = 900 B
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00981562.blk",
-            // 520 + 410 = 930 B: the deferred trim (`trim_deferred`)
+            // 520 + 410 = 930 B: the file shrinks with a moved source (`reuse_moved`)
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
             // 580 000 + 600 000 = 1 180 000 B
             "GenshinImpact_Data/StreamingAssets/unity default resources",
@@ -467,7 +467,7 @@ fn aggregation_keeps_the_counts_and_names_the_field() {
         agg.byte_counts.patch,
         // llll (the DLL) + pppp (the moved block) + mmmm (the grown block) +
         // qqqq (the single fresh download) + the whole voice pack, which is
-        // what a `zero_reuse_multi` patch fetches + the four new blocks' one
+        // what a `no_reuse` patch fetches + the four new blocks' one
         // fresh chunk each.
         274_426 + 100 + 300 + 42 + 290_000 + 310_000 + 110 + 120 + 150 + 150,
         "only what a patch would actually fetch"
@@ -871,7 +871,7 @@ mod m5_matrix {
     ///
     /// Phase 2 re-sorts the wants by cost, so the position a capture is admitted
     /// at is unrelated to which pick it was. Reading the suffix as a global
-    /// position would have produced `moved_ascending+7` for a
+    /// position would have produced `reuse_moved+7` for a
     /// `--per-class 1` run, which is true about the cost order and useless
     /// about the flag.
     #[test]
@@ -1067,7 +1067,7 @@ mod m6_chunk_store {
             ),
         ];
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: HOYO.into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1313,7 +1313,7 @@ mod m7_assembly {
             ],
         );
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: HOYO.into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),

@@ -212,34 +212,31 @@ pub struct World {
 }
 
 impl World {
-    /// A world whose `game` field exercises eight of the eleven classes.
+    /// A world whose `game` field exercises every patch shape.
     ///
-    /// | file                 | old → new                            | class                |
+    /// | file                 | old → new                            | shape                |
     /// |----------------------|--------------------------------------|----------------------|
     /// | `browser_assets`     | same chunks, same order              | `identical`          |
     /// | `libNew.dll`         | absent → one new chunk              | `added`              |
     /// | `old.blk`            | one old chunk → absent              | `removed`            |
-    /// | `zero.blk`           | all chunks replaced                 | `zero_reuse_multi`   |
-    /// | `HoYoChannel.dll`    | first chunk replaced, rest shared   | `kept_in_place`      |
-    /// | `eager.blk`          | the file shrinks, no source past the end | `trim_eager`     |
-    /// | `deferred.blk`       | the file shrinks, a source past the end | `trim_deferred`  |
-    /// | `grow.blk`           | the file grows, the content moves later | `moved_descending` |
+    /// | `zero.blk`           | all chunks replaced                 | `no_reuse`           |
+    /// | `HoYoChannel.dll`    | first chunk replaced, rest shared   | `reuse_in_place`     |
+    /// | `eager.blk`          | the file shrinks, no source past the end | `reuse_in_place` |
+    /// | `deferred.blk`       | the file shrinks, a source past the end | `reuse_moved`    |
+    /// | `grow.blk`           | the file grows, the content moves later | `reuse_moved`   |
     ///
-    /// The last three are there for the **coverage** assertions (A21-A23):
-    /// a bundle that does not show both trim outcomes, both write directions
-    /// and a file that grows cannot claim to cover the repair spec's
-    /// decisions, and the capture says so — which means the fixture has to
-    /// show them or every capture against this world would be red.
-    ///
-    /// The remaining three are `unavailable`, which is the honest answer for a
-    /// synthetic world and matches the live 7.0.0 → 7.1.0 finding that
-    /// `moved_mixed` has no candidate at all.
+    /// The last three are there for the **coverage** assertions (A21-A23): a
+    /// bundle that does not show both sides of the reuse boundary, both sides
+    /// of the moved boundary and both sides of the size boundary cannot claim
+    /// to cover the patch space, and the capture says so — which means the
+    /// fixture has to show them or every capture against this world would be
+    /// red.
     ///
     /// **`en-us` is published too**, because `--audio` defaults to `en-us` and
     /// the capture then fetches that manifest from *both* builds. A world that
     /// published only `game` would not be a narrower fixture — it would be a
     /// capture that cannot finish. The audio file is byte-identical across the
-    /// pair so it does not take a class away from `game`.
+    /// pair so it does not take a shape away from `game`.
     pub fn all_shapes() -> World {
         let shared = File::new(
             "GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all",

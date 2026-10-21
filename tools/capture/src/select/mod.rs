@@ -531,7 +531,7 @@ pub fn select(
     // The ordinal rides along because `capture_id` is `<class>` or `<class>+<n>`
     // where `n` counts *within the class*. Phase 2 re-sorts these by cost, so
     // the position a want is admitted at says nothing about which pick it was —
-    // `moved_ascending+7` would be a true statement about a global cost
+    // `reuse_moved+7` would be a true statement about a global cost
     // order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     let mut notes: Vec<MatrixRow> = Vec::new();
@@ -568,8 +568,8 @@ pub fn select(
         // Already answered by a file an earlier class is about to capture?
         //
         // **This is the case that decides the bundle's size.** The cheapest
-        // `trim_deferred` candidate is the same file as the cheapest
-        // `moved_ascending` one, and buying a second copy of that shape would
+        // `reuse_moved` candidate is the same file as the cheapest
+        // `reuse_moved` one, and buying a second copy of that shape would
         // cost 24.9 MB for nothing: the two classes differ only in which of
         // the two trim outcomes the file shows, and one capture shows both.
         //

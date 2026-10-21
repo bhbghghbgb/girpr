@@ -770,7 +770,7 @@ mod tests {
 
     fn pair() -> FilePair {
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "dll".into(),
             old: Some(chunks::OldFile {
                 tag: "7.0.0".into(),
