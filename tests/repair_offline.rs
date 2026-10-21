@@ -1934,8 +1934,13 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
         "not a failure"
     );
     assert!(
+        summary.write_bytes_spent.load(Ordering::Relaxed) <= limit,
+        "the ceiling must not be overshot: the live counter is the one the \
+         ceiling bounds"
+    );
+    assert!(
         summary.write_bytes.load(Ordering::Relaxed) <= limit,
-        "the ceiling must not be overshot"
+        "and the reported figure is no larger than it"
     );
 
     let line = girpr::report::summary_record(&summary, code).text();
@@ -2558,6 +2563,82 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     );
 
     mock.stop();
+}
+
+#[tokio::test]
+async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
+    // `SUMMARY write_bytes` counts the bytes written into the install **from
+    // sources that passed their gate**, so it is a function of the *input
+    // state*: the same install against a clean origin and against one that
+    // serves a corrupt-but-well-formed chunk reports the same number. The
+    // corrupt chunk contributes nothing — its bytes landed, but they were
+    // never a source that passed a gate.
+    //
+    // The live counter the `--max-write-bytes` ceiling reads is a *different*
+    // number, and it is larger in the corrupt run: the chunk was written and
+    // then written again. That is the disk the run actually took, and it is
+    // the number the ceiling bounds.
+    //
+    // A streamed chunk is what makes this a question: its bytes land before
+    // its digest is known, so "what was written" and "what was allowed to be
+    // written" are two different figures, and only the second one is a
+    // function of the install.
+    async fn run(opts: MockOpts, tag: &str) -> (u64, u64) {
+        let fx = build_fixture();
+        let mock = MockServer::start(fx, opts).await;
+        let dir = temp_dir(tag);
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, b"not the game data");
+        }
+        let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+            .await
+            .expect("run");
+        assert_eq!(code, 0, "the repair recovered");
+        for f in &fx2.files {
+            assert_eq!(
+                read_game_file(&dir, &f.rel).unwrap(),
+                f.data,
+                "{} is correct",
+                f.rel
+            );
+        }
+        mock.stop();
+        (
+            summary.write_bytes.load(Ordering::Relaxed),
+            summary.write_bytes_spent.load(Ordering::Relaxed),
+        )
+    }
+
+    let (clean_reported, clean_spent) = run(MockOpts::default(), "write_bytes_clean").await;
+    let (corrupt_reported, corrupt_spent) = run(
+        MockOpts {
+            corrupt_first_chunks: 1,
+            ..Default::default()
+        },
+        "write_bytes_corrupt",
+    )
+    .await;
+
+    // The two files are 128 + 48 bytes of chunks, and every one of them is
+    // written from a source that passed its gate.
+    assert_eq!(clean_reported, 176, "the clean run's verified writes");
+    assert_eq!(
+        corrupt_reported, clean_reported,
+        "a corrupt chunk contributes nothing: the figure is a function of the \
+         install, not of the transport"
+    );
+    // The ceiling's number is the other one: the corrupt chunk landed and was
+    // charged, and then it landed again.
+    assert_eq!(
+        clean_spent, clean_reported,
+        "a clean run spends what it writes"
+    );
+    assert!(
+        corrupt_spent > corrupt_reported,
+        "the corrupt chunk's bytes are spent even though they never validated: \
+         {corrupt_spent} > {corrupt_reported}"
+    );
 }
 
 #[tokio::test]

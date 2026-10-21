@@ -842,6 +842,23 @@ enum Tier {
     Ordered,
 }
 
+/// A write that passed its gate.
+///
+/// The bytes are counted twice, on purpose. `stats.bytes_written` is the
+/// file's own figure (the per-file half of `kept_bytes`), and the summary's
+/// `write_bytes` is the run's **reported** one: the bytes written into the
+/// install from sources that passed their gate. The *live* counter that the
+/// `--max-write-bytes` ceiling reads is charged separately, by
+/// [`reserve_write`], at the moment the bytes land — so the ceiling bounds
+/// the disk, and the reported figure stays a function of the input state.
+///
+/// The streamed download calls this **after** its digest has been checked, so
+/// a chunk that never validated contributes nothing to the reported figure.
+fn note_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) {
+    stats.bytes_written += n;
+    ctx.summary.note_write_bytes(n);
+}
+
 /// Write `bytes` at `offset`.
 fn write_at(
     ctx: &FileCtx,
@@ -853,7 +870,7 @@ fn write_at(
     reserve_write(ctx, bytes.len() as u64)?;
     f.seek(SeekFrom::Start(offset))?;
     f.write_all(bytes)?;
-    stats.bytes_written += bytes.len() as u64;
+    note_write(ctx, stats, bytes.len() as u64);
     Ok(())
 }
 
@@ -882,7 +899,7 @@ fn copy_within(
         reserve_write(ctx, n as u64)?;
         f.seek(SeekFrom::Start(dst + done))?;
         f.write_all(&buf[..n])?;
-        stats.bytes_written += n as u64;
+        note_write(ctx, stats, n as u64);
         done += n as u64;
     }
     Ok(())
@@ -1015,7 +1032,7 @@ fn zero_fill(
     while left > 0 {
         let n = (left as usize).min(zeros.len());
         out.write_all(&zeros[..n])?;
-        stats.bytes_written += n as u64;
+        note_write(ctx, stats, n as u64);
         left -= n as u64;
     }
     Ok(())
@@ -1202,7 +1219,7 @@ fn try_reuse_slice(
                 // appears in neither `download_bytes` nor the plan's estimate.
                 reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
-                stats.bytes_written += n as u64;
+                note_write(ctx, stats, n as u64);
                 remaining -= n as u64;
             }
             Ok(ChunkOutcome::Reused)
@@ -1333,6 +1350,12 @@ async fn write_downloaded_chunk(
     // The size and the digest are checked **after** the stream ends, which is
     // after the last byte has been written. A mismatch fails the attempt, and
     // the attempt's bytes are handed back by the caller.
+    //
+    // The write is counted **after** the checks, so a chunk that never
+    // validated contributes nothing to the reported `write_bytes`. The bytes
+    // are still spent — the live counter the ceiling reads has them — but the
+    // run's answer to "how much did the repair rewrite" does not move because
+    // the network was flaky.
     if digest.bytes != expected {
         anyhow::bail!(
             "chunk {} size mismatch: expect {} got {}",
@@ -1345,7 +1368,7 @@ async fn write_downloaded_chunk(
         tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
-    stats.bytes_written += sink.written();
+    note_write(ctx, stats, sink.written());
     stats.chunks_downloaded += 1;
     Ok(())
 }

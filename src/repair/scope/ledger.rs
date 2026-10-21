@@ -106,6 +106,15 @@ impl Summary {
     /// [`Self::reserve_download_bytes`] for why this is a reservation and not a
     /// check-then-add.
     ///
+    /// **This is the live counter** ([`Summary::write_bytes_spent`]): it counts
+    /// every byte that lands in the install, gate or no gate. The ceiling
+    /// exists to bound the disk, and a chunk that fails its digest has already
+    /// been written — the bytes are spent whether they are good or not.
+    ///
+    /// The *reported* figure is [`Summary::write_bytes`], which counts only
+    /// the bytes whose source passed its gate; see
+    /// [`Self::note_write_bytes`].
+    ///
     /// **This is the only genuinely un-counted cost in the tool.**
     /// `SUMMARY download_bytes` counts the network; this counts the disk. Every
     /// reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
@@ -114,13 +123,13 @@ impl Summary {
     /// entire payload to disk while reporting a network cost of almost nothing.
     pub fn reserve_write_bytes(&self, n: u64) -> bool {
         let limit = self.write_limit.load(Ordering::Relaxed);
-        let mut cur = self.write_bytes.load(Ordering::Relaxed);
+        let mut cur = self.write_bytes_spent.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
             if next > limit {
                 return false;
             }
-            match self.write_bytes.compare_exchange_weak(
+            match self.write_bytes_spent.compare_exchange_weak(
                 cur,
                 next,
                 Ordering::Relaxed,
@@ -130,6 +139,22 @@ impl Summary {
                 Err(actual) => cur = actual,
             }
         }
+    }
+
+    /// Record `n` bytes that were written into the install **from a source
+    /// that passed its gate** — a chunk's MD5, a reuse slice's MD5, a staged
+    /// chunk's MD5, the scan's source verdict, the structural zero-fill.
+    ///
+    /// This is the figure the `write_bytes=` key reports, and the point of
+    /// having it separate from [`Self::reserve_write_bytes`] is that it is a
+    /// function of the *input state*: the same install against a clean origin
+    /// and against one that serves a corrupt chunk reports the same number,
+    /// because the corrupt chunk never passed a gate and contributes nothing.
+    ///
+    /// It is charged at the write sites and never taken back, so it is
+    /// cumulative across attempts — the same as the counter it replaces.
+    pub fn note_write_bytes(&self, n: u64) {
+        self.write_bytes.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Trip the runtime **write** hard stop. Separate from
