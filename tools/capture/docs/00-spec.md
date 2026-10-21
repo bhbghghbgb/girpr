@@ -878,7 +878,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    `--check-only` is the other free check, and it **is expected to report
    damage**: under `--include <a capture path>` the run verifies only that one
    path against the *new* manifest while the copy still holds the *old* bytes,
-   so the seven repairable captures come back damaged and exit **`4`**. Only
+   so the four repairable captures come back damaged and exit **`4`**. Only
    `identical` is clean and exits `0`, because its bytes already match. A `0`
    here would mean the check looked at nothing.
 
@@ -902,22 +902,23 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    same total but cannot be compared per capture. `removed` is the exception and
    takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
-4. **Assert five things**, per capture:
+4. **Assert the cross-tool claim**, per capture — the three things, and the
+   run's preconditions:
 
    | # | assertion | read from |
    |---|---|---|
-   | 1 | `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes` | `SUMMARY` |
-   | 2 | the patched file's MD5 equals `expectations.result_md5` | the file on disk |
-   | 3 | no id in `expectations.must_not_fetch` was requested | **the replay server's own request log** — see below |
-   | 4 | exit `0`, `config_bumped=0`, `local_manifest=ok`, every path outside the scope untouched | `SUMMARY` + a before/after tree diff |
-   | 5 | for `removed`: the path is gone, and `deleted_extra_bytes` equals `old.size` | `SUMMARY` + the tree diff |
+   | 1 | the patched file's bytes are `expectations.result_md5`, and its length is `new.size` | the file on disk |
+   | 2 | the chunks asked for are exactly the `plan[]` entries whose decision is `FETCH`, and **none** of the `REUSE` ones was asked for | **the replay server's own request log** — see below |
+   | 3 | `SUMMARY download_bytes` equals `patchmaps/<id>.json → totals.download_bytes` | `SUMMARY` |
+   | — | *precondition:* exit `0`, `local_manifest=ok`, `scoped=1`, `config_bumped=0` | `SUMMARY` |
+   | — | for `removed`: the path is gone, and `deleted_extra_bytes` equals `old.size` | `SUMMARY` + the tree diff |
 
-   **The normative source for assertion 3 is the server's.** The bridge runs a
+   **The normative source for assertion 2 is the server's.** The bridge runs a
    shim that records what it was asked for, and that record is the primary
    answer: it is the only one that sees every request, including any that no
    client-side log line describes.
 
-   The procedure reads assertion 3 out of `<exe-dir>/logs/girpr_<ts>.log` at
+   The procedure reads assertion 2 out of `<exe-dir>/logs/girpr_<ts>.log` at
    `--log-level trace` as the fallback for a reader with no shim. Its own caveat
    is the reason the server log is better: **a reused chunk is logged too**, as
    `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the id
@@ -925,12 +926,14 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    record, never on the bare id: `chunk downloaded chunk=<id>` and
    `no local reuse candidate -> download chunk=<id>`.
 
-   `local_manifest=ok` is assertion 4's teeth. Without it a run whose local
+   `local_manifest=ok` is the precondition's teeth. Without it a run whose local
    manifest failed to load still exits `0` with a plausible byte count, having
    reused nothing; the key is emitted only when a local version was known and the
    lookup was attempted, so it separates a real reuse from a full re-fetch.
-   Assertion 4's tree diff is the only thing that proves the scope held across
-   the whole filesystem rather than just the repair plan.
+
+   **"Nothing outside the scope moved" is `girpr`'s own claim, not this
+   bundle's**, and it is asserted where the tool is: on a crafted multi-file
+   manifest, in `girpr`'s `tests/repair_machinery.rs`.
 
 5. **Do not pass `--purge-after` / `--purge-before` for a repair run anyway.**
    There is nothing to delete under a one-path scope, and a run that deletes
@@ -1046,6 +1049,10 @@ makes it **2 290 529 B**.
   `result_md5` (must equal) and **`must_not_fetch`** (must not be requested) —
   the last one names the chunk ids a working reuse path skips, so a broken reuse
   path is a specific, nameable failure rather than a byte-count mismatch.
+- `patchmaps/<id>.json → plan[]` says, per chunk, whether the bytes are already
+  in the old file (`REUSE`) or have to come off the network (`FETCH`). The set
+  of chunks a run asked for is exactly the `FETCH` set, so a run that fetched
+  more than the patch says, or less, is nameable.
 - `game/config.ini` already reads the old version, so the run takes the
   `getBuild(old)` reuse path without extra flags.
 - `verify/` makes the fixture's own integrity a precondition, so a bundle that
