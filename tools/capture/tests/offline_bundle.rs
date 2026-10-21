@@ -577,7 +577,7 @@ fn list_finds_a_bundle_from_the_root() {
     std::fs::write(sibling.join("readme.txt"), b"nothing here").unwrap();
 
     let found = gircap::verify::list(b.root.parent().unwrap()).expect("lists");
-    let hit = found.iter().find(|f| {
+    let hit = found.bundles.iter().find(|f| {
         f.path
             .ends_with(b.root.file_name().unwrap().to_string_lossy().as_ref())
     });
@@ -602,9 +602,17 @@ fn a_bundle_that_does_not_open_is_skipped_rather_than_fatal() {
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("MANIFEST.json"), b"{ not json").unwrap();
     let found = gircap::verify::list(parent).expect("lists");
-    assert!(found.iter().all(|f| !f.path.contains("broken-bundle")));
     assert!(
-        found.iter().any(|f| f.capture_id == "20261014T000000Z"),
+        found
+            .bundles
+            .iter()
+            .all(|f| !f.path.contains("broken-bundle"))
+    );
+    assert!(
+        found
+            .bundles
+            .iter()
+            .any(|f| f.capture_id == "20261014T000000Z"),
         "the good one is still there"
     );
     let _ = std::fs::remove_dir_all(&broken);

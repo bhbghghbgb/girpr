@@ -1771,8 +1771,8 @@ mod tests {
             );
             assert_eq!(
                 diff.moved,
-                diff.moved_up + diff.moved_down,
-                "{}: every move has a direction",
+                diff.moved_later + diff.moved_earlier,
+                "{}: every move lands either earlier or later",
                 pair.capture_id
             );
         }
@@ -1790,8 +1790,8 @@ mod tests {
             &duplicated.new.as_ref().unwrap().entry,
         );
         assert_eq!(diff.moved, 1, "the first match is the source");
-        assert_eq!(diff.moved_up, 1, "and the bytes move later");
-        assert_eq!(diff.moved_down, 0);
+        assert_eq!(diff.moved_later, 1, "and the bytes move later");
+        assert_eq!(diff.moved_earlier, 0);
     }
 
     /// Every chunk reused and the file laid out differently is the reorder case:

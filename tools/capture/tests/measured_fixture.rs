@@ -91,7 +91,8 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "gggg-old",
             vec![chunk("gggg", 0, 2048, 200), chunk("hhhh", 2048, 2048, 200)],
         ),
-        // common + changed, single chunk, nothing reusable -> no shape: a one-chunk`r`n        // file with nothing reusable is a degenerate patch
+        // common + changed, single chunk, nothing reusable -> no shape: a one-chunk
+        // file with nothing reusable is a degenerate patch
         file(
             "GenshinImpact_Data/AssetBundles/data_revision",
             "iiii-old",

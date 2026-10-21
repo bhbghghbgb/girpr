@@ -713,8 +713,14 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// bundle to describe, so a `BUNDLE` record would have to carry the failure
 /// instead of the facts, and a caller asking "which bundles are here" would get
 /// an entry that is not one.
+///
+/// **The summary still counts them.** A bundle this build refuses — an older
+/// schema — is a permanent condition with a known fix, and an operator whose
+/// inventory quietly omits one has an inventory that is wrong. So the count is
+/// on the summary and the path and the reason are on stderr.
 pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
-    let found = crate::verify::list(&root).map_err(|e| Failure::usage(e.to_string()))?;
+    let index = crate::verify::list(&root).map_err(|e| Failure::usage(e.to_string()))?;
+    let found = index.bundles;
     let capturing = found.iter().filter(|f| f.selfcheck == "pass").count() as u64;
     let blobs: u64 = found.iter().map(|f| f.blobs as u64).sum();
     for f in &found {
@@ -738,11 +744,19 @@ pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failur
             .set("complete", f.complete)
             .emit(output);
     }
+    for u in &index.unreadable {
+        tracing::error!(
+            path = %u.path,
+            reason = %u.reason,
+            "a bundle under --root that this build will not read; not in the index"
+        );
+    }
     let summary = Record::summary("list")
         .set("result", "ok")
         .set("root", root.as_path())
         .set("bundles", found.len() as u64)
         .set("bundles_passing", capturing)
+        .set("bundles_unreadable", index.unreadable.len() as u64)
         .set(
             "bundles_incomplete",
             found.iter().filter(|f| !f.complete).count() as u64,

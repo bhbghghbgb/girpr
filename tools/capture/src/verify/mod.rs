@@ -41,6 +41,11 @@
 //! manifests and the diff, and re-running them here would be re-running the
 //! capture's own algorithm against the capture's own output. They are counted
 //! and named in `covered_by_recording`, never silently dropped.
+//!
+//! A21-A23 are the bundle's **coverage** — whether it holds both sides of the
+//! reuse, moved and size boundaries — and they are re-derived but never
+//! *failed*: a bundle that does not cover the patch space is still internally
+//! consistent, so it is reported as a finding and the bundle still verifies.
 
 pub mod materialize;
 
@@ -135,24 +140,36 @@ impl Bundle {
                 root.display()
             ));
         }
-        let manifest: Manifest = read_json(&root.join("MANIFEST.json"))?;
+        let manifest_path = root.join("MANIFEST.json");
+        // The schema version is read **first, and on its own**, because it is
+        // the one fact that decides whether the rest of the document means
+        // anything.
+        //
         // A bundle written by an older schema is **refused**, not read with
         // the new reader's defaults. The version-1 patchmap carried a `repair`
         // block and an `expectations.summary` block, and its class ids named
         // a repair tool's internal decisions; a reader that understood the
         // current shape would silently ignore all three and report a bundle
         // as consistent when it is not.
-        if manifest.schema_version != crate::SCHEMA_VERSION {
+        //
+        // Reading the version before the document matters as much as refusing
+        // it: a version-1 `MANIFEST.json` does not have the fields the current
+        // reader wants, so a reader that parsed the document first would fail
+        // on a *missing field* and say nothing about the version that caused
+        // it. The version is the diagnosis; the missing field is a symptom.
+        let version = schema_version_of(&manifest_path)?;
+        if version != crate::SCHEMA_VERSION {
             return Err(format!(
                 "{}: schema version {} is not the current {}; this bundle was written \
                  by an older gircap and its patchmaps carry a different shape.\n\
                  \x20   capture a current bundle with:  cargo run -p gircap -- capture --out {}",
-                root.join("MANIFEST.json").display(),
-                manifest.schema_version,
+                manifest_path.display(),
+                version,
                 crate::SCHEMA_VERSION,
                 root.display(),
             ));
         }
+        let manifest: Manifest = read_json(&manifest_path)?;
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
@@ -237,6 +254,32 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The schema version a bundle declares, read on its own.
+///
+/// **Nothing but the version.** The document is read as a JSON value rather
+/// than as a [`Manifest`], because a bundle written by an older schema does
+/// not have the fields the current reader wants: parsed as a `Manifest` it
+/// fails on a missing field, and the message names a symptom instead of the
+/// cause. The version is the diagnosis.
+///
+/// A document with no readable version is **not a bundle** — a half-written
+/// capture, or a directory that only looks like one — and says so.
+fn schema_version_of(path: &Path) -> Result<u32, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .map(|v| v as u32)
+        .ok_or_else(|| {
+            format!(
+                "{}: no schema_version; this is not a bundle gircap wrote",
+                path.display()
+            )
+        })
 }
 
 /// What re-verification found.
@@ -427,17 +470,18 @@ pub fn reverify(bundle: Bundle) -> Report {
         )
     });
 
-    // 4b. The bundle's **coverage**: whether it shows both trim outcomes, both
-    // write directions and a file that grows.
+    // 4b. The bundle's **coverage**: whether it holds both sides of the reuse
+    // boundary, the moved boundary and the size boundary.
     //
     // A **finding**, not a failed check, and that is the whole distinction.
     // The coverage is a design property of the bundle - it is what the class
     // set was captured for - and a bundle that does not cover everything (a
     // narrow one, or a hand-built one) is still internally consistent. The
     // *capture* is where the coverage is a contract: a capture that does not
-    // cover the spec's decisions fails its own run (A21-A23 are fatal there).
+    // cover the patch space fails its own run (A21-A23 are fatal there).
     // The verifier's job is to prove the bundle still says what it said, and
-    // "this bundle does not cover both trims" is a thing it said.
+    // "this bundle does not cover both sides of the reuse boundary" is a thing
+    // it said.
     let shapes: Vec<crate::assemble::PatchShape> = bundle
         .patchmaps
         .values()
@@ -450,7 +494,7 @@ pub fn reverify(bundle: Bundle) -> Report {
                 assertion = %row.id,
                 subject = %row.subject,
                 actual = %row.actual,
-                "the bundle does not cover the repair spec's decisions"
+                "the bundle does not cover the patch space"
             );
         }
     }
@@ -847,6 +891,29 @@ pub struct Listed {
     pub complete: bool,
 }
 
+/// What [`list`] found under a root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Index {
+    /// The bundles that opened.
+    pub bundles: Vec<Listed>,
+    /// The directories that hold a `MANIFEST.json` this build will not read.
+    ///
+    /// **Not a record.** The spec says a directory that does not open is
+    /// stderr-only, because a record would have to carry the failure instead
+    /// of the facts. That stays true — but the operator's inventory is still
+    /// incomplete, so these are counted and named rather than dropped.
+    pub unreadable: Vec<Unreadable>,
+}
+
+/// A bundle under the root that this build will not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    /// The bundle root, relative to the `--root` that was walked.
+    pub path: String,
+    /// Why it was not read.
+    pub reason: String,
+}
+
 /// Every bundle under `root`, deepest first.
 ///
 /// Recursive rather than a fixed depth, because the layout is
@@ -854,24 +921,39 @@ pub struct Listed {
 /// `artifacts/hk4e_global` and one that points at `artifacts/` should both work
 /// without the caller knowing which.
 ///
-/// A bundle that fails to open is *not* an error: `list` is an index, and a
-/// half-written capture next to a good one is exactly what an operator wants to
-/// see listed. It is skipped, and the skip is logged.
-pub fn list(root: &Path) -> Result<Vec<Listed>, String> {
+/// **A bundle that fails to open is not an error, and it is not dropped.**
+/// `list` is an index, and a half-written capture next to a good one is
+/// exactly what an operator wants to see listed — so a directory that is not a
+/// bundle at all is stepped over silently. A directory that *is* a bundle this
+/// build refuses — an older schema, which is a permanent condition with a
+/// known fix — is named, with the reason, in [`Index::unreadable`], so the
+/// operator's inventory is complete.
+pub fn list(root: &Path) -> Result<Index, String> {
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
     let mut found = Vec::new();
+    let mut unreadable = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         if dir.join("MANIFEST.json").is_file() {
             match Bundle::open(&dir) {
                 Ok(b) => found.push(listed_of(root, &b)),
-                Err(e) => tracing::warn!(
-                    dir = %dir.display(),
-                    error = %e,
-                    "a directory under --root looks like a bundle but does not open; skipped"
-                ),
+                Err(e) => {
+                    // A directory that is not a bundle at all is stepped over;
+                    // one that is a bundle this build refuses is named.
+                    if schema_version_of(&dir.join("MANIFEST.json")).is_ok() {
+                        unreadable.push(Unreadable {
+                            path: crate::emit::index::rel(root, &dir),
+                            reason: e.clone(),
+                        });
+                    }
+                    tracing::warn!(
+                        dir = %dir.display(),
+                        error = %e,
+                        "a directory under --root looks like a bundle but does not open; skipped"
+                    );
+                }
             }
             // A bundle does not contain another bundle.
             continue;
@@ -889,7 +971,11 @@ pub fn list(root: &Path) -> Result<Vec<Listed>, String> {
         stack.extend(subs.into_iter().rev());
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(found)
+    unreadable.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(Index {
+        bundles: found,
+        unreadable,
+    })
 }
 
 /// One `Listed` row from an opened bundle.
@@ -937,6 +1023,76 @@ mod tests {
         let d = crate::testtemp::TempDir::new("gircap-m9-empty", "no_manifest");
         let e = Bundle::open(&d).unwrap_err();
         assert!(e.contains("MANIFEST.json"), "{e}");
+    }
+
+    /// **A bundle written by an older schema is refused, and the refusal says
+    /// what to do.**
+    ///
+    /// The schema bump exists precisely so that a version-1 bundle can be
+    /// refused: its patchmaps carry a `repair` block and an
+    /// `expectations.summary` block, and its class ids named a repair tool's
+    /// internal decisions — a reader that understood the current shape would
+    /// ignore all three and report the bundle as consistent when it is not.
+    ///
+    /// The manifest here is a version-1 manifest with **nothing else in it**,
+    /// which is the point: the version is read on its own, so the refusal
+    /// names the version rather than a missing field the version caused.
+    #[test]
+    fn a_v1_bundle_is_refused_with_the_command_that_makes_a_current_one() {
+        let d = crate::testtemp::TempDir::new("gircap-v1", "v1_bundle");
+        std::fs::write(d.join("MANIFEST.json"), br#"{"schema_version": 1}"#)
+            .expect("writes the manifest");
+        let e = Bundle::open(&d).unwrap_err();
+        assert!(e.contains("schema version 1"), "{e}");
+        assert!(e.contains("is not the current"), "{e}");
+        assert!(
+            e.contains("cargo run -p gircap -- capture --out"),
+            "the refusal must say how to make a current one: {e}"
+        );
+    }
+
+    /// **And `list` does not let it vanish.**
+    ///
+    /// `list` is an index, and an index that quietly omits a bundle is wrong.
+    /// A directory that is not a bundle at all is stepped over — a half-written
+    /// capture is a normal transient — but one that is a bundle this build
+    /// refuses is named, with the reason.
+    #[test]
+    fn a_v1_bundle_is_named_by_list_rather_than_dropped() {
+        let d = crate::testtemp::TempDir::new("gircap-v1-list", "v1_list");
+        let old = d.join("old");
+        std::fs::create_dir_all(&old).expect("makes the directory");
+        std::fs::write(old.join("MANIFEST.json"), br#"{"schema_version": 1}"#)
+            .expect("writes the manifest");
+
+        let index = list(&d).expect("lists");
+        assert!(
+            index.bundles.is_empty(),
+            "a bundle that does not open is not a row: {index:?}"
+        );
+        assert_eq!(index.unreadable.len(), 1, "{index:?}");
+        assert_eq!(index.unreadable[0].path, "old");
+        assert!(
+            index.unreadable[0].reason.contains("schema version 1"),
+            "and the reason is the version: {index:?}"
+        );
+    }
+
+    /// A directory that is not a bundle at all is stepped over silently: it is
+    /// a half-written capture, not something the operator has to act on.
+    #[test]
+    fn a_directory_that_is_not_a_bundle_is_not_named_by_list() {
+        let d = crate::testtemp::TempDir::new("gircap-not-a-bundle", "not_a_bundle");
+        let broken = d.join("broken");
+        std::fs::create_dir_all(&broken).expect("makes the directory");
+        std::fs::write(broken.join("MANIFEST.json"), b"{ not json").expect("writes it");
+
+        let index = list(&d).expect("lists");
+        assert!(index.bundles.is_empty(), "{index:?}");
+        assert!(
+            index.unreadable.is_empty(),
+            "a manifest that is not JSON is not a bundle this build refuses: {index:?}"
+        );
     }
 
     /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"

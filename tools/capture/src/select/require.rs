@@ -65,9 +65,9 @@ fn line(row: &MatrixRow) -> String {
 ///
 /// **Empty is the correct default rather than a missing one.** `--require-class`
 /// is opt-in, so a class is only fatal when the caller named it. Requiring all
-/// eleven by default would make *every* run of a pair like 7.0.0 → 7.1.0 exit
-/// `4`, because that pair genuinely lacks a `reuse_moved` file — a fact about
-/// the world, recorded as `status: unavailable`, not a failure of the tool.
+/// six by default would make *every* run of a pair that lacks one of them exit
+/// `4` — and a class the manifests do not have is a fact about the world,
+/// recorded as `status: unavailable`, not a failure of the tool.
 ///
 /// The distinction the exit code turns on:
 ///

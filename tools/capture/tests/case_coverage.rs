@@ -15,12 +15,18 @@
 //!
 //! | what | against what |
 //! |---|---|
-//! | the script's outcome table | the patchmaps' `repair` blocks |
+//! | the script's chunk arithmetic | the patchmaps' `totals` |
 //! | the script's population | the matrix's `candidates_considered` |
 //!
-//! The second one is the class drift: the crate's class set, the instrument's
+//! The first one is the class drift: the crate's class set, the instrument's
 //! and the published table are three statements of the same fact, and this is
 //! what says they agree.
+//!
+//! **The script computes more than the bundle publishes, and that is fine.**
+//! It also works out the trim and the write order — the repair tool's own
+//! decisions, which the bundle deliberately does not carry — and those figures
+//! are the instrument's own expectation rather than a claim about the
+//! artifact. Only the numbers the bundle *does* publish are compared.
 //!
 //! **Python is optional.** The gate needs it, and a developer without it gets
 //! a note rather than a failure — but the note says what was *not* checked, so

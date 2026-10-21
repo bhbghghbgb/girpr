@@ -46,6 +46,12 @@ use serde::{Deserialize, Serialize};
 /// Deliberately lossy: a path's *name* never decides a class, so it is not here.
 /// A class is a statement about how the content changed, and a predicate that
 /// could look at the name would eventually start doing so.
+///
+/// **It holds what the predicates read, and nothing else.** The two whole-file
+/// sizes used to be here, and no predicate read them: a field that no
+/// predicate looks at is one that can drift from the fact it names without
+/// anything noticing. The sizes are still published, in the candidate table,
+/// where a reader wants them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     /// A path in both manifests, with the numbers the decision turns on.
@@ -58,10 +64,6 @@ pub enum Shape {
         reused: u64,
         /// Of those, how many sit at a different offset.
         moved: u64,
-        /// The old file's declared size.
-        old_size: u64,
-        /// The new file's declared size.
-        new_size: u64,
     },
     /// The path is only in the new manifest.
     Added,
@@ -83,8 +85,6 @@ impl Shape {
                 nchunks: s.nchunks,
                 reused: s.reused,
                 moved: s.moved,
-                old_size: s.old_size.max(0) as u64,
-                new_size: s.new_size.max(0) as u64,
             },
         }
     }
@@ -309,27 +309,6 @@ mod tests {
             nchunks,
             reused,
             moved,
-            old_size: 100,
-            new_size: 100,
-        }
-    }
-
-    /// The full shape, every field spoken for.
-    fn shape(
-        same_md5: bool,
-        nchunks: u64,
-        reused: u64,
-        moved: u64,
-        old_size: u64,
-        new_size: u64,
-    ) -> Shape {
-        Shape::Scored {
-            same_md5,
-            nchunks,
-            reused,
-            moved,
-            old_size,
-            new_size,
         }
     }
 
@@ -344,9 +323,9 @@ mod tests {
             // reused == 0, nchunks > 1
             (Class::NoReuse, scored(false, 3, 0, 0)),
             // 0 < reused < nchunks, moved == 0
-            (Class::ReuseInPlace, shape(false, 3, 1, 0, 100, 100)),
+            (Class::ReuseInPlace, scored(false, 3, 1, 0)),
             // moved > 0
-            (Class::ReuseMoved, shape(false, 4, 3, 2, 100, 100)),
+            (Class::ReuseMoved, scored(false, 4, 3, 2)),
             // only in the new manifest
             (Class::Added, Shape::Added),
             // only in the old manifest
@@ -365,14 +344,14 @@ mod tests {
         let cases: Vec<(Vec<Class>, Shape)> = vec![
             (vec![Class::Identical], scored(true, 1, 1, 0)),
             (vec![Class::NoReuse], scored(false, 3, 0, 0)),
-            (vec![Class::ReuseInPlace], shape(false, 3, 1, 0, 100, 100)),
-            (vec![Class::ReuseMoved], shape(false, 4, 3, 2, 100, 100)),
+            (vec![Class::ReuseInPlace], scored(false, 3, 1, 0)),
+            (vec![Class::ReuseMoved], scored(false, 4, 3, 2)),
             // A file that reuses *and* moves is the moved shape, and only that
             // one: the two reuse classes are exclusive.
-            (vec![Class::ReuseMoved], shape(false, 10, 8, 4, 200, 100)),
+            (vec![Class::ReuseMoved], scored(false, 10, 8, 4)),
             // A file that shrinks and reuses without moving is still the
             // in-place shape: the shrink is not a class of its own.
-            (vec![Class::ReuseInPlace], shape(false, 3, 2, 0, 200, 100)),
+            (vec![Class::ReuseInPlace], scored(false, 3, 2, 0)),
         ];
         for (want, shape) in cases {
             assert_eq!(Class::all_satisfied_by(shape), want, "{shape:?}");
@@ -383,11 +362,11 @@ mod tests {
     /// chunks did not all stay where they belong".
     #[test]
     fn the_two_reuse_classes_are_exclusive() {
-        let still = shape(false, 4, 3, 0, 100, 100);
+        let still = scored(false, 4, 3, 0);
         assert!(Class::ReuseInPlace.matches(still));
         assert!(!Class::ReuseMoved.matches(still));
 
-        let moved = shape(false, 4, 3, 2, 100, 100);
+        let moved = scored(false, 4, 3, 2);
         assert!(Class::ReuseMoved.matches(moved));
         assert!(!Class::ReuseInPlace.matches(moved));
     }
@@ -439,7 +418,7 @@ mod tests {
     /// chunking did.
     #[test]
     fn an_unchanged_file_is_the_skip_branch_even_when_its_chunking_moved() {
-        let retiled = shape(true, 336, 336, 4, 398_535_566, 398_535_566);
+        let retiled = scored(true, 336, 336, 4);
         assert_eq!(
             Class::all_satisfied_by(retiled),
             vec![Class::Identical],
@@ -484,8 +463,8 @@ mod tests {
         for shape in [
             scored(true, 1, 1, 0),
             scored(false, 3, 0, 0),
-            shape(false, 3, 1, 0, 100, 100),
-            shape(false, 4, 3, 2, 100, 100),
+            scored(false, 3, 1, 0),
+            scored(false, 4, 3, 2),
         ] {
             let all = Class::all_satisfied_by(shape);
             assert_eq!(all.len(), 1, "{shape:?} -> {all:?}");

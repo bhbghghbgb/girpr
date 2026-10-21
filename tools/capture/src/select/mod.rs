@@ -398,10 +398,10 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
 
 /// How many pool candidates satisfy each class, indexed by [`Class::ALL`].
 ///
-/// One walk of the pool instead of eleven. The eleven numbers are the same ones
+/// One walk of the pool instead of one per class. The numbers are the same ones
 /// the per-class `filter().count()` produced.
-fn considered_counts(pool: &[SizedCandidate]) -> [u64; 11] {
-    let mut counts = [0_u64; 11];
+fn considered_counts(pool: &[SizedCandidate]) -> [u64; Class::ALL.len()] {
+    let mut counts = [0_u64; Class::ALL.len()];
     for c in pool {
         for (i, class) in Class::ALL.iter().enumerate() {
             if c.candidate.satisfies(*class) {
@@ -780,8 +780,13 @@ fn unavailable_reason(class: Class, considered: u64) -> String {
 /// The note the matrix carries when a class has no candidate at all, so a reader
 /// can tell "this version pair does not have one" from "this tool looked
 /// somewhere it should not have".
-const REPOOL_NOTE: &str = "widen --audio, or check the version pair — the spec records this class as \
-     absent for 7.0.0 -> 7.1.0";
+///
+/// **It says nothing about the reference pair, and it used to.** The note used
+/// to point at the spec's record of a class that was absent for 7.0.0 -> 7.1.0,
+/// which was true of the class set the spec had then. All six classes have
+/// candidates for that pair now, so there is no such absence to point at and
+/// the note is about the reader's next move instead.
+const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
 ///
@@ -808,8 +813,8 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
                 "nchunks": s.nchunks,
                 "reused": s.reused,
                 "moved": s.moved,
-                "moved_up": s.moved_up,
-                "moved_down": s.moved_down,
+                "moved_later": s.moved_later,
+                "moved_earlier": s.moved_earlier,
                 "old_max_end": s.old_max_end,
                 "same_md5": s.same_md5,
                 "old_bytes": s.old_bytes,
@@ -825,7 +830,7 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
         "schema_version": crate::SCHEMA_VERSION,
         "columns": [
             "path", "matching_field", "old_size", "new_size", "nchunks", "reused",
-            "moved", "moved_up", "moved_down", "old_max_end", "same_md5",
+            "moved", "moved_later", "moved_earlier", "old_max_end", "same_md5",
             "old_bytes", "new_bytes", "patch_bytes", "total_cost", "classes", "rank",
         ],
         "rows": rows,
@@ -865,14 +870,14 @@ mod tests {
     ///
     /// * `(old_size, new_size)`
     /// * `(nchunks, reused, moved)`
-    /// * `(moved_up, moved_down)`
+    /// * `(moved_later, moved_earlier)`
     #[allow(clippy::too_many_arguments)]
     fn shaped(
         path: &str,
         cost: u64,
         size: (i64, i64),
         chunks: (u64, u64, u64),
-        direction: (u64, u64),
+        moves: (u64, u64),
         old_max_end: u64,
         md5: bool,
     ) -> PathScore {
@@ -885,8 +890,8 @@ mod tests {
             nchunks,
             reused,
             moved,
-            moved_up: direction.0,
-            moved_down: direction.1,
+            moved_later: moves.0,
+            moved_earlier: moves.1,
             old_max_end,
             same_md5: md5,
             old_bytes: cost / 2,
@@ -896,7 +901,8 @@ mod tests {
         }
     }
 
-    /// The simple case: every move goes **down**, and the trim is free.
+    /// The simple case: every move lands **earlier**, and no reuse source is
+    /// recorded.
     fn scored(
         path: &str,
         cost: u64,
@@ -1421,8 +1427,8 @@ mod tests {
             "path",
             "reused",
             "moved",
-            "moved_up",
-            "moved_down",
+            "moved_later",
+            "moved_earlier",
             "old_max_end",
             "patch_bytes",
             "total_cost",

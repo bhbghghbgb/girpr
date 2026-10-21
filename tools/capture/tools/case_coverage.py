@@ -23,7 +23,9 @@ Three sections, one per question the findings ask:
    have no usable local source (fetched), how much RAM the staged tier would
    need, how many sources each write order would salvage, and whether the trim
    is eager or deferred. The fixture's bytes are hashed at each entry's target
-   and source range.
+   and source range. The kept/moved/fetched counts are the artifact's own and
+   are gated against it; the rest is this script's expectation of what a repair
+   would do, because the bundle deliberately does not publish it.
 
 3. **ranking** - the cheapest candidate per class, by `gircap`'s own key
    (`total_cost` = the compressed bytes of the old and the new file).
@@ -338,15 +340,25 @@ def md5(data):
 def outcome_rows(bundle):
     """What the in-place repair would do with each capture's file.
 
-    **The rules are the artifact's** (`assemble::repair_of` in the crate), not a
-    second opinion, and the differences matter:
+    **The chunk arithmetic is the artifact's, and it is compared.** The counts
+    below are checked against the patchmap's own `totals` by
+    `tests/case_coverage.rs`, so they have to be the same numbers the crate
+    wrote, and the differences matter:
 
     - a chunk that is already correct where it belongs is **kept**, and it is
       not a candidate for either write order. The salvage counts run over the
-      *damaged* chunks only, exactly as `repair::reuse::salvage_order` does.
+      *damaged* chunks only.
     - a source that reaches past the end of the file is not there to be
       copied, so it salvages nothing in either order.
     - a tie keeps nothing at all, so there is no direction to name.
+
+    **The trim, the write order and the growth are this script's own
+    expectation.** The bundle does not publish them, and does not publish
+    anything that implies them: they are the repair tool's decisions, and a
+    bundle that carried them would be carrying another tool's business. They
+    are here because this is a development instrument and "what would a repair
+    do with this file" is worth answering while working on the capture. Nothing
+    compares them with anything.
 
     A file that is absent from `game/` is the *created* case: every chunk is
     fetched and nothing is kept.
