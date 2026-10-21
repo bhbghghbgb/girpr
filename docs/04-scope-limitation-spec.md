@@ -324,6 +324,48 @@ ceiling bounds what is *done*.
 
 `post::delete_deprecated` is a handful of files and needs no ceiling.
 
+### B5 · `--max-verified-download-bytes <N>` / `--max-verified-write-bytes <N>` — **P1** — runtime hard stop
+
+The two ceilings the **live/settled** split makes possible.
+
+**The problem they solve.** `--max-download-bytes` and `--max-write-bytes` bound
+the **live** figures: the traffic the run caused, and the disk it took. Neither
+bounds **the repair** — how much of the install the run actually had to
+rewrite. So a run against a flaky origin gets stopped early (the budget was
+eaten by retries that produced nothing), while a run that legitimately rewrote
+40 GB of the install is not bounded by anything except the disk.
+
+These two bound the **settled** figures instead: the bytes of the files that
+were actually repaired, and the bytes the repair actually wrote into the
+install. A budget on the *outcome*, not on the *cost*.
+
+**Both are runtime hard stops**, never pre-flight refusals: the split between
+the two figures is only known at runtime, so there is nothing to refuse
+against. Both count towards `limited=1`, and both answer with exit `5` and a
+`stopped=` value that names the flag that bound.
+
+**The line is checked when the bytes are settled**, so it can be crossed by the
+write that settled them: one chunk for the disk, one file for the network. The
+bytes are counted either way — the write happened, and a figure that stopped
+counting would be a lie — and the run stops with the work it had done left in
+place, which is what every other hard stop does.
+
+**Why two flags and not one.** A user who wants "do not rewrite more than N
+bytes of my install" wants the write one; a user who wants "do not fetch more
+than N bytes that actually land in files" wants the download one. Collapsing
+them into a single `--max-repair-bytes` would have to pick one of the two
+quantities, and the other would stay unbounded.
+
+**They compose with the existing ceilings, and the order matters.** The live
+ceilings are checked first — they bound the disk and the network — and the
+verified ones are checked when a resource is settled. A run with both
+`--max-write-bytes` and `--max-verified-write-bytes` stops on whichever is
+reached first, and `stopped=` says which.
+
+**A flag that never fires is not a failure.** A run that never settles that
+many bytes is simply not limited by it; there is nothing to report and
+nothing to refuse.
+
 ### C1 · `--print-plan` + `--plan-out <FILE>` — **P0** — observability
 
 **`--dry-run` does not cover this,** for three concrete reasons:
@@ -581,11 +623,16 @@ run that never passes the flag.
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
 | `download_bytes_spent=<N>` | `--max-download-bytes` active. The bytes that **crossed the wire**, the abandoned attempts' included: the traffic the run caused, which is what the ceiling bounds. `download_bytes` is the other half — the bytes of the files that were actually repaired — and the two are the same number in a clean run and differ exactly when the transport misbehaved |
-| `write_bytes=<N>` | `--max-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
+| `write_bytes=<N>` | `--max-write-bytes` **or** `--max-verified-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
 | `write_bytes_spent=<N>` | `--max-write-bytes` active. The bytes that **landed in the install**, the bytes of an attempt that later failed its digest included: the disk the run took, which is what the ceiling bounds. `write_bytes` is the other half — the bytes written from sources that passed their gate |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
-| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so two stops cannot share a value |
+| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so two stops cannot share a value |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |
+
+`download_bytes` is **not** in this table: it is one of the fixed keys, and it is
+the **settled** download figure — the bytes of the files that were actually
+repaired. It is on every `SUMMARY` line, flagged or not, because it is the
+run's headline number.
 
 `stopped=` is what distinguishes "nothing was written because the plan was too
 big" from "something was written and then we ran out".

@@ -2064,6 +2064,129 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     mock.stop();
 }
 
+/// The two **verified** ceilings bound the *settled* figures — the bytes the
+/// repair was allowed to spend — and they are the limits the live/settled
+/// split makes possible: a run against a flaky origin can be bounded by what
+/// it *achieved* rather than by what it *cost*.
+#[tokio::test]
+async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
+    // The fixture: `bar.dat` is one 48-byte chunk, `foo.dat` is two 64-byte
+    // ones, and the plan is sorted — so `bar.dat` is repaired first and
+    // settles 48 bytes, which is under the line. `foo.dat`'s first chunk
+    // settles 64 more and crosses it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("verified_write");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, b"not the game data");
+    }
+
+    let limit = 64u64;
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.limits.verified_write_bytes = Some(limit);
+    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    assert_eq!(
+        code, 5,
+        "the verified ceiling is a hard stop, like every other"
+    );
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-verified-write-bytes"),
+        "the stop must name the flag that bound"
+    );
+    assert!(summary.flags.limited, "the ceiling was requested");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "not a failure: the ceiling stopped the run, the file did not fail"
+    );
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        1,
+        "the file that crossed the line was repaired; the next one was not started"
+    );
+    // The settled figure is counted even when it crosses the line: the write
+    // happened, and a figure that stopped counting would be a lie.
+    assert!(
+        summary.write.settled() > limit,
+        "the write that crossed the line is counted: {} > {limit}",
+        summary.write.settled()
+    );
+    // And the live figure — the one `--max-write-bytes` bounds — is the same
+    // number here: nothing was wasted, the run simply ran out of budget.
+    assert_eq!(summary.write.live(), summary.write.settled());
+
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(
+        line.contains("stopped=--max-verified-write-bytes"),
+        "{line}"
+    );
+    assert!(line.contains("write_bytes="), "{line}");
+    assert!(line.contains("limited=1"), "{line}");
+
+    mock.stop();
+}
+
+/// The download half of the same idea: a ceiling on the bytes of the files
+/// that were **actually repaired**, rather than on the traffic.
+#[tokio::test]
+async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
+    let fx = build_fixture();
+    // The settled download figure is counted in **compressed** bytes, and it
+    // is settled per file — a file is the atom it is counted in.
+    let bar_bytes = fx.chunk_store.get("chunk_bar0").unwrap().len() as u64;
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("verified_download");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, b"not the game data");
+    }
+
+    // A ceiling of zero: the first file that is repaired crosses it, and the
+    // second one is never started.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.limits.verified_download_bytes = Some(0);
+    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    assert_eq!(
+        code, 5,
+        "the verified ceiling is a hard stop, like every other"
+    );
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-verified-download-bytes"),
+        "the stop must name the flag that bound"
+    );
+    assert!(summary.flags.limited, "the ceiling was requested");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "not a failure: the ceiling stopped the run, the file did not fail"
+    );
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        1,
+        "the first file was repaired; the next one was not started"
+    );
+    assert!(
+        summary.download.settled() >= bar_bytes,
+        "the file that crossed the line is counted: {} >= {bar_bytes}",
+        summary.download.settled()
+    );
+    // The live figure is the traffic: the same number here, because nothing
+    // was fetched twice.
+    assert_eq!(summary.download.live(), summary.download.settled());
+
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(
+        line.contains("stopped=--max-verified-download-bytes"),
+        "{line}"
+    );
+    assert!(line.contains("limited=1"), "{line}");
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the

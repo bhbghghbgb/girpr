@@ -203,7 +203,18 @@ pub async fn repair_all(
                         // them, and it carries the abandoned attempts' bytes
                         // too: those crossed the wire, and a budget is about
                         // the traffic, not about the install.
-                        ctx.summary.settle_download_bytes(stats.download_bytes);
+                        if !ctx.summary.settle_download_bytes(stats.download_bytes) {
+                            // The **verified** ceiling bound: the file is
+                            // repaired and counted, and the run stops here.
+                            // The line is crossed by a whole file, because a
+                            // file is the atom the figure is counted in.
+                            ctx.summary.stop(StoppedBy::VerifiedDownload);
+                            tracing::warn!(
+                                limit = ?ctx.summary.max_verified_download_bytes(),
+                                have = ctx.summary.download.settled(),
+                                "verified-download-bytes ceiling reached -> stopping the run"
+                            );
+                        }
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
                         // Which path wrote it. The disk claim of the run is
                         // "how many files were written where they lie", and
@@ -861,9 +872,24 @@ enum Tier {
 ///
 /// The streamed download calls this **after** its digest has been checked, so
 /// a chunk that never validated contributes nothing to the reported figure.
-fn note_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) {
+///
+/// The **verified** ceiling (`--max-verified-write-bytes`) is checked here,
+/// where the bytes are settled: the figure is only known once the source has
+/// passed its gate, so this is the earliest the question can be asked. The
+/// bytes are counted either way — the write happened — and the stop is the
+/// caller's.
+fn note_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) -> Result<()> {
     stats.bytes_written += n;
-    ctx.summary.note_write_bytes(n);
+    if !ctx.summary.note_write_bytes(n) {
+        ctx.summary.stop(StoppedBy::VerifiedWrite);
+        tracing::warn!(
+            limit = ?ctx.summary.max_verified_write_bytes(),
+            have = ctx.summary.write.settled(),
+            "verified-write-bytes ceiling reached -> stopping the run"
+        );
+        anyhow::bail!("verified-write-bytes ceiling reached");
+    }
+    Ok(())
 }
 
 /// Write `bytes` at `offset`.
@@ -877,7 +903,7 @@ fn write_at(
     reserve_write(ctx, bytes.len() as u64)?;
     f.seek(SeekFrom::Start(offset))?;
     f.write_all(bytes)?;
-    note_write(ctx, stats, bytes.len() as u64);
+    note_write(ctx, stats, bytes.len() as u64)?;
     Ok(())
 }
 
@@ -906,7 +932,7 @@ fn copy_within(
         reserve_write(ctx, n as u64)?;
         f.seek(SeekFrom::Start(dst + done))?;
         f.write_all(&buf[..n])?;
-        note_write(ctx, stats, n as u64);
+        note_write(ctx, stats, n as u64)?;
         done += n as u64;
     }
     Ok(())
@@ -1039,7 +1065,7 @@ fn zero_fill(
     while left > 0 {
         let n = (left as usize).min(zeros.len());
         out.write_all(&zeros[..n])?;
-        note_write(ctx, stats, n as u64);
+        note_write(ctx, stats, n as u64)?;
         left -= n as u64;
     }
     Ok(())
@@ -1222,7 +1248,7 @@ fn try_reuse_slice(
                 // appears in neither `download_bytes` nor the plan's estimate.
                 reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
-                note_write(ctx, stats, n as u64);
+                note_write(ctx, stats, n as u64)?;
                 remaining -= n as u64;
             }
             Ok(ChunkOutcome::Reused)
@@ -1375,7 +1401,7 @@ async fn write_downloaded_chunk(
         tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
-    note_write(ctx, stats, sink.written());
+    note_write(ctx, stats, sink.written())?;
     stats.chunks_downloaded += 1;
     Ok(())
 }

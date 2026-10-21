@@ -242,10 +242,25 @@ impl Meter {
     /// The return value says whether the settled figure is still within its
     /// ceiling: `false` means the ceiling bound, and the caller trips the
     /// stop.
+    ///
+    /// The charge and the check are **one** compare-and-swap, so two files
+    /// settling at the same time cannot both slip past the line: the figure
+    /// is exact, and the one that crossed it is the one that says so.
     pub fn settle(&self, n: u64) -> bool {
-        self.settled.fetch_add(n, Ordering::Relaxed);
         let limit = self.settled_limit.load(Ordering::Relaxed);
-        self.settled.load(Ordering::Relaxed) <= limit
+        let mut cur = self.settled.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_add(n);
+            match self.settled.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return next <= limit,
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// The bytes the run has spent.
@@ -270,6 +285,16 @@ impl Summary {
     /// against a number rather than an `Option` check.
     pub fn set_download_limit(&mut self, limit: Option<u64>) {
         self.download.set_live_limit(limit);
+    }
+
+    /// `--max-verified-download-bytes`, or `None`.
+    pub fn max_verified_download_bytes(&self) -> Option<u64> {
+        self.download.settled_limit()
+    }
+
+    /// Install the verified (settled) download ceiling.
+    pub fn set_verified_download_limit(&mut self, limit: Option<u64>) {
+        self.download.set_settled_limit(limit);
     }
 
     /// Reserve `n` bytes against the download ceiling, adding them to the live
@@ -340,6 +365,16 @@ impl Summary {
         self.write.set_live_limit(limit);
     }
 
+    /// `--max-verified-write-bytes`, or `None`.
+    pub fn max_verified_write_bytes(&self) -> Option<u64> {
+        self.write.settled_limit()
+    }
+
+    /// Install the verified (settled) write ceiling.
+    pub fn set_verified_write_limit(&mut self, limit: Option<u64>) {
+        self.write.set_settled_limit(limit);
+    }
+
     /// Reserve `n` bytes of disk writes against the ceiling — see
     /// [`Self::reserve_download_bytes`] for why this is a reservation and not a
     /// check-then-add.
@@ -374,8 +409,12 @@ impl Summary {
     ///
     /// It is charged at the write sites and never taken back, so it is
     /// cumulative across attempts — the same as the counter it replaces.
-    pub fn note_write_bytes(&self, n: u64) {
-        self.write.settle(n);
+    ///
+    /// The return value says whether the settled figure is still within the
+    /// *verified* ceiling; `false` means it bound, and the caller trips the
+    /// stop.
+    pub fn note_write_bytes(&self, n: u64) -> bool {
+        self.write.settle(n)
     }
 
     /// Trip the runtime **write** hard stop. The marker says *which* ceiling

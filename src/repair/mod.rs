@@ -396,7 +396,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
+    summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_verified_write_limit(ctx.limits.verified_write_bytes);
     summary.set_ram_limit(ctx.limits.ram_bytes);
     summary.set_fail_fast(ctx.fail_fast);
     tracing::info!(
@@ -421,11 +423,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // They are the same number in a clean run and differ exactly when the
     // transport misbehaved, so a reader who has only one of them cannot tell
     // a clean run from a lucky one.
+    //
+    // The settled write figure is reported when *either* write ceiling is
+    // active: a run that asked "how much may I rewrite?" wants to see the
+    // answer, whichever of the two ceilings it asked with.
     if ctx.limits.download_bytes.is_some() {
         summary.flags.download_bytes_spent = Some(summary.download.live());
     }
-    if ctx.limits.write_bytes.is_some() {
+    if ctx.limits.write_bytes.is_some() || ctx.limits.verified_write_bytes.is_some() {
         summary.flags.write_bytes = Some(summary.write.settled());
+    }
+    if ctx.limits.write_bytes.is_some() {
         summary.flags.write_bytes_spent = Some(summary.write.live());
     }
     // The repair-mode group: what was asked for, what happened, and how many
