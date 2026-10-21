@@ -96,9 +96,8 @@ pub fn select_manifests<'a>(
 /// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L822-L864>
 ///
 /// The blob is **streamed**: the compressed body never sits in memory whole,
-/// and the decoded bytes land in a buffer that is already the size the API
-/// reported (`manifest.uncompressed_size`), so the decode does not have to
-/// grow it.
+/// and the decoded bytes land in a buffer the API's reported
+/// `uncompressed_size` **sizes**, so the decode does not have to grow it.
 ///
 /// Manifests are still never cached inside `game_dir` (V1-SIMPLIFICATION S1,
 /// see README). Starward caches the *compressed* manifest under the app
@@ -109,10 +108,12 @@ pub async fn fetch_manifest(
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
-    // The decoded manifest is exactly the size the API reported, so the
-    // buffer is allocated once and the decode never has to grow it. It lives
-    // across the attempts, because a retry reuses the same allocation.
-    let mut decoded: Vec<u8> = Vec::with_capacity(meta.manifest.uncompressed_size.max(0) as usize);
+    // The reported size *sizes* the buffer; it does not promise the length,
+    // and it is not trusted enough to allocate on. A blob bigger than the
+    // clamp grows the buffer; a bogus number cannot ask for an impossible
+    // allocation.
+    let hint = manifest_size_hint(meta.manifest.uncompressed_size);
+    let mut decoded: Vec<u8> = Vec::with_capacity(hint);
     let mut last_err = anyhow::anyhow!("no attempts");
     for attempt in 1..=ATTEMPTS {
         match try_fetch_manifest(client, &url, meta, attempt, &mut decoded).await {
@@ -133,6 +134,27 @@ pub async fn fetch_manifest(
         tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)
+}
+
+/// The largest allocation the manifest's reported size is allowed to ask for.
+///
+/// The `uncompressed_size` in the API's `getBuild` body is a raw number, and
+/// it is a *hint*, not a promise: the decode grows the buffer if the blob is
+/// bigger, and a blob that decodes to nothing is fine. So the only thing the
+/// number must not do is ask for an impossible allocation — `Vec::with_capacity`
+/// above `isize::MAX` panics, and a merely-large value is an OOM abort on a
+/// field nobody has checked. 64 MiB is well above the real manifest (16.8 MB
+/// for the `game` manifest of build 7.1.0) and well below anything that would
+/// hurt.
+const MAX_MANIFEST_HINT: usize = 64 << 20;
+
+/// The capacity to give the manifest's decoded buffer, from the size the API
+/// reported.
+///
+/// Clamped, and never negative: a wrong number costs a reallocation, not a
+/// crash.
+fn manifest_size_hint(reported: i64) -> usize {
+    reported.clamp(0, MAX_MANIFEST_HINT as i64) as usize
 }
 
 async fn try_fetch_manifest(
@@ -161,12 +183,12 @@ async fn try_fetch_manifest(
     // The whole blob is zstd-compressed; the checksum is the MD5 of the
     // DECOMPRESSED bytes. There is no ceiling on the decode: the reported
     // size sizes the buffer, it does not promise the length.
-    let (compressed, digest) = match stream_body(resp.bytes_stream(), None, decoded).await {
+    let digest = match stream_body(resp.bytes_stream(), None, decoded).await {
         Ok(v) => v,
         Err(StreamError::Transport(e)) => return Attempt::Retry(e),
         Err(StreamError::Content(e)) => return Attempt::Retry(e),
     };
-    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = compressed, "manifest downloaded");
+    tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = digest.compressed_bytes, "manifest downloaded");
     tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = digest.bytes, expect_md5 = %meta.manifest.checksum, actual_md5 = %digest.md5, "manifest checksum check");
     // A checksum mismatch is worth another try: the origin may have served a
     // torn body, and the next attempt is a fresh one.
@@ -261,11 +283,6 @@ impl<W: Write> HashingWriter<W> {
     pub fn md5(&self) -> String {
         format!("{:x}", self.hasher.clone().compute())
     }
-
-    /// The writer underneath, for the caller that wants it back.
-    pub fn into_inner(self) -> W {
-        self.inner
-    }
 }
 
 impl<W: Write> Write for HashingWriter<W> {
@@ -321,12 +338,24 @@ impl<T: ChunkSink + ?Sized> ChunkSink for &mut T {
 }
 
 /// Why a streamed body could not be delivered.
+///
+/// The two kinds are the same *kind* of failure — the body arrived and it is
+/// not what it should be — but the two callers read them differently, and the
+/// difference is deliberate:
+///
+/// - **a chunk** treats it as [`Attempt::Fatal`]: the origin answered
+///   definitively with a body that does not decode, and the file-level retry
+///   is what asks for it again. That is what the buffered path did — a bad
+///   frame failed the *file* attempt, not the chunk fetch — so the request
+///   counts do not change;
+/// - **a manifest** treats it as [`Attempt::Retry`]: a torn body is worth
+///   another try of the whole fetch, which is what the manifest path has
+///   always done with a decode failure.
 #[derive(Debug)]
 enum StreamError {
     /// The transport failed. Worth another try.
     Transport(anyhow::Error),
-    /// The body arrived but is not what it should be. The origin has answered
-    /// definitively: a second identical request would answer identically.
+    /// The body arrived but is not what it should be.
     Content(anyhow::Error),
 }
 
@@ -389,23 +418,26 @@ async fn try_stream_chunk(
     if let Some(e) = status_failure(status, url) {
         return verdict(e, retryable(status.as_u16()));
     }
+    // NOTE: the bridge parses this line to work out what was *downloaded*
+    // rather than reused, so it has to say which chunk it was about.
+    //
+    // **It is emitted as soon as the origin has answered with the chunk**, not
+    // when the body has been decoded: the marker means "this chunk was
+    // fetched", and a body that turns out to be corrupt was still fetched.
+    // The compressed byte count is on the `chunk decoded` line, which is
+    // emitted when the stream ends.
+    tracing::trace!(chunk = %id, attempt, "chunk downloaded");
     // A retry starts the chunk over: the decoded bytes are written as they are
     // produced, so a failed attempt may have left half a chunk behind.
     if let Err(e) = sink.restart() {
         return Attempt::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
     }
-    let (compressed, digest) = match stream_body(resp.bytes_stream(), Some(expected), sink).await {
+    let digest = match stream_body(resp.bytes_stream(), Some(expected), sink).await {
         Ok(v) => v,
         Err(StreamError::Transport(e)) => return Attempt::Retry(e),
         Err(StreamError::Content(e)) => return Attempt::Fatal(e),
     };
-    // NOTE: the bridge parses this line to work out what was *downloaded*
-    // rather than reused, so it has to say which chunk it was about.
-    tracing::trace!(chunk = %id, compressed_bytes = compressed, attempt, "chunk downloaded");
-    Attempt::Ok(ChunkDigest {
-        compressed_bytes: compressed,
-        ..digest
-    })
+    Attempt::Ok(digest)
 }
 
 /// Feed a compressed body through the decoder into `sink`, hashing on the way
@@ -420,7 +452,7 @@ async fn stream_body<S, B, E>(
     mut body: S,
     expected: Option<u64>,
     sink: &mut impl ChunkSink,
-) -> Result<(u64, ChunkDigest), StreamError>
+) -> Result<ChunkDigest, StreamError>
 where
     S: futures::Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
@@ -432,7 +464,9 @@ where
         // The write-side decoder, built on the zio writer rather than
         // `stream::write::Decoder`: the zio writer's `finish` is what tells a
         // complete frame from a truncated one, and the wrapper does not expose
-        // it.
+        // it. (`write::Decoder` has `with_writer`, `get_ref`, `into_inner`,
+        // `auto_flush` — and no `finish`: `zstd-0.13.3/src/stream/write/mod.rs`
+        // puts `do_finish` on the *encoder*.)
         let raw = zstd::stream::raw::Decoder::new()
             .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")))?;
         let mut dec = zstd::stream::zio::Writer::new(&mut hashing, raw);
@@ -452,14 +486,11 @@ where
         dec.finish()
             .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")))?;
     }
-    Ok((
-        compressed,
-        ChunkDigest {
-            compressed_bytes: compressed,
-            bytes: hashing.written(),
-            md5: hashing.md5(),
-        },
-    ))
+    Ok(ChunkDigest {
+        compressed_bytes: compressed,
+        bytes: hashing.written(),
+        md5: hashing.md5(),
+    })
 }
 
 /// Attempts per blob fetch, and the backoff is `attempt` seconds: 1+2+3+4 s.
@@ -573,14 +604,8 @@ mod tests {
     ) -> Result<(Vec<u8>, ChunkDigest), StreamError> {
         let mut sink: Vec<u8> = Vec::new();
         let body = futures::stream::iter(pieces(compressed, 4096));
-        let (compressed_bytes, digest) = stream_body(body, expected, &mut sink).await?;
-        Ok((
-            sink,
-            ChunkDigest {
-                compressed_bytes,
-                ..digest
-            },
-        ))
+        let digest = stream_body(body, expected, &mut sink).await?;
+        Ok((sink, digest))
     }
 
     /// The differential: the streamed decode and the buffered decode of the
@@ -710,7 +735,7 @@ mod tests {
         // The buffer the API's `uncompressed_size` sizes.
         let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
         let body = futures::stream::iter(pieces(&compressed, 4096));
-        let (compressed_bytes, digest) = stream_body(body, None, &mut sink)
+        let digest = stream_body(body, None, &mut sink)
             .await
             .expect("the frame decodes");
         assert_eq!(sink, raw, "the decoded bytes are the manifest");
@@ -725,7 +750,7 @@ mod tests {
             "the checksum is of the decompressed bytes"
         );
         assert_eq!(digest.bytes, raw.len() as u64);
-        assert_eq!(compressed_bytes, compressed.len() as u64);
+        assert_eq!(digest.compressed_bytes, compressed.len() as u64);
         assert_eq!(
             sink.capacity(),
             raw.len(),
@@ -733,6 +758,32 @@ mod tests {
         );
         let parsed = SophonChunkManifest::decode(sink.as_slice()).expect("parse");
         assert_eq!(parsed, manifest, "the same message as the buffered one");
+    }
+
+    /// The manifest's reported size is a **hint**, and a hint cannot ask for an
+    /// impossible allocation.
+    ///
+    /// `Vec::with_capacity` above `isize::MAX` panics, and a merely-large
+    /// value is an OOM abort — on a field out of the API's JSON that nothing
+    /// has checked. The clamp is what makes the reported size safe to act on.
+    #[test]
+    fn the_manifest_size_hint_is_clamped() {
+        assert_eq!(manifest_size_hint(0), 0);
+        assert_eq!(manifest_size_hint(-5), 0, "a negative size is no size");
+        assert_eq!(
+            manifest_size_hint(16_827_424),
+            16_827_424,
+            "the real manifest's size passes through"
+        );
+        assert_eq!(
+            manifest_size_hint(i64::MAX),
+            MAX_MANIFEST_HINT,
+            "a bogus one cannot ask for an impossible allocation"
+        );
+        assert_eq!(
+            manifest_size_hint(MAX_MANIFEST_HINT as i64 + 1),
+            MAX_MANIFEST_HINT
+        );
     }
 
     // --- the policy ---------------------------------------------------------
