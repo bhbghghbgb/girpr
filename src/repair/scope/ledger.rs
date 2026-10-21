@@ -104,8 +104,9 @@ impl StoppedBy {
 ///   `SUMMARY` reports: the bytes the repair was *allowed* to spend.
 ///
 /// The two are equal in the happy path and differ exactly when something
-/// failed. `download_bytes` has always been this pair — with the settle done
-/// when the file is promoted — and `write_bytes` becomes it here.
+/// failed. `download_bytes` and `write_bytes` are both this pair: the settle
+/// happens where the resource validated — for the download, where the file is
+/// promoted, and for the write, at the write site.
 ///
 /// The rule that makes it work:
 ///
