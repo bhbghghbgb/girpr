@@ -2,16 +2,15 @@
 //!
 //! `tools/case_coverage.py` is the instrument behind `docs/00-spec.md` §4.1's
 //! published populations, and it is supposed to **reproduce the crate's rules
-//! exactly**. Nothing checked that, so it drifted: it counted a *kept* chunk
-//! toward the two salvage counts — the artifact counts only the damaged ones,
-//! exactly as `repair::reuse::salvage_order` does — and it always named a
-//! write direction, where the artifact names `n/a` for the tie. On the
-//! reference bundle it disagreed with the artifact on six of the nine
-//! captures.
+//! exactly**. Nothing checked that, so it drifted once: it counted a *kept*
+//! chunk toward the two salvage counts, where the artifact counts only the
+//! damaged ones, and it always named a write direction, where the artifact
+//! named `n/a` for the tie. On the reference bundle it disagreed with the
+//! artifact on six of the nine captures.
 //!
-//! This is the gate that would have caught it: the script is run against a
-//! bundle the **crate** wrote, and its numbers are compared with the numbers
-//! the crate wrote into that same bundle. Two comparisons:
+//! **The gate is what says it has not drifted again.** The script is run
+//! against a bundle the **crate** wrote, and its numbers are compared with the
+//! numbers the crate wrote into that same bundle. Two comparisons:
 //!
 //! | what | against what |
 //! |---|---|
