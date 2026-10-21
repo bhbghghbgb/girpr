@@ -379,7 +379,7 @@ Per capture, against a **fresh scratch copy of that capture's `game/` tree** and
 | `--repair-mode inplace` | the mode is **asked for**, so the run reports `inplace` / `temp` / `kept_bytes` — the counters that say which path ran | all but `removed` |
 | `--scan` | the scan is what makes `damaged_chunks` appear, and it turns the download estimate from an approximation into the precise sum | all but `removed` |
 | `--max-ram-bytes 1 GiB` | the budget is what makes `ram_bytes` appear; the value is large enough for the staged tier, which is the default | all but `removed` |
-| `--max-write-bytes 1 TiB` | the ceiling is what makes `write_bytes` appear; the value never trips | all but `removed` |
+| `--max-write-bytes 1 TiB` | the ceiling is what makes `write_bytes` (and its live half, `write_bytes_spent`) appear; the value never trips | all but `removed` |
 
 **Every capture gets `--include`, `removed` included.** `--purge-only --include
 <that path>` is precisely the request that deletes a path the new manifest

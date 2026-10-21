@@ -165,7 +165,7 @@ Two enforcement points exist and are not interchangeable:
 | shape | when | suits |
 |---|---|---|
 | **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
-| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp` |
+| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp`, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
 
 Both produce exit `5`.
 
@@ -542,9 +542,9 @@ correct answer rather than a limitation of the design.
 **A refusal has no partial state, except one.** For B1, B2's pre-flight half and
 B4: nothing has been written when the run exits `5` — no directory created, no
 `_tmp` opened, no file deleted, no `config.ini` touched. The single exception is
-B2's and B3's runtime hard stop, which by definition fires mid-flight and leaves
-`*_tmp` behind. That is safe, but it is state, and `SUMMARY stopped=` must say
-so rather than leaving it to be discovered.
+B2's, B3's and B5's runtime hard stop, which by definition fires mid-flight and
+leaves `*_tmp` behind. That is safe, but it is state, and `SUMMARY stopped=`
+must say so rather than leaving it to be discovered.
 
 ### 4.1 Read-only modes
 
