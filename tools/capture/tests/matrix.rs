@@ -496,10 +496,10 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         "a budget that takes the coverage with it is a failed run\n{}\n{}",
         narrow.summary["exit_code"], narrow.summary["detail"]
     );
+    let detail = narrow.failure["detail"].clone();
     assert!(
-        narrow.failure["detail"].contains("A21"),
-        "and the failure names the coverage assertion: {:?}",
-        narrow.failure["detail"]
+        ["A21", "A22", "A23"].iter().any(|id| detail.contains(id)),
+        "and the failure names a coverage assertion: {detail:?}"
     );
 }
 

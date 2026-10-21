@@ -844,7 +844,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
     assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
     assert_eq!(m["totals"]["files_captured"], 6);
-    assert_eq!(m["totals"]["chunks_blobs"], 14);
+    assert_eq!(m["totals"]["chunks_blobs"], 16);
 
     let mpaths: Vec<&str> = m["files"]
         .as_array()
@@ -857,11 +857,11 @@ fn the_inventory_documents_describe_the_same_bundle() {
         mdocs, MANIFEST_DOCUMENTS,
         "MANIFEST.json documents[] changed"
     );
-    assert_eq!(mcounts.get("blob"), Some(&14), "MANIFEST.json blob rows");
-    assert_eq!(mcounts.get("game"), Some(&6), "MANIFEST.json game rows");
+    assert_eq!(mcounts.get("blob"), Some(&16), "MANIFEST.json blob rows");
+    assert_eq!(mcounts.get("game"), Some(&7), "MANIFEST.json game rows");
     assert_eq!(
         mcounts.get("expected"),
-        Some(&4),
+        Some(&5),
         "MANIFEST.json expected rows"
     );
 
@@ -879,7 +879,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         cdocs, CHECKSUM_DOCUMENTS,
         "checksums.json documents[] changed"
     );
-    assert_eq!(ccounts.get("blob"), Some(&14), "checksums.json blob rows");
+    assert_eq!(ccounts.get("blob"), Some(&16), "checksums.json blob rows");
 
     // A16's claim, restated against the projection: every file `MANIFEST.json`
     // lists is also checksummed, plus the three documents that cannot list
@@ -907,7 +907,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "## Matrix",
         "| class | status | capture | path | field | bytes |",
         "|---|---|---|---|---|---|",
-        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
+        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | #   |",
         "| `no_reuse` | captured | no_reuse | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
         "| `reuse_in_place` | captured | reuse_in_place | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
         "| `reuse_moved` | captured | reuse_moved | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
@@ -917,8 +917,8 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "- # files captured, #  chunk blobs stored",
         "- #     B downloaded, #      B on disk",
         "- selection pool: `game`, `en-us`",
-        "- `materialize_new`: # chunks",
-        "- `materialize_old`: # chunks",
+        "- `materialize_new`: #  chunks",
+        "- `materialize_old`: #  chunks",
         "- `patch_fetch`: # chunks",
         "## Re-verifying",
         "```",
@@ -1033,9 +1033,6 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         .expect("api/requests.ndjson");
 
     const EXPECTED: &[&str] = &[
-        // The fixture grew three files (the eager trim, the deferred trim and
-        // the growing one) and the `removed` one got big, so the log has
-        // more rows and different chunk ids.
         "1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
         "2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
         "3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
@@ -1057,17 +1054,19 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         "19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
         "20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
         "21 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1033 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
-        "22 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
-        "23 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
-        "24 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
-        "25 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
-        "26 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
-        "27 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
-        "28 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
-        "29 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
-        "30 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
-        "31 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
-        "32 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
+        "22 chunk GET /cdn/sMOCKnew00/chunk/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b 200 265 1 chunks/blobs/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b.zst -",
+        "23 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+        "24 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+        "25 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
+        "26 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+        "27 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
+        "28 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
+        "29 chunk GET /cdn/sMOCKnew00/chunk/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4 200 265 1 chunks/blobs/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4.zst -",
+        "30 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+        "31 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+        "32 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
+        "33 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+        "34 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
     ];
 
     let mut got: Vec<(u64, String)> = log

@@ -94,7 +94,7 @@ assume any document in a bundle was renamed into position.
   "schema_version": 2,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
-    "id": "20261020T154810Z",
+    "id": "20261021T111044Z",
     "captured_at": "2026-10-20T15:48:10Z",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],

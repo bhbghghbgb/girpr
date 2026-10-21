@@ -584,18 +584,26 @@ three coverage assertions (A21–A23) from a capture, and A18 and A20 from
 
 ### A21, A22 and A23 — the coverage the class set exists to buy
 
-The three properties the class set was built for are otherwise only held **by
-accident**: a bundle that happened to contain a file with nothing reusable
-would say nothing about the other side of that boundary, and a reader would
-have to take the class names on trust. The three assertions read the
-patchmaps' own arithmetic — how much of each file is reused, how much of that
-is moved, and whether the file grows or shrinks — and say whether the bundle
-covers both sides of each boundary.
+The three boundaries of the patch space, and each one has two sides. A bundle
+that happened to contain a file with nothing reusable would say nothing about
+the other side of that boundary, and a reader would have to take the class names
+on trust — which is exactly the trust this tool exists to replace with a
+measurement. The three assertions read the patchmaps' own arithmetic — the
+plan's counts and the two sides' sizes — and say whether the bundle covers
+both sides of each boundary.
 
-**An absent side counts as zero bytes.** An `added` file grows from nothing and
-a `removed` file shrinks to nothing, so "the bundle covers a file that grows
-and one that shrinks" is a property of the class set rather than of one
-version pair.
+**An absent side is no file, not a file of zero bytes.** The old side of an
+`added` capture is *no file* and the new side of a `removed` capture is *no
+file*; neither is a file of zero bytes, and the difference matters: a file that
+is **created** has grown and a file that is **deleted** has shrunk, whether it
+is a hundred bytes or none at all. What changed is the file, not the byte
+count. A file present on both sides grows or shrinks when its two sizes say
+so.
+
+**A capture with no plan is on neither side of the reuse boundary.** It has no
+target, so it has nothing to reuse and nothing to fetch, and counting it as
+"nothing reusable" would be a false claim about a capture that says nothing at
+all.
 
 **They are fatal in a capture and a finding in a `verify`,** and the difference
 is the point. A capture's contract is "a bundle that covers the patch space", so

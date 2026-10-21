@@ -516,13 +516,25 @@ impl Store {
 /// skipped. `--files` may name a path that only the new build has, and the
 /// honest shape for that is "no old side", which is what [`FilePair`] already
 /// models for `added`.
+///
+/// **The sides are looked up in the capture's own field.** A capture is scored
+/// against the field it came from — `game` or an audio field — and the path
+/// lives in *that* field's manifests. Looking it up in the `game` manifests
+/// instead would find nothing for an audio capture, and the pair would come out
+/// with **no sides at all**: a patchmap that says "this file must be gone
+/// afterwards", and a fixture with no file in it. The capture would then assert
+/// nothing, and the cross-tool claim would be vacuous for it.
+///
+/// The index is built once per field and tag, so the cost is one walk over the
+/// manifests rather than one per admitted path per side.
 pub fn file_pairs(
     selection: &crate::select::Selection,
-    manifests: &BTreeMap<String, &CapturedManifest>,
+    fields: &[String],
+    manifests: &[Vec<CapturedManifest>],
     old_tag: &str,
     new_tag: &str,
 ) -> Vec<FilePair> {
-    // One index per manifest, built once.
+    // One index per (field, tag), built once.
     //
     // This used to `entries.iter().find(|e| e.file == a.path)` **per admitted
     // path, per side**: O(admitted × paths), twice. Over the measured pair that
@@ -530,31 +542,44 @@ pub fn file_pairs(
     // single largest waste in the selection→store hand-off. `diff` builds the
     // same map and throws it away, so the shape was already known; here it is
     // built where it is used, which costs one walk rather than A×n.
-    let index = |tag: &str| -> Option<BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>> {
-        let m = manifests.get(tag)?;
-        Some(m.entries.iter().map(|e| (e.file.as_str(), e)).collect())
-    };
-    let old_by_path = index(old_tag);
-    let new_by_path = index(new_tag);
-    let build_id = |tag: &str| -> &str {
+    let mut indexes: BTreeMap<
+        (&str, &str),
+        BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>,
+    > = BTreeMap::new();
+    for (field, pair) in fields.iter().zip(manifests) {
+        for m in pair {
+            indexes.insert(
+                (field.as_str(), m.tag.as_str()),
+                m.entries.iter().map(|e| (e.file.as_str(), e)).collect(),
+            );
+        }
+    }
+    let build_id = |tag: &str, field: &str| -> &str {
         manifests
-            .get(tag)
+            .iter()
+            .zip(fields)
+            .filter(|(_, f)| f.as_str() == field)
+            .flat_map(|(ms, _)| ms.iter())
+            .find(|m| m.tag == tag)
             .map(|m| m.build_id.as_str())
             .unwrap_or_default()
     };
-    let old_build_id = build_id(old_tag);
-    let new_build_id = build_id(new_tag);
-
     selection
         .admitted
         .iter()
         .map(|a| {
-            let old_entry = old_by_path
-                .as_ref()
+            // The capture's **own** field, not the `game` field: the path was
+            // scored against the field it came from, so that is where it
+            // lives.
+            let field = a.matching_field.as_str();
+            let old_entry = indexes
+                .get(&(field, old_tag))
                 .and_then(|m| m.get(a.path.as_str()).copied());
-            let new_entry = new_by_path
-                .as_ref()
+            let new_entry = indexes
+                .get(&(field, new_tag))
                 .and_then(|m| m.get(a.path.as_str()).copied());
+            let old_build_id = build_id(old_tag, field);
+            let new_build_id = build_id(new_tag, field);
             FilePair {
                 capture_id: a.capture_id.clone(),
                 path: a.path.clone(),
@@ -804,6 +829,78 @@ mod tests {
             ("7.0.0".to_string(), "https://cdn/old".to_string()),
             ("7.1.0".to_string(), "https://cdn/new".to_string()),
         ])
+    }
+
+    /// **A capture's sides come from its own field.**
+    ///
+    /// The audio manifests widen the *selection pool*, so a capture can be an
+    /// audio file. Its sides are then in the audio manifests, and looking them
+    /// up in the `game` manifests instead would find nothing: the pair would
+    /// come out with **no sides at all**, and the capture would assert nothing
+    /// — a patchmap that says "this file must be gone afterwards" for a file
+    /// that is simply there.
+    #[test]
+    fn a_capture_from_another_field_gets_its_sides_from_that_field() {
+        use crate::select::{Admission, Selection};
+
+        let audio = |tag: &str, build: &str, path: &str| CapturedManifest {
+            tag: tag.into(),
+            build_id: build.into(),
+            entries: vec![entry(path, vec![chunk(b"vo", 0, 0x1234)])],
+            ..CapturedManifest::empty(tag, "en-us", vec![])
+        };
+        let manifests = vec![
+            // The `game` field: a different path entirely.
+            vec![
+                CapturedManifest {
+                    tag: "7.0.0".into(),
+                    build_id: "gameold".into(),
+                    entries: vec![entry("game/other.dat", vec![chunk(b"x", 0, 1)])],
+                    ..CapturedManifest::empty("7.0.0", "game", vec![])
+                },
+                CapturedManifest {
+                    tag: "7.1.0".into(),
+                    build_id: "gamenew".into(),
+                    entries: vec![entry("game/other.dat", vec![chunk(b"x", 0, 1)])],
+                    ..CapturedManifest::empty("7.1.0", "game", vec![])
+                },
+            ],
+            // The `en-us` field: the file the capture is about.
+            vec![
+                audio("7.0.0", "audiold", "vo.dat"),
+                audio("7.1.0", "audinew", "vo.dat"),
+            ],
+        ];
+        let selection = Selection {
+            admitted: vec![Admission {
+                capture_id: "identical".into(),
+                primary_class: crate::select::Class::Identical,
+                path: "vo.dat".into(),
+                matching_field: "en-us".into(),
+                state: crate::manifest::diff::State::Identical,
+                also_satisfies: Vec::new(),
+                budget_cost: 10,
+                patch_bytes: 0,
+            }],
+            rejected: Vec::new(),
+            forced_skipped: Vec::new(),
+            matrix: Vec::new(),
+            bytes_admitted: 10,
+            budget: crate::select::Budget::unlimited(),
+        };
+        let pairs = file_pairs(
+            &selection,
+            &["game".into(), "en-us".into()],
+            &manifests,
+            "7.0.0",
+            "7.1.0",
+        );
+        assert_eq!(pairs.len(), 1);
+        let p = &pairs[0];
+        assert!(p.old.is_some(), "the old side is in the audio manifest");
+        assert!(p.new.is_some(), "and so is the new one");
+        assert_eq!(p.old.as_ref().expect("an old side").build_id, "audiold");
+        assert_eq!(p.new.as_ref().expect("a new side").build_id, "audinew");
     }
 
     #[test]

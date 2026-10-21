@@ -216,17 +216,28 @@ pub fn wording(id: &str) -> &'static str {
 /// red row and forget to say so.
 /// A21, A22 and A23: the coverage the class set exists to buy.
 ///
-/// The three properties are otherwise only held **by accident**. A bundle that
-/// happened to contain a file with nothing reusable would say nothing about
-/// the other side of the reuse boundary, and a reader would have to take the
-/// class names on trust — which is exactly the trust this tool exists to
-/// replace with a measurement.
+/// The three boundaries of the patch space, and each one has two sides:
 ///
-/// The coverage is read out of the patchmaps' own arithmetic: how much of each
-/// file is reused, how much of that is moved, and whether the file grows or
-/// shrinks. Those are facts about the **patch**, and they are the same facts
-/// for every consumer — unlike the tier, the write order and the trim, which
-/// are the repair tool's own decisions and are not published at all.
+/// | id | the boundary | the two sides |
+/// |---|---|---|
+/// | A21 | reuse | nothing reusable, and something reusable |
+/// | A22 | moved | the reused chunks are where they belong, and they live elsewhere |
+/// | A23 | size | the file grows, and the file shrinks |
+///
+/// **A capture with no plan is on neither side of the reuse boundary.** A
+/// capture with no new side has no target, so it has nothing to reuse and
+/// nothing to fetch; counting it as "nothing reusable" would be a false claim
+/// about a capture that says nothing.
+///
+/// **A file that is created grows, and a file that is deleted shrinks, whatever
+/// its size.** The size boundary is about the file, not about the byte count: a
+/// zero-byte file that appears has appeared, and a zero-byte file that
+/// disappears has gone. An absent side is *no file*, never a file of zero
+/// bytes.
+///
+/// The coverage is read out of the patchmaps' own arithmetic — the plan's
+/// counts and the two sides' sizes — and not out of the class labels, so a
+/// mislabelled capture cannot make a boundary look covered.
 ///
 /// It lives here rather than in `closeout.rs` so that the two places that
 /// build these rows build the **same** rows: the capture's and the verifier's
@@ -237,8 +248,14 @@ pub fn coverage(shapes: &[crate::assemble::PatchShape]) -> Vec<Assertion> {
 
     // A21 — both sides of the reuse boundary: a file with nothing reusable
     // and a file with something.
-    let none_reusable = shapes.iter().filter(|s| s.reuse == 0).count();
-    let some_reusable = shapes.iter().filter(|s| s.reuse > 0).count();
+    let none_reusable = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.reuse == 0))
+        .count();
+    let some_reusable = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.reuse > 0))
+        .count();
     rows.push(Assertion::row(
         "A21",
         "patchmaps/",
@@ -247,10 +264,18 @@ pub fn coverage(shapes: &[crate::assemble::PatchShape]) -> Vec<Assertion> {
         &format!("{none_reusable} with nothing reusable, {some_reusable} with something"),
     ));
 
-    // A22 — both sides of the reuse boundary's other half: the reused chunks
-    // stay where they belong, or they live elsewhere and have to be copied.
-    let in_place = shapes.iter().filter(|s| s.moved == 0).count();
-    let moved = shapes.iter().filter(|s| s.moved > 0).count();
+    // A22 — both sides of the moved boundary: the reused chunks stay where
+    // they belong, or they live elsewhere and have to be copied. A capture with
+    // no reused chunk has nothing that could have moved, so it is on neither
+    // side.
+    let in_place = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.reuse > 0 && p.moved == 0))
+        .count();
+    let moved = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.moved > 0))
+        .count();
     rows.push(Assertion::row(
         "A22",
         "patchmaps/",
@@ -260,15 +285,8 @@ pub fn coverage(shapes: &[crate::assemble::PatchShape]) -> Vec<Assertion> {
     ));
 
     // A23 — the file grows and the file shrinks.
-    //
-    // **An absent side counts as zero bytes**, which is what makes the
-    // assertion a fact about the patch space rather than a fact about one
-    // pair: an `added` file grows from nothing, a `removed` file shrinks to
-    // nothing, and a two-sided capture grows or shrinks when its two sizes
-    // say so. The six classes guarantee the first two, so a bundle that has
-    // them cannot fail this row.
-    let grows = shapes.iter().filter(|s| s.new_size > s.old_size).count();
-    let shrinks = shapes.iter().filter(|s| s.new_size < s.old_size).count();
+    let grows = shapes.iter().filter(|s| s.grows()).count();
+    let shrinks = shapes.iter().filter(|s| s.shrinks()).count();
     rows.push(Assertion::row(
         "A23",
         "patchmaps/",
@@ -1002,14 +1020,16 @@ mod tests {
     /// take the class names on trust.
     #[test]
     fn a_bundle_without_both_sides_of_the_reuse_boundary_fails_a21() {
-        use crate::assemble::PatchShape;
+        use crate::assemble::{PatchShape, PlanCounts};
 
         let shape = |reuse, moved| PatchShape {
-            chunks: 3,
-            reuse,
-            moved,
-            old_size: 100,
-            new_size: 100,
+            plan: Some(PlanCounts {
+                chunks: 3,
+                reuse,
+                moved,
+            }),
+            old_size: Some(100),
+            new_size: Some(100),
         };
 
         // Nothing reusable at all: A21 is red.
@@ -1032,18 +1052,44 @@ mod tests {
         assert!(a21.ok, "both sides: {a21:?}");
     }
 
+    /// **A capture with no plan is on neither side of the reuse boundary.**
+    ///
+    /// It has no target, so it has nothing to reuse and nothing to fetch.
+    /// Counting it as "nothing reusable" would be a false claim about a
+    /// capture that says nothing at all.
+    #[test]
+    fn a_capture_with_no_plan_is_on_neither_side_of_the_reuse_boundary() {
+        use crate::assemble::PatchShape;
+
+        let no_plan = PatchShape {
+            plan: None,
+            old_size: None,
+            new_size: None,
+        };
+        let rows = coverage(&[no_plan]);
+        let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
+        assert!(!a21.ok, "a capture with no plan covers no side: {a21:?}");
+        assert!(
+            a21.actual
+                .contains("0 with nothing reusable, 0 with something"),
+            "and it is counted on neither side: {a21:?}"
+        );
+    }
+
     /// The same shape for the other two: the reused chunks in place and moved,
     /// and a file that grows and one that shrinks.
     #[test]
     fn a_bundle_without_both_reuse_shapes_fails_a22_and_one_that_never_shrinks_fails_a23() {
-        use crate::assemble::PatchShape;
+        use crate::assemble::{PatchShape, PlanCounts};
 
         let shape = |moved, old_size, new_size| PatchShape {
-            chunks: 3,
-            reuse: 2,
-            moved,
-            old_size,
-            new_size,
+            plan: Some(PlanCounts {
+                chunks: 3,
+                reuse: 2,
+                moved,
+            }),
+            old_size: Some(old_size),
+            new_size: Some(new_size),
         };
 
         let rows = coverage(&[shape(0, 100, 100)]);
@@ -1064,6 +1110,37 @@ mod tests {
         ]);
         assert!(rows.iter().find(|r| r.id == "A22").expect("a row").ok);
         assert!(rows.iter().find(|r| r.id == "A23").expect("a row").ok);
+    }
+
+    /// **A zero-byte file still covers its side of the size boundary.**
+    ///
+    /// A file that is created has grown and a file that is deleted has
+    /// shrunk, whether it is a hundred bytes or none at all — what changed is
+    /// the file, not the byte count. Counting an absent side as zero bytes
+    /// would make an empty `added` file neither, and the bundle's coverage of
+    /// the size boundary would depend on whether the cheapest candidate
+    /// happened to be empty.
+    #[test]
+    fn a_zero_byte_file_still_covers_its_side_of_the_size_boundary() {
+        use crate::assemble::{PatchShape, PlanCounts};
+
+        let created = PatchShape {
+            plan: Some(PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: None,
+            new_size: Some(0),
+        };
+        let deleted = PatchShape {
+            plan: None,
+            old_size: Some(0),
+            new_size: None,
+        };
+        let rows = coverage(&[created, deleted]);
+        let a23 = rows.iter().find(|r| r.id == "A23").expect("a row");
+        assert!(a23.ok, "both sides, whatever their size: {a23:?}");
     }
 
     /// A19 and A18 are the two that are not the spec's, and both are named.

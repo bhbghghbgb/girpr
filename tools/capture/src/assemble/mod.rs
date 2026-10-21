@@ -224,20 +224,66 @@ pub struct Expectations {
 
 /// What a capture says about the **shape** of its patch.
 ///
-/// The three numbers the coverage assertions read, and nothing else: they are
-/// facts about the patch, not about how a repair tool gets there.
+/// The numbers the coverage assertions read, and nothing else: they are facts
+/// about the patch, not about how a repair tool gets there.
+///
+/// **An absent side is not a file of zero bytes.** The old side of an `added`
+/// capture is *no file*, and the new side of a `removed` capture is *no file*.
+/// The difference matters twice over: a file that appears has grown even when it
+/// is empty, and a capture with no new side has no plan at all — so it has
+/// nothing to reuse and nothing to fetch, and it must not be counted on either
+/// side of the reuse boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PatchShape {
+    /// The plan's own numbers. `None` when the capture has no new side: there
+    /// is no target, so there is nothing to reuse and nothing to fetch.
+    pub plan: Option<PlanCounts>,
+    /// The old side's declared size. `None` when the file is not there.
+    pub old_size: Option<u64>,
+    /// The new side's declared size. `None` when the file is not there.
+    pub new_size: Option<u64>,
+}
+
+impl PatchShape {
+    /// The file **grows**: it is created, or it is present on both sides and
+    /// the new one is larger.
+    ///
+    /// A file that is created grows whether it is a hundred bytes or none at
+    /// all — what grew is the file, not the byte count.
+    pub fn grows(&self) -> bool {
+        if self.old_size.is_none() && self.new_size.is_some() {
+            return true;
+        }
+        match (self.old_size, self.new_size) {
+            (Some(old), Some(new)) => new > old,
+            _ => false,
+        }
+    }
+
+    /// The file **shrinks**: it is deleted, or it is present on both sides and
+    /// the new one is smaller.
+    pub fn shrinks(&self) -> bool {
+        if self.old_size.is_some() && self.new_size.is_none() {
+            return true;
+        }
+        match (self.old_size, self.new_size) {
+            (Some(old), Some(new)) => new < old,
+            _ => false,
+        }
+    }
+}
+
+/// The plan's own numbers: how many chunks the new side has, how many of them
+/// the old file already holds, and how many of the reused ones live elsewhere
+/// in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlanCounts {
     /// How many chunks the new side has.
     pub chunks: u64,
     /// How many of them are reused from the old side.
     pub reuse: u64,
     /// How many of the reused ones live elsewhere in the file.
     pub moved: u64,
-    /// The old side's declared size.
-    pub old_size: u64,
-    /// The new side's declared size.
-    pub new_size: u64,
 }
 
 /// One side's assembly, with what was asserted about it.
@@ -1147,23 +1193,19 @@ fn build_map(
 
 /// The patch's shape, as the coverage assertions read it.
 ///
-/// Three numbers and two sizes: what the patch fetches, what it copies, and
-/// whether the file grows or shrinks. They are facts about the **patch**, and
-/// they are the same facts for every consumer — unlike the tier, the write
-/// order and the trim, which are the repair tool's own decisions.
-///
-/// **An absent side is zero bytes**: an `added` file grows from nothing and a
-/// `removed` file shrinks to nothing, which is what makes "the bundle covers a
-/// file that grows and one that shrinks" a property of the class set rather
-/// than of one version pair.
+/// The plan's own arithmetic, and the two sides' sizes. **An absent side is
+/// `None`, not `Some(0)`**: the file is not there, which is not the same as a
+/// file of zero bytes, and the difference is what makes "a file that grows" and
+/// "a file that shrinks" true of a zero-byte file.
 pub fn patch_shape(map: &PatchMap) -> PatchShape {
-    let t = map.totals;
     PatchShape {
-        chunks: t.map(|t| t.chunks as u64).unwrap_or(0),
-        reuse: t.map(|t| t.reuse as u64).unwrap_or(0),
-        moved: t.map(|t| t.moved as u64).unwrap_or(0),
-        old_size: map.old.as_ref().map(|s| s.size.max(0) as u64).unwrap_or(0),
-        new_size: map.new.as_ref().map(|s| s.size.max(0) as u64).unwrap_or(0),
+        plan: map.totals.map(|t| PlanCounts {
+            chunks: t.chunks as u64,
+            reuse: t.reuse as u64,
+            moved: t.moved as u64,
+        }),
+        old_size: map.old.as_ref().map(|s| s.size.max(0) as u64),
+        new_size: map.new.as_ref().map(|s| s.size.max(0) as u64),
     }
 }
 
@@ -2083,18 +2125,79 @@ mod tests {
             .iter()
             .filter(|e| e.decision == Decision::Fetch)
             .count() as u64;
-        assert_eq!(s.chunks, plan.len() as u64);
-        assert_eq!(s.reuse, reuse);
-        assert_eq!(s.chunks - s.reuse, fetch);
-        assert_eq!(s.moved, 0, "nothing moves");
+        let p = s.plan.expect("a plan");
+        assert_eq!(p.chunks, plan.len() as u64);
+        assert_eq!(p.reuse, reuse);
+        assert_eq!(p.chunks - p.reuse, fetch);
+        assert_eq!(p.moved, 0, "nothing moves");
         assert_eq!(
             s.old_size,
-            a.map.old.as_ref().expect("an old side").size as u64
+            Some(a.map.old.as_ref().expect("an old side").size as u64)
         );
         assert_eq!(
             s.new_size,
-            a.map.new.as_ref().expect("a new side").size as u64
+            Some(a.map.new.as_ref().expect("a new side").size as u64)
         );
+    }
+
+    /// **An absent side is no file, not a file of zero bytes.**
+    ///
+    /// The difference is what makes "a file that grows" and "a file that
+    /// shrinks" true of a zero-byte file: a file that appears has appeared, and a
+    /// file that disappears has gone. Counting an absent side as zero bytes
+    /// would make a zero-byte `added` file neither grow nor shrink, and the
+    /// bundle's coverage of the size boundary would depend on whether the
+    /// cheapest candidate happened to be empty.
+    #[test]
+    fn an_absent_side_is_no_file_and_not_a_file_of_zero_bytes() {
+        // A file that is created: no old side, and the new side is empty.
+        let created = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: None,
+            new_size: Some(0),
+        };
+        assert!(created.grows(), "a file that appears has grown");
+        assert!(!created.shrinks());
+
+        // A file that is deleted: the old side is empty, and there is no new
+        // side.
+        let deleted = crate::assemble::PatchShape {
+            plan: None,
+            old_size: Some(0),
+            new_size: None,
+        };
+        assert!(deleted.shrinks(), "a file that disappears has shrunk");
+        assert!(!deleted.grows());
+
+        // A file that is present on both sides and empty on both: it neither
+        // grows nor shrinks.
+        let empty = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: Some(0),
+            new_size: Some(0),
+        };
+        assert!(!empty.grows() && !empty.shrinks());
+
+        // A file that is present on both sides and grows in bytes.
+        let bigger = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 1,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: Some(0),
+            new_size: Some(100),
+        };
+        assert!(bigger.grows());
+        assert!(!bigger.shrinks());
     }
 
     /// The negative expectation is the plan's REUSE set, stated as the ids a
@@ -2137,23 +2240,24 @@ mod tests {
     fn the_patch_shape_says_whether_the_file_grows_or_shrinks() {
         let growing = assemble_pair(&same_offset_pair()).expect("assembles");
         let s = crate::assemble::patch_shape(&growing.map);
-        assert!(s.new_size > s.old_size, "the file grows");
-        assert_eq!(s.moved, 0, "and nothing moves");
+        assert!(s.grows(), "the file grows");
+        assert_eq!(s.plan.expect("a plan").moved, 0, "and nothing moves");
 
         let shrinking = assemble_pair(&shrinking_pair()).expect("assembles");
         let s = crate::assemble::patch_shape(&shrinking.map);
-        assert!(s.new_size < s.old_size, "the file shrinks");
+        assert!(s.shrinks(), "the file shrinks");
 
         let moved = assemble_pair(&moved_pair()).expect("assembles");
         let s = crate::assemble::patch_shape(&moved.map);
-        assert!(s.moved > 0, "the bytes move");
-        assert!(s.reuse > 0, "and some of them are reused");
+        let p = s.plan.expect("a plan");
+        assert!(p.moved > 0, "the bytes move");
+        assert!(p.reuse > 0, "and some of them are reused");
 
         let moved_shrinking =
             assemble_pair(&shrinking_with_a_past_the_end_source_pair()).expect("assembles");
         let s = crate::assemble::patch_shape(&moved_shrinking.map);
-        assert!(s.moved > 0, "the bytes move");
-        assert!(s.new_size < s.old_size, "and the file shrinks");
+        assert!(s.plan.expect("a plan").moved > 0, "the bytes move");
+        assert!(s.shrinks(), "and the file shrinks");
     }
 
     #[test]
