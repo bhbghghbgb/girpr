@@ -65,6 +65,7 @@ use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use crate::config::RepairMode;
+use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
 use crate::sophon::{self, SophonChunk};
 use crate::util;
@@ -271,7 +272,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // `*_tmp` stays and the next run resumes from it, in place the chunks
     // that are already right stay right — so an aborted run is a smaller
     // run, not a broken one.
-    if ctx.summary.download_stopped() || ctx.summary.write_stopped() || ctx.summary.aborted() {
+    if ctx.summary.stopped_by() != StoppedBy::None || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
@@ -343,7 +344,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
             }
             // The ceiling, not the file: this must not be counted as a
             // failure and must not be retried.
-            Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
+            Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
                 tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
                 return Ok(Repaired::Stopped);
             }
@@ -1326,7 +1327,7 @@ async fn write_downloaded_chunk(
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;
     if !ctx.summary.reserve_download_bytes(reserved) {
-        ctx.summary.stop_downloads();
+        ctx.summary.stop(StoppedBy::Download);
         tracing::warn!(
             limit = ?ctx.summary.max_download_bytes(),
             have = ctx.summary.download.live(),

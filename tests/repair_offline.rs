@@ -1673,7 +1673,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     assert_eq!(code, 5, "the runtime hard stop is also exit 5");
     assert_eq!(
         summary.flags.stopped,
-        Some("bytes"),
+        Some("--max-download-bytes"),
         "the stop must be distinguishable from a refusal"
     );
     assert_eq!(
@@ -1704,7 +1704,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     );
 
     let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("stopped=bytes"), "{line}");
+    assert!(line.contains("stopped=--max-download-bytes"), "{line}");
     assert!(line.contains("limited=1"), "{line}");
 
     mock.stop();
@@ -1733,7 +1733,9 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
             "config_bumped",
             "plan_files",
             "plan_download_bytes",
+            "download_bytes_spent",
             "write_bytes",
+            "write_bytes_spent",
             "stopped",
             // A fresh install has no `config.ini`, so no local version is known
             // and the lookup is never attempted — the key must not appear.
@@ -1926,7 +1928,11 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     ctx.limits.write_bytes = Some(limit);
     let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
     assert_eq!(code, 5);
-    assert_eq!(summary.flags.stopped, Some("write"), "which ceiling bound");
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-write-bytes"),
+        "which ceiling bound"
+    );
     assert!(summary.flags.limited, "the ceiling was requested");
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
@@ -1944,7 +1950,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     );
 
     let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("stopped=write"), "{line}");
+    assert!(line.contains("stopped=--max-write-bytes"), "{line}");
     assert!(line.contains("write_bytes="), "{line}");
 
     // The file is left half-written: the next run re-verifies it and finishes
@@ -1998,6 +2004,62 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let line = girpr::report::summary_record(&summary, code).text();
     assert!(line.contains("write_bytes="), "{line}");
     assert!(!line.contains("stopped="), "{line}");
+
+    mock.stop();
+}
+
+/// The two byte families each have two numbers: the **settled** one (what the
+/// repair achieved — a function of the install) and the **spent** one (what it
+/// cost — a function of the transport). The spent figure is emitted only when
+/// the ceiling that bounds it is active, so an unflagged run's line stays
+/// byte-identical to one that passes no flags at all.
+#[tokio::test]
+async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+
+    // No ceiling: neither figure is on the line.
+    let dir = temp_dir("spent_absent");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, b"not the game data");
+    }
+    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(!line.contains("_spent"), "{line}");
+
+    // With the ceilings on, both figures are: what the repair achieved and
+    // what it spent. In a clean run they are the same number — nothing was
+    // wasted — and the spent one is the larger whenever the transport made
+    // the run work for it.
+    let dir2 = temp_dir("spent_present");
+    let fx3 = build_fixture();
+    for f in &fx3.files {
+        write_game_file(&dir2, &f.rel, b"not the game data");
+    }
+    let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
+    ctx.limits.download_bytes = Some(1 << 20);
+    ctx.limits.write_bytes = Some(1 << 20);
+    let (summary, code) = repair::run(ctx).await.expect("run");
+    assert_eq!(code, 0);
+    let line = girpr::report::summary_record(&summary, code).text();
+    assert!(line.contains("download_bytes_spent="), "{line}");
+    assert!(line.contains("write_bytes_spent="), "{line}");
+    // The settled download figure is the base key, and in a clean run it is
+    // the same number as the spent one: nothing was wasted.
+    let spent = field(&line, "download_bytes_spent");
+    let settled = field(&line, "download_bytes");
+    assert_eq!(spent, settled, "a clean run wastes nothing: {line}");
+    assert!(spent > 0, "the run really downloaded something: {line}");
+    // The disk is a different quantity from the network, and the two families
+    // are not the same number: the payload is uncompressed.
+    assert!(
+        field(&line, "write_bytes_spent") > field(&line, "download_bytes_spent"),
+        "the disk cost is the uncompressed payload: {line}"
+    );
 
     mock.stop();
 }

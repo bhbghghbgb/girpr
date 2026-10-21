@@ -83,11 +83,11 @@ pub struct Args {
     #[arg(long, value_name = "N")]
     pub max_download_bytes: Option<u64>,
 
-    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
-    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
-    /// the disk cost: every reuse-copy and every chunk write is counted, so a
-    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
-    /// success is decided per chunk at runtime.
+    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`)
+    /// once this many bytes have been written into `*_tmp`. Unlike
+    /// `download_bytes`, this is the disk cost: every reuse-copy and every
+    /// chunk write is counted, so a zero-reuse run is bounded too. Cannot be a
+    /// pre-flight refusal — reuse success is decided per chunk at runtime.
     #[arg(long, value_name = "N")]
     pub max_write_bytes: Option<u64>,
 

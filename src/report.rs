@@ -20,7 +20,7 @@
 //! [`crate::logging`]).
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 use crate::repair::scope::ledger::Meter;
@@ -260,11 +260,11 @@ pub struct Summary {
     /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
     /// start; plain values, so no atomics are needed.
     pub flags: SummaryFlags,
-    /// Set when the runtime download hard stop fired. An aborted run leaves
-    /// the work it had done in place: the temp path's `_tmp` is resumed by
-    /// length, and the in-place path's chunks that are already correct stay
-    /// correct. Either way the next run is a smaller run, not a corrupt one.
-    pub download_stopped: AtomicBool,
+    /// Which runtime ceiling bound, if any. `0` = none; the numbers are
+    /// [`crate::repair::scope::ledger::StoppedBy`]'s. A single marker rather
+    /// than a flag per ceiling, because the *value* the `SUMMARY` reports is
+    /// the flag that bound — see [`SummaryFlags::stopped`].
+    pub stopped_by: AtomicU8,
     /// The disk meter: the bytes that landed in the install (**live**) and the
     /// bytes written from sources that passed their gate (**settled**).
     ///
@@ -277,8 +277,6 @@ pub struct Summary {
     ///
     /// See [`Meter`] for the rule that tells the two apart.
     pub write: Meter,
-    /// Set when the runtime **write** hard stop fired (see `write`).
-    pub write_stopped: AtomicBool,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
@@ -319,9 +317,8 @@ impl Summary {
             download: Meter::new(),
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
-            download_stopped: AtomicBool::new(false),
+            stopped_by: AtomicU8::new(0),
             write: Meter::new(),
-            write_stopped: AtomicBool::new(false),
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
             ram_limit: AtomicU64::new(u64::MAX),
@@ -343,12 +340,11 @@ impl Summary {
             download: self.download.snapshot(),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,
-            // A snapshot must not lose the ceiling or the stop flag: the caller
-            // reads both *after* the tasks have been joined, which is the only
-            // moment either can be meaningful.
-            download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
+            // A snapshot must not lose the ceiling or the stop marker: the
+            // caller reads both *after* the tasks have been joined, which is
+            // the only moment either can be meaningful.
+            stopped_by: AtomicU8::new(self.stopped_by.load(Ordering::Relaxed)),
             write: self.write.snapshot(),
-            write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
             ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
@@ -376,8 +372,21 @@ pub struct SummaryFlags {
     pub scoped: bool,
     /// `--max-download-bytes`'s estimate for the (filtered) plan.
     pub plan_download_bytes: Option<u64>,
+    /// The bytes that crossed the wire — the **live** download figure.
+    ///
+    /// Emitted only when `--max-download-bytes` is active, beside the settled
+    /// `download_bytes`: the two are the same quantity in the happy path and
+    /// differ exactly when the transport misbehaved, and a reader who has only
+    /// one of them cannot tell a clean run from a lucky one.
+    pub download_bytes_spent: Option<u64>,
     /// Bytes written into `*_tmp`, when `--max-write-bytes` is active.
     pub write_bytes: Option<u64>,
+    /// The bytes that landed in the install — the **live** write figure.
+    ///
+    /// Emitted only when `--max-write-bytes` is active, beside the settled
+    /// `write_bytes`: the live one is what the ceiling bounds (the disk the
+    /// run took), the settled one is what the install needed.
+    pub write_bytes_spent: Option<u64>,
     /// Whether the **local** build's manifests loaded (`getBuild(local)`).
     /// `None` when no local version was known, so the key is absent on a fresh
     /// install and on a run that never had a version to look up.
@@ -392,8 +401,13 @@ pub struct SummaryFlags {
     /// degradation assertable by a machine consumer instead of discoverable only
     /// by reading a `warn` line.
     pub local_manifest: Option<&'static str>,
-    /// What a **runtime** hard stop cut short (`bytes` / `write` / `delete`), vs
-    /// a pre-flight refusal which wrote nothing at all.
+    /// What a **runtime** hard stop cut short, vs a pre-flight refusal which
+    /// wrote nothing at all.
+    ///
+    /// The value is the **flag** that bound — `--max-download-bytes`,
+    /// `--max-write-bytes`, `--max-delete-bytes` — rather than a vocabulary
+    /// word: it is self-describing, it scales with the number of ceilings, and
+    /// it is the shape a script already has to write.
     pub stopped: Option<&'static str>,
     /// `config.ini` was deliberately not bumped, because a scoped (or
     /// `--purge-only`) run has deliberately not put the bytes in place.
@@ -476,8 +490,16 @@ fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     if let Some(n) = f.plan_download_bytes {
         out.push(Extra::Num("plan_download_bytes", n));
     }
+    // The spent figure comes before the settled one it belongs to: the pair
+    // is one story, and the order says "what it spent, what it got".
+    if let Some(n) = f.download_bytes_spent {
+        out.push(Extra::Num("download_bytes_spent", n));
+    }
     if let Some(n) = f.write_bytes {
         out.push(Extra::Num("write_bytes", n));
+    }
+    if let Some(n) = f.write_bytes_spent {
+        out.push(Extra::Num("write_bytes_spent", n));
     }
     // The repair-mode group: what was asked for, what happened, and how
     // many bytes did not have to be written.
@@ -746,8 +768,10 @@ mod tests {
             limited: true,
             scoped: true,
             plan_download_bytes: Some(4242),
+            download_bytes_spent: Some(4300),
             write_bytes: Some(77),
-            stopped: Some("bytes"),
+            write_bytes_spent: Some(96),
+            stopped: Some("--max-write-bytes"),
             config_bumped_zero: false,
             local_manifest: Some("unavailable"),
             repair_mode: Some("inplace"),
@@ -762,14 +786,17 @@ mod tests {
             rec.text(),
             "SUMMARY total=3 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
              exit=5 limited=1 scoped=1 config_bumped=0 plan_files=3 plan_download_bytes=4242 \
-             write_bytes=77 repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
-             damaged_chunks=7 stopped=bytes local_manifest=unavailable"
+             download_bytes_spent=4300 write_bytes=77 write_bytes_spent=96 \
+             repair_mode=inplace inplace=3 temp=1 kept_bytes=900 ram_bytes=4096 \
+             damaged_chunks=7 stopped=--max-write-bytes local_manifest=unavailable"
         );
         // `stopped` and `local_manifest` are words, not numbers: the JSON plane
         // must say so.
         let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
-        assert_eq!(v["stopped"], "bytes");
+        assert_eq!(v["stopped"], "--max-write-bytes");
         assert_eq!(v["write_bytes"], 77);
+        assert_eq!(v["write_bytes_spent"], 96);
+        assert_eq!(v["download_bytes_spent"], 4300);
         assert_eq!(v["plan_download_bytes"], 4242);
         assert_eq!(v["local_manifest"], "unavailable");
         assert_eq!(v["repair_mode"], "inplace");
@@ -788,7 +815,9 @@ mod tests {
                 "config_bumped",
                 "plan_files",
                 "plan_download_bytes",
+                "download_bytes_spent",
                 "write_bytes",
+                "write_bytes_spent",
                 "repair_mode",
                 "inplace",
                 "temp",

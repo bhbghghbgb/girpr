@@ -165,7 +165,7 @@ persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` r
 | a final-MD5 mismatch | redoes only the chunks the per-chunk verdicts name | deletes the temp and restarts the file |
 | the resume artefact | none: the scan finds the chunks that are already right, so a corrupt prefix cannot be inherited | the `*_tmp` prefix, kept and continued |
 | peak extra disk | `io_threads × largest *growth*` — 0 for a same-size repair | `io_threads × largest file` |
-| `stopped=bytes`/`stopped=write` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
+| `stopped=--max-download-bytes`/`stopped=--max-write-bytes` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
 
 The rows are two ways to spend disk, not two rungs of a safety ladder. Both gate the file on
 the same whole-file MD5, and `config.ini` advances only when every planned file verified.

@@ -555,6 +555,17 @@ flags, not prose. The one thing a refusal has and a normal run does not is that
 every value in it is `0` except the plan-derived ones, which is itself the proof
 that nothing was written.
 
+**`stopped=` names the flag.** The value is the flag that bound
+(`--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`), not a
+vocabulary word. It is a **breaking change** to the `SUMMARY` line: the three
+values `bytes` / `write` / `delete` are gone, replaced by the flags they stood
+for. A consumer that matched on them has to be updated; a consumer that only
+looked for the key's presence is unaffected. The reason is the one the plan
+weighed: the flat vocabulary needed a new word per ceiling, and the words said
+less than the flags do — `stopped=--max-write-bytes` is self-describing, it
+scales with the number of ceilings, and it is the shape a script already has
+to write.
+
 ---
 
 ## 6. `SUMMARY` additions
@@ -569,9 +580,11 @@ run that never passes the flag.
 | `scoped=1` | any path scope active |
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
+| `download_bytes_spent=<N>` | `--max-download-bytes` active. The bytes that **crossed the wire**, the abandoned attempts' included: the traffic the run caused, which is what the ceiling bounds. `download_bytes` is the other half — the bytes of the files that were actually repaired — and the two are the same number in a clean run and differ exactly when the transport misbehaved |
 | `write_bytes=<N>` | `--max-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
+| `write_bytes_spent=<N>` | `--max-write-bytes` active. The bytes that **landed in the install**, the bytes of an attempt that later failed its digest included: the disk the run took, which is what the ceiling bounds. `write_bytes` is the other half — the bytes written from sources that passed their gate |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
-| `stopped=<bytes>\|write\|delete` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`, `delete` = a cleanup pass refused by `--max-delete-bytes`. The key says *which* ceiling bound, so the three cannot share a value |
+| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so two stops cannot share a value |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |
 
 `stopped=` is what distinguishes "nothing was written because the plan was too

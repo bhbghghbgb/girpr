@@ -16,6 +16,84 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::report::Summary;
 
+/// Which runtime ceiling bound, if any.
+///
+/// The value the `SUMMARY` reports is the **flag**, not a vocabulary word:
+/// `stopped=--max-write-bytes` says which ceiling bound without the reader
+/// having to know a mapping, and it scales with the number of ceilings — the
+/// flat vocabulary (`bytes` / `write` / `delete`) needed a new word per
+/// ceiling, and the words said less than the flags do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StoppedBy {
+    /// No ceiling bound.
+    #[default]
+    None,
+    /// `--max-download-bytes` — the live download figure.
+    Download,
+    /// `--max-write-bytes` — the live write figure.
+    Write,
+    /// `--max-verified-download-bytes` — the settled download figure.
+    VerifiedDownload,
+    /// `--max-verified-write-bytes` — the settled write figure.
+    VerifiedWrite,
+}
+
+impl StoppedBy {
+    /// The flag as the user typed it, or `None` when nothing bound.
+    pub fn flag(self) -> Option<&'static str> {
+        match self {
+            StoppedBy::None => None,
+            StoppedBy::Download => Some("--max-download-bytes"),
+            StoppedBy::Write => Some("--max-write-bytes"),
+            StoppedBy::VerifiedDownload => Some("--max-verified-download-bytes"),
+            StoppedBy::VerifiedWrite => Some("--max-verified-write-bytes"),
+        }
+    }
+
+    /// Which of the meter's two numbers the ceiling bounded: `live` or
+    /// `settled`.
+    pub fn figure(self) -> &'static str {
+        match self {
+            StoppedBy::Download | StoppedBy::Write => "live",
+            StoppedBy::VerifiedDownload | StoppedBy::VerifiedWrite => "settled",
+            StoppedBy::None => "none",
+        }
+    }
+
+    /// The number the ceiling bounded, in the run's own figures.
+    pub fn count(self, sum: &Summary) -> u64 {
+        match self {
+            StoppedBy::Download => sum.download.live(),
+            StoppedBy::Write => sum.write.live(),
+            StoppedBy::VerifiedDownload => sum.download.settled(),
+            StoppedBy::VerifiedWrite => sum.write.settled(),
+            StoppedBy::None => 0,
+        }
+    }
+
+    /// The marker's number.
+    fn as_u8(self) -> u8 {
+        match self {
+            StoppedBy::None => 0,
+            StoppedBy::Download => 1,
+            StoppedBy::Write => 2,
+            StoppedBy::VerifiedDownload => 3,
+            StoppedBy::VerifiedWrite => 4,
+        }
+    }
+
+    /// The number's meaning.
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => StoppedBy::Download,
+            2 => StoppedBy::Write,
+            3 => StoppedBy::VerifiedDownload,
+            4 => StoppedBy::VerifiedWrite,
+            _ => StoppedBy::None,
+        }
+    }
+}
+
 /// A counter with two numbers.
 ///
 /// - **live** is charged *before* the resource is consumed. It is monotone — a
@@ -235,17 +313,21 @@ impl Summary {
         self.download.settle(n)
     }
 
-    /// `true` once a runtime hard stop has fired. Checked at every file-task
-    /// entry, so the remaining files drop out instead of queueing behind the
-    /// ceiling.
-    pub fn download_stopped(&self) -> bool {
-        self.download_stopped.load(Ordering::Relaxed)
+    /// Which runtime ceiling bound, if any. Checked at every file-task entry,
+    /// so the remaining files drop out instead of queueing behind the ceiling.
+    pub fn stopped_by(&self) -> StoppedBy {
+        StoppedBy::from_u8(self.stopped_by.load(Ordering::Relaxed))
     }
 
-    /// Trip the runtime hard stop. Idempotent: the first caller to see the line
-    /// wins and the rest simply observe the flag.
-    pub fn stop_downloads(&self) {
-        self.download_stopped.store(true, Ordering::Relaxed);
+    /// Trip the runtime hard stop. Idempotent: the first ceiling to reach the
+    /// line wins and the rest simply observe the marker.
+    pub fn stop(&self, which: StoppedBy) {
+        let _ = self.stopped_by.compare_exchange(
+            0,
+            which.as_u8(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     }
 
     /// `--max-write-bytes`, or `None`.
@@ -296,18 +378,11 @@ impl Summary {
         self.write.settle(n);
     }
 
-    /// Trip the runtime **write** hard stop. Separate from
-    /// [`Self::stop_downloads`] so `SUMMARY stopped=` can say which ceiling
-    /// bound — that distinction is the entire point of the key.
+    /// Trip the runtime **write** hard stop. The marker says *which* ceiling
+    /// bound — that distinction is the entire point of the `stopped=` key.
     pub fn stop_writes(&self) {
-        self.write_stopped.store(true, Ordering::Relaxed);
+        self.stop(StoppedBy::Write);
     }
-
-    /// `true` once the write ceiling has fired.
-    pub fn write_stopped(&self) -> bool {
-        self.write_stopped.load(Ordering::Relaxed)
-    }
-
     /// `--max-ram-bytes`, or `None`.
     pub fn max_ram_bytes(&self) -> Option<u64> {
         let l = self.ram_limit.load(Ordering::Relaxed);
@@ -508,14 +583,37 @@ mod tests {
     }
 
     #[test]
-    fn the_stop_flag_survives_a_snapshot() {
-        // `repair::run` reads `download_stopped` *after* `repair_all` has
-        // snapshotted the Summary, so the copy must carry it.
+    fn the_stop_marker_survives_a_snapshot() {
+        // `repair::run` reads the marker *after* `repair_all` has snapshotted
+        // the Summary, so the copy must carry it.
         let s = Summary::default();
-        assert!(!s.download_stopped());
-        s.stop_downloads();
-        assert!(s.download_stopped());
-        assert!(s.snapshot().download_stopped());
+        assert_eq!(s.stopped_by(), StoppedBy::None);
+        s.stop(StoppedBy::Download);
+        assert_eq!(s.stopped_by(), StoppedBy::Download);
+        assert_eq!(s.snapshot().stopped_by(), StoppedBy::Download);
+        // The first ceiling to reach the line wins: the rest observe it.
+        s.stop(StoppedBy::Write);
+        assert_eq!(s.stopped_by(), StoppedBy::Download);
+    }
+
+    /// The `stopped=` value is the flag that bound — self-describing, and it
+    /// scales with the number of ceilings.
+    #[test]
+    fn every_stop_names_its_flag() {
+        assert_eq!(StoppedBy::None.flag(), None);
+        assert_eq!(StoppedBy::Download.flag(), Some("--max-download-bytes"));
+        assert_eq!(StoppedBy::Write.flag(), Some("--max-write-bytes"));
+        assert_eq!(
+            StoppedBy::VerifiedDownload.flag(),
+            Some("--max-verified-download-bytes")
+        );
+        assert_eq!(
+            StoppedBy::VerifiedWrite.flag(),
+            Some("--max-verified-write-bytes")
+        );
+        // And each one says which of the meter's two numbers it bounded.
+        assert_eq!(StoppedBy::Download.figure(), "live");
+        assert_eq!(StoppedBy::VerifiedWrite.figure(), "settled");
     }
 
     #[test]
