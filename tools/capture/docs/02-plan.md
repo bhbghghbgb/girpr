@@ -90,7 +90,7 @@ tools/capture/
 │   │   └── diff.rs       # path diff, reuse pool, scoring, stats reconciliation
 │   ├── select/
 │   │   ├── mod.rs        # scoring + admission
-│   │   ├── classes.rs    # the eleven class predicates
+│   │   ├── classes.rs    # the six patch-shape predicates
 │   │   ├── budget.rs     # smallest-first under --max-download-bytes
 │   │   ├── decide.rs     # the selection decision, and the narration that reports it
 │   │   └── require.rs    # --require-class, and the one pass that builds its detail
@@ -241,12 +241,12 @@ says which is which.
 | HoYo retires a tag mid-run | manifest 404s partway | exit `2`, `MANIFEST.json` `complete:false`, selfcheck names the missing tag; partial artifacts are never presented as good |
 | A future version violates the structural invariants of spec §3.6 (non-gapless chunks, unsorted offsets, folders) | assembly or diff logic silently wrong | they are **assertions** (A11) and recorded per manifest in `decoded.structure`; a violation exits `3`, it does not pass quietly |
 | A matrix class has no candidate | incomplete test matrix | `status:"unavailable"` + reason, run still exits `0`; `--require-class` turns it into exit `4` |
-| `moved_ascending` and `trim_eager` are ~22 MB each | a default capture is ~696 MiB | `--max-download-bytes`, smallest-first admission, and the exact cost is printed *before* fetching so a run is never a surprise |
+| `reuse_moved` is ~23 MB on disk | a default capture is ~98 MiB | `--max-download-bytes`, smallest-first admission, and the exact cost is printed *before* fetching so a run is never a surprise |
 | gzip hurts agent readability | an agent tries to `cat` a `.gz` | the threshold is a flag, every gzipped doc ships a plain `.tsv` sidecar, and `MANIFEST.json → files[].encoding` is authoritative |
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` records the *decompressed* digest for gzipped files, so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | assembly exists purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
 | An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
-| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive and leaves `schema_version` at `1` — a reader must tolerate an unknown field and reject only an unknown `schema_version`. A new **required** thing is not: it makes the bundles that predate it stale by definition, and re-capturing them is the answer rather than teaching every reader two shapes. What is never acceptable is a **required field that defaults**, because the default is indistinguishable from the real value. |
+| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive and leaves `schema_version` where it is — a reader must tolerate an unknown field and reject only an unknown `schema_version`. A new **required** thing is not: it makes the bundles that predate it stale by definition, and re-capturing them is the answer rather than teaching every reader two shapes. What is never acceptable is a **required field that defaults**, because the default is indistinguishable from the real value. |
 
 ---
 

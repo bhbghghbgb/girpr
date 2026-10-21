@@ -42,8 +42,8 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈696 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`expected/` is ≈220 MiB, `game/` ≈213 MiB, `chunks/` ≈220 MiB and `manifests/`
+bundles are large (≈98 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`expected/` is ≈20 MiB, `game/` ≈20 MiB, `chunks/` ≈17 MiB and `manifests/`
 ≈41 MiB) and regenerable, so they belong on disk, not in history. **This is the
 project location**: anything a test or another tool is expected to rely on lives
 here.
@@ -110,13 +110,12 @@ them, and assembles a **complete artifact**:
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
 The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
-`20261020T154810Z`, the one the tool writes today — **verifies 325/325, exit
-`0`**, and its own selfcheck is **354/354, `pass`**.
+`20261021T090003Z`, the one the tool writes today — **verifies 63/63, exit
+`0`**, and its own selfcheck is **93/93, `pass`**.
 
-It holds **ten** captures and answers **all eleven** classes, and the matrix
-says how: nine classes are `captured` — one capture each — and `trim_deferred`
-is **`covered_by`** `moved_ascending`'s capture, because the file that shows the
-deferred trim is that capture's. So ten captures answer eleven classes.
+It holds **six** captures and answers **all six** patch shapes, one capture
+each: the class set is a partition on the content, so a file answers exactly
+one shape.
 
 **A class the budget refused is recorded, not dropped.** `--max-download-bytes`
 refuses a class it cannot pay for and the matrix row says `over_budget` with

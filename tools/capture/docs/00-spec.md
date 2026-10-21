@@ -346,7 +346,7 @@ correct by construction.
 
 What the bundle *does* cover is the **behaviour** that regime produces: the
 payload is 0, the wrong chunks are written in place and the good ones are kept
-(`kept_in_place`). What it does not cover is the **input** — the case where the
+(`reuse_in_place`). What it does not cover is the **input** — the case where the
 local map has an entry for the damaged chunk and the source check is what
 rejects it. A second fixture flavour, a "damaged current install" capture, is a
 real feature and not a flag: the class model would need a second dimension and
@@ -639,7 +639,7 @@ statement about the bundle rather than about the run.
 
 A14 asks one direction: is `game/` free of paths the tool under test would build
 a plan against? It cannot see the other failure — a capture admitted for
-`kept_in_place` whose two variant files came out byte-identical. That
+`reuse_in_place` whose two variant files came out byte-identical. That
 bundle would satisfy A14, satisfy A7/A8 (each side matches its own declared MD5),
 and be useless, because the fixture would hold no evidence of the patch it was
 captured for.
@@ -695,7 +695,7 @@ An empty `--require-class` is **not** "every required class". The implementation
 requires nothing unless a class is named, so a capture whose matrix leaves a
 class `unavailable` still exits `0`; the unavailable row is the finding, not the
 exit code. That is a deliberate reversal of "all required classes", and the live
-pair is why: requiring all eleven by default would make *every* run of a pair
+pair is why: requiring all six by default would make *every* run of a pair
 that lacks one of them exit `4`. `unavailable` is a fact about the manifests;
 `over_budget` is a fact about this run's flags; only a class the caller named
 is fatal. A caller that needs the stronger rule asks for it:
@@ -898,7 +898,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
-   makes `download_bytes` attributable; a single run over all ten sums to the
+   makes `download_bytes` attributable; a single run over all six sums to the
    same total but cannot be compared per capture. `removed` is the exception and
    takes `--purge-only` instead of `--max-files 1` (§8.1.2).
 
@@ -1005,29 +1005,23 @@ artifact's own patchmap rather than against this table:
 | capture | class | `download_bytes` | reuse / fetch / moved | `must_not_fetch` |
 |---|---|---|---|---|
 | `identical` | `identical` | 0 | 1 / 0 / 0 | 1 |
-| `zero_reuse_single` | `zero_reuse_single` | 21 | 0 / 1 / 0 | 0 |
-| `zero_reuse_multi` | `zero_reuse_multi` | 336 852 | 0 / 2 / 0 | 0 |
-| `kept_in_place` | `kept_in_place` | 274 426 | 1 / 2 / 0 | 1 |
-| `moved_ascending` | `moved_ascending`, `trim_deferred` | 1 564 894 | 8 / 2 / 4 | 8 |
-| `moved_descending` | `moved_descending` | 2 480 175 | 27 / 7 / 27 | 27 |
-| `moved_mixed` | `moved_mixed` | 64 139 674 | 67 / 60 / 67 | 67 |
-| `trim_eager` | `kept_in_place`, `trim_eager` | 197 192 | 9 / 1 / 0 | 9 |
+| `no_reuse` | `no_reuse` | 336 852 | 0 / 2 / 0 | 0 |
+| `reuse_in_place` | `reuse_in_place` | 274 426 | 1 / 2 / 0 | 1 |
+| `reuse_moved` | `reuse_moved` | 1 564 894 | 8 / 2 / 4 | 8 |
 | `added` | `added` | **114 357** | 0 / 1 / 0 | 0 |
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
-All ten exit `0`. **69 107 591 B in total**, which is the sum of the patchmaps'
-figures to the byte. 113 reused chunks across the six captures that declare them,
-none of them downloaded. Only the ten captures' own paths changed on the
+All six exit `0`. **2 290 529 B in total**, which is the sum of the patchmaps'
+figures to the byte. Ten reused chunks across the four captures that declare
+them, none of them downloaded. Only the six captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
-`identical` one was left alone, and the other seven were modified in place — so
-the scope held across all ten runs. The bundle itself was never a working tree
+`identical` one was left alone, and the other three were modified in place — so
+the scope held across all six runs. The bundle itself was never a working tree
 and still verifies.
 
-**Two captures carry two classes each.** `moved_ascending`'s file is also the
-`trim_deferred` one — the same file shows the deferred trim and the ascending
-shift — and `trim_eager`'s file is also a `kept_in_place` one. That is the
-`covered_by` admission at work, and it is why the bundle holds ten captures for
-eleven classes.
+**One capture, one class.** The class set is a partition on the content, so a
+file answers exactly one class and the bundle holds six captures for six
+classes.
 
 `added` and `removed` are the two one-sided captures and they are not shaped like
 the rest, so read them with §13.1 of the schema:
@@ -1041,8 +1035,8 @@ the rest, so read them with §13.1 of the schema:
   nothing. The run that produces it is a cleanup run, and the size it reports is
   `deleted_extra_bytes` = `old.size`; see §8.1.2.
 
-The seven that carry a total of their own sum to **68 993 234 B**; adding
-`added` makes it **69 107 591 B**.
+The four that carry a total of their own sum to **2 176 172 B**; adding `added`
+makes it **2 290 529 B**.
 
 ### 8.2 What the artifact provides so that the check is cheap to run
 

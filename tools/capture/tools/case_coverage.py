@@ -10,9 +10,9 @@ added or a predicate moved makes them stale.
 
 Three sections, one per question the findings ask:
 
-1. **population** - how many paths satisfy each class, old set and proposed
-   set, over the pool the capture selects (`game` + every selected audio
-   field). The scoring is `gircap`'s own: an identity is
+1. **population** - how many paths satisfy each class, the historical set and
+   the current one, over the pool the capture selects (`game` + every selected
+   audio field). The scoring is `gircap`'s own: an identity is
    `(uncompressed_md5, uncompressed_size)`, a chunk is *reused* when the old
    file carries that identity and *moved* when the old file's offset for it
    differs from the new chunk's.
@@ -26,8 +26,7 @@ Three sections, one per question the findings ask:
    and source range.
 
 3. **ranking** - the cheapest candidate per class, by `gircap`'s own key
-   (`total_cost` = the compressed bytes of the old and the new file), and the
-   overlap between the proposed classes.
+   (`total_cost` = the compressed bytes of the old and the new file).
 
 Usage:
 
@@ -60,7 +59,7 @@ from collections import Counter, defaultdict
 #   old/new  - the two sizes
 #   trim_free - no old chunk reaches past the new size (the eager trim)
 
-OLD_CLASSES = [
+HISTORICAL_CLASSES = [
     "identical",
     "zero_reuse_single",
     "zero_reuse_multi",
@@ -72,7 +71,7 @@ OLD_CLASSES = [
     "full_reuse_reordered",
 ]
 
-PROPOSED_CLASSES = [
+CURRENT_CLASSES = [
     "identical",
     "no_reuse",
     "reuse_in_place",
@@ -160,7 +159,7 @@ def describe(entry_new, entry_old, index):
     )
 
 
-def old_class_of(row, side):
+def historical_class_of(row, side):
     if side == "identical":
         return {"identical"}
     if side == "added":
@@ -182,7 +181,7 @@ def old_class_of(row, side):
     return out
 
 
-def proposed_class_of(row, side):
+def current_class_of(row, side):
     """The crate's class set: the six **patch shapes**.
 
     The class set is a partition on the content, so a path answers exactly
@@ -276,8 +275,8 @@ def population_counts(rows):
     """How many paths satisfy each class, per class set."""
     counts = {}
     for label, classifier, names in (
-        ("current", old_class_of, OLD_CLASSES),
-        ("proposed", proposed_class_of, PROPOSED_CLASSES),
+        ("historical", historical_class_of, HISTORICAL_CLASSES),
+        ("current", current_class_of, CURRENT_CLASSES),
     ):
         c = Counter()
         for r in rows:
@@ -292,8 +291,8 @@ def section_population(rows):
     print("== population ==")
     print(f"pool: {len(rows)} paths\n")
     for label, classifier, names in (
-        ("current", old_class_of, OLD_CLASSES),
-        ("proposed", proposed_class_of, PROPOSED_CLASSES),
+        ("historical", historical_class_of, HISTORICAL_CLASSES),
+        ("current", current_class_of, CURRENT_CLASSES),
     ):
         print(f"-- {label} class set --")
         counts = Counter()
@@ -306,10 +305,10 @@ def section_population(rows):
 
 
 def section_ranking(rows):
-    print("== ranking (the proposed set) ==")
+    print("== ranking (the current set) ==")
     for r in rows:
-        r["classes"] = proposed_class_of(r, r["side"])
-    for name in PROPOSED_CLASSES:
+        r["classes"] = current_class_of(r, r["side"])
+    for name in CURRENT_CLASSES:
         sel = [r for r in rows if name in r["classes"]]
         if not sel:
             print(f"{name:<24} (no candidate)")

@@ -184,12 +184,12 @@ every document type the tool writes:
 
 | | mock | reference (`20261020T154810Z`) |
 |---|---|---|
-| files | 79 | 324 |
+| files | 79 | 78 |
 | `api/` | 9 | 9 |
 | `manifests/` | 16 | 16 |
 | `diff/` | 5 | 5 |
 | `patchmaps/` | 8 | 10 |
-| chunk blobs | 22 | 259 |
+| chunk blobs | 22 | 25 |
 
 It is small, deterministic, offline, and produces the whole document surface —
 which is what makes a commit-by-commit search affordable. It is also a *healthy*

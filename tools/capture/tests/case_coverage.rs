@@ -294,7 +294,7 @@ fn the_instrument_reproduces_the_crates_class_populations() {
     let bundle = bundle_in(&scratch.out(), &r);
 
     let doc = instrument_json(py, &bundle, "population");
-    let proposed = &doc["population"]["proposed"];
+    let proposed = &doc["population"]["current"];
     let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("the matrix");
     let matrix: serde_json::Value = serde_json::from_slice(&raw).expect("json");
 

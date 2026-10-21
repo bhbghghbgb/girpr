@@ -60,9 +60,12 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/util.rs` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `scan_file`, `scan_reader`, `read_range`, `Scan`, `ScanRange`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
-| `tests/common/mod.rs` | mock server + deterministic fixture | `MockServer`, `build_fixture`, `MockOpts` |
+| `tests/common/mod.rs` | mock server + the fixture *description* | `MockServer`, `FixtureSpec`, `build_fixture_spec`, `MockOpts` |
+| `tests/repair_machinery.rs` | the repair's own decisions, on crafted fixtures | one case per decision (D1–D9) |
 | `tests/artifact_bridge.rs` | `#[ignore]`d e2e against a real `gircap` bundle (docs/06) | `drive_capture`, one test per capture |
-| `tests/artifact_bridge/server.rs` | the loopback replay server, reached only by the test above | `Bridge`, `Bundle`, `Capture`, `Hit` |
+| `tests/artifact_bridge/bundle.rs` | the bundle's records: the matrix and the patchmaps | `Patchmaps`, `Capture`, `MatrixClass` |
+| `tests/artifact_bridge/server.rs` | the loopback replay server | `Bridge`, `Bundle`, `Hit` |
+| `tests/artifact_server.rs` | the replay server's own tests, against a synthetic mini-bundle | one case per route family |
 
 **Action graph** — what one `repair::run(ctx)` does (numbers = `docs/02` steps):
 
@@ -299,8 +302,9 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 137 unit + 73 integration, all offline
+cargo test            # 147 unit + 106 integration, all offline
 cargo test --test repair_offline
+cargo test --test repair_machinery
 cargo clippy --all-targets
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
@@ -314,7 +318,7 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
   resolved in `RunCtx::api_bases`).
-- **What the tests actually drive.** `tests/repair_offline.rs` is 66 cases, and
+- **What the tests actually drive.** `tests/repair_offline.rs` is 74 cases, and
   most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
   — that exercises the library, not the flag surface. Six of them (the
   endpoint-override cases, the `--output` format case, the scan estimate and the
@@ -323,12 +327,33 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   against the mock, not against real bytes.
   `tests/cli_contract.rs` is the other file that spawns the binary, and it never
   reaches the API at all — it is argument handling and exit codes only.
+- **The repair's own decisions are on crafted fixtures.**
+  `tests/repair_machinery.rs` is 25 cases, one per decision the repair makes
+  per file — the tier, the write direction, the trim, the growth, the mode, the
+  resume, and what a malformed manifest does — plus the four facts the run
+  reports on its data plane (the live and the settled byte figures agree,
+  `local_manifest` says `ok` or `unavailable`, the scope contains the run, and
+  the trace log's download records agree with the server's request log). They
+  run the **real binary** against the mock, because several of those decisions
+  are only visible on the `--output json` records.
+  The fixtures are **described**, not hardcoded: `tests/common/mod.rs` takes a
+  `FixtureSpec` — the new side, the old side and the bytes on disk — so a
+  uniform shift, a mixed shift, a shrinking file, a file with a hole in its
+  coverage and a path with a space in it are all a description rather than a
+  builder of their own. A case costs kilobytes.
+- **The replay server has its own tests, against a synthetic mini-bundle.**
+  `tests/artifact_server.rs` builds a bundle of a few kilobytes — two `getBuild`
+  bodies, one carried manifest per build, one chunk blob, the recorded failure
+  shapes — and drives the server over it: the surgical `url_prefix` rewrite,
+  the `build_id` invariant, the request log, and the recorded not-found shapes.
+  It is always on and it takes no time, because the server's behaviour does not
+  depend on the bundle being hundreds of megabytes of real game bytes.
 - **Real bytes, real flags — and expensive.** `tests/artifact_bridge.rs` runs
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
   `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs ~2 minutes** of real binary runs over ~20 MB of bundle bytes per run,
-  and it is meant to be started **by hand, only when a repair-spec change is
+  it costs real binary runs over ~20 MB of bundle bytes per run**, and it is
+  meant to be started **by hand, only when a repair-spec change is
   suspected**:
   ```powershell
   cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
@@ -344,19 +369,18 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
     that body rather than from the flags. It never writes to the bundle; the
     working tree is a scratch copy, and `gircap verify` must still pass
     afterwards.
-  - Per capture it asserts: `download_bytes` equals the patchmap's total, the
-    patched file's MD5 equals `expectations.result_md5`, no id in
-    `must_not_fetch` was requested, exit `0` with `config_bumped=0` and nothing
-    outside the scope touched on disk, and `local_manifest` did not come back
-    `unavailable` (a run with no local manifest still exits `0`, downloads
-    everything, and is the failure mode byte counts alone will not catch).
-  - **And it drives every repair capture twice** — once with `--repair-mode
-    temp`, once with the default — and asserts the two runs produce the
-    **same file** while the in-place one writes **strictly fewer** bytes.
-    That is the space claim asserted against real game bytes: the offline
-    fixture is 128 bytes, too small to tell "wrote 128" from "wrote 64". On
-    the reference bundle the in-place run writes 714 KB where the temp path
-    writes 2.3 MB, and 199 KB where the temp path writes 10.9 MB.
+  - **What it claims, and only that:** `girpr`'s output is identical to what
+    another repair tool computes. Three assertions per capture — the patched
+    file's bytes are the reference bytes, the chunks asked for are exactly the
+    chunks the patch says must be fetched (and none of the ones it says can be
+    reused), and the byte total is the patch's byte total — plus the run's
+    preconditions: exit `0`, `local_manifest` did not come back `unavailable` (a
+    run with no local manifest still exits `0`, downloads everything, and is the
+    failure mode byte counts alone will not catch), `scoped=1` and
+    `config_bumped=0`.
+  - **Everything else about `girpr` is tested elsewhere**, on fixtures where the
+    answer is exact and the cost is nothing: the tier, the direction, the trim
+    and the rest are in `tests/repair_machinery.rs`.
 - Mock shapes mirror live `hk4e_global` responses (Sept 2026): same wrappers,
   node names, int-or-string sizes, `url_prefix + "/" + id` joining. `getBuild?tag=<unknown>`
   returns `retcode -202` to exercise the local-build fallback.
@@ -371,9 +395,10 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   local chunk map).
 - `tests/cli_contract.rs` runs the built binary to pin the process-level contract
   (every arg error → `1`, `--help` → `0`); it never touches a game directory.
-- To add a case: extend `MockOpts` (deprecated list, audio dirs) or the fixture,
-  then write one `#[tokio::test]` calling `repair::run` and asserting
-  `(summary, exit code)` + on-disk state. Use `jobs=1` when asserting chunk order.
+- To add a case: extend `MockOpts` (deprecated list, audio dirs) or describe a
+  new fixture, then write one `#[tokio::test]` calling `repair::run` and
+  asserting `(summary, exit code)` + on-disk state. Use `jobs=1` when asserting
+  chunk order.
 
 ## How it keeps disk usage low
 
