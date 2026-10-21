@@ -714,26 +714,26 @@ capture_test!(
 
 capture_test!(
     the_no_reuse_capture_fetches_the_whole_file,
-    "zero_reuse_multi",
-    "`zero_reuse_multi`: no chunk has a local source, so every chunk is \
-     fetched and the file is written whole. A path with a space in it, \
-     which the `--include` glob has to carry verbatim."
+    "no_reuse",
+    "`no_reuse`: no chunk has a local source, so every chunk is fetched and \
+     the file is written whole. A path with a space in it, which the \
+     `--include` glob has to carry verbatim."
 );
 
 capture_test!(
     the_reuse_in_place_capture_fetches_only_what_it_must,
-    "kept_in_place",
-    "`kept_in_place`: the load-bearing reuse case — three chunks, one of \
+    "reuse_in_place",
+    "`reuse_in_place`: the load-bearing reuse case — three chunks, one of \
      them already correct where it belongs and two fetched. The `REUSE` set \
      names the kept chunk, and the run must not ask for it."
 );
 
 capture_test!(
     the_reuse_moved_capture_fetches_only_what_it_must,
-    "moved_ascending",
-    "`moved_ascending`: the load-bearing reuse case at scale — 10 chunks, \
-     8 reused locally and 2 fetched, and the 4 that move go *earlier*. The \
-     `REUSE` set names all 8."
+    "reuse_moved",
+    "`reuse_moved`: the load-bearing reuse case at scale — 10 chunks, 8 reused \
+     locally and 2 fetched, and the 4 that move go *earlier*. The `REUSE` set \
+     names all 8."
 );
 
 capture_test!(

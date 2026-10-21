@@ -210,112 +210,90 @@ repeat the mistake.
 targets a *distinct* decision the main tool makes. `--per-class N` raises the
 count; there are no per-variant flags.
 
-#### The case space: what the repair decides, and what a class can force
+#### The case space: what the patch is, and what a class can force
+
+A class is a statement about the **patch**: what a consumer has to download to
+produce the new file, and what the file becomes. It is not a statement about
+how a repair tool gets there.
 
 The repair spec (2026-10-20, merge `f9e6f6a`) makes the repair **in place** by
 default, in two tiers, with a trim that is sometimes eager and sometimes
-deferred. Per file, it decides nine things. Six of them are **content**
-decisions — a function of how the file changed — and those six are what the
-class set has to cover. The other three come from a flag, a filesystem or an
-interruption, and no class can force them; §7.3 of `girpr`'s bridge spec
-says where each one goes instead.
+deferred. Per file, it decides nine things.
 
-| # | decision | what it depends on | a class can force it? |
+| # | decision | what it depends on | tested where |
 |---|---|---|---|
-| D1 | **skip** — the file is already correct | the whole-file MD5 | yes |
-| D2 | **what happens to each chunk**: *kept* (already correct where it belongs), *copied* (its bytes live elsewhere in the file), *fetched* (no usable local source) | the old/new chunk layouts | yes |
-| D3 | **the tier** — RAM-staged (the moving bytes fit the budget) or ordered (they do not) | the payload size vs `--max-ram-bytes` | the payload is content; the budget is a flag |
-| D4 | **the direction** — ascending or descending, whichever keeps more reuse | the *sign* of the moves | yes |
-| D5 | **the trim** — eager (the dead tail is released before the first write) or deferred (the tail waits for the end) | the old size vs the new size, and **where the sources are** | yes |
-| D6 | **the growth** — the file on disk is shorter than the target, so the in-place path has to extend it | the two sizes | yes (as a property) |
-| D7 | **the mode** — in place / temp / discard, and the fallback when the target cannot be opened for writing | a flag, and the filesystem | no — a flag axis |
-| D8 | **the resume** — in place re-verifies and continues; temp resumes by length | an interrupted run | no — a fault injection |
-| D9 | **the zero-fill** of a hole in the chunk coverage | a manifest that does not tile its file | no — a malformed manifest |
+| D1 | **skip** — the file is already correct | the whole-file MD5 | `girpr`'s `tests/repair_machinery.rs` |
+| D2 | **what happens to each chunk**: *kept* (already correct where it belongs), *copied* (its bytes live elsewhere in the file), *fetched* (no usable local source) | the old/new chunk layouts | `girpr`'s `tests/repair_machinery.rs` |
+| D3 | **the tier** — RAM-staged (the moving bytes fit the budget) or ordered (they do not) | the payload size vs `--max-ram-bytes` | `girpr`'s `tests/repair_machinery.rs` |
+| D4 | **the direction** — ascending or descending, whichever keeps more reuse | the *sign* of the moves | `girpr`'s `tests/repair_machinery.rs` |
+| D5 | **the trim** — eager (the dead tail is released before the first write) or deferred (the tail waits for the end) | the old size vs the new size, and **where the sources are** | `girpr`'s `tests/repair_machinery.rs` |
+| D6 | **the growth** — the file on disk is shorter than the target, so the in-place path has to extend it | the two sizes | `girpr`'s `tests/repair_machinery.rs` |
+| D7 | **the mode** — in place / temp / discard, and the fallback when the target cannot be opened for writing | a flag, and the filesystem | `girpr`'s `tests/repair_machinery.rs` |
+| D8 | **the resume** — in place re-verifies and continues; temp resumes by length | an interrupted run | `girpr`'s `tests/repair_machinery.rs` |
+| D9 | **the zero-fill** of a hole in the chunk coverage | a manifest that does not tile its file | `girpr`'s `tests/repair_machinery.rs` |
 
-**A class is a statement about the content, so it is a class over D1–D6.** A
-flag axis is a different kind of thing: the same file answers it whatever the
-flag says, so a class over it would be a class over nothing.
+**None of those decisions is shared with any other repair tool.** They are the
+repair tool's own, and they are tested where they belong — on crafted
+fixtures, where a 192-byte input states each of them exactly and a broken
+branch fails the case that names it.
+
+**So the class set is over the patch space, and only the patch space.** A class
+is a statement about what the patch is, and the six classes are the patch
+space's boundary conditions: **nothing** fetched, **everything** fetched, a
+**subset** fetched with the reused part already in place, a **subset** fetched
+with the reused part moved, a **new** file and a **deleted** file.
 
 #### The classes
 
-| class | predicate over the old/new manifest entries | the branch it exercises | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
+| class | predicate over the old/new manifest entries | the patch it covers | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
-| `identical` | `old.md5 == new.md5` | the skip branch: the scan's whole-file MD5 matches, 0 bytes fetched | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `zero_reuse_single` | `reused == 0`, `nchunks == 1` | no local source: the one chunk is fetched and written in place | `GenshinImpact_Data/StreamingAssets/AssetBundles/data_revision` | 42 B |
-| `zero_reuse_multi` | `reused == 0`, `nchunks > 1` | no local source: every chunk is fetched, one at a time, into the target | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `kept_in_place` | `0 < reused < nchunks`, `moved == 0` | the surviving chunks are already correct where they belong: kept, not copied; the rest are fetched | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `moved_ascending` | `moved > 0`, every move goes **down** (source after destination) | the bytes move earlier: the ascending write order keeps every source alive | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `moved_descending` | `moved > 0`, every move goes **up** (source before destination) | the bytes move later: the descending write order keeps every source alive | `GenshinImpact_Data/resources.assets` | 40.3 MB |
-| `moved_mixed` | `moved > 0`, moves in **both** directions | the chunking re-flowed: the ordered tier keeps the larger half and fetches the rest | `…/StreamingAssets/AudioAssets/Banks25.pck` | 243 MB |
-| `trim_eager` | `0 < reused < nchunks`, `old.size > new.size`, no source reaches past `new.size` | the file on disk is longer than the target and no source reaches past it: the dead tail is released before the first write | `…/StreamingAssets/AssetBundles/blocks/00/00981562.blk` | 21.7 MB |
-| `trim_deferred` | `0 < reused < nchunks`, `old.size > new.size`, some source reaches past `new.size` | the file on disk is longer than the target and a source reaches past it: the trim waits for the end | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
-| `added` | path only in the new manifest | the file is created: absent locally, fetched whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
-| `removed` | path only in the old manifest | not planned; a `--purge-after` target | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
+| `identical` | `old.md5 == new.md5` | nothing to fetch: the file is already right | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
+| `no_reuse` | `reused == 0`, `nchunks > 1` | everything fetched: the whole file is overwritten | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
+| `reuse_in_place` | `0 < reused < nchunks`, `moved == 0` | a subset fetched: the reused chunks are already correct where they belong | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `reuse_moved` | `moved > 0` | a subset fetched: the reused chunks live elsewhere in the file and have to be copied | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `added` | path only in the new manifest | the file is created whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
+| `removed` | path only in the old manifest | the file is purged | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
 
-**`kept_in_place` is not a reuse class.** A same-offset source *is* the chunk's
-own destination, so the chunk is **kept**, not copied: the payload is 0 and the
-staged tier stages nothing. The old name (`partial_same_offset`) said "reuse"
-and the behaviour is not a reuse.
+**The two reuse classes are exclusive, and the class set is a partition.** A
+file that reuses *and* moves is the `reuse_moved` one, and a file that reuses
+without moving is the `reuse_in_place` one — so one capture is one shape, and
+the bundle is one file per shape.
 
-**`moved_ascending` and `moved_descending` are the direction, not the shift.**
-The direction is the *sign* of the moves: the bytes move **earlier** (the source
-is after the destination) and the ascending order keeps every source alive, or
-the bytes move **later** (the source is before the destination) and the
-descending one does. `moved_mixed` is the chunking re-flowing, and the ordered
-tier keeps the larger half.
-
-**The two trim classes split what one class used to cover.** The trim is
-**eager** when the file on disk is longer than the target and no reuse source
-reaches past the target's end — the tail is dead weight, and it is released
-before the first write. It is **deferred** when a source does reach past it: a
-source the trim would delete is a source that is gone, so the trim waits for the
-end and the file grows during the repair.
+**A one-chunk file with nothing reusable is not a class.** It is a degenerate
+patch, and `added` already covers "the file is created whole".
 
 *(measured)* population over the pool the capture selects (`game` ∪ `en-us`,
-2 932 paths): `identical` 1 733, `zero_reuse_single` 121, `zero_reuse_multi` 491,
-`kept_in_place` 29, `moved_ascending` 321, `moved_descending` 139,
-`moved_mixed` 3, `trim_eager` 56, `trim_deferred` 282, `added` 84, `removed` 11.
+2 932 paths): `identical` 1 733, `no_reuse` 491, `reuse_in_place` 29,
+`reuse_moved` 463, `added` 84, `removed` 11.
 
-**The admission order is a decision.** The direction classes are admitted
-**before** the trim classes, because `trim_deferred`'s cheapest candidate is the
-same file as `moved_ascending`'s: admitting the trim first would push
-`moved_ascending` onto its next candidate — 24.9 MB for a second copy of the
-same shape. The order is
+**The admission order is a decision.** The cheap shapes come first, so a small
+budget buys the boundaries before the expensive ones:
 
 ```
-identical, zero_reuse_single, zero_reuse_multi, kept_in_place,
-moved_ascending, moved_descending, moved_mixed, trim_eager, trim_deferred,
-added, removed
+identical, no_reuse, reuse_in_place, reuse_moved, added, removed
 ```
 
 #### What the reference bundle exercises
 
-*(measured)* against the reference bundle. The three counts are the repair's own
-vocabulary: **kept** (already correct where it belongs), **copied** (its bytes
-live elsewhere in the file) and **fetched** (no usable local source).
+*(measured)* against the reference bundle. The counts are the patch's own
+vocabulary: how many chunks the new side has, how many of them the old file
+already holds (**reused**), how many of the reused ones live elsewhere in the
+file (**moved**), and how many have to come off the network (**fetched**).
 
-| capture | kept | copied | fetched | payload (RAM) | the ordered tier's direction | the trim |
+| capture | chunks | reused | moved | fetched | download bytes | the two sizes |
 |---|---|---|---|---|---|---|
-| `identical` | 1 | 0 | 0 | 0 | — (skipped) | — |
-| `zero_reuse_single` | 0 | 0 | 1 | 0 | — | — (same size) |
-| `zero_reuse_multi` | 0 | 0 | 2 | 0 | — | — (grows 192 924 B) |
-| `kept_in_place` | 1 | 0 | 2 | 0 | — | — (same size) |
-| `moved_ascending` | 4 | 4 | 2 | **5 892 269** | **ascending** | **deferred** |
-| `moved_descending` | 0 | 27 | 7 | **38 150 367** | **descending** | — (grows 5 094 416 B) |
-| `moved_mixed` | 0 | 67 | 60 | **70 736 576** | **descending** (60 of 67) | — (grows 3 429 518 B) |
-| `trim_eager` | 9 | 0 | 1 | 0 | — | **eager** (24 067 B released) |
-| `added` | 0 | 0 | 1 | 0 | — | — (created) |
-| `removed` | — | — | — | — | — | — (purged) |
+| `identical` | 1 | 1 | 0 | 0 | 0 | 14 → 14 (the same) |
+| `no_reuse` | 2 | 0 | 0 | 2 | 336 852 | 4 871 912 → 5 064 836 (**grows**) |
+| `reuse_in_place` | 3 | 1 | 0 | 2 | 274 426 | 2 340 264 → 2 340 264 (the same) |
+| `reuse_moved` | 10 | 8 | 4 | 2 | 1 564 894 | 11 914 387 → 11 912 007 (**shrinks**) |
+| `added` | 1 | 0 | 0 | 1 | 114 357 | — → 249 256 (created) |
+| `removed` | — | — | — | — | — | 1 731 133 → — (purged) |
 
-Three rows carry the load. `moved_ascending` is the only capture that reaches
-the **deferred** trim — a reuse source reaches past the target's end, so the
-tail is not dead weight, the trim waits for the end and the file grows during
-the repair — and its every move goes the same way, so the ordered tier's
-direction rule has an unambiguous answer. `moved_descending` is its mirror: the
-content moves the other way, so the descending order is the one that keeps the
-sources alive. And `moved_mixed` is the case the rule exists for: the moves go
-**both** ways, so neither order keeps every source, and the ordered tier has to
-fetch the ones it cannot salvage.
+**Every patch shape is here once.** `no_reuse` fetches the whole file;
+`reuse_in_place` fetches a part of it and leaves the rest where it belongs;
+`reuse_moved` fetches a part of it and copies the rest from elsewhere in the
+file; `identical` fetches nothing; `added` creates a file; `removed` deletes
+one.
 
 **Selection pool = `game` ∪ the selected audio fields.** Each Sophon manifest is
 a `matching_field` pool, and every pool is scored and diffed, not just `game`:
@@ -338,22 +316,16 @@ fixture to be real.
 | class | candidates | cheapest candidate | `total_cost` | on disk |
 |---|---|---|---|---|
 | `identical` | 1 733 | `…/Resources/browser_assets` | 54 | 28 B |
-| `zero_reuse_single` | 121 | `…/AssetBundles/data_revision` | 42 | 16 B |
-| `zero_reuse_multi` | 491 | `…/Resources/unity default resources` | 633 588 | 9.9 MB |
-| `kept_in_place` | 29 | `…/Plugins/HoYoChannel.dll` | 1 826 067 | 4.7 MB |
-| `moved_ascending` | 321 | `…/blocks/00/09801749.blk` | 22 662 068 | 23.8 MB |
-| `moved_descending` | 139 | `GenshinImpact_Data/resources.assets` | 40 280 151 | 100.5 MB |
-| `moved_mixed` | 3 | `…/AudioAssets/Banks25.pck` | 243 016 539 | 290.4 MB |
-| `trim_eager` | 56 | `…/blocks/00/00981562.blk` | 21 679 587 | 21.8 MB |
-| `trim_deferred` | 282 | `…/blocks/00/09801749.blk` | 22 662 068 | — (the same file as `moved_ascending`) |
+| `no_reuse` | 491 | `…/Resources/unity default resources` | 633 588 | 9.9 MB |
+| `reuse_in_place` | 29 | `…/Plugins/HoYoChannel.dll` | 1 826 067 | 4.7 MB |
+| `reuse_moved` | 463 | `…/blocks/00/09801749.blk` | 22 662 068 | 23.8 MB |
 | `added` | 84 | `…/Plugins/libHttpClient.GDK.dll` | 114 357 | 249 KB |
 | `removed` | 11 | `…/blocks/00/00664172.blk` | 1 731 133 | 1.7 MB |
 
-**`moved_mixed` is the expensive one.** The rule's "keep the larger half"
-branch deserves a case, and it has one — but its cheapest candidate is 243 MB
-of compressed bytes and 290 MB of fixture, so it is the last capture admitted
-and by far the largest in the bundle. `gircap` has the mechanism for a capture
-that cannot afford one: `--max-download-bytes` refuses a class it cannot pay for
+**`reuse_moved` is the expensive one.** Its cheapest candidate is 22.7 MB of
+compressed bytes and 23.8 MB of fixture, so it is the last capture admitted
+before the one-sided shapes. `gircap` has the mechanism for a capture that
+cannot afford one: `--max-download-bytes` refuses a class it cannot pay for
 and the matrix records it as `over_budget` with its reason. The reference bundle
 is captured **without** a ceiling, so every class is funded; a capture with a
 ceiling records the truth instead of pretending.
@@ -602,9 +574,9 @@ Each row is `{id, assertion, subject, expected, actual, ok}`.
 | A18 | the bytes rebuilt from `chunks/` are byte-for-byte the bytes `game/` and `expected/` hold |
 | A19 | each two-sided captured file differs between `game/` and `expected/` exactly when its class says it should |
 | A20 | a patchmap's `totals` and `expectations` are the arithmetic of its own `plan` |
-| A21 | the bundle covers both trim outcomes: at least one eager and at least one deferred |
-| A22 | the bundle covers both write directions: at least one ascending and at least one descending |
-| A23 | the bundle covers a file that grows: at least one capture with `growth_bytes > 0` |
+| A21 | the bundle covers both sides of the reuse boundary: at least one capture with nothing reusable and at least one with something |
+| A22 | the bundle covers both sides of the moved boundary: at least one capture whose reused chunks are in place and at least one whose reused chunks moved |
+| A23 | the bundle covers both sides of the size boundary: at least one capture whose file grows and at least one whose file shrinks |
 
 There are **twenty-three** ids: seventeen from this spec (A1–A17), A19 and the
 three coverage assertions (A21–A23) from a capture, and A18 and A20 from
@@ -612,21 +584,28 @@ three coverage assertions (A21–A23) from a capture, and A18 and A20 from
 
 ### A21, A22 and A23 — the coverage the class set exists to buy
 
-The three properties the new classes were built for are otherwise only held
-**by accident**: a bundle that happened to contain a file with a deferred trim
-would say nothing about the eager one, and a reader would have to take the class
-names on trust. The three assertions read the patchmaps' `repair` blocks —
-their `trim`, their `direction` and their `growth_bytes` — and say whether the
-bundle covers both trim outcomes, both write directions and a file that grows.
+The three properties the class set was built for are otherwise only held **by
+accident**: a bundle that happened to contain a file with nothing reusable
+would say nothing about the other side of that boundary, and a reader would
+have to take the class names on trust. The three assertions read the
+patchmaps' own arithmetic — how much of each file is reused, how much of that
+is moved, and whether the file grows or shrinks — and say whether the bundle
+covers both sides of each boundary.
+
+**An absent side counts as zero bytes.** An `added` file grows from nothing and
+a `removed` file shrinks to nothing, so "the bundle covers a file that grows
+and one that shrinks" is a property of the class set rather than of one
+version pair.
 
 **They are fatal in a capture and a finding in a `verify`,** and the difference
-is the point. A capture's contract is "a bundle that covers the repair spec's
-decisions", so a capture that does not cover them fails its own run and names
-the assertion. A bundle's *coverage* is a design property, not an integrity
-one: a narrow bundle (a tight `--max-download-bytes`) or a hand-built one is
-still internally consistent, so `verify` reports the shortfall as a **finding**
-and the bundle still verifies. `verify`'s job is to prove the bundle still says
-what it said — and "this bundle does not cover both trims" is a thing it said.
+is the point. A capture's contract is "a bundle that covers the patch space", so
+a capture that does not cover it fails its own run and names the assertion. A
+bundle's *coverage* is a design property, not an integrity one: a narrow bundle
+(a tight `--max-download-bytes`) or a hand-built one is still internally
+consistent, so `verify` reports the shortfall as a **finding** and the bundle
+still verifies. `verify`'s job is to prove the bundle still says what it said —
+and "this bundle does not cover both sides of the reuse boundary" is a thing it
+said.
 
 **Which ids a `capture` records, and which fail the run.** `capture` records
 **A1–A17 and A19** — A18 and A20 are statements about the bundle rather than
