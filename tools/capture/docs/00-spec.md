@@ -824,6 +824,13 @@ A directory under the root that does not open as a bundle is **not** a record.
 It stays stderr-only: there is no bundle to describe, so a record would have to
 carry the failure instead of the facts.
 
+**The summary still counts the ones that are bundles.** A directory that is not
+a bundle at all — a half-written capture — is stepped over, and a directory
+that *is* a bundle this build refuses (an older schema, which is a permanent
+condition with a known fix) is named on stderr with the reason and counted in
+the summary's `bundles_unreadable`. An operator whose inventory quietly omits a
+bundle has an inventory that is wrong.
+
 ---
 
 ## 8. Consuming the bundle with `girpr`
