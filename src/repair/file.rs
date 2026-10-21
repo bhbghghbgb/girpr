@@ -38,14 +38,19 @@
 //!   the ones the whole-file MD5 still finds wrong after a re-do — so the
 //!   bytes it lands replace bytes that were already bad;
 //! - a downloaded chunk's bytes come from the network, not from the file, so
-//!   they consume no source region and the ordered tier's salvage rule is
-//!   untouched;
+//!   it consumes no source region: the salvage rule is not *weakened*, it
+//!   just loses a candidate when a download fails its digest — the region it
+//!   overwrote may have been another chunk's source, and the next scan
+//!   re-checks every source, so the cost is a download, never a wrong byte;
+//! - the in-place path has **no rollback**, and does not need one: it has no
+//!   resume artefact, and the next attempt's scan finds the chunk wrong and
+//!   rewrites it. The temp mode is the other way round — it resumes by
+//!   length, so a chunk that failed its digest is rolled back to its offset
+//!   (see `rollback_tmp`);
 //! - the temp path is safe by construction: the `_tmp` is promoted only after
-//!   the whole-file MD5 passes, and a chunk that fails its digest is rolled
-//!   back to its offset so the resume stays honest.
-//!
-//! A staged source's MD5 is still checked before it is staged, so that path
-//! keeps the stronger property it always had.
+//!   the whole-file MD5 passes, and the rollback keeps its *resume* honest;
+//! - a staged source's MD5 is still checked before it is staged, so that path
+//!   keeps the stronger property it always had.
 //!
 //! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a
 //! file are strictly sequential.
@@ -1135,13 +1140,16 @@ enum ChunkOutcome {
 /// corrupt bytes and call the file complete. The rollback makes the resume
 /// point honest.
 ///
-/// The truncation is exact because the plan sorts a file's chunks by offset:
-/// the `_tmp` is valid up to the start of the failed chunk and nothing after
-/// it, and the chunks before it were each digest-checked when they were
-/// written.
+/// **What the truncation guarantees.** The `_tmp` is cut back to the failed
+/// chunk's offset, so the chunk itself cannot be taken as "already complete"
+/// and the bytes after it are gone. The bytes *before* it are either
+/// digest-checked (the chunks this attempt wrote) or the prefix a previous
+/// run left — the temp mode resumes by length, with no hash check of its own,
+/// which is the whole reason the rollback has to exist. Either way the
+/// whole-file MD5 gates the promotion.
 ///
-/// A `_tmp` shorter than `offset` is left alone — the rollback truncates, it
-/// never extends.
+/// The truncation never extends: a `_tmp` shorter than the offset is left
+/// alone.
 fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     if len <= offset {
@@ -1271,6 +1279,10 @@ impl Write for ChunkFileSink<'_> {
         // The write ceiling counts this piece: it goes into the install, and
         // the ceiling counts what lands there.
         reserve_write(self.ctx, buf.len() as u64).map_err(std::io::Error::other)?;
+        // The seek is per piece, and it is deliberate: the sink is
+        // position-independent, so the caller cannot get it wrong by having
+        // left the file's cursor somewhere else. A syscall per 32 KB is
+        // nothing next to the decode.
         self.file
             .seek(SeekFrom::Start(self.offset + self.written))?;
         self.file.write_all(buf)?;

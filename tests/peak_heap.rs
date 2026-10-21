@@ -7,9 +7,10 @@
 //! # Why this file exists
 //!
 //! The whole justification for the streaming path is a number: the chunk
-//! path's peak live heap goes from **6.1 MB to 0.2 MB** per active chunk,
+//! path's peak live heap goes from **6.14 MB to 0.03 MB** per active chunk
+//! (measured below on the 2 162 302 B chunk: 6 435 587 B against 33 684 B),
 //! which at `--io-threads 8` is ~64-97 MB of resident chunk buffers down to
-//! ~1.6 MB. Without an instrument that number is a sentence in a document,
+//! ~0.3 MB. Without an instrument that number is a sentence in a document,
 //! and the next change that reintroduces a buffer silently invalidates it.
 //!
 //! So this is the instrument: a counting allocator around the two shapes of

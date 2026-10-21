@@ -99,6 +99,10 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
    has to grow the buffer → compute MD5 of **decompressed** bytes → must equal `checksum`
    (case-insensitive); mismatch → retry whole fetch up to 5× with linear backoff → still
    mismatch → abort (exit 2).
+
+   The reported size is a **hint, not a promise**: it is a raw number out of the API's JSON
+   and nothing has checked it, so it only ever sizes the buffer (clamped). A blob bigger than
+   the hint grows the buffer; a wrong number cannot ask for an impossible allocation.
  4. Protobuf-decode `SophonChunkManifest{chunks: [{file, chunks:[{id,uncompressed_md5,offset,
    compressed_size,uncompressed_size,unknown:int64=6,compressed_md5=7}], is_folder, size, md5}]}`
    (keep opaque field 6; `compressed_md5` is tag 7).
@@ -274,8 +278,14 @@ What replaces the gate is checkable in the code rather than hopeful:
 - the in-place path writes only to the chunks the scan found wrong, and to the ones the
   whole-file MD5 still finds wrong after a re-do — so the bytes it lands replace bytes that
   were already bad;
-- a downloaded chunk's bytes come from the network, not from the file, so they consume no
-  source region and the ordered tier's salvage rule is untouched;
+- a downloaded chunk's bytes come from the network, not from the file, so it consumes no
+  source region: the salvage rule is not *weakened*, it just loses a candidate when a download
+  fails its digest — the region it overwrote may have been another chunk's source, and the
+  next scan re-checks every source, so the cost is a download, never a wrong byte;
+- the in-place path has **no rollback**, and does not need one: it has no resume artefact, and
+  the next attempt's scan finds the chunk wrong and rewrites it. The temp mode is the other
+  way round — it resumes by length, so a chunk that failed its digest is rolled back to its
+  offset;
 - the temp path is safe by construction: the `_tmp` is promoted only after the whole-file
   MD5 passes, and the rollback above keeps its *resume* honest;
 - a staged source's MD5 is still checked before it is staged, so that path keeps the

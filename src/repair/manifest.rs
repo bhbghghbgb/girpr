@@ -7,7 +7,7 @@
 //!    downloaded.
 //!
 //! Manifests are never cached inside `game_dir` (V1-SIMPLIFICATION S1: the
-//! blob is streamed and parsed in memory, and nothing is kept) — see
+//! blob is streamed into memory, parsed, and not kept) — see
 //! [`crate::sophon::fetch_manifest`].
 
 use std::collections::HashMap;

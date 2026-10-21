@@ -173,10 +173,11 @@ the same whole-file MD5, and `config.ini` advances only when every planned file 
 **The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
 decoded as it arrives and the decoded bytes are written into the target as they are
 produced, so the peak per active chunk is one read window plus the decoder's buffer
-(~0.2 MB), not the chunk. The only RAM that scales with the file is the in-place tier's
-staging, and that is what `--max-ram-bytes` bounds. A manifest is streamed too, into a
-buffer the API's `uncompressed_size` sizes exactly; its *decoded* bytes have to be resident
-for `prost` to parse them, which is the one term the decode cannot remove.
+(**33 684 B measured** on the 2 162 302 B chunk — `tests/peak_heap.rs`), not the chunk. The
+only RAM that scales with the file is the in-place tier's staging, and that is what
+`--max-ram-bytes` bounds. A manifest is streamed too, into a buffer the API's
+`uncompressed_size` sizes; its *decoded* bytes have to be resident for `prost` to parse
+them, which is the one term the decode cannot remove.
 
 **What is deliberately not implemented yet,** with the reason:
 

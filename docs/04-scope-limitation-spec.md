@@ -567,7 +567,7 @@ run that never passes the flag.
 | `scoped=1` | any path scope active |
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
-| `write_bytes=<N>` | `--max-write-bytes` active |
+| `write_bytes=<N>` | `--max-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
 | `stopped=<bytes>\|write\|delete` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`, `delete` = a cleanup pass refused by `--max-delete-bytes`. The key says *which* ceiling bound, so the three cannot share a value |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |

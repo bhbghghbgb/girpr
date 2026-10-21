@@ -10,10 +10,10 @@ limits that the split makes possible. It is the worklist; it is **deleted when t
 done**, and its content lives in the documents that own it (section 9, the fold).
 
 **When.** This is a **separate piece of work from the streaming zstd decode**, and it lands
-**after** it. The streaming branch's review note
-(`docs/07-streaming-zst-decode-review.md`, section 3) fixes back the one metric the streaming
-change broke — `SUMMARY write_bytes` — and deliberately leaves the output contract alone. This
-plan starts from that stable base and changes the contract on purpose.
+**after** it. The streaming branch's review fix — the commit "girpr: write_bytes — the reported
+figure is the bytes that passed their gate" — fixes back the one metric the streaming change
+broke, `SUMMARY write_bytes`, and deliberately leaves the output contract alone. This plan starts
+from that stable base and changes the contract on purpose.
 
 **Scope.** `src/report.rs` (the counters and the `SUMMARY` keys), `src/repair/scope/ledger.rs`
 (the runtime ledger), `src/repair/scope/limits.rs` (the ceilings), `src/cli.rs` (the flags), and
@@ -41,6 +41,13 @@ On `main` the number was a **pure function of the input state**: the corrupt chu
 **0**, a transport error contributed **0**, and a retry contributed **0**. On the branch it
 **grows with the number of failures**. The same install, the same API, the same files, a
 different number, because the network was flaky.
+
+**Read the table against the split, not against the `SUMMARY` line.** The review fix that
+precedes this plan has already put the two numbers apart: the **reported** `write_bytes` is back
+to `main`'s number — 176 in both rows, because the corrupt chunk never passed a gate — and the
+**live** counter, the one the `--max-write-bytes` ceiling bounds, is the 224. So the divergence
+the table shows is now *by design* rather than a defect, and what this plan is about is making
+the split explicit, naming it, and reporting both.
 
 That is the general defect this plan fixes, and the streaming branch is where it became
 visible. It is worth being precise about why it was invisible until then: before the streaming
@@ -172,7 +179,7 @@ refusal: the live/settled split is only known at runtime):
 
 `verified` is the house's word for "passed its digest" (`verified local slice`, the
 `uncompressed_md5` gate), and it is what the two flags are named after. The **counters** use the
-shorter names the review note's section 3.3 fixes: the settled figure is `write_bytes` /
+shorter names the review fix settled on: the settled figure is `write_bytes` /
 `download_bytes`, and the live one is `*_spent`. The two documents must not drift apart on the
 words.
 
@@ -208,11 +215,11 @@ unchanged, bit for bit.
 ### M2 · `girpr: write_bytes — the settled figure is what the SUMMARY reports`
 
 **Changes.** `src/repair/file.rs`: the live write counter becomes the meter's live number and
-the validated writes become its settled number (the review note's fix, on the type). The
+the validated writes become its settled number (the review fix, on the type). The
 `write_bytes=` key reads the settled number. **The key's name and its position in the line do
 not change**, and no new key is emitted — the *reported* split is M3.
 
-**Verifies.** The whole suite, the new determinism test from the review note (a clean origin
+**Verifies.** The whole suite, the new determinism test from the review fix (a clean origin
 and a corrupt origin give the same `write_bytes`), and `max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run`
 (the ceiling still does not overshoot).
 
@@ -279,7 +286,7 @@ The fold — section 9.
 - **Whether the `PLAN` line should carry the settled figures.** It cannot: the plan runs before
   the repair. It carries estimates, and that is right.
 - **`ram_bytes`.** A peak is inherently live. There is no meaningful peak to report beside it.
-- **The plan's own measurement.** The numbers in section 1 come from the review note's
+- **The plan's own measurement.** The numbers in section 1 come from the review fix's
   measurement over the synthetic fixture. The bundle gives the real ones, and the artifact
   bridge is the place to take them.
 
