@@ -1,24 +1,26 @@
-* text=auto eol=lf
+# Line endings are left to the checkout: core.autocrlf=true stores LF in the
+# repository and checks text files out as CRLF on Windows.
+* text=auto
 
-*.rs    text eol=lf
-*.toml  text eol=lf
-*.lock  text eol=lf
-*.md    text eol=lf
-*.txt   text eol=lf
-*.yml   text eol=lf
-*.yaml  text eol=lf
-*.json  text eol=lf
-*.csv   text eol=lf
-*.sh    text eol=lf
-*.bash  text eol=lf
-*.ps1   text eol=lf
-*.bat   text eol=lf
-*.cmd   text eol=lf
-*.html  text eol=lf
-*.css   text eol=lf
-*.js    text eol=lf
-*.ts    text eol=lf
-*.py    text eol=lf
+*.rs    text
+*.toml  text
+*.lock  text
+*.md    text
+*.txt   text
+*.yml   text
+*.yaml  text
+*.json  text
+*.csv   text
+*.sh    text
+*.bash  text
+*.ps1   text
+*.bat   text
+*.cmd   text
+*.html  text
+*.css   text
+*.js    text
+*.ts    text
+*.py    text
 
 *.png   binary
 *.jpg   binary
