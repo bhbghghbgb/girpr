@@ -41,6 +41,12 @@ bundle is for, and it is tested where it belongs: on crafted fixtures, in
 `girpr`'s `tests/repair_machinery.rs`. A 192-byte input states a decision
 exactly, and a bundle of real game bytes states it at the price of a download.
 
+**The claim is not specific to one version pair.** It has been checked against
+`hk4e_global` 7.0.0 → 7.1.0 and against 6.7.0 → 7.1.0: two bundles, two
+different sets of files and two different sets of numbers, and the same six
+assertions green on both. A claim that held on one pair alone would be a claim
+about that pair.
+
 | | the bridge does | the bridge does not |
 |---|---|---|
 | network | loopback only | touch the internet, ever |
