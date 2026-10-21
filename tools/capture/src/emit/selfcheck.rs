@@ -120,6 +120,16 @@ impl Assertion {
 /// A reader looking at a failed bundle should not have to open another file to
 /// find out what A11 means, and a one-line table is cheap.
 ///
+/// **This table is the contract, not a label.** It is what every shipped bundle
+/// publishes as the row's `assertion`, next to the row's own `expected` and
+/// `actual` — so a wording that names something the row does not measure makes
+/// the row contradict itself, and a reader of `verify/selfcheck.json` is the one
+/// who has to live with it. It once did: the coverage rows were rewritten to
+/// the patch space and this table was not, so every bundle said the bundle
+/// covered "both trim outcomes" beside a count of reused chunks. The tests
+/// below are what keep it honest: the wording is the specification's wording,
+/// and it never names the repair tool's own vocabulary.
+///
 /// `A19` is **M11's**, added after running the whole thing against the live API:
 /// it is the converse of A14, and without it a capture whose two variant files
 /// came out identical would pass every other assertion while holding no evidence
@@ -141,7 +151,7 @@ pub const WORDING: [(&str, &str); 21] = [
     ),
     (
         "A6",
-        "len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+        "per chunk: len(raw blob) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
     ),
     ("A7", "assemble(materialize_old) has md5 == old entry.md5"),
     ("A8", "assemble(materialize_new) has md5 == new entry.md5"),
@@ -184,15 +194,15 @@ pub const WORDING: [(&str, &str); 21] = [
     ),
     (
         "A21",
-        "the bundle covers both trim outcomes: at least one eager and at least one deferred",
+        "the bundle covers both sides of the reuse boundary: at least one capture with nothing reusable and at least one with something",
     ),
     (
         "A22",
-        "the bundle covers both write directions: at least one ascending and at least one descending",
+        "the bundle covers both sides of the moved boundary: at least one capture whose reused chunks are in place and at least one whose reused chunks moved",
     ),
     (
         "A23",
-        "the bundle covers a file that grows: at least one capture with growth_bytes > 0",
+        "the bundle covers both sides of the size boundary: at least one capture whose file grows and at least one whose file shrinks",
     ),
 ];
 
@@ -1008,6 +1018,90 @@ mod tests {
         // `verify`-only ones.
         assert!(!WORDING.iter().any(|(id, _)| *id == "A18"));
         assert!(!WORDING.iter().any(|(id, _)| *id == "A20"));
+    }
+
+    /// **The published wording is the specification's wording.**
+    ///
+    /// `docs/00-spec.md` §6 is the specification of the rows a bundle
+    /// publishes, and its table is what a reader reads before the bundle. The
+    /// wording table here is what the bundle actually carries — the row's
+    /// `assertion` field, next to the row's own `expected` and `actual` — so
+    /// the two are the same sentence and must not be able to drift.
+    ///
+    /// They drifted once: the coverage rows were rewritten to the patch space,
+    /// and the wording table was not, so every bundle published a claim about
+    /// the repair tool's own decisions ("both trim outcomes") beside a count of
+    /// reused chunks.
+    #[test]
+    fn the_published_wording_is_the_specifications_wording() {
+        let spec = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/00-spec.md"),
+        )
+        .expect("the spec is beside the crate");
+
+        for (id, published) in WORDING {
+            let cell = spec_row(&spec, id).unwrap_or_else(|| {
+                panic!("{id}: the specification has no row for it, so it cannot be published")
+            });
+            assert_eq!(
+                as_published(cell),
+                *published,
+                "{id}: the published wording and the specification's table row have drifted"
+            );
+        }
+    }
+
+    /// **The coverage rows are about the patch space, not the repair spec.**
+    ///
+    /// The retired classes — the trim's two outcomes, the write order's two
+    /// directions, the growth counter — are the repair tool's own vocabulary.
+    /// They were in the wording table, and a bundle that publishes them is
+    /// telling a reader about decisions that are not the bundle's to make.
+    #[test]
+    fn the_coverage_rows_are_about_the_patch_space_and_not_the_repair_spec() {
+        for (id, forbidden) in [
+            ("A21", &["trim", "eager", "deferred"][..]),
+            ("A22", &["direction", "ascending", "descending"][..]),
+            ("A23", &["growth_bytes"][..]),
+        ] {
+            let w = wording(id).to_lowercase();
+            for word in forbidden {
+                assert!(
+                    !w.contains(word),
+                    "{id} still names the repair spec's own vocabulary: {word}"
+                );
+            }
+        }
+    }
+
+    /// The specification's table row for an id, as the specification writes it.
+    ///
+    /// The row is `| <id> | <text> |`, and the text may contain an escaped
+    /// pipe (`\|`), which is why the split is on the first ` | ` and not on
+    /// every pipe.
+    fn spec_row<'a>(spec: &'a str, id: &str) -> Option<&'a str> {
+        spec.lines().find_map(|l| {
+            let rest = l.strip_prefix("| ")?;
+            let (row_id, text) = rest.split_once(" | ")?;
+            (row_id.trim() == id).then(|| text.trim().trim_end_matches('|').trim())
+        })
+    }
+
+    /// The specification's spelling, as the table spells it.
+    ///
+    /// The two are the same sentence and the differences are spelling: the
+    /// specification puts code in backticks, escapes a pipe inside a table
+    /// cell, and uses `∪`, `⊆` and `Σ` where the table spells them out. The
+    /// mappings below are the whole list, and each one is a spelling and
+    /// nothing else — a new one means the specification and the table have to
+    /// be reconciled by hand, which is exactly the point.
+    fn as_published(spec_cell: &str) -> String {
+        spec_cell
+            .replace('`', "")
+            .replace("\\|", "|")
+            .replace('∪', "union")
+            .replace("⊆ ", "a subset of ")
+            .replace("Σ uncompressed_size", "sum(uncompressed_size)")
     }
 
     /// **The negative case**, and the reason the three assertions exist: a
