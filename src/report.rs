@@ -297,6 +297,14 @@ pub struct Summary {
     /// Bytes that were already correct where they belonged and were **not**
     /// written. The disk claim of the run, in one number: the bytes the
     /// repair did not have to touch.
+    ///
+    /// It is the complement of the **settled** writes — the bytes that landed
+    /// in the install from a source that passed its gate — and the settled
+    /// writes are the *file's*, accumulated across its attempts: a chunk an
+    /// abandoned attempt wrote is in the install, so the next attempt finds it
+    /// correct and does not write it again. It was the last attempt's figure
+    /// that made this counter over-report, and a run that had to retry claimed
+    /// it had touched fewer bytes than it had.
     pub kept_bytes: AtomicU64,
 }
 
@@ -427,6 +435,9 @@ pub struct SummaryFlags {
     /// Files repaired through `{path}_tmp`.
     pub files_temp: Option<u64>,
     /// Bytes that were already correct and were not rewritten.
+    ///
+    /// The complement of the **settled** writes: see
+    /// [`Summary::kept_bytes`].
     pub kept_bytes: Option<u64>,
     /// The peak staged payload — the most RAM that was staged at once.
     /// Emitted only when `--max-ram-bytes` was passed.

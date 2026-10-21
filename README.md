@@ -137,7 +137,9 @@ flowchart TD
   emitted only when `--repair-mode` was passed; `ram_bytes=` (the peak staged
   payload) only when `--max-ram-bytes` was; `damaged_chunks=` only when
   `--scan` was. `kept_bytes` is the disk claim in one number: the bytes that
-  were already correct and did not have to be written.
+  were already correct and did not have to be written — the complement of the
+  **settled** writes, which are the file's, accumulated across its attempts
+  (a chunk an abandoned attempt wrote is in the install, so it was not kept).
 - **The binary cannot report which chunks were requested.** `SUMMARY` is
   byte-level by design. Per-chunk request detail exists only as `trace` lines in
   `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never

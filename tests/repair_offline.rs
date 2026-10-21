@@ -2187,6 +2187,63 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     mock.stop();
 }
 
+/// `kept_bytes` is the complement of the file's **settled** writes — the bytes
+/// the repair did not have to touch — and the settled writes are the *file's*,
+/// accumulated across its attempts.
+///
+/// The bug this pins: `kept_bytes` was the file's size minus the **last
+/// attempt's** writes. An attempt that wrote a chunk and then failed on the
+/// next one left those bytes in the install, and the next attempt — which
+/// re-verifies the file, finds that chunk correct and does not write it again
+/// — was credited with them as "kept". The run then claimed it had touched
+/// fewer bytes than it had.
+#[tokio::test]
+async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
+    // The fixture: `foo.dat` is two 64-byte chunks, and the mock serves the
+    // second one corrupt on its first request. The first attempt writes the
+    // first chunk — which passes its gate — and then fails on the second; the
+    // second attempt finds the first chunk correct, writes the second, and
+    // the file verifies.
+    async fn run(opts: MockOpts, tag: &str) -> u64 {
+        let fx = build_fixture();
+        let mock = MockServer::start(fx, opts).await;
+        let dir = temp_dir(tag);
+        let fx2 = build_fixture();
+        write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+        ctx.repair_mode = RepairMode::Inplace;
+        // The key is emitted only when the flag was passed.
+        ctx.repair_mode_explicit = true;
+        ctx.path_scope = scope(&["game/foo.dat"], &[]);
+        let (summary, code) = repair::run(ctx).await.expect("run");
+        assert_eq!(code, 0, "the file was repaired on the second attempt");
+        assert_eq!(
+            read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+            fx2.files[0].data,
+            "the file is correct"
+        );
+        mock.stop();
+        summary.kept_bytes.load(Ordering::Relaxed)
+    }
+
+    let clean = run(MockOpts::default(), "kept_clean").await;
+    let retried = run(
+        MockOpts {
+            corrupt_chunks: vec!["chunk_foo1".to_string()],
+            ..Default::default()
+        },
+        "kept_retry",
+    )
+    .await;
+
+    assert_eq!(clean, 0, "nothing was kept: the whole file was written");
+    assert_eq!(
+        retried, clean,
+        "a retry must not look like a file that was left alone: the first \
+         attempt's chunk is in the install, so it was not kept"
+    );
+}
+
 #[tokio::test]
 async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the
