@@ -439,9 +439,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // rather than leaving it to be discovered.
     if summary.download_stopped() {
         tracing::error!(
-            "stopped after {} downloaded bytes: --max-download-bytes is a hard stop; \
+            "stopped after {} downloaded bytes (the live figure, the one the \
+             ceiling bounds): --max-download-bytes is a hard stop; \
              *_tmp files left in place are resumed by the next run",
-            summary.download_bytes.load(Ordering::Relaxed)
+            summary.download.live()
         );
         summary.flags.stopped = Some("bytes");
         return Ok((summary, 5));

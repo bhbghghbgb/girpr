@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
+use crate::repair::scope::ledger::Meter;
 
 /// How often the background reporter emits `PROGRESS` during long phases.
 pub const PROGRESS_INTERVAL_SECS: u64 = 10;
@@ -240,7 +241,18 @@ pub struct Summary {
     pub files_skipped: AtomicU64,
     pub files_repaired: AtomicU64,
     pub files_failed: AtomicU64,
-    pub download_bytes: AtomicU64,
+    /// The network meter: the bytes that crossed the wire (**live**) and the
+    /// bytes of the files that were actually repaired (**settled**).
+    ///
+    /// The reported `download_bytes` is the **settled** figure: it is a
+    /// function of the install, not of the transport, because an attempt that
+    /// failed and was retried settles nothing. The `--max-download-bytes`
+    /// ceiling bounds the **live** figure, which is the traffic the run
+    /// actually caused — the bytes are spent whether they turn out to be good
+    /// or not.
+    ///
+    /// See [`Meter`] for the rule that tells the two apart.
+    pub download: Meter,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
     /// deprecated files) lands here. No split accounting.
@@ -248,12 +260,6 @@ pub struct Summary {
     /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
     /// start; plain values, so no atomics are needed.
     pub flags: SummaryFlags,
-    /// `--max-download-bytes`, stored as a raw ceiling (`u64::MAX` = none) so
-    /// the per-chunk reservation is a compare-and-swap with no `Option` check
-    /// on the hot path. Owned by
-    /// [`crate::repair::scope::ledger`](crate::repair::scope) — see
-    /// [`Summary::set_download_limit`].
-    pub download_limit: AtomicU64,
     /// Set when the runtime download hard stop fired. An aborted run leaves
     /// the work it had done in place: the temp path's `_tmp` is resumed by
     /// length, and the in-place path's chunks that are already correct stay
@@ -325,10 +331,9 @@ impl Summary {
             files_skipped: AtomicU64::new(0),
             files_repaired: AtomicU64::new(0),
             files_failed: AtomicU64::new(0),
-            download_bytes: AtomicU64::new(0),
+            download: Meter::new(),
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
-            download_limit: AtomicU64::new(u64::MAX),
             download_stopped: AtomicBool::new(false),
             write_limit: AtomicU64::new(u64::MAX),
             write_bytes: AtomicU64::new(0),
@@ -352,13 +357,12 @@ impl Summary {
             files_skipped: AtomicU64::new(self.files_skipped.load(Ordering::Relaxed)),
             files_repaired: AtomicU64::new(self.files_repaired.load(Ordering::Relaxed)),
             files_failed: AtomicU64::new(self.files_failed.load(Ordering::Relaxed)),
-            download_bytes: AtomicU64::new(self.download_bytes.load(Ordering::Relaxed)),
+            download: self.download.snapshot(),
             deleted_extra_bytes: AtomicU64::new(self.deleted_extra_bytes.load(Ordering::Relaxed)),
             flags: self.flags,
             // A snapshot must not lose the ceiling or the stop flag: the caller
             // reads both *after* the tasks have been joined, which is the only
             // moment either can be meaningful.
-            download_limit: AtomicU64::new(self.download_limit.load(Ordering::Relaxed)),
             download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
             write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
             write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
@@ -541,7 +545,7 @@ pub fn progress_record(sum: &Summary) -> Record {
     let repaired = sum.files_repaired.load(Ordering::Relaxed);
     let failed = sum.files_failed.load(Ordering::Relaxed);
     let done = skipped + repaired + failed;
-    let dl = sum.download_bytes.load(Ordering::Relaxed);
+    let dl = sum.download.settled();
     Record::keyed("PROGRESS")
         .put("done", done)
         .put("total", sum.files_total)
@@ -621,7 +625,7 @@ pub fn summary_record(sum: &Summary, exit: i32) -> Record {
     let skipped = sum.files_skipped.load(Ordering::Relaxed);
     let repaired = sum.files_repaired.load(Ordering::Relaxed);
     let failed = sum.files_failed.load(Ordering::Relaxed);
-    let dl = sum.download_bytes.load(Ordering::Relaxed);
+    let dl = sum.download.settled();
     let del = sum.deleted_extra_bytes.load(Ordering::Relaxed);
     let base = Record::keyed("SUMMARY")
         .put("total", sum.files_total)
@@ -675,9 +679,9 @@ mod tests {
             files_skipped: AtomicU64::new(3),
             files_repaired: AtomicU64::new(2),
             files_failed: AtomicU64::new(1),
-            download_bytes: AtomicU64::new(123),
             ..Summary::default()
         };
+        s.download.settle(123);
         let rec = progress_record(&s);
         assert_eq!(
             rec.text(),
@@ -699,11 +703,11 @@ mod tests {
             files_skipped: AtomicU64::new(1),
             files_repaired: AtomicU64::new(2),
             files_failed: AtomicU64::new(1),
-            download_bytes: AtomicU64::new(10),
             deleted_extra_bytes: AtomicU64::new(20),
             flags: SummaryFlags::default(),
             ..Summary::default()
         };
+        s.download.settle(10);
         let rec = summary_record(&s, 3);
         assert_eq!(
             rec.text(),
@@ -853,13 +857,13 @@ mod tests {
         let s = Summary {
             files_total: 7,
             files_skipped: AtomicU64::new(1),
-            download_bytes: AtomicU64::new(9),
             ..Summary::default()
         };
+        s.download.settle(9);
         let snap = s.snapshot();
         assert_eq!(snap.files_total, 7);
         assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
-        assert_eq!(snap.download_bytes.load(Ordering::Relaxed), 9);
+        assert_eq!(snap.download.settled(), 9);
         assert_eq!(snap.flags, SummaryFlags::default());
         // Mutating the source afterwards must not touch the snapshot.
         s.files_skipped.store(5, Ordering::Relaxed);

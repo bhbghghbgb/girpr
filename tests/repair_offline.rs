@@ -90,7 +90,7 @@ fn load_counters(s: &girpr::Summary) -> (u64, u64, u64, u64, u64) {
         s.files_skipped.load(Ordering::Relaxed),
         s.files_repaired.load(Ordering::Relaxed),
         s.files_failed.load(Ordering::Relaxed),
-        s.download_bytes.load(Ordering::Relaxed),
+        s.download.settled(),
         s.deleted_extra_bytes.load(Ordering::Relaxed),
     )
 }
@@ -1632,7 +1632,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     ctx.limits.download_bytes = Some(est);
     let (summary, code) = repair::run(ctx).await.expect("the boundary passes");
     assert_eq!(code, 0);
-    assert_eq!(summary.download_bytes.load(Ordering::Relaxed), est);
+    assert_eq!(summary.download.settled(), est);
     let line = girpr::report::summary_record(&summary, code).text();
     assert!(
         line.contains(&format!("plan_download_bytes={est}")),
@@ -1693,7 +1693,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
         "bar was intact"
     );
     assert!(
-        summary.download_bytes.load(Ordering::Relaxed) <= limit,
+        summary.download.settled() <= limit,
         "the ceiling must not be overshot"
     );
     // The stopped file keeps its `_tmp`, and the next run resumes it.
@@ -1984,8 +1984,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     // exists. Here every byte written came from a download, so write_bytes is
     // simply the *uncompressed* size, which is strictly larger.
     assert!(
-        summary.write_bytes.load(Ordering::Relaxed)
-            > summary.download_bytes.load(Ordering::Relaxed),
+        summary.write_bytes.load(Ordering::Relaxed) > summary.download.settled(),
         "write_bytes counts uncompressed payload, download_bytes the compressed blob"
     );
 
@@ -2052,7 +2051,7 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     // total — and with no ceiling set the sentinel is u64::MAX, so the leak is
     // not gated on `--max-download-bytes`.
     assert_eq!(
-        summary.download_bytes.load(Ordering::Relaxed),
+        summary.download.settled(),
         0,
         "a fetch that delivered nothing must count nothing"
     );
@@ -2464,12 +2463,21 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     );
     // bar.dat sorts first and its single chunk is the corrupt one, so attempt 1
     // really transfers a byte and then fails the chunk MD5. The total is still
-    // every chunk in the plan and nothing more: the abandoned attempt's byte is
-    // given back.
+    // every chunk in the plan and nothing more: the abandoned attempt settles
+    // nothing, because its bytes are not part of the install.
     assert_eq!(
-        summary.download_bytes.load(Ordering::Relaxed),
+        summary.download.settled(),
         est,
         "a failed attempt's bytes must not survive into the total"
+    );
+    // The **live** figure is the other one, and it is larger: the abandoned
+    // attempt's bytes crossed the wire and were spent, whatever became of them.
+    // That is the difference between the two numbers — the waste.
+    assert!(
+        summary.download.live() > summary.download.settled(),
+        "the spent figure carries the abandoned attempt: {} > {}",
+        summary.download.live(),
+        summary.download.settled()
     );
     assert_eq!(
         summary.files_repaired.load(Ordering::Relaxed),
@@ -2719,9 +2727,9 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     assert!(line.contains("local_manifest=ok"), "{line}");
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
     assert!(
-        summary.download_bytes.load(Ordering::Relaxed) < est,
+        summary.download.settled() < est,
         "a run with a loaded local manifest reuses something: {} vs {est}",
-        summary.download_bytes.load(Ordering::Relaxed)
+        summary.download.settled()
     );
     mock.stop();
 
@@ -2766,9 +2774,9 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         "the estimate is only reported when the ceiling asked for it"
     );
     assert!(
-        summary.download_bytes.load(Ordering::Relaxed) < est,
+        summary.download.settled() < est,
         "the degraded run still fetched less than the whole plan: {} vs {est}",
-        summary.download_bytes.load(Ordering::Relaxed)
+        summary.download.settled()
     );
     mock.stop();
 }

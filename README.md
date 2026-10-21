@@ -159,10 +159,11 @@ flowchart TD
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
-  repaired**. An attempt that fails and is retried hands its
-  bytes back, so a run that had to retry does not report what the network cost
-  the retries. The counter is nevertheless live during the repair, which is what
-  `--max-download-bytes` needs to stop mid-flight.
+  repaired**. An attempt that fails and is retried settles nothing, so a run
+  that had to retry does not report what the network cost the retries. The
+  counter is nevertheless live during the repair, which is what
+  `--max-download-bytes` needs to stop mid-flight — and the live figure is the
+  traffic the run caused, the abandoned attempts' bytes included.
 - chunk reuse is **best-effort and the degradation is reported**:
   `SUMMARY local_manifest=unavailable` means `getBuild(local)` could not be
   served, so the reuse map was empty and *every* chunk downloaded. The run is

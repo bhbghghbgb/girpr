@@ -277,9 +277,11 @@ the same quantity by construction.
 The reservation is a compare-and-swap taken **before** each fetch, not a
 check-then-add: under `--io-threads N` a check overshoots by up to N−1 chunks,
 and a ceiling is not a guideline. The counter is incremented with the real
-`blob.len()` and the reservation handed back on any abandoned attempt, so
-`SUMMARY download_bytes` is exact by construction rather than by assumption, and
-a failed-and-retried attempt does not inflate the total.
+`blob.len()`, and the reservation is handed back when the fetch delivered
+nothing at all. `SUMMARY download_bytes` counts the bytes of the files that
+were actually **promoted**, so a failed-and-retried attempt does not inflate
+the reported total; the bytes that attempt did fetch are still counted against
+the ceiling, because they crossed the wire.
 
 ### B3 · `--max-write-bytes <N>` — **P1** — runtime hard stop
 

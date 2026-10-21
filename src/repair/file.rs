@@ -196,9 +196,13 @@ pub async fn repair_all(
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(Repaired::Repaired(stats)) => {
-                        // `download_bytes` is already live: it is incremented
-                        // per chunk inside `write_downloaded_chunk`, because the
-                        // runtime hard stop has to read it mid-flight.
+                        // The file is repaired, so its downloaded bytes are the
+                        // **settled** ones — the bytes of the files that were
+                        // actually repaired. The live figure already carries
+                        // them, and it carries the abandoned attempts' bytes
+                        // too: those crossed the wire, and a budget is about
+                        // the traffic, not about the install.
+                        ctx.summary.settle_download_bytes(stats.download_bytes);
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
                         // Which path wrote it. The disk claim of the run is
                         // "how many files were written where they lie", and
@@ -484,15 +488,12 @@ async fn attempt_inplace(
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
-    let outcome = attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats).await;
-    if outcome.is_err() {
-        // The same rule the temp path follows: an abandoned attempt gives its
-        // downloaded bytes back, so `SUMMARY download_bytes` means "the bytes
-        // of files that were actually repaired".
-        ctx.summary
-            .adjust_download_bytes(-(stats.download_bytes as i64));
-    }
-    outcome
+    // An abandoned attempt settles nothing: the bytes it fetched were spent
+    // (the live figure has them) but they are not part of the install, so the
+    // reported `download_bytes` — "the bytes of the files that were actually
+    // repaired" — does not count them. The settle happens where the file is
+    // promoted, in `repair_all`.
+    attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats).await
 }
 
 /// The body of the in-place repair — see [`attempt_inplace`].
@@ -1053,19 +1054,12 @@ async fn repair_attempt(
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
-    let outcome = repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await;
-    if outcome.is_err() {
-        // This attempt is being abandoned, so the bytes it fetched are given
-        // back. That is what keeps `SUMMARY download_bytes` meaning
-        // **the bytes of files that were actually promoted** — rather than
-        // "bytes that crossed the wire at some point, including on the four
-        // attempts that failed". The ceiling still saw them while they
-        // were in flight, which is the whole reason the counter is live; this
-        // only decides what a *finished* run reports.
-        ctx.summary
-            .adjust_download_bytes(-(stats.download_bytes as i64));
-    }
-    outcome
+    // An abandoned attempt settles nothing — the same rule the in-place path
+    // follows. Its bytes were spent (the live figure has them) but they are
+    // not part of the install, so the reported `download_bytes` — "the bytes
+    // of the files that were actually repaired" — does not count them. The
+    // settle happens where the file is promoted, in `repair_all`.
+    repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await
 }
 
 /// One full pass over a file's chunks, then verify + promote. The caller
@@ -1335,7 +1329,7 @@ async fn write_downloaded_chunk(
         ctx.summary.stop_downloads();
         tracing::warn!(
             limit = ?ctx.summary.max_download_bytes(),
-            have = ctx.summary.download_bytes.load(Ordering::Relaxed),
+            have = ctx.summary.download.live(),
             "download-bytes ceiling reached -> stopping the run"
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
