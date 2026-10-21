@@ -15,7 +15,12 @@
 //! same wrapper (`retcode`/`message`/`data`), same node names, manifest
 //! sizes as int-or-string, chunk/manifest URL prefix + id joining.
 
-use std::collections::{HashMap, HashSet};
+// The module is shared by several test binaries and each of them uses a
+// different part of it, so most of it is dead code in any one of them. The
+// same allowance `tempdir.rs` carries, for the same reason.
+#![allow(dead_code)]
+
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -65,6 +70,13 @@ pub struct GameFixture {
     /// The old file's bytes — the thing the repair has to move — for the
     /// fixtures that have one.
     pub old_data: Option<(String, Vec<u8>)>,
+    /// Every file that is **on disk**, by path.
+    ///
+    /// The old side's bytes are here rather than derived from the sides on
+    /// purpose: the shapes the repair has to survive include a file that is
+    /// longer on disk than its manifest describes (the dead tail the trim
+    /// releases) and one that is shorter (the growth the repair writes).
+    pub disk: BTreeMap<String, Vec<u8>>,
 }
 
 /// A second manifest: the old file's chunk layout.
@@ -88,79 +100,208 @@ fn zstd_bytes(data: &[u8]) -> Vec<u8> {
     zstd::stream::encode_all(std::io::Cursor::new(data), 3).expect("zstd encode fixture")
 }
 
-pub fn build_fixture() -> GameFixture {
-    let latest_tag = LATEST_TAG.to_string();
-    let manifest_id = "manifest_test_game_001".to_string();
+// ---------------------------------------------------------------------------
+// the fixture description
+// ---------------------------------------------------------------------------
+//
+// A fixture is **described**, not built: the old side, the new side and the
+// bytes on disk are three lists, and a shape is a shape rather than a builder
+// of its own. That is what lets one mock serve a uniform shift, a mixed
+// shift, a shrinking file and a file with a hole in its coverage — the four
+// shapes the repair's own branches turn on — without four builders that
+// each know a shape the others do not.
 
-    // Fixed payloads (distinct bytes per chunk so corruption is detectable).
-    let foo_c0 = vec![0x41u8; 64]; // 'A' x64
-    let foo_c1 = vec![0x42u8; 64]; // 'B' x64
-    let bar_c0 = vec![0x43u8; 48]; // 'C' x48
+/// One chunk of a file: its bytes, where they land, and the id the mock
+/// serves it under.
+///
+/// The id is part of the description because the mock's chunk store is keyed
+/// by it and the repair's request log reports it: a test asserts against the
+/// ids it named here.
+#[derive(Clone, Debug)]
+pub struct ChunkSpec {
+    /// The id the store serves this chunk under.
+    pub id: String,
+    /// The chunk's bytes.
+    pub payload: Vec<u8>,
+    /// Where the chunk lands in the file.
+    pub offset: i64,
+}
 
-    let mut foo_data = Vec::new();
-    foo_data.extend_from_slice(&foo_c0);
-    foo_data.extend_from_slice(&foo_c1);
-
-    let files = vec![
-        FixtureFile {
-            rel: "game/foo.dat".to_string(),
-            data: foo_data,
-            md5: String::new(),
-            chunks: vec![
-                FixtureChunk {
-                    id: "chunk_foo0".to_string(),
-                    data: foo_c0,
-                    offset: 0,
-                },
-                FixtureChunk {
-                    id: "chunk_foo1".to_string(),
-                    data: foo_c1,
-                    offset: 64,
-                },
-            ],
-        },
-        FixtureFile {
-            rel: "game/bar.dat".to_string(),
-            data: bar_c0.clone(),
-            md5: String::new(),
-            chunks: vec![FixtureChunk {
-                id: "chunk_bar0".to_string(),
-                data: bar_c0,
-                offset: 0,
-            }],
-        },
-    ];
-
-    // Fill file md5s (can't do inline above because data moves).
-    let mut files = files;
-    for f in &mut files {
-        let mut cat = Vec::new();
-        for c in &f.chunks {
-            cat.extend_from_slice(&c.data);
+impl ChunkSpec {
+    /// A chunk with the given id, bytes and offset.
+    pub fn new(id: &str, payload: Vec<u8>, offset: i64) -> Self {
+        Self {
+            id: id.to_string(),
+            payload,
+            offset,
         }
-        f.data = cat;
-        f.md5 = md5hex(&f.data);
+    }
+}
+
+/// One file: a path and the chunks it is made of.
+#[derive(Clone, Debug)]
+pub struct FileSpec {
+    /// The path, relative to `--game-path`, `/`-separated.
+    pub rel: String,
+    /// The chunks, in manifest order.
+    pub chunks: Vec<ChunkSpec>,
+}
+
+impl FileSpec {
+    /// A file with the given path and chunks.
+    pub fn new(rel: &str, chunks: Vec<ChunkSpec>) -> Self {
+        Self {
+            rel: rel.to_string(),
+            chunks,
+        }
+    }
+}
+
+/// The ways a fixture's manifest can lie about itself.
+///
+/// A manifest is a claim about bytes the tool has not seen yet, so every
+/// field in it is a hint. These are the ways a hint can be wrong, and each
+/// one has a branch in the repair that has to survive it.
+#[derive(Clone, Debug, Default)]
+pub struct Lies {
+    /// Chunk ids whose declared `uncompressed_md5` no payload can match: the
+    /// digest gate has to refuse the bytes it is given.
+    pub wrong_chunk_md5: Vec<String>,
+    /// Chunk ids whose declared `compressed_size` is not the blob's length:
+    /// the size is a hint, and the real length is what crosses the wire.
+    pub wrong_chunk_size: Vec<String>,
+    /// Chunk ids the store serves as a body that is **not a zstd frame**: the
+    /// decode has to fail on it rather than land garbage in the install.
+    pub not_zstd: Vec<String>,
+}
+
+/// A whole fixture: the new side, the old side, and what is on disk.
+#[derive(Clone, Debug, Default)]
+pub struct FixtureSpec {
+    /// The files the **latest** manifest describes — the repair's target.
+    pub new: Vec<FileSpec>,
+    /// The files the **local** build's manifest describes — the reuse map's
+    /// sources. `None` = the server does not serve the local tag at all,
+    /// which is what "no chunk reuse" looks like.
+    pub old: Option<Vec<FileSpec>>,
+    /// The bytes on disk, by path. A path that is not listed does not exist.
+    pub disk: BTreeMap<String, Vec<u8>>,
+    /// The ways the manifest lies.
+    pub lies: Lies,
+}
+
+impl FixtureSpec {
+    /// A fixture with the given new-side files and nothing else: no local
+    /// manifest, and nothing on disk.
+    pub fn new(files: Vec<FileSpec>) -> Self {
+        Self {
+            new: files,
+            ..Default::default()
+        }
     }
 
-    // Protobuf manifest + zstd + checksum (decompressed-bytes MD5, like prod).
+    /// The same fixture, with a local build's manifest — the reuse map's
+    /// sources.
+    pub fn with_old(mut self, files: Vec<FileSpec>) -> Self {
+        self.old = Some(files);
+        self
+    }
+
+    /// The same fixture, with a file on disk.
+    pub fn with_disk(mut self, rel: &str, bytes: Vec<u8>) -> Self {
+        self.disk.insert(rel.to_string(), bytes);
+        self
+    }
+
+    /// The same fixture, with the manifest lying in the given ways.
+    pub fn with_lies(mut self, lies: Lies) -> Self {
+        self.lies = lies;
+        self
+    }
+}
+
+/// The bytes of a file laid out at its chunks' offsets.
+///
+/// A gap between two chunks is **zero bytes**, not nothing: the file on disk
+/// is a byte range, and the hole is a part of it.
+pub fn lay_out(chunks: &[ChunkSpec]) -> Vec<u8> {
+    let end = chunks
+        .iter()
+        .map(|c| c.offset.max(0) as usize + c.payload.len())
+        .max()
+        .unwrap_or(0);
+    let mut out = vec![0u8; end];
+    for c in chunks {
+        let at = c.offset.max(0) as usize;
+        out[at..at + c.payload.len()].copy_from_slice(&c.payload);
+    }
+    out
+}
+
+/// Build the mock's fixture from a description.
+///
+/// The two sides are two lists of files and the bytes on disk are a third, so
+/// every shape the repair has a branch for is a description rather than a
+/// builder.
+pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
     let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
     let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut files: Vec<FixtureFile> = Vec::new();
+
+    // The new side, as the mock's own view of it.
+    for f in &spec.new {
+        let data = lay_out(&f.chunks);
+        files.push(FixtureFile {
+            rel: f.rel.clone(),
+            md5: md5hex(&data),
+            data,
+            chunks: f
+                .chunks
+                .iter()
+                .map(|c| FixtureChunk {
+                    id: c.id.clone(),
+                    data: c.payload.clone(),
+                    offset: c.offset,
+                })
+                .collect(),
+        });
+    }
+
+    // The manifest, and the store it points at.
     let mut pb_files: Vec<SophonChunkFile> = Vec::new();
     for f in &files {
         let mut pb_chunks: Vec<SophonChunk> = Vec::new();
         for c in &f.chunks {
             let compressed = zstd_bytes(&c.data);
-            chunk_store.insert(c.id.clone(), compressed.clone());
+            // A chunk the store serves as something that is not a zstd frame
+            // is served **raw**: the decode is what has to fail, and a
+            // well-formed frame with wrong bytes would fail somewhere else.
+            let served = if spec.lies.not_zstd.contains(&c.id) {
+                c.data.clone()
+            } else {
+                compressed.clone()
+            };
+            chunk_store.insert(c.id.clone(), served);
             // Same length, one byte different: decodes, fails its MD5.
             let mut bad = c.data.clone();
-            let last = bad.len() - 1;
-            bad[last] ^= 0xFF;
+            if let Some(last) = bad.len().checked_sub(1) {
+                bad[last] ^= 0xFF;
+            }
             corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
             pb_chunks.push(SophonChunk {
                 id: c.id.clone(),
-                uncompressed_md5: md5hex(&c.data),
+                uncompressed_md5: if spec.lies.wrong_chunk_md5.contains(&c.id) {
+                    // A digest no payload can have: the chunk must be refused.
+                    "00000000000000000000000000000000".to_string()
+                } else {
+                    md5hex(&c.data)
+                },
                 offset: c.offset,
-                compressed_size: compressed.len() as i64,
+                compressed_size: if spec.lies.wrong_chunk_size.contains(&c.id) {
+                    compressed.len() as i64 + 7
+                } else {
+                    compressed.len() as i64
+                },
                 uncompressed_size: c.data.len() as i64,
                 unknown: 0,
                 compressed_md5: md5hex(&compressed),
@@ -174,23 +315,85 @@ pub fn build_fixture() -> GameFixture {
             md5: f.md5.clone(),
         });
     }
-    let manifest = SophonChunkManifest { chuncks: pb_files };
-    let mut raw = Vec::new();
-    manifest.encode(&mut raw).expect("prost encode fixture");
-    let manifest_checksum = md5hex(&raw);
-    let manifest_zstd = zstd_bytes(&raw);
+    let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
+
+    // The local build's manifest: the old side's chunk layout, and nothing
+    // else. Its chunks are never fetched — the local manifest only ever feeds
+    // the reuse map.
+    let local_manifest = spec.old.as_ref().map(|old| {
+        let mut old_pb: Vec<SophonChunkFile> = Vec::new();
+        for f in old {
+            let data = lay_out(&f.chunks);
+            let mut pb_chunks: Vec<SophonChunk> = Vec::new();
+            for c in &f.chunks {
+                let compressed = zstd_bytes(&c.payload);
+                pb_chunks.push(SophonChunk {
+                    id: c.id.clone(),
+                    uncompressed_md5: md5hex(&c.payload),
+                    offset: c.offset,
+                    compressed_size: compressed.len() as i64,
+                    uncompressed_size: c.payload.len() as i64,
+                    unknown: 0,
+                    compressed_md5: md5hex(&compressed),
+                });
+            }
+            old_pb.push(SophonChunkFile {
+                file: f.rel.clone(),
+                chunks: pb_chunks,
+                is_folder: false,
+                size: data.len() as i64,
+                md5: md5hex(&data),
+            });
+        }
+        let (zstd, checksum) = encode_manifest(&old_pb);
+        FixtureManifest {
+            id: "manifest_test_local_001".to_string(),
+            zstd,
+            checksum,
+        }
+    });
+
+    // The old file's bytes: the first file on disk. Kept as its own field
+    // because that is the shape the moved fixture has always had.
+    let old_data = spec
+        .disk
+        .iter()
+        .next()
+        .map(|(rel, bytes)| (rel.clone(), bytes.clone()));
 
     GameFixture {
-        latest_tag,
-        manifest_id,
+        latest_tag: LATEST_TAG.to_string(),
+        manifest_id: "manifest_test_game_001".to_string(),
         manifest_zstd,
         manifest_checksum,
         files,
         chunk_store,
         corrupt_chunk_store,
-        local_manifest: None,
-        old_data: None,
+        local_manifest,
+        old_data,
+        disk: spec.disk.clone(),
     }
+}
+
+pub fn build_fixture() -> GameFixture {
+    // Fixed payloads (distinct bytes per chunk so corruption is detectable).
+    let foo_c0 = vec![0x41u8; 64]; // 'A' x64
+    let foo_c1 = vec![0x42u8; 64]; // 'B' x64
+    let bar_c0 = vec![0x43u8; 48]; // 'C' x48
+
+    build_fixture_spec(&FixtureSpec::new(vec![
+        FileSpec::new(
+            "game/foo.dat",
+            vec![
+                ChunkSpec::new("chunk_foo0", foo_c0, 0),
+                ChunkSpec::new("chunk_foo1", foo_c1, 64),
+            ],
+        ),
+        FileSpec::new(
+            "game/bar.dat",
+            vec![ChunkSpec::new("chunk_bar0", bar_c0, 0)],
+        ),
+    ]))
 }
 
 /// A fixture whose **old** file has a different chunk layout from the new
@@ -217,113 +420,33 @@ pub fn build_moved_fixture() -> GameFixture {
     let r = vec![0x52u8; 64]; // 'R'
     let t = vec![0x54u8; 64]; // 'T'
 
-    // The new file: R || P || T.
-    let mut new_data = Vec::new();
-    new_data.extend_from_slice(&r);
-    new_data.extend_from_slice(&p);
-    new_data.extend_from_slice(&t);
-    let files = vec![FixtureFile {
-        rel: "game/moved.dat".to_string(),
-        data: new_data.clone(),
-        md5: md5hex(&new_data),
-        chunks: vec![
-            FixtureChunk {
-                id: "chunk_r".to_string(),
-                data: r.clone(),
-                offset: 0,
-            },
-            FixtureChunk {
-                id: "chunk_p".to_string(),
-                data: p.clone(),
-                offset: 64,
-            },
-            FixtureChunk {
-                id: "chunk_t".to_string(),
-                data: t.clone(),
-                offset: 128,
-            },
-        ],
-    }];
-
-    let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut pb_files: Vec<SophonChunkFile> = Vec::new();
-    for f in &files {
-        let mut pb_chunks: Vec<SophonChunk> = Vec::new();
-        for c in &f.chunks {
-            let compressed = zstd_bytes(&c.data);
-            chunk_store.insert(c.id.clone(), compressed.clone());
-            let mut bad = c.data.clone();
-            let last = bad.len() - 1;
-            bad[last] ^= 0xFF;
-            corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
-            pb_chunks.push(SophonChunk {
-                id: c.id.clone(),
-                uncompressed_md5: md5hex(&c.data),
-                offset: c.offset,
-                compressed_size: compressed.len() as i64,
-                uncompressed_size: c.data.len() as i64,
-                unknown: 0,
-                compressed_md5: md5hex(&compressed),
-            });
-        }
-        pb_files.push(SophonChunkFile {
-            file: f.rel.clone(),
-            chunks: pb_chunks,
-            is_folder: false,
-            size: f.data.len() as i64,
-            md5: f.md5.clone(),
-        });
-    }
-    let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
-
     // The old file: P || Q || R, with its own chunk ids — they are never
     // fetched, because the local manifest only ever feeds the reuse map.
-    let mut old_data = Vec::new();
-    old_data.extend_from_slice(&p);
-    old_data.extend_from_slice(&q);
-    old_data.extend_from_slice(&r);
-    let mut old_chunks: Vec<SophonChunk> = Vec::new();
-    for (id, data, offset) in [
-        ("local_p", &p, 0i64),
-        ("local_q", &q, 64),
-        ("local_r", &r, 128),
-    ] {
-        let compressed = zstd_bytes(data);
-        old_chunks.push(SophonChunk {
-            id: id.to_string(),
-            uncompressed_md5: md5hex(data),
-            offset,
-            compressed_size: compressed.len() as i64,
-            uncompressed_size: data.len() as i64,
-            unknown: 0,
-            compressed_md5: md5hex(&compressed),
-        });
-    }
-    let old_files = vec![SophonChunkFile {
-        file: "game/moved.dat".to_string(),
-        chunks: old_chunks,
-        is_folder: false,
-        size: old_data.len() as i64,
-        md5: md5hex(&old_data),
-    }];
-    let (local_zstd, local_checksum) = encode_manifest(&old_files);
+    let old_data = lay_out(&[
+        ChunkSpec::new("local_p", p.clone(), 0),
+        ChunkSpec::new("local_q", q.clone(), 64),
+        ChunkSpec::new("local_r", r.clone(), 128),
+    ]);
 
-    GameFixture {
-        latest_tag: LATEST_TAG.to_string(),
-        manifest_id: "manifest_test_moved_001".to_string(),
-        manifest_zstd,
-        manifest_checksum,
-        files,
-        chunk_store,
-        corrupt_chunk_store,
-        local_manifest: Some(FixtureManifest {
-            id: "manifest_test_moved_old_001".to_string(),
-            zstd: local_zstd,
-            checksum: local_checksum,
-        }),
-        old_data: Some(("game/moved.dat".to_string(), old_data)),
-    }
+    build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/moved.dat",
+            vec![
+                ChunkSpec::new("chunk_r", r.clone(), 0),
+                ChunkSpec::new("chunk_p", p.clone(), 64),
+                ChunkSpec::new("chunk_t", t.clone(), 128),
+            ],
+        )])
+        .with_old(vec![FileSpec::new(
+            "game/moved.dat",
+            vec![
+                ChunkSpec::new("local_p", p, 0),
+                ChunkSpec::new("local_q", q, 64),
+                ChunkSpec::new("local_r", r, 128),
+            ],
+        )])
+        .with_disk("game/moved.dat", old_data),
+    )
 }
 
 /// Encode a manifest body the way the server sends it: zstd over the
