@@ -74,14 +74,9 @@ OLD_CLASSES = [
 
 PROPOSED_CLASSES = [
     "identical",
-    "zero_reuse_single",
-    "zero_reuse_multi",
-    "kept_in_place",
-    "moved_ascending",
-    "moved_descending",
-    "moved_mixed",
-    "trim_eager",
-    "trim_deferred",
+    "no_reuse",
+    "reuse_in_place",
+    "reuse_moved",
     "added",
     "removed",
 ]
@@ -188,6 +183,21 @@ def old_class_of(row, side):
 
 
 def proposed_class_of(row, side):
+    """The crate's class set: the six **patch shapes**.
+
+    The class set is a partition on the content, so a path answers exactly
+    one class — and the classes are statements about the patch, not about how
+    a repair tool gets there:
+
+    - `identical`: nothing to fetch, the file is already right;
+    - `no_reuse`: every chunk is fetched, the whole file is overwritten;
+    - `reuse_in_place`: a subset is fetched, the reused chunks are already
+      correct where they belong;
+    - `reuse_moved`: a subset is fetched, the reused chunks live elsewhere
+      in the file and have to be copied;
+    - `added`: the file is created whole;
+    - `removed`: the file is purged.
+    """
     if side == "identical":
         return {"identical"}
     if side == "added":
@@ -196,24 +206,14 @@ def proposed_class_of(row, side):
         return {"removed"}
     out = set()
     partial = 0 < row["reused"] < row["n"]
-    if row["reused"] == 0:
-        # The crate's rule: `nchunks == 1` is the single-chunk class and
-        # `nchunks > 1` the multi one, so an empty file is neither.
-        if row["n"] == 1:
-            out.add("zero_reuse_single")
-        elif row["n"] > 1:
-            out.add("zero_reuse_multi")
+    # A one-chunk file with nothing reusable is a degenerate patch, and
+    # `added` already covers the "create a file whole" case.
+    if row["reused"] == 0 and row["n"] > 1:
+        out.add("no_reuse")
     if partial and row["moved"] == 0:
-        out.add("kept_in_place")
+        out.add("reuse_in_place")
     if row["moved"] > 0:
-        if row["up"] == 0:
-            out.add("moved_ascending")
-        elif row["down"] == 0:
-            out.add("moved_descending")
-        else:
-            out.add("moved_mixed")
-    if partial and row["old"] > row["new"]:
-        out.add("trim_eager" if row["trim_free"] else "trim_deferred")
+        out.add("reuse_moved")
     return out
 
 

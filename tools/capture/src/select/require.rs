@@ -169,14 +169,14 @@ mod tests {
         // without saying *which* class or *why* has told the operator to go and
         // look it up.
         let sel = selection_with(vec![row(
-            Class::MovedMixed,
+            Class::ReuseMoved,
             MatrixStatus::Unavailable,
             Some("over budget"),
         )]);
-        let e = check(&[Class::MovedMixed], &sel).expect_err("unmet");
+        let e = check(&[Class::ReuseMoved], &sel).expect_err("unmet");
         assert_eq!(e.code, ExitCode::RequirementUnmet);
         assert!(
-            e.detail.contains("moved_mixed"),
+            e.detail.contains("reuse_moved"),
             "the class must be named: {}",
             e.detail
         );

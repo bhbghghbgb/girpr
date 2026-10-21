@@ -79,15 +79,18 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// (`docs/01-artifact-schema.md`). It is bumped only for a breaking change to
 /// the bundle's byte layout.
 ///
-/// **The class ids were renamed and the version did not move, and that is
-/// deliberate.** A *schema* is the shape of the documents, and no shape
-/// changed: the `repair` block and the `expectations.summary` block are
-/// additions, and they are `null` where they do not apply, so a reader that
-/// knows the old shape still reads the old fields correctly. The class ids are
-/// *values*, and one set of them was replaced by another — a breaking change to
-/// the bundle's **contents**, which is what the class set is and what the
-/// bundle's own matrix records. A consumer that hard-codes
-/// `patchmaps/partial_same_offset.json` breaks, and the fix is to read the
-/// matrix rather than to guess a file name; a consumer that reads the matrix
-/// does not notice.
-pub const SCHEMA_VERSION: u32 = 1;
+/// **Version 2** dropped two blocks from the patchmap and replaced the class
+/// set:
+///
+/// - the `repair` block is gone — it stated what a repair tool *would* do
+///   with the file (the tier, the write order, the trim, the byte
+///   accounting), which is that tool's own business and is not shared with any
+///   other repair tool;
+/// - the `expectations.summary` block is gone — it transcribed a repair
+///   tool's `SUMMARY` line, per flag, into a foreign schema;
+/// - the class ids are the six **patch shapes** rather than the repair tool's
+///   internal decisions.
+///
+/// A version-1 bundle is **refused**: `gircap verify` says so and names the
+/// command that produces a current one.
+pub const SCHEMA_VERSION: u32 = 2;

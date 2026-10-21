@@ -440,7 +440,7 @@ mod tests {
         let back = hash::gunzip(&raw).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&back).unwrap();
         assert_eq!(v["entries"].as_array().unwrap().len(), 3);
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], crate::SCHEMA_VERSION);
         // The plain and gzipped forms decompress to the same document, which is
         // what makes `checksums.json` able to carry one digest for both.
         let plain =

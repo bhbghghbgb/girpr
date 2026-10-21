@@ -136,6 +136,23 @@ impl Bundle {
             ));
         }
         let manifest: Manifest = read_json(&root.join("MANIFEST.json"))?;
+        // A bundle written by an older schema is **refused**, not read with
+        // the new reader's defaults. The version-1 patchmap carried a `repair`
+        // block and an `expectations.summary` block, and its class ids named
+        // a repair tool's internal decisions; a reader that understood the
+        // current shape would silently ignore all three and report a bundle
+        // as consistent when it is not.
+        if manifest.schema_version != crate::SCHEMA_VERSION {
+            return Err(format!(
+                "{}: schema version {} is not the current {}; this bundle was written \
+                 by an older gircap and its patchmaps carry a different shape.\n\
+                 \x20   capture a current bundle with:  cargo run -p gircap -- capture --out {}",
+                root.join("MANIFEST.json").display(),
+                manifest.schema_version,
+                crate::SCHEMA_VERSION,
+                root.display(),
+            ));
+        }
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
@@ -421,9 +438,12 @@ pub fn reverify(bundle: Bundle) -> Report {
     // cover the spec's decisions fails its own run (A21-A23 are fatal there).
     // The verifier's job is to prove the bundle still says what it said, and
     // "this bundle does not cover both trims" is a thing it said.
-    let repairs: Vec<crate::assemble::Repair> =
-        bundle.patchmaps.values().filter_map(|m| m.repair).collect();
-    for row in crate::emit::selfcheck::coverage(&repairs) {
+    let shapes: Vec<crate::assemble::PatchShape> = bundle
+        .patchmaps
+        .values()
+        .map(crate::assemble::patch_shape)
+        .collect();
+    for row in crate::emit::selfcheck::coverage(&shapes) {
         if !row.ok {
             findings.push(format!("{}: {}", row.id, row.actual));
             tracing::error!(
@@ -705,6 +725,31 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
             &format!("{subject} (expectations.download_bytes)"),
             &format!("{bytes}, the sum over the FETCH entries"),
             &map.expectations.download_bytes.to_string(),
+        ));
+    }
+    // And the negative assertion must be the **same** set as the plan's REUSE
+    // entries — stated twice, so it has to be checked twice. `must_not_fetch`
+    // is the REUSE set a consumer asserts on ("none of these may be
+    // requested"), and the plan's REUSE entries are the same fact derived from
+    // the other end. One source of truth, two statements, one check.
+    let reuse_ids: Vec<&str> = reuse.iter().map(|e| e.chunk_id.as_str()).collect();
+    let forbidden: Vec<&str> = map
+        .expectations
+        .must_not_fetch
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut want: Vec<&str> = reuse_ids.clone();
+    want.sort_unstable();
+    let mut got = forbidden.clone();
+    got.sort_unstable();
+    if got != want {
+        rows.push(Assertion::fail(
+            A20_ID,
+            A20,
+            &format!("{subject} (expectations.must_not_fetch)"),
+            &format!("the {} REUSE chunk(s) of the plan", want.len()),
+            &format!("{} id(s): {got:?}", got.len()),
         ));
     }
     // And it must not contradict the outcome the patchmap claims.

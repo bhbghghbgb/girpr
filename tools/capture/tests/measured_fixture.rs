@@ -531,13 +531,12 @@ mod m5_matrix {
 
     use gircap::select::{self, Budget, Class, MatrixStatus};
 
-    /// The §4.1 table, on the frozen pair: the cheapest candidate for each of
-    /// the eleven classes, with the byte figure the spec records beside it.
+    /// The class table, on the frozen pair: the cheapest candidate for each of
+    /// the six patch shapes, with the byte figure the spec records beside it.
     ///
-    /// **Two classes share a file**, and that is the point of the `covered_by`
-    /// admission: `trim_eager`'s cheapest candidate is also the cheapest
-    /// `kept_in_place` one, so the eager trim is *covered by* the capture the
-    /// keep class took rather than bought a second time.
+    /// The class set is a **partition** on the content, so no two classes share
+    /// a file: one capture answers one shape, and the bundle is one file per
+    /// shape.
     const CHEAPEST: &[(Class, Option<&str>, u64)] = &[
         (
             Class::Identical,
@@ -545,44 +544,19 @@ mod m5_matrix {
             108,
         ),
         (
-            Class::ZeroReuseSingle,
-            Some("GenshinImpact_Data/AssetBundles/data_revision"),
-            84,
-        ),
-        (
-            Class::ZeroReuseMulti,
+            Class::NoReuse,
             Some("GenshinImpact_Data/StreamingAssets/unity default resources"),
             1_180_000,
         ),
         (
-            Class::KeptInPlace,
+            Class::ReuseInPlace,
             Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
             750,
         ),
         (
-            Class::MovedAscending,
+            Class::ReuseMoved,
             Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk"),
             580,
-        ),
-        (
-            Class::MovedDescending,
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000003.blk"),
-            660,
-        ),
-        (
-            Class::MovedMixed,
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000004.blk"),
-            720,
-        ),
-        (
-            Class::TrimEager,
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
-            750,
-        ),
-        (
-            Class::TrimDeferred,
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk"),
-            930,
         ),
         (
             Class::Added,
@@ -614,11 +588,11 @@ mod m5_matrix {
         }
     }
 
-    /// The greedy admission's answer per class, which is a different question
-    /// from "which candidate is cheapest" once two classes can reach the same
-    /// file. Here one pair can — `trim_eager` and `kept_in_place` share a file
-    /// — and the matrix says so rather than reporting the class as satisfied by
-    /// a coincidence.
+    /// The greedy admission's answer per class.
+    ///
+    /// The class set is a partition, so one capture answers one shape and every
+    /// class gets a capture of its own — the matrix says so rather than
+    /// reporting a class as satisfied by a coincidence.
     #[test]
     fn greedy_admission_captures_the_expected_file_per_class() {
         let pool = select::candidates(&[game()]);
@@ -636,34 +610,20 @@ mod m5_matrix {
                 (r.class, a.path.clone(), a.budget_cost)
             })
             .collect();
-        // The eager trim is **covered by** the keep class's capture, so it has
-        // no capture of its own and is not in the list of captures.
         let mut want: Vec<(Class, String, u64)> = CHEAPEST
             .iter()
-            .filter(|(c, p, _)| p.is_some() && *c != Class::TrimEager)
             .filter_map(|(c, p, cost)| p.map(|p| (*c, p.to_string(), *cost)))
             .collect();
         got.sort_by_key(|(c, _, _)| c.id());
         want.sort_by_key(|(c, _, _)| c.id());
         assert_eq!(got, want, "{MEASURED}");
 
-        // Ten admitted, eleven classes, and the one class without a capture of
-        // its own is covered by another capture.
-        assert_eq!(s.admitted.len(), 10);
+        // Six admitted, six classes, one capture each.
+        assert_eq!(s.admitted.len(), 6);
         assert!(s.unmet().is_empty(), "every class answered");
-        let covered = s
-            .matrix
-            .iter()
-            .find(|r| r.class == Class::TrimEager)
-            .expect("a row for every class");
-        assert_eq!(covered.status, MatrixStatus::CoveredBy);
-        assert_eq!(
-            covered.covered_by.as_deref(),
-            Some("GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk"),
-        );
         assert!(
-            s.admitted.iter().any(|a| !a.also_satisfies.is_empty()),
-            "the covering capture says which other class it answers"
+            s.admitted.iter().all(|a| a.also_satisfies.is_empty()),
+            "a capture answers exactly one shape: the class set is a partition"
         );
         assert!(
             s.admitted.iter().all(|a| {
@@ -677,8 +637,7 @@ mod m5_matrix {
             s.bytes_admitted,
             CHEAPEST
                 .iter()
-                .filter(|(c, p, _)| p.is_some() && *c != Class::TrimEager)
-                .map(|(_, _, c)| c)
+                .filter_map(|(_, p, c)| p.map(|_| *c))
                 .sum::<u64>()
         );
     }
@@ -689,7 +648,7 @@ mod m5_matrix {
     /// class would be indistinguishable from a bug in the loop that walks them.
     #[test]
     fn the_class_with_no_candidate_is_recorded_as_unavailable_not_dropped() {
-        // A pool with one candidate in it, so ten of the eleven classes have
+        // A pool with one candidate in it, so five of the six classes have
         // none.
         let pool = select::candidates(&[game()]);
         let s = select::select(&pool, 1, Budget::unlimited(), &[]);
@@ -714,7 +673,7 @@ mod m5_matrix {
         let row = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::TrimDeferred)
+            .find(|r| r.class == Class::ReuseMoved)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::Unavailable);
         assert_eq!(
@@ -723,7 +682,7 @@ mod m5_matrix {
         );
         assert!(row.path.is_none() && row.capture_id.is_none());
         let reason = row.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("trim_deferred"), "{reason}");
+        assert!(reason.contains("reuse_moved"), "{reason}");
         assert!(
             reason.contains("--audio"),
             "the remedy, not just the fact: {reason}"
@@ -835,15 +794,14 @@ mod m5_matrix {
             "{}",
             everything.rejected.len()
         );
-        // Ten one-per-class captures, plus the second `identical`
-        // (00000001.blk), the second `kept_in_place` (00981562.blk), the second
-        // `moved_ascending` (00000006.blk) and the second `added`
-        // (00000002.blk) that `--per-class 2` asks for. The two trim classes
-        // get **none**: their cheapest candidates are already captured.
-        assert_eq!(everything.admitted.len(), 13);
+        // Six one-per-class captures, plus a second candidate for the four
+        // classes that have one: the second `identical` (00000001.blk), the
+        // second `reuse_in_place`, the second `reuse_moved` (00000003.blk) and
+        // the second `added` (00000002.blk) that `--per-class 2` asks for.
+        assert_eq!(everything.admitted.len(), 10);
         assert_eq!(
-            everything.bytes_admitted, 5_013_724,
-            "the thirteen rows above, summed"
+            everything.bytes_admitted, 5_011_990,
+            "the ten rows above, summed"
         );
     }
 
@@ -859,7 +817,7 @@ mod m5_matrix {
         let row = s
             .matrix
             .iter()
-            .find(|r| r.class == Class::KeptInPlace)
+            .find(|r| r.class == Class::ReuseInPlace)
             .unwrap();
         assert_eq!(row.status, MatrixStatus::CoveredBy);
         assert_eq!(row.covered_by.as_deref(), Some(dll));
@@ -889,24 +847,24 @@ mod m5_matrix {
         assert_eq!(ranks, (1..=rows.len() as u64).collect::<Vec<_>>());
         for r in rows {
             let classes = r["classes"].as_array().expect("classes");
+            // A path that answers **no** class is listed with an empty list.
+            // The frozen pair has one: a single-chunk file with nothing
+            // reusable is a degenerate patch, and `added` already covers the
+            // "create a file whole" case.
+            if r["path"] == "GenshinImpact_Data/AssetBundles/data_revision" {
+                assert!(classes.is_empty(), "the degenerate patch is no class");
+                continue;
+            }
             assert!(!classes.is_empty(), "{} -> {classes:?}", r["path"]);
         }
-        // Two of the paths answer **two** classes each: the file that shows the
-        // eager trim is also a `kept_in_place` file, and the file that shows the
-        // deferred trim is also a `moved_ascending` one. That overlap is what
-        // `covered_by` is built from.
+        // **No path answers two classes**: the class set is a partition on the
+        // content, so one capture is one patch shape.
         let two: Vec<&str> = rows
             .iter()
-            .filter(|r| r["classes"].as_array().expect("classes").len() == 2)
+            .filter(|r| r["classes"].as_array().expect("classes").len() > 1)
             .map(|r| r["path"].as_str().expect("path"))
             .collect();
-        assert_eq!(
-            two,
-            vec![
-                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000005.blk",
-                "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/00000006.blk",
-            ]
-        );
+        assert!(two.is_empty(), "a path answers one shape: {two:?}");
     }
 
     /// The `+n` suffix counts *within a class*, not across the run.
@@ -962,7 +920,7 @@ mod m5_matrix {
         }
         // `--per-class 3` does not invent candidates: the matrix still admits
         // exactly the files that exist.
-        assert_eq!(three.admitted.len(), 14);
+        assert_eq!(three.admitted.len(), 12);
     }
 
     /// An `unavailable` class is a fact about the manifests and an `over_budget`
@@ -979,22 +937,20 @@ mod m5_matrix {
         let open = select::select(&pool, 1, Budget::unlimited(), &[]);
         let tight = select::select(&pool, 1, Budget::capped(0), &[]);
 
-        // Nothing is missing: every class is answered, ten of them by a
-        // capture of their own and one (`trim_eager`) by another capture.
+        // Nothing is missing: every class is answered, and each by a capture of
+        // its own — the class set is a partition, so a capture answers exactly
+        // one shape.
         assert!(
             open.unmet().is_empty(),
             "every class of this pair is answered: {:?}",
             open.matrix
         );
         assert!(
-            open.admitted
-                .iter()
-                .all(|a| a.primary_class != Class::TrimEager),
-            "the eager trim is covered, not captured"
+            open.admitted.iter().all(|a| a.also_satisfies.is_empty()),
+            "and no capture answers two shapes"
         );
 
-        // Over budget: eleven shortfalls, and every one of them names its
-        // cost — including the two whose covering capture was refused.
+        // Over budget: six shortfalls, and every one of them names its cost.
         assert_eq!(tight.unmet().len(), Class::ALL.len());
         for row in &tight.matrix {
             assert_eq!(row.status, MatrixStatus::OverBudget, "{row:?}");
@@ -1010,7 +966,7 @@ mod m5_matrix {
         assert_eq!(tight.bytes_admitted, 0);
         assert_eq!(
             tight.rejected.len(),
-            10,
+            6,
             "every wanted candidate is accounted for"
         );
     }
@@ -1391,7 +1347,7 @@ mod m7_assembly {
             ("7.0.0".to_string(), "https://cdn/old".to_string()),
             ("7.1.0".to_string(), "https://cdn/new".to_string()),
         ]);
-        let classes = [Class::KeptInPlace];
+        let classes = [Class::ReuseInPlace];
         assemble::assemble(&AssemblyInput {
             pair,
             matching_field: "game",

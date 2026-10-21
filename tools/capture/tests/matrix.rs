@@ -185,7 +185,7 @@ impl Captured {
 fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
     let c = captured("classes", World::five_classes(), &[]);
     let rows = c.matrix();
-    assert_eq!(rows.len(), 11, "one row per required class");
+    assert_eq!(rows.len(), 6, "one row per patch shape");
     for r in &rows {
         // An unfulfilled row must say why. A `covered_by` row says which
         // capture covers it, so it carries a reason too — it is the *captured*
@@ -232,7 +232,10 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
     let c = captured("greedy", World::five_classes(), &[]);
     let s = &c.summary;
     let admitted = s["captures_admitted"].parse::<u64>().expect("a count");
-    assert_eq!(admitted, 8, "eight classes are satisfiable in this world");
+    assert_eq!(
+        admitted, 6,
+        "six patch shapes are satisfiable in this world"
+    );
 
     let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
     // The admission total is the sum of what the admitted captures cost, and a
@@ -312,10 +315,10 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// **Two budgets, two verdicts.**
 ///
 /// A budget that refuses a capture the *coverage* does not depend on leaves the
-/// bundle covering the repair spec's decisions, and the run succeeds: the
-/// matrix is complete and honest about what the budget would not pay for.
-/// A budget that takes the coverage with it does not: the bundle no longer
-/// shows both trim outcomes, and the run **fails** and says so (A21). A
+/// bundle covering the patch space, and the run succeeds: the matrix is
+/// complete and honest about what the budget would not pay for. A budget that
+/// takes the coverage with it does not: the bundle no longer covers both sides
+/// of every boundary, and the run **fails** and says so (A21, A22 or A23). A
 /// narrower bundle is not a bundle this tool should hand over as trustworthy.
 ///
 /// The refusal is `--require-class`'s job either way, and the case below
@@ -337,12 +340,19 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
         .parse::<u64>()
         .expect("a size");
     let costs = admitted_costs(&full.bundle);
-    // The dearest capture is the `removed` one, and a `removed` capture
-    // contributes nothing to the coverage — so a budget that refuses it leaves
-    // the bundle covering the spec's decisions.
-    let dearest = *costs.iter().max().expect("a cost");
+    // The dearest capture is the `removed` one, and the coverage does not
+    // depend on it: a two-sided capture in this world shrinks, so the size
+    // boundary is covered either way. A budget that refuses it leaves the
+    // bundle covering the patch space.
+    let dearest = costs.iter().map(|(_, cost)| *cost).max().expect("a cost");
     let keeps_the_coverage = total - dearest;
-    let half = (total / 2).max(1);
+    // And a budget that funds only the cheaper half of the captures takes the
+    // coverage with it: the capture that moves its bytes is not among them, so
+    // the bundle covers neither side of the moved boundary. The figure is read
+    // out of the world's own costs rather than guessed.
+    let mut sorted = costs.iter().map(|(_, cost)| *cost).collect::<Vec<_>>();
+    sorted.sort_unstable();
+    let narrow_budget = sorted.iter().take(sorted.len() / 2).sum::<u64>().max(1);
 
     // ---- the budget that keeps the coverage ------------------------------
     let c = captured(
@@ -479,12 +489,12 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     let narrow = captured(
         "budget-narrow",
         World::five_classes(),
-        &["--max-download-bytes", &half.to_string()],
+        &["--max-download-bytes", &narrow_budget.to_string()],
     );
     assert_eq!(
         narrow.code, 3,
         "a budget that takes the coverage with it is a failed run\n{}\n{}",
-        narrow.summary["exit_code"], narrow.failure["detail"]
+        narrow.summary["exit_code"], narrow.summary["detail"]
     );
     assert!(
         narrow.failure["detail"].contains("A21"),
@@ -498,14 +508,19 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
 /// Read out of the artifact rather than hard-coded: the numbers move with the
 /// world, and a hard-coded one would silently stop testing anything the moment
 /// they did.
-fn admitted_costs(bundle: &std::path::Path) -> Vec<u64> {
+fn admitted_costs(bundle: &std::path::Path) -> Vec<(String, u64)> {
     let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("diff/matrix.json");
     let doc: serde_json::Value = serde_json::from_slice(&raw).expect("diff/matrix.json");
     doc["admitted"]
         .as_array()
         .expect("admitted[]")
         .iter()
-        .map(|r| r["budget_cost"].as_u64().expect("budget_cost"))
+        .map(|r| {
+            (
+                r["capture_id"].as_str().expect("capture_id").to_string(),
+                r["budget_cost"].as_u64().expect("budget_cost"),
+            )
+        })
         .collect()
 }
 

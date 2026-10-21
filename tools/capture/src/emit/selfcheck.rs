@@ -217,59 +217,64 @@ pub fn wording(id: &str) -> &'static str {
 /// A21, A22 and A23: the coverage the class set exists to buy.
 ///
 /// The three properties are otherwise only held **by accident**. A bundle that
-/// happened to contain a file with a deferred trim would say nothing about the
-/// eager one, and a reader would have to take the class names on trust — which
-/// is exactly the trust this tool exists to replace with a measurement.
+/// happened to contain a file with nothing reusable would say nothing about
+/// the other side of the reuse boundary, and a reader would have to take the
+/// class names on trust — which is exactly the trust this tool exists to
+/// replace with a measurement.
 ///
-/// The coverage is read out of the patchmaps' `repair` blocks, which say what
-/// the in-place path would do with each file: its `trim`, its `direction` and
-/// its `growth_bytes`.
+/// The coverage is read out of the patchmaps' own arithmetic: how much of each
+/// file is reused, how much of that is moved, and whether the file grows or
+/// shrinks. Those are facts about the **patch**, and they are the same facts
+/// for every consumer — unlike the tier, the write order and the trim, which
+/// are the repair tool's own decisions and are not published at all.
 ///
 /// It lives here rather than in `closeout.rs` so that the two places that
 /// build these rows build the **same** rows: the capture's and the verifier's
 /// have to agree, or `check_agreement` would report a disagreement that does
 /// not exist.
-pub fn coverage(repairs: &[crate::assemble::Repair]) -> Vec<Assertion> {
-    use crate::assemble::{Direction, Trim};
-
+pub fn coverage(shapes: &[crate::assemble::PatchShape]) -> Vec<Assertion> {
     let mut rows = Vec::new();
 
-    // A21 — both trim outcomes.
-    let eager = repairs.iter().filter(|r| r.trim == Trim::Eager).count();
-    let deferred = repairs.iter().filter(|r| r.trim == Trim::Deferred).count();
+    // A21 — both sides of the reuse boundary: a file with nothing reusable
+    // and a file with something.
+    let none_reusable = shapes.iter().filter(|s| s.reuse == 0).count();
+    let some_reusable = shapes.iter().filter(|s| s.reuse > 0).count();
     rows.push(Assertion::row(
         "A21",
         "patchmaps/",
-        "at least one eager trim and at least one deferred trim",
-        eager > 0 && deferred > 0,
-        &format!("{eager} eager trim(s), {deferred} deferred trim(s)"),
+        "at least one capture with nothing reusable and at least one with something",
+        none_reusable > 0 && some_reusable > 0,
+        &format!("{none_reusable} with nothing reusable, {some_reusable} with something"),
     ));
 
-    // A22 — both write directions.
-    let ascending = repairs
-        .iter()
-        .filter(|r| r.direction == Direction::Ascending)
-        .count();
-    let descending = repairs
-        .iter()
-        .filter(|r| r.direction == Direction::Descending)
-        .count();
+    // A22 — both sides of the reuse boundary's other half: the reused chunks
+    // stay where they belong, or they live elsewhere and have to be copied.
+    let in_place = shapes.iter().filter(|s| s.moved == 0).count();
+    let moved = shapes.iter().filter(|s| s.moved > 0).count();
     rows.push(Assertion::row(
         "A22",
         "patchmaps/",
-        "at least one ascending write order and at least one descending one",
-        ascending > 0 && descending > 0,
-        &format!("{ascending} ascending, {descending} descending"),
+        "at least one capture whose reused chunks are in place and at least one whose reused chunks moved",
+        in_place > 0 && moved > 0,
+        &format!("{in_place} in place, {moved} moved"),
     ));
 
-    // A23 — a file that grows.
-    let growing = repairs.iter().filter(|r| r.growth_bytes > 0).count();
+    // A23 — the file grows and the file shrinks.
+    //
+    // **An absent side counts as zero bytes**, which is what makes the
+    // assertion a fact about the patch space rather than a fact about one
+    // pair: an `added` file grows from nothing, a `removed` file shrinks to
+    // nothing, and a two-sided capture grows or shrinks when its two sizes
+    // say so. The six classes guarantee the first two, so a bundle that has
+    // them cannot fail this row.
+    let grows = shapes.iter().filter(|s| s.new_size > s.old_size).count();
+    let shrinks = shapes.iter().filter(|s| s.new_size < s.old_size).count();
     rows.push(Assertion::row(
         "A23",
         "patchmaps/",
-        "at least one capture whose file on disk is shorter than the target",
-        growing > 0,
-        &format!("{growing} capture(s) grow"),
+        "at least one capture whose file grows and at least one whose file shrinks",
+        grows > 0 && shrinks > 0,
+        &format!("{grows} grow, {shrinks} shrink"),
     ));
 
     rows
@@ -988,86 +993,74 @@ mod tests {
     }
 
     /// **The negative case**, and the reason the three assertions exist: a
-    /// bundle that does not cover both trim outcomes **fails A21**.
+    /// bundle that does not cover both sides of the reuse boundary **fails
+    /// A21**.
     ///
     /// The properties the class set buys are otherwise only held *by accident*:
-    /// a bundle that happened to contain a file with a deferred trim would say
-    /// nothing about the eager one, and a reader would have to take the class
-    /// names on trust.
+    /// a bundle that happened to contain a file with nothing reusable would say
+    /// nothing about the other side of the boundary, and a reader would have to
+    /// take the class names on trust.
     #[test]
-    fn a_bundle_without_both_trims_fails_a21() {
-        use crate::assemble::{Direction, Mode, Repair, Trim};
+    fn a_bundle_without_both_sides_of_the_reuse_boundary_fails_a21() {
+        use crate::assemble::PatchShape;
 
-        let repair = |trim| Repair {
-            kept: 1,
-            moved: 0,
-            fetch: 0,
-            kept_bytes: 10,
-            payload_bytes: 0,
-            write_bytes: 0,
-            direction: Direction::NotApplicable,
-            keeps_ascending: 0,
-            keeps_descending: 0,
-            trim,
-            growth_bytes: 0,
-            mode: Mode::Inplace,
+        let shape = |reuse, moved| PatchShape {
+            chunks: 3,
+            reuse,
+            moved,
+            old_size: 100,
+            new_size: 100,
         };
 
-        // Only the eager trim: A21 is red.
-        let rows = coverage(&[repair(Trim::Eager)]);
+        // Nothing reusable at all: A21 is red.
+        let rows = coverage(&[shape(0, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
-        assert!(!a21.ok, "one trim outcome is not both: {a21:?}");
+        assert!(!a21.ok, "one side of the boundary is not both: {a21:?}");
         assert!(
-            a21.actual.contains("0 deferred"),
+            a21.actual.contains("0 with something"),
             "the detail says so: {a21:?}"
         );
 
-        // Only the deferred one: still red.
-        let rows = coverage(&[repair(Trim::Deferred)]);
+        // Something reusable and nothing else: still red.
+        let rows = coverage(&[shape(2, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
         assert!(!a21.ok);
 
         // Both: green.
-        let rows = coverage(&[repair(Trim::Eager), repair(Trim::Deferred)]);
+        let rows = coverage(&[shape(0, 0), shape(2, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
-        assert!(a21.ok, "both trims: {a21:?}");
+        assert!(a21.ok, "both sides: {a21:?}");
     }
 
-    /// The same shape for the other two: both write directions, and a file that
-    /// grows.
+    /// The same shape for the other two: the reused chunks in place and moved,
+    /// and a file that grows and one that shrinks.
     #[test]
-    fn a_bundle_without_both_directions_fails_a22_and_one_that_never_grows_fails_a23() {
-        use crate::assemble::{Direction, Mode, Repair, Trim};
+    fn a_bundle_without_both_reuse_shapes_fails_a22_and_one_that_never_shrinks_fails_a23() {
+        use crate::assemble::PatchShape;
 
-        let repair = |direction, growth_bytes| Repair {
-            kept: 1,
-            moved: 1,
-            fetch: 0,
-            kept_bytes: 10,
-            payload_bytes: 10,
-            write_bytes: 10,
-            direction,
-            keeps_ascending: 1,
-            keeps_descending: 0,
-            trim: Trim::None,
-            growth_bytes,
-            mode: Mode::Inplace,
+        let shape = |moved, old_size, new_size| PatchShape {
+            chunks: 3,
+            reuse: 2,
+            moved,
+            old_size,
+            new_size,
         };
 
-        let rows = coverage(&[repair(Direction::Ascending, 0)]);
+        let rows = coverage(&[shape(0, 100, 100)]);
         assert!(
             !rows.iter().find(|r| r.id == "A22").expect("a row").ok,
-            "one direction is not both"
+            "the reused chunks in place is not both"
         );
         assert!(
             !rows.iter().find(|r| r.id == "A23").expect("a row").ok,
-            "and a file that does not grow is not a growth"
+            "and a file that does not change size is neither a growth nor a shrink"
         );
 
         let rows = coverage(&[
-            repair(Direction::Ascending, 0),
-            repair(Direction::Descending, 0),
-            repair(Direction::NotApplicable, 64),
+            shape(0, 100, 100),
+            shape(1, 100, 100),
+            shape(0, 100, 200),
+            shape(0, 200, 100),
         ]);
         assert!(rows.iter().find(|r| r.id == "A22").expect("a row").ok);
         assert!(rows.iter().find(|r| r.id == "A23").expect("a row").ok);

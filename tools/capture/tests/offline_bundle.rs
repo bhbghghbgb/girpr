@@ -232,7 +232,7 @@ impl Bundle {
                 capture_id: CAPTURE.into(),
                 path: DLL.into(),
                 matching_field: "game".into(),
-                classes: vec![gircap::select::Class::KeptInPlace],
+                classes: vec![gircap::select::Class::ReuseInPlace],
                 old: Some(Side {
                     tag: OLD_TAG.into(),
                     size: old_bytes.len() as i64,
@@ -247,14 +247,12 @@ impl Bundle {
                 }),
                 plan: Some(plan),
                 totals: Some(totals),
-                repair: None,
                 expectations: gircap::assemble::Expectations {
                     result_path: Some(format!("expected/{DLL}")),
                     result_md5: Some(new_md5.clone()),
                     absent_after: false,
                     download_bytes: fetch_bytes,
                     must_not_fetch: vec![b.id.clone(), c.id.clone()],
-                    summary: None,
                 },
             },
         );
@@ -318,14 +316,9 @@ impl Bundle {
 fn manifest() -> Manifest {
     let rows = [
         ("identical", "unavailable", "identical"),
-        ("zero_reuse_single", "unavailable", "zero_reuse_single"),
-        ("zero_reuse_multi", "unavailable", "zero_reuse_multi"),
-        ("kept_in_place", "captured", "kept_in_place"),
-        ("moved_ascending", "unavailable", "moved_ascending"),
-        ("moved_descending", "unavailable", "moved_descending"),
-        ("moved_mixed", "unavailable", "moved_mixed"),
-        ("trim_eager", "unavailable", "trim_eager"),
-        ("trim_deferred", "unavailable", "trim_deferred"),
+        ("no_reuse", "unavailable", "no_reuse"),
+        ("reuse_in_place", "captured", "reuse_in_place"),
+        ("reuse_moved", "unavailable", "reuse_moved"),
         ("added", "unavailable", "added"),
         ("removed", "unavailable", "removed"),
     ];

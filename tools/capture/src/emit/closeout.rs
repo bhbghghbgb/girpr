@@ -60,8 +60,8 @@ pub struct CloseoutInput<'a> {
     /// under `game/` was one the run planned — and a document the close-out
     /// itself wrote would fail that check if it were not declared first.
     pub written: Vec<String>,
-    /// What the in-place path would do with each capture, for A21-A23.
-    pub repairs: &'a [crate::assemble::Repair],
+    /// The patch shape of each capture, for A21-A23.
+    pub shapes: &'a [crate::assemble::PatchShape],
     /// `--no-chunk-blobs`, which declares A6-A12, A19 and A21-A23 skipped
     /// rather than asserted.
     pub no_chunk_blobs: bool,
@@ -143,7 +143,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // patchmaps are written, so they are settled here with the rest of the
     // closing rows.
     if !i.no_chunk_blobs {
-        i.rows.extend(super::selfcheck::coverage(i.repairs));
+        i.rows.extend(super::selfcheck::coverage(i.shapes));
     }
     super::selfcheck::report_failed(&i.rows);
 
@@ -418,7 +418,7 @@ mod tests {
             selection: &f.selection,
             diffs: &[],
             side_digests: &BTreeMap::new(),
-            repairs: &[],
+            shapes: &[],
             written: vec!["game/config.ini".to_string()],
             no_chunk_blobs: true,
         })
