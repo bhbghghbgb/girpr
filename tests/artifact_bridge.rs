@@ -857,7 +857,7 @@ fn snapshot(game: &Path) -> BTreeMap<String, (u64, String)> {
 ///
 /// | record | site | when |
 /// |---|---|---|
-/// | `chunk downloaded chunk=<id>` | `sophon::try_fetch_chunk` | the body was read — a real download |
+/// | `chunk downloaded chunk=<id>` | `sophon::try_stream_chunk` | the origin answered with the chunk — a real request, whatever the body turned out to be |
 /// | `no local reuse candidate -> download chunk=<id>` | `repair::file::try_reuse_slice` | the decision, before the fetch |
 ///
 /// **Never the bare id.** A reused chunk is logged too — `reuse slice md5 ok

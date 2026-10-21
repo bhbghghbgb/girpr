@@ -38,7 +38,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `fetch_chunk_bytes`, `build_local_chunk_map`, `join_url` |
+| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -91,7 +91,7 @@ flowchart TD
         J1["scan: ONE read → whole-file MD5,<br/>which chunks are already correct,<br/>which reuse sources are intact"] --> J1b{"size+MD5 match?"}
         J1b -->|yes| J9["skip (counted as verified)"]
         J1b -->|no| J2a["stage the bytes that must MOVE inside the file<br/>(RAM tier) — else pick the salvage order"]
-        J2a --> J3["write only the WRONG chunks:<br/>staged copy, or download → zstd → MD5 → write at offset"]
+        J2a --> J3["write only the WRONG chunks:<br/>staged copy, or download → zstd (streamed)<br/>→ write at offset, MD5 when the stream ends"]
         J3 --> J5["final whole-file MD5 gates"]
         J5 -->|mismatch| J5b["redo only the chunks the verdicts name"]
         J5b --> J5
@@ -218,7 +218,7 @@ flowchart TD
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 whole-blob buffering (`sophon.rs`, `repair/file.rs`) · S2 same-file-only chunk reuse
+S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
 single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
@@ -259,7 +259,7 @@ cargo build --release
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
 | `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=delete`); out-of-scope paths are never candidates |
 | `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. The estimate is an **upper bound** without `--scan` (it counts every chunk the local reuse map cannot supply, while the in-place path keeps the ones that are already correct); with `--scan` it is the figure the repair will really spend. Does **not** bound metadata or manifest traffic |
-| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong |
+| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong. `SUMMARY write_bytes` is the *reported* half: the bytes written from sources that passed their gate, so it is a function of the install and not of the transport (a corrupt chunk contributes nothing) |
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |

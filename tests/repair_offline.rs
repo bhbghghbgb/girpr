@@ -1934,8 +1934,13 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
         "not a failure"
     );
     assert!(
+        summary.write_bytes_spent.load(Ordering::Relaxed) <= limit,
+        "the ceiling must not be overshot: the live counter is the one the \
+         ceiling bounds"
+    );
+    assert!(
         summary.write_bytes.load(Ordering::Relaxed) <= limit,
-        "the ceiling must not be overshot"
+        "and the reported figure is no larger than it"
     );
 
     let line = girpr::report::summary_record(&summary, code).text();
@@ -2004,7 +2009,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
 #[tokio::test]
 async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the
-    // 5× retry with 1-5 s sleeps inside `fetch_chunk_bytes` + 1-4 s of
+    // 5× retry with 1-5 s sleeps inside `stream_chunk_to` + 1-4 s of
     // file-level backoff) ≈ **125 s of pure sleeping**, measured — and that is
     // before `HypClient::new_with_bases` is even given a connect timeout. With
     // it, a file gets one attempt and the abort spares every file behind it.
@@ -2142,7 +2147,7 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
     }
 }
 
-/// How many times `fetch_chunk_bytes` asks a *retryable* origin — the linear
+/// How many times `stream_chunk_to` asks a *retryable* origin — the linear
 /// 1+2+3+4 s backoff, five attempts. Kept next to the test that depends on it so
 /// the two cannot drift.
 const ATTEMPTS: usize = 5;
@@ -2473,6 +2478,167 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     );
 
     mock.stop();
+}
+
+#[tokio::test]
+async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
+    // The checksum is the MD5 of the **decompressed** bytes, and it is
+    // verified before the protobuf parse. A manifest that does not match it
+    // cannot be planned from: the run fails as metadata, before a single byte
+    // is written.
+    //
+    // The blob the mock serves is unchanged — only the checksum the API
+    // advertises is wrong — so the checksum gate is the only thing that can
+    // catch it, and the decompressed bytes are the only thing it can be
+    // compared against.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            wrong_manifest_checksum: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("manifest_checksum");
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a manifest that does not match its checksum cannot be planned from");
+    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
+    assert!(!dir.join("config.ini").exists(), "nothing was written");
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
+    // The temp mode resumes by **length**: a chunk whose end is inside the
+    // `_tmp` is taken as done, with no hash check of its own. A streamed
+    // chunk's bytes are written before its digest is known, so a chunk that
+    // fails its digest leaves a `_tmp` that has grown past it — and the next
+    // attempt would keep the corrupt bytes and call the file complete.
+    //
+    // The rollback truncates the `_tmp` back to the chunk's offset, so the
+    // next attempt downloads *that* chunk again and keeps the good prefix
+    // before it. The mock serves one corrupt-but-well-formed chunk, so the
+    // first attempt really does write bad bytes and then fail its digest.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            corrupt_first_chunks: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("tmp_rollback");
+    let fx2 = build_fixture();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    // Only foo.dat: its first chunk is the corrupt one, and its second chunk
+    // is the one that must **not** be downloaded twice.
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    let (summary, code) = repair::run(ctx).await.expect("the retry must recover");
+    assert_eq!(code, 0, "the file was repaired on the second attempt");
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0));
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the file is correct"
+    );
+    // The corrupt chunk was asked for twice — once for the attempt that
+    // failed its digest, once for the attempt that repaired it — and the good
+    // chunk only once. Without the rollback the whole `_tmp` would be thrown
+    // away when the final MD5 failed, and the good chunk would be downloaded
+    // twice as well.
+    assert_eq!(
+        mock.chunk_hits(),
+        vec![
+            "chunk_foo0".to_string(),
+            "chunk_foo0".to_string(),
+            "chunk_foo1".to_string()
+        ],
+        "the corrupt chunk was re-downloaded, the good one was not"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
+    // `SUMMARY write_bytes` counts the bytes written into the install **from
+    // sources that passed their gate**, so it is a function of the *input
+    // state*: the same install against a clean origin and against one that
+    // serves a corrupt-but-well-formed chunk reports the same number. The
+    // corrupt chunk contributes nothing — its bytes landed, but they were
+    // never a source that passed a gate.
+    //
+    // The live counter the `--max-write-bytes` ceiling reads is a *different*
+    // number, and it is larger in the corrupt run: the chunk was written and
+    // then written again. That is the disk the run actually took, and it is
+    // the number the ceiling bounds.
+    //
+    // A streamed chunk is what makes this a question: its bytes land before
+    // its digest is known, so "what was written" and "what was allowed to be
+    // written" are two different figures, and only the second one is a
+    // function of the install.
+    async fn run(opts: MockOpts, tag: &str) -> (u64, u64) {
+        let fx = build_fixture();
+        let mock = MockServer::start(fx, opts).await;
+        let dir = temp_dir(tag);
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, b"not the game data");
+        }
+        let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+            .await
+            .expect("run");
+        assert_eq!(code, 0, "the repair recovered");
+        for f in &fx2.files {
+            assert_eq!(
+                read_game_file(&dir, &f.rel).unwrap(),
+                f.data,
+                "{} is correct",
+                f.rel
+            );
+        }
+        mock.stop();
+        (
+            summary.write_bytes.load(Ordering::Relaxed),
+            summary.write_bytes_spent.load(Ordering::Relaxed),
+        )
+    }
+
+    let (clean_reported, clean_spent) = run(MockOpts::default(), "write_bytes_clean").await;
+    let (corrupt_reported, corrupt_spent) = run(
+        MockOpts {
+            corrupt_first_chunks: 1,
+            ..Default::default()
+        },
+        "write_bytes_corrupt",
+    )
+    .await;
+
+    // The two files are 128 + 48 bytes of chunks, and every one of them is
+    // written from a source that passed its gate.
+    assert_eq!(clean_reported, 176, "the clean run's verified writes");
+    assert_eq!(
+        corrupt_reported, clean_reported,
+        "a corrupt chunk contributes nothing: the figure is a function of the \
+         install, not of the transport"
+    );
+    // The ceiling's number is the other one: the corrupt chunk landed and was
+    // charged, and then it landed again.
+    assert_eq!(
+        clean_spent, clean_reported,
+        "a clean run spends what it writes"
+    );
+    assert!(
+        corrupt_spent > corrupt_reported,
+        "the corrupt chunk's bytes are spent even though they never validated: \
+         {corrupt_spent} > {corrupt_reported}"
+    );
 }
 
 #[tokio::test]

@@ -339,6 +339,16 @@ log alone is the mechanism.
 `chunk downloaded chunk=<id>` and `no local reuse candidate -> download
 chunk=<id>` out of the trace lines.
 
+**What the two records mean.** `chunk downloaded chunk=<id>` is emitted as soon as the
+origin has answered with the chunk — it says **the origin was asked for this chunk
+and served it**, not that its body decoded. A body that turned out to be corrupt
+was still fetched, and the record has to say so: the assertion it serves is
+"this id was not requested", and a request that is invisible to the log is a
+request the log cannot rule out. The compressed byte count is on the
+`chunk decoded compressed_bytes=… decompressed_bytes=…` line, which is emitted
+when the stream ends. `no local reuse candidate -> download chunk=<id>` is the
+*decision*, before the fetch.
+
 **Match on the download record, never on the bare id.** A reused chunk is logged
 too (`reuse slice md5 ok -> copy chunk=<id>`), so a substring search for an id
 finds it in the "reused it" line and false-positives. The pre-pass gets its **own**

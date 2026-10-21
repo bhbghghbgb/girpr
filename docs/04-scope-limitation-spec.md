@@ -383,7 +383,7 @@ so that one invocation works against either tool.
 
 **The caveat is the important part.** `--sophon-base` redirects **`getBuild`
 only**. Manifest and chunk URLs are not built from the configured base at all —
-`sophon::fetch_manifest` and `sophon::fetch_chunk_bytes` both call
+`sophon::fetch_manifest` and `sophon::stream_chunk_to` both call
 `sophon::join_url(prefix, id)` on a `url_prefix` read out of the **response
 body** (`manifest_download.url_prefix`, `chunk_download.url_prefix`). Pointing
 the flag at a mock therefore redirects the metadata call and leaves every
@@ -430,19 +430,23 @@ so.
 
 ### E3 · `--max-chunk-bytes <N>` — **P2**
 
-Two jobs in one flag, both real:
+One job left, and it is real:
 
-- **Memory.** S1 buffers whole chunks (`fetch_chunk_bytes` → `decode_all`,
-  `write_downloaded_chunk`). Peak RAM per active chunk is roughly `compressed +
-  uncompressed`, and the capture measured the largest real Genshin chunk at
-  **3 689 476 B compressed**. At `--io-threads 8` that is a real number. Skipping
-  files whose largest chunk exceeds `N` bounds it.
-- **Targeting.** The same measurement makes the flag a way to *deliberately
-  exercise* the largest-chunk branch, which no small synthetic fixture reaches.
+- **Targeting.** The capture measured the largest real Genshin chunk at
+  **3 689 476 B compressed**, and the same measurement makes the flag a way to
+  *deliberately* exercise the largest-chunk branch, which no small synthetic
+  fixture reaches.
+
+**The memory half is gone.** It used to be the flag's reason to exist: S1
+buffered whole chunks (fetch → decode → write), so the peak RAM per active
+chunk was roughly `compressed + uncompressed` — at `--io-threads 8`, a real
+number. The chunk path is **streamed** now: the body is decoded as it arrives
+and the decoded bytes are written into the target as they are produced, so the
+peak per active chunk is one read window, not the chunk. Skipping files whose
+largest chunk exceeds `N` bounds nothing about RAM any more.
 
 `PLAN max_chunk_bytes=` reports this number today without enforcing it — it is
-the one that bounds peak RAM, and it is printed because printing it costs one
-line.
+printed because printing it costs one line.
 
 ### E4 · `--no-skip-intact` — **P2**
 
@@ -563,7 +567,7 @@ run that never passes the flag.
 | `scoped=1` | any path scope active |
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
-| `write_bytes=<N>` | `--max-write-bytes` active |
+| `write_bytes=<N>` | `--max-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
 | `stopped=<bytes>\|write\|delete` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`, `delete` = a cleanup pass refused by `--max-delete-bytes`. The key says *which* ceiling bound, so the three cannot share a value |
 | `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |

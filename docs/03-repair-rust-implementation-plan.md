@@ -24,7 +24,7 @@ src/logging.rs        # console layer (--log-level/RUST_LOG) + always-TRACE file
 src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formatting and emission
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
-src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, filtering, local chunk map
+src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
 src/util.rs           # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, rel-path normalization
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/metadata.rs# local config.ini version, ignore/blacklist files, server metadata (step 1-2)
@@ -84,13 +84,13 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Server metadata (`game_config`/`game_branch`/`chunk_build` latest + optional local) | `repair::metadata::fetch` + `hyp::HypClient` (2) | Starward |
 | Effective audio + scan-file write | `repair::audio::{resolve_effective_audio,write_scan_file}` (1) | Starward |
 | Begin `REPORT` | `report::format_report_line` (2.5) | Starward |
-| Manifest fetch/verify/parse | `repair::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode → md5 check → `prost::Message::decode` (3) | Starward |
+| Manifest fetch/verify/parse | `repair::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
 | Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `io_threads`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (lazy, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::plan::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Single-writer lock | `repair::lock::Lock::acquire` — `{game_dir}/girpr.lock`, created with `create_new`; a live lock refuses the run with exit 1 (6) | — |
-| Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode → md5 → write at offset → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
+| Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode **streamed straight into the file**, digested on the way past → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
 | Check-only | `repair::check::verify_plan` (6.5) | Starward |
 | Post deletes/config | `repair::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
 | Files-cleanup after | `repair::plan::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
@@ -116,7 +116,8 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
   clean/dirty, dry-run, both purge timings, deprecated deletes, the non-chunk
   `default_download_mode` refusal, the per-launcher channel on the deprecated
   call, the local-slice reuse and the temp mode's resume-by-length (asserting the
-  exact chunk download set), the in-place path's two tiers and the mode
+  exact chunk download set) and its rollback of a chunk that fails its digest, the
+  manifest's checksum gate, the in-place path's two tiers and the mode
   resolution, the single-writer lock, and the audio scan file.
   `--dry-run`/`--check-only` are covered here, so no live-game CI dependency exists.
 - **Binary-level tests** (`tests/cli_contract.rs`): run the built binary
@@ -126,6 +127,10 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
   `#[ignore]`d, and it drives the real binary over a captured bundle — each
   capture twice, once per write mode, asserting that the two produce the same
   file and that the in-place one writes less.
+- **The measurement** (`tests/peak_heap.rs`): `#[ignore]`d, and it prints the
+  chunk path's **peak live heap** — the streamed write against the buffered
+  decode — so the RAM claim is re-derivable in a minute instead of asserted in
+  a document.
 
 ## 5. Logging & correlation
 
@@ -165,6 +170,15 @@ persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` r
 The rows are two ways to spend disk, not two rungs of a safety ladder. Both gate the file on
 the same whole-file MD5, and `config.ini` advances only when every planned file verified.
 
+**The RAM a repair holds.** A downloaded chunk is **streamed**: the compressed body is
+decoded as it arrives and the decoded bytes are written into the target as they are
+produced, so the peak per active chunk is one read window plus the decoder's buffer
+(**33 684 B measured** on the 2 162 302 B chunk — `tests/peak_heap.rs`), not the chunk. The
+only RAM that scales with the file is the in-place tier's staging, and that is what
+`--max-ram-bytes` bounds. A manifest is streamed too, into a buffer the API's
+`uncompressed_size` sizes; its *decoded* bytes have to be resident for `prost` to parse
+them, which is the one term the decode cannot remove.
+
 **What is deliberately not implemented yet,** with the reason:
 
 | item | why not now |
@@ -173,7 +187,7 @@ the same whole-file MD5, and `config.ini` advances only when every planned file 
 | a speculative single-pass capture (capture every candidate source range during the scan, instead of a second pass over the bad ones only) | saves one read pass when the plan-time estimate fits the budget; costs RAM for sources that turn out not to be needed. The exact two-pass scheme is simpler to reason about, and the read is mostly served by the page cache |
 | cross-file salvage (a chunk from any local file, not just the same path) | mutually exclusive with an in-place repair absent a file-level order: repairing a donor destroys a donee's source. The reuse map is same-file-only, so the conflict is latent — but it must be settled before anyone adds it |
 | reclaim-on-demand (delete files mid-run to make room) | the in-place repair removes most of the pressure; it collides with `--max-delete-bytes`' "before anything is deleted" promise and deserves its own flag and its own doc |
-| streaming zstd decode | a RAM question, not a disk one |
+| an incremental protobuf parse of the manifest | the manifest's *decoded* bytes (16.8 MB for the `game` manifest of build 7.1.0) must be resident for `prost` to parse them — the remaining term is protobuf, not zstd. The wire form is a sequence of `0x0A <varint len> <bytes>`, so each entry could be parsed on its own as the bytes arrive, but that needs the *read* side of the decoder (an async→sync bridge) and a ~60-line wire reader that must agree with `prost` on field order, unknown fields and framing. A separate piece of work with its own risk profile |
 | hard-link dedup of byte-identical manifest paths | permanent space rather than transient, NTFS-only (exFAT, where Genshin installs often live, has no hard links), and it interacts with the in-place write: rewriting one link rewrites both |
 | a compressed chunk cache on disk | strictly more disk, retained on purpose — the opposite of what this tool is for |
 

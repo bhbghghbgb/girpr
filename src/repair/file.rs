@@ -25,10 +25,32 @@
 //!   not match, the per-chunk verdicts name the culprit and only those are
 //!   redone.
 //!
-//! Every byte written is hash-gated before it lands, whichever path wrote
-//! it: a downloaded chunk's MD5 is checked before the write, and a staged
-//! source's MD5 is checked before it is staged and again before it is
-//! written.
+//! Every byte written lands in a region that was **already wrong at the
+//! moment of the write**, and the whole-file MD5 decides whether the file is
+//! good.
+//!
+//! A *downloaded* chunk cannot be hash-gated before it lands: the digest of a
+//! decoded stream is only known when the stream ends, and the stream ends
+//! after the last byte has been written. What replaces the gate is checkable
+//! in the code rather than hopeful:
+//!
+//! - the in-place path writes only to the chunks the scan found wrong, and to
+//!   the ones the whole-file MD5 still finds wrong after a re-do — so the
+//!   bytes it lands replace bytes that were already bad;
+//! - a downloaded chunk's bytes come from the network, not from the file, so
+//!   it consumes no source region: the salvage rule is not *weakened*, it
+//!   just loses a candidate when a download fails its digest — the region it
+//!   overwrote may have been another chunk's source, and the next scan
+//!   re-checks every source, so the cost is a download, never a wrong byte;
+//! - the in-place path has **no rollback**, and does not need one: it has no
+//!   resume artefact, and the next attempt's scan finds the chunk wrong and
+//!   rewrites it. The temp mode is the other way round — it resumes by
+//!   length, so a chunk that failed its digest is rolled back to its offset
+//!   (see `rollback_tmp`);
+//! - the temp path is safe by construction: the `_tmp` is promoted only after
+//!   the whole-file MD5 passes, and the rollback keeps its *resume* honest;
+//! - a staged source's MD5 is still checked before it is staged, so that path
+//!   keeps the stronger property it always had.
 //!
 //! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a
 //! file are strictly sequential.
@@ -325,7 +347,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                 tracing::warn!(attempt, "attempt failed: {e:#}");
                 // `--fail-fast` cuts the backoff short. Without it, one bad
                 // file spends 5 × linear sleep (and each of those attempts has
-                // its own 5× chunk retry inside `fetch_chunk_bytes`) before the
+                // its own 5× chunk retry inside `stream_chunk_to`) before the
                 // run even starts on the next file.
                 if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);
@@ -825,6 +847,23 @@ enum Tier {
     Ordered,
 }
 
+/// A write that passed its gate.
+///
+/// The bytes are counted twice, on purpose. `stats.bytes_written` is the
+/// file's own figure (the per-file half of `kept_bytes`), and the summary's
+/// `write_bytes` is the run's **reported** one: the bytes written into the
+/// install from sources that passed their gate. The *live* counter that the
+/// `--max-write-bytes` ceiling reads is charged separately, by
+/// [`reserve_write`], at the moment the bytes land — so the ceiling bounds
+/// the disk, and the reported figure stays a function of the input state.
+///
+/// The streamed download calls this **after** its digest has been checked, so
+/// a chunk that never validated contributes nothing to the reported figure.
+fn note_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) {
+    stats.bytes_written += n;
+    ctx.summary.note_write_bytes(n);
+}
+
 /// Write `bytes` at `offset`.
 fn write_at(
     ctx: &FileCtx,
@@ -836,7 +875,7 @@ fn write_at(
     reserve_write(ctx, bytes.len() as u64)?;
     f.seek(SeekFrom::Start(offset))?;
     f.write_all(bytes)?;
-    stats.bytes_written += bytes.len() as u64;
+    note_write(ctx, stats, bytes.len() as u64);
     Ok(())
 }
 
@@ -865,7 +904,7 @@ fn copy_within(
         reserve_write(ctx, n as u64)?;
         f.seek(SeekFrom::Start(dst + done))?;
         f.write_all(&buf[..n])?;
-        stats.bytes_written += n as u64;
+        note_write(ctx, stats, n as u64);
         done += n as u64;
     }
     Ok(())
@@ -998,7 +1037,7 @@ fn zero_fill(
     while left > 0 {
         let n = (left as usize).min(zeros.len());
         out.write_all(&zeros[..n])?;
-        stats.bytes_written += n as u64;
+        note_write(ctx, stats, n as u64);
         left -= n as u64;
     }
     Ok(())
@@ -1061,7 +1100,18 @@ async fn repair_attempt_inner(
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
-                write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await?;
+                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await {
+                    // The chunk's bytes may have landed in the `_tmp` before
+                    // its digest was known, and the temp mode resumes by
+                    // **length**: a `_tmp` that grew past this chunk would be
+                    // taken as "already complete" by the next run, and the
+                    // corrupt bytes would be kept. Truncating back to the
+                    // chunk's offset makes the resume honest — the chunks
+                    // before it were each digest-checked when they were
+                    // written, and everything from it on is gone.
+                    rollback_tmp(&mut f, c.offset.max(0) as u64)?;
+                    return Err(e);
+                }
             }
         }
     }
@@ -1077,6 +1127,41 @@ enum ChunkOutcome {
     Resumed,
     Reused,
     Download,
+}
+
+/// Truncate the `_tmp` back to `offset`, so a chunk that failed cannot be
+/// resumed as "already complete".
+///
+/// **Why the temp mode needs this and the in-place path does not.** The temp
+/// mode resumes by **length**: a chunk whose end is inside the `_tmp` is
+/// taken as done, with no hash check. A streamed chunk's bytes are written
+/// before its digest is known, so a chunk that fails its digest leaves a
+/// `_tmp` that has grown past it — and the next attempt would keep the
+/// corrupt bytes and call the file complete. The rollback makes the resume
+/// point honest.
+///
+/// **What the truncation guarantees.** The `_tmp` is cut back to the failed
+/// chunk's offset, so the chunk itself cannot be taken as "already complete"
+/// and the bytes after it are gone. The bytes *before* it are either
+/// digest-checked (the chunks this attempt wrote) or the prefix a previous
+/// run left — the temp mode resumes by length, with no hash check of its own,
+/// which is the whole reason the rollback has to exist. Either way the
+/// whole-file MD5 gates the promotion.
+///
+/// The truncation never extends: a `_tmp` shorter than the offset is left
+/// alone.
+fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len <= offset {
+        return Ok(());
+    }
+    f.set_len(offset)?;
+    tracing::debug!(
+        tmp_bytes = len,
+        offset,
+        "the failed chunk is rolled back out of the tmp"
+    );
+    Ok(())
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
@@ -1142,7 +1227,7 @@ fn try_reuse_slice(
                 // appears in neither `download_bytes` nor the plan's estimate.
                 reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
-                stats.bytes_written += n as u64;
+                note_write(ctx, stats, n as u64);
                 remaining -= n as u64;
             }
             Ok(ChunkOutcome::Reused)
@@ -1158,12 +1243,79 @@ fn try_reuse_slice(
     }
 }
 
-/// Download → zstd decode → size/MD5 verify → write at the chunk offset.
+/// The sink of a streamed chunk: the decoded bytes go straight into the
+/// target file, at the chunk's offset.
 ///
-/// V1-SIMPLIFICATION (S1, see README): whole-chunk buffering (`fetch` +
-/// `decode_all`) instead of Starward's streaming `Pipe +
-/// DecompressionStream` pipeline. Simpler and avoids any retained blob store;
-/// costs higher peak RAM per active chunk.
+/// **The write ceiling is charged per piece**, the way the reuse copy charges
+/// it (`copy_within`): a chunk is no longer one indivisible write, so a
+/// ceiling that trips in the middle of a chunk stops the run in the middle of
+/// a chunk. The README already documents that a runtime hard stop leaves the
+/// work done in place, and the next run re-verifies and continues.
+struct ChunkFileSink<'a> {
+    ctx: &'a FileCtx,
+    file: &'a mut File,
+    offset: u64,
+    written: u64,
+}
+
+impl<'a> ChunkFileSink<'a> {
+    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> Self {
+        Self {
+            ctx,
+            file,
+            offset,
+            written: 0,
+        }
+    }
+
+    /// How many bytes have landed in the file.
+    fn written(&self) -> u64 {
+        self.written
+    }
+}
+
+impl Write for ChunkFileSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // The write ceiling counts this piece: it goes into the install, and
+        // the ceiling counts what lands there.
+        reserve_write(self.ctx, buf.len() as u64).map_err(std::io::Error::other)?;
+        // The seek is per piece, and it is deliberate: the sink is
+        // position-independent, so the caller cannot get it wrong by having
+        // left the file's cursor somewhere else. A syscall per 32 KB is
+        // nothing next to the decode.
+        self.file
+            .seek(SeekFrom::Start(self.offset + self.written))?;
+        self.file.write_all(buf)?;
+        self.written += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl sophon::ChunkSink for ChunkFileSink<'_> {
+    fn restart(&mut self) -> std::io::Result<()> {
+        // A retry starts the chunk over. The failed attempt's bytes are in the
+        // file, and they are about to be overwritten by the same chunk's
+        // bytes — the region was wrong before the write and it is wrong now.
+        self.written = 0;
+        self.file.seek(SeekFrom::Start(self.offset))?;
+        Ok(())
+    }
+}
+
+/// Download → zstd decode → digest → write at the chunk offset.
+///
+/// The chunk is **streamed**: the compressed body is decoded as it arrives and
+/// the decoded bytes are written into the target as they are produced, so the
+/// chunk is never resident as a whole. The digest is therefore known when the
+/// stream ends — one byte too late to gate the write, which is the invariant
+/// this path changes (see the module doc).
+///
+/// NOTE(starward-parity): Starward writes the decompressed chunk straight into
+/// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
 async fn write_downloaded_chunk(
     ctx: &FileCtx,
@@ -1176,7 +1328,7 @@ async fn write_downloaded_chunk(
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
     // compare-and-swap is what actually bounds the run. Reserving the manifest's
     // `compressed_size` keeps the stop exact under `--io-threads N` instead of
-    // overshooting by up to N-1 chunks, and the real `blob.len()` is folded back
+    // overshooting by up to N-1 chunks, and the real byte count is folded back
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;
     if !ctx.summary.reserve_download_bytes(reserved) {
@@ -1188,41 +1340,47 @@ async fn write_downloaded_chunk(
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
+    let expected = c.uncompressed_size.max(0) as u64;
+    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
     // A failed fetch delivers nothing, so the reservation goes straight back.
     // Without this the `?` below would leak `compressed_size` per attempt, for
     // bytes that never arrived — and with no ceiling set the sentinel is
     // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
-    let blob = match sophon::fetch_chunk_bytes(&ctx.http, prefix, &c.id).await {
-        Ok(b) => b,
+    let digest = match sophon::stream_chunk_to(&ctx.http, prefix, &c.id, expected, &mut sink).await
+    {
+        Ok(d) => d,
         Err(e) => {
             ctx.summary.adjust_download_bytes(-(reserved as i64));
             return Err(e).with_context(|| format!("chunk {}", c.id));
         }
     };
-    let actual = blob.len() as u64;
+    let actual = digest.compressed_bytes;
     ctx.summary
         .adjust_download_bytes(actual as i64 - reserved as i64);
     stats.download_bytes += actual;
-    let decoded = zstd::stream::decode_all(std::io::Cursor::new(&blob))
-        .with_context(|| format!("zstd chunk {}", c.id))?;
-    tracing::trace!(chunk = %c.id, compressed_bytes = blob.len(), decompressed_bytes = decoded.len(), "chunk decoded");
-    if decoded.len() as i64 != c.uncompressed_size {
+    tracing::trace!(chunk = %c.id, compressed_bytes = actual, decompressed_bytes = digest.bytes, "chunk decoded");
+    // The size and the digest are checked **after** the stream ends, which is
+    // after the last byte has been written. A mismatch fails the attempt, and
+    // the attempt's bytes are handed back by the caller.
+    //
+    // The write is counted **after** the checks, so a chunk that never
+    // validated contributes nothing to the reported `write_bytes`. The bytes
+    // are still spent — the live counter the ceiling reads has them — but the
+    // run's answer to "how much did the repair rewrite" does not move because
+    // the network was flaky.
+    if digest.bytes != expected {
         anyhow::bail!(
             "chunk {} size mismatch: expect {} got {}",
             c.id,
             c.uncompressed_size,
-            decoded.len()
+            digest.bytes
         );
     }
-    let dh = format!("{:x}", md5::compute(&decoded));
-    if !dh.eq_ignore_ascii_case(&c.uncompressed_md5) {
-        tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %dh, "chunk md5 mismatch");
+    if !digest.md5.eq_ignore_ascii_case(&c.uncompressed_md5) {
+        tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
-    out.seek(SeekFrom::Start(c.offset as u64))?;
-    reserve_write(ctx, decoded.len() as u64)?;
-    out.write_all(&decoded)?;
-    stats.bytes_written += decoded.len() as u64;
+    note_write(ctx, stats, sink.written());
     stats.chunks_downloaded += 1;
     Ok(())
 }
