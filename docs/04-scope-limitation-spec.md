@@ -616,6 +616,31 @@ Emitted **only when the corresponding limit is active**, which is what keeps the
 machine contract non-breaking: an unflagged run's output is byte-identical to a
 run that never passes the flag.
 
+### 6.1 Two numbers for every byte count
+
+A byte count answers two questions, and they have different answers: *what did
+the run **spend*** and *what did the run **achieve***.
+
+- The **live** figure is the spend. It is charged *before* the resource is
+  consumed, so it is what a runtime hard stop reads and what a budget is
+  about: the bytes are spent whether they turn out to be good or not.
+- The **settled** figure is the achievement. It is charged *after* the resource
+  validated, so it is a function of the *install* rather than of the transport.
+
+The two are equal in a clean run and differ exactly when something failed, and
+the difference is the waste: the bytes that were spent and did not become part
+of the install. Both are on the data plane, because a reader who has only one
+of them cannot tell a clean run from a lucky one.
+
+**What the byte counts are worth.** A byte count is worth exactly what its
+question is worth: the settled figures answer *what did the repair achieve*,
+so they must not move because the network was flaky — the same install against
+a clean origin and against one that serves a corrupt chunk has to report the
+same number — and the live figures answer *what did it cost*, which is the
+question a budget asks.
+
+### 6.2 The keys
+
 | key | when |
 |---|---|
 | `limited=1` | any ceiling active |
@@ -653,8 +678,8 @@ src/repair/plan/
 src/repair/scope/
   mod.rs      re-exports; the assertion that turns a plan into pass/refuse
   filter.rs   PathScope, is_visible, compile_patterns     (pure)
-  limits.rs   Limits (files / download / write / delete) (pure)
-  ledger.rs   the runtime reservations the hard stops read
+  limits.rs   Limits (files / download / write / verified / delete) (pure)
+  ledger.rs   Meter, StoppedBy, the runtime reservations the hard stops read
   report.rs   PLAN line + --plan-out JSON
 ```
 
