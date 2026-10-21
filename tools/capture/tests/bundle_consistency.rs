@@ -89,7 +89,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Scratch, PathBuf) {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new(name);
     let r = run(&[
         "capture",

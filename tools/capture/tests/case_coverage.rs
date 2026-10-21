@@ -192,7 +192,7 @@ fn the_instrument_reproduces_the_patchmaps_own_arithmetic() {
         );
         return;
     };
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("outcome");
     let r = run(&[
         "capture",
@@ -279,7 +279,7 @@ fn the_instrument_reproduces_the_crates_class_populations() {
         );
         return;
     };
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("population");
     let r = run(&[
         "capture",

@@ -301,7 +301,7 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Testing (offline by construction)
 
 ```powershell
-cargo test            # 147 unit + 106 integration, all offline
+cargo test            # 147 unit + 113 integration, all offline
 cargo test --test repair_offline
 cargo test --test repair_machinery
 cargo clippy --all-targets

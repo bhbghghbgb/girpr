@@ -20,7 +20,7 @@ Which gate to reach for is in
 ## 1. What is compared
 
 A bundle is captured twice from one commit, against the crate's own loopback
-mock (`tests/common/mod.rs`, `World::five_classes()`). Each capture is walked,
+mock (`tests/common/mod.rs`, `World::all_shapes()`). Each capture is walked,
 every file read, and:
 
 | step | what |
@@ -179,7 +179,7 @@ failure mode where one commit looks like it changed the output because its
 
 ## 6. Profiles, and what each one can and cannot see
 
-One profile, `World::five_classes()`, produces a **79-file** bundle covering
+One profile, `World::all_shapes()`, produces a **79-file** bundle covering
 every document type the tool writes:
 
 | | mock | reference (`20261020T154810Z`) |

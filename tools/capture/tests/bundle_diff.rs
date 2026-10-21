@@ -75,7 +75,7 @@
 //!
 //! ## No network
 //!
-//! Two captures of `World::five_classes()` against the loopback mock, in a
+//! Two captures of `World::all_shapes()` against the loopback mock, in a
 //! scratch directory removed on drop. See `tests/common/mod.rs`: the mock is the
 //! only listener and binds `127.0.0.1:0`, so there is no route off the host.
 
@@ -112,7 +112,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Capture `World::five_classes()` into `<scratch>/<slot>/`.
+/// Capture `World::all_shapes()` into `<scratch>/<slot>/`.
 fn capture_into(mock: &Mock, scratch: &Scratch, slot: &str) -> PathBuf {
     let out = scratch.join(slot);
     let args = [
@@ -504,7 +504,7 @@ fn differences(a: &[u8], b: &[u8]) -> String {
 /// very hard to see, because `cargo test` is still green.
 #[test]
 fn two_captures_of_the_same_fixture_agree() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = TempDir::new("gircap-diff", "pair");
 
     let a = capture_into(&mock, &scratch, "a");

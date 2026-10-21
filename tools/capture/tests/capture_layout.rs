@@ -154,7 +154,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new(name);
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1024,7 +1024,7 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
 /// stored rather than re-rendered.
 #[test]
 fn the_request_log_rows_are_what_the_spec_says_they_are() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("rows");
     let r = capture(&mock, &scratch, &["--jobs", "1"]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1109,7 +1109,7 @@ fn a_retried_request_is_recorded_as_retried() {
     // is the same blob the row pin already names, so it is the same construction
     // either way.
     let armed = "/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e";
-    let mock = Mock::start(World::five_classes()).fail_once_for(armed);
+    let mock = Mock::start(World::all_shapes()).fail_once_for(armed);
     let scratch = Scratch::new("retry");
     let r = capture(&mock, &scratch, &["--jobs", "1"]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1203,7 +1203,7 @@ fn row_key(v: &serde_json::Value) -> String {
 /// stored rather than re-rendered.
 #[test]
 fn the_captured_api_bodies_are_the_bytes_the_server_sent() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("byteexact");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1283,7 +1283,7 @@ fn every_request_url_in_the_bundle_is_a_loopback_address() {
 /// it had wanted to, because nothing told it one.
 #[test]
 fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("cdn");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1453,7 +1453,7 @@ fn the_matrix_names_every_class_and_says_what_happened_to_it() {
 /// the audio manifest is fetched from **both** builds either way it appears.
 #[test]
 fn audio_widens_the_selection_pool() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("audio");
     let with = capture(&mock, &scratch, &[]);
     assert_eq!(with.code, 0, "{}\n{}", with.stdout, with.stderr);
@@ -1499,7 +1499,7 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
 /// requirement is not met.
 #[test]
 fn requiring_an_unmet_class_is_exit_four() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("require");
     let r = capture(
         &mock,
@@ -1530,7 +1530,7 @@ fn requiring_an_unmet_class_is_exit_four() {
 /// body — so counting files would be counting the wrong thing.
 #[test]
 fn the_six_api_rows_record_where_their_body_was_written() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("stored-as");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1606,7 +1606,7 @@ fn the_six_api_rows_record_where_their_body_was_written() {
 /// *green for the right reason* - because there was a file to read.
 #[test]
 fn no_chunk_blobs_still_writes_the_launcher_metadata() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("nobloobs-prelude");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1661,7 +1661,7 @@ fn no_chunk_blobs_still_writes_the_launcher_metadata() {
 /// than `pass`: a skip is not a success.
 #[test]
 fn no_chunk_blobs_is_incomplete_not_pass() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1718,7 +1718,7 @@ fn no_chunk_blobs_is_incomplete_not_pass() {
 /// tag* rather than as a build with no manifests, and says so in the detail.
 #[test]
 fn an_old_tag_the_api_does_not_serve_is_refused() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("nosuchtag");
     let r = capture(&mock, &scratch, &["--old-tag", "9.9.9"]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
@@ -1732,7 +1732,7 @@ fn an_old_tag_the_api_does_not_serve_is_refused() {
 /// *that*, rather than silently falling back.
 #[test]
 fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
-    let mut world = World::five_classes();
+    let mut world = World::all_shapes();
     // Put the unservable tag first, as a branch whose old build was retired does.
     world.old_in_diff_tags = false;
     let mock = Mock::start(world);

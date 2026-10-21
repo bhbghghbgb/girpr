@@ -53,7 +53,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn capture_into(prefix: &str, extra: &[&str]) -> PathBuf {
     let scratch = unique_path(prefix, "shared");
     std::fs::create_dir_all(&scratch).expect("scratch");
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let out = scratch.join("artifacts");
     let hyp_base = mock.hyp_base();
     let sophon_base = mock.sophon_base();

@@ -240,7 +240,7 @@ impl World {
     /// published only `game` would not be a narrower fixture — it would be a
     /// capture that cannot finish. The audio file is byte-identical across the
     /// pair so it does not take a class away from `game`.
-    pub fn five_classes() -> World {
+    pub fn all_shapes() -> World {
         let shared = File::new(
             "GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all",
             &[200, 201],
@@ -357,13 +357,13 @@ impl World {
         }
     }
 
-    /// [`World::five_classes`] with no audio field at all.
+    /// [`World::all_shapes`] with no audio field at all.
     ///
     /// Only usable with `--audio none`: with the default, the capture asks for an
     /// `en-us` manifest this world does not publish, and refuses. That refusal is
     /// correct and is not what this world is for.
     pub fn game_only() -> World {
-        let mut w = World::five_classes();
+        let mut w = World::all_shapes();
         w.old.fields.retain(|(f, _)| f == "game");
         w.new.fields.retain(|(f, _)| f == "game");
         w
