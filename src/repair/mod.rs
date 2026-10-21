@@ -396,7 +396,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
     summary.set_download_limit(ctx.limits.download_bytes);
+    summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
+    summary.set_verified_write_limit(ctx.limits.verified_write_bytes);
     summary.set_ram_limit(ctx.limits.ram_bytes);
     summary.set_fail_fast(ctx.fail_fast);
     tracing::info!(
@@ -416,8 +418,23 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.repair_mode,
     )
     .await;
+    // The byte figures, when their ceilings were asked for. The **settled**
+    // one is what the repair achieved; the **spent** one is what it cost.
+    // They are the same number in a clean run and differ exactly when the
+    // transport misbehaved, so a reader who has only one of them cannot tell
+    // a clean run from a lucky one.
+    //
+    // The settled write figure is reported when *either* write ceiling is
+    // active: a run that asked "how much may I rewrite?" wants to see the
+    // answer, whichever of the two ceilings it asked with.
+    if ctx.limits.download_bytes.is_some() {
+        summary.flags.download_bytes_spent = Some(summary.download.live());
+    }
+    if ctx.limits.write_bytes.is_some() || ctx.limits.verified_write_bytes.is_some() {
+        summary.flags.write_bytes = Some(summary.write.settled());
+    }
     if ctx.limits.write_bytes.is_some() {
-        summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
+        summary.flags.write_bytes_spent = Some(summary.write.live());
     }
     // The repair-mode group: what was asked for, what happened, and how many
     // bytes did not have to be written. Emitted only when the flag was
@@ -437,24 +454,20 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // the temp path's `_tmp` is resumed by length, the in-place path's
     // correct chunks stay correct — but it is state, so `SUMMARY` says so
     // rather than leaving it to be discovered.
-    if summary.download_stopped() {
+    //
+    // The value is the **flag** that bound, not a vocabulary word: it says
+    // which ceiling it was without the reader having to know a mapping, and it
+    // scales with the number of ceilings.
+    let stopped = summary.stopped_by();
+    if let Some(flag) = stopped.flag() {
         tracing::error!(
-            "stopped after {} downloaded bytes: --max-download-bytes is a hard stop; \
+            "stopped: {} is a hard stop, at {} bytes (the {} figure); \
              *_tmp files left in place are resumed by the next run",
-            summary.download_bytes.load(Ordering::Relaxed)
+            flag,
+            stopped.count(&summary),
+            stopped.figure()
         );
-        summary.flags.stopped = Some("bytes");
-        return Ok((summary, 5));
-    }
-    // Same shape, different ceiling: `stopped=write` (not `bytes`) so a parser
-    // can tell which one bound without re-deriving it from the flags.
-    if summary.write_stopped() {
-        tracing::error!(
-            "stopped after {} written bytes: --max-write-bytes is a hard stop; \
-             *_tmp files left in place are resumed by the next run",
-            summary.write_bytes.load(Ordering::Relaxed)
-        );
-        summary.flags.stopped = Some("write");
+        summary.flags.stopped = Some(flag);
         return Ok((summary, 5));
     }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
@@ -487,8 +500,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 /// bound.
 ///
 /// A runtime hard stop in the cleanup is exit `5` like every other limit, and
-/// `stopped=delete` says which one — deletion is the one irreversible act in
-/// the tool, so a bounded delete that got refused has to be visible.
+/// `stopped=--max-delete-bytes` says which one — deletion is the one
+/// irreversible act in the tool, so a bounded delete that got refused has to be
+/// visible.
 fn finish(outcome: post::PostOutcome, summary: &mut Summary) -> i32 {
     match outcome {
         post::PostOutcome::Ok | post::PostOutcome::DeletedNothing => 0,
@@ -496,7 +510,7 @@ fn finish(outcome: post::PostOutcome, summary: &mut Summary) -> i32 {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );
-            summary.flags.stopped = Some("delete");
+            summary.flags.stopped = Some("--max-delete-bytes");
             5
         }
     }

@@ -165,7 +165,7 @@ Two enforcement points exist and are not interchangeable:
 | shape | when | suits |
 |---|---|---|
 | **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
-| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp` |
+| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp`, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
 
 Both produce exit `5`.
 
@@ -277,9 +277,11 @@ the same quantity by construction.
 The reservation is a compare-and-swap taken **before** each fetch, not a
 check-then-add: under `--io-threads N` a check overshoots by up to N−1 chunks,
 and a ceiling is not a guideline. The counter is incremented with the real
-`blob.len()` and the reservation handed back on any abandoned attempt, so
-`SUMMARY download_bytes` is exact by construction rather than by assumption, and
-a failed-and-retried attempt does not inflate the total.
+`blob.len()`, and the reservation is handed back when the fetch delivered
+nothing at all. `SUMMARY download_bytes` counts the bytes of the files that
+were actually **promoted**, so a failed-and-retried attempt does not inflate
+the reported total; the bytes that attempt did fetch are still counted against
+the ceiling, because they crossed the wire.
 
 ### B3 · `--max-write-bytes <N>` — **P1** — runtime hard stop
 
@@ -321,6 +323,48 @@ complementary rather than redundant: the glob narrows what is *counted*, the
 ceiling bounds what is *done*.
 
 `post::delete_deprecated` is a handful of files and needs no ceiling.
+
+### B5 · `--max-verified-download-bytes <N>` / `--max-verified-write-bytes <N>` — **P1** — runtime hard stop
+
+The two ceilings the **live/settled** split makes possible.
+
+**The problem they solve.** `--max-download-bytes` and `--max-write-bytes` bound
+the **live** figures: the traffic the run caused, and the disk it took. Neither
+bounds **the repair** — how much of the install the run actually had to
+rewrite. So a run against a flaky origin gets stopped early (the budget was
+eaten by retries that produced nothing), while a run that legitimately rewrote
+40 GB of the install is not bounded by anything except the disk.
+
+These two bound the **settled** figures instead: the bytes of the files that
+were actually repaired, and the bytes the repair actually wrote into the
+install. A budget on the *outcome*, not on the *cost*.
+
+**Both are runtime hard stops**, never pre-flight refusals: the split between
+the two figures is only known at runtime, so there is nothing to refuse
+against. Both count towards `limited=1`, and both answer with exit `5` and a
+`stopped=` value that names the flag that bound.
+
+**The line is checked when the bytes are settled**, so it can be crossed by the
+write that settled them: one chunk for the disk, one file for the network. The
+bytes are counted either way — the write happened, and a figure that stopped
+counting would be a lie — and the run stops with the work it had done left in
+place, which is what every other hard stop does.
+
+**Why two flags and not one.** A user who wants "do not rewrite more than N
+bytes of my install" wants the write one; a user who wants "do not fetch more
+than N bytes that actually land in files" wants the download one. Collapsing
+them into a single `--max-repair-bytes` would have to pick one of the two
+quantities, and the other would stay unbounded.
+
+**They compose with the existing ceilings, and the order matters.** The live
+ceilings are checked first — they bound the disk and the network — and the
+verified ones are checked when a resource is settled. A run with both
+`--max-write-bytes` and `--max-verified-write-bytes` stops on whichever is
+reached first, and `stopped=` says which.
+
+**A flag that never fires is not a failure.** A run that never settles that
+many bytes is simply not limited by it; there is nothing to report and
+nothing to refuse.
 
 ### C1 · `--print-plan` + `--plan-out <FILE>` — **P0** — observability
 
@@ -498,9 +542,9 @@ correct answer rather than a limitation of the design.
 **A refusal has no partial state, except one.** For B1, B2's pre-flight half and
 B4: nothing has been written when the run exits `5` — no directory created, no
 `_tmp` opened, no file deleted, no `config.ini` touched. The single exception is
-B2's and B3's runtime hard stop, which by definition fires mid-flight and leaves
-`*_tmp` behind. That is safe, but it is state, and `SUMMARY stopped=` must say
-so rather than leaving it to be discovered.
+B2's, B3's and B5's runtime hard stop, which by definition fires mid-flight and
+leaves `*_tmp` behind. That is safe, but it is state, and `SUMMARY stopped=`
+must say so rather than leaving it to be discovered.
 
 ### 4.1 Read-only modes
 
@@ -553,6 +597,17 @@ flags, not prose. The one thing a refusal has and a normal run does not is that
 every value in it is `0` except the plan-derived ones, which is itself the proof
 that nothing was written.
 
+**`stopped=` names the flag.** The value is the flag that bound
+(`--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`), not a
+vocabulary word. It is a **breaking change** to the `SUMMARY` line: the three
+values `bytes` / `write` / `delete` are gone, replaced by the flags they stood
+for. A consumer that matched on them has to be updated; a consumer that only
+looked for the key's presence is unaffected. The reason is the one the plan
+weighed: the flat vocabulary needed a new word per ceiling, and the words said
+less than the flags do — `stopped=--max-write-bytes` is self-describing, it
+scales with the number of ceilings, and it is the shape a script already has
+to write.
+
 ---
 
 ## 6. `SUMMARY` additions
@@ -561,16 +616,48 @@ Emitted **only when the corresponding limit is active**, which is what keeps the
 machine contract non-breaking: an unflagged run's output is byte-identical to a
 run that never passes the flag.
 
+### 6.1 Two numbers for every byte count
+
+A byte count answers two questions, and they have different answers: *what did
+the run **spend*** and *what did the run **achieve***.
+
+- The **live** figure is the spend. It is charged *before* the resource is
+  consumed, so it is what a runtime hard stop reads and what a budget is
+  about: the bytes are spent whether they turn out to be good or not.
+- The **settled** figure is the achievement. It is charged *after* the resource
+  validated, so it is a function of the *install* rather than of the transport.
+
+The two are equal in a clean run and differ exactly when something failed, and
+the difference is the waste: the bytes that were spent and did not become part
+of the install. Both are on the data plane, because a reader who has only one
+of them cannot tell a clean run from a lucky one.
+
+**What the byte counts are worth.** A byte count is worth exactly what its
+question is worth: the settled figures answer *what did the repair achieve*,
+so they must not move because the network was flaky — the same install against
+a clean origin and against one that serves a corrupt chunk has to report the
+same number — and the live figures answer *what did it cost*, which is the
+question a budget asks.
+
+### 6.2 The keys
+
 | key | when |
 |---|---|
 | `limited=1` | any ceiling active |
 | `scoped=1` | any path scope active |
 | `plan_files=<N>` | any ceiling or scope active |
 | `plan_download_bytes=<N>` | `--max-download-bytes` active |
-| `write_bytes=<N>` | `--max-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
+| `download_bytes_spent=<N>` | `--max-download-bytes` active. The bytes that **crossed the wire**, the abandoned attempts' included: the traffic the run caused, which is what the ceiling bounds. `download_bytes` is the other half — the bytes of the files that were actually repaired — and the two are the same number in a clean run and differ exactly when the transport misbehaved |
+| `write_bytes=<N>` | `--max-write-bytes` **or** `--max-verified-write-bytes` active. It counts the bytes written into the install **from sources that passed their gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the scan's source verdict, the structural zero-fill — so it is a function of the *install*, not of the transport: a corrupt chunk contributes nothing, and a retry does not move it. The bytes that landed without passing a gate are real and are what the ceiling bounds, but they are not this number |
+| `write_bytes_spent=<N>` | `--max-write-bytes` active. The bytes that **landed in the install**, the bytes of an attempt that later failed its digest included: the disk the run took, which is what the ceiling bounds. `write_bytes` is the other half — the bytes written from sources that passed their gate |
 | `config_bumped=0` | `config.ini` was deliberately **not** bumped — a path scope is active, or `--purge-only` ran |
-| `stopped=<bytes>\|write\|delete` | a runtime hard stop fired, not a refusal. `bytes` = `--max-download-bytes`, `write` = `--max-write-bytes`, `delete` = a cleanup pass refused by `--max-delete-bytes`. The key says *which* ceiling bound, so the three cannot share a value |
-| `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves both byte counts while still exiting `0` |
+| `stopped=<the flag>` | a runtime hard stop fired, not a refusal. The value is the **flag** that bound — `--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`, `--max-verified-download-bytes`, `--max-verified-write-bytes` — rather than a vocabulary word: it is self-describing, it scales with the number of ceilings, and it is the shape a script already has to write. The key says *which* ceiling bound, so two stops cannot share a value |
+| `local_manifest=ok\|unavailable` | a local `config.ini` version was known and `getBuild(local)` was therefore attempted. `unavailable` means the reuse map was empty, so every chunk downloaded — the one degradation that moves `download_bytes` and the plan's estimate while still exiting `0` |
+
+`download_bytes` is **not** in this table: it is one of the fixed keys, and it is
+the **settled** download figure — the bytes of the files that were actually
+repaired. It is on every `SUMMARY` line, flagged or not, because it is the
+run's headline number.
 
 `stopped=` is what distinguishes "nothing was written because the plan was too
 big" from "something was written and then we ran out".
@@ -591,8 +678,8 @@ src/repair/plan/
 src/repair/scope/
   mod.rs      re-exports; the assertion that turns a plan into pass/refuse
   filter.rs   PathScope, is_visible, compile_patterns     (pure)
-  limits.rs   Limits (files / download / write / delete) (pure)
-  ledger.rs   the runtime reservations the hard stops read
+  limits.rs   Limits (files / download / write / verified / delete) (pure)
+  ledger.rs   Meter, StoppedBy, the runtime reservations the hard stops read
   report.rs   PLAN line + --plan-out JSON
 ```
 

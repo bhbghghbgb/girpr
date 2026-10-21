@@ -54,7 +54,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
-| `src/repair/scope/ledger.rs` | the runtime reservations the hard stops read | `Summary::reserve_download_bytes`, `reserve_write_bytes`, `adjust_download_bytes`, `stop_downloads`, `stop_writes`, `abort` |
+| `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
 | `src/util.rs` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, rel-path normalization | `md5_file`, `md5_file_slice`, `scan_file`, `scan_reader`, `read_range`, `Scan`, `ScanRange`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `normalize_rel` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
@@ -101,9 +101,9 @@ flowchart TD
     end
     J2 --> K{"any failed?"}
     K -->|yes| L["SUMMARY with failed>0<br/>exit 3 (skip post-phase)"]
-    J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=bytes\|write<br/>exit 5, the next run re-verifies"]
+    J2 -->|"a byte ceiling hit mid-flight"| X5["SUMMARY stopped=--max-download-bytes\|--max-write-bytes<br/>exit 5, the next run re-verifies"]
     K -->|no| M["post::run (skipped when readonly)<br/>deprecated delete → audio cache→res move<br/>→ purge-after? → config.ini bump"]
-    M -->|"delete ceiling hit"| X6["SUMMARY stopped=delete<br/>exit 5, that pass deleted nothing"]
+    M -->|"delete ceiling hit"| X6["SUMMARY stopped=--max-delete-bytes<br/>exit 5, that pass deleted nothing"]
     M -->|write fails| X3["FATAL, exit 3 (no SUMMARY)"]
     M --> N["SUMMARY to stdout+log<br/>exit 0"]
 ```
@@ -118,15 +118,28 @@ flowchart TD
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
   byte-identical to one that never passes them.
+  The byte counts come in **pairs** when their ceiling is active:
+  `download_bytes` (the bytes of the files that were actually repaired) beside
+  `download_bytes_spent` (the bytes that crossed the wire), and `write_bytes`
+  (the bytes written from sources that passed their gate) beside
+  `write_bytes_spent` (the bytes that landed in the install). The first of each
+  pair is a function of the *install*, the second of the *transport*; in a
+  clean run the two are the same number, and a difference is the waste.
+  The two **verified** ceilings (`--max-verified-download-bytes`,
+  `--max-verified-write-bytes`) bound the settled figures — the bytes the
+  repair was *allowed* to spend — where the other two bound the live ones,
+  the traffic and the disk the run actually took.
   `local_manifest=ok|unavailable` is the one exception to "flag-driven": it is
   emitted when a local `config.ini` version was known and `getBuild(local)` was
-  attempted, because that lookup is the one thing that moves both byte counts
-  while still exiting `0` — see below. Absent on a fresh install.
+  attempted, because that lookup is the one thing that moves the download byte
+  count while still exiting `0` — see below. Absent on a fresh install.
   The repair-mode group (`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`) is
   emitted only when `--repair-mode` was passed; `ram_bytes=` (the peak staged
   payload) only when `--max-ram-bytes` was; `damaged_chunks=` only when
   `--scan` was. `kept_bytes` is the disk claim in one number: the bytes that
-  were already correct and did not have to be written.
+  were already correct and did not have to be written — the complement of the
+  **settled** writes, which are the file's, accumulated across its attempts
+  (a chunk an abandoned attempt wrote is in the install, so it was not kept).
 - **The binary cannot report which chunks were requested.** `SUMMARY` is
   byte-level by design. Per-chunk request detail exists only as `trace` lines in
   `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never
@@ -153,16 +166,17 @@ flowchart TD
   file, and resume-by-length makes the next run resume rather than restart; in
   place, the chunks that were already correct stay correct and the next run
   re-verifies and continues — and `SUMMARY stopped=` says which ceiling bound and
-  that it happened at all: `stopped=bytes` (`--max-download-bytes`),
-  `stopped=write` (`--max-write-bytes`), `stopped=delete` (a cleanup pass
-  refused). That key is
+  that it happened at all: the value is the **flag** that bound
+  (`stopped=--max-download-bytes`, `stopped=--max-write-bytes`,
+  `stopped=--max-delete-bytes` — a cleanup pass refused). That key is
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
-  repaired**. An attempt that fails and is retried hands its
-  bytes back, so a run that had to retry does not report what the network cost
-  the retries. The counter is nevertheless live during the repair, which is what
-  `--max-download-bytes` needs to stop mid-flight.
+  repaired**. An attempt that fails and is retried settles nothing, so a run
+  that had to retry does not report what the network cost the retries. The
+  counter is nevertheless live during the repair, which is what
+  `--max-download-bytes` needs to stop mid-flight — and the live figure is the
+  traffic the run caused, the abandoned attempts' bytes included.
 - chunk reuse is **best-effort and the degradation is reported**:
   `SUMMARY local_manifest=unavailable` means `getBuild(local)` could not be
   served, so the reuse map was empty and *every* chunk downloaded. The run is
@@ -257,9 +271,11 @@ cargo build --release
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include` |
 | `--max-files <N>` | (no limit) | Refuse (exit `5`) if the plan touches more than N files. `0` is a valid ceiling. Checked **after** `--include`, so it means "the files the scope selected" |
-| `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=delete`); out-of-scope paths are never candidates |
-| `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=bytes`) if reuse falls back to more than the estimate predicted. The estimate is an **upper bound** without `--scan` (it counts every chunk the local reuse map cannot supply, while the in-place path keeps the ones that are already correct); with `--scan` it is the figure the repair will really spend. Does **not** bound metadata or manifest traffic |
-| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong. `SUMMARY write_bytes` is the *reported* half: the bytes written from sources that passed their gate, so it is a function of the install and not of the transport (a corrupt chunk contributes nothing) |
+| `--max-delete-bytes <N>` | (no limit) | Refuse (exit `5`) if the files-cleanup would delete more than N bytes. Checked against the cleanup candidates computed before any work starts, and again against the post-repair pass's own candidates before it deletes anything (`stopped=--max-delete-bytes`); out-of-scope paths are never candidates |
+| `--max-download-bytes <N>` | (no limit) | Refuse (exit `5`) if the plan's **estimated** chunk downloads exceed N, and hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-download-bytes`) if reuse falls back to more than the estimate predicted. The estimate is an **upper bound** without `--scan` (it counts every chunk the local reuse map cannot supply, while the in-place path keeps the ones that are already correct); with `--scan` it is the figure the repair will really spend. Does **not** bound metadata or manifest traffic |
+| `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong. The two halves are reported: `SUMMARY write_bytes_spent` is the live figure the ceiling bounds (the bytes that landed, gate or no gate), and `SUMMARY write_bytes` is the settled one — the bytes written from sources that passed their gate, so it is a function of the install and not of the transport (a corrupt chunk contributes nothing) |
+| `--max-verified-download-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-download-bytes`) once N bytes of **verified** downloads have been made — the bytes of the files that were actually repaired, not the traffic the run caused. A budget on the *repair* rather than on the network: a retry that fetched the same chunk twice, and a chunk that failed its digest, cost nothing here. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime, so the line is checked when a file is repaired and can be crossed by that one file |
+| `--max-verified-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-write-bytes`) once N bytes have been written into the install **from sources that passed their gate**. The same split as `--max-write-bytes`, on the other half: the bytes that landed without passing a gate are spent and are what `--max-write-bytes` bounds; this bounds the bytes the repair was allowed to spend. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime, so the line is checked when a write is settled and can be crossed by that one write |
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |

@@ -65,6 +65,7 @@ use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use crate::config::RepairMode;
+use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
 use crate::sophon::{self, SophonChunk};
 use crate::util;
@@ -108,11 +109,32 @@ pub struct ChunkStats {
     /// Chunks that were already correct where they belong and were not
     /// written at all. The in-place path's own "kept" count.
     pub chunks_kept: u64,
-    /// Bytes written into the install for this file. The per-file half of
-    /// the run's `write_bytes`.
-    pub bytes_written: u64,
+    /// The bytes this file had written into the install **from sources that
+    /// passed their gate**, accumulated across its attempts.
+    ///
+    /// This is the file's half of the run's settled `write_bytes` figure, and
+    /// it is what `kept_bytes` is the complement of: the bytes the repair did
+    /// not have to touch. It is the *file's* figure rather than an attempt's,
+    /// because a chunk written by an attempt that later failed is still in the
+    /// install — the next attempt re-verifies the file, finds that chunk
+    /// correct, and does not write it again.
+    pub settled_writes: u64,
     /// Which path wrote this file.
     pub mode: Mode,
+}
+
+/// The bytes one file has had written into the install, across its attempts.
+///
+/// This is the per-file half of the run's **settled** write figure, and it
+/// outlives an attempt: an attempt that wrote a chunk and then failed on the
+/// next one leaves those bytes in the install, and the next attempt does not
+/// write them again. The per-attempt [`ChunkStats`] is dropped when the
+/// attempt fails, so it cannot carry that figure — and `kept_bytes`, which is
+/// the complement of this one, over-reported while it was derived from it.
+#[derive(Debug, Default, Clone, Copy)]
+struct FileWrites {
+    /// The bytes written from a source that passed its gate.
+    settled: u64,
 }
 
 /// How one file was written.
@@ -196,9 +218,24 @@ pub async fn repair_all(
                         ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(Repaired::Repaired(stats)) => {
-                        // `download_bytes` is already live: it is incremented
-                        // per chunk inside `write_downloaded_chunk`, because the
-                        // runtime hard stop has to read it mid-flight.
+                        // The file is repaired, so its downloaded bytes are the
+                        // **settled** ones — the bytes of the files that were
+                        // actually repaired. The live figure already carries
+                        // them, and it carries the abandoned attempts' bytes
+                        // too: those crossed the wire, and a budget is about
+                        // the traffic, not about the install.
+                        if !ctx.summary.settle_download_bytes(stats.download_bytes) {
+                            // The **verified** ceiling bound: the file is
+                            // repaired and counted, and the run stops here.
+                            // The line is crossed by a whole file, because a
+                            // file is the atom the figure is counted in.
+                            ctx.summary.stop(StoppedBy::VerifiedDownload);
+                            tracing::warn!(
+                                limit = ?ctx.summary.max_verified_download_bytes(),
+                                have = ctx.summary.download.settled(),
+                                "verified-download-bytes ceiling reached -> stopping the run"
+                            );
+                        }
                         ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
                         // Which path wrote it. The disk claim of the run is
                         // "how many files were written where they lie", and
@@ -215,8 +252,13 @@ pub async fn repair_all(
                         // size minus what was written. The in-place path
                         // leaves the correct chunks alone; the temp path
                         // rewrites the whole file and keeps nothing.
+                        //
+                        // The subtraction is against the file's **settled**
+                        // writes, accumulated across its attempts: a chunk an
+                        // abandoned attempt wrote is in the install, so it is
+                        // not a byte the repair did not have to touch.
                         let kept = (ctx.plan.files[idx].size.max(0) as u64)
-                            .saturating_sub(stats.bytes_written);
+                            .saturating_sub(stats.settled_writes);
                         ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
                     }
                     Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
@@ -267,7 +309,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // `*_tmp` stays and the next run resumes from it, in place the chunks
     // that are already right stay right — so an aborted run is a smaller
     // run, not a broken one.
-    if ctx.summary.download_stopped() || ctx.summary.write_stopped() || ctx.summary.aborted() {
+    if ctx.summary.stopped_by() != StoppedBy::None || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
@@ -313,11 +355,15 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         MAX_ATTEMPTS
     };
     let mut attempt = 1;
+    // The file's settled writes, accumulated across its attempts. It outlives
+    // an attempt on purpose: a chunk an abandoned attempt wrote is in the
+    // install, and `kept_bytes` is the complement of this figure.
+    let mut writes = FileWrites::default();
     while attempt <= max_attempts {
         let outcome = if inplace {
-            attempt_inplace(ctx, file, &prefix, &final_path).await
+            attempt_inplace(ctx, file, &prefix, &final_path, &mut writes).await
         } else {
-            attempt_temp(ctx, file, &prefix, &tmp_path, &final_path).await
+            attempt_temp(ctx, file, &prefix, &tmp_path, &final_path, &mut writes).await
         };
         match outcome {
             Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
@@ -325,6 +371,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
             Ok(Inplace::Repaired(stats)) => {
                 let mut stats = stats;
                 stats.mode = mode;
+                stats.settled_writes = writes.settled;
                 return Ok(Repaired::Repaired(stats));
             }
             // The target cannot be opened for writing, so this file cannot
@@ -339,7 +386,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
             }
             // The ceiling, not the file: this must not be counted as a
             // failure and must not be retried.
-            Err(_e) if ctx.summary.download_stopped() || ctx.summary.write_stopped() => {
+            Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
                 tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
                 return Ok(Repaired::Stopped);
             }
@@ -426,6 +473,7 @@ async fn attempt_temp(
     prefix: &str,
     tmp_path: &std::path::Path,
     final_path: &std::path::Path,
+    writes: &mut FileWrites,
 ) -> Result<Inplace> {
     match util::file_len(final_path) {
         None => tracing::debug!("check: missing local file"),
@@ -445,7 +493,7 @@ async fn attempt_temp(
         tracing::info!("would repair");
         return Ok(Inplace::DryRun);
     }
-    let stats = repair_attempt(ctx, file, prefix, tmp_path).await?;
+    let stats = repair_attempt(ctx, file, prefix, tmp_path, writes).await?;
     Ok(Inplace::Repaired(stats))
 }
 
@@ -479,20 +527,18 @@ async fn attempt_inplace(
     file: &PlannedFile,
     prefix: &str,
     final_path: &std::path::Path,
+    writes: &mut FileWrites,
 ) -> Result<Inplace> {
     let mut stats = ChunkStats {
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
-    let outcome = attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats).await;
-    if outcome.is_err() {
-        // The same rule the temp path follows: an abandoned attempt gives its
-        // downloaded bytes back, so `SUMMARY download_bytes` means "the bytes
-        // of files that were actually repaired".
-        ctx.summary
-            .adjust_download_bytes(-(stats.download_bytes as i64));
-    }
-    outcome
+    // An abandoned attempt settles nothing: the bytes it fetched were spent
+    // (the live figure has them) but they are not part of the install, so the
+    // reported `download_bytes` — "the bytes of the files that were actually
+    // repaired" — does not count them. The settle happens where the file is
+    // promoted, in `repair_all`.
+    attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats, writes).await
 }
 
 /// The body of the in-place repair — see [`attempt_inplace`].
@@ -502,6 +548,7 @@ async fn attempt_inplace_inner(
     prefix: &str,
     final_path: &std::path::Path,
     stats: &mut ChunkStats,
+    writes: &mut FileWrites,
 ) -> Result<Inplace> {
     // The reuse candidates: where each chunk's bytes could be copied from.
     let entries: &[(String, i64, i64)] = match ctx.local_map.get(&file.rel) {
@@ -725,7 +772,7 @@ async fn attempt_inplace_inner(
         let dst = c.offset.max(0) as u64;
         if let Some(bytes) = &captured[i] {
             // A staged source: the bytes are already verified.
-            write_at(ctx, stats, &mut handle, dst, bytes)?;
+            write_at(ctx, writes, &mut handle, dst, bytes)?;
             stats.chunks_reused += 1;
         } else if let Some(o) = &order
             && o.live[k]
@@ -734,7 +781,7 @@ async fn attempt_inplace_inner(
             // The source survives the order: copy it from inside the file.
             copy_within(
                 ctx,
-                stats,
+                writes,
                 &mut handle,
                 src,
                 dst,
@@ -742,7 +789,7 @@ async fn attempt_inplace_inner(
             )?;
             stats.chunks_reused += 1;
         } else {
-            write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
+            write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
         }
     }
 
@@ -751,7 +798,7 @@ async fn attempt_inplace_inner(
     // ordered tier a hole can still hold a source that a later chunk needs.
     let layout = file.layout();
     for (offset, len) in &layout.gaps {
-        zero_fill(ctx, stats, &mut handle, *offset, *len)?;
+        zero_fill(ctx, writes, &mut handle, *offset, *len)?;
     }
 
     // The file must end at its manifest size: shorter means the tail is
@@ -796,7 +843,7 @@ async fn attempt_inplace_inner(
     );
     for &i in &still_bad {
         let c = &file.chunks[i];
-        write_downloaded_chunk(ctx, prefix, c, &mut handle, stats).await?;
+        write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
@@ -849,25 +896,39 @@ enum Tier {
 
 /// A write that passed its gate.
 ///
-/// The bytes are counted twice, on purpose. `stats.bytes_written` is the
-/// file's own figure (the per-file half of `kept_bytes`), and the summary's
-/// `write_bytes` is the run's **reported** one: the bytes written into the
-/// install from sources that passed their gate. The *live* counter that the
-/// `--max-write-bytes` ceiling reads is charged separately, by
-/// [`reserve_write`], at the moment the bytes land — so the ceiling bounds
-/// the disk, and the reported figure stays a function of the input state.
+/// The bytes are counted twice, on purpose. The run's **settled** figure is
+/// the reported one: the bytes written into the install from sources that
+/// passed their gate. The **live** figure that the `--max-write-bytes`
+/// ceiling reads is charged separately, by [`reserve_write`], at the moment the
+/// bytes land — so the ceiling bounds the disk, and the reported figure stays
+/// a function of the input state.
 ///
 /// The streamed download calls this **after** its digest has been checked, so
 /// a chunk that never validated contributes nothing to the reported figure.
-fn note_write(ctx: &FileCtx, stats: &mut ChunkStats, n: u64) {
-    stats.bytes_written += n;
-    ctx.summary.note_write_bytes(n);
+///
+/// The **verified** ceiling (`--max-verified-write-bytes`) is checked here,
+/// where the bytes are settled: the figure is only known once the source has
+/// passed its gate, so this is the earliest the question can be asked. The
+/// bytes are counted either way — the write happened — and the stop is the
+/// caller's.
+fn note_write(ctx: &FileCtx, writes: &mut FileWrites, n: u64) -> Result<()> {
+    writes.settled += n;
+    if !ctx.summary.note_write_bytes(n) {
+        ctx.summary.stop(StoppedBy::VerifiedWrite);
+        tracing::warn!(
+            limit = ?ctx.summary.max_verified_write_bytes(),
+            have = ctx.summary.write.settled(),
+            "verified-write-bytes ceiling reached -> stopping the run"
+        );
+        anyhow::bail!("verified-write-bytes ceiling reached");
+    }
+    Ok(())
 }
 
 /// Write `bytes` at `offset`.
 fn write_at(
     ctx: &FileCtx,
-    stats: &mut ChunkStats,
+    writes: &mut FileWrites,
     f: &mut File,
     offset: u64,
     bytes: &[u8],
@@ -875,7 +936,7 @@ fn write_at(
     reserve_write(ctx, bytes.len() as u64)?;
     f.seek(SeekFrom::Start(offset))?;
     f.write_all(bytes)?;
-    note_write(ctx, stats, bytes.len() as u64);
+    note_write(ctx, writes, bytes.len() as u64)?;
     Ok(())
 }
 
@@ -886,7 +947,7 @@ fn write_at(
 /// *handle* — only in the *file*, which the write order guarantees.
 fn copy_within(
     ctx: &FileCtx,
-    stats: &mut ChunkStats,
+    writes: &mut FileWrites,
     f: &mut File,
     src: u64,
     dst: u64,
@@ -904,7 +965,7 @@ fn copy_within(
         reserve_write(ctx, n as u64)?;
         f.seek(SeekFrom::Start(dst + done))?;
         f.write_all(&buf[..n])?;
-        note_write(ctx, stats, n as u64);
+        note_write(ctx, writes, n as u64)?;
         done += n as u64;
     }
     Ok(())
@@ -1020,7 +1081,7 @@ fn trim_is_free(file: &PlannedFile, chunks: &[SophonChunk], sources: &[Option<u6
 /// would ever write it: without this it would keep the old file's bytes.
 fn zero_fill(
     ctx: &FileCtx,
-    stats: &mut ChunkStats,
+    writes: &mut FileWrites,
     out: &mut File,
     offset: u64,
     len: u64,
@@ -1037,7 +1098,7 @@ fn zero_fill(
     while left > 0 {
         let n = (left as usize).min(zeros.len());
         out.write_all(&zeros[..n])?;
-        note_write(ctx, stats, n as u64);
+        note_write(ctx, writes, n as u64)?;
         left -= n as u64;
     }
     Ok(())
@@ -1048,24 +1109,18 @@ async fn repair_attempt(
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
+    writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
     let mut stats = ChunkStats {
         chunks_total: file.chunks.len() as u64,
         ..Default::default()
     };
-    let outcome = repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats).await;
-    if outcome.is_err() {
-        // This attempt is being abandoned, so the bytes it fetched are given
-        // back. That is what keeps `SUMMARY download_bytes` meaning
-        // **the bytes of files that were actually promoted** — rather than
-        // "bytes that crossed the wire at some point, including on the four
-        // attempts that failed". The ceiling still saw them while they
-        // were in flight, which is the whole reason the counter is live; this
-        // only decides what a *finished* run reports.
-        ctx.summary
-            .adjust_download_bytes(-(stats.download_bytes as i64));
-    }
-    outcome
+    // An abandoned attempt settles nothing — the same rule the in-place path
+    // follows. Its bytes were spent (the live figure has them) but they are
+    // not part of the install, so the reported `download_bytes` — "the bytes
+    // of the files that were actually repaired" — does not count them. The
+    // settle happens where the file is promoted, in `repair_all`.
+    repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats, writes).await
 }
 
 /// One full pass over a file's chunks, then verify + promote. The caller
@@ -1076,6 +1131,7 @@ async fn repair_attempt_inner(
     prefix: &str,
     tmp_path: &std::path::Path,
     stats: &mut ChunkStats,
+    writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
     let mut f = std::fs::OpenOptions::new()
         .read(true)
@@ -1096,11 +1152,12 @@ async fn repair_attempt_inner(
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, stats)? {
+        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, writes)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
-                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats).await {
+                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats, writes).await
+                {
                     // The chunk's bytes may have landed in the `_tmp` before
                     // its digest was known, and the temp mode resumes by
                     // **length**: a `_tmp` that grew past this chunk would be
@@ -1117,7 +1174,7 @@ async fn repair_attempt_inner(
     }
     f.flush()?;
     drop(f);
-    promote_tmp(ctx, file, tmp_path, stats)
+    promote_tmp(ctx, file, tmp_path, stats, writes)
 }
 
 /// What one chunk needed. `Resumed` (already complete) and `Reused` (copied
@@ -1180,7 +1237,7 @@ fn try_reuse_slice(
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
-    stats: &mut ChunkStats,
+    writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
     let end = (c.offset + c.uncompressed_size) as u64;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1227,7 +1284,7 @@ fn try_reuse_slice(
                 // appears in neither `download_bytes` nor the plan's estimate.
                 reserve_write(ctx, n as u64)?;
                 out.write_all(&buf[..n])?;
-                note_write(ctx, stats, n as u64);
+                note_write(ctx, writes, n as u64)?;
                 remaining -= n as u64;
             }
             Ok(ChunkOutcome::Reused)
@@ -1323,6 +1380,7 @@ async fn write_downloaded_chunk(
     c: &SophonChunk,
     out: &mut File,
     stats: &mut ChunkStats,
+    writes: &mut FileWrites,
 ) -> Result<()> {
     // Reserve before fetching, not after: the pre-flight estimate is a *lower
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
@@ -1332,10 +1390,10 @@ async fn write_downloaded_chunk(
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;
     if !ctx.summary.reserve_download_bytes(reserved) {
-        ctx.summary.stop_downloads();
+        ctx.summary.stop(StoppedBy::Download);
         tracing::warn!(
             limit = ?ctx.summary.max_download_bytes(),
-            have = ctx.summary.download_bytes.load(Ordering::Relaxed),
+            have = ctx.summary.download.live(),
             "download-bytes ceiling reached -> stopping the run"
         );
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
@@ -1380,7 +1438,7 @@ async fn write_downloaded_chunk(
         tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
-    note_write(ctx, stats, sink.written());
+    note_write(ctx, writes, sink.written())?;
     stats.chunks_downloaded += 1;
     Ok(())
 }
@@ -1401,7 +1459,7 @@ fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     ctx.summary.stop_writes();
     tracing::warn!(
         limit = ?ctx.summary.max_write_bytes(),
-        have = ctx.summary.write_bytes.load(Ordering::Relaxed),
+        have = ctx.summary.write.live(),
         "write-bytes ceiling reached -> stopping the run"
     );
     anyhow::bail!("write-bytes ceiling reached")
@@ -1419,6 +1477,7 @@ fn promote_tmp(
     file: &PlannedFile,
     tmp_path: &std::path::Path,
     stats: &ChunkStats,
+    writes: &FileWrites,
 ) -> Result<ChunkStats> {
     let len = util::file_len(tmp_path).unwrap_or(0);
     if len != file.size as u64 {
@@ -1445,7 +1504,7 @@ fn promote_tmp(
         chunks_downloaded: stats.chunks_downloaded,
         chunks_resumed: stats.chunks_resumed,
         chunks_kept: stats.chunks_kept,
-        bytes_written: stats.bytes_written,
+        settled_writes: writes.settled,
         mode: Mode::Temp,
     })
 }

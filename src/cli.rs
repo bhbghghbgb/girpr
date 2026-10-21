@@ -83,13 +83,35 @@ pub struct Args {
     #[arg(long, value_name = "N")]
     pub max_download_bytes: Option<u64>,
 
-    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=write`) once this many
-    /// bytes have been written into `*_tmp`. Unlike `download_bytes`, this is
-    /// the disk cost: every reuse-copy and every chunk write is counted, so a
-    /// zero-reuse run is bounded too. Cannot be a pre-flight refusal — reuse
-    /// success is decided per chunk at runtime.
+    /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`)
+    /// once this many bytes have been written into `*_tmp`. Unlike
+    /// `download_bytes`, this is the disk cost: every reuse-copy and every
+    /// chunk write is counted, so a zero-reuse run is bounded too. Cannot be a
+    /// pre-flight refusal — reuse success is decided per chunk at runtime.
     #[arg(long, value_name = "N")]
     pub max_write_bytes: Option<u64>,
+
+    /// Hard-stop mid-flight (exit `5`,
+    /// `SUMMARY stopped=--max-verified-download-bytes`) once this many
+    /// **verified** download bytes have been made — the bytes of the files
+    /// that were actually repaired, not the traffic the run caused. A budget
+    /// on the *repair* rather than on the network: a retry that fetched the
+    /// same chunk twice, and a chunk that failed its digest, cost nothing
+    /// here. Cannot be a pre-flight refusal — the split between the two
+    /// figures is only known at runtime.
+    #[arg(long, value_name = "N")]
+    pub max_verified_download_bytes: Option<u64>,
+
+    /// Hard-stop mid-flight (exit `5`,
+    /// `SUMMARY stopped=--max-verified-write-bytes`) once this many bytes
+    /// have been written into the install **from sources that passed their
+    /// gate**. The same split as `--max-write-bytes`, on the other half: the
+    /// bytes that landed without passing a gate are spent and are what
+    /// `--max-write-bytes` bounds; this bounds the bytes the repair was
+    /// allowed to spend. Cannot be a pre-flight refusal — the split between
+    /// the two figures is only known at runtime.
+    #[arg(long, value_name = "N")]
+    pub max_verified_write_bytes: Option<u64>,
 
     /// Cap the RAM the in-place repair may use to stage the bytes it has to
     /// move inside a file. A file that cannot get its reservation is written
@@ -213,6 +235,8 @@ impl Args {
                 delete_bytes: self.max_delete_bytes,
                 download_bytes: self.max_download_bytes,
                 write_bytes: self.max_write_bytes,
+                verified_download_bytes: self.max_verified_download_bytes,
+                verified_write_bytes: self.max_verified_write_bytes,
                 ram_bytes: self.max_ram_bytes,
             },
             repair_mode: self.repair_mode.unwrap_or_default(),

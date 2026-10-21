@@ -15,7 +15,7 @@
 //! same wrapper (`retcode`/`message`/`data`), same node names, manifest
 //! sizes as int-or-string, chunk/manifest URL prefix + id joining.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -402,6 +402,14 @@ pub struct MockOpts {
     /// which is what makes a file retry — and therefore what distinguishes
     /// "bytes of promoted files" from "bytes that crossed the wire".
     pub corrupt_first_chunks: u32,
+    /// Serve these chunk ids corrupt on their **first** request.
+    ///
+    /// `corrupt_first_chunks` is a counter over the requests, so it can only
+    /// ever break the *first* chunk a file asks for. Naming the ids is what
+    /// breaks a later one — the case where an attempt has already written a
+    /// chunk that passed its gate before it fails, and the next attempt has to
+    /// find that chunk still correct.
+    pub corrupt_chunks: Vec<String>,
     /// Advertise a manifest checksum the blob does not have. The blob itself
     /// is served unchanged, so the only thing that can catch it is the
     /// checksum gate — the MD5 of the **decompressed** bytes.
@@ -507,6 +515,19 @@ struct Responses {
     not_found_chunks: bool,
     not_found_manifests: bool,
     corrupt_first_chunks: u32,
+    /// Chunk ids to serve corrupt on their **first** request, whatever the
+    /// request order.
+    ///
+    /// `corrupt_first_chunks` is a counter over the requests, so it can only
+    /// ever break the *first* chunk a file asks for. This one names the ids,
+    /// which is what a test needs to break a *later* chunk — the case where an
+    /// attempt has already written a chunk that passed its gate before it
+    /// fails.
+    corrupt_chunks: Vec<String>,
+    /// The ids whose first response was already served corrupt. An id is in
+    /// here from its first corrupt response onwards, so the second request for
+    /// the same id gets the good bytes: a flaky origin, not a broken one.
+    corrupt_served: Mutex<HashSet<String>>,
     /// Chunk responses served so far, so the corrupt-N counter is per-server
     /// and not per-connection.
     served: AtomicU64,
@@ -643,6 +664,8 @@ fn build_responses(
         not_found_chunks: opts.not_found_chunks,
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
+        corrupt_chunks: opts.corrupt_chunks.clone(),
+        corrupt_served: Mutex::new(HashSet::new()),
         served: AtomicU64::new(0),
     }
 }
@@ -761,7 +784,14 @@ async fn serve_one(
                 Some(bytes) => {
                     log.lock().unwrap().push(id.to_string());
                     let n = r.served.fetch_add(1, Ordering::Relaxed);
-                    if n < r.corrupt_first_chunks as u64 {
+                    // The named ids are corrupt on their **first** request
+                    // only: the second one gets the good bytes, which is what
+                    // a flaky origin looks like.
+                    let first_time = {
+                        let mut served = r.corrupt_served.lock().unwrap();
+                        r.corrupt_chunks.iter().any(|c| c == id) && served.insert(id.to_string())
+                    };
+                    if n < r.corrupt_first_chunks as u64 || first_time {
                         // Well-formed, same uncompressed length, wrong MD5.
                         let bad = fx
                             .corrupt_chunk_store

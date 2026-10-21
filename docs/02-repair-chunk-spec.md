@@ -381,6 +381,15 @@ never being modified. For a corrupt-but-right-sized file — the common repair c
 grows by `Δ`, `inplace` needs `Δ`, not `S`. For a fresh install nothing is saved because
 nothing is on disk to save.
 
+**The bytes the repair did not have to touch.** `SUMMARY kept_bytes` is the run's disk
+claim in one number: the bytes that were already correct where they belonged and did not
+have to be written. It is the complement of the **settled** writes — the bytes that landed
+in the install from a source that passed its gate — and the settled writes are the
+*file's*, accumulated across its attempts: a chunk an abandoned attempt wrote is in the
+install, so the next attempt re-verifies the file, finds that chunk correct, and does
+not write it again. A counter derived from the *last* attempt's writes would claim those
+bytes were kept, and the run would report touching fewer bytes than it had.
+
 ## 4. Failure modes
 
 | Failure | Handling |

@@ -151,6 +151,22 @@ fn argument_errors_exit_one_not_two() {
             ".",
             "--biz",
             "hk4e_global",
+            "--max-verified-download-bytes",
+            "abc",
+        ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--max-verified-write-bytes",
+            "abc",
+        ],
+        vec![
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
             "--max-ram-bytes",
             "abc",
         ],
@@ -201,6 +217,8 @@ fn help_text_lists_every_documented_flag() {
         "--max-delete-bytes",
         "--max-download-bytes",
         "--max-write-bytes",
+        "--max-verified-download-bytes",
+        "--max-verified-write-bytes",
         "--max-ram-bytes",
         "--repair-mode",
         "--scan",
@@ -318,6 +336,10 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
         "0",
         "--max-write-bytes",
         "0",
+        "--max-verified-download-bytes",
+        "0",
+        "--max-verified-write-bytes",
+        "0",
         "--fail-fast",
         "--purge-only",
     ]);
@@ -326,6 +348,8 @@ fn exit_five_is_a_refusal_not_an_argument_error() {
     assert_eq!(ctx.limits.delete_bytes, Some(0));
     assert_eq!(ctx.limits.download_bytes, Some(0));
     assert_eq!(ctx.limits.write_bytes, Some(0));
+    assert_eq!(ctx.limits.verified_download_bytes, Some(0));
+    assert_eq!(ctx.limits.verified_write_bytes, Some(0));
     assert!(ctx.limits.is_active());
     assert!(ctx.fail_fast);
     assert!(ctx.purge_only);

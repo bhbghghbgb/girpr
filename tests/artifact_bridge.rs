@@ -1037,10 +1037,39 @@ fn capture_args(capture: &Capture, mode: &str) -> Vec<String> {
         // never trips.
         args.push("--max-write-bytes".into());
         args.push((1_u64 << 40).to_string());
+        // The download ceiling, so `download_bytes_spent` appears beside the
+        // `download_bytes` that is always there. It is also a pre-flight
+        // refusal against the estimate, and a ceiling of a tebibyte never
+        // refuses anything this bundle asks for.
+        args.push("--max-download-bytes".into());
+        args.push((1_u64 << 40).to_string());
         args.push("--max-files".into());
         args.push("1".into());
     }
     args
+}
+
+/// The **pair**: the live figure (what the run spent) and the settled one (what
+/// it achieved) are the same number in a clean run — nothing was wasted.
+///
+/// The bundle's captures are clean by construction: the origin serves what the
+/// manifest says, so no chunk is fetched twice and none fails its digest. This
+/// is therefore the split's central property, asserted on real bytes: a
+/// difference between the two figures would mean the run spent something the
+/// install did not keep.
+fn assert_the_pair_agrees(run: &Run, id: &str) {
+    assert_eq!(
+        run.num("summary", "download_bytes_spent"),
+        run.num("summary", "download_bytes"),
+        "{id}: a clean run fetches nothing twice: the live and the settled \
+         download figures are the same number",
+    );
+    assert_eq!(
+        run.num("summary", "write_bytes_spent"),
+        run.num("summary", "write_bytes"),
+        "{id}: a clean run writes nothing twice: the live and the settled write \
+         figures are the same number",
+    );
 }
 
 /// Drive one capture end to end and assert `docs/06` §7's four per-capture
@@ -1486,6 +1515,13 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         }
     }
 
+    // The **pair** on this run: the live figure and the settled one are the
+    // same number, because nothing was wasted. The `removed` capture is a
+    // cleanup and asks for neither ceiling, so it has no pair to compare.
+    if !capture.is_purge_only() {
+        assert_the_pair_agrees(&run, &capture.id);
+    }
+
     // The **trim's** outcome — the one content decision that had a class and no
     // assertion.
     //
@@ -1691,6 +1727,11 @@ async fn drive_capture_differential(bridge: &Bridge, capture: &Capture) {
     }
 
     // ---- and a different cost --------------------------------------------
+    //
+    // The pair first: both runs are clean, so the live and the settled figure
+    // of each are the same number — in either mode.
+    assert_the_pair_agrees(&temp, &capture.id);
+    assert_the_pair_agrees(&inplace, &capture.id);
     let temp_written = temp.num("summary", "write_bytes");
     let inplace_written = inplace.num("summary", "write_bytes");
     let inplace_kept_bytes = inplace.num("summary", "kept_bytes");

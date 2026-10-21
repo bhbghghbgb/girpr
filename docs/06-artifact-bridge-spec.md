@@ -379,7 +379,8 @@ Per capture, against a **fresh scratch copy of that capture's `game/` tree** and
 | `--repair-mode inplace` | the mode is **asked for**, so the run reports `inplace` / `temp` / `kept_bytes` — the counters that say which path ran | all but `removed` |
 | `--scan` | the scan is what makes `damaged_chunks` appear, and it turns the download estimate from an approximation into the precise sum | all but `removed` |
 | `--max-ram-bytes 1 GiB` | the budget is what makes `ram_bytes` appear; the value is large enough for the staged tier, which is the default | all but `removed` |
-| `--max-write-bytes 1 TiB` | the ceiling is what makes `write_bytes` appear; the value never trips | all but `removed` |
+| `--max-write-bytes 1 TiB` | the ceiling is what makes `write_bytes` (and its live half, `write_bytes_spent`) appear; the value never trips | all but `removed` |
+| `--max-download-bytes 1 TiB` | the ceiling is what makes `download_bytes_spent` appear beside the `download_bytes` that is always there. It is also a pre-flight refusal against the estimate, so the ceiling has to be above it — a tebibyte is | all but `removed` |
 
 **Every capture gets `--include`, `removed` included.** `--purge-only --include
 <that path>` is precisely the request that deletes a path the new manifest
@@ -602,6 +603,16 @@ reports counters that are *conditional on a flag* — `inplace` / `temp` /
 the patchmap states them per flag and the run asks for all of them. The
 patchmap's own `repair` block is the same numbers seen twice, and the bridge
 asserts that the two agree.
+
+**The byte counts come in pairs, and the pair is asserted without the
+patchmap's help.** Every byte count has two halves — the *live* figure (what
+the run spent) and the *settled* one (what it achieved) — and the bundle's
+captures are clean by construction: the origin serves what the manifest says,
+so no chunk is fetched twice and none fails its digest. The two halves are
+therefore the **same number** on every capture and in both write modes, and a
+difference would mean the run spent something the install did not keep. The
+patchmap states only the settled half (it is what the capture can know from
+the bytes), so this half of the contract is the bridge's own.
 
 **And the `repair` block is asserted against the run, field by field.** The
 counts (`kept` + `copied` + `fetched` is the plan's length), the growth (the

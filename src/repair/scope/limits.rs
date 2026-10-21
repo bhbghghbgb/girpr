@@ -53,6 +53,18 @@ pub struct Limits {
     pub download_bytes: Option<u64>,
     /// `--max-write-bytes`: cumulative bytes written into `*_tmp`.
     pub write_bytes: Option<u64>,
+    /// `--max-verified-download-bytes`: the **settled** download bytes — the
+    /// bytes of the files that were actually repaired.
+    ///
+    /// Not a refusal: the split between the traffic a run caused and the
+    /// bytes it was allowed to spend is only known at runtime, so this is a
+    /// mid-flight stop and nothing else.
+    pub verified_download_bytes: Option<u64>,
+    /// `--max-verified-write-bytes`: the **settled** write bytes — the bytes
+    /// the repair actually wrote into the install.
+    ///
+    /// Not a refusal, for the same reason as the download one.
+    pub verified_write_bytes: Option<u64>,
     /// `--max-delete-bytes`: bytes the files-cleanup would delete.
     pub delete_bytes: Option<u64>,
     /// `--max-ram-bytes`: the RAM the in-place repair may stage the bytes
@@ -71,6 +83,8 @@ impl Limits {
         self.files.is_some()
             || self.download_bytes.is_some()
             || self.write_bytes.is_some()
+            || self.verified_download_bytes.is_some()
+            || self.verified_write_bytes.is_some()
             || self.delete_bytes.is_some()
             || self.ram_bytes.is_some()
     }
@@ -291,6 +305,8 @@ mod tests {
             download_bytes: Some(0),
             delete_bytes: Some(1),
             write_bytes: None,
+            verified_download_bytes: None,
+            verified_write_bytes: None,
             ram_bytes: None,
         };
         let p = plan(5);
@@ -354,6 +370,14 @@ mod tests {
             },
             Limits {
                 write_bytes: Some(1),
+                ..Default::default()
+            },
+            Limits {
+                verified_download_bytes: Some(1),
+                ..Default::default()
+            },
+            Limits {
+                verified_write_bytes: Some(1),
                 ..Default::default()
             },
             Limits {
