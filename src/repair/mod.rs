@@ -417,7 +417,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     )
     .await;
     if ctx.limits.write_bytes.is_some() {
-        summary.flags.write_bytes = Some(summary.write_bytes.load(Ordering::Relaxed));
+        summary.flags.write_bytes = Some(summary.write.settled());
     }
     // The repair-mode group: what was asked for, what happened, and how many
     // bytes did not have to be written. Emitted only when the flag was
@@ -451,9 +451,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // can tell which one bound without re-deriving it from the flags.
     if summary.write_stopped() {
         tracing::error!(
-            "stopped after {} written bytes: --max-write-bytes is a hard stop; \
+            "stopped after {} written bytes (the live figure, the one the \
+             ceiling bounds): --max-write-bytes is a hard stop; \
              *_tmp files left in place are resumed by the next run",
-            summary.write_bytes.load(Ordering::Relaxed)
+            summary.write.live()
         );
         summary.flags.stopped = Some("write");
         return Ok((summary, 5));

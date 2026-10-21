@@ -852,8 +852,8 @@ enum Tier {
 ///
 /// The bytes are counted twice, on purpose. `stats.bytes_written` is the
 /// file's own figure (the per-file half of `kept_bytes`), and the summary's
-/// `write_bytes` is the run's **reported** one: the bytes written into the
-/// install from sources that passed their gate. The *live* counter that the
+/// **settled** figure is the run's *reported* one: the bytes written into the
+/// install from sources that passed their gate. The **live** figure that the
 /// `--max-write-bytes` ceiling reads is charged separately, by
 /// [`reserve_write`], at the moment the bytes land — so the ceiling bounds
 /// the disk, and the reported figure stays a function of the input state.
@@ -1395,7 +1395,7 @@ fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     ctx.summary.stop_writes();
     tracing::warn!(
         limit = ?ctx.summary.max_write_bytes(),
-        have = ctx.summary.write_bytes.load(Ordering::Relaxed),
+        have = ctx.summary.write.live(),
         "write-bytes ceiling reached -> stopping the run"
     );
     anyhow::bail!("write-bytes ceiling reached")

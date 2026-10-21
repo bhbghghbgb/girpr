@@ -395,7 +395,7 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
     );
     // The disk claim: one chunk written, not the whole file.
     assert_eq!(
-        summary.write_bytes.load(Ordering::Relaxed),
+        summary.write.settled(),
         64,
         "only the corrupt chunk was written"
     );
@@ -435,7 +435,7 @@ async fn a_file_that_grows_writes_only_the_growth() {
         "the file grew to its manifest size"
     );
     assert_eq!(
-        summary.write_bytes.load(Ordering::Relaxed),
+        summary.write.settled(),
         64,
         "only the missing chunk was written"
     );
@@ -647,7 +647,7 @@ async fn the_run_counts_the_paths_it_used() {
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
     // The temp path wrote the whole file; the in-place path wrote one chunk.
-    assert_eq!(summary.write_bytes.load(Ordering::Relaxed), 128);
+    assert_eq!(summary.write.settled(), 128);
 
     mock.stop();
 }
@@ -976,7 +976,7 @@ async fn an_interrupted_in_place_run_resumes_by_verification() {
         fx2.files[0].data
     );
     assert_eq!(
-        summary.write_bytes.load(Ordering::Relaxed),
+        summary.write.settled(),
         64,
         "the chunk that was already right was not rewritten"
     );
@@ -1934,12 +1934,12 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
         "not a failure"
     );
     assert!(
-        summary.write_bytes_spent.load(Ordering::Relaxed) <= limit,
+        summary.write.live() <= limit,
         "the ceiling must not be overshot: the live counter is the one the \
          ceiling bounds"
     );
     assert!(
-        summary.write_bytes.load(Ordering::Relaxed) <= limit,
+        summary.write.settled() <= limit,
         "and the reported figure is no larger than it"
     );
 
@@ -1973,10 +1973,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
         .await
         .expect("run");
     assert_eq!(code, 0);
-    assert!(
-        summary.write_bytes.load(Ordering::Relaxed) > 0,
-        "it was counted"
-    );
+    assert!(summary.write.settled() > 0, "it was counted");
     let line = girpr::report::summary_record(&summary, code).text();
     assert!(!line.contains("write_bytes"), "{line}");
     // `download_bytes` is the network; `write_bytes` is the disk. They are not the
@@ -1984,7 +1981,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     // exists. Here every byte written came from a download, so write_bytes is
     // simply the *uncompressed* size, which is strictly larger.
     assert!(
-        summary.write_bytes.load(Ordering::Relaxed) > summary.download.settled(),
+        summary.write.settled() > summary.download.settled(),
         "write_bytes counts uncompressed payload, download_bytes the compressed blob"
     );
 
@@ -2612,10 +2609,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
             );
         }
         mock.stop();
-        (
-            summary.write_bytes.load(Ordering::Relaxed),
-            summary.write_bytes_spent.load(Ordering::Relaxed),
-        )
+        (summary.write.settled(), summary.write.live())
     }
 
     let (clean_reported, clean_spent) = run(MockOpts::default(), "write_bytes_clean").await;

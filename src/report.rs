@@ -265,34 +265,19 @@ pub struct Summary {
     /// length, and the in-place path's chunks that are already correct stay
     /// correct. Either way the next run is a smaller run, not a corrupt one.
     pub download_stopped: AtomicBool,
-    /// `--max-write-bytes`, same `u64::MAX` sentinel as `download_limit`.
-    pub write_limit: AtomicU64,
-    /// The bytes written into the install **from sources that passed their
-    /// gate** — a chunk's MD5, a reuse slice's MD5, a staged chunk's MD5, the
-    /// scan's source verdict for an in-file copy, and the structural
-    /// zero-fill.
+    /// The disk meter: the bytes that landed in the install (**live**) and the
+    /// bytes written from sources that passed their gate (**settled**).
     ///
-    /// Reported as `write_bytes` **only** when `--max-write-bytes` is active —
-    /// this is the cumulative counterpart of peak disk (`io_threads × largest
-    /// file`), and it is invisible to `download_bytes`, which counts the
-    /// network, not the disk.
+    /// The reported `write_bytes` is the **settled** figure: it is a function
+    /// of the install, not of the transport, because a chunk whose digest
+    /// fails contributes nothing. The `--max-write-bytes` ceiling bounds the
+    /// **live** figure, which is the disk the run actually took: a chunk that
+    /// fails its digest has already been written, and the bytes are spent
+    /// whether they are good or not.
     ///
-    /// **It is a function of the input state.** A chunk whose digest fails
-    /// contributes nothing: the bytes it landed are real, but they were never
-    /// a source that passed a gate, and the run's answer to "how much did the
-    /// repair rewrite" must not move because the network was flaky. The live
-    /// counter that the ceiling reads is [`Self::write_bytes_spent`].
-    pub write_bytes: AtomicU64,
-    /// Every byte that landed in the install, gate or no gate.
-    ///
-    /// This is the number the `--max-write-bytes` ceiling bounds, because it
-    /// is the disk the run actually took: a chunk that fails its digest has
-    /// already been written, and the bytes are spent whether they are good or
-    /// not. It is **not** reported — the reported figure is
-    /// [`Self::write_bytes`], which counts only the bytes that passed their
-    /// gate.
-    pub write_bytes_spent: AtomicU64,
-    /// Set when the runtime **write** hard stop fired (see `write_bytes`).
+    /// See [`Meter`] for the rule that tells the two apart.
+    pub write: Meter,
+    /// Set when the runtime **write** hard stop fired (see `write`).
     pub write_stopped: AtomicBool,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
@@ -335,9 +320,7 @@ impl Summary {
             deleted_extra_bytes: AtomicU64::new(0),
             flags: SummaryFlags::default(),
             download_stopped: AtomicBool::new(false),
-            write_limit: AtomicU64::new(u64::MAX),
-            write_bytes: AtomicU64::new(0),
-            write_bytes_spent: AtomicU64::new(0),
+            write: Meter::new(),
             write_stopped: AtomicBool::new(false),
             fail_fast: AtomicBool::new(false),
             aborted: AtomicBool::new(false),
@@ -364,9 +347,7 @@ impl Summary {
             // reads both *after* the tasks have been joined, which is the only
             // moment either can be meaningful.
             download_stopped: AtomicBool::new(self.download_stopped.load(Ordering::Relaxed)),
-            write_limit: AtomicU64::new(self.write_limit.load(Ordering::Relaxed)),
-            write_bytes: AtomicU64::new(self.write_bytes.load(Ordering::Relaxed)),
-            write_bytes_spent: AtomicU64::new(self.write_bytes_spent.load(Ordering::Relaxed)),
+            write: self.write.snapshot(),
             write_stopped: AtomicBool::new(self.write_stopped.load(Ordering::Relaxed)),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
