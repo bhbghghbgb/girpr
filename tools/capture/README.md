@@ -110,7 +110,7 @@ them, and assembles a **complete artifact**:
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
 The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
-`20261021T111044Z`, the one the tool writes today — **verifies 63/63, exit
+`20261021T141336Z`, the one the tool writes today — **verifies 63/63, exit
 `0`**, and its own selfcheck is **93/93, `pass`**.
 
 It holds **six** captures and answers **all six** patch shapes, one capture

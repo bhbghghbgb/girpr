@@ -44,8 +44,23 @@ exactly, and a bundle of real game bytes states it at the price of a download.
 **The claim is not specific to one version pair.** It has been checked against
 `hk4e_global` 7.0.0 → 7.1.0 and against 6.7.0 → 7.1.0: two bundles, two
 different sets of files and two different sets of numbers, and the same six
-assertions green on both. A claim that held on one pair alone would be a claim
+captures green on both. A claim that held on one pair alone would be a claim
 about that pair.
+
+**The second bundle is not kept in the tree**, because `artifacts/` is
+gitignored and a bundle is a hundred megabytes of game bytes rather than a
+document — so this is a claim a reader can check, not one they have to take on
+faith. Reproduce it with
+
+```
+cargo run -p gircap -- capture --old-tag 6.7.0 --new-tag 7.1.0 --out artifacts
+```
+
+and point the bridge at the result with `GIRPR_ARTIFACT_BUNDLE=<dir>`. The
+captures are then the same six classes over a different pair's files, and the
+byte totals are the pair's own: on 6.7.0 → 7.1.0 the `reuse_in_place` capture
+fetches 839 603 B where the 7.0.0 pair fetches 274 426 B, and `reuse_moved`
+fetches 2 745 798 B where it fetches 1 564 894 B.
 
 | | the bridge does | the bridge does not |
 |---|---|---|

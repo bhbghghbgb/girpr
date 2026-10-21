@@ -248,9 +248,9 @@ with the reused part moved, a **new** file and a **deleted** file.
 | class | predicate over the old/new manifest entries | the patch it covers | *(measured)* cheapest candidate, 7.0.0→7.1.0 | cost |
 |---|---|---|---|---|
 | `identical` | `old.md5 == new.md5` | nothing to fetch: the file is already right | `GenshinImpact_Data/Resources/browser_assets` | 54 B |
-| `no_reuse` | `reused == 0`, `nchunks > 1` | everything fetched: the whole file is overwritten | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
-| `reuse_in_place` | `0 < reused < nchunks`, `moved == 0` | a subset fetched: the reused chunks are already correct where they belong | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
-| `reuse_moved` | `moved > 0` | a subset fetched: the reused chunks live elsewhere in the file and have to be copied | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
+| `no_reuse` | `same_md5 == false`, `reused == 0`, `nchunks > 1` | everything fetched: the whole file is overwritten | `GenshinImpact_Data/Resources/unity default resources` | 634 KB |
+| `reuse_in_place` | `same_md5 == false`, `0 < reused < nchunks`, `moved == 0` | a subset fetched: the reused chunks are already correct where they belong | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | 1.83 MB |
+| `reuse_moved` | `same_md5 == false`, `moved > 0` | a subset fetched: the reused chunks live elsewhere in the file and have to be copied | `…/StreamingAssets/AssetBundles/blocks/00/09801749.blk` | 22.7 MB |
 | `added` | path only in the new manifest | the file is created whole | `…/Plugins/libHttpClient.GDK.dll` | 114 KB |
 | `removed` | path only in the old manifest | the file is purged | `…/StreamingAssets/AssetBundles/blocks/00/00664172.blk` | 1.73 MB |
 
@@ -258,6 +258,16 @@ with the reused part moved, a **new** file and a **deleted** file.
 file that reuses *and* moves is the `reuse_moved` one, and a file that reuses
 without moving is the `reuse_in_place` one — so one capture is one shape, and
 the bundle is one file per shape.
+
+**The `same_md5 == false` carve-out is what makes the partition true.** Every
+content class requires it: a file whose whole-file MD5s agree is the **skip**
+branch — the repair makes no content decision about it at all, so it cannot be
+a statement about how the content changed. The live pool holds one such path
+(`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled, so four
+chunks "move", yet the file's content is byte-identical. Without the carve-out
+it would satisfy a content class as well as `identical`, and the class set would
+not be a partition. **A reader implementing the table above must include it**,
+or `Music4.pck` lands in `reuse_moved`.
 
 **A one-chunk file with nothing reusable is not a class.** It is a degenerate
 patch, and `added` already covers "the file is created whole".
@@ -672,7 +682,7 @@ dropped.
 
 `gircap verify` re-derives **nine** of the twenty-one — A6, A7, A8, A11, A13,
 A16, A17, A18 and A20. It does not re-derive A1–A5, A9, A10, A12, A14, A15, A19
-or A21–A23: the first **eight** are statements about the API bodies, the
+or A21–A23: the first **eleven** are statements about the API bodies, the
 manifests and the diff, and re-running them inside the bundle would be re-running
 the capture's own algorithm against the capture's own output, which can only ever
 agree; the last three are the bundle's **coverage**, which `verify` reports as
@@ -971,7 +981,7 @@ two figures worth checking are `deleted_extra_bytes=1731133`, which is the
 patchmap's `old.size`, and `download_bytes=0`. `expectations.absent_after: true`
 says exactly this, so the artifact's contract and the run's output agree.
 
-Only the `--include` glob is shared with the other eight; `--purge-only` is the
+Only the `--include` glob is shared with the other five; `--purge-only` is the
 one flag that makes this capture different, and leaving it off would make the run
 exit non-zero for the same reason a repair run would.
 
@@ -1023,7 +1033,7 @@ artifact's own patchmap rather than against this table:
 | `removed` | `removed` | **0** *(cleanup run; `deleted_extra_bytes=1 731 133`)* | *(no plan)* | 0 |
 
 All six exit `0`. **2 290 529 B in total**, which is the sum of the patchmaps'
-figures to the byte. Ten reused chunks across the four captures that declare
+figures to the byte. Ten reused chunks across the three captures that declare
 them, none of them downloaded. Only the six captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
 `identical` one was left alone, and the other three were modified in place — so

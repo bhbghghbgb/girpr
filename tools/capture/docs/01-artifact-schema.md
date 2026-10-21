@@ -94,7 +94,7 @@ assume any document in a bundle was renamed into position.
   "schema_version": 2,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
-    "id": "20261021T111044Z",
+    "id": "20261021T141336Z",
     "captured_at": "2026-10-20T15:48:10Z",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
@@ -193,7 +193,7 @@ rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5
 
 ## 4. `api/requests.ndjson`
 
-One object per HTTP request, in `seq` order. In the reference capture: 277 rows —
+One object per HTTP request, in `seq` order. In the reference capture: 43 rows —
 6 `api`, 4 `manifest`, 25 `chunk`, 8 `probe`.
 
 ```jsonc
@@ -501,12 +501,12 @@ for the reference pool. Lets a later run ask "why did it pick that?"
 ```jsonc
 { "schema_version": 2,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
-              "moved_up","moved_down","old_max_end","same_md5","old_bytes","new_bytes",
+              "moved_later","moved_earlier","old_max_end","same_md5","old_bytes","new_bytes",
               "patch_bytes","total_cost","classes","rank"],
   "rows": [
     { "path": "…/HoYoChannel.dll", "matching_field": "game",
       "old_size": 2340264, "new_size": 2340264,
-      "nchunks": 3, "reused": 1, "moved": 0, "moved_up": 0, "moved_down": 0,
+      "nchunks": 3, "reused": 1, "moved": 0, "moved_later": 0, "moved_earlier": 0,
       "old_max_end": 2340264, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
       "total_cost": 1826067, "classes": ["reuse_in_place"], "rank": 1 }
@@ -520,18 +520,18 @@ code). It is a row column because the same relative path can appear in more than
 one pool, and without it a reader summing `total_cost` across rows would double
 count. `rank` is 1-based, in `total_cost` order.
 
-`moved_up` and `moved_down` split `moved` by **direction**: `moved_up` counts
-the chunks whose source is *before* their destination (the bytes move later,
-and the descending write order keeps them alive), `moved_down` counts the ones
-whose source is *after* it (the bytes move earlier, and the ascending order
-keeps them alive). `moved` is their sum. The split is what makes the write
-direction a *measurement* rather than something a reader has to re-derive.
+`moved_later` and `moved_earlier` split `moved` by **where the bytes land**:
+`moved_later` counts the chunks whose source is *before* their destination, so
+the chunk lands later in the file than the offset it came from, and
+`moved_earlier` counts the ones whose source is *after* it. `moved` is their
+sum. The split is what makes the shape of the move a *measurement* rather than
+something a reader has to re-derive — and it is a measurement about the patch,
+not about any repair tool's write order.
 
 `old_max_end` is the largest end (`source offset + size`) over the file's reuse
-sources. It is the **trim test's input**: the repair releases the dead tail
-before the first write only when no source reaches past the target's end, and
-the tool under test asks that same question of that same number
-(`repair::file::trim_is_free`).
+sources: **how far into the old file the reusable bytes reach**. It is a fact
+about the patch, and what a repair tool does with a source that reaches past
+the end is that tool's own business.
 
 ## 11. `diff/reuse_pool.json`
 
@@ -813,12 +813,20 @@ whose two sides are deliberately byte-identical.
       "md5": "8c718562f39f91f7e399b02de591f3bd",
       "sha256": "…", "encoding": "gzip" }
   ],
-  "file_count": 96, "total_bytes": 208307799 }
+  "file_count": 77, "total_bytes": 175623337 }
 ```
 
 This is the **complete** inventory of the bundle: every file except
 `checksums.json` itself. `file_count` is therefore one less than the number of
 files on disk, and a bundle whose count disagrees with its tree fails A16.
+
+**`file_count` is a property of the shape and `total_bytes` is a property of the
+run.** The count does not move between two captures of the same pair — the same
+documents, the same tree — while the byte total moves by a few bytes, because
+the capture's own timestamp and id are in two of the documents and their
+lengths change with it. So a reader comparing two bundles of the same pair
+should expect the counts to agree and the byte totals to differ slightly, and
+should not read the difference as a different tree.
 
 **`encoding: gzip` means the digest is of the _decompressed_ body**, and `bytes`
 is the decompressed length too. That is the only way a reader can check the
@@ -848,7 +856,7 @@ The count is safe, because no file appears or disappears between the two passes.
 ```jsonc
 { "schema_version": 2,
   "result": "pass",                                  // pass | fail | incomplete
-  "counts": { "total": 354, "passed": 354, "failed": 0 },
+  "counts": { "total": 93, "passed": 93, "failed": 0 },
   "assertions": [
     { "id": "A6", "assertion": "chunk decompressed md5 matches",
       "subject": "chunks/blobs/340ca86e….zst",
@@ -862,8 +870,8 @@ The count is safe, because no file appears or disappears between the two passes.
 
 One row per assertion **instance**, not per assertion kind — 25 stored chunks
 produce 25 A6 rows, so `counts.total` is much larger than the number of ids. In
-the reference capture it is 354: A1 6, A2 2, A3 4, A4 8, A6 259, A7 9, A8 9,
-A9 8, A10 6, A11 18, A12 9, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1,
+the reference capture it is 93: A1 6, A2 2, A3 4, A4 8, A6 25, A7 5, A8 5,
+A9 4, A10 3, A11 10, A12 5, A13 1, A14 1, A15 8, A16 1, A17 1, A19 1,
 A21 1, A22 1, A23 1.
 `ok:false` rows are never dropped; a failing capture leaves them in place so the
 failure is inspectable rather than summarized away.
@@ -872,7 +880,9 @@ failure is inspectable rather than summarized away.
 bundle does not have to open another file to find out what A11 means. The
 wording table is pinned by a test: `id` alone would pass if an assertion were
 silently narrowed, and "every reused chunk's old-file slice MD5 matches" and
-"every reused chunk's MD5 matches" are both `A10`.
+"every reused chunk's MD5 matches" are both `A10`. It is also compared against
+the specification's own table, so the wording a bundle publishes and the
+wording the specification states cannot drift apart.
 
 A skipped row is recorded too, and is **not** a failure: `ok` is absent and the
 row is listed under `skipped`. A `--no-chunk-blobs` capture skips A6–A12, A19 and
