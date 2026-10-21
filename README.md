@@ -131,8 +131,8 @@ flowchart TD
   the traffic and the disk the run actually took.
   `local_manifest=ok|unavailable` is the one exception to "flag-driven": it is
   emitted when a local `config.ini` version was known and `getBuild(local)` was
-  attempted, because that lookup is the one thing that moves both byte counts
-  while still exiting `0` — see below. Absent on a fresh install.
+  attempted, because that lookup is the one thing that moves the download byte
+  count while still exiting `0` — see below. Absent on a fresh install.
   The repair-mode group (`repair_mode=`, `inplace=`, `temp=`, `kept_bytes=`) is
   emitted only when `--repair-mode` was passed; `ram_bytes=` (the peak staged
   payload) only when `--max-ram-bytes` was; `damaged_chunks=` only when
