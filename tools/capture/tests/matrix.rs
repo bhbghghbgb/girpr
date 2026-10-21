@@ -183,9 +183,9 @@ impl Captured {
 /// to widen `--audio` or pick another pair.
 #[test]
 fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
-    let c = captured("classes", World::five_classes(), &[]);
+    let c = captured("classes", World::all_shapes(), &[]);
     let rows = c.matrix();
-    assert_eq!(rows.len(), 11, "one row per required class");
+    assert_eq!(rows.len(), 6, "one row per patch shape");
     for r in &rows {
         // An unfulfilled row must say why. A `covered_by` row says which
         // capture covers it, so it carries a reason too — it is the *captured*
@@ -229,10 +229,13 @@ fn the_matrix_has_one_row_per_class_and_each_says_what_happened() {
 /// file for an expensive class while a cheap one sat unfunded.
 #[test]
 fn admission_is_cheapest_first_and_the_totals_add_up() {
-    let c = captured("greedy", World::five_classes(), &[]);
+    let c = captured("greedy", World::all_shapes(), &[]);
     let s = &c.summary;
     let admitted = s["captures_admitted"].parse::<u64>().expect("a count");
-    assert_eq!(admitted, 8, "eight classes are satisfiable in this world");
+    assert_eq!(
+        admitted, 6,
+        "six patch shapes are satisfiable in this world"
+    );
 
     let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
     // The admission total is the sum of what the admitted captures cost, and a
@@ -312,10 +315,10 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
 /// **Two budgets, two verdicts.**
 ///
 /// A budget that refuses a capture the *coverage* does not depend on leaves the
-/// bundle covering the repair spec's decisions, and the run succeeds: the
-/// matrix is complete and honest about what the budget would not pay for.
-/// A budget that takes the coverage with it does not: the bundle no longer
-/// shows both trim outcomes, and the run **fails** and says so (A21). A
+/// bundle covering the patch space, and the run succeeds: the matrix is
+/// complete and honest about what the budget would not pay for. A budget that
+/// takes the coverage with it does not: the bundle no longer covers both sides
+/// of every boundary, and the run **fails** and says so (A21, A22 or A23). A
 /// narrower bundle is not a bundle this tool should hand over as trustworthy.
 ///
 /// The refusal is `--require-class`'s job either way, and the case below
@@ -332,22 +335,29 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // hard-coded number would silently stop testing anything the moment the
     // world's bytes changed, and "the budget happened to be larger than
     // everything" looks exactly like "the budget did nothing".
-    let full = captured("budget-full", World::five_classes(), &[]);
+    let full = captured("budget-full", World::all_shapes(), &[]);
     let total = full.summary["capture_bytes_admitted"]
         .parse::<u64>()
         .expect("a size");
     let costs = admitted_costs(&full.bundle);
-    // The dearest capture is the `removed` one, and a `removed` capture
-    // contributes nothing to the coverage — so a budget that refuses it leaves
-    // the bundle covering the spec's decisions.
-    let dearest = *costs.iter().max().expect("a cost");
+    // The dearest capture is the `removed` one, and the coverage does not
+    // depend on it: a two-sided capture in this world shrinks, so the size
+    // boundary is covered either way. A budget that refuses it leaves the
+    // bundle covering the patch space.
+    let dearest = costs.iter().map(|(_, cost)| *cost).max().expect("a cost");
     let keeps_the_coverage = total - dearest;
-    let half = (total / 2).max(1);
+    // And a budget that funds only the cheaper half of the captures takes the
+    // coverage with it: the capture that moves its bytes is not among them, so
+    // the bundle covers neither side of the moved boundary. The figure is read
+    // out of the world's own costs rather than guessed.
+    let mut sorted = costs.iter().map(|(_, cost)| *cost).collect::<Vec<_>>();
+    sorted.sort_unstable();
+    let narrow_budget = sorted.iter().take(sorted.len() / 2).sum::<u64>().max(1);
 
     // ---- the budget that keeps the coverage ------------------------------
     let c = captured(
         "budget",
-        World::five_classes(),
+        World::all_shapes(),
         &["--max-download-bytes", &keeps_the_coverage.to_string()],
     );
     // The run **succeeds**: the matrix is complete and honest about what the
@@ -431,7 +441,7 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // Run through the binary directly, because the requirement is checked
     // **before** the bundle is written: a run that refuses a class the caller
     // named has nothing to write, and there is no bundle to read.
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("budget-required");
     let args: Vec<String> = vec![
         "capture".into(),
@@ -478,18 +488,18 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
     // says so.
     let narrow = captured(
         "budget-narrow",
-        World::five_classes(),
-        &["--max-download-bytes", &half.to_string()],
+        World::all_shapes(),
+        &["--max-download-bytes", &narrow_budget.to_string()],
     );
     assert_eq!(
         narrow.code, 3,
         "a budget that takes the coverage with it is a failed run\n{}\n{}",
-        narrow.summary["exit_code"], narrow.failure["detail"]
+        narrow.summary["exit_code"], narrow.summary["detail"]
     );
+    let detail = narrow.failure["detail"].clone();
     assert!(
-        narrow.failure["detail"].contains("A21"),
-        "and the failure names the coverage assertion: {:?}",
-        narrow.failure["detail"]
+        ["A21", "A22", "A23"].iter().any(|id| detail.contains(id)),
+        "and the failure names a coverage assertion: {detail:?}"
     );
 }
 
@@ -498,21 +508,26 @@ fn a_budget_turns_a_satisfiable_class_into_over_budget() {
 /// Read out of the artifact rather than hard-coded: the numbers move with the
 /// world, and a hard-coded one would silently stop testing anything the moment
 /// they did.
-fn admitted_costs(bundle: &std::path::Path) -> Vec<u64> {
+fn admitted_costs(bundle: &std::path::Path) -> Vec<(String, u64)> {
     let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("diff/matrix.json");
     let doc: serde_json::Value = serde_json::from_slice(&raw).expect("diff/matrix.json");
     doc["admitted"]
         .as_array()
         .expect("admitted[]")
         .iter()
-        .map(|r| r["budget_cost"].as_u64().expect("budget_cost"))
+        .map(|r| {
+            (
+                r["capture_id"].as_str().expect("capture_id").to_string(),
+                r["budget_cost"].as_u64().expect("budget_cost"),
+            )
+        })
         .collect()
 }
 
 /// The diff the run computed, read back off disk, agrees with the rows.
 #[test]
 fn the_diff_on_disk_matches_the_files_the_captures_name() {
-    let c = captured("diff", World::five_classes(), &[]);
+    let c = captured("diff", World::all_shapes(), &[]);
     let d = c.diff();
     assert_eq!(d["fields"], serde_json::json!(["game", "en-us"]));
     let counts = &d["counts"];
@@ -550,7 +565,7 @@ fn the_diff_on_disk_matches_the_files_the_captures_name() {
 /// audio pool cannot be mistaken for one from `game`.
 #[test]
 fn audio_candidates_are_attributed_to_their_own_field() {
-    let c = captured("attrib", World::five_classes(), &[]);
+    let c = captured("attrib", World::all_shapes(), &[]);
     let candidates = json(&c.bundle.join("diff/candidates.json"));
     let rows = candidates["rows"].as_array().expect("candidate rows");
     assert!(!rows.is_empty());
@@ -577,7 +592,7 @@ fn audio_candidates_are_attributed_to_their_own_field() {
 /// admitted and numbered.
 #[test]
 fn per_class_two_admits_two_files_and_numbers_them() {
-    let c = captured("perclass", World::five_classes(), &["--per-class", "2"]);
+    let c = captured("perclass", World::all_shapes(), &["--per-class", "2"]);
     // `added` has exactly one candidate, so the second is refused; the point is
     // that the capture still succeeds and says which class was short.
     let s = &c.summary;
@@ -609,10 +624,10 @@ fn per_class_two_admits_two_files_and_numbers_them() {
 /// the file, and that the nine rows are the same nine either way.
 #[test]
 fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
-    let matrix_only = captured("explicit-off", World::five_classes(), &[]);
+    let matrix_only = captured("explicit-off", World::all_shapes(), &[]);
     let c = captured(
         "explicit",
-        World::five_classes(),
+        World::all_shapes(),
         &["--files", "GenshinImpact_Data/Resources/browser_assets"],
     );
     assert_eq!(
@@ -679,7 +694,7 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
 fn a_named_path_the_manifests_do_not_carry_is_skipped_and_reported() {
     let c = captured(
         "explicit-missing",
-        World::five_classes(),
+        World::all_shapes(),
         &["--files", "GenshinImpact_Data/Plugins/Nope.dll"],
     );
     assert_eq!(

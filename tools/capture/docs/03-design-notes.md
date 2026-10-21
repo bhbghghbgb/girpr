@@ -15,7 +15,7 @@ Companions: [`02-plan.md`](02-plan.md) (shape, tests, risks),
 ## 1. How this crate measures risk
 
 A bundle is a **fixture other work depends on**. Re-capturing one costs a couple
-of minutes and ~696 MiB, and `girpr`'s `artifact_bridge` runs against the copies
+of minutes and ~98 MiB, and `girpr`'s `artifact_bridge` runs against the copies
 under `artifacts/`. So the risk axis for a change here is not "might it break the
 build":
 
@@ -43,8 +43,8 @@ Re-measure before trusting them; they are a scale reference, not a benchmark.
 | total chunk bytes in `game` 7.1.0 | 128.3 GB |
 | manifest archive | 9 007 187 B zstd → 16 827 424 B |
 | largest single chunk | 3 689 476 B compressed — this bounds the main tool's whole-chunk buffering |
-| a default capture | ~696 MiB on disk: 324 files, 4 manifests, 259 stored chunks, 277 request rows |
-| admitted files per capture | 10 captures, 9 in `game/` and 9 in `expected/` |
+| a default capture | ~98 MiB on disk: 78 files, 4 manifests, 25 stored chunks, 43 request rows |
+| admitted files per capture | 6 captures, 5 in `game/` and 5 in `expected/` |
 | assembled bytes per capture | 453 033 100 B |
 
 The ratio that matters: the `game` manifest describes **128 GB** of content and a

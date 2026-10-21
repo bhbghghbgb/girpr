@@ -85,19 +85,24 @@ pub struct PathScore {
     pub reused: u64,
     /// Of those, how many sit at a different offset in the old file.
     pub moved: u64,
-    /// Of the moved ones, how many move **later**: the source is *before* the
-    /// destination. The descending write order keeps these alive.
-    pub moved_up: u64,
-    /// Of the moved ones, how many move **earlier**: the source is *after* the
-    /// destination. The ascending write order keeps these alive.
-    pub moved_down: u64,
-    /// The largest end (`source offset + size`) over the file's reuse sources.
+    /// Of the moved ones, how many land **later** in the file than the offset
+    /// they came from: the source is *before* the destination.
     ///
-    /// **The trim test's input.** The repair releases the dead tail *before*
-    /// the first write only when no reuse source reaches past the target's end
-    /// — a source the trim would delete is a source that is gone. The tool
-    /// under test asks the same question of the same number
-    /// (`repair::file::trim_is_free`).
+    /// A fact about the patch, not a decision: it says where the old file's
+    /// reusable bytes sit relative to where the new file wants them. What a
+    /// repair tool does about that is its own business.
+    pub moved_later: u64,
+    /// Of the moved ones, how many land **earlier** in the file than the offset
+    /// they came from: the source is *after* the destination.
+    ///
+    /// A fact about the patch, not a decision, like [`Self::moved_later`].
+    pub moved_earlier: u64,
+    /// The largest end (`source offset + size`) over the file's reuse sources:
+    /// **how far into the old file the reusable bytes reach**.
+    ///
+    /// A fact about the patch, not a decision: it says where the old file's
+    /// content that the new file reuses lives. What a repair tool does with a
+    /// source that reaches past the end is its own business.
     pub old_max_end: u64,
     /// Whether the whole-file MD5s agree.
     pub same_md5: bool,
@@ -446,8 +451,8 @@ pub fn score(
 ) -> PathScore {
     let mut reused = 0_u64;
     let mut moved = 0_u64;
-    let mut moved_up = 0_u64;
-    let mut moved_down = 0_u64;
+    let mut moved_later = 0_u64;
+    let mut moved_earlier = 0_u64;
     let mut old_max_end = 0_u64;
     let mut patch_bytes = 0_u64;
     let mut new_bytes = 0_u64;
@@ -468,10 +473,10 @@ pub fn score(
                     if src > c.offset {
                         // The bytes move earlier: the source is after the
                         // destination, and the ascending order keeps it alive.
-                        moved_down += 1;
+                        moved_earlier += 1;
                     } else {
                         // The bytes move later: the descending order keeps it.
-                        moved_up += 1;
+                        moved_later += 1;
                     }
                 }
             }
@@ -488,8 +493,8 @@ pub fn score(
         nchunks: new.chunks.len() as u64,
         reused,
         moved,
-        moved_up,
-        moved_down,
+        moved_later,
+        moved_earlier,
         old_max_end,
         same_md5: old.md5 == new.md5,
         old_bytes,
@@ -1132,8 +1137,8 @@ mod tests {
                 nchunks: 0,
                 reused,
                 moved,
-                moved_up: 0,
-                moved_down: moved,
+                moved_later: 0,
+                moved_earlier: moved,
                 old_max_end: 0,
                 same_md5: false,
                 old_bytes: cost / 2,
@@ -1194,8 +1199,8 @@ mod tests {
                 nchunks: 0,
                 reused: 0,
                 moved: 0,
-                moved_up: 0,
-                moved_down: 0,
+                moved_later: 0,
+                moved_earlier: 0,
                 old_max_end: 0,
                 same_md5: false,
                 old_bytes: c,

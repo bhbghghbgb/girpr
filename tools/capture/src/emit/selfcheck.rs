@@ -120,6 +120,16 @@ impl Assertion {
 /// A reader looking at a failed bundle should not have to open another file to
 /// find out what A11 means, and a one-line table is cheap.
 ///
+/// **This table is the contract, not a label.** It is what every shipped bundle
+/// publishes as the row's `assertion`, next to the row's own `expected` and
+/// `actual` — so a wording that names something the row does not measure makes
+/// the row contradict itself, and a reader of `verify/selfcheck.json` is the one
+/// who has to live with it. It once did: the coverage rows were rewritten to
+/// the patch space and this table was not, so every bundle said the bundle
+/// covered "both trim outcomes" beside a count of reused chunks. The tests
+/// below are what keep it honest: the wording is the specification's wording,
+/// and it never names the repair tool's own vocabulary.
+///
 /// `A19` is **M11's**, added after running the whole thing against the live API:
 /// it is the converse of A14, and without it a capture whose two variant files
 /// came out identical would pass every other assertion while holding no evidence
@@ -141,7 +151,7 @@ pub const WORDING: [(&str, &str); 21] = [
     ),
     (
         "A6",
-        "len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+        "per chunk: len(raw blob) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
     ),
     ("A7", "assemble(materialize_old) has md5 == old entry.md5"),
     ("A8", "assemble(materialize_new) has md5 == new entry.md5"),
@@ -184,15 +194,15 @@ pub const WORDING: [(&str, &str); 21] = [
     ),
     (
         "A21",
-        "the bundle covers both trim outcomes: at least one eager and at least one deferred",
+        "the bundle covers both sides of the reuse boundary: at least one capture with nothing reusable and at least one with something",
     ),
     (
         "A22",
-        "the bundle covers both write directions: at least one ascending and at least one descending",
+        "the bundle covers both sides of the moved boundary: at least one capture whose reused chunks are in place and at least one whose reused chunks moved",
     ),
     (
         "A23",
-        "the bundle covers a file that grows: at least one capture with growth_bytes > 0",
+        "the bundle covers both sides of the size boundary: at least one capture whose file grows and at least one whose file shrinks",
     ),
 ];
 
@@ -216,60 +226,83 @@ pub fn wording(id: &str) -> &'static str {
 /// red row and forget to say so.
 /// A21, A22 and A23: the coverage the class set exists to buy.
 ///
-/// The three properties are otherwise only held **by accident**. A bundle that
-/// happened to contain a file with a deferred trim would say nothing about the
-/// eager one, and a reader would have to take the class names on trust — which
-/// is exactly the trust this tool exists to replace with a measurement.
+/// The three boundaries of the patch space, and each one has two sides:
 ///
-/// The coverage is read out of the patchmaps' `repair` blocks, which say what
-/// the in-place path would do with each file: its `trim`, its `direction` and
-/// its `growth_bytes`.
+/// | id | the boundary | the two sides |
+/// |---|---|---|
+/// | A21 | reuse | nothing reusable, and something reusable |
+/// | A22 | moved | the reused chunks are where they belong, and they live elsewhere |
+/// | A23 | size | the file grows, and the file shrinks |
+///
+/// **A capture with no plan is on neither side of the reuse boundary.** A
+/// capture with no new side has no target, so it has nothing to reuse and
+/// nothing to fetch; counting it as "nothing reusable" would be a false claim
+/// about a capture that says nothing.
+///
+/// **A file that is created grows, and a file that is deleted shrinks, whatever
+/// its size.** The size boundary is about the file, not about the byte count: a
+/// zero-byte file that appears has appeared, and a zero-byte file that
+/// disappears has gone. An absent side is *no file*, never a file of zero
+/// bytes.
+///
+/// The coverage is read out of the patchmaps' own arithmetic — the plan's
+/// counts and the two sides' sizes — and not out of the class labels, so a
+/// mislabelled capture cannot make a boundary look covered.
 ///
 /// It lives here rather than in `closeout.rs` so that the two places that
 /// build these rows build the **same** rows: the capture's and the verifier's
 /// have to agree, or `check_agreement` would report a disagreement that does
 /// not exist.
-pub fn coverage(repairs: &[crate::assemble::Repair]) -> Vec<Assertion> {
-    use crate::assemble::{Direction, Trim};
-
+pub fn coverage(shapes: &[crate::assemble::PatchShape]) -> Vec<Assertion> {
     let mut rows = Vec::new();
 
-    // A21 — both trim outcomes.
-    let eager = repairs.iter().filter(|r| r.trim == Trim::Eager).count();
-    let deferred = repairs.iter().filter(|r| r.trim == Trim::Deferred).count();
+    // A21 — both sides of the reuse boundary: a file with nothing reusable
+    // and a file with something.
+    let none_reusable = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.reuse == 0))
+        .count();
+    let some_reusable = shapes
+        .iter()
+        .filter(|s| s.plan.is_some_and(|p| p.reuse > 0))
+        .count();
     rows.push(Assertion::row(
         "A21",
         "patchmaps/",
-        "at least one eager trim and at least one deferred trim",
-        eager > 0 && deferred > 0,
-        &format!("{eager} eager trim(s), {deferred} deferred trim(s)"),
+        "at least one capture with nothing reusable and at least one with something",
+        none_reusable > 0 && some_reusable > 0,
+        &format!("{none_reusable} with nothing reusable, {some_reusable} with something"),
     ));
 
-    // A22 — both write directions.
-    let ascending = repairs
+    // A22 — both sides of the moved boundary: the reused chunks stay where
+    // they belong, or they live elsewhere and have to be copied. A capture with
+    // no reused chunk has nothing that could have moved, so it is on neither
+    // side.
+    let in_place = shapes
         .iter()
-        .filter(|r| r.direction == Direction::Ascending)
+        .filter(|s| s.plan.is_some_and(|p| p.reuse > 0 && p.moved == 0))
         .count();
-    let descending = repairs
+    let moved = shapes
         .iter()
-        .filter(|r| r.direction == Direction::Descending)
+        .filter(|s| s.plan.is_some_and(|p| p.moved > 0))
         .count();
     rows.push(Assertion::row(
         "A22",
         "patchmaps/",
-        "at least one ascending write order and at least one descending one",
-        ascending > 0 && descending > 0,
-        &format!("{ascending} ascending, {descending} descending"),
+        "at least one capture whose reused chunks are in place and at least one whose reused chunks moved",
+        in_place > 0 && moved > 0,
+        &format!("{in_place} in place, {moved} moved"),
     ));
 
-    // A23 — a file that grows.
-    let growing = repairs.iter().filter(|r| r.growth_bytes > 0).count();
+    // A23 — the file grows and the file shrinks.
+    let grows = shapes.iter().filter(|s| s.grows()).count();
+    let shrinks = shapes.iter().filter(|s| s.shrinks()).count();
     rows.push(Assertion::row(
         "A23",
         "patchmaps/",
-        "at least one capture whose file on disk is shorter than the target",
-        growing > 0,
-        &format!("{growing} capture(s) grow"),
+        "at least one capture whose file grows and at least one whose file shrinks",
+        grows > 0 && shrinks > 0,
+        &format!("{grows} grow, {shrinks} shrink"),
     ));
 
     rows
@@ -493,7 +526,7 @@ pub fn closing(
     //
     // A14 asks "is `game/` free of paths the tool under test would plan
     // against", which is one direction. It cannot see the other failure: a
-    // capture admitted for `kept_in_place` whose two variant files came
+    // capture admitted for `reuse_in_place` whose two variant files came
     // out byte-identical. That bundle would satisfy A14, satisfy A7/A8 (each
     // side matches its own declared MD5), and be useless - the fixture would
     // hold no evidence of the patch it was captured for. M11 found the gap by
@@ -987,90 +1020,221 @@ mod tests {
         assert!(!WORDING.iter().any(|(id, _)| *id == "A20"));
     }
 
+    /// **The published wording is the specification's wording.**
+    ///
+    /// `docs/00-spec.md` §6 is the specification of the rows a bundle
+    /// publishes, and its table is what a reader reads before the bundle. The
+    /// wording table here is what the bundle actually carries — the row's
+    /// `assertion` field, next to the row's own `expected` and `actual` — so
+    /// the two are the same sentence and must not be able to drift.
+    ///
+    /// They drifted once: the coverage rows were rewritten to the patch space,
+    /// and the wording table was not, so every bundle published a claim about
+    /// the repair tool's own decisions ("both trim outcomes") beside a count of
+    /// reused chunks.
+    #[test]
+    fn the_published_wording_is_the_specifications_wording() {
+        let spec = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/00-spec.md"),
+        )
+        .expect("the spec is beside the crate");
+
+        for (id, published) in WORDING {
+            let cell = spec_row(&spec, id).unwrap_or_else(|| {
+                panic!("{id}: the specification has no row for it, so it cannot be published")
+            });
+            assert_eq!(
+                as_published(cell),
+                *published,
+                "{id}: the published wording and the specification's table row have drifted"
+            );
+        }
+    }
+
+    /// **The coverage rows are about the patch space, not the repair spec.**
+    ///
+    /// The retired classes — the trim's two outcomes, the write order's two
+    /// directions, the growth counter — are the repair tool's own vocabulary.
+    /// They were in the wording table, and a bundle that publishes them is
+    /// telling a reader about decisions that are not the bundle's to make.
+    #[test]
+    fn the_coverage_rows_are_about_the_patch_space_and_not_the_repair_spec() {
+        for (id, forbidden) in [
+            ("A21", &["trim", "eager", "deferred"][..]),
+            ("A22", &["direction", "ascending", "descending"][..]),
+            ("A23", &["growth_bytes"][..]),
+        ] {
+            let w = wording(id).to_lowercase();
+            for word in forbidden {
+                assert!(
+                    !w.contains(word),
+                    "{id} still names the repair spec's own vocabulary: {word}"
+                );
+            }
+        }
+    }
+
+    /// The specification's table row for an id, as the specification writes it.
+    ///
+    /// The row is `| <id> | <text> |`, and the text may contain an escaped
+    /// pipe (`\|`), which is why the split is on the first ` | ` and not on
+    /// every pipe.
+    fn spec_row<'a>(spec: &'a str, id: &str) -> Option<&'a str> {
+        spec.lines().find_map(|l| {
+            let rest = l.strip_prefix("| ")?;
+            let (row_id, text) = rest.split_once(" | ")?;
+            (row_id.trim() == id).then(|| text.trim().trim_end_matches('|').trim())
+        })
+    }
+
+    /// The specification's spelling, as the table spells it.
+    ///
+    /// The two are the same sentence and the differences are spelling: the
+    /// specification puts code in backticks, escapes a pipe inside a table
+    /// cell, and uses `∪`, `⊆` and `Σ` where the table spells them out. The
+    /// mappings below are the whole list, and each one is a spelling and
+    /// nothing else — a new one means the specification and the table have to
+    /// be reconciled by hand, which is exactly the point.
+    fn as_published(spec_cell: &str) -> String {
+        spec_cell
+            .replace('`', "")
+            .replace("\\|", "|")
+            .replace('∪', "union")
+            .replace("⊆ ", "a subset of ")
+            .replace("Σ uncompressed_size", "sum(uncompressed_size)")
+    }
+
     /// **The negative case**, and the reason the three assertions exist: a
-    /// bundle that does not cover both trim outcomes **fails A21**.
+    /// bundle that does not cover both sides of the reuse boundary **fails
+    /// A21**.
     ///
     /// The properties the class set buys are otherwise only held *by accident*:
-    /// a bundle that happened to contain a file with a deferred trim would say
-    /// nothing about the eager one, and a reader would have to take the class
-    /// names on trust.
+    /// a bundle that happened to contain a file with nothing reusable would say
+    /// nothing about the other side of the boundary, and a reader would have to
+    /// take the class names on trust.
     #[test]
-    fn a_bundle_without_both_trims_fails_a21() {
-        use crate::assemble::{Direction, Mode, Repair, Trim};
+    fn a_bundle_without_both_sides_of_the_reuse_boundary_fails_a21() {
+        use crate::assemble::{PatchShape, PlanCounts};
 
-        let repair = |trim| Repair {
-            kept: 1,
-            moved: 0,
-            fetch: 0,
-            kept_bytes: 10,
-            payload_bytes: 0,
-            write_bytes: 0,
-            direction: Direction::NotApplicable,
-            keeps_ascending: 0,
-            keeps_descending: 0,
-            trim,
-            growth_bytes: 0,
-            mode: Mode::Inplace,
+        let shape = |reuse, moved| PatchShape {
+            plan: Some(PlanCounts {
+                chunks: 3,
+                reuse,
+                moved,
+            }),
+            old_size: Some(100),
+            new_size: Some(100),
         };
 
-        // Only the eager trim: A21 is red.
-        let rows = coverage(&[repair(Trim::Eager)]);
+        // Nothing reusable at all: A21 is red.
+        let rows = coverage(&[shape(0, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
-        assert!(!a21.ok, "one trim outcome is not both: {a21:?}");
+        assert!(!a21.ok, "one side of the boundary is not both: {a21:?}");
         assert!(
-            a21.actual.contains("0 deferred"),
+            a21.actual.contains("0 with something"),
             "the detail says so: {a21:?}"
         );
 
-        // Only the deferred one: still red.
-        let rows = coverage(&[repair(Trim::Deferred)]);
+        // Something reusable and nothing else: still red.
+        let rows = coverage(&[shape(2, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
         assert!(!a21.ok);
 
         // Both: green.
-        let rows = coverage(&[repair(Trim::Eager), repair(Trim::Deferred)]);
+        let rows = coverage(&[shape(0, 0), shape(2, 0)]);
         let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
-        assert!(a21.ok, "both trims: {a21:?}");
+        assert!(a21.ok, "both sides: {a21:?}");
     }
 
-    /// The same shape for the other two: both write directions, and a file that
-    /// grows.
+    /// **A capture with no plan is on neither side of the reuse boundary.**
+    ///
+    /// It has no target, so it has nothing to reuse and nothing to fetch.
+    /// Counting it as "nothing reusable" would be a false claim about a
+    /// capture that says nothing at all.
     #[test]
-    fn a_bundle_without_both_directions_fails_a22_and_one_that_never_grows_fails_a23() {
-        use crate::assemble::{Direction, Mode, Repair, Trim};
+    fn a_capture_with_no_plan_is_on_neither_side_of_the_reuse_boundary() {
+        use crate::assemble::PatchShape;
 
-        let repair = |direction, growth_bytes| Repair {
-            kept: 1,
-            moved: 1,
-            fetch: 0,
-            kept_bytes: 10,
-            payload_bytes: 10,
-            write_bytes: 10,
-            direction,
-            keeps_ascending: 1,
-            keeps_descending: 0,
-            trim: Trim::None,
-            growth_bytes,
-            mode: Mode::Inplace,
+        let no_plan = PatchShape {
+            plan: None,
+            old_size: None,
+            new_size: None,
+        };
+        let rows = coverage(&[no_plan]);
+        let a21 = rows.iter().find(|r| r.id == "A21").expect("a row");
+        assert!(!a21.ok, "a capture with no plan covers no side: {a21:?}");
+        assert!(
+            a21.actual
+                .contains("0 with nothing reusable, 0 with something"),
+            "and it is counted on neither side: {a21:?}"
+        );
+    }
+
+    /// The same shape for the other two: the reused chunks in place and moved,
+    /// and a file that grows and one that shrinks.
+    #[test]
+    fn a_bundle_without_both_reuse_shapes_fails_a22_and_one_that_never_shrinks_fails_a23() {
+        use crate::assemble::{PatchShape, PlanCounts};
+
+        let shape = |moved, old_size, new_size| PatchShape {
+            plan: Some(PlanCounts {
+                chunks: 3,
+                reuse: 2,
+                moved,
+            }),
+            old_size: Some(old_size),
+            new_size: Some(new_size),
         };
 
-        let rows = coverage(&[repair(Direction::Ascending, 0)]);
+        let rows = coverage(&[shape(0, 100, 100)]);
         assert!(
             !rows.iter().find(|r| r.id == "A22").expect("a row").ok,
-            "one direction is not both"
+            "the reused chunks in place is not both"
         );
         assert!(
             !rows.iter().find(|r| r.id == "A23").expect("a row").ok,
-            "and a file that does not grow is not a growth"
+            "and a file that does not change size is neither a growth nor a shrink"
         );
 
         let rows = coverage(&[
-            repair(Direction::Ascending, 0),
-            repair(Direction::Descending, 0),
-            repair(Direction::NotApplicable, 64),
+            shape(0, 100, 100),
+            shape(1, 100, 100),
+            shape(0, 100, 200),
+            shape(0, 200, 100),
         ]);
         assert!(rows.iter().find(|r| r.id == "A22").expect("a row").ok);
         assert!(rows.iter().find(|r| r.id == "A23").expect("a row").ok);
+    }
+
+    /// **A zero-byte file still covers its side of the size boundary.**
+    ///
+    /// A file that is created has grown and a file that is deleted has
+    /// shrunk, whether it is a hundred bytes or none at all — what changed is
+    /// the file, not the byte count. Counting an absent side as zero bytes
+    /// would make an empty `added` file neither, and the bundle's coverage of
+    /// the size boundary would depend on whether the cheapest candidate
+    /// happened to be empty.
+    #[test]
+    fn a_zero_byte_file_still_covers_its_side_of_the_size_boundary() {
+        use crate::assemble::{PatchShape, PlanCounts};
+
+        let created = PatchShape {
+            plan: Some(PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: None,
+            new_size: Some(0),
+        };
+        let deleted = PatchShape {
+            plan: None,
+            old_size: Some(0),
+            new_size: None,
+        };
+        let rows = coverage(&[created, deleted]);
+        let a23 = rows.iter().find(|r| r.id == "A23").expect("a row");
+        assert!(a23.ok, "both sides, whatever their size: {a23:?}");
     }
 
     /// A19 and A18 are the two that are not the spec's, and both are named.

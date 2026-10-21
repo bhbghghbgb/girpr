@@ -34,7 +34,7 @@ use gircap::verify::materialize;
 const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
 const OLD_TAG: &str = "7.0.0";
 const NEW_TAG: &str = "7.1.0";
-const CAPTURE: &str = "kept_in_place";
+const CAPTURE: &str = "reuse_in_place";
 
 /// A chunk and the bytes it holds.
 fn chunk(seed: u8, len: usize, prefix: u64) -> (SophonChunk, Vec<u8>, Vec<u8>) {
@@ -232,7 +232,7 @@ impl Bundle {
                 capture_id: CAPTURE.into(),
                 path: DLL.into(),
                 matching_field: "game".into(),
-                classes: vec![gircap::select::Class::KeptInPlace],
+                classes: vec![gircap::select::Class::ReuseInPlace],
                 old: Some(Side {
                     tag: OLD_TAG.into(),
                     size: old_bytes.len() as i64,
@@ -247,14 +247,12 @@ impl Bundle {
                 }),
                 plan: Some(plan),
                 totals: Some(totals),
-                repair: None,
                 expectations: gircap::assemble::Expectations {
                     result_path: Some(format!("expected/{DLL}")),
                     result_md5: Some(new_md5.clone()),
                     absent_after: false,
                     download_bytes: fetch_bytes,
                     must_not_fetch: vec![b.id.clone(), c.id.clone()],
-                    summary: None,
                 },
             },
         );
@@ -318,14 +316,9 @@ impl Bundle {
 fn manifest() -> Manifest {
     let rows = [
         ("identical", "unavailable", "identical"),
-        ("zero_reuse_single", "unavailable", "zero_reuse_single"),
-        ("zero_reuse_multi", "unavailable", "zero_reuse_multi"),
-        ("kept_in_place", "captured", "kept_in_place"),
-        ("moved_ascending", "unavailable", "moved_ascending"),
-        ("moved_descending", "unavailable", "moved_descending"),
-        ("moved_mixed", "unavailable", "moved_mixed"),
-        ("trim_eager", "unavailable", "trim_eager"),
-        ("trim_deferred", "unavailable", "trim_deferred"),
+        ("no_reuse", "unavailable", "no_reuse"),
+        ("reuse_in_place", "captured", "reuse_in_place"),
+        ("reuse_moved", "unavailable", "reuse_moved"),
         ("added", "unavailable", "added"),
         ("removed", "unavailable", "removed"),
     ];
@@ -584,7 +577,7 @@ fn list_finds_a_bundle_from_the_root() {
     std::fs::write(sibling.join("readme.txt"), b"nothing here").unwrap();
 
     let found = gircap::verify::list(b.root.parent().unwrap()).expect("lists");
-    let hit = found.iter().find(|f| {
+    let hit = found.bundles.iter().find(|f| {
         f.path
             .ends_with(b.root.file_name().unwrap().to_string_lossy().as_ref())
     });
@@ -609,9 +602,17 @@ fn a_bundle_that_does_not_open_is_skipped_rather_than_fatal() {
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("MANIFEST.json"), b"{ not json").unwrap();
     let found = gircap::verify::list(parent).expect("lists");
-    assert!(found.iter().all(|f| !f.path.contains("broken-bundle")));
     assert!(
-        found.iter().any(|f| f.capture_id == "20261014T000000Z"),
+        found
+            .bundles
+            .iter()
+            .all(|f| !f.path.contains("broken-bundle"))
+    );
+    assert!(
+        found
+            .bundles
+            .iter()
+            .any(|f| f.capture_id == "20261014T000000Z"),
         "the good one is still there"
     );
     let _ = std::fs::remove_dir_all(&broken);

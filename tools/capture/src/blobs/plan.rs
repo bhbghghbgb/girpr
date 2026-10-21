@@ -14,38 +14,12 @@
 //! `tracing::` lines that narrate it are one unit: there is no path that gets a
 //! `projected` figure without having passed both gates.
 
-use std::collections::BTreeMap;
-
 use crate::failure::{Failure, assertion};
 use crate::http::ApiError;
-use crate::manifest::{CapturedManifest, MANIFEST_FIELD};
+use crate::manifest::CapturedManifest;
 
 use super::chunks::{FilePair, Want, retention};
 use super::{file_pairs, projected_download};
-
-/// The `game` manifests, keyed by tag.
-///
-/// **Only `game`.** The audio manifests exist to widen the *selection pool*, and
-/// a selected path is always scored against game first (M5's tie-break). If a
-/// path ever comes only from an audio field, that is a bug in the scoring, and
-/// here it surfaces as a one-sided pair rather than as a wrong download — which
-/// is the whole reason this filter exists rather than a `flat_map` over
-/// everything.
-pub fn game_manifests_by_tag<'a>(
-    fields: &[String],
-    manifests: &'a [Vec<CapturedManifest>],
-) -> BTreeMap<String, &'a CapturedManifest> {
-    let mut by_tag = BTreeMap::new();
-    for (field, pair) in fields.iter().zip(manifests) {
-        if *field != MANIFEST_FIELD {
-            continue;
-        }
-        for m in pair {
-            by_tag.insert(m.tag.clone(), m);
-        }
-    }
-    by_tag
-}
 
 /// Refuse a store larger than `--max-download-bytes`.
 ///
@@ -107,12 +81,7 @@ pub fn plan(
     new_tag: &str,
     max_download_bytes: Option<u64>,
 ) -> Result<ChunkPlan, Failure> {
-    let pairs = file_pairs(
-        selection,
-        &game_manifests_by_tag(fields, manifests),
-        old_tag,
-        new_tag,
-    );
+    let pairs = file_pairs(selection, fields, manifests, old_tag, new_tag);
 
     for (a, p) in selection.admitted.iter().zip(&pairs) {
         let r = retention(p);

@@ -12,7 +12,7 @@ reading bundles and, for the probe driver, running the `gircap` binary.
 | file | what it does |
 |---|---|
 | `bundle_differ.py` | **the instrument.** normalises a bundle and compares two of them, file-set first then byte-for-byte |
-| `case_coverage.py` | the instrument behind [`../docs/00-spec.md` §4.1](../docs/00-spec.md): the class population, what the in-place repair would do with each captured file, and the candidate ranking. It carries **both** class sets — the one the bundle was captured with and the one the doc publishes — so the two can be compared, and it is gated against the artifact by `tests/case_coverage.rs` |
+| `case_coverage.py` | the instrument behind [`../docs/00-spec.md` §4.1](../docs/00-spec.md): the class population, what the in-place repair would do with each captured file, and the candidate ranking. It carries **both** class sets — the historical one and the one the doc publishes — so the two can be compared, and it is gated against the artifact by `tests/case_coverage.rs` |
 | `mutation_control.py` | proves the instrument: injects nine kinds of change this tool's output has actually been through, and requires all nine to be caught |
 | `search.py` | the divide-and-conquer that finds which commits moved the output |
 | `probe.ps1` | build one commit and capture it twice; fingerprints and rejects it if the two disagree |

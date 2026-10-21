@@ -20,7 +20,7 @@ Which gate to reach for is in
 ## 1. What is compared
 
 A bundle is captured twice from one commit, against the crate's own loopback
-mock (`tests/common/mod.rs`, `World::five_classes()`). Each capture is walked,
+mock (`tests/common/mod.rs`, `World::all_shapes()`). Each capture is walked,
 every file read, and:
 
 | step | what |
@@ -126,7 +126,7 @@ quietly comparing nothing (`--strict`).
 
 For a gzipped document, `files[].bytes` and its digests are the
 **decompressed** size and digest, not the `.gz` bytes on disk. Measured on
-`artifacts/hk4e_global/7.0.0__7.1.0/20261020T154810Z`:
+`artifacts/hk4e_global/7.0.0__7.1.0/20261021T141336Z`:
 
 ```
   manifests/7.0.0/en-us.manifest.json.gz   on disk 1 356 632 B
@@ -179,17 +179,17 @@ failure mode where one commit looks like it changed the output because its
 
 ## 6. Profiles, and what each one can and cannot see
 
-One profile, `World::five_classes()`, produces a **79-file** bundle covering
+One profile, `World::all_shapes()`, produces a **79-file** bundle covering
 every document type the tool writes:
 
-| | mock | reference (`20261020T154810Z`) |
+| | mock | reference (`20261021T141336Z`) |
 |---|---|---|
-| files | 79 | 324 |
+| files | 79 | 78 |
 | `api/` | 9 | 9 |
 | `manifests/` | 16 | 16 |
 | `diff/` | 5 | 5 |
-| `patchmaps/` | 8 | 10 |
-| chunk blobs | 22 | 259 |
+| `patchmaps/` | 6 | 6 |
+| chunk blobs | 22 | 25 |
 
 It is small, deterministic, offline, and produces the whole document surface —
 which is what makes a commit-by-commit search affordable. It is also a *healthy*

@@ -82,12 +82,12 @@ pub struct BuiltFixture {
     /// and holding the assembled files here would keep a whole patch resident
     /// twice.
     pub side_digests: BTreeMap<String, (String, String)>,
-    /// What the in-place path would do with each capture, for A21-A23.
+    /// The patch shape of each capture, for A21-A23.
     ///
-    /// The `repair` blocks of the patchmaps, in the order the captures
-    /// assembled. They are the bundle's own account of its coverage, and the
-    /// three assertions read them.
-    pub repairs: Vec<crate::assemble::Repair>,
+    /// The patchmaps' own arithmetic, in the order the captures assembled.
+    /// They are the bundle's account of its coverage, and the three assertions
+    /// read them.
+    pub shapes: Vec<crate::assemble::PatchShape>,
     /// The paths written here, to append to the run's `written` list.
     pub written: Vec<String>,
     /// Chunks reused from the old side, summed.
@@ -141,7 +141,7 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
         ),
         assembled_ids: Vec::new(),
         side_digests: BTreeMap::new(),
-        repairs: Vec::new(),
+        shapes: Vec::new(),
         written: Vec::new(),
         reused: 0,
         fetched: 0,
@@ -246,11 +246,8 @@ fn record(
     // than re-derived here.
     out.rows.extend(got.selfcheck_rows());
     out.assembled_ids.push(a.capture_id.clone());
-    // The `repair` block is the bundle's account of what the in-place path
-    // would do with this file, and A21-A23 read it.
-    if let Some(r) = got.map.repair {
-        out.repairs.push(r);
-    }
+    // The patch's own shape, which is what A21-A23 read.
+    out.shapes.push(crate::assemble::patch_shape(&got.map));
     out.side_digests.insert(
         a.capture_id.clone(),
         (

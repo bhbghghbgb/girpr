@@ -475,7 +475,7 @@ mod tests {
     /// ones — five distinct chunk ids in all.
     fn hoyo() -> FilePair {
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn a_zero_reuse_file_fetches_every_new_chunk() {
         let p = FilePair {
-            capture_id: "zero_reuse_multi".into(),
+            capture_id: "no_reuse".into(),
             path: "unity default resources".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -753,7 +753,7 @@ mod tests {
     fn a_reference_written_before_build_id_existed_still_reads() {
         let old_document = r#"{
             "tag": "7.0.0",
-            "capture_id": "kept_in_place",
+            "capture_id": "reuse_in_place",
             "path": "dll",
             "role": "materialize_old",
             "offset": 0
@@ -766,7 +766,7 @@ mod tests {
         let now = Reference {
             tag: "7.0.0".into(),
             build_id: Some("3XnPviMfoILi".into()),
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "dll".into(),
             role: Set::MaterializeOld,
             offset: 0,

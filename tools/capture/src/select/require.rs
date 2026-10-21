@@ -65,9 +65,9 @@ fn line(row: &MatrixRow) -> String {
 ///
 /// **Empty is the correct default rather than a missing one.** `--require-class`
 /// is opt-in, so a class is only fatal when the caller named it. Requiring all
-/// eleven by default would make *every* run of a pair like 7.0.0 → 7.1.0 exit
-/// `4`, because that pair genuinely lacks a `moved_mixed` file — a fact about
-/// the world, recorded as `status: unavailable`, not a failure of the tool.
+/// six by default would make *every* run of a pair that lacks one of them exit
+/// `4` — and a class the manifests do not have is a fact about the world,
+/// recorded as `status: unavailable`, not a failure of the tool.
 ///
 /// The distinction the exit code turns on:
 ///
@@ -169,14 +169,14 @@ mod tests {
         // without saying *which* class or *why* has told the operator to go and
         // look it up.
         let sel = selection_with(vec![row(
-            Class::MovedMixed,
+            Class::ReuseMoved,
             MatrixStatus::Unavailable,
             Some("over budget"),
         )]);
-        let e = check(&[Class::MovedMixed], &sel).expect_err("unmet");
+        let e = check(&[Class::ReuseMoved], &sel).expect_err("unmet");
         assert_eq!(e.code, ExitCode::RequirementUnmet);
         assert!(
-            e.detail.contains("moved_mixed"),
+            e.detail.contains("reuse_moved"),
             "the class must be named: {}",
             e.detail
         );

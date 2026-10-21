@@ -1,4 +1,4 @@
-//! Cross-commit probe: capture `World::five_classes()` against the loopback
+//! Cross-commit probe: capture `World::all_shapes()` against the loopback
 //! mock and leave the raw bundles on disk for an external normaliser/differ.
 //!
 //! Lives outside version control on purpose: it is a measurement instrument, not
@@ -91,7 +91,7 @@ fn probe_captures() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("probe root");
 
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     // Armed profiles may legitimately end the run early.
     let allow_fail = std::env::var("GIRCAP_PROBE_ALLOW_FAIL").is_ok();
     // Extra capture flags, space-separated, so one probe binary can drive more

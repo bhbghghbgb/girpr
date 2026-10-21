@@ -10,9 +10,9 @@ added or a predicate moved makes them stale.
 
 Three sections, one per question the findings ask:
 
-1. **population** - how many paths satisfy each class, old set and proposed
-   set, over the pool the capture selects (`game` + every selected audio
-   field). The scoring is `gircap`'s own: an identity is
+1. **population** - how many paths satisfy each class, the historical set and
+   the current one, over the pool the capture selects (`game` + every selected
+   audio field). The scoring is `gircap`'s own: an identity is
    `(uncompressed_md5, uncompressed_size)`, a chunk is *reused* when the old
    file carries that identity and *moved* when the old file's offset for it
    differs from the new chunk's.
@@ -23,11 +23,12 @@ Three sections, one per question the findings ask:
    have no usable local source (fetched), how much RAM the staged tier would
    need, how many sources each write order would salvage, and whether the trim
    is eager or deferred. The fixture's bytes are hashed at each entry's target
-   and source range.
+   and source range. The kept/moved/fetched counts are the artifact's own and
+   are gated against it; the rest is this script's expectation of what a repair
+   would do, because the bundle deliberately does not publish it.
 
 3. **ranking** - the cheapest candidate per class, by `gircap`'s own key
-   (`total_cost` = the compressed bytes of the old and the new file), and the
-   overlap between the proposed classes.
+   (`total_cost` = the compressed bytes of the old and the new file).
 
 Usage:
 
@@ -60,7 +61,7 @@ from collections import Counter, defaultdict
 #   old/new  - the two sizes
 #   trim_free - no old chunk reaches past the new size (the eager trim)
 
-OLD_CLASSES = [
+HISTORICAL_CLASSES = [
     "identical",
     "zero_reuse_single",
     "zero_reuse_multi",
@@ -72,16 +73,11 @@ OLD_CLASSES = [
     "full_reuse_reordered",
 ]
 
-PROPOSED_CLASSES = [
+CURRENT_CLASSES = [
     "identical",
-    "zero_reuse_single",
-    "zero_reuse_multi",
-    "kept_in_place",
-    "moved_ascending",
-    "moved_descending",
-    "moved_mixed",
-    "trim_eager",
-    "trim_deferred",
+    "no_reuse",
+    "reuse_in_place",
+    "reuse_moved",
     "added",
     "removed",
 ]
@@ -165,7 +161,7 @@ def describe(entry_new, entry_old, index):
     )
 
 
-def old_class_of(row, side):
+def historical_class_of(row, side):
     if side == "identical":
         return {"identical"}
     if side == "added":
@@ -187,7 +183,22 @@ def old_class_of(row, side):
     return out
 
 
-def proposed_class_of(row, side):
+def current_class_of(row, side):
+    """The crate's class set: the six **patch shapes**.
+
+    The class set is a partition on the content, so a path answers exactly
+    one class — and the classes are statements about the patch, not about how
+    a repair tool gets there:
+
+    - `identical`: nothing to fetch, the file is already right;
+    - `no_reuse`: every chunk is fetched, the whole file is overwritten;
+    - `reuse_in_place`: a subset is fetched, the reused chunks are already
+      correct where they belong;
+    - `reuse_moved`: a subset is fetched, the reused chunks live elsewhere
+      in the file and have to be copied;
+    - `added`: the file is created whole;
+    - `removed`: the file is purged.
+    """
     if side == "identical":
         return {"identical"}
     if side == "added":
@@ -196,24 +207,14 @@ def proposed_class_of(row, side):
         return {"removed"}
     out = set()
     partial = 0 < row["reused"] < row["n"]
-    if row["reused"] == 0:
-        # The crate's rule: `nchunks == 1` is the single-chunk class and
-        # `nchunks > 1` the multi one, so an empty file is neither.
-        if row["n"] == 1:
-            out.add("zero_reuse_single")
-        elif row["n"] > 1:
-            out.add("zero_reuse_multi")
+    # A one-chunk file with nothing reusable is a degenerate patch, and
+    # `added` already covers the "create a file whole" case.
+    if row["reused"] == 0 and row["n"] > 1:
+        out.add("no_reuse")
     if partial and row["moved"] == 0:
-        out.add("kept_in_place")
+        out.add("reuse_in_place")
     if row["moved"] > 0:
-        if row["up"] == 0:
-            out.add("moved_ascending")
-        elif row["down"] == 0:
-            out.add("moved_descending")
-        else:
-            out.add("moved_mixed")
-    if partial and row["old"] > row["new"]:
-        out.add("trim_eager" if row["trim_free"] else "trim_deferred")
+        out.add("reuse_moved")
     return out
 
 
@@ -276,8 +277,8 @@ def population_counts(rows):
     """How many paths satisfy each class, per class set."""
     counts = {}
     for label, classifier, names in (
-        ("current", old_class_of, OLD_CLASSES),
-        ("proposed", proposed_class_of, PROPOSED_CLASSES),
+        ("historical", historical_class_of, HISTORICAL_CLASSES),
+        ("current", current_class_of, CURRENT_CLASSES),
     ):
         c = Counter()
         for r in rows:
@@ -292,8 +293,8 @@ def section_population(rows):
     print("== population ==")
     print(f"pool: {len(rows)} paths\n")
     for label, classifier, names in (
-        ("current", old_class_of, OLD_CLASSES),
-        ("proposed", proposed_class_of, PROPOSED_CLASSES),
+        ("historical", historical_class_of, HISTORICAL_CLASSES),
+        ("current", current_class_of, CURRENT_CLASSES),
     ):
         print(f"-- {label} class set --")
         counts = Counter()
@@ -306,10 +307,10 @@ def section_population(rows):
 
 
 def section_ranking(rows):
-    print("== ranking (the proposed set) ==")
+    print("== ranking (the current set) ==")
     for r in rows:
-        r["classes"] = proposed_class_of(r, r["side"])
-    for name in PROPOSED_CLASSES:
+        r["classes"] = current_class_of(r, r["side"])
+    for name in CURRENT_CLASSES:
         sel = [r for r in rows if name in r["classes"]]
         if not sel:
             print(f"{name:<24} (no candidate)")
@@ -339,15 +340,25 @@ def md5(data):
 def outcome_rows(bundle):
     """What the in-place repair would do with each capture's file.
 
-    **The rules are the artifact's** (`assemble::repair_of` in the crate), not a
-    second opinion, and the differences matter:
+    **The chunk arithmetic is the artifact's, and it is compared.** The counts
+    below are checked against the patchmap's own `totals` by
+    `tests/case_coverage.rs`, so they have to be the same numbers the crate
+    wrote, and the differences matter:
 
     - a chunk that is already correct where it belongs is **kept**, and it is
       not a candidate for either write order. The salvage counts run over the
-      *damaged* chunks only, exactly as `repair::reuse::salvage_order` does.
+      *damaged* chunks only.
     - a source that reaches past the end of the file is not there to be
       copied, so it salvages nothing in either order.
     - a tie keeps nothing at all, so there is no direction to name.
+
+    **The trim, the write order and the growth are this script's own
+    expectation.** The bundle does not publish them, and does not publish
+    anything that implies them: they are the repair tool's decisions, and a
+    bundle that carried them would be carrying another tool's business. They
+    are here because this is a development instrument and "what would a repair
+    do with this file" is worth answering while working on the capture. Nothing
+    compares them with anything.
 
     A file that is absent from `game/` is the *created* case: every chunk is
     fetched and nothing is kept.

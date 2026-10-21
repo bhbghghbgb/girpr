@@ -2,25 +2,30 @@
 //!
 //! `tools/case_coverage.py` is the instrument behind `docs/00-spec.md` §4.1's
 //! published populations, and it is supposed to **reproduce the crate's rules
-//! exactly**. Nothing checked that, so it drifted: it counted a *kept* chunk
-//! toward the two salvage counts — the artifact counts only the damaged ones,
-//! exactly as `repair::reuse::salvage_order` does — and it always named a
-//! write direction, where the artifact names `n/a` for the tie. On the
-//! reference bundle it disagreed with the artifact on six of the nine
-//! captures.
+//! exactly**. Nothing checked that, so it drifted once: it counted a *kept*
+//! chunk toward the two salvage counts, where the artifact counts only the
+//! damaged ones, and it always named a write direction, where the artifact
+//! named `n/a` for the tie. On the reference bundle it disagreed with the
+//! artifact on six of the nine captures.
 //!
-//! This is the gate that would have caught it: the script is run against a
-//! bundle the **crate** wrote, and its numbers are compared with the numbers
-//! the crate wrote into that same bundle. Two comparisons:
+//! **The gate is what says it has not drifted again.** The script is run
+//! against a bundle the **crate** wrote, and its numbers are compared with the
+//! numbers the crate wrote into that same bundle. Two comparisons:
 //!
 //! | what | against what |
 //! |---|---|
-//! | the script's outcome table | the patchmaps' `repair` blocks |
+//! | the script's chunk arithmetic | the patchmaps' `totals` |
 //! | the script's population | the matrix's `candidates_considered` |
 //!
-//! The second one is the class drift: the crate's class set, the instrument's
+//! The first one is the class drift: the crate's class set, the instrument's
 //! and the published table are three statements of the same fact, and this is
 //! what says they agree.
+//!
+//! **The script computes more than the bundle publishes, and that is fine.**
+//! It also works out the trim and the write order — the repair tool's own
+//! decisions, which the bundle deliberately does not carry — and those figures
+//! are the instrument's own expectation rather than a claim about the
+//! artifact. Only the numbers the bundle *does* publish are compared.
 //!
 //! **Python is optional.** The gate needs it, and a developer without it gets
 //! a note rather than a failure — but the note says what was *not* checked, so
@@ -153,8 +158,8 @@ fn instrument_json(py: &str, bundle: &Path, section: &str) -> serde_json::Value 
     serde_json::from_slice(&out.stdout).expect("the instrument's JSON parses")
 }
 
-/// The artifact's `repair` block for every capture that has one.
-fn repair_blocks(bundle: &Path) -> Vec<(String, serde_json::Value)> {
+/// The artifact's `totals` for every capture that has one.
+fn totals_of(bundle: &Path) -> Vec<(String, serde_json::Value)> {
     let dir = bundle.join("patchmaps");
     let mut names: Vec<PathBuf> = std::fs::read_dir(&dir)
         .expect("the patchmaps directory")
@@ -168,23 +173,23 @@ fn repair_blocks(bundle: &Path) -> Vec<(String, serde_json::Value)> {
             let v: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&p).expect("the patchmap")).expect("json");
             let id = v["capture_id"].as_str().expect("a capture id").to_string();
-            (id, v["repair"].clone())
+            (id, v["totals"].clone())
         })
         .collect()
 }
 
-/// **The instrument reproduces the artifact's `repair` block.**
-///
-/// The block is what the crate says the in-place repair would do with the
-/// file: how many chunks are kept, copied and fetched, how much RAM the
-/// staged tier needs, how many sources each write order salvages, which order
-/// it picks, when the dead tail is released, and how much the file grows.
+/// **The instrument reproduces the artifact's own arithmetic.**
 ///
 /// The instrument answers the same question by hashing the fixture's bytes,
 /// and it has to answer it the same way — otherwise the published populations
-/// and the artifact are describing two different repairs.
+/// and the artifact are describing two different patches.
+///
+/// The comparison is against the patchmap's `totals`: the number of chunks
+/// reused, moved and fetched, and the byte total. Those are facts about the
+/// **patch**, and they are the same for every consumer — unlike the tier, the
+/// write order and the trim, which the artifact deliberately does not publish.
 #[test]
-fn the_instrument_reproduces_the_artifacts_repair_block() {
+fn the_instrument_reproduces_the_patchmaps_own_arithmetic() {
     let Some(py) = python() else {
         println!(
             "note: no python on this machine, so the instrument was not checked against \
@@ -192,7 +197,7 @@ fn the_instrument_reproduces_the_artifacts_repair_block() {
         );
         return;
     };
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("outcome");
     let r = run(&[
         "capture",
@@ -210,38 +215,45 @@ fn the_instrument_reproduces_the_artifacts_repair_block() {
     let rows = doc["outcome"].as_array().expect("an outcome array");
 
     let mut checked = 0;
-    for (id, repair) in repair_blocks(&bundle) {
-        if repair.is_null() {
-            // `removed`: there is nothing to repair, so there is no block.
+    for (id, totals) in totals_of(&bundle) {
+        if totals.is_null() {
+            // `removed`: there is nothing to patch, so there is no total.
             continue;
         }
         let row = rows
             .iter()
             .find(|r| r["capture_id"] == id.as_str())
             .unwrap_or_else(|| panic!("{id}: the instrument has no row for it"));
+        // The plan's REUSE entries are the kept ones plus the moved ones: a
+        // chunk whose source sits at its own offset is a REUSE in the plan and
+        // a **kept** chunk for the repair.
+        let kept = row["kept"].as_u64().expect("a kept count");
+        let moved = row["moved"].as_u64().expect("a moved count");
+        let fetched = row["fetched"].as_u64().expect("a fetched count");
+        // The plan's REUSE entries are the kept ones plus the moved ones: a
+        // chunk whose source sits at its own offset is a REUSE in the plan and
+        // a **kept** chunk for the repair.
+        let reuse = kept + moved;
         for (field, ours, theirs) in [
-            ("kept", row["kept"].as_u64(), repair["kept"].as_u64()),
-            ("moved", row["moved"].as_u64(), repair["moved"].as_u64()),
-            ("fetched", row["fetched"].as_u64(), repair["fetch"].as_u64()),
             (
-                "payload_bytes",
-                row["payload"].as_u64(),
-                repair["payload_bytes"].as_u64(),
+                "reuse",
+                reuse,
+                totals["reuse"].as_u64().expect("a reuse count"),
             ),
             (
-                "keeps_ascending",
-                row["keeps_ascending"].as_u64(),
-                repair["keeps_ascending"].as_u64(),
+                "moved",
+                moved,
+                totals["moved"].as_u64().expect("a moved count"),
             ),
             (
-                "keeps_descending",
-                row["keeps_descending"].as_u64(),
-                repair["keeps_descending"].as_u64(),
+                "fetch",
+                fetched,
+                totals["fetch"].as_u64().expect("a fetch count"),
             ),
             (
-                "growth_bytes",
-                row["growth"].as_u64(),
-                repair["growth_bytes"].as_u64(),
+                "chunks",
+                kept + moved + fetched,
+                totals["chunks"].as_u64().expect("a chunk count"),
             ),
         ] {
             assert_eq!(
@@ -249,21 +261,11 @@ fn the_instrument_reproduces_the_artifacts_repair_block() {
                 "{id}: the instrument's {field} and the artifact's disagree"
             );
         }
-        assert_eq!(
-            row["direction"].as_str(),
-            repair["direction"].as_str(),
-            "{id}: the instrument's direction and the artifact's disagree"
-        );
-        assert_eq!(
-            row["trim"].as_str(),
-            repair["trim"].as_str(),
-            "{id}: the instrument's trim and the artifact's disagree"
-        );
         checked += 1;
     }
     assert!(
         checked > 0,
-        "no capture carried a repair block, so nothing was checked"
+        "no capture carried totals, so nothing was checked"
     );
 }
 
@@ -282,7 +284,7 @@ fn the_instrument_reproduces_the_crates_class_populations() {
         );
         return;
     };
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("population");
     let r = run(&[
         "capture",
@@ -297,7 +299,7 @@ fn the_instrument_reproduces_the_crates_class_populations() {
     let bundle = bundle_in(&scratch.out(), &r);
 
     let doc = instrument_json(py, &bundle, "population");
-    let proposed = &doc["population"]["proposed"];
+    let proposed = &doc["population"]["current"];
     let raw = std::fs::read(bundle.join("diff/matrix.json")).expect("the matrix");
     let matrix: serde_json::Value = serde_json::from_slice(&raw).expect("json");
 

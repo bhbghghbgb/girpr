@@ -1,4 +1,4 @@
-//! Cross-commit probe: capture `World::five_classes()` against the loopback
+//! Cross-commit probe: capture `World::all_shapes()` against the loopback
 //! mock and leave the raw bundles on disk for an external normaliser/differ.
 //!
 //! Lives outside version control on purpose: it is a measurement instrument, not
@@ -92,10 +92,10 @@ fn probe_captures() {
     std::fs::create_dir_all(&root).expect("probe root");
 
     let mock = match arm_spec() {
-    None => Mock::start(World::five_classes()),
+    None => Mock::start(World::all_shapes()),
     Some(spec) => {
         let f: Vec<&str> = spec.split('|').collect();
-        let m = Mock::start(World::five_classes());
+        let m = Mock::start(World::all_shapes());
         match f[0] {
             "fail" => m.arm_fail(f[1], f[2].parse().unwrap(), f[3].as_bytes(), f[4].parse().unwrap()),
             "body" => m.arm_body(f[1], f[2].as_bytes(), f[3].parse().unwrap()),

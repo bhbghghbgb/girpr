@@ -154,7 +154,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new(name);
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -771,12 +771,10 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/kept_in_place.json",
-        "patchmaps/moved_ascending.json",
-        "patchmaps/moved_descending.json",
+        "patchmaps/no_reuse.json",
         "patchmaps/removed.json",
-        "patchmaps/trim_eager.json",
-        "patchmaps/zero_reuse_multi.json",
+        "patchmaps/reuse_in_place.json",
+        "patchmaps/reuse_moved.json",
     ];
     const CHECKSUM_DOCUMENTS: &[&str] = &[
         "MANIFEST.json",
@@ -814,17 +812,15 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "manifests/7.1.0/game.paths.tsv",
         "patchmaps/added.json",
         "patchmaps/identical.json",
-        "patchmaps/kept_in_place.json",
-        "patchmaps/moved_ascending.json",
-        "patchmaps/moved_descending.json",
+        "patchmaps/no_reuse.json",
         "patchmaps/removed.json",
-        "patchmaps/trim_eager.json",
-        "patchmaps/zero_reuse_multi.json",
+        "patchmaps/reuse_in_place.json",
+        "patchmaps/reuse_moved.json",
         "verify/selfcheck.json",
     ];
 
     let m = json("MANIFEST.json");
-    assert_eq!(m["schema_version"], 1);
+    assert_eq!(m["schema_version"], gircap::SCHEMA_VERSION);
     assert_eq!(m["tool"]["name"], "gircap");
     // The bases name this run's ephemeral loopback port; the identity does not.
     assert_eq!(m["biz"]["id"], "hk4e_global");
@@ -847,8 +843,8 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["capture"]["complete"], true);
     let vkeys: Vec<&String> = m["versions"].as_object().unwrap().keys().collect();
     assert_eq!(vkeys, vec!["diff_tags", "new", "old"]);
-    assert_eq!(m["totals"]["files_captured"], 8);
-    assert_eq!(m["totals"]["chunks_blobs"], 22);
+    assert_eq!(m["totals"]["files_captured"], 6);
+    assert_eq!(m["totals"]["chunks_blobs"], 16);
 
     let mpaths: Vec<&str> = m["files"]
         .as_array()
@@ -861,11 +857,11 @@ fn the_inventory_documents_describe_the_same_bundle() {
         mdocs, MANIFEST_DOCUMENTS,
         "MANIFEST.json documents[] changed"
     );
-    assert_eq!(mcounts.get("blob"), Some(&22), "MANIFEST.json blob rows");
-    assert_eq!(mcounts.get("game"), Some(&8), "MANIFEST.json game rows");
+    assert_eq!(mcounts.get("blob"), Some(&16), "MANIFEST.json blob rows");
+    assert_eq!(mcounts.get("game"), Some(&7), "MANIFEST.json game rows");
     assert_eq!(
         mcounts.get("expected"),
-        Some(&6),
+        Some(&5),
         "MANIFEST.json expected rows"
     );
 
@@ -883,7 +879,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         cdocs, CHECKSUM_DOCUMENTS,
         "checksums.json documents[] changed"
     );
-    assert_eq!(ccounts.get("blob"), Some(&22), "checksums.json blob rows");
+    assert_eq!(ccounts.get("blob"), Some(&16), "checksums.json blob rows");
 
     // A16's claim, restated against the projection: every file `MANIFEST.json`
     // lists is also checksummed, plus the three documents that cannot list
@@ -911,15 +907,10 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "## Matrix",
         "| class | status | capture | path | field | bytes |",
         "|---|---|---|---|---|---|",
-        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | - |",
-        "| `zero_reuse_single` | unavailable | - | `-` | - | - |",
-        "| `zero_reuse_multi` | captured | zero_reuse_multi | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
-        "| `kept_in_place` | captured | kept_in_place | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
-        "| `moved_ascending` | captured | moved_ascending | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
-        "| `moved_descending` | captured | moved_descending | `GenshinImpact_Data/StreamingAssets/blocks/grow.blk` | game | #    |",
-        "| `moved_mixed` | unavailable | - | `-` | - | - |",
-        "| `trim_eager` | captured | trim_eager | `GenshinImpact_Data/StreamingAssets/blocks/eager.blk` | game | #    |",
-        "| `trim_deferred` | covered_by | moved_ascending | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
+        "| `identical` | captured | identical | `GenshinImpact_Data/StreamingAssets/Audio/en-us/vo_all` | en-us | #   |",
+        "| `no_reuse` | captured | no_reuse | `GenshinImpact_Data/StreamingAssets/blocks/zero.blk` | game | #    |",
+        "| `reuse_in_place` | captured | reuse_in_place | `GenshinImpact_Data/Plugins/HoYoChannel.dll` | game | #    |",
+        "| `reuse_moved` | captured | reuse_moved | `GenshinImpact_Data/StreamingAssets/blocks/deferred.blk` | game | #    |",
         "| `added` | captured | added | `GenshinImpact_Data/Plugins/libNew.dll` | game | - |",
         "| `removed` | captured | removed | `GenshinImpact_Data/StreamingAssets/blocks/old.blk` | game | #     |",
         "## Totals",
@@ -1016,12 +1007,12 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
         "A17 each required matrix class is captured | covered_by | over_budget | unavailable - never absent",
         "A19 each two-sided captured file differs between game/ and expected/ exactly when its class says it should",
         "A2 getBuild(new).data.tag == --new-tag; getBuild(old).data.tag == --old-tag",
-        "A21 the bundle covers both trim outcomes: at least one eager and at least one deferred",
-        "A22 the bundle covers both write directions: at least one ascending and at least one descending",
-        "A23 the bundle covers a file that grows: at least one capture with growth_bytes > 0",
+        "A21 the bundle covers both sides of the reuse boundary: at least one capture with nothing reusable and at least one with something",
+        "A22 the bundle covers both sides of the moved boundary: at least one capture whose reused chunks are in place and at least one whose reused chunks moved",
+        "A23 the bundle covers both sides of the size boundary: at least one capture whose file grows and at least one whose file shrinks",
         "A3 manifest blob md5(decompressed) == manifest.checksum",
         "A4 manifest.checksum == id 32-hex suffix; id 16-hex prefix recorded as opaque",
-        "A6 len(raw) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
+        "A6 per chunk: len(raw blob) == compressed_size; md5(raw) == compressed_md5; md5(zstd(raw)) == uncompressed_md5; len(decoded) == uncompressed_size",
         "A7 assemble(materialize_old) has md5 == old entry.md5",
         "A8 assemble(materialize_new) has md5 == new entry.md5",
         "A9 assemble(REUSE-from-old union patch_fetch) byte-equals assemble(materialize_new)",
@@ -1033,7 +1024,7 @@ fn the_selfcheck_document_asserts_what_it_always_asserted() {
 /// stored rather than re-rendered.
 #[test]
 fn the_request_log_rows_are_what_the_spec_says_they_are() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("rows");
     let r = capture(&mock, &scratch, &["--jobs", "1"]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1042,9 +1033,6 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         .expect("api/requests.ndjson");
 
     const EXPECTED: &[&str] = &[
-        // The fixture grew three files (the eager trim, the deferred trim and
-        // the growing one) and the `removed` one got big, so the log has
-        // more rows and different chunk ids.
         "1 api GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 435 1 api/getGameConfigs.json -",
         "2 api GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3 200 476 1 api/getGameBranches.json -",
         "3 api GET /hyp/getGameDeprecatedFileConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=gopR6Cufr3&channel=1&sub_channel=0 200 183 1 api/getGameDeprecatedFileConfigs.json -",
@@ -1064,27 +1052,21 @@ fn the_request_log_rows_are_what_the_spec_says_they_are() {
         "17 probe GET /hyp/getGameConfigs?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
         "18 probe GET /hyp/getGameBranches?launcher_id=VYTpXlbWo8&language=en-us&game_ids[]=undefined 200 56 1 - -",
         "19 chunk GET /cdn/sMOCKnew00/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e 200 1033 1 chunks/blobs/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e.zst -",
-        "20 chunk GET /cdn/sMOCKold00/chunk/24e99fcb0359f3fb_3d0838c26d10d17bd1714fae25fac45c 200 2057 1 chunks/blobs/24e99fcb0359f3fb_3d0838c26d10d17bd1714fae25fac45c.zst -",
-        "21 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
-        "22 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1033 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
-        "23 chunk GET /cdn/sMOCKnew00/chunk/6789fad3caf3fb1a_ee0ef7aefe4efdab5c25aa0f3894cb34 200 1033 1 chunks/blobs/6789fad3caf3fb1a_ee0ef7aefe4efdab5c25aa0f3894cb34.zst -",
-        "24 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
-        "25 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
-        "26 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
-        "27 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
-        "28 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
-        "29 chunk GET /cdn/sMOCKold00/chunk/81cb3c6b453257d4_b9d4f8d6da7e69a1de630211b23c5ebd 200 2057 1 chunks/blobs/81cb3c6b453257d4_b9d4f8d6da7e69a1de630211b23c5ebd.zst -",
-        "30 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
-        "31 chunk GET /cdn/sMOCKnew00/chunk/982f9a91afccd519_f2b42080304278b2760f7954a2659275 200 2057 1 chunks/blobs/982f9a91afccd519_f2b42080304278b2760f7954a2659275.zst -",
-        "32 chunk GET /cdn/sMOCKnew00/chunk/a598e647b6df4268_4ba362f130b9615b2a3b733313f198d5 200 1033 1 chunks/blobs/a598e647b6df4268_4ba362f130b9615b2a3b733313f198d5.zst -",
-        "33 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
-        "34 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
-        "35 chunk GET /cdn/sMOCKnew00/chunk/bd9b67a9dc35093c_e2a2e62035e8cff44c8346b4583fba39 200 2057 1 chunks/blobs/bd9b67a9dc35093c_e2a2e62035e8cff44c8346b4583fba39.zst -",
-        "36 chunk GET /cdn/sMOCKnew00/chunk/c13c9adf4fc994be_a4a093e638464814ba68155fb8bc4862 200 1033 1 chunks/blobs/c13c9adf4fc994be_a4a093e638464814ba68155fb8bc4862.zst -",
-        "37 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
-        "38 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
-        "39 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
-        "40 chunk GET /cdn/sMOCKnew00/chunk/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781 200 2057 1 chunks/blobs/f188296b04130a9d_b3c24404ff9cf54800c93d5f4253a781.zst -",
+        "20 chunk GET /cdn/sMOCKold00/chunk/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3 200 521 1 chunks/blobs/4411d85567f739ce_6940ec80459b4352adaffa992aacdab3.zst -",
+        "21 chunk GET /cdn/sMOCKold00/chunk/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6 200 1033 1 chunks/blobs/4e03e3d397f031f6_bce567638abdc69b80c7bde1f50677f6.zst -",
+        "22 chunk GET /cdn/sMOCKnew00/chunk/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b 200 265 1 chunks/blobs/5323e19e9e03d8c5_ee3f3f3e27aa76ff65c4c3a1c1aa1d7b.zst -",
+        "23 chunk GET /cdn/sMOCKnew00/chunk/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea 200 1033 1 chunks/blobs/69edd52759c53740_12283b0a8bbcfc40b5e00175c1d7dfea.zst -",
+        "24 chunk GET /cdn/sMOCKnew00/chunk/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469 200 521 1 chunks/blobs/6a2c2034429981aa_1fbd0959e726da54e75cd528a6c15469.zst -",
+        "25 chunk GET /cdn/sMOCKnew00/chunk/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c 200 1033 1 chunks/blobs/734acba1f3db65a7_759d96ceaf6d243146547304a953ad3c.zst -",
+        "26 chunk GET /cdn/sMOCKnew00/chunk/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73 200 521 1 chunks/blobs/78389a4e7cc1b62b_4a84467752ea9c122de6b7288b0f7e73.zst -",
+        "27 chunk GET /cdn/sMOCKold00/chunk/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389 200 1033 1 chunks/blobs/7bc80346da24dc10_36bed2b08e4df3d4ba63710fcc4e7389.zst -",
+        "28 chunk GET /cdn/sMOCKnew00/chunk/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde 200 1033 1 chunks/blobs/8cdfadf64dbc1235_c67e30034329d2ba4419ca814f691bde.zst -",
+        "29 chunk GET /cdn/sMOCKnew00/chunk/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4 200 265 1 chunks/blobs/91ea6819c901e42b_8b31ee982e6de0878e3b4515b4a09ad4.zst -",
+        "30 chunk GET /cdn/sMOCKold00/chunk/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf 200 521 1 chunks/blobs/a80d7329a2bf0f6c_3b5a7d035458664fcdd3e13fb1b193cf.zst -",
+        "31 chunk GET /cdn/sMOCKnew00/chunk/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982 200 265 1 chunks/blobs/ba3ffe0a4f82d1b5_a003157e0deaac5832ecfc30f3e62982.zst -",
+        "32 chunk GET /cdn/sMOCKold00/chunk/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36 200 32777 1 chunks/blobs/d3263f518c944d35_f639a004b4ab92e314c88a73b9c0aa36.zst -",
+        "33 chunk GET /cdn/sMOCKold00/chunk/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636 200 1033 1 chunks/blobs/dc4c4277b58c6559_9c389ad675e81e5be30dc2aea4770636.zst -",
+        "34 chunk GET /cdn/sMOCKnew00/chunk/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa 200 1033 1 chunks/blobs/dced37b2dd2b2118_558db22ff96610039fa29418b658bbaa.zst -",
     ];
 
     let mut got: Vec<(u64, String)> = log
@@ -1126,7 +1108,7 @@ fn a_retried_request_is_recorded_as_retried() {
     // is the same blob the row pin already names, so it is the same construction
     // either way.
     let armed = "/chunk/059f931481c3a4bf_90d769cb1f8fb7037073188f9399952e";
-    let mock = Mock::start(World::five_classes()).fail_once_for(armed);
+    let mock = Mock::start(World::all_shapes()).fail_once_for(armed);
     let scratch = Scratch::new("retry");
     let r = capture(&mock, &scratch, &["--jobs", "1"]);
     assert_eq!(r.code, 0, "capture failed:\n{}\n{}", r.stdout, r.stderr);
@@ -1220,7 +1202,7 @@ fn row_key(v: &serde_json::Value) -> String {
 /// stored rather than re-rendered.
 #[test]
 fn the_captured_api_bodies_are_the_bytes_the_server_sent() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("byteexact");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1300,7 +1282,7 @@ fn every_request_url_in_the_bundle_is_a_loopback_address() {
 /// it had wanted to, because nothing told it one.
 #[test]
 fn the_chunk_cdn_base_comes_from_the_mock_not_from_the_region() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("cdn");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1432,15 +1414,18 @@ fn the_captured_bundle_is_found_by_list() {
 
 // ------------------------------------------------------------ the matrix
 
-/// The five classes the synthetic world publishes are found, and the six it
-/// does not are `unavailable` rather than absent.
+/// The matrix names **every** class, and the synthetic world publishes a
+/// candidate for each of them — so every row is `captured`.
+///
+/// A class with no candidate is `unavailable` **with a reason** rather than
+/// absent from the matrix, and that is what the selection's own tests pin.
 #[test]
-fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
+fn the_matrix_names_every_class_and_says_what_happened_to_it() {
     let (_m, _s, _r, bundle) = capture_ok("matrix");
     let raw = std::fs::read(bundle.join("MANIFEST.json")).unwrap();
     let doc: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     let rows = doc["matrix"].as_array().expect("a matrix");
-    assert_eq!(rows.len(), 11, "one row per required class");
+    assert_eq!(rows.len(), 6, "one row per patch shape");
     let by = |c: &str| {
         rows.iter()
             .find(|r| r["class"] == c)
@@ -1449,27 +1434,13 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
     };
     for c in [
         "identical",
+        "no_reuse",
+        "reuse_in_place",
+        "reuse_moved",
         "added",
         "removed",
-        "zero_reuse_multi",
-        "kept_in_place",
-        "moved_ascending",
-        "moved_descending",
-        "trim_eager",
     ] {
         assert_eq!(by(c)["status"], "captured", "{c}: {}", by(c));
-    }
-    // The deferred trim has no capture of its own: the file that shows it is
-    // the `moved_ascending` one, so the class is **covered by** that capture.
-    let deferred = by("trim_deferred");
-    assert_eq!(deferred["status"], "covered_by");
-    assert_eq!(deferred["capture_id"], "moved_ascending");
-    for c in ["zero_reuse_single", "moved_mixed"] {
-        assert_eq!(by(c)["status"], "unavailable", "{c}: {}", by(c));
-        assert!(
-            !by(c)["reason"].as_str().unwrap_or_default().is_empty(),
-            "{c} is unavailable without a reason"
-        );
     }
 }
 
@@ -1481,7 +1452,7 @@ fn the_matrix_names_every_class_and_says_why_the_rest_are_unavailable() {
 /// the audio manifest is fetched from **both** builds either way it appears.
 #[test]
 fn audio_widens_the_selection_pool() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("audio");
     let with = capture(&mock, &scratch, &[]);
     assert_eq!(with.code, 0, "{}\n{}", with.stdout, with.stderr);
@@ -1519,18 +1490,26 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
     );
 }
 
-/// `--require-class` on a class the world has no candidate for is exit `4`,
-/// and the artifact is still written.
+/// `--require-class` on a class the run cannot satisfy is exit `4`, and the
+/// artifact is still written.
+///
+/// A ceiling of zero makes every class `over_budget`, which is the honest way
+/// to ask for a class the run cannot have: the matrix says so, and the
+/// requirement is not met.
 #[test]
-fn requiring_an_unavailable_class_is_exit_four() {
-    let mock = Mock::start(World::five_classes());
+fn requiring_an_unmet_class_is_exit_four() {
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("require");
-    let r = capture(&mock, &scratch, &["--require-class", "moved_mixed"]);
+    let r = capture(
+        &mock,
+        &scratch,
+        &["--max-download-bytes", "0", "--require-class", "identical"],
+    );
     assert_eq!(r.code, 4, "{}\n{}", r.stdout, r.stderr);
     assert_eq!(r.summary()["exit_code"], "4");
     // And it says which class, rather than only that something was unmet.
     let detail = percent_decode(&r.summary()["detail"]);
-    assert!(detail.contains("moved_mixed"), "{detail}");
+    assert!(detail.contains("identical"), "{detail}");
 }
 
 /// The six `api` rows in `requests.ndjson` carry the path their body was
@@ -1550,7 +1529,7 @@ fn requiring_an_unavailable_class_is_exit_four() {
 /// body — so counting files would be counting the wrong thing.
 #[test]
 fn the_six_api_rows_record_where_their_body_was_written() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("stored-as");
     let r = capture(&mock, &scratch, &[]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1626,7 +1605,7 @@ fn the_six_api_rows_record_where_their_body_was_written() {
 /// *green for the right reason* - because there was a file to read.
 #[test]
 fn no_chunk_blobs_still_writes_the_launcher_metadata() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("nobloobs-prelude");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1681,7 +1660,7 @@ fn no_chunk_blobs_still_writes_the_launcher_metadata() {
 /// than `pass`: a skip is not a success.
 #[test]
 fn no_chunk_blobs_is_incomplete_not_pass() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("noblobs");
     let r = capture(&mock, &scratch, &["--no-chunk-blobs"]);
     assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
@@ -1738,7 +1717,7 @@ fn no_chunk_blobs_is_incomplete_not_pass() {
 /// tag* rather than as a build with no manifests, and says so in the detail.
 #[test]
 fn an_old_tag_the_api_does_not_serve_is_refused() {
-    let mock = Mock::start(World::five_classes());
+    let mock = Mock::start(World::all_shapes());
     let scratch = Scratch::new("nosuchtag");
     let r = capture(&mock, &scratch, &["--old-tag", "9.9.9"]);
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
@@ -1752,7 +1731,7 @@ fn an_old_tag_the_api_does_not_serve_is_refused() {
 /// *that*, rather than silently falling back.
 #[test]
 fn the_default_old_tag_is_diff_tags_zero_and_whatever_it_names_must_exist() {
-    let mut world = World::five_classes();
+    let mut world = World::all_shapes();
     // Put the unservable tag first, as a branch whose old build was retired does.
     world.old_in_diff_tags = false;
     let mock = Mock::start(world);

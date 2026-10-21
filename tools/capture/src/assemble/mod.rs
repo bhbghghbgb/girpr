@@ -80,7 +80,7 @@ impl PlanEntry {
     /// Whether this chunk's bytes come from a **different offset** in the old
     /// file than where they land in the new one.
     ///
-    /// One definition for the `moved_ascending` class, the `Totals::moved`
+    /// One definition for the `reuse_moved` class, the `Totals::moved`
     /// count and the per-entry note. It was spelled out three times, and the
     /// three had to agree or the note would contradict the count.
     pub fn is_moved(&self) -> bool {
@@ -152,11 +152,6 @@ pub struct PatchMap {
     /// capture has at least one side, and a capture nothing can be asserted
     /// about is the defect rather than a shape.
     pub expectations: Expectations,
-    /// What the in-place path would do with this file, so a consumer does not
-    /// have to work it out.
-    ///
-    /// Absent for a capture with no new side — there is nothing to repair.
-    pub repair: Option<Repair>,
 }
 
 /// One side of the pair.
@@ -218,115 +213,77 @@ pub struct Expectations {
     /// because the number is known and a consumer should be able to compare
     /// against it.
     pub download_bytes: i64,
-    /// Chunks a correct patch must not request.
-    pub must_not_fetch: Vec<String>,
-    /// The `SUMMARY` keys a consumer can assert against.
+    /// Chunks a correct patch must not request: the `REUSE` set.
     ///
-    /// Absent for a capture with nothing to repair.
-    pub summary: Option<SummaryExpectations>,
+    /// It is the same fact as the `plan[]` entries whose decision is `REUSE`,
+    /// stated as the negative a consumer can assert on — "none of these may be
+    /// requested". `verify` checks the two against each other, so there is one
+    /// source of truth.
+    pub must_not_fetch: Vec<String>,
 }
 
-/// The write order the **ordered tier** would pick, and the two counts that
-/// say which order keeps more of the file's sources alive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Direction {
-    /// The lowest offset first. It keeps the sources that sit **after** their
-    /// destination — the bytes moved *earlier*.
-    #[serde(rename = "ascending")]
-    Ascending,
-    /// The highest offset first. It keeps the sources that sit **before** their
-    /// destination — the bytes moved *later*.
-    #[serde(rename = "descending")]
-    Descending,
-    /// Nothing moves, so there is no order to pick.
-    #[serde(rename = "n/a")]
-    NotApplicable,
-}
-
-/// When the file's dead tail is released.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Trim {
-    /// **Before** the first write: the tail is dead weight and nothing the
-    /// repair reads lives in it.
-    #[serde(rename = "eager")]
-    Eager,
-    /// **At the end**: a reuse source reaches past the target's end, so the
-    /// tail is not dead weight and the file grows during the repair.
-    #[serde(rename = "deferred")]
-    Deferred,
-    /// The file does not shrink, so there is no tail to release.
-    #[serde(rename = "none")]
-    None,
-}
-
-/// The mode the repair takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Mode {
-    /// Written **in place** — the default.
-    #[serde(rename = "inplace")]
-    Inplace,
-}
-
-/// What the in-place path would do with this file.
+/// What a capture says about the **shape** of its patch.
 ///
-/// Every number here is computed from the plan and the old side's bytes — the
-/// two things the capture already has — so a consumer does not have to work it
-/// out, and so the artifact and the tool cannot disagree about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Repair {
-    /// The chunks that are already correct where they belong: **kept**, not
-    /// written.
-    pub kept: u64,
-    /// The chunks whose bytes live elsewhere in the file: copied from a source.
+/// The numbers the coverage assertions read, and nothing else: they are facts
+/// about the patch, not about how a repair tool gets there.
+///
+/// **An absent side is not a file of zero bytes.** The old side of an `added`
+/// capture is *no file*, and the new side of a `removed` capture is *no file*.
+/// The difference matters twice over: a file that appears has grown even when it
+/// is empty, and a capture with no new side has no plan at all — so it has
+/// nothing to reuse and nothing to fetch, and it must not be counted on either
+/// side of the reuse boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PatchShape {
+    /// The plan's own numbers. `None` when the capture has no new side: there
+    /// is no target, so there is nothing to reuse and nothing to fetch.
+    pub plan: Option<PlanCounts>,
+    /// The old side's declared size. `None` when the file is not there.
+    pub old_size: Option<u64>,
+    /// The new side's declared size. `None` when the file is not there.
+    pub new_size: Option<u64>,
+}
+
+impl PatchShape {
+    /// The file **grows**: it is created, or it is present on both sides and
+    /// the new one is larger.
+    ///
+    /// A file that is created grows whether it is a hundred bytes or none at
+    /// all — what grew is the file, not the byte count.
+    pub fn grows(&self) -> bool {
+        if self.old_size.is_none() && self.new_size.is_some() {
+            return true;
+        }
+        match (self.old_size, self.new_size) {
+            (Some(old), Some(new)) => new > old,
+            _ => false,
+        }
+    }
+
+    /// The file **shrinks**: it is deleted, or it is present on both sides and
+    /// the new one is smaller.
+    pub fn shrinks(&self) -> bool {
+        if self.old_size.is_some() && self.new_size.is_none() {
+            return true;
+        }
+        match (self.old_size, self.new_size) {
+            (Some(old), Some(new)) => new < old,
+            _ => false,
+        }
+    }
+}
+
+/// The plan's own numbers: how many chunks the new side has, how many of them
+/// the old file already holds, and how many of the reused ones live elsewhere
+/// in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlanCounts {
+    /// How many chunks the new side has.
+    pub chunks: u64,
+    /// How many of them are reused from the old side.
+    pub reuse: u64,
+    /// How many of the reused ones live elsewhere in the file.
     pub moved: u64,
-    /// The chunks with no usable local source: downloaded.
-    pub fetch: u64,
-    /// The bytes that did not have to be written.
-    pub kept_bytes: u64,
-    /// The RAM the **staged** tier needs: the bytes that have to move.
-    pub payload_bytes: u64,
-    /// The bytes the in-place run writes.
-    pub write_bytes: u64,
-    /// The write order the **ordered** tier would pick.
-    pub direction: Direction,
-    /// How many sources the ascending order would salvage.
-    pub keeps_ascending: u64,
-    /// How many sources the descending order would salvage.
-    pub keeps_descending: u64,
-    /// When the dead tail is released.
-    pub trim: Trim,
-    /// How much the file on disk has to grow.
-    pub growth_bytes: u64,
-    /// The mode the default run takes.
-    pub mode: Mode,
-}
-
-/// The `SUMMARY` keys a consumer can assert against.
-///
-/// **Every counter the repair reports is conditional on a flag** — the mode,
-/// the RAM budget, the scan, the write ceiling — so the expectations are
-/// stated per flag rather than as one flat set of numbers. The mode-dependent
-/// ones are stated for the **in-place** mode, which is the default; the temp
-/// mode writes the whole file and keeps nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SummaryExpectations {
-    /// `--scan`: the chunks that are wrong where they belong.
-    pub damaged_chunks: Option<u64>,
-    /// `--repair-mode inplace`: the files the run repaired in place.
-    pub inplace: Option<u64>,
-    /// `--repair-mode inplace`: the files the run repaired through the temp
-    /// path — none, because the mode was in place.
-    pub temp: Option<u64>,
-    /// `--repair-mode inplace`: the bytes that did not have to be written.
-    pub kept_bytes: Option<u64>,
-    /// `--max-ram-bytes 0` — the **ordered** tier: the RAM the run reserved.
-    /// Zero, because the ordered tier stages nothing.
-    pub ram_bytes_ordered: Option<u64>,
-    /// `--max-ram-bytes` big enough for the staged tier: the RAM the run
-    /// reserved.
-    pub ram_bytes_staged: Option<u64>,
-    /// `--max-write-bytes`, in place: the bytes the run wrote.
-    pub write_bytes: Option<u64>,
 }
 
 /// One side's assembly, with what was asserted about it.
@@ -1188,41 +1145,6 @@ fn build_map(
     // one-sided pair rather than a wrong download"), so it is folded in with
     // `removed`: there is no result file and nothing is downloaded. That is a weaker capture than the other classes,
     // and saying so is better than claiming a result that does not exist.
-    // What the in-place path would do with this file, computed from the plan
-    // and the old side's bytes. A consumer reads it instead of working it out
-    // — and, more to the point, the artifact and the tool cannot disagree
-    // about it.
-    let sources = identity_sources(
-        input.pair.old.as_ref().map(|o| &o.entry),
-        input.pair.new.as_ref().map(|n| &n.entry),
-    );
-    let repair = new.map(|n| {
-        repair_of(
-            old.map(|o| o.bytes.as_slice()).unwrap_or(&[]),
-            old.map(|o| o.bytes.len() as u64).unwrap_or(0),
-            n.bytes.len() as u64,
-            &sources,
-            plan.as_deref().unwrap_or(&[]),
-        )
-    });
-    // The file is **skipped** — not repaired — when what is on disk already
-    // hashes to the target's MD5. That is the `identical` case, and it changes
-    // every counter the run reports: nothing is written and nothing is kept.
-    let skipped = match (old, new) {
-        (Some(o), Some(n)) => o.declared_md5 == n.declared_md5,
-        _ => false,
-    };
-    let summary = repair.map(|r| SummaryExpectations {
-        damaged_chunks: Some(r.moved + r.fetch),
-        inplace: Some(u64::from(!skipped)),
-        temp: Some(0),
-        kept_bytes: Some(if skipped { 0 } else { r.kept_bytes }),
-        // The ordered tier stages nothing, so it reserves nothing.
-        ram_bytes_ordered: Some(0),
-        ram_bytes_staged: Some(r.payload_bytes),
-        write_bytes: Some(if skipped { 0 } else { r.write_bytes }),
-    });
-
     let expectations = match new {
         Some(n) => Expectations {
             result_path: Some(format!(
@@ -1242,7 +1164,6 @@ fn build_map(
                         .collect()
                 })
                 .unwrap_or_default(),
-            summary,
         },
         None => Expectations {
             result_path: None,
@@ -1254,8 +1175,6 @@ fn build_map(
             // forbidden.
             download_bytes: 0,
             must_not_fetch: Vec::new(),
-            // Nothing is repaired, so there is no `SUMMARY` to predict.
-            summary: None,
         },
     };
     Ok(PatchMap {
@@ -1269,146 +1188,24 @@ fn build_map(
         plan,
         totals,
         expectations,
-        repair,
     })
 }
 
-/// The reuse source of each new-side chunk: the **first** old chunk with that
-/// identity, in manifest order.
+/// The patch's shape, as the coverage assertions read it.
 ///
-/// The same rule the diff scores with and the repair reads with
-/// (`repair::reuse::sources_for`): the first match. Two rules would be two
-/// answers, and a class is a statement about the content — so the class, the
-/// diff and the plan all have to say the same thing.
-fn identity_sources(
-    old: Option<&SophonChunkFile>,
-    new: Option<&SophonChunkFile>,
-) -> Vec<Option<i64>> {
-    let (Some(old), Some(new)) = (old, new) else {
-        return Vec::new();
-    };
-    let mut first: BTreeMap<(String, i64), i64> = BTreeMap::new();
-    for c in &old.chunks {
-        first
-            .entry((c.uncompressed_md5.clone(), c.uncompressed_size))
-            .or_insert(c.offset);
-    }
-    new.chunks
-        .iter()
-        .map(|c| {
-            first
-                .get(&(c.uncompressed_md5.clone(), c.uncompressed_size))
-                .copied()
-        })
-        .collect()
-}
-
-/// What the in-place path would do with this file.
-///
-/// The three chunk counts are the repair's own vocabulary: a chunk is **kept**
-/// (already correct where it belongs), **copied** (its bytes live elsewhere in
-/// the file) or **fetched** (no usable local source).
-///
-/// The direction is the **ordered tier's** rule — the same one
-/// `repair::reuse::survives` applies: a source survives the ascending order
-/// when it sits at or after its destination, the descending one when it sits
-/// at or before it, and a source that reaches past the end of the file counts
-/// for neither.
-fn repair_of(
-    old_bytes: &[u8],
-    old_size: u64,
-    new_size: u64,
-    sources: &[Option<i64>],
-    plan: &[PlanEntry],
-) -> Repair {
-    let mut kept = 0_u64;
-    let mut moved = 0_u64;
-    let mut fetch = 0_u64;
-    let mut kept_bytes = 0_u64;
-    let mut payload_bytes = 0_u64;
-    let mut write_bytes = 0_u64;
-    let mut keeps_ascending = 0_u64;
-    let mut keeps_descending = 0_u64;
-
-    for e in plan {
-        let len = e.uncompressed_size.max(0) as u64;
-        // Already correct where it belongs? The bytes on disk say so, and they
-        // are the old side's — which is what the repair's scan would read.
-        let at_dest = e
-            .target_range
-            .slice(old_bytes)
-            .is_some_and(|s| hash::md5_hex(s) == e.uncompressed_md5);
-        if at_dest {
-            kept += 1;
-            kept_bytes += len;
-            continue;
-        }
-        match e.source_range.as_ref() {
-            Some(src) => {
-                moved += 1;
-                payload_bytes += len;
-                write_bytes += len;
-                let r = src.start;
-                let o = e.target_range.start;
-                let inside = (r.max(0) as u64)
-                    .checked_add(len)
-                    .is_none_or(|end| end <= old_size);
-                if inside {
-                    if r >= o {
-                        keeps_ascending += 1;
-                    }
-                    if r <= o {
-                        keeps_descending += 1;
-                    }
-                }
-            }
-            None => {
-                fetch += 1;
-                write_bytes += len;
-            }
-        }
-    }
-
-    // The trim: the dead tail is released **before** the first write only when
-    // no reuse source reaches past the target's end — a source the trim would
-    // delete is a source that is gone.
-    let max_source_end = sources
-        .iter()
-        .zip(plan)
-        .filter_map(|(s, e)| s.map(|r| r.max(0) as u64 + e.uncompressed_size.max(0) as u64))
-        .max()
-        .unwrap_or(0);
-    let trim = if new_size >= old_size {
-        Trim::None
-    } else if max_source_end <= new_size {
-        Trim::Eager
-    } else {
-        Trim::Deferred
-    };
-
-    // The direction is the one that keeps the most sources alive, and a tie
-    // goes to ascending — the same tie-break the repair applies.
-    let direction = if keeps_ascending == 0 && keeps_descending == 0 {
-        Direction::NotApplicable
-    } else if keeps_descending > keeps_ascending {
-        Direction::Descending
-    } else {
-        Direction::Ascending
-    };
-
-    Repair {
-        kept,
-        moved,
-        fetch,
-        kept_bytes,
-        payload_bytes,
-        write_bytes,
-        direction,
-        keeps_ascending,
-        keeps_descending,
-        trim,
-        growth_bytes: new_size.saturating_sub(old_size),
-        mode: Mode::Inplace,
+/// The plan's own arithmetic, and the two sides' sizes. **An absent side is
+/// `None`, not `Some(0)`**: the file is not there, which is not the same as a
+/// file of zero bytes, and the difference is what makes "a file that grows" and
+/// "a file that shrinks" true of a zero-byte file.
+pub fn patch_shape(map: &PatchMap) -> PatchShape {
+    PatchShape {
+        plan: map.totals.map(|t| PlanCounts {
+            chunks: t.chunks as u64,
+            reuse: t.reuse as u64,
+            moved: t.moved as u64,
+        }),
+        old_size: map.old.as_ref().map(|s| s.size.max(0) as u64),
+        new_size: map.new.as_ref().map(|s| s.size.max(0) as u64),
     }
 }
 
@@ -1514,7 +1311,7 @@ mod tests {
     }
 
     /// **The limit must stay clear of a real fixture.** 22 662 068 B is the largest
-    /// file in the reference bundle (`moved_ascending`), and 40x is slack
+    /// file in the reference bundle (`reuse_moved`), and 40x is slack
     /// well below the 1 GiB the limit is set at. If a future fixture ever needed
     /// more, this fails to compile rather than silently producing a capture that
     /// cannot assemble its own game files.
@@ -1615,7 +1412,7 @@ mod tests {
         .flatten()
         .collect();
         let src = ChunkSource::from_memory(memory_of(&entries));
-        let classes = [Class::KeptInPlace];
+        let classes = [Class::ReuseInPlace];
         assemble(&AssemblyInput {
             pair,
             matching_field: "game",
@@ -1626,12 +1423,12 @@ mod tests {
     }
 
     /// The measured shape: the file on disk is **longer** than the target and
-    /// no reuse source reaches past the target's end — the eager trim.
+    /// no reuse source reaches past the target's end.
     fn shrinking_pair() -> FilePair {
         let old = file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 64)]);
         let new = file("blk", vec![chunk(1, 0, 64), chunk(9, 64, 32)]);
         FilePair {
-            capture_id: "trim_eager".into(),
+            capture_id: "reuse_in_place".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1647,12 +1444,12 @@ mod tests {
     }
 
     /// The measured shape: the file on disk is longer than the target and a
-    /// reuse source **does** reach past the target's end — the deferred trim.
+    /// reuse source **does** reach past the target's end.
     fn shrinking_with_a_past_the_end_source_pair() -> FilePair {
         let old = file("blk", vec![chunk(1, 0, 64), chunk(2, 64, 64)]);
         let new = file("blk", vec![chunk(2, 0, 64), chunk(9, 64, 32)]);
         FilePair {
-            capture_id: "trim_deferred".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1678,7 +1475,7 @@ mod tests {
             vec![chunk(9, 0, 64), chunk(2, 64, 128), chunk(8, 192, 40)],
         );
         FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "dll".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1725,7 +1522,7 @@ mod tests {
             vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
         );
         FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1872,7 +1669,7 @@ mod tests {
             vec![chunk(1, 0, 64), chunk(3, 64, 32), chunk(4, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1924,7 +1721,7 @@ mod tests {
         // offset the old file *does* have — so the old rule called it "not
         // moved", while the repair would read it from 0 and call it moved.
         let duplicated = FilePair {
-            capture_id: "kept_in_place".into(),
+            capture_id: "reuse_in_place".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1939,7 +1736,7 @@ mod tests {
         };
         // The moved case, for the other side of the comparison.
         let moved = FilePair {
-            capture_id: "moved_ascending".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -1974,8 +1771,8 @@ mod tests {
             );
             assert_eq!(
                 diff.moved,
-                diff.moved_up + diff.moved_down,
-                "{}: every move has a direction",
+                diff.moved_later + diff.moved_earlier,
+                "{}: every move lands either earlier or later",
                 pair.capture_id
             );
         }
@@ -1993,8 +1790,8 @@ mod tests {
             &duplicated.new.as_ref().unwrap().entry,
         );
         assert_eq!(diff.moved, 1, "the first match is the source");
-        assert_eq!(diff.moved_up, 1, "and the bytes move later");
-        assert_eq!(diff.moved_down, 0);
+        assert_eq!(diff.moved_later, 1, "and the bytes move later");
+        assert_eq!(diff.moved_earlier, 0);
     }
 
     /// Every chunk reused and the file laid out differently is the reorder case:
@@ -2010,7 +1807,7 @@ mod tests {
             vec![chunk(3, 0, 32), chunk(1, 32, 64), chunk(2, 96, 128)],
         );
         let a = assemble_pair(&FilePair {
-            capture_id: "moved_mixed".into(),
+            capture_id: "reuse_moved".into(),
             path: "blk".into(),
             old: Some(OldFile {
                 tag: "7.0.0".into(),
@@ -2199,7 +1996,7 @@ mod tests {
         .into();
         let mut mem = memory_of(&entries);
         mem.insert(shared.id.clone(), payload(200, 128)); // wrong content, same id
-        let classes = [Class::KeptInPlace];
+        let classes = [Class::ReuseInPlace];
         let src = ChunkSource::from_memory(mem);
         let mut a = assemble(&AssemblyInput {
             pair: &pair,
@@ -2258,7 +2055,7 @@ mod tests {
     fn a_missing_chunk_is_named_and_stops_the_assembly() {
         let pair = same_offset_pair();
         let src = ChunkSource::from_memory(BTreeMap::new());
-        let classes = [Class::KeptInPlace];
+        let classes = [Class::ReuseInPlace];
         let e = assemble(&AssemblyInput {
             pair: &pair,
             matching_field: "game",
@@ -2297,17 +2094,29 @@ mod tests {
         );
     }
 
-    /// The `repair` block and the plan it was derived from must agree, or the
+    /// The **skip branch**: the file is already right, so the patch fetches
+    /// nothing and writes nothing.
+    #[test]
+    fn the_skip_branch_fetches_nothing() {
+        let a = assemble_pair(&identical_pair()).expect("assembles");
+        let plan = a.map.plan.as_ref().expect("a plan");
+        assert!(
+            plan.iter().all(|e| e.decision == Decision::Reuse),
+            "every chunk is already in the file"
+        );
+        let totals = a.map.totals.expect("totals");
+        assert_eq!(totals.fetch, 0);
+        assert_eq!(totals.reuse, plan.len());
+        assert_eq!(a.map.expectations.download_bytes, 0);
+    }
+
+    /// The patch's shape and the plan it was derived from must agree, or the
     /// artifact says two things about the same file.
     #[test]
-    fn the_repair_block_agrees_with_the_plan_it_came_from() {
+    fn the_patch_shape_agrees_with_the_plan_it_came_from() {
         let a = assemble_pair(&same_offset_pair()).expect("assembles");
-        let r = a.map.repair.expect("a repair block");
+        let s = crate::assemble::patch_shape(&a.map);
         let plan = a.map.plan.as_ref().expect("a plan");
-        assert_eq!(r.kept + r.moved + r.fetch, plan.len() as u64);
-        // The plan's REUSE entries are the kept ones plus the moved ones: a
-        // chunk whose source sits at its own offset is a REUSE in the plan and
-        // a **kept** chunk here, because the repair leaves it alone.
         let reuse = plan
             .iter()
             .filter(|e| e.decision == Decision::Reuse)
@@ -2316,125 +2125,139 @@ mod tests {
             .iter()
             .filter(|e| e.decision == Decision::Fetch)
             .count() as u64;
-        assert_eq!(r.kept + r.moved, reuse);
-        assert_eq!(r.fetch, fetch);
-        // And the numbers themselves.
-        assert_eq!((r.kept, r.moved, r.fetch), (1, 0, 2));
-        assert_eq!(r.kept_bytes, 128, "the shared chunk");
-        assert_eq!(r.payload_bytes, 0, "nothing moves, so nothing is staged");
-        assert_eq!(r.write_bytes, 64 + 40, "the two fetched chunks");
-        assert_eq!(r.direction, Direction::NotApplicable, "nothing moves");
-        assert_eq!((r.keeps_ascending, r.keeps_descending), (0, 0));
-        assert_eq!(r.trim, Trim::None, "the file does not shrink");
-        assert_eq!(r.growth_bytes, 8, "it grows by the new chunk's size");
-        assert_eq!(r.mode, Mode::Inplace);
-    }
-
-    /// The direction, the payload and the two salvage counts are the ordered
-    /// tier's own numbers.
-    #[test]
-    fn the_repair_block_says_which_way_the_bytes_move() {
-        let a = assemble_pair(&moved_pair()).expect("assembles");
-        let r = a.map.repair.expect("a repair block");
-        assert_eq!((r.kept, r.moved, r.fetch), (1, 1, 1));
-        assert_eq!(r.payload_bytes, 32, "the bytes that have to move");
-        assert_eq!(r.write_bytes, 32 + 128);
-        // The source is *after* the destination, so the ascending order keeps
-        // it and the descending one does not.
-        assert_eq!(r.keeps_ascending, 1);
-        assert_eq!(r.keeps_descending, 0);
-        assert_eq!(r.direction, Direction::Ascending);
-    }
-
-    /// The `SUMMARY` expectations are the repair's numbers, restated per flag.
-    #[test]
-    fn the_summary_expectations_are_the_repair_numbers_per_flag() {
-        let a = assemble_pair(&moved_pair()).expect("assembles");
-        let s = a.map.expectations.summary.expect("a summary block");
-        assert_eq!(s.damaged_chunks, Some(2), "the moved and the fetched chunk");
-        assert_eq!(s.inplace, Some(1));
-        assert_eq!(s.temp, Some(0));
-        assert_eq!(s.kept_bytes, Some(64));
+        let p = s.plan.expect("a plan");
+        assert_eq!(p.chunks, plan.len() as u64);
+        assert_eq!(p.reuse, reuse);
+        assert_eq!(p.chunks - p.reuse, fetch);
+        assert_eq!(p.moved, 0, "nothing moves");
         assert_eq!(
-            s.ram_bytes_ordered,
-            Some(0),
-            "the ordered tier stages nothing"
+            s.old_size,
+            Some(a.map.old.as_ref().expect("an old side").size as u64)
         );
-        assert_eq!(s.ram_bytes_staged, Some(32));
-        assert_eq!(s.write_bytes, Some(160));
+        assert_eq!(
+            s.new_size,
+            Some(a.map.new.as_ref().expect("a new side").size as u64)
+        );
     }
 
-    /// A file that is already correct is **skipped**, not repaired, and every
-    /// counter says so: nothing is written and nothing is kept.
+    /// **An absent side is no file, not a file of zero bytes.**
+    ///
+    /// The difference is what makes "a file that grows" and "a file that
+    /// shrinks" true of a zero-byte file: a file that appears has appeared, and a
+    /// file that disappears has gone. Counting an absent side as zero bytes
+    /// would make a zero-byte `added` file neither grow nor shrink, and the
+    /// bundle's coverage of the size boundary would depend on whether the
+    /// cheapest candidate happened to be empty.
     #[test]
-    fn a_skipped_file_reports_nothing_written() {
-        let a = assemble_pair(&identical_pair()).expect("assembles");
-        let r = a.map.repair.expect("a repair block");
-        assert_eq!((r.kept, r.moved, r.fetch), (2, 0, 0));
-        let s = a.map.expectations.summary.expect("a summary block");
-        assert_eq!(s.damaged_chunks, Some(0));
-        assert_eq!(s.inplace, Some(0), "the repair never ran");
-        assert_eq!(s.temp, Some(0));
-        assert_eq!(s.kept_bytes, Some(0), "a skipped file keeps nothing");
-        assert_eq!(s.write_bytes, Some(0));
-    }
-
-    /// A capture with no new side has nothing to repair, and says so by having
-    /// no `repair` block at all rather than a block full of zeros.
-    #[test]
-    fn a_one_sided_capture_has_no_repair_block() {
-        let added = FilePair {
-            capture_id: "added".into(),
-            path: "dll".into(),
-            old: None,
-            new: Some(NewFile {
-                tag: "7.1.0".into(),
-                build_id: "sMXGW2ll3Fuu".into(),
-                entry: file("dll", vec![chunk(1, 0, 64)]),
+    fn an_absent_side_is_no_file_and_not_a_file_of_zero_bytes() {
+        // A file that is created: no old side, and the new side is empty.
+        let created = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
             }),
+            old_size: None,
+            new_size: Some(0),
         };
-        let a = assemble_pair(&added).expect("assembles");
-        assert!(
-            a.map.repair.is_some(),
-            "there is a new side, so there is a repair"
-        );
-        let r = a.map.repair.unwrap();
-        assert_eq!(
-            (r.kept, r.moved, r.fetch),
-            (0, 0, 1),
-            "every chunk is fetched"
-        );
-        assert_eq!(r.trim, Trim::None, "there is no old side to shrink");
-        assert_eq!(r.growth_bytes, 64, "the file is created whole");
-        assert!(a.map.expectations.summary.is_some());
+        assert!(created.grows(), "a file that appears has grown");
+        assert!(!created.shrinks());
+
+        // A file that is deleted: the old side is empty, and there is no new
+        // side.
+        let deleted = crate::assemble::PatchShape {
+            plan: None,
+            old_size: Some(0),
+            new_size: None,
+        };
+        assert!(deleted.shrinks(), "a file that disappears has shrunk");
+        assert!(!deleted.grows());
+
+        // A file that is present on both sides and empty on both: it neither
+        // grows nor shrinks.
+        let empty = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 0,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: Some(0),
+            new_size: Some(0),
+        };
+        assert!(!empty.grows() && !empty.shrinks());
+
+        // A file that is present on both sides and grows in bytes.
+        let bigger = crate::assemble::PatchShape {
+            plan: Some(crate::assemble::PlanCounts {
+                chunks: 1,
+                reuse: 0,
+                moved: 0,
+            }),
+            old_size: Some(0),
+            new_size: Some(100),
+        };
+        assert!(bigger.grows());
+        assert!(!bigger.shrinks());
     }
 
-    /// The trim is the one decision that depends on **where the sources are**,
-    /// and the two outcomes are what the capture's `trim_eager` and
-    /// `trim_deferred` classes are named after.
+    /// The negative expectation is the plan's REUSE set, stated as the ids a
+    /// consumer must **not** see requested.
     #[test]
-    fn the_repair_block_says_which_trim_the_file_gets() {
-        // The tail is dead weight: nothing the repair reads lives in it.
-        let a = assemble_pair(&shrinking_pair()).expect("assembles");
-        let r = a.map.repair.expect("a repair block");
-        assert_eq!(r.trim, Trim::Eager);
-        assert_eq!((r.kept, r.moved, r.fetch), (1, 0, 1));
-        assert_eq!(r.growth_bytes, 0, "the file shrinks, it does not grow");
-
-        // A source reaches past the target's end, so the trim has to wait.
-        let a = assemble_pair(&shrinking_with_a_past_the_end_source_pair()).expect("assembles");
-        let r = a.map.repair.expect("a repair block");
-        assert_eq!(r.trim, Trim::Deferred);
-        assert_eq!((r.kept, r.moved, r.fetch), (0, 1, 1));
-        assert_eq!(r.keeps_ascending, 1, "the source is after the destination");
-        assert_eq!(r.direction, Direction::Ascending);
-    }
-
-    /// A file that does not shrink has no dead tail, and the trim is `none`.
-    #[test]
-    fn a_file_that_does_not_shrink_has_no_trim() {
+    fn the_negative_expectation_is_the_plans_reuse_set() {
         let a = assemble_pair(&moved_pair()).expect("assembles");
-        assert_eq!(a.map.repair.expect("a repair block").trim, Trim::None);
+        let plan = a.map.plan.as_ref().expect("a plan");
+        let reuse: Vec<&str> = plan
+            .iter()
+            .filter(|e| e.decision == Decision::Reuse)
+            .map(|e| e.chunk_id.as_str())
+            .collect();
+        assert_eq!(a.map.expectations.must_not_fetch, reuse);
+    }
+
+    /// A patchmap says what the **patch** is, and nothing about how a repair
+    /// tool gets there: no tier, no write order, no trim, and no `SUMMARY`
+    /// line transcribed into a foreign schema.
+    #[test]
+    fn the_patchmap_carries_no_repair_tool_vocabulary() {
+        let a = assemble_pair(&moved_pair()).expect("assembles");
+        let v = serde_json::to_value(&a.map).expect("serializes");
+        let obj = v.as_object().expect("an object");
+        assert!(
+            !obj.contains_key("repair"),
+            "the repair block is gone: {obj:?}"
+        );
+        let ex = obj["expectations"].as_object().expect("expectations");
+        assert!(
+            !ex.contains_key("summary"),
+            "the SUMMARY expectations are gone: {ex:?}"
+        );
+    }
+
+    /// The patch's shape says whether the file grows or shrinks, how much of
+    /// it is reused and how much of that has moved — the three facts the
+    /// coverage assertions read.
+    #[test]
+    fn the_patch_shape_says_whether_the_file_grows_or_shrinks() {
+        let growing = assemble_pair(&same_offset_pair()).expect("assembles");
+        let s = crate::assemble::patch_shape(&growing.map);
+        assert!(s.grows(), "the file grows");
+        assert_eq!(s.plan.expect("a plan").moved, 0, "and nothing moves");
+
+        let shrinking = assemble_pair(&shrinking_pair()).expect("assembles");
+        let s = crate::assemble::patch_shape(&shrinking.map);
+        assert!(s.shrinks(), "the file shrinks");
+
+        let moved = assemble_pair(&moved_pair()).expect("assembles");
+        let s = crate::assemble::patch_shape(&moved.map);
+        let p = s.plan.expect("a plan");
+        assert!(p.moved > 0, "the bytes move");
+        assert!(p.reuse > 0, "and some of them are reused");
+
+        let moved_shrinking =
+            assemble_pair(&shrinking_with_a_past_the_end_source_pair()).expect("assembles");
+        let s = crate::assemble::patch_shape(&moved_shrinking.map);
+        assert!(s.plan.expect("a plan").moved > 0, "the bytes move");
+        assert!(s.shrinks(), "and the file shrinks");
     }
 
     #[test]
@@ -2467,7 +2290,6 @@ mod tests {
                 "old",
                 "path",
                 "plan",
-                "repair",
                 "schema_version",
                 "totals",
             ],
