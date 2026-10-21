@@ -2124,8 +2124,58 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     );
     assert!(line.contains("write_bytes="), "{line}");
     assert!(line.contains("limited=1"), "{line}");
+    // The **spent** figure is the live one, and the live ceiling was not
+    // asked for: the key is not on the line. The settled one is, because this
+    // ceiling is about it.
+    assert!(
+        !line.contains("write_bytes_spent="),
+        "the spent figure belongs to the live ceiling: {line}"
+    );
 
     mock.stop();
+}
+
+/// The live and the verified ceilings **compose**, and the order matters: the
+/// live one is checked before the resource is consumed, the verified one when
+/// the resource is settled, and a run with both stops on whichever is reached
+/// first — with `stopped=` saying which.
+#[tokio::test]
+async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() {
+    // The fixture: `bar.dat` is one 48-byte chunk and `foo.dat` is two
+    // 64-byte ones, and the plan is sorted — so `bar.dat` is repaired first
+    // (48 bytes) and `foo.dat`'s first chunk settles 64 more.
+    async fn run(live: u64, verified: u64, tag: &str) -> &'static str {
+        let fx = build_fixture();
+        let mock = MockServer::start(fx, MockOpts::default()).await;
+        let dir = temp_dir(tag);
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, b"not the game data");
+        }
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+        ctx.limits.write_bytes = Some(live);
+        ctx.limits.verified_write_bytes = Some(verified);
+        let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+        assert_eq!(code, 5, "a ceiling bound");
+        mock.stop();
+        summary
+            .flags
+            .stopped
+            .expect("the ceiling that bound is named")
+    }
+
+    // The live ceiling is the tighter one: it is reached first, and it is the
+    // one that is named.
+    assert_eq!(
+        run(1, 1 << 20, "both_live_first").await,
+        "--max-write-bytes"
+    );
+    // The verified one is tighter: the settled figure crosses its line while
+    // the live figure is still under its own.
+    assert_eq!(
+        run(1 << 20, 64, "both_verified_first").await,
+        "--max-verified-write-bytes"
+    );
 }
 
 /// The download half of the same idea: a ceiling on the bytes of the files
