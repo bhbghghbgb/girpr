@@ -1,10 +1,11 @@
-//! The loopback replay server behind `tests/artifact_bridge.rs`.
+//! The loopback replay server.
 //!
 //! Spec: [`docs/06-artifact-bridge-spec.md`](../../../docs/06-artifact-bridge-spec.md)
-//! §4. This module is reached from that one test file and from nowhere else:
-//! `mod server;` in `repair_offline.rs` / `cli_contract.rs` would put a
-//! several-hundred-line replay server into both of those compilation units for
-//! tests that never use it.
+//! §4. This module is reached from `tests/artifact_bridge.rs` (the cross-tool
+//! claim) and from `tests/artifact_server.rs` (the server's own tests), and
+//! from nowhere else: `mod server;` in `repair_offline.rs` / `cli_contract.rs`
+//! would put a several-hundred-line replay server into both of those
+//! compilation units for tests that never use it.
 //!
 //! **What it does.** Opens one `gircap` artifact bundle **read-only** and serves
 //! its bytes on ephemeral `127.0.0.1` ports, so the real `girpr` binary can be
@@ -53,6 +54,15 @@
 //! **Nothing here invents a byte.** Every served body comes out of a file the
 //! bundle vouches for; the only synthesised content is the failure shapes, and
 //! those are replayed from `api/error_shapes.json` (`docs/06` §4.4).
+//!
+//! **What this module does not know about.** The bundle's *records* — the
+//! capture matrix and the patchmaps — are read by
+//! [`bundle`](super::bundle), which is the artifact suite's business. The
+//! server serves bytes and answers routes; it does not know what a patch is.
+
+// The module is reached from two test binaries and each of them uses a
+// different part of it, so most of it is dead code in any one of them.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -117,138 +127,12 @@ impl std::fmt::Display for Hit {
 // the bundle, opened read-only
 // ---------------------------------------------------------------------------
 
-/// One entry of the capture matrix: a `patchmaps/<id>.json` plus the identity
-/// its driver needs.
-#[derive(Clone, Debug)]
-pub struct Capture {
-    /// The `capture_id`, which is also the `patchmaps/<id>.json` stem.
-    pub id: String,
-    /// The fixture path, as `/`-separated and relative to `--game-path`.
-    pub path: String,
-    pub classes: Vec<String>,
-    /// Size of the file on disk in the bundle's `game/` fixture.
-    pub old_size: u64,
-    pub new_size: u64,
-    /// `Σ compressed_size` over the chunks with no old-side match, or `None`
-    /// for a `removed` patchmap (`totals: null` — there is nothing to patch).
-    pub download_bytes: Option<u64>,
-    /// Ground truth: the patched file's bytes live at this bundle-relative path.
-    pub result_path: String,
-    pub result_md5: String,
-    /// `true` when the file must be **gone** afterwards.
-    pub absent_after: bool,
-    /// Chunk ids that must never be requested (`docs/06` §7 assertion 3).
-    pub must_not_fetch: Vec<String>,
-    /// The new side's chunks: `(chunk_id, offset, uncompressed_size)`, in target
-    /// order. The driver needs them to name a chunk it damages.
-    pub chunks: Vec<(String, u64, u64)>,
-    /// The `expectations.summary` block: the `SUMMARY` keys a consumer can
-    /// assert against, per flag.
-    pub summary: Option<Summary>,
-    /// The `repair` block: what the in-place path would do with this file.
-    pub repair: Option<Repair>,
-}
-
-impl Capture {
-    /// `removed` is the one class with no repair to do, so it gets the
-    /// `--purge-only` run and the purge counters instead of a byte total.
-    pub fn is_purge_only(&self) -> bool {
-        self.download_bytes.is_none()
-    }
-}
-
-/// The `SUMMARY` keys the repair reports, per flag.
-///
-/// Every counter is conditional on a flag — the mode, the RAM budget, the
-/// scan, the write ceiling — so the artifact states them per flag and the
-/// bridge asserts them under the flag that produces them.
-#[derive(Clone, Debug, Default)]
-pub struct Summary {
-    /// `--scan`: the chunks that are wrong where they belong.
-    pub damaged_chunks: Option<u64>,
-    /// `--repair-mode inplace`: the files the run repaired in place.
-    pub inplace: Option<u64>,
-    /// `--repair-mode inplace`: the files the run repaired through the temp
-    /// path.
-    pub temp: Option<u64>,
-    /// `--repair-mode inplace`: the bytes that did not have to be written.
-    pub kept_bytes: Option<u64>,
-    /// `--max-ram-bytes 0` — the **ordered** tier: the RAM the run reserved.
-    pub ram_bytes_ordered: Option<u64>,
-    /// `--max-ram-bytes` big enough for the staged tier: the RAM reserved.
-    pub ram_bytes_staged: Option<u64>,
-    /// `--max-write-bytes`, in place: the bytes the run wrote.
-    pub write_bytes: Option<u64>,
-}
-
-/// What the in-place path would do with the file, as the capture recorded it.
-#[derive(Clone, Debug)]
-pub struct Repair {
-    /// The chunks already correct where they belong: kept, not written.
-    pub kept: u64,
-    /// The chunks whose bytes live elsewhere in the file: copied.
-    pub moved: u64,
-    /// The chunks with no usable local source: downloaded.
-    pub fetch: u64,
-    /// The RAM the staged tier needs.
-    pub payload_bytes: u64,
-    /// The bytes that did not have to be written.
-    pub kept_bytes: u64,
-    /// The bytes the in-place run writes.
-    pub write_bytes: u64,
-    /// The write order the ordered tier would pick.
-    pub direction: String,
-    /// How many sources each order would salvage.
-    pub keeps_ascending: u64,
-    pub keeps_descending: u64,
-    /// When the dead tail is released.
-    pub trim: String,
-    /// How much the file on disk has to grow.
-    pub growth_bytes: u64,
-}
-
-/// One row of `MANIFEST.json`'s capture matrix.
-#[derive(Clone, Debug)]
-pub struct MatrixClass {
-    pub class: String,
-    /// The row's status: `captured`, `covered_by`, `over_budget` or
-    /// `unavailable`.
-    pub status: String,
-    /// The capture that answers the class, when one does.
-    ///
-    /// For a `covered_by` row it is the **covering** capture's id: the class
-    /// has no capture of its own, and the file that shows it is another
-    /// capture's. This is why the class has to be resolved *through the
-    /// matrix* — the patchmap's file name is the capture's id, not the class's.
-    pub capture_id: Option<String>,
-    /// `true` when the capture recorded a path and a `patchmaps/<id>.json`.
-    pub captured: bool,
-    /// Why a class no path satisfied. Never empty when `captured` is false —
-    /// the bundle records *why* it has no instance rather than silently
-    /// omitting it.
-    pub reason: String,
-}
-
-impl MatrixClass {
-    /// A class that is absent **by the bundle's own record**, as opposed to one
-    /// that is simply missing. The distinction decides whether a driver case
-    /// may stand down: `moved_mixed` has no candidate the budget could pay
-    /// for and says so, which is a fact, not a broken prerequisite.
-    pub fn absent_by_record(&self) -> bool {
-        !self.answered() && !self.reason.is_empty()
-    }
-
-    /// Whether some capture answers this class: of its own (`captured`) or by
-    /// standing in for another (`covered_by`).
-    ///
-    /// A `covered_by` row **is** answered — that is what it says. Only
-    /// `over_budget` and `unavailable` are not.
-    pub fn answered(&self) -> bool {
-        matches!(self.status.as_str(), "captured" | "covered_by")
-    }
-}
-
 /// A `gircap` artifact bundle, opened read-only.
+///
+/// This is the **fixture** half of a bundle: the versions, the API bodies and
+/// the blobs. The bundle's *records* — the capture matrix and the patchmaps —
+/// are read by [`bundle`](super::bundle), and the server does not need them:
+/// it serves bytes and answers routes.
 ///
 /// Nothing in this struct is a cache of a live server: every path points into
 /// the bundle, and every rule is derived from what the bundle recorded. The
@@ -263,13 +147,6 @@ pub struct Bundle {
     pub new_tag: String,
     pub old_build: String,
     pub new_build: String,
-    /// The capture matrix, ordered by class name.
-    pub matrix: Vec<MatrixClass>,
-    /// The capture matrix on disk, ordered by capture id so runs are
-    /// comparable.
-    pub captures: Vec<Capture>,
-    /// `MANIFEST.json → capture.id`.
-    pub capture_id: String,
 }
 
 impl Bundle {
@@ -285,35 +162,6 @@ impl Bundle {
         let old_build = str_field(&versions["old"]["build_id"], &manifest_path);
         let new_build = str_field(&versions["new"]["build_id"], &manifest_path);
         let biz = str_field(&manifest["biz"]["id"], &manifest_path);
-        let capture_id = str_field(&manifest["capture"]["id"], &manifest_path);
-
-        let mut matrix: Vec<MatrixClass> = manifest["matrix"]
-            .as_array()
-            .unwrap_or_else(|| panic!("MANIFEST.json declares no matrix[]"))
-            .iter()
-            .map(|m| MatrixClass {
-                class: str_field(&m["class"], &manifest_path),
-                status: str_field(&m["status"], &manifest_path),
-                capture_id: m["capture_id"].as_str().map(str::to_string),
-                captured: m["status"].as_str() == Some("captured"),
-                reason: m["reason"].as_str().unwrap_or_default().to_string(),
-            })
-            .collect();
-        matrix.sort_by(|a, b| a.class.cmp(&b.class));
-
-        let mut captures: Vec<Capture> = std::fs::read_dir(root.join("patchmaps"))
-            .unwrap_or_else(|e| panic!("read patchmaps/ in {}: {e}", root.display()))
-            .map(|e| {
-                let path = e.expect("read patchmaps entry").path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    Some(read_capture(&path))
-                } else {
-                    None
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_default();
-        captures.sort_by(|a, b| a.id.cmp(&b.id));
 
         Self {
             root,
@@ -322,27 +170,7 @@ impl Bundle {
             new_tag,
             old_build,
             new_build,
-            matrix,
-            captures,
-            capture_id,
         }
-    }
-
-    /// The matrix's row for a class, if the bundle records one.
-    pub fn matrix_class(&self, class: &str) -> Option<&MatrixClass> {
-        self.matrix.iter().find(|m| m.class == class)
-    }
-
-    /// The capture that answers a class — **through the matrix**.
-    ///
-    /// The matrix is the only place that knows which capture answers which
-    /// class, and it is not the same as "the patchmap named after the class":
-    /// a class the matrix records as `covered_by` has **no capture of its
-    /// own**. `trim_deferred` is answered by `moved_ascending`'s capture, and
-    /// the file that shows the deferred trim is that capture's.
-    pub fn capture_for_class(&self, class: &str) -> Option<&Capture> {
-        let id = self.matrix_class(class)?.capture_id.as_deref()?;
-        self.captures.iter().find(|c| c.id == id)
     }
 
     /// The four `api/*.json` bodies served verbatim by the hyp listener.
@@ -379,77 +207,6 @@ impl Bundle {
             .join("blobs")
             .join(format!("{id}.zst"));
         p.is_file().then_some(p)
-    }
-}
-
-fn read_capture(path: &Path) -> Capture {
-    let v = read_json(path);
-    let ex = &v["expectations"];
-    // `totals: null` is the `removed` class's shape: nothing to patch, so there
-    // is no byte total to compare against and the capture is driven by the
-    // purge counters instead (`docs/06` §6.1).
-    let download_bytes = v["totals"]["download_bytes"].as_u64();
-    Capture {
-        id: str_field(&v["capture_id"], path),
-        path: str_field(&v["path"], path),
-        classes: v["classes"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|c| c.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        old_size: v["old"]["size"].as_u64().unwrap_or(0),
-        new_size: v["new"]["size"].as_u64().unwrap_or(0),
-        download_bytes,
-        result_path: ex["result_path"].as_str().unwrap_or_default().to_string(),
-        result_md5: ex["result_md5"].as_str().unwrap_or_default().to_string(),
-        absent_after: ex["absent_after"].as_bool().unwrap_or(false),
-        must_not_fetch: ex["must_not_fetch"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|c| c.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        chunks: v["plan"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|c| {
-                        (
-                            c["chunk_id"].as_str().unwrap_or_default().to_string(),
-                            c["target_range"]["start"].as_u64().unwrap_or(0),
-                            c["uncompressed_size"].as_u64().unwrap_or(0),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        summary: ex["summary"].as_object().map(|s| Summary {
-            damaged_chunks: s["damaged_chunks"].as_u64(),
-            inplace: s["inplace"].as_u64(),
-            temp: s["temp"].as_u64(),
-            kept_bytes: s["kept_bytes"].as_u64(),
-            ram_bytes_ordered: s["ram_bytes_ordered"].as_u64(),
-            ram_bytes_staged: s["ram_bytes_staged"].as_u64(),
-            write_bytes: s["write_bytes"].as_u64(),
-        }),
-        repair: v["repair"].as_object().map(|r| Repair {
-            kept: r["kept"].as_u64().unwrap_or(0),
-            moved: r["moved"].as_u64().unwrap_or(0),
-            fetch: r["fetch"].as_u64().unwrap_or(0),
-            payload_bytes: r["payload_bytes"].as_u64().unwrap_or(0),
-            kept_bytes: r["kept_bytes"].as_u64().unwrap_or(0),
-            write_bytes: r["write_bytes"].as_u64().unwrap_or(0),
-            direction: r["direction"].as_str().unwrap_or_default().to_string(),
-            keeps_ascending: r["keeps_ascending"].as_u64().unwrap_or(0),
-            keeps_descending: r["keeps_descending"].as_u64().unwrap_or(0),
-            trim: r["trim"].as_str().unwrap_or_default().to_string(),
-            growth_bytes: r["growth_bytes"].as_u64().unwrap_or(0),
-        }),
     }
 }
 
@@ -636,11 +393,6 @@ impl Bridge {
             .as_ref()
             .and_then(|s| s.get(id))
             .map(|s| (s.status, s.content_type.clone(), s.body.clone()))
-    }
-
-    /// One capture, by its id.
-    pub fn capture(&self, id: &str) -> Option<&Capture> {
-        self.served.bundle.captures.iter().find(|c| c.id == id)
     }
 
     /// The rewritten `getBuild` body for a tag, as it is served.
