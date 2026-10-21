@@ -576,6 +576,25 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
             capture.id,
             capture.path
         );
+        // The cleanup's byte count is a **cross-tool** fact, not `girpr`'s own:
+        // the bytes the run deleted are the old file's bytes, and the
+        // patchmap states the old file's size. A run that deleted a different
+        // number would still have removed the path, and this is what says so.
+        assert_eq!(
+            run.num("summary", "deleted_extra_bytes"),
+            capture.old_size,
+            "{}: the cleanup must delete exactly the old side's bytes",
+            capture.id
+        );
+        // And a deletion downloads nothing. The patchmap has no `totals` for
+        // this capture — there is no target to patch — so the bundle states
+        // the figure as zero and this is where it is checked.
+        assert_eq!(
+            run.num("summary", "download_bytes"),
+            0,
+            "{}: a deletion must download nothing",
+            capture.id
+        );
     } else {
         let bytes = std::fs::read(&target)
             .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));

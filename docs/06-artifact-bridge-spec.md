@@ -514,15 +514,24 @@ rather than the whole fixture.
 
 ## 7. The assertions
 
-**Three per capture**, plus the run's preconditions. None of them is optional;
-the second is the one that earns the whole exercise.
+**Three per capture**, plus the run's preconditions — and one more for the
+capture that is a deletion rather than a patch. None of them is optional; the
+second is the one that earns the whole exercise.
 
 | # | assertion | source |
 |---|---|---|
 | 1 | the patched file's bytes are `expectations.result_md5`, and its length is `new.size` | `patchmaps/<id>.json` |
 | 2 | **the chunks asked for are the chunks the patch says must be fetched, and none of the ones it says can be reused was asked for** | the patchmap's `plan[]` + the server's request log |
 | 3 | `SUMMARY download_bytes` equals the patchmap's total | `patchmaps/<id>.json` |
+| 3b | for the capture that is **deleted**: the path is gone, `deleted_extra_bytes` equals the patchmap's `old.size`, and `download_bytes` is `0` | the run + `patchmaps/<id>.json` |
 | — | *precondition:* exit `0`, `local_manifest == "ok"`, `scoped == 1`, `config_bumped == 0` | the run |
+
+**3b is a cross-tool fact and not `girpr`'s own business.** The bytes the run
+deleted are the old file's bytes, and the patchmap states the old file's size;
+a run that removed the path and reported a different number would have passed a
+weaker check. The patchmap has no `totals` for that capture — there is no
+target to patch — so the bundle states the byte total as zero, and that is
+where the zero is checked.
 
 ### 7.1 The byte total is exact, not approximate
 
