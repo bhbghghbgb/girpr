@@ -5,7 +5,8 @@
 //! separate purposes, but they answer the same three questions the same way:
 //!
 //! - **Where does the log file go?** `<exe-dir>/logs/<project>_<timestamp>.log`,
-//!   unless `--log-file` or `<PROJECT>_LOG_FILE` says otherwise.
+//!   unless `--log-file` or `<PROJECT>_LOG_FILE` says otherwise — and in a
+//!   **debug** build there is no file at all unless one was asked for.
 //! - **How loud is each sink?** The console is `info` by default
 //!   (`--log-level`); the file is `debug` by default (`--log-file-level`).
 //! - **What happens when the file cannot be opened?** A warning on stderr,
@@ -36,10 +37,14 @@
 //!         console_level: Level::Info,
 //!         file_level: None,
 //!         log_file: None,
+//!         no_log_file: false,
 //!     },
 //!     env,
 //! );
-//! println!("log file: {}", plan.file.display());
+//! match plan.file_path() {
+//!     Some(path) => println!("log file: {}", path.display()),
+//!     None => println!("log file: none"),
+//! }
 //! ```
 //!
 //! The example is also **run**, as an ordinary test: `cargo nextest` has no
@@ -53,7 +58,9 @@ pub mod plan;
 
 pub use filter::filter;
 pub use level::Level;
-pub use plan::{EnvOptions, LogOptions, LogPlan, default_log_path, env_options};
+pub use plan::{
+    EnvOptions, LogOptions, LogPlan, default_file_is_written, default_log_path, env_options,
+};
 
 /// Parse a level name, for use as a `clap` value parser.
 ///
@@ -91,6 +98,7 @@ mod tests {
                 console_level: Level::Info,
                 file_level: None,
                 log_file: None,
+                no_log_file: false,
             },
             env,
         );
@@ -102,7 +110,10 @@ mod tests {
             "{}",
             plan.console_filter()
         );
-        // The file is somewhere: a path, not an empty one.
-        assert!(!plan.file.as_os_str().is_empty(), "{plan:?}");
+        // A file, or the absence of one: both are states the plan can be in,
+        // and the example handles both.
+        if let Some(path) = plan.file_path() {
+            assert!(!path.as_os_str().is_empty(), "{plan:?}");
+        }
     }
 }

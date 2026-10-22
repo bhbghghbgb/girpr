@@ -553,49 +553,106 @@ fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
     );
 }
 
-/// The log file is written whether or not anybody asked for one.
+/// A **debug** build writes no log file; a **release** build writes one.
 ///
-/// It lands in a `logs/` directory beside the executable, named for the project
-/// and stamped with the time. There is no "no log file" mode: a run that leaves
-/// nothing behind is a run nobody can ask questions of later.
+/// The policy is the shared crate's — `girpr-log` decides whether there is a
+/// default at all, and the shape of that default is asserted there — so what
+/// is pinned here is that the *program* does what the policy says: it says
+/// on stderr which of the two it is doing, and a debug build does not bring
+/// the `logs/` directory beside the executable into existence.
+///
+/// It is not pinned by *finding* the file. The default's name carries a
+/// timestamp, so the only way to find it is to list the directory and read
+/// every file in it — and that cost is the history of the machine rather
+/// than the code.
 #[test]
-fn a_log_file_is_always_written_beside_the_executable() {
+fn the_default_log_file_follows_the_build_it_was_built_from() {
     let logs = exe_dir().join("logs");
-    std::fs::create_dir_all(&logs).expect("the logs directory");
+    let existed = logs.exists();
 
-    let t = temp_root("out_default_log_file");
+    let t = temp_root("out_default_log_file_policy");
     let (src, dst) = fixture(&t);
     let r = run(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
 
-    let mine: Vec<_> = std::fs::read_dir(&logs)
-        .expect("read the logs directory")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            std::fs::read_to_string(p)
-                .map(|b| b.contains("\"log start\""))
-                .unwrap_or(false)
-        })
-        .collect();
-    assert!(
-        !mine.is_empty(),
-        "the run wrote a log file into {}: {mine:?}",
-        logs.display()
-    );
-    for path in &mine {
-        let name = path.file_name().unwrap().to_str().unwrap();
+    if cfg!(debug_assertions) {
         assert!(
-            name.starts_with("girsync_"),
-            "named for the project: {name}"
+            r.stderr.contains("log file: none"),
+            "a debug build says it wrote no file:\n{}",
+            r.stderr
         );
-        assert!(name.ends_with(".log"), "and for what it is: {name}");
-        assert_eq!(
-            path.parent().and_then(|p| p.file_name()),
-            Some(std::ffi::OsStr::new("logs")),
-            "in a `logs/` directory: {path:?}"
+        if !existed {
+            assert!(
+                !logs.exists(),
+                "and it did not bring {} into existence",
+                logs.display()
+            );
+        }
+    } else {
+        assert!(
+            r.stderr.contains("log file: "),
+            "a release build says where the file went:\n{}",
+            r.stderr
         );
     }
+}
+
+/// `--no-log-file` turns the file off, and it beats the environment.
+///
+/// "Write no log file" is the more specific thing to have said, so it wins
+/// over a path the shell happened to export. The file is not written at
+/// all — which is the whole point, and which is why the assertion is
+/// `exists()` on a known path rather than a search of a directory.
+#[test]
+fn no_log_file_turns_the_file_off_even_when_the_environment_names_one() {
+    let t = temp_root("out_no_log_file");
+    let (src, dst) = fixture(&t);
+    let logfile = t.subdir("logs").join("from-env.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(compare_args(&src, &dst, &["--no-log-file"]))
+        .env("GIRSYNC_LOG_FILE", &logfile)
+        .output()
+        .expect("spawn girsync");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(4), "{stderr}");
+    assert!(
+        !logfile.exists(),
+        "no log file was written: {}",
+        logfile.display()
+    );
+    assert!(
+        !stderr.contains(&format!("log file: {}", logfile.display())),
+        "and the path was not announced:\n{stderr}"
+    );
+}
+
+/// `--no-log-file` and `--log-file` say opposite things, so they are a usage
+/// error rather than one of them silently winning.
+#[test]
+fn no_log_file_and_log_file_together_are_a_usage_error() {
+    let t = temp_root("out_no_log_file_conflict");
+    let (src, dst) = fixture(&t);
+    let logfile = t.subdir("logs").join("both.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(compare_args(
+            &src,
+            &dst,
+            &["--no-log-file", "--log-file", logfile.to_str().unwrap()],
+        ))
+        .output()
+        .expect("spawn girsync");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // clap's own exit code for an argument error, which is what `girsync`
+    // uses: it parses with `Cli::parse()`, so a bad flag is clap's `2` and
+    // not the `1` the repair binary remaps it to.
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("cannot be used with"),
+        "the conflict is reported:\n{stderr}"
+    );
+    assert!(!logfile.exists(), "and no file was written");
 }
 
 /// The environment variable names the log file when the flag does not.

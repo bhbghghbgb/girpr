@@ -39,12 +39,17 @@ async fn main() {
             exit::exit_with(e.exit_code())
         }
     };
-    let mut log_guard = logging::init(common.level, common.file_level, common.log_file.as_deref());
+    let mut log_guard = logging::init(
+        common.level,
+        common.file_level,
+        common.log_file.as_deref(),
+        common.no_log_file,
+    );
     // The path is echoed on stderr when the caller named it — by flag or by
     // `GIRCAP_LOG_FILE` — so a wrapper that captured only stdout can still
     // find the log. The default path is announced inside the file instead.
-    if log_guard.plan().file_named {
-        eprintln!("log file: {}", log_guard.plan().file.display());
+    if let Some(path) = log_guard.plan().named_file() {
+        eprintln!("log file: {}", path.display());
     }
 
     // Resolving the plan is where flag validation happens, so a rejected request

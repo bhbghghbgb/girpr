@@ -17,6 +17,7 @@ async fn main() {
         args.log_level,
         args.log_file_level,
         args.log_file.as_deref(),
+        args.no_log_file,
     );
     // `init_tracing` already announced the path into the file. But the caller who
     // passed `--log-file` (or `GIRPR_LOG_FILE`) asked for *this* file and never
@@ -24,8 +25,8 @@ async fn main() {
     // a `tracing::info!` would be filtered out of stderr by the very
     // `--log-level` the caller chose, and an unfiltered run means a caller who
     // lost the log can still find it.
-    if plan.file_named {
-        eprintln!("log file: {}", plan.file.display());
+    if let Some(path) = plan.named_file() {
+        eprintln!("log file: {}", path.display());
     }
 
     let output = args.output;

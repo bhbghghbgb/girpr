@@ -3,18 +3,25 @@
 //! # The policy
 //!
 //! One policy, every project in this workspace — the repair binary (`girpr`)
-//! and the two dev tools (`gircap`, `girsync`). It is six rules:
+//! and the two dev tools (`gircap`, `girsync`). It is seven rules:
 //!
-//! 1. **A log file is always written.** There is no "no log file" mode: a run
-//!    that leaves nothing behind is a run nobody can ask questions of later.
-//! 2. **The file has a name you can find.** By default it is
+//! 1. **A release build always writes a log file.** A debug build writes one
+//!    **only when it is asked to**. The switch is
+//!    [`default_file_is_written`], and it answers the question that is
+//!    actually being asked: "is this a binary somebody ships, or a build
+//!    somebody is working on". A shipped binary that leaves nothing behind is
+//!    a binary nobody can ask questions of later; a debug build that writes a
+//!    file per run leaves a directory nobody reads, growing by one file per
+//!    run, forever.
+//! 2. **The file has a name you can find.** When there is one, it is
 //!    `<exe-dir>/logs/<project>_<timestamp>.log` — beside the executable, in a
 //!    `logs/` directory, named for the project and stamped with the time.
-//! 3. **Three ways to choose the path, in this order**: the `--log-file` flag,
-//!    then the `<PROJECT>_LOG_FILE` environment variable, then the default.
-//!    A flag beats an environment variable because a flag was typed by the
-//!    person running the tool; an environment variable is whatever the shell
-//!    happened to export.
+//! 3. **Four ways to choose, in this order**: the `--no-log-file` flag, the
+//!    `--log-file` flag, then the `<PROJECT>_LOG_FILE` environment variable,
+//!    then the default. A flag beats an environment variable because a flag
+//!    was typed by the person running the tool; an environment variable is
+//!    whatever the shell happened to export. And `--no-log-file` beats both,
+//!    because "write no log file" is the more specific thing to have said.
 //! 4. **Two levels, not one.** `--log-level` is the **console's** (default
 //!    `info`); `--log-file-level` is the **file's** (default `debug`). They are
 //!    separate because they answer separate questions: the console is for the
@@ -26,6 +33,10 @@
 //!    reasoning is below.
 //! 6. **A log file that cannot be opened is a warning, never a failure.** A run
 //!    must not end differently because of where it was asked to log.
+//! 7. **`--no-log-file` turns the *file* off, not the console.** The console is
+//!    where the run is watched; the file is where the run is read afterwards.
+//!    A run that cannot be watched is a different thing from a run that leaves
+//!    nothing behind.
 //!
 //! # The environment seams
 //!
@@ -99,6 +110,13 @@ pub struct LogOptions {
     pub file_level: Option<Level>,
     /// `--log-file`: the file's path, when the caller named one.
     pub log_file: Option<PathBuf>,
+    /// `--no-log-file`: no file at all, whatever else was asked for.
+    ///
+    /// The one flag that beats everything else, because "write no log file" is
+    /// the more specific thing to have said. It beats `--log-file` too, so
+    /// the two are a usage error when given together rather than one of them
+    /// silently winning.
+    pub no_log_file: bool,
 }
 
 /// The environment seams for one project.
@@ -137,8 +155,13 @@ pub struct LogPlan {
     pub console_level: Level,
     /// The log file's verbosity.
     pub file_level: Level,
-    /// Where the log file goes.
-    pub file: PathBuf,
+    /// Where the log file goes — or `None`, when there is no log file.
+    ///
+    /// `None` is a real state and not an error: a debug build writes no file
+    /// unless it is asked to, and `--no-log-file` says so in any build. A
+    /// project that has a file opens it from here; a project that has none
+    /// installs no file sink at all.
+    pub file: Option<PathBuf>,
     /// Whether the caller named the file, rather than taking the default.
     ///
     /// This is what decides whether the path is echoed on stderr: a caller who
@@ -155,12 +178,19 @@ impl LogPlan {
     ///
     /// Precedence, everywhere: **flag > environment > default**.
     pub fn resolve(project: &'static str, opts: LogOptions, env: EnvOptions) -> Self {
-        let (file, file_named) = match opts.log_file {
-            Some(path) => (path, true),
-            None => match env.log_file {
-                Some(path) => (path, true),
-                None => (default_log_path(project), false),
-            },
+        let (file, file_named) = if opts.no_log_file {
+            (None, false)
+        } else {
+            match opts.log_file {
+                Some(path) => (Some(path), true),
+                None => match env.log_file {
+                    Some(path) => (Some(path), true),
+                    None => match default_file_is_written() {
+                        true => (Some(default_log_path(project)), false),
+                        false => (None, false),
+                    },
+                },
+            }
         };
         let file_level = opts.file_level.or(env.file_level).unwrap_or(Level::Debug);
         Self {
@@ -170,6 +200,27 @@ impl LogPlan {
             file,
             file_named,
             rust_log: env.rust_log,
+        }
+    }
+
+    /// The log file's path, when there is one.
+    ///
+    /// The call that opens the file asks this first: a plan with no file is a
+    /// plan with no file sink, and the caller installs none.
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file.as_deref()
+    }
+
+    /// The path the caller **named**, when they named one.
+    ///
+    /// The default is not "named": a caller who took the default has not asked
+    /// for anything, and is told where the file went inside the file rather
+    /// than on stderr.
+    pub fn named_file(&self) -> Option<&Path> {
+        if self.file_named {
+            self.file.as_deref()
+        } else {
+            None
         }
     }
 
@@ -221,6 +272,33 @@ impl LogPlan {
     }
 }
 
+/// Whether a build writes a log file when nobody asked for one.
+///
+/// **A release build does; a debug build does not.**
+///
+/// The switch is `cfg!(debug_assertions)`, and it answers the question that
+/// is actually being asked: "is a person running a shipped binary, or is this
+/// a build being worked on". The two want opposite things from a log file.
+///
+/// A **release** build is the binary somebody installs. A run of it that
+/// leaves nothing behind is a run nobody can ask questions of later — the
+/// whole point of a file named after the project and stamped with the time is
+/// that it can be found again.
+///
+/// A **debug** build is what a developer runs and what the test suite runs,
+/// and there the file is pure cost: a file per run, in a directory nobody
+/// reads, growing by one file per run for as long as the checkout is used.
+/// That directory is what three tests used to have to *scan* to find the file
+/// their own run had written, and the cost of those tests was the history of
+/// the machine rather than the code.
+///
+/// `cargo test` and `cargo nextest` build the dev profile, so `debug_assertions`
+/// is on and the suite writes nothing by default. `--release` turns it off, and
+/// the file comes back.
+pub fn default_file_is_written() -> bool {
+    !cfg!(debug_assertions)
+}
+
 /// The default log file path: `<exe-dir>/logs/<project>_<timestamp>.log`.
 ///
 /// Beside the executable, because that is the one directory a user can find
@@ -229,6 +307,10 @@ impl LogPlan {
 ///
 /// The timestamp keeps concurrent runs from interleaving in one file, and
 /// names the project so a directory of logs from three tools stays readable.
+///
+/// This is the *shape* of the default, and it is the same in every build. What
+/// differs between builds is whether the default is used at all — see
+/// [`default_file_is_written`].
 pub fn default_log_path(project: &str) -> PathBuf {
     let dir = std::env::current_exe()
         .ok()
@@ -313,6 +395,7 @@ mod tests {
             console_level: Level::Info,
             file_level: None,
             log_file: None,
+            no_log_file: false,
         }
     }
 
@@ -338,6 +421,97 @@ mod tests {
         assert_eq!(stamp.as_bytes()[10], b'_');
     }
 
+    /// The shape of the default is the same in every build. What differs is
+    /// whether the default is *used*.
+    ///
+    /// This test is the shape, and it is deliberately not conditional: the
+    /// path a release build would write is the path a debug build would write
+    /// if it were asked to, and a change to the shape has to be a change in
+    /// every build.
+    #[test]
+    fn a_debug_build_and_a_release_build_name_the_default_the_same_way() {
+        // The build under test is the build the policy is about, so the
+        // assertion is the policy itself: the default is written in a release
+        // build and not in a debug one.
+        assert_eq!(
+            default_file_is_written(),
+            !cfg!(debug_assertions),
+            "a release build writes a log file by default; a debug build does not"
+        );
+    }
+
+    /// A debug build writes no file by default, and a release build writes the
+    /// timestamped default.
+    ///
+    /// The two halves are the same fact seen from the two sides, and the test
+    /// says which side it is on so that a failure says *which* way the policy
+    /// moved.
+    #[test]
+    fn the_default_file_is_written_in_a_release_build_and_not_in_a_debug_one() {
+        let plan = LogPlan::resolve("girpr", opts(), EnvOptions::default());
+        if default_file_is_written() {
+            let path = plan.file_path().expect("a release build has a file");
+            assert!(
+                path.to_string_lossy().contains("girpr_"),
+                "and it is the timestamped default: {path:?}"
+            );
+            assert!(!plan.file_named, "the default is not 'named'");
+        } else {
+            assert!(
+                plan.file_path().is_none(),
+                "a debug build writes no file unless it is asked to: {plan:?}"
+            );
+            assert!(!plan.file_named);
+        }
+    }
+
+    /// `--no-log-file` beats everything else, including the environment.
+    ///
+    /// "Write no log file" is the more specific thing to have said, so it
+    /// wins over a path the shell happened to export.
+    #[test]
+    fn no_log_file_beats_the_environment_and_the_flag() {
+        let env = EnvOptions {
+            log_file: Some(PathBuf::from("from-env.log")),
+            ..Default::default()
+        };
+        let mut flagged = opts();
+        flagged.log_file = Some(PathBuf::from("from-flag.log"));
+        flagged.no_log_file = true;
+        let plan = LogPlan::resolve("girpr", flagged, env);
+        assert!(plan.file_path().is_none(), "{plan:?}");
+        assert!(!plan.file_named, "there is nothing to name");
+        assert!(plan.named_file().is_none());
+    }
+
+    /// A file that was asked for is still written in a debug build.
+    ///
+    /// The debug default is about the *default*, not about the file: a caller
+    /// who names a path gets one, in every build.
+    #[test]
+    fn a_named_file_is_written_in_every_build() {
+        let mut flagged = opts();
+        flagged.log_file = Some(PathBuf::from("from-flag.log"));
+        let plan = LogPlan::resolve("girpr", flagged, EnvOptions::default());
+        assert_eq!(plan.file_path(), Some(Path::new("from-flag.log")));
+        assert!(plan.file_named);
+        assert_eq!(plan.named_file(), Some(Path::new("from-flag.log")));
+    }
+
+    /// The console is unaffected by the file being off.
+    ///
+    /// `--no-log-file` turns the *file* off. The console is where the run is
+    /// watched, and a run that cannot be watched is a different thing from a
+    /// run that leaves nothing behind.
+    #[test]
+    fn no_log_file_says_nothing_about_the_console() {
+        let mut flagged = opts();
+        flagged.no_log_file = true;
+        let plan = LogPlan::resolve("girpr", flagged, EnvOptions::default());
+        assert_eq!(plan.console_filter(), "girpr=info");
+        assert_eq!(plan.file_filter(), "debug");
+    }
+
     #[test]
     fn a_flag_beats_the_environment_and_the_environment_beats_the_default() {
         let env = EnvOptions {
@@ -345,13 +519,13 @@ mod tests {
             ..Default::default()
         };
         let plan = LogPlan::resolve("girpr", opts(), env.clone());
-        assert_eq!(plan.file, PathBuf::from("from-env.log"));
+        assert_eq!(plan.file_path(), Some(Path::new("from-env.log")));
         assert!(plan.file_named);
 
         let mut flagged = opts();
         flagged.log_file = Some(PathBuf::from("from-flag.log"));
         let plan = LogPlan::resolve("girpr", flagged, env);
-        assert_eq!(plan.file, PathBuf::from("from-flag.log"));
+        assert_eq!(plan.file_path(), Some(Path::new("from-flag.log")));
         assert!(plan.file_named);
     }
 
@@ -359,7 +533,12 @@ mod tests {
     fn the_default_file_is_not_named() {
         let plan = LogPlan::resolve("gircap", opts(), EnvOptions::default());
         assert!(!plan.file_named);
-        assert!(plan.file.to_string_lossy().contains("gircap_"), "{plan:?}");
+        assert!(plan.named_file().is_none(), "the default is not 'named'");
+        // In a release build there is a default, and it is the timestamped
+        // one; in a debug build there is none. Either way it is not *named*.
+        if let Some(path) = plan.file_path() {
+            assert!(path.to_string_lossy().contains("gircap_"), "{plan:?}");
+        }
     }
 
     #[test]

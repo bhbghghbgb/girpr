@@ -35,11 +35,26 @@ pub struct Cli {
     pub log_file_level: Option<Level>,
     /// Where the log file goes.
     ///
-    /// By default it is `logs/girsync_<timestamp>.log` in a `logs/` directory
-    /// beside the executable. `GIRSYNC_LOG_FILE` names one when this flag does
-    /// not. The file is always written, as JSON lines, and appended to.
+    /// In a **release** build the default is `logs/girsync_<timestamp>.log` in
+    /// a `logs/` directory beside the executable; in a **debug** build there is
+    /// no default and the file is written only because this flag named it.
+    /// `GIRSYNC_LOG_FILE` names one when this flag does not. The file is
+    /// appended to, as JSON lines.
     #[arg(long, value_name = "FILE", global = true)]
     pub log_file: Option<PathBuf>,
+    /// Write no log file at all.
+    ///
+    /// The console is unaffected: this turns off the *file*, which is where a
+    /// run is read afterwards, and not the console, which is where it is
+    /// watched while it happens.
+    ///
+    /// A release build writes a log file by default and this turns that off;
+    /// a debug build writes none by default and this says so explicitly. It
+    /// cannot be combined with `--log-file`: the two say opposite things about
+    /// the same file, and a usage error says so rather than one of them
+    /// silently winning.
+    #[arg(long, global = true, conflicts_with = "log_file")]
+    pub no_log_file: bool,
     /// How stdout reports are written: text (one human line per record) or json
     /// (one JSON object per line, same records and same order).
     ///

@@ -14,9 +14,11 @@
 //!   The two levels are separate because they answer separate questions: the
 //!   console is for the person watching, the file is for the person reading
 //!   it afterwards.
-//! - The file is **always** written. Without `--log-file` or
-//!   `GIRPR_LOG_FILE` it is [`default_log_path`]'s timestamped default, in a
-//!   `logs/` directory beside the executable.
+//! - The file is written when it is asked for: by `--log-file`, by
+//!   `GIRPR_LOG_FILE`, or — in a **release** build — by the default, which is
+//!   [`default_log_path`]'s timestamped path in a `logs/` directory beside the
+//!   executable. A **debug** build writes no file unless it is asked to, and
+//!   `--no-log-file` turns it off in any build.
 //! - Data-plane output (`REPORT` / `PROGRESS` / `SUMMARY`) stays on stdout via
 //!   [`crate::report::emit`]; the file layer is plain text, not JSON, because
 //!   it is meant to be read with `grep 'path=<file>'`.
@@ -54,8 +56,8 @@ pub fn default_log_path() -> PathBuf {
 ///
 /// `console_level` is `--log-level`, `file_level` is `--log-file-level`
 /// (`None` when the flag was not given, so the environment variable and then
-/// the `debug` default can answer for it), and `log_file` is `--log-file`
-/// (`None` for the timestamped default).
+/// the `debug` default can answer for it), `log_file` is `--log-file`
+/// (`None` for the timestamped default), and `no_log_file` is `--no-log-file`.
 ///
 /// The returned plan is what was *asked for*, not what was opened: a file
 /// that could not be opened is a stderr warning, and this stays infallible so
@@ -64,6 +66,7 @@ pub fn init_tracing(
     console_level: Level,
     file_level: Option<Level>,
     log_file: Option<&Path>,
+    no_log_file: bool,
 ) -> LogPlan {
     let env = girpr_log::env_options(PROJECT);
     for warning in &env.warnings {
@@ -75,6 +78,7 @@ pub fn init_tracing(
             console_level,
             file_level,
             log_file: log_file.map(Path::to_path_buf),
+            no_log_file,
         },
         env,
     );
@@ -84,12 +88,19 @@ pub fn init_tracing(
         .with_writer(std::io::stderr)
         .with_filter(girpr_log::filter(&plan.console_filter(), &console_fallback));
 
-    let file_writer: Mutex<Box<dyn Write + Send + Sync>> = match open_log_file(&plan.file) {
-        Ok(f) => Mutex::new(Box::new(f)),
-        Err(e) => {
-            eprintln!("WARN disabling file logging ({}): {e}", plan.file.display());
-            Mutex::new(Box::new(std::io::sink()))
-        }
+    // A plan with no file has no file sink: a debug build that was not asked
+    // for a file, or any build that was told `--no-log-file`. The sink then
+    // writes nowhere, so the run leaves nothing behind and nothing has to be
+    // cleaned up afterwards.
+    let file_writer: Mutex<Box<dyn Write + Send + Sync>> = match plan.file_path() {
+        None => Mutex::new(Box::new(std::io::sink())),
+        Some(path) => match open_log_file(path) {
+            Ok(f) => Mutex::new(Box::new(f)),
+            Err(e) => {
+                eprintln!("WARN disabling file logging ({}): {e}", path.display());
+                Mutex::new(Box::new(std::io::sink()))
+            }
+        },
     };
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)
@@ -109,7 +120,10 @@ pub fn init_tracing(
         eprintln!("WARN cannot install the tracing subscriber: {e}");
     }
 
-    tracing::info!("log file: {}", plan.file.display());
+    match plan.file_path() {
+        Some(path) => tracing::info!("log file: {}", path.display()),
+        None => tracing::info!("log file: none"),
+    }
     plan
 }
 

@@ -670,6 +670,7 @@ mod tests {
                 log_level: crate::logging::Level::Info,
                 log_file_level: None,
                 log_file: None,
+                no_log_file: false,
                 output: "text".into(),
             },
         };
@@ -900,6 +901,7 @@ mod tests {
                 log_level: crate::logging::Level::Info,
                 log_file_level: None,
                 log_file: None,
+                no_log_file: false,
                 output: "json".into(),
             },
         })
@@ -913,6 +915,7 @@ mod tests {
                 log_level: crate::logging::Level::Info,
                 log_file_level: None,
                 log_file: None,
+                no_log_file: false,
                 output: "text".into(),
             },
         })
@@ -926,6 +929,7 @@ mod tests {
                 log_level: crate::logging::Level::Info,
                 log_file_level: None,
                 log_file: None,
+                no_log_file: false,
                 output: "text".into(),
             },
         })
@@ -939,6 +943,7 @@ mod tests {
                 log_level: crate::logging::Level::Info,
                 log_file_level: None,
                 log_file: None,
+                no_log_file: false,
                 output: "text".into(),
             },
         };

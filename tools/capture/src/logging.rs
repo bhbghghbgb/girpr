@@ -10,14 +10,15 @@
 //!   `RUST_LOG`, which replaces it);
 //! - a JSON-lines file layer, filtered by `--log-file-level`.
 //!
-//! The file is **always** written: by default to
-//! `<exe-dir>/logs/gircap_<timestamp>.log`, or wherever `--log-file` or
-//! `GIRCAP_LOG_FILE` says. The console filter is deliberately *not* copied to
-//! the file sink — the two are separate questions, and the file's default
-//! (`debug`) is one step louder than the console's (`info`) for exactly that
-//! reason. An artifact run's narration is the evidence for why a version pair
-//! was chosen and what each request cost, and it must survive a
-//! `--log-level warn` console.
+//! The file is written when it is asked for: by `--log-file`, by
+//! `GIRCAP_LOG_FILE`, or — in a **release** build — by the default, which is
+//! `<exe-dir>/logs/gircap_<timestamp>.log`. A **debug** build writes no file
+//! unless it is asked to, and `--no-log-file` turns it off in any build. The
+//! console filter is deliberately *not* copied to the file sink — the two are
+//! separate questions, and the file's default (`debug`) is one step louder
+//! than the console's (`info`) for exactly that reason. An artifact run's
+//! narration is the evidence for why a version pair was chosen and what each
+//! request cost, and it must survive a `--log-level warn` console.
 //!
 //! The *policy* — where the file goes, which level each sink gets, which
 //! environment variable answers for which flag — is the workspace's and lives
@@ -109,7 +110,12 @@ impl<'a> MakeWriter<'a> for AppendFile {
 /// levels is that the file is louder than the console. The stack's level hint
 /// is the louder of the two, so a `debug` event is still worth building when
 /// only the file wants it.
-pub fn init(console_level: Level, file_level: Option<Level>, log_file: Option<&Path>) -> LogGuard {
+pub fn init(
+    console_level: Level,
+    file_level: Option<Level>,
+    log_file: Option<&Path>,
+    no_log_file: bool,
+) -> LogGuard {
     use tracing_subscriber::fmt::layer;
 
     let env = girpr_log::env_options(PROJECT);
@@ -122,6 +128,7 @@ pub fn init(console_level: Level, file_level: Option<Level>, log_file: Option<&P
             console_level,
             file_level,
             log_file: log_file.map(Path::to_path_buf),
+            no_log_file,
         },
         env,
     );
@@ -133,20 +140,22 @@ pub fn init(console_level: Level, file_level: Option<Level>, log_file: Option<&P
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_target(true);
 
-    // The file sink. A log file that cannot be opened is reported and then
+    // The file sink. A plan with no file has no sink at all: a debug build
+    // that was not asked for a file, or any build that was told
+    // `--no-log-file`. A log file that cannot be opened is reported and then
     // skipped: the capture is the thing that was asked for, and losing its
     // narration is a lesser harm than losing it. Everything before this point
     // happens with no subscriber installed, so the failure is a raw stderr
     // write.
-    let file = match open_log_file(&plan.file) {
-        Err(e) => {
-            eprintln!(
-                "gircap: cannot open the log file {}: {e}",
-                plan.file.display()
-            );
-            None
-        }
-        Ok(writer) => Some(writer),
+    let file = match plan.file_path() {
+        None => None,
+        Some(path) => match open_log_file(path) {
+            Err(e) => {
+                eprintln!("gircap: cannot open the log file {}: {e}", path.display());
+                None
+            }
+            Ok(writer) => Some(writer),
+        },
     };
 
     let mut worker = None;
@@ -183,12 +192,21 @@ pub fn init(console_level: Level, file_level: Option<Level>, log_file: Option<&P
         _file: worker,
     };
 
+    // The file's fate, said out loud and said the same way in all three
+    // projects: `log file: <path>`, or `log file: none` when there is no
+    // file. A run that leaves nothing behind should say so, rather than
+    // saying nothing and leaving the reader to guess.
+    match plan.file_path() {
+        Some(path) => tracing::info!("log file: {}", path.display()),
+        None => tracing::info!("log file: none"),
+    }
+
     tracing::info!(
         version = crate::VERSION,
         log_level = %console_level,
         console_filter = %console_spec,
         file_level = %plan.file_level,
-        log_file = %plan.file.display(),
+        log_file = %plan.file_path().map(|p| p.display().to_string()).unwrap_or_else(|| "none".into()),
         "gircap start"
     );
     guard
@@ -226,6 +244,26 @@ mod tests {
         assert_eq!(
             USER_AGENT,
             "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)"
+        );
+    }
+
+    /// The default file is named for the project, and it sits in a `logs/`
+    /// directory beside the executable.
+    ///
+    /// The *shape* of the default is the same in every build; what differs
+    /// between builds is whether there is a default at all, and that is the
+    /// shared crate's business (`girpr_log::default_file_is_written`).
+    #[test]
+    fn the_default_file_is_named_for_the_project() {
+        let path = girpr_log::default_log_path(PROJECT);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("gircap_"), "{name}");
+        assert!(name.ends_with(".log"), "{name}");
+        assert_eq!(
+            path.parent()
+                .and_then(Path::file_name)
+                .and_then(|s| s.to_str()),
+            Some("logs")
         );
     }
 

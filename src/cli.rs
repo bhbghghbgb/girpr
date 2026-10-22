@@ -206,12 +206,28 @@ pub struct Args {
 
     /// Where the log file goes.
     ///
-    /// By default it is `logs/girpr_<timestamp>.log` in a `logs/` directory
-    /// beside the executable. `GIRPR_LOG_FILE` names one when this flag does
-    /// not. Missing parent directories are created. A file that cannot be
-    /// opened is a stderr warning, never a failure.
+    /// In a **release** build the default is `logs/girpr_<timestamp>.log` in a
+    /// `logs/` directory beside the executable; in a **debug** build there is
+    /// no default and the file is written only because this flag named it.
+    /// `GIRPR_LOG_FILE` names one when this flag does not. Missing parent
+    /// directories are created. A file that cannot be opened is a stderr
+    /// warning, never a failure.
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<PathBuf>,
+
+    /// Write no log file at all.
+    ///
+    /// The console is unaffected: this turns off the *file*, which is where a
+    /// run is read afterwards, and not the console, which is where a run is
+    /// watched while it happens.
+    ///
+    /// A release build writes a log file by default and this turns that off;
+    /// a debug build writes none by default and this says so explicitly.
+    /// It cannot be combined with `--log-file`: the two say opposite things
+    /// about the same file, and a usage error says so rather than one of them
+    /// silently winning.
+    #[arg(long, conflicts_with = "log_file")]
+    pub no_log_file: bool,
 
     /// Point the HoYoPlay API at this base URL instead of the production CDN.
     /// Overrides the `GIRPR_HYP_BASE` env var. NOTE: this redirects

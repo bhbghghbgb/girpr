@@ -12,8 +12,11 @@
 //! - The file (JSON) is filtered by `--log-file-level`. The two levels are
 //!   separate: the console is for the person watching, the file is for the
 //!   person reading it afterwards.
-//! - The file is **always** written — by default to
-//!   `<exe-dir>/logs/girsync_<timestamp>.log`.
+//! - The file is written when it is asked for: by `--log-file`, by
+//!   `GIRSYNC_LOG_FILE`, or — in a **release** build — by the default, which is
+//!   `<exe-dir>/logs/girsync_<timestamp>.log`. A **debug** build writes no
+//!   file unless it is asked to, and `--no-log-file` turns it off in any
+//!   build.
 //! - Nothing is printed raw: every diagnostic is a `tracing` event with named
 //!   fields, so the JSON log and the console are the same records rendered twice.
 //! - Per-command spans carry config so every event inside is correlated.
@@ -62,6 +65,7 @@ pub fn plan(
     console_level: Level,
     file_level: Option<Level>,
     log_file: Option<&Path>,
+    no_log_file: bool,
 ) -> girpr_log::LogPlan {
     let env = girpr_log::env_options(PROJECT);
     for warning in &env.warnings {
@@ -73,6 +77,7 @@ pub fn plan(
             console_level,
             file_level,
             log_file: log_file.map(Path::to_path_buf),
+            no_log_file,
         },
         env,
     )
@@ -82,7 +87,7 @@ pub fn plan(
 ///
 /// Console (stderr, human-readable) is filtered by `--log-level` for our
 /// `girsync` target; third-party targets stay quiet. The file (JSON) is
-/// filtered by `--log-file-level`, and is always written.
+/// filtered by `--log-file-level`, and is written when it is asked for.
 ///
 /// A log file that cannot be opened is a warning on stderr and not a failure:
 /// a run must not end differently because of where it was asked to log. The
@@ -92,8 +97,9 @@ pub fn init_tracing(
     console_level: Level,
     file_level: Option<Level>,
     log_file: Option<&Path>,
+    no_log_file: bool,
 ) -> LogGuard {
-    let plan = plan(console_level, file_level, log_file);
+    let plan = plan(console_level, file_level, log_file, no_log_file);
 
     let console_layer = fmt::layer()
         .with_writer(std::io::stderr)
@@ -106,13 +112,18 @@ pub fn init_tracing(
 
     // The file is opened append-only, so two runs against one path do not
     // erase each other. A file that cannot be opened costs the run its
-    // narration and nothing else.
-    let file = match open_log_file(&plan.file) {
-        Ok(f) => Some(f),
-        Err(e) => {
-            eprintln!("WARN disabling file logging ({}): {e}", plan.file.display());
-            None
-        }
+    // narration and nothing else. A plan with no file — a debug build that was
+    // not asked for one, or any build told `--no-log-file` — has no sink at
+    // all, so the run leaves nothing behind.
+    let file = match plan.file_path() {
+        None => None,
+        Some(path) => match open_log_file(path) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("WARN disabling file logging ({}): {e}", path.display());
+                None
+            }
+        },
     };
 
     let mut worker = None;
@@ -142,8 +153,20 @@ pub fn init_tracing(
         eprintln!("WARN cannot install the tracing subscriber: {e}");
     }
 
+    // The file's fate, said out loud and said the same way in all three
+    // projects: `log file: <path>`, or `log file: none` when there is no file.
+    // A run that leaves nothing behind should say so, rather than saying
+    // nothing and leaving the reader to guess.
+    match plan.file_path() {
+        Some(path) => info!("log file: {}", path.display()),
+        None => info!("log file: none"),
+    }
+
     info!(
-        path = %plan.file.display(),
+        path = %plan
+            .file_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".into()),
         console_level = %plan.console_level,
         file_level = %plan.file_level,
         pid = std::process::id(),

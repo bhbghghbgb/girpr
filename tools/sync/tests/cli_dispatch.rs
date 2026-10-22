@@ -38,13 +38,14 @@ fn run_cli_dispatch_update_compare_sync() {
         log_level: Level::Error,
         log_file_level: None,
         log_file: None,
+        no_log_file: false,
         output: OutputFormat::Text,
         cmd,
     };
     // The log policy the runs below are dispatched under. Resolved once, the
     // way `main` does it, so the spans name the file that is really being
     // written.
-    let plan = girsync::plan(Level::Error, None, None);
+    let plan = girsync::plan(Level::Error, None, None, false);
 
     let code = run(
         mkcli(Cmd::Update {

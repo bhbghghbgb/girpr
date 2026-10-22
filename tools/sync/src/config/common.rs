@@ -42,8 +42,13 @@ pub struct LogCtx {
     pub level: Level,
     /// The log file's verbosity, echoed into spans.
     pub file_level: Level,
-    /// Where the log file went, echoed into spans.
-    pub file: PathBuf,
+    /// Where the log file went, echoed into spans — or `None`, when there is no
+    /// log file.
+    ///
+    /// A debug build writes no file unless it is asked to, and `--no-log-file`
+    /// turns one off in any build, so "no file" is a state a span has to be
+    /// able to say out loud rather than a path that is always there.
+    pub file: Option<PathBuf>,
     /// `--output`: how stdout records are rendered.
     pub output: OutputFormat,
 }
@@ -51,7 +56,10 @@ pub struct LogCtx {
 impl LogCtx {
     /// Span-friendly rendering of the log file's path.
     pub fn file_display(&self) -> String {
-        self.file.display().to_string()
+        match &self.file {
+            Some(path) => path.display().to_string(),
+            None => "none".to_string(),
+        }
     }
 
     /// The stdout writer for this run, in the requested format.

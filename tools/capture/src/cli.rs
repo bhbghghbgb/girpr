@@ -86,11 +86,27 @@ pub struct CommonArgs {
 
     /// Where the log file goes.
     ///
-    /// By default it is `logs/gircap_<timestamp>.log` in a `logs/` directory
-    /// beside the executable. `GIRCAP_LOG_FILE` names one when this flag does
-    /// not. The file is always written, as JSON lines, and appended to.
+    /// In a **release** build the default is `logs/gircap_<timestamp>.log` in a
+    /// `logs/` directory beside the executable; in a **debug** build there is
+    /// no default and the file is written only because this flag named it.
+    /// `GIRCAP_LOG_FILE` names one when this flag does not. The file is
+    /// appended to, as JSON lines.
     #[arg(long, value_name = "FILE", global = true)]
     pub log_file: Option<PathBuf>,
+
+    /// Write no log file at all.
+    ///
+    /// The console is unaffected: this turns off the *file*, which is where a
+    /// capture is read afterwards, and not the console, which is where it is
+    /// watched while it happens.
+    ///
+    /// A release build writes a log file by default and this turns that off;
+    /// a debug build writes none by default and this says so explicitly. It
+    /// cannot be combined with `--log-file`: the two say opposite things about
+    /// the same file, and a usage error says so rather than one of them
+    /// silently winning.
+    #[arg(long, global = true, conflicts_with = "log_file")]
+    pub no_log_file: bool,
 
     /// How the single stdout summary is rendered.
     #[arg(long, value_name = "FORMAT", default_value = "text", global = true)]
@@ -345,6 +361,7 @@ pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
             .parse::<OutputFormat>()
             .map_err(UsageError::new)?,
         log_file: common.log_file.clone(),
+        no_log_file: common.no_log_file,
     })
 }
 
@@ -359,6 +376,8 @@ pub struct CommonResolved {
     pub output: OutputFormat,
     /// Where the JSON-lines log goes, if the caller named one.
     pub log_file: Option<PathBuf>,
+    /// Whether the caller asked for no log file at all.
+    pub no_log_file: bool,
 }
 
 /// Parse an argv into a [`Cli`], mapping every argument-level failure to exit
@@ -661,6 +680,7 @@ mod tests {
             log_level: Level::Debug,
             log_file_level: Some(Level::Trace),
             log_file: Some("x.log".into()),
+            no_log_file: false,
             output: "json".into(),
         })
         .unwrap();
@@ -668,11 +688,13 @@ mod tests {
         assert_eq!(ok.file_level, Some(Level::Trace));
         assert_eq!(ok.output, OutputFormat::Json);
         assert_eq!(ok.log_file, Some(PathBuf::from("x.log")));
+        assert!(!ok.no_log_file);
 
         let bad_output = resolve_common(&CommonArgs {
             log_level: Level::Info,
             log_file_level: None,
             log_file: None,
+            no_log_file: false,
             output: "yaml".into(),
         })
         .unwrap_err();
