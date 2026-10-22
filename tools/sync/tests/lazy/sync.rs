@@ -78,7 +78,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
 /// larger win: `sync` is where the I/O volume lives.
 #[test]
 fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
-    let t = TempRoot::new("lz_sync_differ");
+    let t = temp_root("lz_sync_differ");
     let (src, dst) = four_differing(&t);
     assert_eq!(
         sync_counts(&src, &dst, &opts(), TrustOpts::default()),
@@ -93,7 +93,7 @@ fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
 /// src-only file costs the *scan* nothing, and the copy itself reads src once.
 #[test]
 fn a_src_only_file_costs_the_sync_scan_no_digest() {
-    let t = TempRoot::new("lz_sync_srconly");
+    let t = temp_root("lz_sync_srconly");
     let (src, dst) = pair(
         &t,
         &[
@@ -127,7 +127,7 @@ fn a_src_only_file_costs_the_sync_scan_no_digest() {
 /// scan read nothing.
 #[test]
 fn a_lazy_sync_records_no_digest_it_never_needed() {
-    let t = TempRoot::new("lz_sync_lazy");
+    let t = temp_root("lz_sync_lazy");
     let (src, dst) = four_differing(&t);
     let mut o = sync_opts(src.clone(), dst.clone());
     o.common.case_sensitive = true;
@@ -157,8 +157,8 @@ fn a_lazy_sync_records_no_digest_it_never_needed() {
 /// later rejects.
 #[test]
 fn update_still_hashes_every_file() {
-    let t = TempRoot::new("lz_update");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lz_update");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"alpha");
     wfile(&dir, "sub/b.txt", b"bravo");
     let o = UpdateOpts {
@@ -175,8 +175,8 @@ fn update_still_hashes_every_file() {
 /// handles on one file would be refused by redb with a far worse message.
 #[test]
 fn the_wider_handle_window_still_refuses_a_self_collision() {
-    let t = TempRoot::new("lz_self");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lz_self");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"alpha");
     girsync::cmd_update(
         UpdateOpts {
@@ -204,8 +204,8 @@ fn the_wider_handle_window_still_refuses_a_self_collision() {
 /// itself so a case's fixture is not silently the wrong shape.
 #[test]
 fn fixtures_classify_as_folders() {
-    let t = TempRoot::new("lz_classify");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lz_classify");
+    let dir = t.subdir("w");
     assert!(matches!(classify(&dir), Side::Folder(_)));
     assert!(matches!(classify(&dir.join(CACHE_PREFIX)), Side::Record(_)));
 }
@@ -224,7 +224,7 @@ fn fixtures_classify_as_folders() {
 /// control — untouched, so its digests must still be there afterwards.
 #[test]
 fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
-    let t = TempRoot::new("lz_prune");
+    let t = temp_root("lz_prune");
     let (src, dst) = pair(
         &t,
         &[
@@ -300,7 +300,7 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
 /// the rows that are wrong".
 #[test]
 fn distrusting_the_cache_does_not_suppress_pruning() {
-    let t = TempRoot::new("lz_prune_nt");
+    let t = temp_root("lz_prune_nt");
     let (src, dst) = pair(
         &t,
         &[("gone.txt", Some(b"gone"), Some(b"gone"))],

@@ -238,7 +238,7 @@ mod tests {
     /// casing reports a case-only difference as both `COPY` and `DELETE`.
     #[test]
     fn dry_run_rekeys_the_dst_map_without_touching_disk() {
-        let root = crate::testtemp::TempDir::new("girsync_rename_dry", "rekeys_map");
+        let root = girpr_tempdir::TempDir::new("girsync_rename_dry", "rekeys_map");
         let dst = root.join("dst");
         std::fs::create_dir_all(&dst).unwrap();
         std::fs::write(dst.join("data.txt"), b"data").unwrap();

@@ -14,7 +14,7 @@ use super::*;
 /// call `parse_any_of` already makes for `none`, for the same reason.
 #[test]
 fn no_digest_available_with_a_distrusted_field_is_refused() {
-    let t = TempRoot::new("st_refuse");
+    let t = temp_root("st_refuse");
     let (src, dst) = size_differs(&t);
     let (s, d) = (src.display().to_string(), dst.display().to_string());
     for flags in [
@@ -59,7 +59,7 @@ fn no_digest_available_with_a_distrusted_field_is_refused() {
 /// never becomes vacuous.
 #[test]
 fn the_refusal_leaves_every_supported_combination_alone() {
-    let t = TempRoot::new("st_narrow");
+    let t = temp_root("st_narrow");
     let (src, dst) = size_differs(&t);
     let (s, d) = (src.display().to_string(), dst.display().to_string());
     let base = |extra: &[String]| {
@@ -105,8 +105,8 @@ fn the_refusal_leaves_every_supported_combination_alone() {
 /// way, whichever subcommand it hit first.
 #[test]
 fn the_refusal_is_uniform_across_subcommands() {
-    let t = TempRoot::new("st_refuse_update");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_refuse_update");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let (code, stderr) = bin(&[
         "update".to_string(),

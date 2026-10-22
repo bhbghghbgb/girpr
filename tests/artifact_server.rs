@@ -21,11 +21,10 @@
 
 #[path = "artifact_bridge/server.rs"]
 mod server;
-#[path = "common/tempdir.rs"]
-mod tempdir;
 
 use std::path::{Path, PathBuf};
 
+use girpr_tempdir::TempDir;
 use server::{Bridge, Bundle, HitKind};
 
 // ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ const CDN: &str = "https://autopatchhk.example/client_app/sophon";
 struct MiniBundle {
     dir: PathBuf,
     /// Removes the tree on drop.
-    _guard: tempdir::TempDir,
+    _guard: TempDir,
 }
 
 impl MiniBundle {
@@ -90,7 +89,7 @@ impl MiniBundle {
     }
 
     fn build(shapes: Option<Vec<Shape>>) -> Self {
-        let guard = tempdir::TempDir::new("girpr_artifact_server", "mini");
+        let guard = TempDir::new("girpr_artifact_server", "mini");
         let dir = guard.to_path_buf();
         std::fs::create_dir_all(dir.join("api")).expect("create api/");
         std::fs::create_dir_all(dir.join("manifests").join(OLD_TAG)).expect("create manifests/");

@@ -5,7 +5,7 @@ mod common;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use common::{TempRoot, age, log, rw, strip_algo, sync, sync_mtime, update, wfile};
+use common::{age, log, rw, strip_algo, sync, sync_mtime, temp_root, update, wfile};
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -36,8 +36,8 @@ fn restore_recorded_mtime(dir: &Path, rel: &str) {
 
 #[test]
 fn run_compare_self_is_clean_after_update() {
-    let t = TempRoot::new("cs_clean");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_clean");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     cmd_update(update(dir.clone()), &log()).unwrap();
@@ -47,8 +47,8 @@ fn run_compare_self_is_clean_after_update() {
 
 #[test]
 fn run_compare_self_reports_drift_with_record_as_src() {
-    let t = TempRoot::new("cs_drift");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_drift");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     std::fs::create_dir_all(dir.join("empty")).unwrap();
@@ -68,8 +68,8 @@ fn run_compare_self_reports_drift_with_record_as_src() {
 /// report.
 #[test]
 fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
-    let t = TempRoot::new("cs_nowrite");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_nowrite");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let before = recs(&dir);
@@ -100,8 +100,8 @@ fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
 /// scanned against an empty handle rather than the record's.
 #[test]
 fn hidden_content_drift_is_reported_without_a_flag() {
-    let t = TempRoot::new("cs_hidden");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_hidden");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let before = recs(&dir);
@@ -126,8 +126,8 @@ fn hidden_content_drift_is_reported_without_a_flag() {
 /// same verdict either way, and still no writes.
 #[test]
 fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
-    let t = TempRoot::new("cs_flag");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_flag");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let before = recs(&dir);
@@ -196,8 +196,8 @@ fn paths(recs: &[serde_json::Value], event: &str) -> Vec<String> {
 /// the `CHANGED` half.
 #[test]
 fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched() {
-    let t = TempRoot::new("cs_case");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_case");
+    let dir = t.subdir("w");
     wfile(&dir, "case.txt", b"payload");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let before = recs(&dir);
@@ -237,8 +237,8 @@ fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched
 /// stat-only audit rather than a weaker version of the same one.
 #[test]
 fn hash_none_is_a_stat_only_audit_and_still_runs() {
-    let t = TempRoot::new("cs_nonone");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_nonone");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     cmd_update(update(dir.clone()), &log()).unwrap();
@@ -280,8 +280,8 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
 /// which is worse than an error.
 #[test]
 fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
-    let t = TempRoot::new("cs_cover");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_cover");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     strip_algo(&dir, "a.txt", "md5");
@@ -315,8 +315,8 @@ fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
 /// of the record as a whole.
 #[test]
 fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
-    let t = TempRoot::new("cs_cover_differ");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_cover_differ");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "b.txt", b"world");
     cmd_update(update(dir.clone()), &log()).unwrap();
@@ -350,9 +350,9 @@ fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
 /// digest is a hypothetical, a stat-only row written by a lazy scan is Tuesday.
 #[test]
 fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() {
-    let t = TempRoot::new("cs_lazy_route");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("cs_lazy_route");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     for i in 0..2 {
         wfile(&src, &format!("f{i}.txt"), format!("body {i}").as_bytes());
         wfile(&dst, &format!("f{i}.txt"), format!("body {i}").as_bytes());
@@ -411,8 +411,8 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
 /// kind of claim that stops being true without one.
 #[test]
 fn hash_none_is_not_a_coverage_failure() {
-    let t = TempRoot::new("cs_cover_none");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_cover_none");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     strip_algo(&dir, "a.txt", "md5");
@@ -431,8 +431,8 @@ fn hash_none_is_not_a_coverage_failure() {
 
 #[test]
 fn run_compare_self_rejects_a_missing_cache_and_ignore_cache() {
-    let t = TempRoot::new("cs_reject");
-    let dir = t.mkdirs("w");
+    let t = temp_root("cs_reject");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
 
     // No cache yet: an audit with no subject, and creating one would make the
@@ -457,7 +457,7 @@ fn run_compare_self_rejects_a_missing_cache_and_ignore_cache() {
     assert!(dir.join(CACHE_PREFIX).exists(), "the cache survived");
 
     // Not a folder.
-    let file = t.mkdirs("afile");
+    let file = t.subdir("afile");
     wfile(&file, "x.txt", b"x");
     assert!(cmd_compare_self(self_compare(file.join("x.txt")), &log()).is_err());
 }

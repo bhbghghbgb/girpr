@@ -597,7 +597,7 @@ mod tests {
     /// shows up on a file larger than one buffer.
     #[test]
     fn the_digest_of_a_copy_is_the_digest_of_the_file() {
-        let dir = crate::testtemp::TempDir::new("girsync_copy", "digest");
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "digest");
         // Longer than `CHUNK`, so the loop really does iterate rather than
         // doing one read and one write.
         let body: Vec<u8> = (0..(CHUNK * 2 + 12345)).map(|i| (i % 251) as u8).collect();
@@ -626,7 +626,7 @@ mod tests {
     /// must report no digest rather than an empty one for some other reason.
     #[test]
     fn no_digest_requested_still_copies_every_byte() {
-        let dir = crate::testtemp::TempDir::new("girsync_copy", "noalgo");
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "noalgo");
         // Bigger than `CHUNK`, so "it went through the other arm and came out
         // whole" is a statement about more than one buffer.
         let body: Vec<u8> = (0..(CHUNK * 3 + 7)).map(|i| (i % 97) as u8).collect();
@@ -654,7 +654,7 @@ mod tests {
     /// disagree — the loop never enters its body at all.
     #[test]
     fn an_empty_file_copies_and_hashes() {
-        let dir = crate::testtemp::TempDir::new("girsync_copy", "empty");
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "empty");
         let src = dir.join("src.bin");
         let dst = dir.join("dst.bin");
         std::fs::write(&src, b"").unwrap();

@@ -103,7 +103,7 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testtemp::TempDir;
+    use girpr_tempdir::TempDir;
 
     fn dir(name: &str) -> TempDir {
         TempDir::new("girpr_test_audio", name)

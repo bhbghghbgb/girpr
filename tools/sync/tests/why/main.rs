@@ -63,7 +63,7 @@ mod table;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use common::{TempRoot, age, serial_rw, sync_mtime, wfile};
+use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
@@ -122,9 +122,9 @@ fn any_of_md5_sha256() -> CommonOpts {
 /// mtime, and a pair whose mtime also differs is settled by a stat field instead of
 /// by the digest this row is about — so the row would appear not to work, for a
 /// reason that has nothing to do with the code.
-fn pinned(t: &TempRoot, rel: &str, src_bytes: &[u8], dst_bytes: &[u8]) -> (PathBuf, PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn pinned(t: &TempDir, rel: &str, src_bytes: &[u8], dst_bytes: &[u8]) -> (PathBuf, PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, rel, src_bytes);
     wfile(&dst, rel, dst_bytes);
     sync_mtime(&src.join(rel), &dst.join(rel));

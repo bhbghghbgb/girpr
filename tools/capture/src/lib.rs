@@ -72,9 +72,6 @@ pub use exit::ExitCode;
 // crate's public surface.
 pub use girpr_log;
 
-#[cfg(test)]
-pub(crate) mod testtemp;
-
 /// The version this tool reports in `MANIFEST.json` and in its `User-Agent`.
 ///
 /// Kept in step with `Cargo.toml` by reading it at build time rather than by a

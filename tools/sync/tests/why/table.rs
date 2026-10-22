@@ -10,13 +10,13 @@ struct Row {
     name: &'static str,
     /// The path this row is about — the key the table is indexed by.
     rel: &'static str,
-    /// Build the fixture, in a fresh [`TempRoot`] of its own.
+    /// Build the fixture, in a fresh [`TempDir`] of its own.
     ///
     /// A closure rather than shared state because resolving a folder side **writes
     /// to its cache**: measuring two configurations against one fixture makes the
     /// second find whatever the first backfilled, and the tag under test is a
     /// function of what was *not* read.
-    build: fn(&TempRoot) -> (PathBuf, PathBuf),
+    build: fn(&TempDir) -> (PathBuf, PathBuf),
     /// The run's options for this row.
     common: fn() -> CommonOpts,
     /// The classification the pair must carry.
@@ -165,8 +165,8 @@ fn rows() -> Vec<Row> {
             name: "directory on both sides",
             rel: "d",
             build: |t| {
-                let s = t.mkdirs("src");
-                let d = t.mkdirs("dst");
+                let s = t.subdir("src");
+                let d = t.subdir("dst");
                 std::fs::create_dir_all(s.join("d")).unwrap();
                 std::fs::create_dir_all(d.join("d")).unwrap();
                 (s, d)
@@ -184,8 +184,8 @@ fn rows() -> Vec<Row> {
             name: "hash-any-of md5 sha256, record holds only md5",
             rel: "a.txt",
             build: |t| {
-                let old = t.mkdirs("old");
-                let live = t.mkdirs("live");
+                let old = t.subdir("old");
+                let live = t.subdir("live");
                 wfile(&old, "a.txt", b"aaaa");
                 // Warm only md5, so the record is short of sha256 exactly as an
                 // older run would leave it.
@@ -217,7 +217,7 @@ fn rows() -> Vec<Row> {
 #[test]
 fn every_pair_state_has_one_classification_and_one_tag() {
     for row in rows() {
-        let t = TempRoot::new(&format!("why_{}", row.name.replace(' ', "_")));
+        let t = temp_root(&format!("why_{}", row.name.replace(' ', "_")));
         let (src, dst) = (row.build)(&t);
         let common = (row.common)();
         let (sm, dm, plans) = resolved(row.name, &src, &dst, &common);
@@ -309,7 +309,7 @@ fn the_table_covers_every_classification() {
 /// reconstruct.
 #[test]
 fn a_tag_names_the_algorithms_that_disagreed() {
-    let t = TempRoot::new("why_algo_order");
+    let t = temp_root("why_algo_order");
     let (src, dst) = pinned(&t, "a.txt", b"aaaa", b"bbbb");
     let common = md5_and_sha256();
     let (sm, dm, plans) = resolved("algo order", &src, &dst, &common);
@@ -341,7 +341,7 @@ fn a_tag_names_the_algorithms_that_disagreed() {
 /// the disagreement itself has no order to depend on.
 #[test]
 fn a_tag_names_the_algorithms_in_a_fixed_order_not_the_flag_order() {
-    let t = TempRoot::new("why_algo_fixed_order");
+    let t = temp_root("why_algo_fixed_order");
     let (src, dst) = pinned(&t, "a.txt", b"aaaa", b"bbbb");
     let common = common::with_algos(&["sha256", "md5"]);
     let (sm, dm, plans) = resolved("algo fixed order", &src, &dst, &common);

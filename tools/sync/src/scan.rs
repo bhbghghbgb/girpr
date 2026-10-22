@@ -145,8 +145,7 @@ mod tests {
     /// output would get wrong while still looking correct.
     #[test]
     fn cache_paths_are_pruned_along_with_their_contents() {
-        let root = std::env::temp_dir().join(format!("girsync_scan_prune_{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = girpr_tempdir::TempDir::new("girsync_scan", "prune");
         // The live DB is a file; the backups and `old-*` snapshots are directories.
         // All three are named `girpr-cache*` and none of them is mirror content.
         for f in ["a.txt", "keep/b.txt", "girpr-cache/rows"] {
@@ -168,7 +167,6 @@ mod tests {
         rels.sort();
 
         assert_eq!(rels, vec!["a.txt", "keep", "keep/b.txt"]);
-        std::fs::remove_dir_all(&root).ok();
     }
 
     /// `max_depth` is the walk's own bound, and the cache prune must not consume
@@ -176,8 +174,7 @@ mod tests {
     /// real dir exactly at the cap is still emitted.
     #[test]
     fn the_depth_cap_bounds_the_walk_independently_of_the_cache_prune() {
-        let root = std::env::temp_dir().join(format!("girsync_scan_depth_{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = girpr_tempdir::TempDir::new("girsync_scan", "depth");
         for f in ["top.txt", "one/mid.txt", "one/two/deep.txt"] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -192,6 +189,5 @@ mod tests {
         rels.sort();
 
         assert_eq!(rels, vec!["one", "one/mid.txt", "one/two", "top.txt"]);
-        std::fs::remove_dir_all(&root).ok();
     }
 }

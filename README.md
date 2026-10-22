@@ -36,6 +36,7 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `env_options` |
+| `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `unique_path` |
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -304,7 +305,8 @@ the configured base, so a local mock must return bodies pointing at itself.
 ## Logging
 
 One policy, three programs: this binary and the two dev tools (`gircap`,
-`girsync`). It lives in `crates/log/` and is the only thing they share.
+`girsync`). It lives in `crates/log/` and is the only thing they share that
+ships.
 
 - **A log file is always written.** There is no "no log file" mode: a run that
   leaves nothing behind is a run nobody can ask questions of later. By default
@@ -334,12 +336,12 @@ One policy, three programs: this binary and the two dev tools (`gircap`,
 
 The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
 the prebuilt release for the platform. Every crate in the workspace (`girpr`,
-`girpr-log`, `gircap`, `girsync`) runs its suite with it, and
+`girpr-log`, `girpr-tempdir`, `gircap`, `girsync`) runs its suite with it, and
 [`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
 
 ```powershell
 cargo nextest run             # 268 tests in this package, all offline
-cargo nextest run --workspace # the whole workspace: girpr, girpr-log, gircap, girsync
+cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
 cargo clippy --all-targets
@@ -360,14 +362,21 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
     it has. (`--no-capture` also runs the suite serially, because a captured
     output cannot be interleaved.)
   - **Doctests are not run.** Nextest has no doctest support at all, so the
-    workspace's one doctest — the example in `crates/log/src/lib.rs` — is
-    mirrored by a unit test beside it, and `cargo nextest run` alone covers
-    everything the suite covers.
+    workspace's doctests — the examples in `crates/log/src/lib.rs` and
+    `crates/tempdir/src/lib.rs` — are mirrored by unit tests beside them, and
+    `cargo nextest run` alone covers everything the suite covers.
 
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/metadata.rs`;
   `HypClient::new_with_bases` in `src/hyp.rs`).
+- **One scratch-directory policy, three projects.** A test that needs a tree of
+  its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,
+  `gircap` and `girsync` alike. The name carries the pid, a timestamp and a
+  per-process counter, so two runs — or two `cargo nextest run` invocations —
+  never share a tree, and the guard removes the tree when the test ends
+  however it ends. It used to be six copies of this, three of them in the same
+  project, each of which had to be kept in step by hand.
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
   resolved in `RunCtx::api_bases`).

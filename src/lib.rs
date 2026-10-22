@@ -40,9 +40,6 @@ pub mod report;
 pub mod sophon;
 pub mod util;
 
-#[cfg(test)]
-pub(crate) mod testtemp;
-
 // The log policy crate, re-exported so that a caller can name the type
 // [`logging::init_tracing`] returns without adding a dependency of its own:
 // the policy is part of this crate's public signature, so it is part of this

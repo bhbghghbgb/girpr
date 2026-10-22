@@ -12,12 +12,6 @@
 //! Small enough to reason about, and the only shape in which "reused a chunk from
 //! a different offset" is already true.
 
-// This target builds its bundle with the crate's own writers rather than
-// against the mock, so it takes the scratch-directory helper directly instead
-// of the whole of `tests/common`.
-#[path = "tempdir.rs"]
-mod tempdir;
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -30,6 +24,7 @@ use gircap::emit::selfcheck::{Assertion, Selfcheck};
 use gircap::hash;
 use gircap::manifest::proto::SophonChunk;
 use gircap::verify::materialize;
+use girpr_tempdir::TempDir;
 
 const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
 const OLD_TAG: &str = "7.0.0";
@@ -86,12 +81,12 @@ fn reference(tag: &str, path: &str, role: Set, offset: i64) -> Reference {
 /// the ones that fail partway through and a fixture that only cleans up on the
 /// happy path leaks into the next test.
 struct Bundle {
-    root: tempdir::TempDir,
+    root: TempDir,
 }
 
 impl Bundle {
     fn build(name: &str) -> Bundle {
-        let root = tempdir::TempDir::new("gircap-offline", name);
+        let root = TempDir::new("gircap-offline", name);
 
         // The three chunks of one file, at the offsets the index will record.
         let (a, ab, ar) = chunk(0xa1, 64, 0x7d3f_0504_4383_7e58);
@@ -549,7 +544,7 @@ fn materialize_defaults_beside_the_bundle() {
     // The tool picks this path itself when `--out` is absent, so the assertion
     // can only be made against it. It is a *sibling* of the bundle root, hence a
     // guard of its own: the bundle's guard does not own it.
-    let out = tempdir::TempDir::at(b.root.with_file_name(format!(
+    let out = TempDir::at(b.root.with_file_name(format!(
         "{}-materialized",
         b.root.file_name().unwrap().to_string_lossy()
     )));

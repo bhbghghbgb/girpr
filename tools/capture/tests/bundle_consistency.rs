@@ -16,7 +16,8 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World, tempdir::TempDir};
+use common::{Mock, World};
+use girpr_tempdir::TempDir;
 
 /// A scratch root that is removed when the test ends, whatever happens.
 struct Scratch {

@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{TempRoot, log, parse_ndjson, rw};
+use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
 use sha2::Digest;
 use std::collections::HashMap;
@@ -92,8 +92,8 @@ fn build_sled_db(dir: &std::path::Path) {
 
 #[test]
 fn convert_sled_dir_to_redb_file() {
-    let t = TempRoot::new("convert");
-    let work = t.mkdirs("w");
+    let t = temp_root("convert");
+    let work = t.subdir("w");
     build_sled_db(&work);
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
@@ -131,7 +131,7 @@ fn convert_sled_dir_to_redb_file() {
 
     // Converted caches are immediately usable: comparing the record against
     // a folder with the same content is equal.
-    let live = t.mkdirs("live");
+    let live = t.subdir("live");
     common::wfile(&live, "a.txt", b"hello");
     common::wfile(&live, "sub/b.bin", b"");
     std::fs::create_dir_all(live.join("sub")).unwrap();
@@ -158,8 +158,8 @@ fn convert_sled_dir_to_redb_file() {
 
 #[test]
 fn convert_refuses_to_overwrite_without_force() {
-    let t = TempRoot::new("convert_force");
-    let work = t.mkdirs("w");
+    let t = temp_root("convert_force");
+    let work = t.subdir("w");
     build_sled_db(&work);
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");
@@ -173,8 +173,8 @@ fn convert_refuses_to_overwrite_without_force() {
 
 #[test]
 fn convert_rejects_missing_source() {
-    let t = TempRoot::new("convert_missing");
-    let work = t.mkdirs("w");
+    let t = temp_root("convert_missing");
+    let work = t.subdir("w");
     assert!(
         girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
             .is_err()
@@ -187,8 +187,8 @@ fn convert_rejects_missing_source() {
 /// and its reporting live.
 #[test]
 fn the_converter_reports_json_records_on_stdout() {
-    let t = TempRoot::new("convert_json");
-    let work = t.mkdirs("w");
+    let t = temp_root("convert_json");
+    let work = t.subdir("w");
     build_sled_db(&work);
     let src = work.join("legacy-cache");
     let dst = work.join("girpr-cache");

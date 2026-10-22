@@ -10,9 +10,9 @@ use super::*;
 /// with the same fixture and the same folder.
 #[test]
 fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
-    let t = TempRoot::new("hm_any_of_record");
-    let rec_home = t.mkdirs("rec");
-    let folder = t.mkdirs("live");
+    let t = temp_root("hm_any_of_record");
+    let rec_home = t.subdir("rec");
+    let folder = t.subdir("live");
     for dir in [&rec_home, &folder] {
         wfile(dir, "a.txt", b"hello");
     }
@@ -96,8 +96,8 @@ fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
 /// `compare-self` precedent: a script passing the flag everywhere keeps working.
 #[test]
 fn update_populates_every_algorithm_under_any_of() {
-    let t = TempRoot::new("hm_update_any_of");
-    let dir = t.mkdirs("w");
+    let t = temp_root("hm_update_any_of");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(
         girsync::UpdateOpts {
@@ -132,8 +132,8 @@ fn bin(args: &[&str]) -> (i32, String) {
 /// name that claims a digest was optional.
 #[test]
 fn any_of_with_none_is_rejected() {
-    let t = TempRoot::new("hm_none");
-    let dir = t.mkdirs("w");
+    let t = temp_root("hm_none");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     let (code, stderr) = bin(&["update", "--dir", &d, "--hash-any-of", "none"]);
@@ -152,8 +152,8 @@ fn any_of_with_none_is_rejected() {
 /// reason this can be a clap conflict at all rather than a hand-written check.
 #[test]
 fn the_two_modes_cannot_be_asked_for_at_once() {
-    let t = TempRoot::new("hm_both");
-    let dir = t.mkdirs("w");
+    let t = temp_root("hm_both");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     let (code, stderr) = bin(&[
@@ -185,8 +185,8 @@ fn the_two_modes_cannot_be_asked_for_at_once() {
 /// running with no digests at all.
 #[test]
 fn the_short_hash_spelling_is_rejected_by_name() {
-    let t = TempRoot::new("hm_old");
-    let dir = t.mkdirs("w");
+    let t = temp_root("hm_old");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     let (code, stderr) = bin(&["update", "--dir", &d, "--hash", "md5"]);

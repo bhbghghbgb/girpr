@@ -36,7 +36,8 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World, tempdir::TempDir};
+use common::{Mock, World};
+use girpr_tempdir::TempDir;
 
 /// The instrument, beside the crate it measures.
 fn script() -> PathBuf {

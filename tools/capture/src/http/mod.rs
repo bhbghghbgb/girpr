@@ -2148,7 +2148,7 @@ mod tests {
         }
         // 300 rows of ~950 B is ~285 KB, past the 256 KB BufWriter, so the
         // write really does cross a flush boundary mid-document.
-        let dir = crate::testtemp::TempDir::new("gircap-http-ndjson", "crosses_a_flush");
+        let dir = girpr_tempdir::TempDir::new("gircap-http-ndjson", "crosses_a_flush");
         let path = dir.join("api").join("requests.ndjson");
         let n = log.write_ndjson(&path).expect("write");
         assert_eq!(n, 300);
@@ -2578,8 +2578,8 @@ mod tests {
         Box::leak(v.to_vec().into_boxed_slice())
     }
 
-    fn scratch(name: &str) -> crate::testtemp::TempDir {
-        crate::testtemp::TempDir::new("gircap-stream", name)
+    fn scratch(name: &str) -> girpr_tempdir::TempDir {
+        girpr_tempdir::TempDir::new("gircap-stream", name)
     }
 
     /// A body the mock will send, `n` bytes of it.
@@ -3124,7 +3124,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_log_is_written_to_disk_as_ndjson() {
-        let dir = crate::testtemp::TempDir::new("gircap-http", "written_to_disk_as_ndjson");
+        let dir = girpr_tempdir::TempDir::new("gircap-http", "written_to_disk_as_ndjson");
         let path = dir.join("api").join("requests.ndjson");
 
         let mock = spawn(vec![(200, b"body")], "");

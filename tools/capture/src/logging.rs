@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn a_log_file_writer_appends_and_flushes() {
-        let dir = crate::testtemp::TempDir::new("gircap-log-test", "appends_and_flushes");
+        let dir = girpr_tempdir::TempDir::new("gircap-log-test", "appends_and_flushes");
         let path = dir.join("nested").join("run.log");
 
         let w = open_log_file(&path).expect("creates the parent directory");

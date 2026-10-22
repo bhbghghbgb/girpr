@@ -574,6 +574,7 @@ dependencies = [
  "clap",
  "flate2",
  "girpr-log",
+ "girpr-tempdir",
  "md5",
  "prost",
  "reqwest",
@@ -596,6 +597,7 @@ dependencies = [
  "clap",
  "futures",
  "girpr-log",
+ "girpr-tempdir",
  "glob",
  "md5",
  "prost",
@@ -620,6 +622,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-tempdir"
+version = "0.1.0"
+
+[[package]]
 name = "girsync"
 version = "0.1.0"
 dependencies = [
@@ -627,6 +633,7 @@ dependencies = [
  "chrono",
  "clap",
  "girpr-log",
+ "girpr-tempdir",
  "glob",
  "md5",
  "rayon",

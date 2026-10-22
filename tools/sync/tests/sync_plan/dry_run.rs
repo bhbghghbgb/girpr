@@ -14,7 +14,7 @@ use super::*;
 /// stops both sides from writing the backfill a real run would.
 #[test]
 fn dry_run_changes_nothing() {
-    let t = TempRoot::new("plan_untouched");
+    let t = temp_root("plan_untouched");
     let (src, dst) = build(&t);
     // Warm both caches so there is something a stray write could damage.
     for dir in [&src, &dst] {
@@ -101,10 +101,10 @@ fn walk(dir: &Path) -> Vec<(String, std::path::PathBuf)> {
 /// fails here.
 #[test]
 fn a_dry_run_reports_what_a_real_run_reports() {
-    let dry_root = TempRoot::new("parity_dry");
+    let dry_root = temp_root("parity_dry");
     let (dry_src, dry_dst) = build(&dry_root);
     let dry = run(&dry_src, &dry_dst, &["--dry-run"]);
-    let real_root = TempRoot::new("parity_real");
+    let real_root = temp_root("parity_real");
     let (real_src, real_dst) = build(&real_root);
     let real = run(&real_src, &real_dst, &[]);
 

@@ -23,9 +23,9 @@ use super::*;
 #[test]
 fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_only() {
     // dst starts as a copy of src, so the row is fresh and both sides have a digest.
-    let t = TempRoot::new("st_repair");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("st_repair");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"original");
     wfile(&dst, "a.txt", b"original");
     sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
@@ -65,9 +65,9 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
     );
 
     // Now the same edit, with the flag: the digest comes back.
-    let t2 = TempRoot::new("st_repair2");
-    let src2 = t2.mkdirs("src");
-    let dst2 = t2.mkdirs("dst");
+    let t2 = temp_root("st_repair2");
+    let src2 = t2.subdir("src");
+    let dst2 = t2.subdir("dst");
     wfile(&src2, "a.txt", b"original");
     wfile(&dst2, "a.txt", b"original");
     sync_mtime(&src2.join("a.txt"), &dst2.join("a.txt"));

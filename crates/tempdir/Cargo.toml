@@ -1,0 +1,14 @@
+[package]
+name = "girpr-tempdir"
+version = "0.1.0"
+edition = "2024"
+description = "The scratch-directory policy every project in the girpr workspace follows: a name nothing collides with, and a tree removed when the test ends"
+
+[lib]
+name = "girpr_tempdir"
+path = "src/lib.rs"
+
+# No dependencies: this is `std` and nothing else. A test helper that drags in
+# a crate is a test helper whose build can fail for reasons that have nothing
+# to do with the test.
+[dependencies]

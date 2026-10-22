@@ -40,12 +40,6 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-// The scratch-directory helper lives beside this file rather than in it, so the
-// targets that only spawn the binary — and never talk to the mock — can reach
-// it without compiling the mock server into their test binary.
-#[path = "../tempdir.rs"]
-pub mod tempdir;
-
 // ---------------------------------------------------------------- the world
 
 /// One chunk, with the bytes a CDN would serve and everything a manifest

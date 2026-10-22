@@ -13,7 +13,8 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World, tempdir::TempDir};
+use common::{Mock, World};
+use girpr_tempdir::TempDir;
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("a path");

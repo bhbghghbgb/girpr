@@ -51,6 +51,7 @@ use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
     temp_dir,
 };
+use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
 // the harness
@@ -88,11 +89,11 @@ impl Run {
 /// A scratch install and the mock that serves it.
 struct Rig {
     mock: MockServer,
-    dir: common::tempdir::TempDir,
+    dir: TempDir,
     /// Somewhere for the trace logs, **outside** the install: the install's
     /// tree is what the scope assertions compare, and a log file appearing in
     /// it would look like the run added a file.
-    logs: common::tempdir::TempDir,
+    logs: TempDir,
     /// How many runs this rig has made, so each gets its own trace log.
     runs: std::sync::atomic::AtomicU64,
 }

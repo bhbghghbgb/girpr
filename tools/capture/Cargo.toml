@@ -6,10 +6,12 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
 # package, no registry dep, and no `Command` against its binary anywhere in
-# the tree (docs/00-spec.md §2). The one path dep is `girpr-log`, a leaf
-# crate holding the shared log-file and log-level *policy* — flag names,
-# environment variables, default levels and default paths — and no logic of
-# any program.
+# the tree (docs/00-spec.md §2). Its two path deps are leaf crates holding a
+# shared *policy* and no logic of any program: `girpr-log` (the log-file and
+# log-level policy — flag names, environment variables, default levels and
+# default paths) and `girpr-tempdir` (the scratch-directory policy, a
+# dev-dependency, so the tree a test writes into is named and removed the same
+# way in all three projects).
 
 [lib]
 name = "gircap"
@@ -49,6 +51,11 @@ chrono = { version = "0.4", features = ["clock"] }
 [dev-dependencies]
 # `tests/cli_contract.rs` asserts on `--output json` records, so it parses them.
 serde_json = "1"
+# The scratch-directory helper, shared with the repair binary and with
+# `girsync`: one name, one construction and one cleanup for every test in the
+# workspace. A dev-dependency, because nothing that ships creates a scratch
+# directory.
+girpr-tempdir = { path = "../../crates/tempdir" }
 
 # Deliberately absent: `twox-hash`. The 16-hex manifest-id prefix is not a hash
 # of any observable input (docs/00-spec.md §3.7), so an xxh64 implementation

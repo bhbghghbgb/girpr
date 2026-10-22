@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TempRoot, rfile, wfile};
+use common::{rfile, temp_root, wfile};
 use girsync::cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs};
 use girsync::logging::Level;
 use girsync::report::OutputFormat;
@@ -10,9 +10,9 @@ use girsync::run;
 
 #[test]
 fn run_cli_dispatch_update_compare_sync() {
-    let t = TempRoot::new("cli");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("cli");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"aaa");
     wfile(&dst, "a.txt", b"bbb");
 
@@ -151,6 +151,4 @@ fn run_cli_dispatch_update_compare_sync() {
         0
     );
     assert_eq!(rfile(&dst, "later.txt"), b"added after the first sync");
-
-    let _ = t.root();
 }

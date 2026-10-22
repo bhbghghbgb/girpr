@@ -382,8 +382,8 @@ mod tests {
     /// Bind it to `_dir`, not `_`: the lifetime *is* the cleanup, and a bare `_`
     /// drops the guard at the end of the statement — deleting the tree the rest of
     /// the test is about to write into.
-    fn seeded(tag: &str, case_sensitive: bool) -> (crate::testtemp::TempDir, PathBuf) {
-        let dir = crate::testtemp::TempDir::new("girsync_ro", tag);
+    fn seeded(tag: &str, case_sensitive: bool) -> (girpr_tempdir::TempDir, PathBuf) {
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", tag);
         let p = dir.join(CACHE_PREFIX);
         let c = open_db(
             &p,
@@ -481,7 +481,7 @@ mod tests {
     /// build would decode under the wrong assumptions.
     #[test]
     fn read_only_open_requires_a_readable_current_version_cache() {
-        let dir = crate::testtemp::TempDir::new("girsync_ro", "gates");
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", "gates");
         let ro = |p: &Path| open_db(p, true, CacheOpen::ReadOnly);
 
         // No file: there is nothing to observe, and creating one would be a write.

@@ -50,3 +50,8 @@ serde_json = "1"
 # than spawning the binary, so a mutual-exclusion table can be stated exhaustively
 # for the price of a table. Same crate the lib already uses, so it costs no build.
 clap = { version = "4", features = ["derive"] }
+# The scratch-directory helper, shared with the repair binary and with
+# `gircap`: one name, one construction and one cleanup for every test in the
+# workspace. A dev-dependency, because nothing that ships creates a scratch
+# directory.
+girpr-tempdir = { path = "../../crates/tempdir" }

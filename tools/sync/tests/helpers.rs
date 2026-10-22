@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{TempRoot, md5arg, opts, rw, scan, serial_rw, wfile};
+use common::{md5arg, opts, rw, scan, serial_rw, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
@@ -92,8 +92,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     // Cache created sensitive with "a.txt"; disk renames to "A.txt".
     // Insensitive run must NOT error: disk governs, cache key becomes
     // "A.txt" (hashes reused), and a later sensitive run still works.
-    let t = TempRoot::new("casefix");
-    let dir = t.mkdirs("w");
+    let t = temp_root("casefix");
+    let dir = t.subdir("w");
     std::fs::write(dir.join("a.txt"), b"hello").unwrap();
     let db_path = dir.join(CACHE_PREFIX);
 
@@ -147,8 +147,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
 /// A three-file folder scanned on a cold cache, and the same folder scanned again
 /// once warm. Returns `(cold, warm)`, each carrying both phases' counters.
 fn cold_then_warm(tag: &str, algos: Vec<HashAlg>) -> (Run, Run) {
-    let t = TempRoot::new(tag);
-    let dir = t.mkdirs("w");
+    let t = temp_root(tag);
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world!");
     wfile(&dir, "sub/deep/c.txt", b"third");
@@ -264,8 +264,8 @@ fn hash_none_reads_nothing_and_says_so() {
 /// committing to a read.
 #[test]
 fn phase_a_never_hashes() {
-    let t = TempRoot::new("phase_a");
-    let dir = t.mkdirs("w");
+    let t = temp_root("phase_a");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world!");
     wfile(&dir, "sub/deep/c.txt", b"third");
@@ -311,8 +311,8 @@ fn phase_a_never_hashes() {
 /// answers, not side effects.
 #[test]
 fn phase_a_reports_the_same_decisions_when_it_cannot_write() {
-    let t = TempRoot::new("phase_a_dry");
-    let dir = t.mkdirs("w");
+    let t = temp_root("phase_a_dry");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "gone.txt", b"was-here");
     let db_path = dir.join(CACHE_PREFIX);
@@ -363,8 +363,8 @@ fn phase_a_reports_the_same_decisions_when_it_cannot_write() {
 /// like an answer, which is what makes it worse than a crash.
 #[test]
 fn a_corrupt_cache_is_refused_by_a_dry_run_too() {
-    let t = TempRoot::new("corrupt_dry");
-    let dir = t.mkdirs("w");
+    let t = temp_root("corrupt_dry");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let db_path = dir.join(CACHE_PREFIX);
     std::fs::write(&db_path, b"not a redb database").unwrap();
@@ -387,8 +387,8 @@ fn a_corrupt_cache_is_refused_by_a_dry_run_too() {
 /// digest, which is the whole reason the carry rule keys on the stat alone.
 #[test]
 fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
-    let t = TempRoot::new("phase_a_stale");
-    let dir = t.mkdirs("w");
+    let t = temp_root("phase_a_stale");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let db_path = dir.join(CACHE_PREFIX);
     let db = open_db(&db_path, true, rw()).unwrap();

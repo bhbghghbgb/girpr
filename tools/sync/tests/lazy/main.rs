@@ -160,7 +160,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
 
 /// Four file pairs, each dst content a different length from src's, so every
 /// pair differs in size and therefore in stat.
-fn four_differing(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
+fn four_differing(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     pair(
         t,
         &[

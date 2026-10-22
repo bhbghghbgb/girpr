@@ -144,7 +144,7 @@ fn assert_apply_order(recs: &[Value], mode: &str) {
 
 #[test]
 fn the_dry_run_does_exactly_what_the_table_says() {
-    let t = TempRoot::new("plan");
+    let t = temp_root("plan");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run"]);
 
@@ -164,7 +164,7 @@ fn the_dry_run_does_exactly_what_the_table_says() {
 /// become unconditional.
 #[test]
 fn case_sensitive_is_the_same_table_without_the_rename_pass() {
-    let t = TempRoot::new("plan_cs");
+    let t = temp_root("plan_cs");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run", "--case-sensitive"]);
 

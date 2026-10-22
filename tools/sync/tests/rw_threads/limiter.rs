@@ -106,7 +106,7 @@ fn resolve_sequential(src: &Path, dst: &Path, common: &CommonOpts) -> (Resolved,
 /// the digests themselves, so they cannot agree that way.
 #[test]
 fn every_rw_setting_answers_the_same_question() {
-    let t = TempRoot::new("rw_same");
+    let t = temp_root("rw_same");
     let (src, dst) = fixture(&t);
     let common = common::opts();
 
@@ -146,7 +146,7 @@ fn every_rw_setting_answers_the_same_question() {
 /// time here, which is the only place in the test suite that happens.
 #[test]
 fn an_overlapping_resolve_agrees_with_a_sequential_one() {
-    let t = TempRoot::new("rw_overlap");
+    let t = temp_root("rw_overlap");
     let (src, dst) = fixture(&t);
     let common = common::opts();
 
@@ -194,7 +194,7 @@ fn an_overlapping_resolve_agrees_with_a_sequential_one() {
 /// tightest limits where the window is smallest and the boundaries most frequent.
 #[test]
 fn a_window_boundary_writes_every_row_exactly_once() {
-    let t = TempRoot::new("rw_window");
+    let t = temp_root("rw_window");
     let (src, dst) = fixture(&t);
     let common = common::opts();
 

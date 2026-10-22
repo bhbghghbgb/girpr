@@ -13,12 +13,9 @@
 //! That is what makes the seam worth having — the contract is asserted against a
 //! run that started, failed, and reported, rather than against a stub.
 
-// This target never talks to the mock, so it takes the scratch-directory
-// helper directly rather than the whole of `tests/common`.
-#[path = "tempdir.rs"]
-mod tempdir;
-
 use std::process::Command;
+
+use girpr_tempdir::TempDir;
 
 /// The binary under test, beside this test's own executable.
 fn bin() -> std::path::PathBuf {
@@ -240,7 +237,7 @@ fn a_plaintext_override_to_a_remote_host_is_refused_and_says_why() {
 /// consumer is most likely to get wrong.
 #[test]
 fn list_emits_one_record_per_bundle_then_a_summary() {
-    let scratch = tempdir::TempDir::new("gircap-list", "one_record_per_bundle");
+    let scratch = TempDir::new("gircap-list", "one_record_per_bundle");
 
     let r = run(&[
         "list",
@@ -299,7 +296,7 @@ fn list_emits_one_record_per_bundle_then_a_summary() {
 /// contains.
 #[test]
 fn every_record_puts_event_first_and_the_stream_is_pure_ndjson() {
-    let scratch = tempdir::TempDir::new("gircap-ndjson", "event_first");
+    let scratch = TempDir::new("gircap-ndjson", "event_first");
 
     for argv in [
         vec![
@@ -369,7 +366,7 @@ fn stderr_carries_the_narration_and_stdout_carries_none_of_it() {
 fn a_log_file_is_written_and_flushed_before_the_process_ends() {
     // Absent on purpose: the run is what has to create the parent, and that is
     // half of what this case is about.
-    let dir = tempdir::TempDir::absent("gircap-contract", "log_file");
+    let dir = TempDir::absent("gircap-contract", "log_file");
     let log = dir.join("nested").join("run.ndjson");
 
     let r = run_owned(&offline_capture(&["--log-file", log.to_str().unwrap()]));
@@ -389,7 +386,7 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
 /// and the file's own level is `--log-file-level`.
 #[test]
 fn rust_log_does_not_reach_the_log_file() {
-    let dir = tempdir::TempDir::absent("gircap-rustlog", "rust_log_stays_off_the_file");
+    let dir = TempDir::absent("gircap-rustlog", "rust_log_stays_off_the_file");
     let log = dir.join("run.ndjson");
 
     let argv = offline_capture(&["--log-level", "error", "--log-file", log.to_str().unwrap()]);
@@ -474,7 +471,7 @@ fn a_log_file_is_always_written_beside_the_executable() {
 /// default answers for both.
 #[test]
 fn the_environment_names_the_log_file_when_the_flag_does_not() {
-    let dir = tempdir::TempDir::absent("gircap-env", "log_file");
+    let dir = TempDir::absent("gircap-env", "log_file");
     let log = dir.join("from-env.ndjson");
 
     let out = Command::new(bin())
@@ -499,7 +496,7 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
 /// evidence — it is in the file and not on the console.
 #[test]
 fn the_file_is_louder_than_the_console_by_default() {
-    let dir = tempdir::TempDir::absent("gircap-levels", "file_vs_console");
+    let dir = TempDir::absent("gircap-levels", "file_vs_console");
     let log = dir.join("levels.ndjson");
 
     let r = run_owned(&offline_capture(&[
@@ -529,7 +526,7 @@ fn the_file_is_louder_than_the_console_by_default() {
 /// nothing else.
 #[test]
 fn the_log_file_level_flag_narrows_the_file() {
-    let dir = tempdir::TempDir::absent("gircap-levels", "file_level_flag");
+    let dir = TempDir::absent("gircap-levels", "file_level_flag");
     let log = dir.join("levels.ndjson");
 
     let r = run_owned(&offline_capture(&[
@@ -562,7 +559,7 @@ fn the_log_file_level_flag_narrows_the_file() {
 /// default — answers for both.
 #[test]
 fn the_environment_sets_the_log_files_level() {
-    let dir = tempdir::TempDir::absent("gircap-env", "log_file_level");
+    let dir = TempDir::absent("gircap-env", "log_file_level");
     let log = dir.join("levels.ndjson");
 
     let out = Command::new(bin())
@@ -596,8 +593,8 @@ fn exe_dir() -> std::path::PathBuf {
 ///
 /// Absent on purpose: these cases are about what the tool does with a path that
 /// is *not* a bundle, so the fixture must not hand it one.
-fn scratch(name: &str) -> tempdir::TempDir {
-    tempdir::TempDir::absent("gircap-contract", name)
+fn scratch(name: &str) -> TempDir {
+    TempDir::absent("gircap-contract", name)
 }
 
 /// A path that is not a bundle is a usage error, not an assertion failure: the

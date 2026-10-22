@@ -15,8 +15,8 @@ use super::*;
 /// passing it to every subcommand keeps working.
 #[test]
 fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
-    let t = TempRoot::new("st_update");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_update");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
 
@@ -50,8 +50,8 @@ fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
 /// independent, and "both is disable it" has to be reachable from the flags themselves.
 #[test]
 fn the_two_flags_are_independent_on_the_command_line() {
-    let t = TempRoot::new("st_flags");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_flags");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     for extra in [
@@ -73,8 +73,8 @@ fn the_two_flags_are_independent_on_the_command_line() {
 /// statement about *which* one.
 #[test]
 fn the_flags_compose_with_both_hash_modes() {
-    let t = TempRoot::new("st_compose");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_compose");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     let d = dir.display().to_string();
     for hash in [

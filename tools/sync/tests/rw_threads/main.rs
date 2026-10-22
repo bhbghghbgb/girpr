@@ -47,7 +47,7 @@ use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
-use common::{Spec, TempRoot, pair, recs_of, serial_rw, wfile};
+use common::{Spec, TempDir, pair, recs_of, serial_rw, temp_root, wfile};
 use girsync::cache::CACHE_PREFIX;
 use girsync::cli::{Cli, RwArgs};
 use girsync::config::{CommonOpts, ScanMode};
@@ -114,7 +114,7 @@ const PAD: [u8; 512] = [b'x'; 512];
 /// several times. A fixture that fit in a single window would pass even if the
 /// window boundary dropped a file, duplicated one, or lost the write order
 /// between windows.
-fn fixture(t: &TempRoot) -> (PathBuf, PathBuf) {
+fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
     let mut spec: Vec<Spec> = vec![
         ("changed.txt", Some(b"src version"), Some(b"dst")),
         ("sized.txt", Some(b"src is longer"), Some(b"s")),

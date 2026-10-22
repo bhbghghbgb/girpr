@@ -570,7 +570,7 @@ pub fn hash_file(path: &Path, algos: &AlgoSet) -> Result<DigestSet> {
 mod tests {
     use super::*;
 
-    fn write(dir: &crate::testtemp::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    fn write(dir: &girpr_tempdir::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let p = dir.join(name);
         std::fs::write(&p, bytes).unwrap();
         p
@@ -983,7 +983,7 @@ mod tests {
     /// first case proves it is reading `update` and not something incidental.
     #[test]
     fn a_digest_is_the_same_however_the_bytes_were_split() {
-        let dir = crate::testtemp::TempDir::new("girsync_hash", "split");
+        let dir = girpr_tempdir::TempDir::new("girsync_hash", "split");
         // Longer than `CHUNK` is not practical here, but it must exceed one
         // buffer's worth of a *small* file to make "chunk bigger than the file"
         // a real case rather than a trivially-true one.
@@ -1022,7 +1022,7 @@ mod tests {
     /// that never calls `update` has still absorbed every byte there is.
     #[test]
     fn an_empty_file_hashes_to_the_digest_of_nothing() {
-        let dir = crate::testtemp::TempDir::new("girsync_hash", "empty");
+        let dir = girpr_tempdir::TempDir::new("girsync_hash", "empty");
         let path = write(&dir, "f.bin", b"");
 
         let set = algos(&["md5", "sha256"]);
@@ -1039,7 +1039,7 @@ mod tests {
         d.update(b"these bytes must not be absorbed by anything");
         assert!(d.finish().is_empty());
         // ...and `hash_file` must agree, without opening the file at all.
-        let dir = crate::testtemp::TempDir::new("girsync_hash", "absent");
+        let dir = girpr_tempdir::TempDir::new("girsync_hash", "absent");
         assert!(
             hash_file(&dir.join("not-there.bin"), &AlgoSet::NONE)
                 .unwrap()

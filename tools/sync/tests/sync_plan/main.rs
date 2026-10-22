@@ -62,7 +62,7 @@ mod table;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use common::{TempRoot, parse_ndjson, summary_of, sync_mtime, wfile};
+use common::{TempDir, parse_ndjson, summary_of, sync_mtime, temp_root, wfile};
 use serde_json::Value;
 
 /// Run `girsync sync --output json` and return the records it reported.
@@ -467,9 +467,9 @@ fn cases() -> Vec<Case> {
 /// written microseconds apart can land on one timestamp in one tree and different
 /// ones in the other, and a pair becomes undecided for reasons that have nothing to
 /// do with the code under test.
-fn build(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn build(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     for c in cases() {
         for (dir, rel, shape) in [
             (&src, Some(c.src_rel), c.src),

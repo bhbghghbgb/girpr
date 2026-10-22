@@ -49,17 +49,13 @@
 //! wrong thing — the compressed body would be small and the buffered path's
 //! peak would be the decoded buffer alone.
 
-#[path = "common/tempdir.rs"]
-mod tempdir;
-
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use girpr::sophon::{self, ChunkSink};
-
-use tempdir::TempDir;
+use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
 // the counting allocator

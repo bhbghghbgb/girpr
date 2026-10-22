@@ -12,7 +12,7 @@ use super::*;
 /// with the actions is not a plan.
 #[test]
 fn sync_reports_the_diff_as_its_plan_before_it_acts() {
-    let t = TempRoot::new("plan_print");
+    let t = temp_root("plan_print");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run"]);
 
@@ -60,7 +60,7 @@ fn sync_reports_the_diff_as_its_plan_before_it_acts() {
 /// Asserted against a plan that is genuinely non-empty, so it cannot pass vacuously.
 #[test]
 fn sync_still_exits_zero_with_a_non_empty_plan() {
-    let t = TempRoot::new("plan_exit");
+    let t = temp_root("plan_exit");
     let (src, dst) = build(&t);
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
@@ -92,7 +92,7 @@ fn sync_still_exits_zero_with_a_non_empty_plan() {
 /// segment can enumerate what *will* happen without joining it against the actions.
 #[test]
 fn a_missing_file_appears_in_both_the_plan_and_the_actions() {
-    let t = TempRoot::new("plan_missing");
+    let t = temp_root("plan_missing");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run"]);
     // Only the missing **files**: a missing directory is `MISSING` in the plan and
@@ -137,7 +137,7 @@ fn a_missing_file_appears_in_both_the_plan_and_the_actions() {
 /// `COPY` never carries a `why=`.
 #[test]
 fn the_plan_carries_reasons_when_why_is_passed() {
-    let t = TempRoot::new("plan_why");
+    let t = temp_root("plan_why");
     let (src, dst) = build(&t);
 
     let flagged = run(&src, &dst, &["--dry-run", "--why"]);
@@ -178,7 +178,7 @@ fn the_plan_carries_reasons_when_why_is_passed() {
 /// for the same path.
 #[test]
 fn copy_names_the_bucket_that_caused_it_and_never_a_why() {
-    let t = TempRoot::new("because");
+    let t = temp_root("because");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run", "--why"]);
 
@@ -213,7 +213,7 @@ fn copy_names_the_bucket_that_caused_it_and_never_a_why() {
 /// bucket — but the wrong one — fails.
 #[test]
 fn each_copy_because_matches_its_own_plan_record() {
-    let t = TempRoot::new("because_join");
+    let t = temp_root("because_join");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run"]);
 
@@ -248,7 +248,7 @@ fn each_copy_because_matches_its_own_plan_record() {
 /// a table derived from "present on one side" would get wrong.
 #[test]
 fn a_copy_over_a_blocking_directory_names_the_type_conflict() {
-    let t = TempRoot::new("because_conflict");
+    let t = temp_root("because_conflict");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run"]);
     let conflict_copy = recs
@@ -271,7 +271,7 @@ fn a_copy_over_a_blocking_directory_names_the_type_conflict() {
 /// that remain, or `because` would describe a plan the run is not following.
 #[test]
 fn missing_only_keeps_the_bucket_of_the_copies_it_leaves() {
-    let t = TempRoot::new("because_missing_only");
+    let t = temp_root("because_missing_only");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--dry-run", "--missing-only"]);
 
@@ -301,7 +301,7 @@ fn missing_only_keeps_the_bucket_of_the_copies_it_leaves() {
 /// until it was not, and by then a file would be copied twice.
 #[test]
 fn a_path_is_never_planned_for_copying_twice() {
-    let t = TempRoot::new("copy_once");
+    let t = temp_root("copy_once");
     let (src, dst) = build(&t);
     // `run` already passes `--output json`, so these are the extra flags only.
     for extra in [vec!["--dry-run"], vec!["--dry-run", "--case-sensitive"]] {

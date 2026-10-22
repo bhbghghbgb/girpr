@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn an_intact_file_answers_every_range_correctly() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "intact");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "intact");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         let dest = Ranges::of(&[(0, 64, hex(&data[0..64])), (64, 65, hex(&data[64..129]))]);
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn one_corrupt_chunk_leaves_the_other_chunk_correct() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "one_bad");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "one_bad");
         let good = four_blocks();
         let mut bad = good.clone();
         // Flip a byte inside the second block only.
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn a_truncated_file_makes_every_range_past_its_end_wrong() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "truncated");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "truncated");
         let good = four_blocks();
         // Only the first 100 bytes are on disk.
         std::fs::write(dir.join("f.dat"), &good[..100]).unwrap();
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn an_absent_file_is_not_an_error_and_nothing_is_correct() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "absent");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "absent");
         let dest = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let source = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let scan = scan_file(&dir.join("nope.dat"), &dest.view(), &source.view()).unwrap();
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn ranges_may_be_given_in_any_order() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "unsorted");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "unsorted");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         // Descending by offset: the scan must not care.
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn a_range_can_be_both_a_destination_and_a_source() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "both");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "both");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         let dest = Ranges::of(&[(0, 64, hex(&data[0..64]))]);
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn a_source_elsewhere_in_the_file_is_verdicted_on_its_own_bytes() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "source");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "source");
         let data = four_blocks();
         // The second block is damaged, so it cannot serve as a source, and the
         // third block is intact and can.
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn a_range_past_the_end_of_the_file_is_never_correct() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "past_end");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "past_end");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data[..100]).unwrap();
         let dest = Ranges::of(&[(200, 32, hex(&data[200..232]))]);
@@ -677,7 +677,7 @@ mod tests {
     fn an_empty_expectation_is_never_correct() {
         // An empty MD5 is "unknown", not "matches" — a manifest that carries
         // one must not be read as a free pass.
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "empty_expect");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "empty_expect");
         std::fs::write(dir.join("f.dat"), b"abc").unwrap();
         let dest = Ranges::of(&[(0, 3, String::new())]);
         let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn the_expected_md5_is_compared_case_insensitively() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "case");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "case");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         let dest = Ranges::of(&[(0, 64, hex(&data[0..64]).to_ascii_uppercase())]);
@@ -699,7 +699,7 @@ mod tests {
         // The sweep is what makes "one read, every answer" true; a range that
         // straddles the 512 KiB block boundary is where an off-by-one would
         // show up.
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "boundary");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "boundary");
         let data: Vec<u8> = (0..(MD5_BUF + 1000)).map(|i| (i % 251) as u8).collect();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         let start = MD5_BUF as u64 - 10;
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn read_range_returns_the_bytes_at_the_offset() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_scan", "read_range");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "read_range");
         let data = four_blocks();
         std::fs::write(dir.join("f.dat"), &data).unwrap();
         let mut f = File::open(dir.join("f.dat")).unwrap();
@@ -720,7 +720,7 @@ mod tests {
     }
     #[test]
     fn version_last_match_wins() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "version_last_match_wins");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "version_last_match_wins");
         std::fs::write(
             dir.join("config.ini"),
             "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n",
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn ignore_and_blacklist_parse() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_lists", "ignore_and_blacklist_parse");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "ignore_and_blacklist_parse");
         std::fs::write(
             dir.join("rc"),
             "{\"category\":\"10302\",\"is_delete\":true}\n{}\n",
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn config_bump_forces_target_keys_preserves_rest_and_is_idempotent() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "bump_idempotent");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "bump_idempotent");
         std::fs::write(
             dir.join("config.ini"),
             "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
@@ -816,7 +816,7 @@ mod tests {
     /// (`uapc`/`wpf_version`/`predownload`/`plugin_*`) are preserved.
     #[test]
     fn config_bump_preserves_sections_and_merges_duplicates() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "sections");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "sections");
         std::fs::write(
             dir.join("config.ini"),
             "; leading comment\n\
@@ -901,7 +901,7 @@ mod tests {
     /// missing `sdk_version` defaults to empty (Collapse `DefaultIniVersion`).
     #[test]
     fn config_bump_creates_missing_and_handles_headerless() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_cfg", "headerless");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "headerless");
         write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");

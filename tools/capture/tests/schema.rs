@@ -12,7 +12,8 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World, tempdir::TempDir};
+use common::{Mock, World};
+use girpr_tempdir::TempDir;
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("the test binary has a path");
@@ -72,8 +73,8 @@ impl AsRef<Path> for CapturedBundle {
 /// **The root is removed with the returned value.** A test that binds it to a
 /// local pays for one capture and leaves nothing behind; a test that lets it
 /// die with the statement still leaves nothing behind. Every tree in this
-/// suite is built this way — see `tests/tempdir.rs` for what the name carries
-/// and why a killed run's leftover cannot be mistaken for a fixture.
+/// suite is built this way — see the `girpr-tempdir` crate for what the name
+/// carries and why a killed run's leftover cannot be mistaken for a fixture.
 ///
 /// The listener goes away with the call too. The capture has finished writing
 /// by the time [`run`] returns, so the mock has nothing left to answer and

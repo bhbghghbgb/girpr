@@ -15,7 +15,7 @@ use super::*;
 /// nothing about *what* was reported.
 #[test]
 fn actions_are_reported_as_they_complete_under_a_parallel_rw_limit() {
-    let t = TempRoot::new("asdone");
+    let t = temp_root("asdone");
     let (src, dst) = build(&t);
     let recs = run(&src, &dst, &["--rw-threads", "4"]);
 
@@ -62,11 +62,11 @@ fn actions_are_reported_as_they_complete_under_a_parallel_rw_limit() {
 /// actually reads.
 #[test]
 fn the_rw_limit_does_not_change_what_is_reported() {
-    let t1 = TempRoot::new("asdone_1");
+    let t1 = temp_root("asdone_1");
     let (src1, dst1) = build(&t1);
     let one = run(&src1, &dst1, &["--rw-threads", "1"]);
 
-    let t4 = TempRoot::new("asdone_4");
+    let t4 = temp_root("asdone_4");
     let (src4, dst4) = build(&t4);
     let four = run(&src4, &dst4, &["--rw-threads", "4"]);
 
@@ -94,7 +94,7 @@ fn the_rw_limit_does_not_change_what_is_reported() {
 /// asserted, not only the stream.
 #[test]
 fn parallel_copies_actually_land_on_disk() {
-    let t = TempRoot::new("asdone_disk");
+    let t = temp_root("asdone_disk");
     let (src, dst) = build(&t);
     // A real run this time: the point is that the files arrive.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
@@ -141,9 +141,9 @@ fn parallel_copies_actually_land_on_disk() {
 /// machine, and a test that depended on it would be a flaky test.
 #[test]
 fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
-    let t = TempRoot::new("asdone_many");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("asdone_many");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // Increasing sizes, so the copies take measurably different times and completion
     // order is free to diverge from plan order.
     for i in 0..24usize {
@@ -179,7 +179,7 @@ fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
 /// not the other would be an inconsistency a user could trip over.
 #[test]
 fn sync_plan_honours_show_identical() {
-    let t = TempRoot::new("plan_show_identical");
+    let t = temp_root("plan_show_identical");
     let (src, dst) = build(&t);
     let flagged = run(&src, &dst, &["--dry-run", "--show-identical"]);
     assert!(

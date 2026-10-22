@@ -7,8 +7,8 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    TempRoot, compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync,
-    sync_dry, sync_mtime, update, wfile,
+    compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
+    sync_mtime, temp_root, update, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
@@ -57,9 +57,9 @@ fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
 
 #[test]
 fn run_sync_dry_run_writes_nothing() {
-    let t = TempRoot::new("dryrun");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("dryrun");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
     wfile(&dst, "extra.txt", b"stay for now");
@@ -88,9 +88,9 @@ fn run_sync_dry_run_writes_nothing() {
 /// read/write open would have created one per side and written its `meta`.
 #[test]
 fn run_sync_dry_run_creates_no_cache() {
-    let t = TempRoot::new("drynocache");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("drynocache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
 
@@ -117,9 +117,9 @@ fn run_sync_dry_run_creates_no_cache() {
 /// real cache is treated as absent rather than deleted: left exactly as it was.
 #[test]
 fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
-    let t = TempRoot::new("dryignore");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("dryignore");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
     cmd_update(update(src.clone()), &log()).unwrap();
@@ -142,9 +142,9 @@ fn run_sync_dry_run_with_ignore_cache_leaves_caches_intact() {
 
 #[test]
 fn run_sync_keep_extra_and_missing_only() {
-    let t = TempRoot::new("flags");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("flags");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "common.txt", b"v2-changed-and-longer");
     wfile(&dst, "common.txt", b"v1");
     wfile(&src, "newfile.txt", b"brand new");
@@ -181,9 +181,9 @@ fn run_sync_keep_extra_and_missing_only() {
 /// by the same flag that skips `DELETE`.
 #[test]
 fn run_sync_keep_extra_spares_extra_dirs_too() {
-    let t = TempRoot::new("keep_dirs");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("keep_dirs");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "shared.txt", b"same");
     wfile(&dst, "shared.txt", b"same");
     wfile(&dst, "extra.txt", b"extra file");
@@ -202,9 +202,9 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     );
 
     // Without the flag the same tree is fully collected, dirs included.
-    let t2 = TempRoot::new("no_keep_dirs");
-    let src2 = t2.mkdirs("src");
-    let dst2 = t2.mkdirs("dst");
+    let t2 = temp_root("no_keep_dirs");
+    let src2 = t2.subdir("src");
+    let dst2 = t2.subdir("dst");
     wfile(&src2, "shared.txt", b"same");
     wfile(&dst2, "shared.txt", b"same");
     wfile(&dst2, "extradir/nested/deep.bin", b"y");
@@ -223,9 +223,9 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
 /// `clash/sub/deep` are unknown dirs that the copy wipes.
 #[test]
 fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
-    let t = TempRoot::new("wiped");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("wiped");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
@@ -248,9 +248,9 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
 
 #[test]
 fn run_sync_rejects_bad_inputs() {
-    let t = TempRoot::new("reject");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("reject");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"x");
     wfile(&dst, "a.txt", b"x");
 
@@ -270,9 +270,9 @@ fn run_sync_rejects_bad_inputs() {
 
 #[test]
 fn run_sync_resolves_type_conflicts() {
-    let t = TempRoot::new("typeconf");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("typeconf");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // src file vs dst dir at the same relpath...
     wfile(&src, "node", b"i am a file");
     wfile(&dst, "node/inner.txt", b"i am a dir");
@@ -296,9 +296,9 @@ fn run_sync_resolves_type_conflicts() {
 /// on the old casing, or it would plan both a COPY and a DELETE for one file.
 #[test]
 fn run_sync_case_only_difference_renames_instead_of_copying() {
-    let t = TempRoot::new("caseren");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("caseren");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "Data.txt", b"payload");
     wfile(&dst, "data.txt", b"payload");
     // Align mtime so casing is the *only* difference; otherwise the diff
@@ -353,9 +353,9 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 /// satisfied by a `RENAME` line that is printed either way.
 #[test]
 fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
-    let t = TempRoot::new("caseren_content");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("caseren_content");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // Same length, different bytes. Different lengths would let size settle the
     // pair, and the test would pass without a digest ever being needed.
     wfile(&src, "Data.txt", b"payload");
@@ -411,9 +411,9 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
 /// and the damage only surfaces later as phantom drift from a `compare-self`.
 #[test]
 fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
-    let t = TempRoot::new("prune_keeps_copied");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("prune_keeps_copied");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // One file at the root, so the run has work beyond the new directory and the
     // prune is not trivially looking at an empty table.
     wfile(&src, "top.txt", b"top");
@@ -447,9 +447,9 @@ fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
 /// Asserted against the cache, per the reasoning above.
 #[test]
 fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
-    let t = TempRoot::new("prune_drops_gone");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("prune_drops_gone");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "kept.txt", b"kept");
     wfile(&src, "doomed.txt", b"doomed");
 
@@ -491,9 +491,9 @@ fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
 /// invisible in the run's own output and shows up later as cache bloat.
 #[test]
 fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
-    let t = TempRoot::new("prune_wiped_subtree");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("prune_wiped_subtree");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // src: x is a file.
     wfile(&src, "x", b"file contents");
     // dst: x is a directory, with a subtree under it. Two levels, so the
@@ -554,9 +554,9 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
 #[test]
 #[ignore = "known: the derived present set keeps rows for a dir created and rmdir'd in the same run"]
 fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
-    let t = TempRoot::new("prune_create_then_rmdir");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("prune_create_then_rmdir");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "Sub/One.txt", b"one");
     wfile(&src, "Sub/Two.txt", b"two");
     // Only reachable on a case-insensitive filesystem; skip elsewhere rather

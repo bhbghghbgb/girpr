@@ -23,9 +23,9 @@ fn bin(args: &[String]) -> (i32, String) {
 
 /// A src/dst pair with one of every difference class, so a report has something to
 /// say in each bucket and `only_changed_carries_a_why` is not vacuous.
-fn every_bucket(t: &TempRoot) -> (PathBuf, PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn every_bucket(t: &TempDir) -> (PathBuf, PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     // `stat-size`: differing length, mtime pinned so size is the only signal.
     wfile(&src, "sized.txt", b"src-version-longer");
     wfile(&dst, "sized.txt", b"dst");
@@ -71,7 +71,7 @@ fn compare_args<'a>(src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Vec<Stri
 /// (`fields`? `detail`? `sources`?) that this does not need to answer.
 #[test]
 fn why_is_a_field_on_the_changed_record_in_both_formats() {
-    let t = TempRoot::new("why_flag_shape");
+    let t = temp_root("why_flag_shape");
     let (src, dst) = every_bucket(&t);
 
     let (code, text) = bin(&compare_args(&src, &dst, &["--why", "--case-sensitive"]));
@@ -111,7 +111,7 @@ fn why_is_a_field_on_the_changed_record_in_both_formats() {
 /// `why` on one of them would be a tag inventing an explanation nobody asked for.
 #[test]
 fn only_changed_carries_a_why() {
-    let t = TempRoot::new("why_only_changed");
+    let t = temp_root("why_only_changed");
     let (src, dst) = every_bucket(&t);
     let (_code, text) = bin(&compare_args(&src, &dst, &["--why"]));
     let with_why: Vec<&str> = text.lines().filter(|l| l.contains(" why=")).collect();
@@ -175,7 +175,7 @@ fn only_pairs_get_a_classification_and_only_classified_paths_get_a_tag() {
 /// `why` anywhere — the whole point of the flag being additive.
 #[test]
 fn an_unflagged_run_carries_no_why() {
-    let t = TempRoot::new("why_default_off");
+    let t = temp_root("why_default_off");
     let (src, dst) = every_bucket(&t);
     for extra in [
         vec!["--case-sensitive"],
@@ -200,9 +200,9 @@ fn why_does_not_change_the_exit_code() {
         ("differs", &b"src-version-longer"[..], &b"dst"[..]),
         ("clean", &b"same"[..], &b"same"[..]),
     ] {
-        let t = TempRoot::new(&format!("why_exit_{tag}"));
-        let src = t.mkdirs("src");
-        let dst = t.mkdirs("dst");
+        let t = temp_root(&format!("why_exit_{tag}"));
+        let src = t.subdir("src");
+        let dst = t.subdir("dst");
         wfile(&src, "a.txt", src_bytes);
         wfile(&dst, "a.txt", dst_bytes);
         sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
@@ -237,8 +237,8 @@ fn why_does_not_change_the_exit_code() {
 /// would never be reached.
 #[test]
 fn compare_self_reports_a_reason_too() {
-    let t = TempRoot::new("why_self");
-    let dir = t.mkdirs("w");
+    let t = temp_root("why_self");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"short");
     cmd_update(
         girsync::UpdateOpts {
@@ -291,7 +291,7 @@ fn compare_self_reports_a_reason_too() {
 /// The `--why` flag reaches the real binary on every command that reports a diff.
 #[test]
 fn why_is_accepted_by_the_parser() {
-    let t = TempRoot::new("why_parser");
+    let t = temp_root("why_parser");
     let (src, dst) = every_bucket(&t);
     let (code, text) = bin(&compare_args(&src, &dst, &["--why"]));
     assert_eq!(code, 4, "--why is a flag, not a parse error:\n{text}");
@@ -391,7 +391,7 @@ fn holding_reasons_does_not_make_a_pair_a_difference() {
 /// behaving correctly.
 #[test]
 fn show_identical_is_default_off_and_independent_of_why() {
-    let t = TempRoot::new("show_identical_surface");
+    let t = temp_root("show_identical_surface");
     let (src, dst) = every_bucket(&t);
     let cases: [(&[&str], bool, bool); 4] = [
         (&[], false, false),
@@ -430,7 +430,7 @@ fn show_identical_is_default_off_and_independent_of_why() {
 /// the second bucket having its own vocabulary.
 #[test]
 fn every_equal_pair_is_reported_once_with_its_reason() {
-    let t = TempRoot::new("show_identical_set");
+    let t = temp_root("show_identical_set");
     let (src, dst) = every_bucket(&t);
     wfile(&src, "same_file.txt", b"identical");
     wfile(&dst, "same_file.txt", b"identical");
@@ -465,9 +465,9 @@ fn every_equal_pair_is_reported_once_with_its_reason() {
 /// record per file to a report must not make "nothing differs" look like a failure.
 #[test]
 fn show_identical_does_not_change_the_exit_code_on_a_clean_tree() {
-    let t = TempRoot::new("show_identical_exit");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("show_identical_exit");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"same");
     wfile(&dst, "a.txt", b"same");
     sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));

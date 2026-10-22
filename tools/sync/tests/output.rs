@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{TempRoot, parse_ndjson, strip_ansi, summary_of, sync_mtime, wfile};
+use common::{TempDir, parse_ndjson, strip_ansi, summary_of, sync_mtime, temp_root, wfile};
 use girsync::hash::AlgoSet;
 use serde_json::Value;
 use std::path::Path;
@@ -52,9 +52,9 @@ fn run(args: &[String]) -> Run {
 
 /// A src/dst pair with one of each difference class, so a report has something to
 /// say in every bucket. Casing is set up so `case-mismatch` fires too.
-fn fixture(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn fixture(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "same.txt", b"identical");
     wfile(&dst, "same.txt", b"identical");
     sync_mtime(&src.join("same.txt"), &dst.join("same.txt"));
@@ -84,7 +84,7 @@ fn compare_args<'a>(src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Vec<Stri
 
 #[test]
 fn compare_json_is_one_object_per_line_with_a_single_summary() {
-    let t = TempRoot::new("out_cmp");
+    let t = temp_root("out_cmp");
     let (src, dst) = fixture(&t);
     let r = run(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
@@ -114,7 +114,7 @@ fn compare_json_is_one_object_per_line_with_a_single_summary() {
 /// one of them is what `compare`, `compare-self` and the tests read.
 #[test]
 fn compare_json_is_the_verdict_the_library_builds() {
-    let t = TempRoot::new("out_verdict");
+    let t = temp_root("out_verdict");
     let (src, dst) = fixture(&t);
     // `--case-sensitive` because the library-side harness below is case-sensitive,
     // and the two must be answering the same question for the comparison to mean
@@ -153,8 +153,8 @@ fn compare_json_is_the_verdict_the_library_builds() {
 
 #[test]
 fn update_json_names_the_directory_it_refreshed() {
-    let t = TempRoot::new("out_upd");
-    let dir = t.mkdirs("w");
+    let t = temp_root("out_upd");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     let r = run(&[
@@ -182,7 +182,7 @@ fn update_json_names_the_directory_it_refreshed() {
 /// per invocation without the tool behaving differently.
 #[test]
 fn the_two_formats_report_the_same_records_in_the_same_order() {
-    let t = TempRoot::new("out_both");
+    let t = temp_root("out_both");
     let (src, dst) = fixture(&t);
     let mut base: Vec<String> = vec![
         "sync".into(),
@@ -242,7 +242,7 @@ fn the_two_formats_report_the_same_records_in_the_same_order() {
 /// a machine interface.
 #[test]
 fn json_stdout_stays_clean_while_the_run_narrates() {
-    let t = TempRoot::new("out_clean");
+    let t = temp_root("out_clean");
     let (src, dst) = fixture(&t);
     // No --log-level: the default narrates at info, the noisiest ordinary setting.
     let r = run(&compare_args(&src, &dst, &["--output", "json"]));
@@ -288,9 +288,9 @@ fn an_unknown_output_format_is_rejected_by_the_parser() {
 /// instead of by substring.
 #[test]
 fn a_record_is_logged_with_its_fields_at_debug_level() {
-    let t = TempRoot::new("out_debug_log");
+    let t = temp_root("out_debug_log");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("run.json");
+    let logfile = t.subdir("logs").join("run.json");
     let mut args = compare_args(&src, &dst, &["--output", "json", "--log-level", "debug"]);
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
@@ -374,9 +374,9 @@ fn a_record_is_logged_with_its_fields_at_debug_level() {
 /// pinned here is the one the gate actually makes.
 #[test]
 fn a_record_reaches_the_file_log_at_the_default_log_level() {
-    let t = TempRoot::new("out_default_log");
+    let t = temp_root("out_default_log");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("run.json");
+    let logfile = t.subdir("logs").join("run.json");
     // No --log-level at all: the default `info`, where the console layer discards
     // a debug event and only the file layer wants it.
     let mut args = compare_args(&src, &dst, &["--output", "json"]);
@@ -419,9 +419,9 @@ fn a_record_reaches_the_file_log_at_the_default_log_level() {
 /// sink with two names.
 #[test]
 fn the_file_is_louder_than_the_console_by_default() {
-    let t = TempRoot::new("out_file_vs_console");
+    let t = temp_root("out_file_vs_console");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("run.json");
+    let logfile = t.subdir("logs").join("run.json");
     let mut args = compare_args(&src, &dst, &["--output", "json"]);
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
@@ -453,9 +453,9 @@ fn the_file_is_louder_than_the_console_by_default() {
 /// nothing else.
 #[test]
 fn the_log_file_level_flag_narrows_the_file() {
-    let t = TempRoot::new("out_file_level_flag");
+    let t = temp_root("out_file_level_flag");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("run.json");
+    let logfile = t.subdir("logs").join("run.json");
     let mut args = compare_args(&src, &dst, &["--output", "json"]);
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
@@ -484,9 +484,9 @@ fn the_log_file_level_flag_narrows_the_file() {
 /// default — answers for both.
 #[test]
 fn the_environment_sets_the_log_files_level() {
-    let t = TempRoot::new("out_env_log_file_level");
+    let t = temp_root("out_env_log_file_level");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("run.json");
+    let logfile = t.subdir("logs").join("run.json");
     let mut args = compare_args(&src, &dst, &["--output", "json"]);
     args.push("--log-file".into());
     args.push(logfile.display().to_string());
@@ -518,7 +518,7 @@ fn the_environment_sets_the_log_files_level() {
 /// `--log-level`, and `RUST_LOG` only adds to it.
 #[test]
 fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
-    let t = TempRoot::new("out_rust_log");
+    let t = temp_root("out_rust_log");
     let (src, dst) = fixture(&t);
 
     // The environment names another crate: the program still speaks, at its
@@ -563,7 +563,7 @@ fn a_log_file_is_always_written_beside_the_executable() {
     let logs = exe_dir().join("logs");
     std::fs::create_dir_all(&logs).expect("the logs directory");
 
-    let t = TempRoot::new("out_default_log_file");
+    let t = temp_root("out_default_log_file");
     let (src, dst) = fixture(&t);
     let r = run(&compare_args(&src, &dst, &["--output", "json"]));
     assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
@@ -605,9 +605,9 @@ fn a_log_file_is_always_written_beside_the_executable() {
 /// default answers for both.
 #[test]
 fn the_environment_names_the_log_file_when_the_flag_does_not() {
-    let t = TempRoot::new("out_env_log_file");
+    let t = temp_root("out_env_log_file");
     let (src, dst) = fixture(&t);
-    let logfile = t.mkdirs("logs").join("from-env.json");
+    let logfile = t.subdir("logs").join("from-env.json");
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &[]))

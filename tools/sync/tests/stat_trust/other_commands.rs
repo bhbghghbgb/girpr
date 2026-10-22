@@ -10,9 +10,9 @@ use super::*;
 /// `CHANGED`, and `CHANGED` in a sync is a copy.
 #[test]
 fn sync_with_the_short_circuit_off_still_converges() {
-    let t = TempRoot::new("st_sync");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("st_sync");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"short");
     wfile(
         &dst,
@@ -65,8 +65,8 @@ fn sync_with_the_short_circuit_off_still_converges() {
 /// proves it*".
 #[test]
 fn compare_self_reads_a_touched_file_when_mtime_is_distrusted() {
-    let t = TempRoot::new("st_self");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_self");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"identical");
     cmd_update(update(dir.clone()), &log()).unwrap();
     age(&dir, "a.txt", 60);

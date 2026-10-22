@@ -12,7 +12,7 @@
 
 mod common;
 
-use common::{TempRoot, compare, log, rw, sync, update, wfile};
+use common::{compare, log, rw, sync, temp_root, update, wfile};
 use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
 use girsync::hash::hash_file;
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
@@ -62,8 +62,8 @@ fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
 ///
 #[test]
 fn lock_update_records_files_dirs_and_hashes() {
-    let t = TempRoot::new("lock_basic");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lock_basic");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     std::fs::create_dir_all(dir.join("empty")).unwrap();
@@ -88,8 +88,8 @@ fn lock_update_records_files_dirs_and_hashes() {
 /// (the cache-hit path reuses entries instead of rewriting them).
 #[test]
 fn lock_update_is_idempotent() {
-    let t = TempRoot::new("lock_idem");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lock_idem");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"stable content");
 
     cmd_update(update(dir.clone()), &log()).unwrap();
@@ -111,8 +111,8 @@ fn lock_update_is_idempotent() {
 /// match a fresh `hash_file` call.
 #[test]
 fn lock_multi_algo_backfill() {
-    let t = TempRoot::new("lock_algos");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lock_algos");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"digest me");
 
     cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
@@ -139,8 +139,8 @@ fn lock_multi_algo_backfill() {
 /// stat still matches.
 #[test]
 fn lock_cache_writes_merge_unless_stat_changed() {
-    let t = TempRoot::new("lock_merge");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lock_merge");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"digest me");
     wfile(&dir, "sub/b.txt", b"nested payload");
     let full = hash_file(&dir.join("a.txt"), &aset(&both())).unwrap();
@@ -198,9 +198,9 @@ fn lock_cache_writes_merge_unless_stat_changed() {
 /// equal and sync cleanly.
 #[test]
 fn lock_hash_none_tracks_without_digests() {
-    let t = TempRoot::new("lock_none");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_none");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"same bytes");
     wfile(&dst, "a.txt", b"same bytes");
     // Same size but fresh writes differ by mtime; pin it so size+mtime
@@ -236,9 +236,9 @@ fn lock_hash_none_tracks_without_digests() {
 /// sha256-only sync converges and the cache holds sha256 digests.
 #[test]
 fn lock_sha256_sync_converges() {
-    let t = TempRoot::new("lock_sha");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_sha");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"sha payload v2 longer");
     wfile(&dst, "a.txt", b"old");
 
@@ -267,9 +267,9 @@ fn lock_sha256_sync_converges() {
 /// cache, so exit 0 under the flag proves the rehash happened.
 #[test]
 fn lock_no_trust_cached_hashes_is_per_side() {
-    let t = TempRoot::new("lock_notrust");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_notrust");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"identical bytes");
     wfile(&dst, "a.txt", b"identical bytes");
     common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
@@ -334,9 +334,9 @@ fn poison(dir: &std::path::Path, rel: &str) {
 /// `girpr-cache-old-*` snapshot of dst. Both are keep-all, so one is enough.
 #[test]
 fn lock_backups_and_snapshots_created() {
-    let t = TempRoot::new("lock_bak");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_bak");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"x");
     wfile(&dst, "a.txt", b"x");
 
@@ -371,13 +371,13 @@ fn lock_backups_and_snapshots_created() {
 /// the assertion would hold vacuously.
 #[test]
 fn lock_record_side_is_read_only() {
-    let t = TempRoot::new("lock_rec");
-    let dir = t.mkdirs("w");
+    let t = temp_root("lock_rec");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
 
     // Same content, different root.
-    let live = t.mkdirs("live");
+    let live = t.subdir("live");
     wfile(&live, "a.txt", b"hello");
     common::sync_mtime(&dir.join("a.txt"), &live.join("a.txt"));
 
@@ -396,9 +396,9 @@ fn lock_record_side_is_read_only() {
 /// caches' logical content identical.
 #[test]
 fn lock_dry_run_changes_nothing() {
-    let t = TempRoot::new("lock_dry");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_dry");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"new content here");
     wfile(&dst, "a.txt", b"old");
     // Pre-create both caches so dry-run has no reason to create anything.
@@ -424,9 +424,9 @@ fn lock_dry_run_changes_nothing() {
 /// Empty dirs and nesting survive a full sync and compare equal after.
 #[test]
 fn lock_empty_dirs_and_nesting_sync() {
-    let t = TempRoot::new("lock_dirs");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lock_dirs");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a/b/c/deep.txt", b"deep");
     std::fs::create_dir_all(src.join("a/empty1")).unwrap();
     std::fs::create_dir_all(src.join("lonely")).unwrap();

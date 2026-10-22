@@ -625,8 +625,8 @@ mod tests {
         );
     }
 
-    fn tmp(name: &str) -> crate::testtemp::TempDir {
-        crate::testtemp::TempDir::new("gircap-hash", name)
+    fn tmp(name: &str) -> girpr_tempdir::TempDir {
+        girpr_tempdir::TempDir::new("gircap-hash", name)
     }
 
     /// Blob-shaped bytes: binary, with repeats, long enough to span many

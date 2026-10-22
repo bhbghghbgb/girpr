@@ -645,8 +645,8 @@ mod tests {
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
-    fn scratch(name: &str) -> crate::testtemp::TempDir {
-        crate::testtemp::TempDir::new("gircap-blobs", name)
+    fn scratch(name: &str) -> girpr_tempdir::TempDir {
+        girpr_tempdir::TempDir::new("gircap-blobs", name)
     }
 
     /// `fs::rename` **does** replace an existing destination on Windows: it calls
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn an_unfilled_want_still_has_a_row_and_says_it_was_not_stored() {
         let w = chunks::wants(&[pair()]);
-        let root = crate::testtemp::TempDir::new("gircap-m6", "unfilled_want");
+        let root = girpr_tempdir::TempDir::new("gircap-m6", "unfilled_want");
         let store = Store::new(&root, sources());
         let (entry, roles) = store.unfilled(&w[0]);
         assert_eq!(roles, w[0].sets);

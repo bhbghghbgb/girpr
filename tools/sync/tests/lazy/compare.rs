@@ -13,7 +13,7 @@ use super::*;
 /// Eager baseline: 8. This is the win.
 #[test]
 fn cold_all_stat_differing_pairs_read_nothing() {
-    let t = TempRoot::new("lz_cold_differ");
+    let t = temp_root("lz_cold_differ");
     let (src, dst) = four_differing(&t);
     let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
     assert_eq!(
@@ -35,7 +35,7 @@ fn cold_all_stat_differing_pairs_read_nothing() {
 /// are read — laziness is not "never hash".
 #[test]
 fn cold_all_stat_equal_pairs_are_all_hashed() {
-    let t = TempRoot::new("lz_cold_equal");
+    let t = temp_root("lz_cold_equal");
     let (src, dst) = pair(
         &t,
         &[
@@ -67,7 +67,7 @@ fn cold_all_stat_equal_pairs_are_all_hashed() {
 /// half is read — the count is 4, not 8 and not 0.
 #[test]
 fn mixed_tree_reads_only_the_stat_equal_half() {
-    let t = TempRoot::new("lz_mixed");
+    let t = temp_root("lz_mixed");
     let (src, dst) = pair(
         &t,
         &[
@@ -102,7 +102,7 @@ fn mixed_tree_reads_only_the_stat_equal_half() {
 /// neither side opens a file.
 #[test]
 fn warm_complete_caches_read_nothing() {
-    let t = TempRoot::new("lz_warm");
+    let t = temp_root("lz_warm");
     let (src, dst) = pair(
         &t,
         &[
@@ -126,7 +126,7 @@ fn warm_complete_caches_read_nothing() {
 /// the count, not about backfilling correctly.
 #[test]
 fn stat_equal_pair_costs_only_the_side_missing_the_algorithm() {
-    let t = TempRoot::new("lz_missing_algo");
+    let t = temp_root("lz_missing_algo");
     let both = &["md5", "sha256"];
     let (src, dst) = pair(
         &t,
@@ -155,7 +155,7 @@ fn stat_equal_pair_costs_only_the_side_missing_the_algorithm() {
 /// verdict came from the cache, not from stat.
 #[test]
 fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
-    let t = TempRoot::new("lz_poison");
+    let t = temp_root("lz_poison");
     let (src, dst) = pair(
         &t,
         &[("a.txt", Some(b"alpha"), Some(b"alpha"))],
@@ -180,7 +180,7 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
 /// tree looks like.
 #[test]
 fn hash_none_reads_nothing_on_a_differing_tree() {
-    let t = TempRoot::new("lz_hash_none");
+    let t = temp_root("lz_hash_none");
     let (src, dst) = four_differing(&t);
     let r = run_pair(&src, &dst, &with_algos(&[]), TrustOpts::default());
     assert_eq!(r.hashed, 0, "an empty plan means no read");
@@ -192,7 +192,7 @@ fn hash_none_reads_nothing_on_a_differing_tree() {
 /// sides, eight files.
 #[test]
 fn no_trust_on_stat_equal_pairs_forces_the_read() {
-    let t = TempRoot::new("lz_notrust_equal");
+    let t = temp_root("lz_notrust_equal");
     let (src, dst) = pair(
         &t,
         &[
@@ -226,7 +226,7 @@ fn no_trust_on_stat_equal_pairs_forces_the_read() {
 /// both sides and a cold cache.
 #[test]
 fn no_trust_on_stat_differing_pairs_is_a_no_op() {
-    let t = TempRoot::new("lz_notrust_differ");
+    let t = temp_root("lz_notrust_differ");
     let (src, dst) = four_differing(&t);
     let r = run_pair(
         &src,
@@ -246,7 +246,7 @@ fn no_trust_on_stat_differing_pairs_is_a_no_op() {
 /// dst-only dir likewise.
 #[test]
 fn one_sided_paths_and_dirs_need_no_digest() {
-    let t = TempRoot::new("lz_onesided");
+    let t = temp_root("lz_onesided");
     let (src, dst) = pair(
         &t,
         &[
@@ -284,7 +284,7 @@ fn one_sided_paths_and_dirs_need_no_digest() {
 /// presence, so no digest.
 #[test]
 fn a_kind_conflict_needs_no_digest() {
-    let t = TempRoot::new("lz_kind");
+    let t = temp_root("lz_kind");
     let (src, dst) = pair(
         &t,
         &[("clash", Some(b"iamafile"), Some(b""))],
@@ -310,9 +310,9 @@ fn a_kind_conflict_needs_no_digest() {
 /// wrong: it would plan nothing and the `CASE-MISMATCH` would be the only line.
 #[test]
 fn a_case_only_difference_with_equal_content_is_still_compared() {
-    let t = TempRoot::new("lz_case_equal");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lz_case_equal");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"alpha");
     wfile(&dst, "A.txt", b"alpha");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
@@ -347,9 +347,9 @@ fn a_case_only_difference_with_equal_content_is_still_compared() {
 /// is a different test — and one that would pass with no digest at all.
 #[test]
 fn a_case_only_difference_with_differing_content_is_changed_too() {
-    let t = TempRoot::new("lz_case_diff");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("lz_case_diff");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"alpha");
     wfile(&dst, "A.txt", b"ALPHA");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
@@ -383,7 +383,7 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
 /// gone, replaced by a stat-only row.
 #[test]
 fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() {
-    let t = TempRoot::new("lz_stale");
+    let t = temp_root("lz_stale");
     let (src, dst) = pair(
         &t,
         &[("a.txt", Some(b"alpha"), Some(b"alpha"))],
@@ -417,7 +417,7 @@ fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() 
 /// not call it.
 #[test]
 fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
-    let t = TempRoot::new("lz_cmd");
+    let t = temp_root("lz_cmd");
     let (src, dst) = four_differing(&t);
     let o = girsync::CompareOpts {
         src: src.clone(),

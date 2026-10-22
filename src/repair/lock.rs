@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn a_fresh_lock_excludes_a_second_run() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_lock", "fresh");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "fresh");
         let lock = Lock::acquire(&dir).expect("the first run takes the lock");
         assert!(lock.path().exists());
         // The second run is refused, and the refusal names the file.
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn a_stale_lock_is_taken_over() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_lock", "stale");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "stale");
         // A lock file from a run that was killed: old enough to be stale.
         let path = dir.join(LOCK_FILE);
         let f = std::fs::OpenOptions::new()
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn a_live_lock_is_not_taken_over() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_lock", "live");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "live");
         let path = dir.join(LOCK_FILE);
         std::fs::write(&path, "pid=1234\n").unwrap();
         // Fresh: not stale, so the lock stands.
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn a_lock_with_an_unreadable_body_still_excludes() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_lock", "body");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "body");
         let path = dir.join(LOCK_FILE);
         std::fs::write(&path, "not a pid at all").unwrap();
         assert_eq!(holder_pid(&path), "?");

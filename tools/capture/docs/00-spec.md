@@ -39,7 +39,7 @@ main tool, and never imports its code.
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
 | No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`) and their environment variables. The README is the only other shared vocabulary (version strings) |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
-| One shared *leaf* crate: the log policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. It holds no logic of any program, and no test of one program depends on it |
+| Two shared *leaf* crates: the log policy and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. Neither holds any logic of any program, and no test of one program depends on another's |
 
 The intent is **do not couple**. Two tools that must stay independent should not
 end up depending on each other in order to prove one of them works, and the
@@ -57,9 +57,17 @@ What stays independent is everything that could couple the *meaning* of a run:
 the exit codes, the report format, the fixtures, and every flag that is not
 about logging.
 
+**The scratch-directory policy is shared for the same reason, and is a
+dev-dependency.** A scratch directory is a thing for a test, not for a program:
+the shared crate is how a test's tree is *named* (so two runs never share one)
+and *removed* (so a failed case leaves nothing behind). Sharing it means the
+three suites cannot drift apart on the one thing where a drift is invisible
+until it eats another test's tree. Nothing that ships links against it, and it
+depends on no program at all.
+
 This mirrors `tools/sync`: *"Separate from the `girpr` binary; shares no flags,
-no exit-code contract, no code."* — with the same one exception, the log
-policy, on the same grounds.
+no exit-code contract, no code."* — with the same exceptions, the log policy
+and the scratch-directory policy, on the same grounds.
 
 ---
 

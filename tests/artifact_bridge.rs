@@ -74,13 +74,12 @@
 mod bundle;
 #[path = "artifact_bridge/server.rs"]
 mod server;
-#[path = "common/tempdir.rs"]
-mod tempdir;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
+use girpr_tempdir::TempDir;
 use server::{Bridge, Bundle, Origins};
 
 // ---------------------------------------------------------------------------
@@ -302,12 +301,12 @@ struct Scratch {
     root: PathBuf,
     /// Removes the tree on drop. Named so the owned `root` path can stay a
     /// plain `PathBuf` for the call sites that hand it to the binary.
-    _guard: tempdir::TempDir,
+    _guard: TempDir,
 }
 
 impl Scratch {
     fn new(bundle: &Bundle, capture: &Capture) -> Self {
-        let root = tempdir::TempDir::new("girpr_artifact_bridge", "scratch");
+        let root = TempDir::new("girpr_artifact_bridge", "scratch");
         let game = root.join("game");
         // The install's own state.
         copy_file(

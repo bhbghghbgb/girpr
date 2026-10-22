@@ -16,9 +16,15 @@ use girsync::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+// The scratch-directory helper, from the shared `girpr-tempdir` crate, so the
+// tree a test writes into is named and removed exactly the way it is in the
+// other two projects.
+pub use girpr_tempdir::TempDir;
+
+/// The prefix every scratch directory in this suite carries: it says which
+/// suite leaked a directory if one survives a crash.
+pub const TEMP_PREFIX: &str = "girsync";
 
 /// The console's records, with the colour taken out.
 ///
@@ -55,45 +61,11 @@ pub fn rw() -> CacheOpen {
 
 /// Isolated temp directory per test, so parallel `cargo nextest run` workers
 /// never share a cache file.
-pub struct TempRoot {
-    path: PathBuf,
-}
-
-impl TempRoot {
-    pub fn new(tag: &str) -> Self {
-        let n = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "girsync_run_{}_{}_{}_{}",
-            std::process::id(),
-            nanos,
-            n,
-            tag
-        ));
-        std::fs::remove_dir_all(&path).ok();
-        std::fs::create_dir_all(&path).unwrap();
-        Self { path }
-    }
-
-    pub fn mkdirs(&self, rel: &str) -> PathBuf {
-        let p = self.path.join(rel);
-        std::fs::create_dir_all(&p).unwrap();
-        p
-    }
-
-    pub fn root(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        // Cache handles opened by cmd_* are dropped by then; best-effort cleanup.
-        std::fs::remove_dir_all(&self.path).ok();
-    }
+///
+/// The tree is named so nothing can collide with it and removed when the
+/// guard drops; see `girpr-tempdir` for why each part of the name is there.
+pub fn temp_root(tag: &str) -> TempDir {
+    TempDir::new(TEMP_PREFIX, tag)
 }
 
 pub fn wfile(root: &Path, rel: &str, bytes: &[u8]) {
@@ -421,9 +393,9 @@ pub type Spec = (&'static str, Side, Side);
 /// dimension it is about.
 ///
 /// With `warmed: false` both caches are left cold.
-pub fn pair(t: &TempRoot, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
-    let s = t.mkdirs("src");
-    let d = t.mkdirs("dst");
+pub fn pair(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    let s = t.subdir("src");
+    let d = t.subdir("dst");
     for (rel, sb, db) in spec {
         for (dir, bytes) in [(&s, *sb), (&d, *db)] {
             match bytes {

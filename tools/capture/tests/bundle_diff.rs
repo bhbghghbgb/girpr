@@ -86,7 +86,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World, tempdir::TempDir};
+use common::{Mock, World};
+use girpr_tempdir::TempDir;
 
 /// The binary under test, beside this test's own executable.
 fn bin() -> PathBuf {

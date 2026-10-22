@@ -5,8 +5,8 @@ mod common;
 use std::num::NonZeroUsize;
 
 use common::{
-    TempRoot, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
-    serial_rw, strip_algo, sync, sync_mtime, update, update_dry, wfile,
+    TempDir, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
+    serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, FileRec, open_db};
 use girsync::config::{CommonOpts, ScanMode};
@@ -62,9 +62,9 @@ fn tree_state(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 /// A two-tree fixture that makes the planner do real work: one equal pair that
 /// must be hashed to confirm, one that is already decided by size, one src-only,
 /// one dst-only, and one nested path.
-fn two_trees(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn two_trees(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"same");
     wfile(&dst, "a.txt", b"same");
     // The load-bearing file: same length, so size cannot settle it, and the
@@ -161,7 +161,7 @@ fn effective_maps(
 /// remembering to extend it.
 #[test]
 fn dry_run_reports_the_same_counters_as_a_real_run() {
-    let t = TempRoot::new("dry_stats");
+    let t = temp_root("dry_stats");
     let (src, dst) = two_trees(&t);
 
     // An orphan row on each side, so `pruned` is non-zero and the two modes have
@@ -220,7 +220,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
 /// dropped it would be writing.
 #[test]
 fn a_dry_run_decides_to_prune_without_dropping_the_row() {
-    let t = TempRoot::new("dry_prune");
+    let t = temp_root("dry_prune");
     let (src, dst) = two_trees(&t);
     let p = src.join(CACHE_PREFIX);
     {
@@ -261,7 +261,7 @@ fn a_dry_run_decides_to_prune_without_dropping_the_row() {
 /// total, which is also checked so a widening of the undecided set is visible here.
 #[test]
 fn the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs() {
-    let t = TempRoot::new("cmp_dry_fixture");
+    let t = temp_root("cmp_dry_fixture");
     let (src, dst) = two_trees(&t);
     let (sm, dm, _, hashed) = effective_maps(&src, &dst, false);
 
@@ -294,8 +294,8 @@ fn the_dry_run_fixture_forces_hashing_of_exactly_the_undecided_pairs() {
 
 #[test]
 fn run_update_then_compare_equal() {
-    let t = TempRoot::new("upd_eq");
-    let dir = t.mkdirs("a");
+    let t = temp_root("upd_eq");
+    let dir = t.subdir("a");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
 
@@ -309,7 +309,7 @@ fn run_update_then_compare_equal() {
     // A second folder with the same content. mtime is part of identity, so pin
     // the copy's stamps to the original's; a same-root copy is not an option,
     // since `compare` refuses to name one cache twice.
-    let mirror = t.mkdirs("a-mirror");
+    let mirror = t.subdir("a-mirror");
     wfile(&mirror, "a.txt", b"hello");
     wfile(&mirror, "sub/b.txt", b"world");
     for rel in ["a.txt", "sub/b.txt"] {
@@ -336,8 +336,8 @@ fn run_update_then_compare_equal() {
 /// audit repairs the drift it was supposed to surface.
 #[test]
 fn run_compare_rejects_same_cache() {
-    let t = TempRoot::new("cmp_self");
-    let dir = t.mkdirs("a");
+    let t = temp_root("cmp_self");
+    let dir = t.subdir("a");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let record = dir.join(girsync::cache::CACHE_PREFIX);
@@ -364,16 +364,16 @@ fn run_compare_rejects_same_cache() {
     assert!(cmd_compare(compare(dir.clone(), spelled), &log()).is_err());
 
     // A genuinely different folder on the other side still works.
-    let other = t.mkdirs("b");
+    let other = t.subdir("b");
     wfile(&other, "a.txt", b"hello");
     assert!(cmd_compare(compare(dir.clone(), other), &log()).is_ok());
 }
 
 #[test]
 fn run_compare_detects_diff_then_sync_converges() {
-    let t = TempRoot::new("diff_sync");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("diff_sync");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "keep.txt", b"same");
     wfile(&dst, "keep.txt", b"same");
     wfile(&src, "changed.txt", b"src-new-content-much-longer");
@@ -417,7 +417,7 @@ fn run_compare_detects_diff_then_sync_converges() {
 /// coincidence.
 #[test]
 fn compare_dry_run_writes_nothing_and_answers_the_same() {
-    let t = TempRoot::new("cmp_dry");
+    let t = temp_root("cmp_dry");
     let (src, dst) = two_trees(&t);
     let src_cache = src.join(CACHE_PREFIX);
     let dst_cache = dst.join(CACHE_PREFIX);
@@ -471,7 +471,7 @@ fn compare_dry_run_writes_nothing_and_answers_the_same() {
 /// size are different digests in the map, whatever the verdict says.
 #[test]
 fn compare_dry_run_computes_the_same_digests() {
-    let t = TempRoot::new("cmp_dry_map");
+    let t = temp_root("cmp_dry_map");
     let (src, dst) = two_trees(&t);
 
     // Cold, so the dry run really does have to hash to answer. It gets an
@@ -508,8 +508,8 @@ fn compare_dry_run_computes_the_same_digests() {
 /// run that skipped the hashing would not be answering the same question.
 #[test]
 fn update_dry_run_reads_everything_and_writes_nothing() {
-    let t = TempRoot::new("upd_dry");
-    let dir = t.mkdirs("a");
+    let t = temp_root("upd_dry");
+    let dir = t.subdir("a");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     let cache = dir.join(CACHE_PREFIX);
@@ -531,8 +531,8 @@ fn update_dry_run_reads_everything_and_writes_nothing() {
 /// command that was already safe.
 #[test]
 fn compare_self_accepts_dry_run_with_a_warning() {
-    let t = TempRoot::new("cs_dry");
-    let dir = t.mkdirs("a");
+    let t = temp_root("cs_dry");
+    let dir = t.subdir("a");
     wfile(&dir, "a.txt", b"hello");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let cache = dir.join(CACHE_PREFIX);
@@ -568,9 +568,9 @@ fn compare_self_accepts_dry_run_with_a_warning() {
 /// coverage rule.
 #[test]
 fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
-    let t = TempRoot::new("cmp_cover");
-    let rec_home = t.mkdirs("rec");
-    let folder = t.mkdirs("live");
+    let t = temp_root("cmp_cover");
+    let rec_home = t.subdir("rec");
+    let folder = t.subdir("live");
     for dir in [&rec_home, &folder] {
         wfile(dir, "a.txt", b"hello");
     }
@@ -610,9 +610,9 @@ fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
 /// Availability is `cached` plus `hashable`, and trust is absent from it on purpose.
 #[test]
 fn distrusting_a_record_does_not_make_it_uncovered() {
-    let t = TempRoot::new("cmp_notrust_rec");
-    let rec_home = t.mkdirs("rec");
-    let folder = t.mkdirs("live");
+    let t = temp_root("cmp_notrust_rec");
+    let rec_home = t.subdir("rec");
+    let folder = t.subdir("live");
     for dir in [&rec_home, &folder] {
         wfile(dir, "a.txt", b"hello");
     }

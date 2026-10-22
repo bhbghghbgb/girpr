@@ -1521,7 +1521,7 @@ mod tests {
     /// path with a regular file.
     #[test]
     fn the_resolution_table_is_pinned() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_resolve", "table");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_resolve", "table");
 
         // Not there: the in-place path creates it.
         let missing = dir.join("missing.dat");

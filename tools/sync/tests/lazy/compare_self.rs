@@ -17,9 +17,9 @@ use super::*;
 /// `update` is what makes the record describe the tree, so this is the state an
 /// audit is run against: `n_eq` pairs that can only be settled by a digest, and
 /// `n_diff` that size and mtime have already settled.
-fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempRoot, PathBuf) {
-    let t = TempRoot::new(tag);
-    let dir = t.mkdirs("w");
+fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempDir, PathBuf) {
+    let t = temp_root(tag);
+    let dir = t.subdir("w");
     for i in 0..n_eq {
         wfile(&dir, &format!("eq{i}.txt"), b"aaaa");
     }
@@ -126,7 +126,7 @@ fn self_audit(dir: &Path) -> Run {
 /// files to conclude things their sizes had decided for free.
 #[test]
 fn an_audit_where_every_pair_differs_in_stat_reads_nothing() {
-    let t = TempRoot::new("lz_self_alldiffer");
+    let t = temp_root("lz_self_alldiffer");
     let (_t, dir) = audited("lz_self_alldiffer", 0, 16);
     let r = self_audit(&dir);
     assert_eq!(

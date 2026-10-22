@@ -22,6 +22,7 @@ src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx
 src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit code) + RepairMode
 src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
 crates/log/           # the shared log policy: log file path, log levels, env vars (also used by tools/)
+crates/tempdir/       # the shared scratch-directory policy: a name nothing collides with, a tree removed with the test (also used by tools/)
 src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formatting and emission
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated

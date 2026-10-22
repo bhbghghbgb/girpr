@@ -13,8 +13,8 @@ use super::*;
 /// `gone.txt` is `EXTRA`.
 #[test]
 fn no_trust_mtime_costs_the_mtime_changed_pairs_and_nothing_else() {
-    let t_default = TempRoot::new("st_mtime_off");
-    let t_flagged = TempRoot::new("st_mtime_on");
+    let t_default = temp_root("st_mtime_off");
+    let t_flagged = temp_root("st_mtime_on");
     let (a_src, a_dst) = four_states(&t_default);
     let (b_src, b_dst) = four_states(&t_flagged);
 
@@ -35,8 +35,8 @@ fn no_trust_mtime_costs_the_mtime_changed_pairs_and_nothing_else() {
 /// rather than one switch wearing two names.
 #[test]
 fn no_trust_size_costs_the_size_changed_pairs_and_nothing_else() {
-    let t_default = TempRoot::new("st_size_off");
-    let t_flagged = TempRoot::new("st_size_on");
+    let t_default = temp_root("st_size_off");
+    let t_flagged = temp_root("st_size_on");
     let (a_src, a_dst) = four_states(&t_default);
     let (b_src, b_dst) = four_states(&t_flagged);
 
@@ -57,7 +57,7 @@ fn no_trust_size_costs_the_size_changed_pairs_and_nothing_else() {
 /// the count is every file on both sides and nothing is free.
 #[test]
 fn distrusting_both_fields_reads_every_file_on_both_sides() {
-    let t = TempRoot::new("st_both_off");
+    let t = temp_root("st_both_off");
     let (src, dst) = four_states(&t);
     let off = StatTrust::default().without_size().without_mtime();
     assert_eq!(
@@ -78,7 +78,7 @@ fn distrusting_both_fields_reads_every_file_on_both_sides() {
 /// files*, never about how many times.
 #[test]
 fn switching_the_short_circuit_off_costs_one_pass_per_side_not_one_read_per_algorithm() {
-    let t = TempRoot::new("st_digests");
+    let t = temp_root("st_digests");
     let (src, dst) = four_states(&t);
     let off = StatTrust::default().without_size().without_mtime();
     let files = hashed(&src, &dst, &distrusting(&["md5", "sha256"], off));

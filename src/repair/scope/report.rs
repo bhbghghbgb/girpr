@@ -451,7 +451,7 @@ mod tests {
         // A file that is already the right size needs nothing beyond the
         // install; a file that is not there needs all of it; the temp path
         // always needs all of it.
-        let dir = crate::testtemp::TempDir::new("girpr_test_disk", "plan");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "plan");
         std::fs::create_dir_all(dir.join("game")).unwrap();
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
 
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn the_document_carries_the_mode_and_the_extra_bytes_of_each_file() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_disk", "document");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "document");
         std::fs::create_dir_all(dir.join("game")).unwrap();
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         let plan = plan();
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn writing_creates_the_parent_directory() {
-        let dir = crate::testtemp::TempDir::new("girpr_test_plan_out", "creates_parent");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, 60, &DiskPlan::default());

@@ -301,7 +301,7 @@ fn file_name(rel: &str) -> &str {
 mod tests {
     use super::*;
     use crate::repair::plan::PlannedFile;
-    use crate::testtemp::TempDir;
+    use girpr_tempdir::TempDir;
     use std::collections::HashMap;
 
     fn purge_fixture() -> (HashSet<String>, HashSet<String>) {

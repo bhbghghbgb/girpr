@@ -31,7 +31,7 @@ fn sync_reports_the_same_actions_under_every_rw_setting() {
 
     let mut baseline: Option<(BTreeSet<String>, usize)> = None;
     for flags in flag_spellings() {
-        let t = TempRoot::new("rw_sync");
+        let t = temp_root("rw_sync");
         let (src, dst) = fixture(&t);
         let (code, recs) = run(&argv("sync", &src, &dst, &flags));
         assert_eq!(code, 0, "{flags:?} exited {code}");
@@ -75,7 +75,7 @@ fn sync_reports_the_same_actions_under_every_rw_setting() {
 /// different question, which is exactly the failure `SyncStats` exists to catch.
 #[test]
 fn a_dry_run_is_unaffected_by_the_rw_limit() {
-    let t = TempRoot::new("rw_dry");
+    let t = temp_root("rw_dry");
     let (src, dst) = fixture(&t);
     let sp = |d: &Path| d.join(CACHE_PREFIX);
 
@@ -120,8 +120,8 @@ fn a_dry_run_is_unaffected_by_the_rw_limit() {
 #[test]
 fn update_hashes_the_same_set_at_every_limit() {
     for flags in flag_spellings() {
-        let t = TempRoot::new("rw_update");
-        let dir = t.mkdirs("w");
+        let t = temp_root("rw_update");
+        let dir = t.subdir("w");
         for i in 0..40usize {
             let rel: &'static str = Box::leak(format!("u{i:02}.bin").into_boxed_str());
             wfile(&dir, rel, &vec![b'z'; 256 + i]);

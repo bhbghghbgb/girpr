@@ -9,7 +9,7 @@ name = "girpr"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/log", "tools/sync", "tools/capture"]
+members = [".", "crates/log", "crates/tempdir", "tools/sync", "tools/capture"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -32,3 +32,9 @@ walkdir = "2"
 glob = "0.3"
 regex = "1"
 futures = "0.3"
+
+[dev-dependencies]
+# The scratch-directory helper, shared with the two dev tools: one name, one
+# construction and one cleanup for every test in the workspace. A
+# dev-dependency, because nothing that ships creates a scratch directory.
+girpr-tempdir = { path = "crates/tempdir" }

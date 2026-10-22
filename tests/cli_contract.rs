@@ -17,11 +17,9 @@
 //! fetched, so they live in `tests/repair_offline.rs` rather than here — this
 //! file never has a server.
 
-#[path = "common/tempdir.rs"]
-mod tempdir;
-
 use clap::Parser;
 use girpr::cli::Args;
+use girpr_tempdir::TempDir;
 use std::process::Command;
 
 fn run(args: &[&str]) -> (i32, String, String) {
@@ -263,7 +261,7 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // the file layer is installed: validation rejects it (exit 1) before any
     // game directory or network is touched, so the expected code is exact and
     // the case needs no server.
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "unopenable");
+    let scratch = TempDir::new("girpr_cli_logfile", "unopenable");
     // A regular file where the log's parent directory should be: `create_dir_all`
     // cannot succeed, and cannot be confused with "the directory was absent".
     let blocker = scratch.join("not_a_dir");
@@ -308,7 +306,7 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
     // reports the default path is filtered out at `warn`, so anything still
     // saying `log file:` on stderr at that level is the acknowledgement the
     // caller asked for.
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "explicit");
+    let scratch = TempDir::new("girpr_cli_logfile", "explicit");
     let log = scratch.join("nested").join("run.log");
 
     let (code, _, stderr) = run(&[
@@ -404,7 +402,7 @@ fn a_log_file_is_always_written_beside_the_executable() {
 /// default answers for both.
 #[test]
 fn the_environment_names_the_log_file_when_the_flag_does_not() {
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "env");
+    let scratch = TempDir::new("girpr_cli_logfile", "env");
     let log = scratch.join("from-env.log");
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -438,7 +436,7 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
 /// whatever the shell happened to export. The one that was typed wins.
 #[test]
 fn the_flag_wins_over_the_environment() {
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "precedence");
+    let scratch = TempDir::new("girpr_cli_logfile", "precedence");
     let from_flag = scratch.join("from-flag.log");
     let from_env = scratch.join("from-env.log");
 
@@ -472,7 +470,7 @@ fn the_flag_wins_over_the_environment() {
 /// questions, and the file's is the one asked afterwards.
 #[test]
 fn the_file_keeps_what_a_quiet_console_drops() {
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "levels");
+    let scratch = TempDir::new("girpr_cli_logfile", "levels");
     let log = scratch.join("levels.log");
 
     let (code, _, stderr) = run(&[
@@ -514,7 +512,7 @@ fn exe_dir() -> std::path::PathBuf {
 /// default — answers for both.
 #[test]
 fn the_environment_sets_the_log_files_level() {
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "file_level");
+    let scratch = TempDir::new("girpr_cli_logfile", "file_level");
     let log = scratch.join("levels.log");
 
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -548,7 +546,7 @@ fn the_environment_sets_the_log_files_level() {
 /// The flag beats the environment for the log file's level too.
 #[test]
 fn the_log_file_level_flag_beats_the_environment() {
-    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "file_level_flag");
+    let scratch = TempDir::new("girpr_cli_logfile", "file_level_flag");
     let log = scratch.join("levels.log");
 
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))

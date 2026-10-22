@@ -22,7 +22,7 @@ use super::*;
 /// every other test in this file and every library user.
 #[test]
 fn a_distrusted_field_with_no_digest_to_fall_back_on_is_never_reported_equal() {
-    let t = TempRoot::new("st_unverifiable");
+    let t = temp_root("st_unverifiable");
     let (src, dst) = size_differs(&t);
     let exit = |stat: StatTrust| {
         cmd_compare(
@@ -54,7 +54,7 @@ fn a_distrusted_field_with_no_digest_to_fall_back_on_is_never_reported_equal() {
 /// differ on nothing.
 #[test]
 fn a_distrusted_mtime_with_no_digest_to_fall_back_on_is_never_reported_equal() {
-    let t = TempRoot::new("st_unverifiable_mt");
+    let t = temp_root("st_unverifiable_mt");
     let (src, dst) = size_differs(&t);
     // Make the two sides byte-identical, then leave only the mtime differing.
     wfile(&dst, "a.txt", b"short");
@@ -87,7 +87,7 @@ fn a_distrusted_mtime_with_no_digest_to_fall_back_on_is_never_reported_equal() {
 /// to `src`.
 #[test]
 fn sync_copies_a_pair_it_cannot_confirm_rather_than_declaring_it_equal() {
-    let t = TempRoot::new("st_unverifiable_sync");
+    let t = temp_root("st_unverifiable_sync");
     let (src, dst) = size_differs(&t);
     cmd_sync(
         girsync::SyncOpts {
@@ -114,8 +114,8 @@ fn sync_copies_a_pair_it_cannot_confirm_rather_than_declaring_it_equal() {
 /// audit is the thing a user trusts to tell them their cache is trustworthy.
 #[test]
 fn compare_self_does_not_claim_in_step_with_a_pair_it_cannot_verify() {
-    let t = TempRoot::new("st_unverifiable_self");
-    let dir = t.mkdirs("w");
+    let t = temp_root("st_unverifiable_self");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"short");
     cmd_update(update(dir.clone()), &log()).unwrap();
     let stamped = std::fs::metadata(dir.join("a.txt"))

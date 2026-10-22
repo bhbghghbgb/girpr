@@ -304,8 +304,8 @@ fn f_detail(a: &Assertion) -> String {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> crate::testtemp::TempDir {
-        let p = crate::testtemp::TempDir::new("gircap-closeout", name);
+    fn scratch(name: &str) -> girpr_tempdir::TempDir {
+        let p = girpr_tempdir::TempDir::new("gircap-closeout", name);
         std::fs::create_dir_all(p.join("game")).expect("scratch root");
         std::fs::create_dir_all(p.join("scan")).expect("scan dir");
         p

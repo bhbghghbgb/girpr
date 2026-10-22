@@ -86,7 +86,7 @@ fn an_all_equal_diff_is_empty() {
 /// and turn the gate into a convention rather than a property.
 #[test]
 fn the_identical_bucket_is_empty_unless_it_was_asked_for() {
-    let t = TempRoot::new("identical_gate");
+    let t = temp_root("identical_gate");
     let (src, dst) = pinned(&t, "a.txt", b"same", b"same");
     std::fs::create_dir_all(src.join("d")).unwrap();
     std::fs::create_dir_all(dst.join("d")).unwrap();
@@ -136,7 +136,7 @@ fn the_identical_bucket_is_empty_unless_it_was_asked_for() {
 /// claims cannot both be true.
 #[test]
 fn a_pair_is_never_both_changed_and_identical() {
-    let t = TempRoot::new("identical_exclusive");
+    let t = temp_root("identical_exclusive");
     let (src, dst) = pinned(&t, "same.txt", b"same", b"same");
     // Both sides written *before* the pin — pinning a path dst does not hold yet
     // opens nothing and fails. Size is the only difference, so this pair is settled

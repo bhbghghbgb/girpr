@@ -4,7 +4,7 @@
 mod common;
 
 use common::{
-    TempRoot, compare, compare_self_opts, log, poison_digest, recs_of, rw, sync, sync_mtime,
+    compare, compare_self_opts, log, poison_digest, recs_of, rw, sync, sync_mtime, temp_root,
     update, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
@@ -13,8 +13,8 @@ use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 #[test]
 fn run_update_prunes_and_excludes() {
-    let t = TempRoot::new("prune");
-    let dir = t.mkdirs("w");
+    let t = temp_root("prune");
+    let dir = t.subdir("w");
     wfile(&dir, "keep.txt", b"keep");
     wfile(&dir, "gone.txt", b"to be deleted");
     wfile(&dir, "skip.me", b"excluded content v1");
@@ -66,7 +66,7 @@ fn run_update_prunes_and_excludes() {
     // NOTE: compare treats size/mtime/hash as equality, so normalize
     // keep.txt's mtime across both dirs (same bytes, fresh writes would
     // otherwise differ by mtime alone and report CHANGED).
-    let other = t.mkdirs("other");
+    let other = t.subdir("other");
     wfile(&other, "keep.txt", b"keep");
     wfile(&other, "skip.me", b"excluded content v2 (different)");
     {
@@ -105,8 +105,8 @@ fn run_update_prunes_and_excludes() {
 /// see the sibling test below, which is the same insight from the other side.
 #[test]
 fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
-    let t = TempRoot::new("upd_rehash");
-    let dir = t.mkdirs("w");
+    let t = temp_root("upd_rehash");
+    let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"stable content");
 
     cmd_update(update(dir.clone()), &log()).unwrap();
@@ -154,9 +154,9 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
 /// because the only difference between them is which side of the run can hash.
 #[test]
 fn update_fills_the_gap_that_makes_an_audit_of_the_same_folder_fail() {
-    let t = TempRoot::new("upd_fills_gap");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("upd_fills_gap");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     for i in 0..2 {
         wfile(&src, &format!("f{i}.txt"), format!("body {i}").as_bytes());
         wfile(&dst, &format!("f{i}.txt"), format!("body {i}").as_bytes());

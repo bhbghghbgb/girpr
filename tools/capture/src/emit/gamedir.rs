@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn writing_the_tree_produces_three_kinds_of_entry_and_nothing_else() {
-        let root = crate::testtemp::TempDir::new("gircap-m8-gamedir", "three_kinds");
+        let root = girpr_tempdir::TempDir::new("gircap-m8-gamedir", "three_kinds");
         let old = VariantFile {
             rel_path: "GenshinImpact_Data/a.dll",
             bytes: b"old",

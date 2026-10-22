@@ -47,7 +47,7 @@ mod other_commands;
 mod refusal;
 mod verdict;
 
-use common::{TempRoot, age, log, opts, recs_of, serial_rw, sync_mtime, update, wfile};
+use common::{TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update, wfile};
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -86,9 +86,9 @@ fn restore_mtime(p: &std::path::Path, t: std::time::SystemTime) {
 /// The shape both `--no-trust-size`'s cases and the "no digest to fall back on"
 /// cases need: a pair whose *only* evidence of difference is size, so switching
 /// that field off leaves the pair undecidable.
-fn size_differs(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn size_differs(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"short");
     wfile(
         &dst,
@@ -125,9 +125,9 @@ fn distrusting(algos: &[&str], stat: StatTrust) -> CommonOpts {
 ///
 /// `equal.txt` is the control: it is already undecided, so it hashes in every
 /// configuration and any change in the other three is attributable.
-fn four_states(t: &TempRoot) -> (std::path::PathBuf, std::path::PathBuf) {
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+fn four_states(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     for rel in ["equal.txt", "sized.txt", "mtime'd.txt"] {
         let body = format!("body of {rel}");
         wfile(&src, rel, body.as_bytes());

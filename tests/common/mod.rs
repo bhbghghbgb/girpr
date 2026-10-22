@@ -16,8 +16,7 @@
 //! sizes as int-or-string, chunk/manifest URL prefix + id joining.
 
 // The module is shared by several test binaries and each of them uses a
-// different part of it, so most of it is dead code in any one of them. The
-// same allowance `tempdir.rs` carries, for the same reason.
+// different part of it, so most of it is dead code in any one of them.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -28,11 +27,6 @@ use std::sync::{
 
 use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 use prost::Message as _;
-
-// The scratch-directory helper lives beside this file rather than in it, so the
-// other integration targets can reach it without dragging in the mock server.
-#[path = "tempdir.rs"]
-pub mod tempdir;
 
 // ---------------------------------------------------------------------------
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)
@@ -462,7 +456,7 @@ fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
 }
 
 // ---------------------------------------------------------------------------
-// temp dirs (no extra deps)
+// temp dirs
 // ---------------------------------------------------------------------------
 
 /// Fresh unique temp dir for one test, removed when the returned guard drops.
@@ -470,9 +464,9 @@ fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
 /// The name carries the pid, a timestamp and a per-process counter so two runs
 /// — or two `cargo nextest run` invocations — never share a tree, and the guard
 /// means the tree is removed even when a case fails before its last line. See
-/// [`tempdir`] for why each part is there.
-pub fn temp_dir(name: &str) -> tempdir::TempDir {
-    tempdir::TempDir::new("girpr_it", name)
+/// `girpr_tempdir` for why each part is there.
+pub fn temp_dir(name: &str) -> girpr_tempdir::TempDir {
+    girpr_tempdir::TempDir::new("girpr_it", name)
 }
 
 pub fn write_game_file(game_dir: &std::path::Path, rel: &str, bytes: &[u8]) {

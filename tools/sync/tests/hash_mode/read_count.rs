@@ -23,8 +23,8 @@ fn any_of_avoids_backfilling_an_algorithm_the_pair_already_shares() {
         ("a.txt", Some(b"alpha"), Some(b"alpha")),
         ("b.txt", Some(b"bravo"), Some(b"bravo")),
     ];
-    let t_all = TempRoot::new("hm_tier1_all");
-    let t_any = TempRoot::new("hm_tier1_any");
+    let t_all = temp_root("hm_tier1_all");
+    let t_any = temp_root("hm_tier1_any");
     let (a_src, a_dst) = pair(&t_all, spec, &["md5"], true);
     let (b_src, b_dst) = pair(&t_any, spec, &["md5"], true);
 
@@ -55,8 +55,8 @@ fn any_of_still_hashes_when_the_pair_shares_no_algorithm() {
     // not because the mode is free, but because the `all-of` run before it had
     // already backfilled both algorithms into both caches, so the second run found
     // tier 1.
-    let t_all = TempRoot::new("hm_tier3_all");
-    let t_any = TempRoot::new("hm_tier3_any");
+    let t_all = temp_root("hm_tier3_all");
+    let t_any = temp_root("hm_tier3_any");
     let spec: &[common::Spec] = &[("a.txt", Some(b"alpha"), Some(b"alpha"))];
     let (a_src, a_dst) = pair(&t_all, spec, &[], true);
     let (b_src, b_dst) = pair(&t_any, spec, &[], true);
@@ -82,9 +82,9 @@ fn any_of_still_hashes_when_the_pair_shares_no_algorithm() {
 /// possible.
 #[test]
 fn any_of_reads_one_algorithm_against_a_record_that_holds_the_other() {
-    let t = TempRoot::new("hm_audit_any_of");
-    let rec_home = t.mkdirs("rec");
-    let folder = t.mkdirs("live");
+    let t = temp_root("hm_audit_any_of");
+    let rec_home = t.subdir("rec");
+    let folder = t.subdir("live");
     for dir in [&rec_home, &folder] {
         wfile(dir, "a.txt", b"hello");
     }

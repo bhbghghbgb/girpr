@@ -476,8 +476,8 @@ pub type ManifestFile = FileEntry;
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> crate::testtemp::TempDir {
-        crate::testtemp::TempDir::new("gircap-m8", name)
+    fn scratch(name: &str) -> girpr_tempdir::TempDir {
+        girpr_tempdir::TempDir::new("gircap-m8", name)
     }
 
     #[test]

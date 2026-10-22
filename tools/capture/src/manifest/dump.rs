@@ -332,10 +332,10 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> crate::testtemp::TempDir {
+    fn tmp(name: &str) -> girpr_tempdir::TempDir {
         // Absent, not created: these cases are about what the dump writes, and
         // one of them asserts the writer creates its own parents.
-        crate::testtemp::TempDir::absent("gircap-dump", name)
+        girpr_tempdir::TempDir::absent("gircap-dump", name)
     }
 
     #[test]

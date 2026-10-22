@@ -16,7 +16,7 @@ use super::*;
 /// and only a flag that distrusts mtime can tell them apart.
 #[test]
 fn no_trust_mtime_clears_a_touched_file_whose_bytes_never_changed() {
-    let t = TempRoot::new("st_mtime_verdict");
+    let t = temp_root("st_mtime_verdict");
     let (src, dst) = four_states(&t);
     let trust = StatTrust::default();
 
@@ -58,9 +58,9 @@ fn no_trust_mtime_clears_a_touched_file_whose_bytes_never_changed() {
     // expected exit code is 0 rather than 4-for-other-reasons. Filtering would have
     // left the assertion "still 4" unable to say *why*, which is the property under
     // test.
-    let t1 = TempRoot::new("st_mtime_alone");
-    let src1 = t1.mkdirs("one_src");
-    let dst1 = t1.mkdirs("one_dst");
+    let t1 = temp_root("st_mtime_alone");
+    let src1 = t1.subdir("one_src");
+    let dst1 = t1.subdir("one_dst");
     wfile(&src1, "t.txt", b"identical");
     wfile(&dst1, "t.txt", b"identical");
     sync_mtime(&src1.join("t.txt"), &dst1.join("t.txt"));
@@ -101,9 +101,9 @@ fn no_trust_mtime_clears_a_touched_file_whose_bytes_never_changed() {
 /// `--no-trust-size` exists for the cache rather than for the answer.
 #[test]
 fn no_trust_size_never_turns_a_changed_file_into_an_unchanged_one() {
-    let t = TempRoot::new("st_size_verdict");
-    let src = t.mkdirs("src");
-    let dst = t.mkdirs("dst");
+    let t = temp_root("st_size_verdict");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
     wfile(&src, "a.txt", b"short");
     wfile(
         &dst,

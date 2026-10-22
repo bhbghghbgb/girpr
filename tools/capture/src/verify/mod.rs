@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn opening_a_directory_with_no_manifest_names_the_missing_document() {
-        let d = crate::testtemp::TempDir::new("gircap-m9-empty", "no_manifest");
+        let d = girpr_tempdir::TempDir::new("gircap-m9-empty", "no_manifest");
         let e = Bundle::open(&d).unwrap_err();
         assert!(e.contains("MANIFEST.json"), "{e}");
     }
@@ -1039,7 +1039,7 @@ mod tests {
     /// names the version rather than a missing field the version caused.
     #[test]
     fn a_v1_bundle_is_refused_with_the_command_that_makes_a_current_one() {
-        let d = crate::testtemp::TempDir::new("gircap-v1", "v1_bundle");
+        let d = girpr_tempdir::TempDir::new("gircap-v1", "v1_bundle");
         std::fs::write(d.join("MANIFEST.json"), br#"{"schema_version": 1}"#)
             .expect("writes the manifest");
         let e = Bundle::open(&d).unwrap_err();
@@ -1059,7 +1059,7 @@ mod tests {
     /// refuses is named, with the reason.
     #[test]
     fn a_v1_bundle_is_named_by_list_rather_than_dropped() {
-        let d = crate::testtemp::TempDir::new("gircap-v1-list", "v1_list");
+        let d = girpr_tempdir::TempDir::new("gircap-v1-list", "v1_list");
         let old = d.join("old");
         std::fs::create_dir_all(&old).expect("makes the directory");
         std::fs::write(old.join("MANIFEST.json"), br#"{"schema_version": 1}"#)
@@ -1082,7 +1082,7 @@ mod tests {
     /// a half-written capture, not something the operator has to act on.
     #[test]
     fn a_directory_that_is_not_a_bundle_is_not_named_by_list() {
-        let d = crate::testtemp::TempDir::new("gircap-not-a-bundle", "not_a_bundle");
+        let d = girpr_tempdir::TempDir::new("gircap-not-a-bundle", "not_a_bundle");
         let broken = d.join("broken");
         std::fs::create_dir_all(&broken).expect("makes the directory");
         std::fs::write(broken.join("MANIFEST.json"), b"{ not json").expect("writes it");
@@ -1189,7 +1189,7 @@ mod tests {
 
     #[test]
     fn a_blob_whose_bytes_were_altered_turns_its_row_red() {
-        let d = crate::testtemp::TempDir::new("gircap-m9-blob", "altered_bytes");
+        let d = girpr_tempdir::TempDir::new("gircap-m9-blob", "altered_bytes");
         std::fs::create_dir_all(d.join("chunks/ab")).unwrap();
         let body = vec![7_u8; 64];
         let raw = zstd::encode_all(body.as_slice(), 1).unwrap();
