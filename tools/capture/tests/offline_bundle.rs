@@ -30,6 +30,8 @@ const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
 const OLD_TAG: &str = "7.0.0";
 const NEW_TAG: &str = "7.1.0";
 const CAPTURE: &str = "reuse_in_place";
+/// The business the bundle belongs to: the first level of the tree `list` walks.
+const BIZ: &str = "hk4e_global";
 
 /// A chunk and the bytes it holds.
 fn chunk(seed: u8, len: usize, prefix: u64) -> (SophonChunk, Vec<u8>, Vec<u8>) {
@@ -80,13 +82,32 @@ fn reference(tag: &str, path: &str, role: Set, offset: i64) -> Reference {
 /// The guard rather than an explicit teardown, because the interesting tests are
 /// the ones that fail partway through and a fixture that only cleans up on the
 /// happy path leaks into the next test.
+///
+/// The bundle does **not** sit at the root of the scratch tree. It sits where a
+/// real capture puts it — `<scratch>/artifacts/<biz>/<old>__<new>/<capture_id>/`
+/// — so that `list`, which is a *walk*, is pointed at a tree the test owns
+/// (`<scratch>/artifacts`) rather than at a directory that belongs to the whole
+/// machine. A walk rooted at the system temp directory is the system temp
+/// directory's cost to pay, and it grows with every other program on it.
 struct Bundle {
-    root: TempDir,
+    /// The scratch tree that owns everything this test made.
+    scratch: TempDir,
+    /// The tree `list` is pointed at: `<scratch>/artifacts`.
+    artifacts: std::path::PathBuf,
+    /// The bundle itself: `<scratch>/artifacts/<biz>/<old>__<new>/<capture_id>`.
+    root: std::path::PathBuf,
 }
 
 impl Bundle {
     fn build(name: &str) -> Bundle {
-        let root = TempDir::new("gircap-offline", name);
+        let scratch = TempDir::new("gircap-offline", name);
+        // The layout a capture really produces, one level below the root the
+        // walk is given: a tree of pairs, each pair holding a capture.
+        let artifacts = scratch.join("artifacts");
+        let root = scratch.subdir(&format!(
+            "artifacts/{}/{OLD_TAG}__{NEW_TAG}/20261014T000000Z",
+            BIZ
+        ));
 
         // The three chunks of one file, at the offsets the index will record.
         let (a, ab, ar) = chunk(0xa1, 64, 0x7d3f_0504_4383_7e58);
@@ -282,7 +303,11 @@ impl Bundle {
         let checksums = Checksums::scan(&root).expect("scan");
         write_json(&root.join("verify/checksums.json"), &checksums);
 
-        Bundle { root }
+        Bundle {
+            scratch,
+            artifacts,
+            root,
+        }
     }
 
     /// Flip one byte inside a stored blob's frame, leaving the magic intact.
@@ -560,18 +585,32 @@ fn materialize_defaults_beside_the_bundle() {
     );
     assert!(out.join(format!("expected/{DLL}")).is_file());
     assert!(!b.root.join("materialized").exists(), "and not inside it");
+    // "Beside the bundle" is a sibling of the bundle *root*, and the bundle
+    // root is inside the tree this test owns — so the rebuild lands there too,
+    // and not in whatever directory the scratch tree happens to sit in.
+    assert!(
+        out.starts_with(b.scratch.as_ref()),
+        "the rebuild is inside the tree the test owns: {}",
+        out.display()
+    );
 }
 
 /// `list` finds a bundle by walking, not by knowing the layout.
+///
+/// The walk is rooted at **the tree the test owns** — `<scratch>/artifacts` —
+/// and not at the directory the scratch tree happens to sit in. `list` is a
+/// recursive walk: rooted at the system temp directory it would descend into
+/// every other program's leftovers, and the cost of the test would be the
+/// machine's cost rather than the code's.
 #[test]
 fn list_finds_a_bundle_from_the_root() {
     let b = Bundle::build("list");
     // A sibling that is not a bundle must be stepped over, not refused.
-    let sibling = b.root.with_file_name("not-a-bundle");
+    let sibling = b.artifacts.join("not-a-bundle");
     std::fs::create_dir_all(&sibling).unwrap();
     std::fs::write(sibling.join("readme.txt"), b"nothing here").unwrap();
 
-    let found = gircap::verify::list(b.root.parent().unwrap()).expect("lists");
+    let found = gircap::verify::list(&b.artifacts).expect("lists");
     let hit = found.bundles.iter().find(|f| {
         f.path
             .ends_with(b.root.file_name().unwrap().to_string_lossy().as_ref())
@@ -583,20 +622,24 @@ fn list_finds_a_bundle_from_the_root() {
     assert_eq!(hit.blobs, 4);
     assert_eq!(hit.selfcheck, "pass");
     assert!(hit.complete);
-    let _ = std::fs::remove_dir_all(&sibling);
+    // The sibling goes with the guard, not by hand: a directory removed by hand
+    // is a directory left behind when the test panics before the removal.
 }
 
 /// A directory that *looks* like a bundle - it has a `MANIFEST.json` - but is
 /// truncated is skipped, not fatal. `list` runs over trees that may contain a
 /// capture in progress.
+///
+/// The broken directory is a child of the tree the test owns, for the same
+/// reason the walk is rooted there: a fixture that puts its litter in a
+/// directory it does not own is a fixture that collides with the next run.
 #[test]
 fn a_bundle_that_does_not_open_is_skipped_rather_than_fatal() {
     let b = Bundle::build("skip");
-    let parent = b.root.parent().unwrap();
-    let broken = parent.join("broken-bundle");
+    let broken = b.artifacts.join("broken-bundle");
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("MANIFEST.json"), b"{ not json").unwrap();
-    let found = gircap::verify::list(parent).expect("lists");
+    let found = gircap::verify::list(&b.artifacts).expect("lists");
     assert!(
         found
             .bundles
@@ -610,7 +653,6 @@ fn a_bundle_that_does_not_open_is_skipped_rather_than_fatal() {
             .any(|f| f.capture_id == "20261014T000000Z"),
         "the good one is still there"
     );
-    let _ = std::fs::remove_dir_all(&broken);
 }
 
 // ------------------------------------------------------------------ plumbing
