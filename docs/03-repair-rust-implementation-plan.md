@@ -142,8 +142,10 @@ it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level
 policy in `crates/log/` — the same policy the two dev tools follow. The two
 levels are separate: `--log-level` only affects stderr, `--log-file-level` only
 the file. A log file that cannot be opened degrades to a warning and a sink,
-never a failure. The file is always written: `--log-file`, then
-`GIRPR_LOG_FILE`, then the timestamped default, in that order.
+never a failure. Where the file goes, in order: `--no-log-file` (none at all),
+then `--log-file`, then `GIRPR_LOG_FILE`, then the timestamped default. The
+default itself is a release build's only: a debug build writes no file unless
+one was asked for.
 - `hyp` (debug): every HoYoPlay/Sophon JSON call with full request URL, retcode,
   node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
 - `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual

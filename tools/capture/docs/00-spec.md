@@ -37,7 +37,7 @@ main tool, and never imports its code.
 |---|---|
 | No dependency on the `girpr` crate | `Cargo.toml` declares no `girpr` path or registry dep |
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
-| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program |
+| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`, `--no-log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
 | Two shared *leaf* crates: the log policy and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. Neither holds any logic of any program, and no test of one program depends on another's |
 
@@ -765,7 +765,7 @@ gircap capture
   [--probe-tags <tag>…]                       (default: diff_tags ∪ {old,new}; JSON only)
   [--no-chunk-blobs]                          (metadata only; breaks A6-A12 by design)
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file-level LV] [--log-file P]
-  [--output text|json]
+  [--no-log-file] [--output text|json]
 
 gircap verify      --artifact <DIR>            # re-derive A6,A7,A8,A11,A13,A16,A17,A18,A20, no network
 gircap materialize --artifact <DIR> [--out DIR] # rebuild old/new files from chunks/, no network
@@ -810,9 +810,11 @@ object per line, NDJSON, no enclosing array. All narration goes to stderr via
 `tracing` and to a JSON-lines log file. The only `println!` in the crate is the
 record emitter.
 
-**The log file is always written**, by default to
-`<exe-dir>/logs/gircap_<timestamp>.log`; `--log-file` and `GIRCAP_LOG_FILE` name
-one otherwise, in that order. Its verbosity is `--log-file-level` (`debug` by
+**A release build always writes a log file; a debug build writes one only when
+it is asked to.** A release build's default is
+`<exe-dir>/logs/gircap_<timestamp>.log`; `--log-file` and `GIRCAP_LOG_FILE`
+name one otherwise, in that order, and `--no-log-file` turns the file off in
+any build. Its verbosity is `--log-file-level` (`debug` by
 default), the console's is `--log-level` (`info` by default). `RUST_LOG` *adds*
 to the console — it can turn up other crates, but it cannot change this
 program's own level, because a flag is what the person running the tool typed.
@@ -978,8 +980,9 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    answer: it is the only one that sees every request, including any that no
    client-side log line describes.
 
-   The procedure reads assertion 2 out of `<exe-dir>/logs/girpr_<ts>.log` at
-   `--log-level trace` as the fallback for a reader with no shim. Its own caveat
+   The procedure reads assertion 2 out of a log file at `--log-level trace` as
+   the fallback for a reader with no shim — name one with `--log-file <path>`,
+   which is written in any build. Its own caveat
    is the reason the server log is better: **a reused chunk is logged too**, as
    `reuse slice md5 ok -> copy chunk=<id>`, so a naive substring search for the id
    reports a violation on a perfectly correct reuse. Match on the *download*

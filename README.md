@@ -26,8 +26,11 @@ reach.
 behavior is in the library; `src/repair/mod.rs::run` is the pipeline
 coordinator and holds no logic beyond phase order and the exit-code contract.
 
-**Open work is in [`TODO.md`](TODO.md)** — two tests that scan a directory they
-do not own, and the log-file policy change that fixes one of them.
+**No test scans a directory it does not own.** Every scratch tree lives under
+`<temp>/girpr-test/` and goes away with the test that made it; every log file
+a test reads is one the test named itself, inside its own scratch. A test that
+has to *find* the file it wrote is a test whose cost is the history of the
+machine rather than the code.
 
 **Entry points.**
 
@@ -38,7 +41,7 @@ do not own, and the log-file policy change that fixes one of them.
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
-| `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `env_options` |
+| `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
@@ -150,11 +153,12 @@ flowchart TD
   (a chunk an abandoned attempt wrote is in the install, so it was not kept).
 - **The binary cannot report which chunks were requested.** `SUMMARY` is
   byte-level by design. Per-chunk request detail exists only as `trace` lines in
-  `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never
-  fetched" needs a request log (`--log-file-level trace`), not the data plane.
+  the log file (`--log-file <path> --log-file-level trace`), so asserting "this
+  chunk id was never fetched" needs a request log, not the data plane.
 - stderr: structured `tracing` logs (`--log-level`, with `RUST_LOG` adding to
   it), at `info` by default; the same events go to
-  `<exe-dir>/logs/girpr_<timestamp>.log`, at `debug` by default.
+  `<exe-dir>/logs/girpr_<timestamp>.log`, at `debug` by default — in a release
+  build, or wherever `--log-file` points in any build (see **Logging**).
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
@@ -297,7 +301,8 @@ cargo build --release
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` *adds* to it — it can turn up other crates, but it cannot change this program's own level |
 | `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
-| `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. The file is **always** written — there is no "no log file" mode. An unopenable file is a stderr warning, never a failure |
+| `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable (release builds only) | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. An unopenable file is a stderr warning, never a failure |
+| `--no-log-file` | off | Write no log file at all. Turns the default off in a release build, and says so explicitly in a debug build. Cannot be combined with `--log-file`: the two say opposite things about the same file. The console is unaffected |
 | `--hyp-base <URL>` | production | Point the HoYoPlay API at another base (overrides `GIRPR_HYP_BASE`) |
 | `--sophon-base <URL>` | production | Point Sophon `getBuild` at another base (overrides `GIRPR_SOPHON_BASE`) |
 
@@ -311,13 +316,19 @@ One policy, three programs: this binary and the two dev tools (`gircap`,
 `girsync`). It lives in `crates/log/` and is the only thing they share that
 ships.
 
-- **A log file is always written.** There is no "no log file" mode: a run that
-  leaves nothing behind is a run nobody can ask questions of later. By default
-  it is `<exe-dir>/logs/<project>_<timestamp>.log` — `logs/girpr_….log` here.
-- **Where it goes**, in order of precedence: `--log-file`, then
-  `GIRPR_LOG_FILE`, then the default. The flag wins because it was typed by the
-  person running the tool; an environment variable is whatever the shell
-  happened to export.
+- **A release build always writes a log file; a debug build writes one only when
+  it is asked to.** A release build's default is
+  `<exe-dir>/logs/<project>_<timestamp>.log` — `logs/girpr_….log` here. A
+  debug build writes no file by default: it is the build a developer and a
+  test suite run, and a file per run in a directory nobody reads is a
+  directory that grows by one file per run, forever. `--no-log-file` turns the
+  file off in any build.
+- **Where it goes**, in order of precedence: `--no-log-file`, then
+  `--log-file`, then `GIRPR_LOG_FILE`, then the default. `--no-log-file` wins
+  because "write no log file" is the more specific thing to have said; the
+  flag beats the environment because the flag was typed by the person running
+  the tool and an environment variable is whatever the shell happened to
+  export.
 - **Two levels, not one.** `--log-level` is the **console's** (`info` by
   default); `--log-file-level` is the **file's** (`debug` by default, or
   `GIRPR_LOG_FILE_LEVEL`). They are separate because they answer separate

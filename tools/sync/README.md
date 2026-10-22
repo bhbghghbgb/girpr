@@ -89,7 +89,8 @@ girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-ext
 ```
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
-trace|debug|info|warn|error`, `--log-file <PATH>`, `--output text|json`.
+trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
+text|json`.
 `sled2redb` takes `--force` and the same `--output`.
 
 ### Logging
@@ -98,10 +99,18 @@ The log policy is the workspace's and lives in `crates/log/`, shared with the
 repair binary and with `gircap` — one set of rules, so a script that learned
 `--log-file` for one of them knows it for all three.
 
-- **A log file is always written**, by default to
-  `<exe-dir>/logs/girsync_<timestamp>.log`. There is no "no log file" mode.
-- **Where it goes**, in order of precedence: `--log-file`, then
-  `GIRSYNC_LOG_FILE`, then the default.
+- **A release build always writes a log file; a debug build writes one only
+  when it is asked to.** A release build's default is
+  `<exe-dir>/logs/girsync_<timestamp>.log`. A debug build writes no file by
+  default: it is the build a developer and a test suite run, and a file per
+  run in a directory nobody reads is a directory that grows by one file per
+  run, forever. `--no-log-file` turns the file off in any build.
+- **Where it goes**, in order of precedence: `--no-log-file`, then
+  `--log-file`, then `GIRSYNC_LOG_FILE`, then the default. `--no-log-file`
+  wins because "write no log file" is the more specific thing to have said;
+  the flag beats the environment because the flag was typed by the person
+  running the tool and an environment variable is whatever the shell happened
+  to export.
 - **Two levels.** `--log-level` is the console's (`info` by default);
   `--log-file-level` is the file's (`debug` by default, or
   `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
