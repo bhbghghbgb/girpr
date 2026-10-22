@@ -39,12 +39,21 @@ main tool, and never imports its code.
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
 | No shared contracts | own flag set, own exit codes, own report format. The README is the only shared vocabulary (version strings) |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
+| One shared *leaf* crate: the log policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. It holds no logic of any program, and no test of one program depends on it |
 
 The intent is **do not couple**. Two tools that must stay independent should not
 end up depending on each other in order to prove one of them works, and the
 artifact is the whole interface between them: a bundle on disk, read by whoever
 wants it. None of the above is mechanically enforced — nothing here checks it —
 so it is a rule the tree has to keep, not a guarantee a build makes.
+
+**The log policy is the one thing that *is* shared, deliberately.** A user who
+has learned `--log-file` for one of the three programs should not have to learn
+it again for the next, and a log file that lands somewhere different per tool is
+a log file nobody finds. The shared crate is a leaf: it depends on nothing but
+`chrono`, holds no logic of any program, and cannot make one program's test
+depend on another's. What stays independent is everything that could couple the
+*meaning* of a run: the flags, the exit codes, the report format, the fixtures.
 
 This mirrors `tools/sync`: *"Separate from the `girpr` binary; shares no flags,
 no exit-code contract, no code."*
@@ -744,7 +753,7 @@ gircap capture
   [--gzip-threshold <bytes>]                  (default 1048576)
   [--probe-tags <tag>…]                       (default: diff_tags ∪ {old,new}; JSON only)
   [--no-chunk-blobs]                          (metadata only; breaks A6-A12 by design)
-  [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file P]
+  [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file-level LV] [--log-file P]
   [--output text|json]
 
 gircap verify      --artifact <DIR>            # re-derive A6,A7,A8,A11,A13,A16,A17,A18,A20, no network
@@ -787,8 +796,15 @@ exit code is a verdict on the bundle.
 stdout is a pure data plane: **records, one per line, the terminal one last.**
 With `--output text` a record is `LABEL k=v k=v …`; with `--output json` it is one
 object per line, NDJSON, no enclosing array. All narration goes to stderr via
-`tracing` and, with `--log-file`, to a JSON-lines log. The only `println!` in the
-crate is the record emitter.
+`tracing` and to a JSON-lines log file. The only `println!` in the crate is the
+record emitter.
+
+**The log file is always written**, by default to
+`<exe-dir>/logs/gircap_<timestamp>.log`; `--log-file` and `GIRCAP_LOG_FILE` name
+one otherwise, in that order. Its verbosity is `--log-file-level` (`debug` by
+default), the console's is `--log-level` (`info` by default, replaced by
+`RUST_LOG`). The policy is the workspace's and lives in `crates/log/`, shared
+with the repair binary and `girsync` — see §2.
 
 **The last record is always the terminal one.** `list` writes one `bundle` record
 per bundle it found and then its terminal record, so a machine can read every

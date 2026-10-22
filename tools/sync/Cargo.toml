@@ -18,6 +18,10 @@ path = "src/bin/sled2redb.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+# The log-file and log-level policy, shared with the repair binary and with
+# `gircap`. It is a leaf crate with no dependency on any of the three
+# programs, so sharing it couples nothing that matters.
+girpr-log = { path = "../../crates/log" }
 anyhow = "1"
 walkdir = "2"
 # sled is used ONLY by the one-shot `sled2redb` converter (src/convert.rs).

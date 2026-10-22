@@ -111,12 +111,13 @@ fn help_and_version_are_zero() {
 #[test]
 fn every_argument_error_is_one() {
     let cases: &[&[&str]] = &[
-        &[],                                  // no subcommand
-        &["capture", "--nope"],               // unknown flag
-        &["frobnicate"],                      // unknown subcommand
-        &["capture", "--biz", "hk4e_turkey"], // bad enum
-        &["capture", "--per-class", "many"],  // bad number
-        &["capture", "--log-level", "loud"],  // unvalidated string flag
+        &[],                                      // no subcommand
+        &["capture", "--nope"],                   // unknown flag
+        &["frobnicate"],                          // unknown subcommand
+        &["capture", "--biz", "hk4e_turkey"],     // bad enum
+        &["capture", "--per-class", "many"],      // bad number
+        &["capture", "--log-level", "loud"],      // bad level
+        &["capture", "--log-file-level", "loud"], // bad level
         &["capture", "--output", "yaml"],
         &["verify"], // missing --artifact
         &["materialize"],
@@ -130,16 +131,38 @@ fn every_argument_error_is_one() {
 
 #[test]
 fn a_usage_error_prints_a_summary_on_stdout_too() {
-    // Resolved *after* the parse: `--log-level` is a string flag on the clap
-    // surface and is typed later, so it is the one usage error that has to be
-    // discovered by the run rather than by the parser. It is also the only
-    // failure that cannot honour `--output`, since `--output` is what failed
-    // alongside it — so this pins the one case that always prints text.
-    let r = assert_code(&["capture", "--log-level", "loud", "--output", "json"], 1);
+    // A failure the *run* discovers — rather than the parser — still prints
+    // exactly one summary on stdout, in text, so that a harness reading stdout
+    // does not have to special-case a crash. `--materialize --artifact a --out
+    // a` is such a failure: the request is well-formed and the plan refuses
+    // it.
+    //
+    // It is also the only failure that cannot honour `--output`, since
+    // `--output` is what failed alongside it — so this pins the one case that
+    // always prints text.
+    let r = assert_code(&["materialize", "--artifact", "a", "--out", "a"], 1);
     assert!(r.stdout.starts_with("SUMMARY "), "{:?}", r.stdout);
     assert!(r.stdout.contains("exit_code=1"), "{:?}", r.stdout);
     assert!(r.stdout.contains("exit_code_slug=usage"), "{:?}", r.stdout);
     assert_eq!(r.stdout.lines().filter(|l| !l.is_empty()).count(), 1);
+}
+
+/// A bad `--log-level` is an *argument* failure, and it is refused by the
+/// parser — like every other bad argument, and unlike the run-time failures
+/// above, which print a summary because they happen after the parse.
+#[test]
+fn a_bad_log_level_is_refused_by_the_parser() {
+    let r = assert_code(&["capture", "--log-level", "loud"], 1);
+    assert!(
+        r.stderr.contains("loud"),
+        "the message names the value that was wrong:\n{:?}",
+        r.stderr
+    );
+    assert!(
+        r.stdout.is_empty(),
+        "a parse failure owns no part of stdout:\n{:?}",
+        r.stdout
+    );
 }
 
 #[test]
@@ -378,6 +401,107 @@ fn rust_log_overrides_the_flag() {
         text.lines().any(|l| l.contains("\"gircap start\"")),
         "the file sink must not inherit the console's `error` filter:\n{text}"
     );
+}
+
+/// The log file is written whether or not anybody asked for one.
+///
+/// It lands in a `logs/` directory beside the executable, named for the project
+/// and stamped with the time. There is no "no log file" mode.
+#[test]
+fn a_log_file_is_always_written_beside_the_executable() {
+    let logs = exe_dir().join("logs");
+    std::fs::create_dir_all(&logs).expect("the logs directory");
+
+    let r = run_owned(&offline_capture(&[]));
+    assert_eq!(r.code, 2);
+
+    let mine: Vec<_> = std::fs::read_dir(&logs)
+        .expect("read the logs directory")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|b| b.contains("\"gircap start\""))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        !mine.is_empty(),
+        "the run wrote a log file into {}: {mine:?}",
+        logs.display()
+    );
+    for path in &mine {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("gircap_"), "named for the project: {name}");
+        assert!(name.ends_with(".log"), "and for what it is: {name}");
+        assert_eq!(
+            path.parent().and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("logs")),
+            "in a `logs/` directory: {path:?}"
+        );
+    }
+}
+
+/// The environment variable names the log file when the flag does not.
+///
+/// Same precedence as everywhere else in the workspace: the flag wins, the
+/// environment answers for a flag that was never given, and the timestamped
+/// default answers for both.
+#[test]
+fn the_environment_names_the_log_file_when_the_flag_does_not() {
+    let dir = tempdir::TempDir::absent("gircap-env", "log_file");
+    let log = dir.join("from-env.ndjson");
+
+    let out = Command::new(bin())
+        .args(offline_capture(&[]))
+        .env("GIRCAP_LOG_FILE", &log)
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(2));
+
+    let text = std::fs::read_to_string(&log).expect("the environment named the file");
+    assert!(
+        text.lines().any(|l| l.contains("\"gircap start\"")),
+        "and it holds the run's own records:\n{text}"
+    );
+}
+
+/// The console is `info` and the log file is `debug`, by default.
+///
+/// The two levels are separate knobs, and the defaults are one step apart:
+/// the console is for the person watching the run, the file for the person
+/// reading it afterwards. The request narration is `debug`, so it is the
+/// evidence — it is in the file and not on the console.
+#[test]
+fn the_file_is_louder_than_the_console_by_default() {
+    let dir = tempdir::TempDir::absent("gircap-levels", "file_vs_console");
+    let log = dir.join("levels.ndjson");
+
+    let r = run_owned(&offline_capture(&[
+        "--log-level",
+        "error",
+        "--log-file",
+        log.to_str().unwrap(),
+    ]));
+    assert_eq!(r.code, 2);
+
+    let text = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        text.lines().any(|l| l.contains("\"GET\"")),
+        "the file is at `debug` by default, so it kept the request narration:\n{text}"
+    );
+    assert!(
+        !r.stderr.contains("GET"),
+        "the console is at `error`, so it did not:\n{}",
+        r.stderr
+    );
+}
+
+/// The directory the executable is in — where the default log file lands.
+fn exe_dir() -> std::path::PathBuf {
+    let mut p = bin();
+    p.pop();
+    p
 }
 
 // ------------------------------------------ the offline three's exit codes

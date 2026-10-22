@@ -14,7 +14,7 @@
 //! | [`exit`] | [`ExitCode`] and the exit-code table |
 //! | [`hash`] | digests, one-pass and one-shot; the gzip rule; zstd helpers |
 //! | [`report`] | the stdout data plane; the only `println!` in the crate |
-//! | [`logging`] | stderr narration via `tracing`, plus `--log-file` |
+//! | [`logging`] | stderr narration via `tracing`, plus the log file |
 //! | [`config`] | the resolved run plan every command works from |
 //! | [`failure`] | [`failure::Failure`] and the four ways a command can say it failed |
 //! | [`run`] | command dispatch: the four entry points |
@@ -41,7 +41,9 @@
 //!
 //! There is no dependency on the repair crate, no `Command` against its binary,
 //! no shared flags and no shared exit-code contract. The only shared vocabulary
-//! is the README's version strings (`docs/00-spec.md` §2).
+//! is the README's version strings (`docs/00-spec.md` §2), and the one shared
+//! crate is `girpr-log` (`crates/log/`): the log-file and log-level *policy*,
+//! which holds no logic of any program.
 
 pub mod assemble;
 pub mod biz;

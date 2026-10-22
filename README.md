@@ -34,7 +34,8 @@ coordinator and holds no logic beyond phase order and the exit-code contract.
 | `src/lib.rs` | module map + re-exports | — |
 | `src/cli.rs` | clap `Args`, audio-lang normalization, flag validation | `Args`, `Args::into_ctx`, `parse_audio_selection`, `normalize_audio_lang`, `is_audio_none` |
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
-| `src/logging.rs` | console layer + always-`TRACE` file layer | `init_tracing`, `log_file_path` |
+| `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
+| `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `default_log_path`, `env_options` |
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -146,9 +147,10 @@ flowchart TD
 - **The binary cannot report which chunks were requested.** `SUMMARY` is
   byte-level by design. Per-chunk request detail exists only as `trace` lines in
   `<exe-dir>/logs/girpr_<ts>.log`, so asserting "this chunk id was never
-  fetched" needs a request log (`--log-level trace`), not the data plane.
-- stderr: structured `tracing` logs (`--log-level` / `RUST_LOG`); always mirrored at
-  `TRACE` to `<exe-dir>/logs/girpr_<timestamp>.log`.
+  fetched" needs a request log (`--log-file-level trace`), not the data plane.
+- stderr: structured `tracing` logs (`--log-level` / `RUST_LOG`), at `info` by
+  default; always mirrored to `<exe-dir>/logs/girpr_<timestamp>.log`, at `debug`
+  by default.
 - path scope: a path outside `--include`/`--exclude` **does not exist** — it is
   dropped from the plan *and* kept by the files-cleanup, so `--purge-*` cannot
   eat it. A scoped run does not bump `config.ini` (the bytes are deliberately
@@ -289,14 +291,38 @@ cargo build --release
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}` |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
-| `--log-level <LVL>` | `info` | `error`/`warn`/`info`/`debug`/`trace` (`RUST_LOG` also honored) |
-| `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable | Write the trace log here instead. Missing parents are created. The file layer captures `TRACE` and above **regardless of `--log-level`**, so `--log-level trace` is only needed to also see it on stderr. An unopenable file is a stderr warning, never a failure |
+| `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` replaces it when it is set |
+| `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
+| `--log-file <FILE>` | `logs/girpr_<timestamp>.log` beside the executable | Where the log file goes. `GIRPR_LOG_FILE` names one when this flag does not; the flag wins. Missing parents are created. The file is **always** written — there is no "no log file" mode. An unopenable file is a stderr warning, never a failure |
 | `--hyp-base <URL>` | production | Point the HoYoPlay API at another base (overrides `GIRPR_HYP_BASE`) |
 | `--sophon-base <URL>` | production | Point Sophon `getBuild` at another base (overrides `GIRPR_SOPHON_BASE`) |
 
 `--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest
 and chunk URLs come from the `url_prefix` inside the response *bodies*, not from
 the configured base, so a local mock must return bodies pointing at itself.
+
+## Logging
+
+One policy, three programs: this binary and the two dev tools (`gircap`,
+`girsync`). It lives in `crates/log/` and is the only thing they share.
+
+- **A log file is always written.** There is no "no log file" mode: a run that
+  leaves nothing behind is a run nobody can ask questions of later. By default
+  it is `<exe-dir>/logs/<project>_<timestamp>.log` — `logs/girpr_….log` here.
+- **Where it goes**, in order of precedence: `--log-file`, then
+  `GIRPR_LOG_FILE`, then the default. The flag wins because it was typed by the
+  person running the tool; an environment variable is whatever the shell
+  happened to export.
+- **Two levels, not one.** `--log-level` is the **console's** (`info` by
+  default, replaced by `RUST_LOG` when it is set); `--log-file-level` is the
+  **file's** (`debug` by default, or `GIRPR_LOG_FILE_LEVEL`). They are separate
+  because they answer separate questions: the console is for the person
+  watching the run, the file is for the person reading it afterwards.
+- **A log file that cannot be opened is a warning, never a failure.** A run
+  must not end differently because of where it was asked to log.
+- The **format** is not shared: this binary writes a human-readable text log,
+  meant to be read with `grep 'path=<file>'`; the two dev tools write JSON
+  lines, meant to be parsed.
 
 ## Testing (offline by construction)
 

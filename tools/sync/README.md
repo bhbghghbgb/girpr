@@ -57,7 +57,7 @@ tests travel with the code they exercise).
 | `rw/mod.rs` | `RwRuntime`: the limits, the counters and the worker pool, as one run's resource |
 | `rw/limits.rs` | `RwLimits`/`RwSide`: the *shape* the `--rw-threads*` flags resolve to |
 | `rw/gate.rs` | `RwLimiter`/`RwPermit` and the counting gate: the counters, and the src-then-dst lock ordering |
-| `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup |
+| `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 `CommonArgs` in `config/common.rs`'s `TryFrom`, then use
@@ -66,12 +66,12 @@ Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 **Two channels, and nothing is printed raw.** **stdout** is the answer —
 differences, plan actions, summaries — and it is made of `report::Record`s
 rendered by `--output` (see "Output" below). **stderr** is the narration:
-`tracing` events with named fields, filtered by `--log-level` and optionally
-mirrored to a JSON `--log-file`. `logging.rs` owns stderr and `report/` owns
-stdout; neither writes to the other's, which is what lets `--output json` hand a
-caller a clean stream of JSON records with no log chatter mixed in. The only
-`println!` in the crate is `Report::emit`, and the only raw stderr writes are the
-two `FATAL` lines that happen *before* a subscriber exists.
+`tracing` events with named fields, filtered by `--log-level`, and mirrored to
+a JSON log file. `logging.rs` owns stderr and `report/` owns stdout; neither
+writes to the other's, which is what lets `--output json` hand a caller a clean
+stream of JSON records with no log chatter mixed in. The only `println!` in the
+crate is `Report::emit`, and the only raw stderr writes are the two `FATAL`
+lines that happen *before* a subscriber exists.
 
 `build_plan` reads only the two effective maps, which is what makes `--dry-run`
 exact. The apply phases are ordered inside `Applier::apply` because the order is
@@ -88,8 +88,25 @@ girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-
 girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
 
-Global flags: `--log-level trace|debug|info|warn|error`, `--log-file <PATH>`,
-`--output text|json`. `sled2redb` takes `--force` and the same `--output`.
+Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
+trace|debug|info|warn|error`, `--log-file <PATH>`, `--output text|json`.
+`sled2redb` takes `--force` and the same `--output`.
+
+### Logging
+
+The log policy is the workspace's and lives in `crates/log/`, shared with the
+repair binary and with `gircap` — one set of rules, so a script that learned
+`--log-file` for one of them knows it for all three.
+
+- **A log file is always written**, by default to
+  `<exe-dir>/logs/girsync_<timestamp>.log`. There is no "no log file" mode.
+- **Where it goes**, in order of precedence: `--log-file`, then
+  `GIRSYNC_LOG_FILE`, then the default.
+- **Two levels.** `--log-level` is the console's (`info` by default, replaced by
+  `RUST_LOG` when it is set); `--log-file-level` is the file's (`debug` by
+  default, or `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run
+  happens; the file is read afterwards.
+- **A log file that cannot be opened is a warning, never a failure.**
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).
@@ -615,13 +632,13 @@ counts, not the work done. An unflagged run is byte-identical to one without the
 ```
 
 Each record is *also* logged, as a `debug` `tracing` event carrying the same
-`event` name and fields, so a `--log-file` contains the same data plane without
+`event` name and fields, so the log file contains the same data plane without
 being asked for it twice in two shapes.
 
 Whether that event is written is decided by what the run has a subscriber for,
-not by `--log-level`: the console layer is filtered by that flag, but a
-`--log-file` layer always records at `trace`, so a file log captures every record
-even at the default `info`.
+not by `--log-level`: the console layer is filtered by that flag, but the file
+layer is filtered by `--log-file-level`, which is `debug` by default — so a
+file log captures every record even at the default `info` console.
 
 ### sync
 

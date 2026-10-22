@@ -6,72 +6,42 @@
 //!
 //! Two sinks, one span tree:
 //!
-//! - a human-readable layer on stderr, filtered by `--log-level` or `RUST_LOG`;
-//! - with `--log-file`, an additional JSON-lines sink carrying the same events.
+//! - a human-readable layer on stderr, filtered by `--log-level` (or
+//!   `RUST_LOG`, which replaces it);
+//! - a JSON-lines file layer, filtered by `--log-file-level`.
 //!
-//! The console filter is deliberately *not* copied to the file sink. An artifact
-//! run's narration is the evidence for why a version pair was chosen and what
-//! each request cost, and it must survive a `--log-level warn` console.
+//! The file is **always** written: by default to
+//! `<exe-dir>/logs/gircap_<timestamp>.log`, or wherever `--log-file` or
+//! `GIRCAP_LOG_FILE` says. The console filter is deliberately *not* copied to
+//! the file sink — the two are separate questions, and the file's default
+//! (`debug`) is one step louder than the console's (`info`) for exactly that
+//! reason. An artifact run's narration is the evidence for why a version pair
+//! was chosen and what each request cost, and it must survive a
+//! `--log-level warn` console.
+//!
+//! The *policy* — where the file goes, which level each sink gets, which
+//! environment variable answers for which flag — is the workspace's and lives
+//! in the `girpr-log` crate, so that `girpr` and `girsync` answer the same
+//! questions the same way.
 
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use girpr_log::{LogOptions, LogPlan};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
-/// Filter verbosities accepted by `--log-level`.
-///
-/// A closed set rather than free text: `EnvFilter` accepts a whole directive
-/// language, and letting it reach the flag would make `--log-level` capable of
-/// things the docs do not describe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Level {
-    Error,
-    Warn,
-    #[default]
-    Info,
-    Debug,
-    Trace,
-}
+/// The verbosity names, re-exported so that `crate::logging::Level` is the one
+/// type the CLI and the log layer share.
+pub use girpr_log::Level;
 
-impl Level {
-    /// The `tracing` filter string for this verbosity.
-    pub const fn as_filter(self) -> &'static str {
-        match self {
-            Level::Error => "error",
-            Level::Warn => "warn",
-            Level::Info => "info",
-            Level::Debug => "debug",
-            Level::Trace => "trace",
-        }
-    }
-
-    /// Parse a `--log-level` value, case-insensitively.
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s.to_ascii_lowercase().as_str() {
-            "error" => Ok(Level::Error),
-            "warn" => Ok(Level::Warn),
-            "info" => Ok(Level::Info),
-            "debug" => Ok(Level::Debug),
-            "trace" => Ok(Level::Trace),
-            other => Err(format!(
-                "unknown log level {other:?}; expected one of \
-                 error, warn, info, debug, trace"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for Level {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_filter())
-    }
-}
+/// This project's name: the default log file's stem, and the prefix of the
+/// environment variables that answer for the flags.
+pub const PROJECT: &str = "gircap";
 
 /// Keeps the non-blocking file sink's buffer alive for the length of the run.
 ///
@@ -79,10 +49,17 @@ impl std::fmt::Display for Level {
 /// hundred lines — the ones describing the run's outcome — would be lost, which is
 /// the one part of the file a reader most wants.
 pub struct LogGuard {
+    plan: LogPlan,
     _file: Option<WorkerGuard>,
 }
 
 impl LogGuard {
+    /// The resolved policy: where the log file went, and at what level each
+    /// sink is running.
+    pub fn plan(&self) -> &LogPlan {
+        &self.plan
+    }
+
     /// Flushes the file sink and forgets it. Idempotent.
     pub fn finish(&mut self) {
         self._file.take();
@@ -120,31 +97,6 @@ impl<'a> MakeWriter<'a> for AppendFile {
     }
 }
 
-/// The filter spec for the console sink: `RUST_LOG` if set, else `--log-level`.
-///
-/// `RUST_LOG` wins over the flag, matching the repair tool's precedence, so a
-/// developer who has exported it gets one consistent lever instead of two that
-/// disagree. An empty or whitespace-only `RUST_LOG` is treated as unset — that
-/// is what an unset variable in a shell profile expands to.
-///
-/// Takes the value as a parameter rather than reading the environment, so the
-/// precedence is a pure function and can be tested without mutating global
-/// state that other tests share.
-pub fn console_filter_spec(level: Level, rust_log: Option<&str>) -> String {
-    rust_log
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| level.as_filter().to_string())
-}
-
-/// The filter spec for the `--log-file` sink.
-///
-/// Everything, deliberately and unconditionally. A capture's narration is the
-/// evidence for why a version pair was chosen and what each request cost, and it
-/// must survive a `--log-level error` console.
-pub const FILE_FILTER_SPEC: &str = "trace";
-
 /// Install the subscriber. Call once, before any work.
 ///
 /// Returns a [`LogGuard`] that must be held for the length of the run; dropping
@@ -152,36 +104,49 @@ pub const FILE_FILTER_SPEC: &str = "trace";
 /// then ignored — a log file that cannot be opened must not stop a capture,
 /// because the capture itself is the thing that was asked for.
 ///
-/// **The registry's own filter is `trace` and the two sinks filter themselves.**
-/// That is not redundant: a `Layered` stack's max-level hint is the *minimum* of
-/// its layers', so putting the console's `info` on the registry would cap the
-/// whole stack at `info` and a per-sink `trace` on the file could never widen it
-/// again. The global filter is therefore a ceiling that decides nothing, and the
-/// real work happens on each sink.
-pub fn init(level: Level, log_file: Option<&Path>) -> LogGuard {
+/// **Each sink filters itself.** There is no filter on the registry: a filter
+/// there would be a *ceiling* over both sinks, and the whole point of the two
+/// levels is that the file is louder than the console. The stack's level hint
+/// is the louder of the two, so a `debug` event is still worth building when
+/// only the file wants it.
+pub fn init(console_level: Level, file_level: Option<Level>, log_file: Option<&Path>) -> LogGuard {
     use tracing_subscriber::fmt::layer;
 
-    let console_spec = console_filter_spec(level, std::env::var("RUST_LOG").ok().as_deref());
+    let env = girpr_log::env_options(PROJECT);
+    for warning in &env.warnings {
+        eprintln!("gircap: {warning}");
+    }
+    let plan = LogPlan::resolve(
+        PROJECT,
+        LogOptions {
+            console_level,
+            file_level,
+            log_file: log_file.map(Path::to_path_buf),
+        },
+        env,
+    );
 
+    let console_spec = plan.console_filter();
+    let console_fallback = format!("{PROJECT}={}", console_level.as_str());
     let stderr_layer = layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_target(true);
 
-    // The file sink, if `--log-file` named a writable path. A log file that
-    // cannot be opened is reported and then skipped: the capture is the thing
-    // that was asked for, and losing its narration is a lesser harm than losing
-    // it. Everything before this point happens with no subscriber installed, so
-    // the failure is a raw stderr write.
-    let file = match log_file {
-        None => None,
-        Some(path) => match open_log_file(path) {
-            Err(e) => {
-                eprintln!("gircap: cannot open --log-file {}: {e}", path.display());
-                None
-            }
-            Ok(writer) => Some(writer),
-        },
+    // The file sink. A log file that cannot be opened is reported and then
+    // skipped: the capture is the thing that was asked for, and losing its
+    // narration is a lesser harm than losing it. Everything before this point
+    // happens with no subscriber installed, so the failure is a raw stderr
+    // write.
+    let file = match open_log_file(&plan.file) {
+        Err(e) => {
+            eprintln!(
+                "gircap: cannot open the log file {}: {e}",
+                plan.file.display()
+            );
+            None
+        }
+        Ok(writer) => Some(writer),
     };
 
     let mut worker = None;
@@ -197,22 +162,25 @@ pub fn init(level: Level, log_file: Option<&Path>) -> LogGuard {
             .with_ansi(false)
             .with_target(true)
             .with_writer(non_blocking)
-            .with_filter(EnvFilter::new(FILE_FILTER_SPEC))
+            .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
     });
 
     let _ = tracing_subscriber::registry()
-        .with(EnvFilter::new(FILE_FILTER_SPEC))
-        .with(stderr_layer.with_filter(EnvFilter::new(&console_spec)))
+        .with(stderr_layer.with_filter(girpr_log::filter(&console_spec, &console_fallback)))
         .with(file_layer)
         .try_init();
 
-    let guard = LogGuard { _file: worker };
+    let guard = LogGuard {
+        plan: plan.clone(),
+        _file: worker,
+    };
 
     tracing::info!(
         version = crate::VERSION,
-        log_level = %level,
+        log_level = %console_level,
         console_filter = %console_spec,
-        log_file = log_file.map(|p| p.display().to_string()),
+        file_level = %plan.file_level,
+        log_file = %plan.file.display(),
         "gircap start"
     );
     guard
@@ -245,56 +213,12 @@ mod tests {
     use std::io::Write as _;
 
     #[test]
-    fn every_level_parses_in_any_case_and_rejects_the_rest() {
-        for (s, want) in [
-            ("error", Level::Error),
-            ("WARN", Level::Warn),
-            ("Info", Level::Info),
-            ("debug", Level::Debug),
-            ("TRACE", Level::Trace),
-        ] {
-            assert_eq!(Level::parse(s), Ok(want), "{s}");
-        }
-        let e = Level::parse("verbose").unwrap_err();
-        assert!(e.contains("verbose"), "{e}");
-        assert!(e.contains("error, warn, info, debug, trace"), "{e}");
-    }
-
-    #[test]
-    fn the_default_level_is_info() {
-        assert_eq!(Level::default(), Level::Info);
-        assert_eq!(Level::default().as_filter(), "info");
-    }
-
-    #[test]
     fn the_user_agent_is_the_generic_unity_player_string() {
         assert_eq!(user_agent(), USER_AGENT);
         assert_eq!(
             USER_AGENT,
             "UnityPlayer/2019.4.40f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)"
         );
-    }
-
-    #[test]
-    fn rust_log_wins_over_the_flag_and_an_empty_one_is_treated_as_unset() {
-        assert_eq!(console_filter_spec(Level::Info, Some("warn")), "warn");
-        assert_eq!(
-            console_filter_spec(Level::Debug, Some(" gircap::hyp=trace ")),
-            "gircap::hyp=trace",
-            "the value is trimmed but otherwise passed through verbatim"
-        );
-        for unset in [None, Some(""), Some("   ")] {
-            assert_eq!(
-                console_filter_spec(Level::Debug, unset),
-                "debug",
-                "{unset:?} must fall back to the flag"
-            );
-        }
-    }
-
-    #[test]
-    fn the_file_sink_is_unfiltered() {
-        assert_eq!(FILE_FILTER_SPEC, "trace");
     }
 
     #[test]

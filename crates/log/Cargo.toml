@@ -1,0 +1,16 @@
+[package]
+name = "girpr-log"
+version = "0.1.0"
+edition = "2024"
+description = "The log-file and log-level policy every project in the girpr workspace follows"
+
+[lib]
+name = "girpr_log"
+path = "src/lib.rs"
+
+[dependencies]
+# Only for the timestamp in a default log file name.
+chrono = { version = "0.4", features = ["clock"] }
+# For building the console's filter from `--log-level` or `RUST_LOG`, and for
+# the one place a broken spec is turned into a warning.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

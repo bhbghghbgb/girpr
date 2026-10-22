@@ -667,7 +667,8 @@ mod tests {
             hyp_base: None,
             sophon_base: None,
             common: CommonArgs {
-                log_level: "info".into(),
+                log_level: crate::logging::Level::Info,
+                log_file_level: None,
                 log_file: None,
                 output: "text".into(),
             },
@@ -896,7 +897,8 @@ mod tests {
         let v = verify_plan(&VerifyArgs {
             artifact: PathBuf::from("a"),
             common: CommonArgs {
-                log_level: "info".into(),
+                log_level: crate::logging::Level::Info,
+                log_file_level: None,
                 log_file: None,
                 output: "json".into(),
             },
@@ -908,7 +910,8 @@ mod tests {
             artifact: PathBuf::from("a"),
             out: None,
             common: CommonArgs {
-                log_level: "info".into(),
+                log_level: crate::logging::Level::Info,
+                log_file_level: None,
                 log_file: None,
                 output: "text".into(),
             },
@@ -920,7 +923,8 @@ mod tests {
             artifact: PathBuf::from("a"),
             out: Some(PathBuf::from("a")),
             common: CommonArgs {
-                log_level: "info".into(),
+                log_level: crate::logging::Level::Info,
+                log_file_level: None,
                 log_file: None,
                 output: "text".into(),
             },
@@ -932,7 +936,8 @@ mod tests {
         let l = ListArgs {
             root: PathBuf::from("artifacts"),
             common: CommonArgs {
-                log_level: "info".into(),
+                log_level: crate::logging::Level::Info,
+                log_file_level: None,
                 log_file: None,
                 output: "text".into(),
             },

@@ -149,11 +149,12 @@ pub struct RunCtx {
     /// How the data plane is rendered: `key=value` lines (the default) or NDJSON.
     /// One [`crate::report::Record`] per line either way — see [`crate::report`].
     pub output: OutputFormat,
-    /// `--log-file <FILE>`: the requested destination of the always-`TRACE`
-    /// trace log. `None` means the timestamped default under `<exe-dir>/logs/`
-    /// ([`crate::logging::log_file_path`]). Carried on the context rather than
-    /// applied here because the file layer is installed before any validation
-    /// runs — a usage error is meant to be diagnosable from the log too.
+    /// `--log-file <FILE>` (or `GIRPR_LOG_FILE`): the path the caller named
+    /// for the log file. `None` means the timestamped default under
+    /// `<exe-dir>/logs/` ([`crate::logging::default_log_path`]). Carried on the
+    /// context rather than applied here because the file layer is installed
+    /// before any validation runs — a usage error is meant to be diagnosable
+    /// from the log too.
     pub log_file: Option<PathBuf>,
     /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
     /// APIs are fetched from these bases instead of the production CDNs

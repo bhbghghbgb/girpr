@@ -162,6 +162,12 @@ impl Rig {
             "json".into(),
             "--log-file".into(),
             log.display().to_string(),
+            // The log file's own level, which is a knob of its own: the
+            // chunk-level records this test reads are `trace`, and the file
+            // defaults to `debug`. `--log-level` would only change the
+            // console.
+            "--log-file-level".into(),
+            "trace".into(),
         ];
         all.extend(args.iter().map(|s| s.to_string()));
         let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))

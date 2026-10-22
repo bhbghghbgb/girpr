@@ -573,6 +573,7 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
+ "girpr-log",
  "md5",
  "prost",
  "reqwest",
@@ -594,6 +595,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "girpr-log",
  "glob",
  "md5",
  "prost",
@@ -609,12 +611,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "girpr-log"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "girsync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "girpr-log",
  "glob",
  "md5",
  "rayon",

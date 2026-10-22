@@ -11,9 +11,11 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use girpr_log::Level;
 
 use crate::Biz;
 use crate::config::{RepairMode, RunCtx};
+use crate::logging::PROJECT;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
@@ -184,15 +186,30 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t, global = true)]
     pub output: OutputFormat,
 
-    /// Log level
-    #[arg(long, default_value = "info")]
-    pub log_level: String,
+    /// Console verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+    ///
+    /// The console is for the person watching the run, so it is `info` by
+    /// default. `RUST_LOG` replaces it when it is set — one lever, not two
+    /// that can disagree.
+    #[arg(long, value_name = "LV", default_value = "info", value_parser = girpr_log::parse_level)]
+    pub log_level: Level,
 
-    /// Write the trace log to this file instead of `logs/girpr_<timestamp>.log`
-    /// under the executable's directory. Missing parent directories are created.
-    /// The file layer captures `TRACE` and above **regardless of `--log-level`**,
-    /// so `--log-level trace` is only needed to also see it on stderr. A file
-    /// that cannot be opened is a stderr warning, not a failure.
+    /// Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+    ///
+    /// The file is for the person reading it afterwards, so it is one step
+    /// louder than the console: `debug` by default. `GIRPR_LOG_FILE_LEVEL`
+    /// says otherwise when this flag is absent. The two levels are separate
+    /// because they answer separate questions, and a run that wants a quiet
+    /// console and a detailed file should not have to choose.
+    #[arg(long, value_name = "LV", value_parser = girpr_log::parse_level)]
+    pub log_file_level: Option<Level>,
+
+    /// Where the log file goes.
+    ///
+    /// By default it is `logs/girpr_<timestamp>.log` in a `logs/` directory
+    /// beside the executable. `GIRPR_LOG_FILE` names one when this flag does
+    /// not. Missing parent directories are created. A file that cannot be
+    /// opened is a stderr warning, never a failure.
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<PathBuf>,
 
@@ -255,10 +272,14 @@ impl Args {
             purge_after: self.purge_after,
             purge_before: self.purge_before,
             output: self.output,
-            // Where the trace log goes. `None` keeps the timestamped default
-            // beside the executable, which nothing outside the process can name
-            // reliably — the flag is what makes the file findable.
-            log_file: self.log_file,
+            // Where the log file goes, when the caller named one. The flag
+            // wins over `GIRPR_LOG_FILE`; `None` keeps the timestamped
+            // default beside the executable, which nothing outside the process
+            // can name reliably — the flag and the environment variable are
+            // what make the file findable.
+            log_file: self
+                .log_file
+                .or_else(|| girpr_log::env_options(PROJECT).log_file),
             // Endpoint overrides: explicit flag > GIRPR_*_BASE env > production, resolved
             // by `RunCtx::api_bases`. Omitted flags stay `None`, so the env seam
             // every offline test already uses is untouched.

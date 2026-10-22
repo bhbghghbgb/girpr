@@ -311,6 +311,177 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
     );
 }
 
+/// The log file is written whether or not anybody asked for one.
+///
+/// It lands in a `logs/` directory beside the executable, named for the project
+/// and stamped with the time. There is no "no log file" mode: a run that
+/// leaves nothing behind is a run nobody can ask questions of later.
+///
+/// The file is found by its *content* rather than by diffing the directory,
+/// because the tests in this file run in parallel and every one of them
+/// writes a log file of its own. The marker is an audio code that appears in
+/// no other run's error message.
+#[test]
+fn a_log_file_is_always_written_beside_the_executable() {
+    let logs = exe_dir().join("logs");
+    std::fs::create_dir_all(&logs).expect("the logs directory");
+
+    // A marker no other run's error message carries: the pid and the clock
+    // together, so a file left by an earlier run cannot be mistaken for this
+    // one's.
+    let marker = format!(
+        "marker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after 1970")
+            .as_nanos()
+    );
+    let (code, _, _) = run(&[
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--audio",
+        &marker,
+    ]);
+    assert_eq!(code, 1, "an unknown audio code is a usage error");
+
+    let mine: Vec<_> = std::fs::read_dir(&logs)
+        .expect("read the logs directory")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|b| b.contains(&format!("unknown audio lang '{marker}'")))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        mine.len(),
+        1,
+        "exactly one log file holds this run's records: {mine:?}"
+    );
+    let name = mine[0].file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("girpr_"), "named for the project: {name}");
+    assert!(name.ends_with(".log"), "and for what it is: {name}");
+    assert_eq!(
+        mine[0].parent().and_then(|p| p.file_name()),
+        Some(std::ffi::OsStr::new("logs")),
+        "in a `logs/` directory: {mine:?}"
+    );
+}
+
+/// The environment variable names the log file when the flag does not.
+///
+/// Same precedence as everywhere else in the workspace: the flag wins, the
+/// environment answers for a flag that was never given, and the timestamped
+/// default answers for both.
+#[test]
+fn the_environment_names_the_log_file_when_the_flag_does_not() {
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "env");
+    let log = scratch.join("from-env.log");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args([
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "0",
+        ])
+        .env("GIRPR_LOG_FILE", &log)
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("log file: {}", log.display())),
+        "the path is echoed on stderr, because the caller named it:\n{stderr}"
+    );
+    let body = std::fs::read_to_string(&log).expect("the environment named the file");
+    assert!(
+        body.contains("usage error: io-threads must be >= 1"),
+        "and it holds the run's own records:\n{body}"
+    );
+}
+
+/// The flag wins over the environment.
+///
+/// The flag was typed by the person running the tool; the environment is
+/// whatever the shell happened to export. The one that was typed wins.
+#[test]
+fn the_flag_wins_over_the_environment() {
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "precedence");
+    let from_flag = scratch.join("from-flag.log");
+    let from_env = scratch.join("from-env.log");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args([
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "0",
+            "--log-file",
+            from_flag.to_str().unwrap(),
+        ])
+        .env("GIRPR_LOG_FILE", &from_env)
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(from_flag.exists(), "the flag's file was written");
+    assert!(!from_env.exists(), "the environment's file was not");
+    assert!(
+        stderr.contains(&format!("log file: {}", from_flag.display())),
+        "{stderr}"
+    );
+}
+
+/// The console is `info` and the log file is `debug`, by default.
+///
+/// `--log-level error` takes the console below the file, and the file still
+/// holds the run's own record of itself: the two levels answer separate
+/// questions, and the file's is the one asked afterwards.
+#[test]
+fn the_file_keeps_what_a_quiet_console_drops() {
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "levels");
+    let log = scratch.join("levels.log");
+
+    let (code, _, stderr) = run(&[
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "0",
+        "--log-level",
+        "error",
+        "--log-file",
+        log.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        !stderr.contains("INFO girpr::logging"),
+        "the console is at `error`, so it kept no info record:\n{stderr}"
+    );
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        body.contains("INFO girpr::logging: log file:"),
+        "the file is at `debug` by default, so it kept it:\n{body}"
+    );
+}
+
+/// The directory the executable is in — where the default log file lands.
+fn exe_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_BIN_EXE_girpr"))
+        .parent()
+        .expect("the executable has a directory")
+        .to_path_buf()
+}
+
 #[test]
 fn exit_five_is_a_refusal_not_an_argument_error() {
     // A tripped ceiling is exit `5`, deliberately *not* `1`. Whether a limit

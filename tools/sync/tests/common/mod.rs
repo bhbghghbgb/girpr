@@ -146,7 +146,8 @@ pub fn opts_dry() -> CommonOpts {
 pub fn log() -> LogCtx {
     LogCtx {
         level: "error".to_string(),
-        file: None,
+        file_level: "debug".to_string(),
+        file: PathBuf::from("girsync.log"),
         output: OutputFormat::Text,
     }
 }

@@ -20,7 +20,8 @@ src/main.rs           # shim: Args::try_parse (arg errors -> exit 1) -> logging:
 src/lib.rs            # module map + re-exports
 src/cli.rs            # clap Args, audio-lang normalize/validate, Args::into_ctx -> RunCtx
 src/config.rs         # RunCtx (validated run config) + RunFailure (typed exit code) + RepairMode
-src/logging.rs        # console layer (--log-level/RUST_LOG) + always-TRACE file layer
+src/logging.rs        # console layer (--log-level/RUST_LOG) + file layer (--log-file-level), over the shared policy
+crates/log/           # the shared log policy: log file path, log levels, env vars (also used by tools/)
 src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formatting and emission
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
@@ -58,7 +59,7 @@ girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--repair-mode <auto|inplace|temp|discard>]  (how each file is written; default auto)
       [--max-ram-bytes <N>]                    (cap the RAM the in-place repair may stage)
       [--scan]                                 (read the install once, for exact plan figures)
-      [--log-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>]
+      [--log-level error|warn|info|debug|trace] [--log-file-level error|warn|info|debug|trace] [--output text|json] [--log-file <FILE>]
 ```
 
 The path scope, the byte ceilings, `--print-plan`/`--plan-out` and the endpoint
@@ -134,10 +135,14 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 ## 5. Logging & correlation
 
-`tracing` to stderr (`--log-level` + `RUST_LOG`) plus a `TRACE`-level file log at
-`<exe-dir>/logs/girpr_<timestamp>.log` (both layers built in `src/logging.rs`;
-`--log-level` only affects stderr). A log file that cannot be opened degrades to a
-warning and a sink, never a failure.
+`tracing` to stderr (`--log-level`, `info` by default, replaced by `RUST_LOG`)
+plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`,
+`debug` by default). Both layers are built in `src/logging.rs` over the shared
+policy in `crates/log/` — the same policy the two dev tools follow. The two
+levels are separate: `--log-level` only affects stderr, `--log-file-level` only
+the file. A log file that cannot be opened degrades to a warning and a sink,
+never a failure. The file is always written: `--log-file`, then
+`GIRPR_LOG_FILE`, then the timestamped default, in that order.
 - `hyp` (debug): every HoYoPlay/Sophon JSON call with full request URL, retcode,
   node/attempt; (trace) full JSON response bodies (small metadata only, never chunk binaries).
 - `sophon` (debug): manifest GET, compressed/decompressed byte counts, expected vs actual

@@ -45,7 +45,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         rw_threads_src = common.rw.src_threads(),
         rw_threads_dst = common.rw.dst_threads(),
         console_level = %log.level.to_ascii_lowercase(),
-        file_level = "trace",
+        file_level = %log.file_level,
         log_file = %log.file_display(),
         output = %log.output,
     );

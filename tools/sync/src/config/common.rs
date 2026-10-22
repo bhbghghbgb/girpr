@@ -24,23 +24,28 @@ use crate::rw::RwLimits;
 /// exist so the per-command span can stamp them, and `output` is the one thing a
 /// command needs in order to build its [`Report`] — a report format chosen here
 /// and rebuilt per command would be four independent reads of the same flag.
+///
+/// The values come from the resolved [`girpr_log::LogPlan`], not from the raw
+/// flags: the file's path is only known once the flag, the environment
+/// variable and the timestamped default have been weighed against each other,
+/// and a span that named a different file from the one being written would be
+/// a span lying.
 #[derive(Debug, Clone)]
 pub struct LogCtx {
-    /// Raw `--log-level` string, echoed into spans as the console level.
+    /// The console's verbosity, echoed into spans.
     pub level: String,
-    /// Raw `--log-file` path, echoed into spans.
-    pub file: Option<PathBuf>,
+    /// The log file's verbosity, echoed into spans.
+    pub file_level: String,
+    /// Where the log file went, echoed into spans.
+    pub file: PathBuf,
     /// `--output`: how stdout records are rendered.
     pub output: OutputFormat,
 }
 
 impl LogCtx {
-    /// Span-friendly rendering of `--log-file`.
+    /// Span-friendly rendering of the log file's path.
     pub fn file_display(&self) -> String {
-        self.file
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(none)".to_string())
+        self.file.display().to_string()
     }
 
     /// The stdout writer for this run, in the requested format.

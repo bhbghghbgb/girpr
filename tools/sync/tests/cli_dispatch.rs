@@ -4,6 +4,7 @@ mod common;
 
 use common::{TempRoot, rfile, wfile};
 use girsync::cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs};
+use girsync::logging::Level;
 use girsync::report::OutputFormat;
 use girsync::run;
 
@@ -34,16 +35,24 @@ fn run_cli_dispatch_update_compare_sync() {
         rw: RwArgs::default(),
     };
     let mkcli = |cmd| Cli {
-        log_level: "error".to_string(),
+        log_level: Level::Error,
+        log_file_level: None,
         log_file: None,
         output: OutputFormat::Text,
         cmd,
     };
+    // The log policy the runs below are dispatched under. Resolved once, the
+    // way `main` does it, so the spans name the file that is really being
+    // written.
+    let plan = girsync::plan(Level::Error, None, None);
 
-    let code = run(mkcli(Cmd::Update {
-        dir: src.clone(),
-        common: common(),
-    }))
+    let code = run(
+        mkcli(Cmd::Update {
+            dir: src.clone(),
+            common: common(),
+        }),
+        &plan,
+    )
     .unwrap();
     assert_eq!(code, 0);
 
@@ -53,43 +62,55 @@ fn run_cli_dispatch_update_compare_sync() {
     wfile(&src, "c.txt", b"ccc");
     wfile(&dst, "b.txt", b"bbb");
 
-    let code = run(mkcli(Cmd::CompareSelf {
-        dir: src.clone(),
-        no_trust_cached_hashes: false,
-        common: common(),
-    }))
+    let code = run(
+        mkcli(Cmd::CompareSelf {
+            dir: src.clone(),
+            no_trust_cached_hashes: false,
+            common: common(),
+        }),
+        &plan,
+    )
     .unwrap();
     // Must run *before* the compare below: that one populates src's cache as
     // it scans, which is exactly what compare-self is here to avoid doing.
     assert_eq!(code, 4, "a file on disk that src's cache never recorded");
 
-    let code = run(mkcli(Cmd::Compare {
-        src: src.clone(),
-        dst: dst.clone(),
-        trust: TrustArgs::default(),
-        common: common(),
-    }))
+    let code = run(
+        mkcli(Cmd::Compare {
+            src: src.clone(),
+            dst: dst.clone(),
+            trust: TrustArgs::default(),
+            common: common(),
+        }),
+        &plan,
+    )
     .unwrap();
     assert_eq!(code, 4);
 
-    let code = run(mkcli(Cmd::Sync {
-        src: src.clone(),
-        dst: dst.clone(),
-        missing_only: false,
-        keep_extra: false,
-        trust: TrustArgs::default(),
-        common: common(),
-    }))
+    let code = run(
+        mkcli(Cmd::Sync {
+            src: src.clone(),
+            dst: dst.clone(),
+            missing_only: false,
+            keep_extra: false,
+            trust: TrustArgs::default(),
+            common: common(),
+        }),
+        &plan,
+    )
     .unwrap();
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "a.txt"), b"aaa");
 
-    let code = run(mkcli(Cmd::Compare {
-        src: src.clone(),
-        dst: dst.clone(),
-        trust: TrustArgs::default(),
-        common: common(),
-    }))
+    let code = run(
+        mkcli(Cmd::Compare {
+            src: src.clone(),
+            dst: dst.clone(),
+            trust: TrustArgs::default(),
+            common: common(),
+        }),
+        &plan,
+    )
     .unwrap();
     assert_eq!(code, 0);
 
@@ -102,24 +123,30 @@ fn run_cli_dispatch_update_compare_sync() {
     };
     wfile(&src, "later.txt", b"added after the first sync");
     assert_eq!(
-        run(json_cli(Cmd::CompareSelf {
-            dir: src.clone(),
-            no_trust_cached_hashes: false,
-            common: common(),
-        }))
+        run(
+            json_cli(Cmd::CompareSelf {
+                dir: src.clone(),
+                no_trust_cached_hashes: false,
+                common: common(),
+            }),
+            &plan
+        )
         .unwrap(),
         4,
         "a JSON run reaches the same verdict"
     );
     assert_eq!(
-        run(json_cli(Cmd::Sync {
-            src: src.clone(),
-            dst: dst.clone(),
-            missing_only: false,
-            keep_extra: false,
-            trust: TrustArgs::default(),
-            common: common(),
-        }))
+        run(
+            json_cli(Cmd::Sync {
+                src: src.clone(),
+                dst: dst.clone(),
+                missing_only: false,
+                keep_extra: false,
+                trust: TrustArgs::default(),
+                common: common(),
+            }),
+            &plan
+        )
         .unwrap(),
         0
     );

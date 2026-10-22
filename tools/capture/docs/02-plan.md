@@ -74,7 +74,7 @@ tools/capture/
 │   ├── hash.rs           # md5/sha256 one-pass + one-shot, hex, gzip rule, zstd helpers
 │   ├── run.rs            # command dispatch: the four entry points
 │   ├── report.rs         # stdout data plane (single owner of println!)
-│   ├── logging.rs        # tracing init + --log-file (JSON lines)
+│   ├── logging.rs        # tracing init + the log file (JSON lines), over the shared log policy
 │   ├── http/
 │   │   ├── mod.rs        # Fetcher: retries, timeout, headers, reqlog sink, size ceiling
 │   │   ├── probe.rs      # tag_probe.json + error_shapes.json
@@ -145,8 +145,13 @@ every failure in this crate is a `Result<T, String>` or a
 is declared and never used is a dependency a reader has to check the crate for.
 
 `tracing-appender` is here only for its non-blocking writer guard, which is what
-flushes the tail of a `--log-file` run. No rolling: a capture writes one log, it
+flushes the tail of a log-file run. No rolling: a capture writes one log, it
 is not a daemon.
+
+The log *policy* — where the file goes, which level each sink gets, which env
+var answers for which flag — is the workspace's and lives in `crates/log/`
+(`girpr-log`), shared with the repair binary and `girsync`. It is a leaf crate:
+no logic of any program, no dependency between programs (docs/00-spec.md §2).
 
 ### Style constraints (inherited from this repo)
 

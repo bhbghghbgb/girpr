@@ -67,12 +67,26 @@ pub enum Cmd {
 /// can pass `--log-level debug --output json` to anything and be right.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct CommonArgs {
-    /// stderr verbosity. `RUST_LOG` overrides this.
-    #[arg(long, value_name = "LV", default_value = "info", global = true)]
-    pub log_level: String,
+    /// stderr verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG`
+    /// replaces it when it is set.
+    #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
+    pub log_level: Level,
 
-    /// Also write every event as JSON lines to this file (appended).
-    #[arg(long, value_name = "PATH", global = true)]
+    /// Log file verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+    ///
+    /// Defaults to `debug`; `GIRCAP_LOG_FILE_LEVEL` says otherwise when this
+    /// flag is absent. The file is one step louder than the console by
+    /// default, because the file is read afterwards and the console is read
+    /// while it happens.
+    #[arg(long, value_name = "LV", global = true, value_parser = girpr_log::parse_level)]
+    pub log_file_level: Option<Level>,
+
+    /// Where the log file goes.
+    ///
+    /// By default it is `logs/gircap_<timestamp>.log` in a `logs/` directory
+    /// beside the executable. `GIRCAP_LOG_FILE` names one when this flag does
+    /// not. The file is always written, as JSON lines, and appended to.
+    #[arg(long, value_name = "FILE", global = true)]
     pub log_file: Option<PathBuf>,
 
     /// How the single stdout summary is rendered.
@@ -315,12 +329,14 @@ pub type Result<T> = std::result::Result<T, UsageError>;
 
 /// Resolve `--log-level` and `--output` into their typed forms.
 ///
-/// Both live on `CommonArgs` as strings so that `clap` can render them as
-/// ordinary string flags; they are typed here, once, so no command re-parses
-/// them and no command can disagree about what `default_value` meant.
+/// `--log-level` is typed by `clap` itself — a bad level is an argument-level
+/// failure, and it fails where every other bad argument fails. `--output` is
+/// resolved here, once, so no command re-parses it and no command can disagree
+/// about what `default_value` meant.
 pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
     Ok(CommonResolved {
-        level: Level::parse(&common.log_level).map_err(UsageError::new)?,
+        level: common.log_level,
+        file_level: common.log_file_level,
         output: common
             .output
             .parse::<OutputFormat>()
@@ -334,9 +350,11 @@ pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
 pub struct CommonResolved {
     /// stderr verbosity.
     pub level: Level,
+    /// The log file's verbosity, when the flag named one.
+    pub file_level: Option<Level>,
     /// stdout rendering.
     pub output: OutputFormat,
-    /// Where the JSON-lines log goes, if anywhere.
+    /// Where the JSON-lines log goes, if the caller named one.
     pub log_file: Option<PathBuf>,
 }
 
@@ -490,7 +508,8 @@ mod tests {
         assert_eq!(a.jobs, 8);
         assert_eq!(a.retries, 5);
         assert_eq!(a.timeout, 120);
-        assert_eq!(a.common.log_level, "debug");
+        assert_eq!(a.common.log_level, Level::Debug);
+        assert_eq!(a.common.log_file_level, None);
         assert_eq!(a.common.log_file, Some(PathBuf::from("run.log")));
         assert_eq!(a.common.output, "json");
     }
@@ -518,7 +537,7 @@ mod tests {
         };
         assert_eq!(m.artifact, PathBuf::from("a"));
         assert_eq!(m.out, Some(PathBuf::from("b")));
-        assert_eq!(m.common.log_level, "trace");
+        assert_eq!(m.common.log_level, Level::Trace);
 
         let Cmd::List(l) = parse(&["list", "--root", "artifacts"]).cmd else {
             panic!("expected list")
@@ -636,31 +655,52 @@ mod tests {
     #[test]
     fn common_flags_resolve_to_typed_forms_or_a_usage_error() {
         let ok = resolve_common(&CommonArgs {
-            log_level: "debug".into(),
+            log_level: Level::Debug,
+            log_file_level: Some(Level::Trace),
             log_file: Some("x.log".into()),
             output: "json".into(),
         })
         .unwrap();
         assert_eq!(ok.level, Level::Debug);
+        assert_eq!(ok.file_level, Some(Level::Trace));
         assert_eq!(ok.output, OutputFormat::Json);
         assert_eq!(ok.log_file, Some(PathBuf::from("x.log")));
 
-        let bad_level = resolve_common(&CommonArgs {
-            log_level: "loud".into(),
-            log_file: None,
-            output: "text".into(),
-        })
-        .unwrap_err();
-        assert_eq!(bad_level.exit_code(), ExitCode::Usage);
-        assert!(bad_level.to_string().contains("loud"));
-
         let bad_output = resolve_common(&CommonArgs {
-            log_level: "info".into(),
+            log_level: Level::Info,
+            log_file_level: None,
             log_file: None,
             output: "yaml".into(),
         })
         .unwrap_err();
         assert_eq!(bad_output.exit_code(), ExitCode::Usage);
+    }
+
+    /// A bad level is an *argument* failure, so it is rejected by the parser
+    /// rather than by the command that happens to read it.
+    #[test]
+    fn a_bad_log_level_is_rejected_by_the_parser() {
+        let e = parse_err(&["capture", "--log-level", "loud"]);
+        assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
+        let text = e.to_string();
+        assert!(text.contains("loud"), "{text}");
+        assert!(text.contains("error, warn, info, debug, trace"), "{text}");
+    }
+
+    /// The file's level has no clap default, so that
+    /// `GIRCAP_LOG_FILE_LEVEL` can answer for a flag that was never given.
+    /// The default is `debug`, and it is the *policy* crate's default.
+    #[test]
+    fn the_file_level_is_unset_until_something_says_otherwise() {
+        let Cmd::Capture(a) = parse(&["capture"]).cmd else {
+            panic!("expected capture")
+        };
+        assert_eq!(a.common.log_level, Level::Info);
+        assert_eq!(a.common.log_file_level, None);
+        let Cmd::Capture(b) = parse(&["capture", "--log-file-level", "trace"]).cmd else {
+            panic!("expected capture")
+        };
+        assert_eq!(b.common.log_file_level, Some(Level::Trace));
     }
 
     #[test]

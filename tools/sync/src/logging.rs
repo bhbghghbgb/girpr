@@ -1,4 +1,4 @@
-//! Tracing setup: human console layer plus an optional always-trace JSON file.
+//! Tracing setup: human console layer plus a JSON file layer.
 //!
 //! This module owns **stderr** only. The data plane — `MISSING`/`COPY`/`SUMMARY`
 //! and friends — is stdout, and it goes through [`crate::report::Report`], which
@@ -7,97 +7,206 @@
 //! records with no log chatter mixed into it, while stderr stays the narration.
 //!
 //! Design:
-//! - Console (stderr, human-readable) is filtered by `--log-level`.
-//! - File (if `--log-file`, JSON) always captures TRACE and above, no matter
-//!   `--log-level`.
+//! - Console (stderr, human-readable) is filtered by `--log-level`, or by
+//!   `RUST_LOG` when it is set.
+//! - The file (JSON) is filtered by `--log-file-level`. The two levels are
+//!   separate: the console is for the person watching, the file is for the
+//!   person reading it afterwards.
+//! - The file is **always** written — by default to
+//!   `<exe-dir>/logs/girsync_<timestamp>.log`.
 //! - Nothing is printed raw: every diagnostic is a `tracing` event with named
 //!   fields, so the JSON log and the console are the same records rendered twice.
 //! - Per-command spans carry config so every event inside is correlated.
 //! - Data-plane records reach this channel too: `Report::emit` logs each one as a
 //!   `debug` event with the same `event` name and fields it printed, so a log file
 //!   carries the answer without stdout having been captured.
+//!
+//! The *policy* — where the file goes, which level each sink gets, which
+//! environment variable answers for which flag — is the workspace's and lives
+//! in the `girpr-log` crate, so that `girpr` and `gircap` answer the same
+//! questions the same way.
 
-use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*};
 
-/// Normalize a `--log-level` string, rejecting anything unsupported.
-pub fn parse_level_name(s: &str) -> Result<String> {
-    match s.to_ascii_lowercase().as_str() {
-        "trace" | "debug" | "info" | "warn" | "warning" | "error" => {
-            Ok(if s.eq_ignore_ascii_case("warning") {
-                "warn".to_string()
-            } else {
-                s.to_ascii_lowercase()
-            })
-        }
-        other => bail!(
-            "invalid --log-level '{}' (expected trace|debug|info|warn|error)",
-            other
-        ),
+pub use girpr_log::Level;
+
+/// This project's name: the default log file's stem, and the prefix of the
+/// environment variables that answer for the flags.
+pub const PROJECT: &str = "girsync";
+
+/// Keeps the non-blocking file sink's buffer alive for the length of the run.
+///
+/// Dropping this flushes the tail of the JSON log. Without it the last few
+/// hundred lines — the ones describing the run's outcome — would be lost, which
+/// is the one part of the file a reader most wants.
+pub struct LogGuard {
+    plan: girpr_log::LogPlan,
+    _file: Option<tracing_appender::non_blocking::WorkerGuard>,
+}
+
+impl LogGuard {
+    /// The resolved policy: where the log file went, and at what level each
+    /// sink is running.
+    pub fn plan(&self) -> &girpr_log::LogPlan {
+        &self.plan
     }
+}
+
+/// Resolve the log policy for a run, without installing anything.
+///
+/// The path, the levels and the precedence live in the shared `girpr-log`
+/// crate; this is the one call a caller makes to get them.
+pub fn plan(
+    console_level: Level,
+    file_level: Option<Level>,
+    log_file: Option<&Path>,
+) -> girpr_log::LogPlan {
+    let env = girpr_log::env_options(PROJECT);
+    for warning in &env.warnings {
+        eprintln!("WARN {warning}");
+    }
+    girpr_log::LogPlan::resolve(
+        PROJECT,
+        girpr_log::LogOptions {
+            console_level,
+            file_level,
+            log_file: log_file.map(Path::to_path_buf),
+        },
+        env,
+    )
 }
 
 /// Install the global tracing subscriber.
 ///
-/// Console (stderr, human-readable) is filtered by --log-level for our
-/// `girsync` target; third-party targets (e.g. redb) stay at warn to avoid
-/// noise. File (if --log-file, JSON) always captures TRACE for `girsync`
-/// regardless of --log-level.
+/// Console (stderr, human-readable) is filtered by `--log-level` for our
+/// `girsync` target; third-party targets stay quiet. The file (JSON) is
+/// filtered by `--log-file-level`, and is always written.
 ///
-/// Returns the file guard which must be kept alive for the whole run
-/// (otherwise buffered file logs are dropped).
+/// A log file that cannot be opened is a warning on stderr and not a failure:
+/// a run must not end differently because of where it was asked to log. The
+/// guard must be kept alive for the whole run — otherwise the buffered file log
+/// is dropped.
 pub fn init_tracing(
-    level_str: &str,
+    console_level: Level,
+    file_level: Option<Level>,
     log_file: Option<&Path>,
-) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
-    let console_level = parse_level_name(level_str)?;
-    // Scope filters to our target so `redb` etc. don't flood stderr/file.
-    let console_filter =
-        tracing_subscriber::EnvFilter::new(format!("girsync={},redb=warn", console_level));
+) -> LogGuard {
+    let plan = plan(console_level, file_level, log_file);
+
     let console_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(true)
         .with_target(true)
-        .with_filter(console_filter);
+        .with_filter(girpr_log::filter(
+            &console_filter(&plan),
+            &console_fallback(&plan),
+        ));
 
-    if let Some(p) = log_file {
-        if let Some(parent) = p.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create log dir {}", parent.display()))?;
+    // The file is opened append-only, so two runs against one path do not
+    // erase each other. A file that cannot be opened costs the run its
+    // narration and nothing else.
+    let file = match open_log_file(&plan.file) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("WARN disabling file logging ({}): {e}", plan.file.display());
+            None
         }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-            .with_context(|| format!("open log file {}", p.display()))?;
-        let (nb, guard) = tracing_appender::non_blocking(file);
-        let file_filter = tracing_subscriber::EnvFilter::new("girsync=trace,redb=warn");
-        let file_layer = fmt::layer()
+    };
+
+    let mut worker = None;
+    let file_layer = file.map(|f| {
+        let (nb, guard) = tracing_appender::non_blocking(f);
+        worker = Some(guard);
+        fmt::layer()
             .json()
             .with_writer(nb)
             .with_ansi(false)
             .with_target(true)
             .with_current_span(true)
             .with_span_list(true)
-            .with_filter(file_filter);
-        tracing_subscriber::registry()
-            .with(console_layer)
-            .with(file_layer)
-            .init();
-        info!(
-            path = %p.display(),
-            console_level = %console_level,
-            file_level = "trace",
-            pid = std::process::id(),
-            "log start"
-        );
-        Ok(Some(guard))
+            .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
+    });
+
+    let _ = tracing_subscriber::registry()
+        .with(console_layer)
+        .with(file_layer)
+        .try_init();
+
+    info!(
+        path = %plan.file.display(),
+        console_level = %plan.console_level,
+        file_level = %plan.file_level,
+        pid = std::process::id(),
+        "log start"
+    );
+
+    LogGuard {
+        plan,
+        _file: worker,
+    }
+}
+
+/// The console's filter spec: the shared policy's, plus `redb` at `warn`.
+///
+/// The shared policy keeps third-party crates off the console, and `redb` is
+/// the one exception: it is this tool's cache, and a cache that complains is
+/// worth saying out loud. `RUST_LOG` is left exactly as the user wrote it —
+/// it is the whole console, not a starting point.
+fn console_filter(plan: &girpr_log::LogPlan) -> String {
+    if plan.rust_log.is_some() {
+        plan.console_filter()
     } else {
-        tracing_subscriber::registry().with(console_layer).init();
-        Ok(None)
+        format!("{},redb=warn", plan.console_filter())
+    }
+}
+
+/// The filter to fall back to when the console's spec does not parse.
+///
+/// The same spec, without the environment's contribution: a broken `RUST_LOG`
+/// must not be able to widen the console past what the flag asked for.
+fn console_fallback(plan: &girpr_log::LogPlan) -> String {
+    format!("{PROJECT}={},redb=warn", plan.console_level.as_str())
+}
+
+/// Open the log file for appending, creating the parent directory if needed.
+fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+
+/// The default log file path: `<exe-dir>/logs/girsync_<timestamp>.log`.
+pub fn default_log_path() -> std::path::PathBuf {
+    girpr_log::default_log_path(PROJECT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_file_is_named_for_the_project() {
+        let path = default_log_path();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("girsync_"), "{name}");
+        assert!(name.ends_with(".log"), "{name}");
+    }
+
+    #[test]
+    fn a_level_name_is_normalized_or_refused() {
+        // The flag is typed by `clap`, so this is the level *type* doing the
+        // refusing: one spelling, one message, in every project.
+        assert_eq!(Level::parse("DEBUG").unwrap(), girpr_log::Level::Debug);
+        assert_eq!(Level::parse("warning").unwrap(), girpr_log::Level::Warn);
+        let e = Level::parse("loud").unwrap_err();
+        assert!(e.contains("loud"), "{e}");
     }
 }

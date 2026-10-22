@@ -47,10 +47,17 @@ pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool, show_identica
 ///
 /// This is where raw CLI strings are validated into [`CommonOpts`]; every later
 /// layer works with compiled patterns and checked algorithm lists.
-pub fn run(cli: Cli) -> Result<i32> {
+///
+/// `plan` is the resolved log policy — where the log file went, and at what
+/// level each sink runs. It is passed in rather than resolved here, because
+/// the subscriber was installed with it and a second resolution would name a
+/// second file: the default path carries a timestamp, and two timestamps are
+/// two files.
+pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
     let log = LogCtx {
-        level: cli.log_level,
-        file: cli.log_file,
+        level: plan.console_level.to_string(),
+        file_level: plan.file_level.to_string(),
+        file: plan.file.clone(),
         output: cli.output,
     };
     match cli.cmd {

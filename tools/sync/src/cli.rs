@@ -8,6 +8,8 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+use girpr_log::Level;
+
 use crate::report::OutputFormat;
 
 #[derive(Parser, Debug)]
@@ -16,19 +18,33 @@ use crate::report::OutputFormat;
     about = "Dev-only one-way folder mirror with hash cache"
 )]
 pub struct Cli {
-    /// Console log level: trace|debug|info|warn|error (file log, if enabled, always captures trace+).
-    #[arg(long, default_value = "info", global = true)]
-    pub log_level: String,
-    /// Optional log file path. File always records at trace level regardless of --log-level.
-    #[arg(long, global = true)]
+    /// Console log level: trace|debug|info|warn|error. `RUST_LOG` replaces it
+    /// when it is set.
+    #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
+    pub log_level: Level,
+    /// Log file level: trace|debug|info|warn|error.
+    ///
+    /// Defaults to `debug`; `GIRSYNC_LOG_FILE_LEVEL` says otherwise when this
+    /// flag is absent. The file is one step louder than the console by
+    /// default, because the file is read afterwards and the console is read
+    /// while it happens.
+    #[arg(long, value_name = "LV", global = true, value_parser = girpr_log::parse_level)]
+    pub log_file_level: Option<Level>,
+    /// Where the log file goes.
+    ///
+    /// By default it is `logs/girsync_<timestamp>.log` in a `logs/` directory
+    /// beside the executable. `GIRSYNC_LOG_FILE` names one when this flag does
+    /// not. The file is always written, as JSON lines, and appended to.
+    #[arg(long, value_name = "FILE", global = true)]
     pub log_file: Option<PathBuf>,
     /// How stdout reports are written: text (one human line per record) or json
     /// (one JSON object per line, same records and same order).
     ///
     /// Only stdout is affected. Diagnostics go to stderr as `tracing` events
     /// either way, so `--output json` yields a stream of JSON records on stdout
-    /// with no human chatter mixed in — unless `--log-file` is given, which adds
-    /// a third, always-trace JSON log beside it.
+    /// with no human chatter mixed in. The log file is a third, separate
+    /// stream: it is JSON too, but it is written beside the run rather than
+    /// into it.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
     pub output: OutputFormat,
     #[command(subcommand)]

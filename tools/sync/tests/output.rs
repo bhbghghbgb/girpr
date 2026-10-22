@@ -405,3 +405,125 @@ fn a_record_reaches_the_file_log_at_the_default_log_level() {
         "each logged record carries its payload"
     );
 }
+
+/// **The console is `info` and the log file is `debug`, by default.**
+///
+/// The two levels are separate knobs and the defaults are one step apart: the
+/// console is for the person watching the run, the file for the person reading
+/// it afterwards. The report events are `debug`, so they are the evidence —
+/// they are in the file and not on the console.
+///
+/// This is the same property the test above pins from the other side (the
+/// file wants them), read here as the *difference* between the two sinks:
+/// a console at `info` must not carry them, or the two sinks would be one
+/// sink with two names.
+#[test]
+fn the_file_is_louder_than_the_console_by_default() {
+    let t = TempRoot::new("out_file_vs_console");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    let mut args = compare_args(&src, &dst, &["--output", "json"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+
+    let r = run(&args);
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let report_events = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "report")
+        .count();
+    assert_eq!(
+        report_events,
+        r.records.len(),
+        "the file's default level is `debug`, so every record is in it"
+    );
+    assert!(
+        !r.stderr.contains(" DEBUG "),
+        "the console's default level is `info`, so none of them is on it:\n{}",
+        r.stderr
+    );
+}
+
+/// The log file is written whether or not anybody asked for one.
+///
+/// It lands in a `logs/` directory beside the executable, named for the project
+/// and stamped with the time. There is no "no log file" mode: a run that leaves
+/// nothing behind is a run nobody can ask questions of later.
+#[test]
+fn a_log_file_is_always_written_beside_the_executable() {
+    let logs = exe_dir().join("logs");
+    std::fs::create_dir_all(&logs).expect("the logs directory");
+
+    let t = TempRoot::new("out_default_log_file");
+    let (src, dst) = fixture(&t);
+    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+
+    let mine: Vec<_> = std::fs::read_dir(&logs)
+        .expect("read the logs directory")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .map(|b| b.contains("\"log start\""))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        !mine.is_empty(),
+        "the run wrote a log file into {}: {mine:?}",
+        logs.display()
+    );
+    for path in &mine {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("girsync_"),
+            "named for the project: {name}"
+        );
+        assert!(name.ends_with(".log"), "and for what it is: {name}");
+        assert_eq!(
+            path.parent().and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("logs")),
+            "in a `logs/` directory: {path:?}"
+        );
+    }
+}
+
+/// The environment variable names the log file when the flag does not.
+///
+/// Same precedence as everywhere else in the workspace: the flag wins, the
+/// environment answers for a flag that was never given, and the timestamped
+/// default answers for both.
+#[test]
+fn the_environment_names_the_log_file_when_the_flag_does_not() {
+    let t = TempRoot::new("out_env_log_file");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("from-env.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(compare_args(&src, &dst, &[]))
+        .env("GIRSYNC_LOG_FILE", &logfile)
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains(&format!("log file: {}", logfile.display())),
+        "the path is echoed on stderr, because the caller named it:\n{stderr}"
+    );
+    let text = std::fs::read_to_string(&logfile).expect("the environment named the file");
+    assert!(
+        text.contains("\"log start\""),
+        "and it holds the run's own records:\n{text}"
+    );
+}
+
+/// The directory the executable is in — where the default log file lands.
+fn exe_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_BIN_EXE_girsync"))
+        .parent()
+        .expect("the executable has a directory")
+        .to_path_buf()
+}

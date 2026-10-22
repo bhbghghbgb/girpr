@@ -51,14 +51,9 @@ fn main() {
     }
     // Tracing is installed up front so a conversion failure is a structured
     // `error!` on stderr like every other fatal in the crate, rather than a bare
-    // line this binary formats itself.
-    let _guard = match girsync::init_tracing("info", None) {
-        Ok(g) => g,
-        Err(e) => {
-            eprintln!("FATAL {:#}", e);
-            std::process::exit(3);
-        }
-    };
+    // line this binary formats itself. The log file is always written, exactly
+    // as it is for `girsync` itself.
+    let _guard = girsync::init_tracing(girsync::logging::Level::Info, None, None);
     match girsync::convert::sled_to_redb(&sled_dir, &redb_path, force) {
         Ok(c) => Record::keyed("converted")
             .put("src", sled_dir.display().to_string())

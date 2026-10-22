@@ -15,7 +15,8 @@
 //! - [`cli`] / [`config`] — the argument surface and the validated per-run
 //!   configuration ([`config::RunCtx`]) plus the typed exit-code failure
 //!   ([`config::RunFailure`])
-//! - [`logging`] — console + always-`TRACE` file `tracing` layers
+//! - [`logging`] — console + file `tracing` layers, over the shared log policy
+//!   (`girpr-log`: the log file's path, the two levels, the env vars)
 //! - [`repair`] — the whole pipeline, split into phases
 //!   ([`repair::run`] is the coordinator)
 //! - [`hyp`] — HoYoPlay + Sophon `getBuild` JSON APIs

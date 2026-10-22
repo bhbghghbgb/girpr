@@ -27,7 +27,11 @@
 //! Two channels, deliberately separate. **stdout** is the answer: differences,
 //! plan actions and summaries, as [`report::Record`]s in the `--output` format.
 //! **stderr** is the narration: `tracing` events, filtered by `--log-level` and
-//! optionally also written to a JSON `--log-file`. Nothing is printed raw.
+//! optionally also written to a JSON log file. Nothing is printed raw.
+//!
+//! The log file's *policy* — where it goes, which level each sink gets, which
+//! environment variable answers for which flag — is the workspace's and lives
+//! in the `girpr-log` crate, shared with the repair binary and with `gircap`.
 
 pub mod cache;
 pub mod cli;
@@ -54,7 +58,7 @@ pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
-pub use logging::init_tracing;
+pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;
 pub use report::{OutputFormat, Record, Report, verdict};
 pub use rw::{RwLimits, RwPermit, RwRuntime, RwSide};
