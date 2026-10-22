@@ -37,7 +37,7 @@ main tool, and never imports its code.
 |---|---|
 | No dependency on the `girpr` crate | `Cargo.toml` declares no `girpr` path or registry dep |
 | Never invokes `girpr` or its tests | no `Command` against the `girpr` binary anywhere in the tree |
-| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`) and their environment variables. The README is the only other shared vocabulary (version strings) |
+| No shared contracts, except the log policy | own exit codes, own report format, own flag set apart from the log flags (`--log-level`, `--log-file-level`, `--log-file`) and their environment variables. The README is the only other shared vocabulary (version strings). The scratch-directory policy below is a test concern: it shares no flag, no exit code and no output of any program |
 | No shared fixtures | `gircap` builds its own mock server for its own tests |
 | Two shared *leaf* crates: the log policy and the scratch-directory policy | `girpr-log` (`crates/log/`): where the log file goes, what each sink's level is, which env var answers for which flag. `girpr-tempdir` (`crates/tempdir/`): how a test's scratch directory is named and when it is removed. Neither holds any logic of any program, and no test of one program depends on another's |
 
@@ -47,15 +47,15 @@ artifact is the whole interface between them: a bundle on disk, read by whoever
 wants it. None of the above is mechanically enforced — nothing here checks it —
 so it is a rule the tree has to keep, not a guarantee a build makes.
 
-**The log policy is the one thing that *is* shared, deliberately.** A user who
-has learned `--log-file` for one of the three programs should not have to learn
-it again for the next, and a log file that lands somewhere different per tool is
-a log file nobody finds. The shared crate is a leaf: it depends on `chrono` (for
-the timestamp in a file name) and on `tracing-subscriber` (for the filter), on
-no program at all, and it cannot make one program's test depend on another's.
-What stays independent is everything that could couple the *meaning* of a run:
-the exit codes, the report format, the fixtures, and every flag that is not
-about logging.
+**The log policy is the one thing about a *run* that is shared, deliberately.** A
+user who has learned `--log-file` for one of the three programs should not have
+to learn it again for the next, and a log file that lands somewhere different
+per tool is a log file nobody finds. The shared crate is a leaf: it depends on
+`chrono` (for the timestamp in a file name) and on `tracing-subscriber` (for
+the filter), on no program at all, and it cannot make one program's test depend
+on another's. What stays independent is everything that could couple the
+*meaning* of a run: the exit codes, the report format, the fixtures, and every
+flag that is not about logging.
 
 **The scratch-directory policy is shared for the same reason, and is a
 dev-dependency.** A scratch directory is a thing for a test, not for a program:

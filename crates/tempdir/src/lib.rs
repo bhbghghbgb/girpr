@@ -3,10 +3,15 @@
 //!
 //! One crate, three projects: the repair binary (`girpr`), the capture tool
 //! (`gircap`) and the mirror (`girsync`). Each of them used to carry its own
-//! copy of this helper — six copies in all, three of them in the same project
-//! — and the copies had to be kept in step by hand, because a helper that
-//! drifts is a helper whose two halves fail in different ways. They are all
-//! here now: one name, one construction, one cleanup, for all three.
+//! copy of this helper — six copies in all, two in each project — and they
+//! had to be kept in step by hand, because a helper that drifts is a helper
+//! whose two halves fail in different ways. They are all here now: one name,
+//! one construction, one cleanup, for all three.
+//!
+//! And they had already drifted: girsync's second copy was not a copy at all
+//! but a `TempRoot` with a name of its own
+//! (`girsync_run_<pid>_<nanos>_<n>_<tag>`) and a cleanup of its own, which is
+//! the sentence this crate exists to end.
 //!
 //! It is a **dev-dependency** of every project that uses it. Nothing that
 //! ships links against it: a scratch directory is a thing for a test, not for
@@ -71,14 +76,20 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// (a pid is reused, and a killed run leaves its tree behind), and `seq`
 /// separates two directories made inside one test.
 ///
+/// The name is a contract: **exactly five parts, split on `-`**. A `prefix` or
+/// a `tag` that carries a dash would break the shape, so the dash is folded
+/// to an underscore here rather than left to the caller.
+///
 /// The directory is **not** created: a test whose subject is what the code does
 /// when a path is absent needs it that way.
-pub fn unique_path(prefix: &str, tag: &str) -> PathBuf {
+fn unique_path(prefix: &str, tag: &str) -> PathBuf {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("the system clock is before 1970")
         .as_nanos();
+    let prefix = prefix.replace('-', "_");
+    let tag = tag.replace('-', "_");
     std::env::temp_dir().join(format!(
         "{prefix}-{tag}-{}-{nanos}-{seq}",
         std::process::id()
@@ -96,6 +107,11 @@ pub struct TempDir {
 
 impl TempDir {
     /// An empty directory, created.
+    ///
+    /// The path is unique by construction — pid, timestamp and per-process
+    /// counter — so there is nothing at it to remove: the directory is
+    /// **created, not cleared**. (A "remove first" on a path another run may
+    /// already own is the exact failure this crate's name exists to prevent.)
     pub fn new(prefix: &str, tag: &str) -> Self {
         let path = unique_path(prefix, tag);
         std::fs::create_dir_all(&path).expect("create the temp dir");
@@ -118,14 +134,19 @@ impl TempDir {
     ///
     /// For the few cases where the path is not free: a `materialize` run that
     /// defaults to writing *beside* the bundle, so the assertion can only be
-    /// made against the sibling the tool itself picks. Constructed from a
-    /// [`unique_path`], so it is as collision-proof as any other; `new` exists
-    /// for the cases that have a free choice.
+    /// made against the sibling the tool itself picks. Build the path the way
+    /// the code under test builds it — a sibling of another scratch tree, say
+    /// — and the guard owns it from there.
     ///
-    /// Anything already at the path is removed first. The directory is **not**
-    /// created: the caller chose this path precisely because the code under
-    /// test picks it, and making it is the code under test's job.
+    /// **Anything already at the path is removed first**, whether it is a
+    /// directory or a file. The directory is **not** created: the caller chose
+    /// this path precisely because the code under test picks it, and making it
+    /// is the code under test's job.
     pub fn at(path: PathBuf) -> Self {
+        // `remove_dir_all` refuses a file and `remove_file` refuses a
+        // directory, so both are tried: the promise is that the path is
+        // clear, not that one of the two shapes was there.
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&path);
         Self { path }
     }
@@ -163,7 +184,13 @@ impl Drop for TempDir {
         // (a log sink, a cache handle, a blob), and a leftover in the temp dir
         // is a far smaller problem than a test that cannot report its own
         // failure over it.
+        //
+        // Both shapes are removed, for the reason `at` removes both: the path
+        // is a tree in every case but one, and a file in that one — the path
+        // the code under test picked and wrote to. Each call refuses the
+        // other's shape, and the refusal is swallowed either way.
         let _ = std::fs::remove_dir_all(&self.path);
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -220,6 +247,27 @@ mod tests {
         assert!(parts[4].parse::<u64>().is_ok(), "the name is {name}");
     }
 
+    /// The five-part shape is the **code's** promise, not the caller's: a
+    /// prefix or a tag that carries a dash has it folded to an underscore, so
+    /// the name is still five parts.
+    ///
+    /// This matters because one caller builds its tag from data — a table row's
+    /// name — and a row name is a sentence, so a dash in it is a matter of
+    /// time rather than a matter of luck.
+    #[test]
+    fn a_dash_in_the_prefix_or_the_tag_cannot_break_the_shape() {
+        let path = unique_path("girpr-tempdir-test", "a-tag");
+        let name = path
+            .file_name()
+            .expect("the path has a last component")
+            .to_string_lossy()
+            .into_owned();
+        let parts: Vec<&str> = name.split('-').collect();
+        assert_eq!(parts.len(), 5, "the name is {name}");
+        assert_eq!(parts[0], "girpr_tempdir_test");
+        assert_eq!(parts[1], "a_tag");
+    }
+
     /// An `absent` directory is a path and nothing more: the tests whose
     /// subject is what the code under test does when a path is *missing* need
     /// it that way.
@@ -241,6 +289,19 @@ mod tests {
         assert_eq!(dir.path, path);
         assert!(!path.join("stale").exists(), "the stale file is gone");
         assert!(!path.exists(), "the path is not made for the caller");
+    }
+
+    /// A **file** at the chosen path is cleared too: `remove_dir_all` refuses
+    /// one, and the promise is that the path is clear, not that a directory
+    /// was there.
+    #[test]
+    fn a_file_at_the_chosen_path_is_cleared_too() {
+        let path = unique_path("girpr_tempdir_test", "chosen_file");
+        std::fs::write(&path, b"stale").expect("write a stale file");
+
+        let dir = TempDir::at(path.clone());
+        assert_eq!(dir.path, path);
+        assert!(!path.exists(), "the stale file is gone");
     }
 
     /// `subdir` creates the parents it needs, so a fixture can ask for
