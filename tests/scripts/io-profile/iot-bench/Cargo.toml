@@ -1,0 +1,17 @@
+[package]
+name = "iot-bench"
+version = "0.1.0"
+edition = "2021"
+description = "Microbenchmarks of the file-system operations the test suite performs"
+
+[dependencies]
+# Pinned to the version the workspace resolves (`tools/sync`), so the
+# microbenchmark measures the same redb the cache uses.
+redb = "=4.3.0"
+
+[profile.release]
+opt-level = 2
+
+# Standalone: this tool is not a member of the workspace at the repository
+# root, so builds do not pull it into `cargo test --workspace`.
+[workspace]

@@ -1,0 +1,21 @@
+[package]
+name = "iotime"
+version = "0.1.0"
+edition = "2021"
+description = "Per-test wall/CPU/I/O accounting through a Windows job object"
+
+[dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = 1
+debug = false
+
+# Standalone: this tool is not a member of the workspace at the repository
+# root, so builds do not pull it into `cargo test --workspace`.
+[workspace]
