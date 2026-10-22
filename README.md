@@ -14,6 +14,7 @@ gate) **+ Collapse's extra-file purge** as a pre/post phase.
 | **repair spec** (shipped, describes the whole-install patcher) | [`docs/01-repair-findings-and-verdict.md`](docs/01-repair-findings-and-verdict.md) · [`docs/02-repair-chunk-spec.md`](docs/02-repair-chunk-spec.md) · [`docs/03-repair-rust-implementation-plan.md`](docs/03-repair-rust-implementation-plan.md) | findings → spec → Rust module plan for `docs/02` |
 | **scope limitations** (shipped) | [`docs/04-scope-limitation-spec.md`](docs/04-scope-limitation-spec.md) | `--include`/`--exclude`, byte/file ceilings, `--print-plan`, endpoint override |
 | **artifact bridge** (shipped) | [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md) | the `#[ignore]`d end-to-end test against a real bundle, and what it claims |
+| **test-suite time cost** (measured) | [`docs/07-test-suite-time-cost.md`](docs/07-test-suite-time-cost.md) | where the suite's 6 minutes go: the seven groups that account for it, and what to do about each |
 
 The repair-spec series describes the whole-install patcher and is unaffected by
 the scope-limitations tier: a flag list and a byte ceiling are not a change to
@@ -340,8 +341,17 @@ cargo clippy --all-targets
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
 cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+
+# where the time goes: the per-test profile (docs/07)
+.\tools\testprof\drive.ps1
 ```
 
+- **The suite's cost is measured, not guessed.**
+  [`docs/07-test-suite-time-cost.md`](docs/07-test-suite-time-cost.md) profiles
+  all 1 227 tests on a 4-core box: 462 s of wall time against 26 s of CPU, so
+  **94 % of the suite is spent waiting** — on a redb cache file, on retry
+  backoffs, and on refused loopback connects. The instrument that produced it
+  is in [`tools/testprof/`](tools/testprof/).
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/metadata.rs`;
