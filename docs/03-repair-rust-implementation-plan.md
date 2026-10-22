@@ -103,7 +103,7 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 ## 4. Testing
 
-`cargo test` runs two layers, both offline by construction:
+`cargo nextest run` runs two layers, both offline by construction:
 
 - **Unit tests** (`#[cfg(test)] mod tests` next to the code): config.ini parse/bump,
   audio-lang mapping and flag validation, API URL/query building (per-launcher

@@ -28,7 +28,7 @@ that formula rather than by "how much code does it touch".
 
 The corollary is what to gate on: a change to the wire needs a live check, a
 change to a recorded field needs a *written expectation* (§3), and a change that
-only affects allocation needs nothing but `cargo test`.
+only affects allocation needs nothing but `cargo nextest run`.
 
 ### The shape of the data
 
@@ -91,7 +91,7 @@ them.
 
 | gate | compares | blind to |
 |---|---|---|
-| `cargo test` | the code against written expectations | nothing about the bytes, and a lot about fields only a live capture produces |
+| `cargo nextest run` | the code against written expectations | nothing about the bytes, and a lot about fields only a live capture produces |
 | `tests/bundle_diff.rs` | **two captures of one binary** | a change applied **uniformly to every capture** — by construction |
 | the per-document pins in `tests/capture_layout.rs` | a written expectation for the volatile documents | any **digest** in those documents, on purpose: A16 owns those |
 | `tools/bundle_differ.py` | **two commits** | a change that was wrong the same way at both ends |

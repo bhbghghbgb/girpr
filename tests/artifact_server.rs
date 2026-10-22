@@ -10,8 +10,9 @@
 //! *shape*. A mini-bundle with two `getBuild` bodies, one carried manifest
 //! per build, one chunk blob and a set of recorded failure shapes is a few
 //! kilobytes, and it exercises every route the server has. So these cases run
-//! in every `cargo test`, and the real bundle is only needed by the suite
-//! that compares `girpr`'s output against the patch (`tests/artifact_bridge.rs`).
+//! in every `cargo nextest run`, and the real bundle is only needed by the
+//! suite that compares `girpr`'s output against the patch
+//! (`tests/artifact_bridge.rs`).
 //!
 //! **What is served is never invented.** Every body comes out of a file the
 //! bundle carries; the only synthesized content is the failure shape, and only

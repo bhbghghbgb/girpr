@@ -25,7 +25,7 @@
 //! run deliberately.
 //!
 //! ```text
-//! cargo test -p girpr --test peak_heap -- --ignored --nocapture
+//! cargo nextest run -p girpr --test peak_heap --run-ignored only --no-capture
 //! ```
 //!
 //! # What it measures

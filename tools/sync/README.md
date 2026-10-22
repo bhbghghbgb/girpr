@@ -1029,6 +1029,23 @@ this can be run at any time; it rehashes whatever size+mtime cannot settle):
 .\target\debug\girsync compare-self --dir D:\game-live              # exit 0 = in step
 ```
 
+### The suite
+
+The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
+the prebuilt release for the platform. The shared defaults are in
+[`../../.config/nextest.toml`](../../.config/nextest.toml).
+
+```powershell
+cargo nextest run -p girsync   # 323 tests, one of them #[ignore]d
+```
+
+Nextest runs **each test in its own process**, which is what makes the suite's
+isolation real rather than incidental: nothing one test does — a global, a temp
+directory, an environment variable — can reach the next one.
+
+**Doctests are not run**: nextest has no doctest support at all. This crate has
+none, so nothing is lost.
+
 ## Cost model
 
 Where a run's time goes, so a slow run can be read rather than guessed at. On a

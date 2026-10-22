@@ -468,8 +468,8 @@ fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
 /// Fresh unique temp dir for one test, removed when the returned guard drops.
 ///
 /// The name carries the pid, a timestamp and a per-process counter so two runs
-/// — or two `cargo test` invocations — never share a tree, and the guard means
-/// the tree is removed even when a case fails before its last line. See
+/// — or two `cargo nextest run` invocations — never share a tree, and the guard
+/// means the tree is removed even when a case fails before its last line. See
 /// [`tempdir`] for why each part is there.
 pub fn temp_dir(name: &str) -> tempdir::TempDir {
     tempdir::TempDir::new("girpr_it", name)

@@ -348,9 +348,9 @@ listener and binds `127.0.0.1:0`.
 
 ## 11. What this instrument does not establish
 
-- **It is not the crate's own suite.** `cargo test` is what proves the code is
-  correct; this proves what the bytes say. They are different questions and
-  neither substitutes for the other.
+- **It is not the crate's own suite.** `cargo nextest run` is what proves the
+  code is correct; this proves what the bytes say. They are different questions
+  and neither substitutes for the other.
 - **It compares mock captures, not live ones.** A change that only manifests
   against the real CDN — a header the mock does not model, a body the mock
   cannot produce — is out of reach by construction. A change to the wire needs a

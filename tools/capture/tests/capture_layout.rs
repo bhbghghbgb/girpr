@@ -188,8 +188,8 @@ fn a_capture_leaves_no_failed_selfcheck_rows() {
     );
 }
 
-/// `cargo test -p gircap` green and no network. The "no network" half is
-/// the structural one: every request the capture made went to `127.0.0.1`.
+/// `cargo nextest run -p gircap` green and no network. The "no network" half
+/// is the structural one: every request the capture made went to `127.0.0.1`.
 #[test]
 fn every_request_the_capture_made_went_to_the_mock() {
     let (mock, _s, _r, _b) = capture_ok("requests");

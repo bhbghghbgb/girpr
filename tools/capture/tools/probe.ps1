@@ -87,7 +87,7 @@ if ($Arm -ne "") { $env:GIRCAP_PROBE_ALLOW_FAIL = "1" }
 else { Remove-Item Env:\GIRCAP_PROBE_ALLOW_FAIL -ErrorAction SilentlyContinue }
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-$out = & cargo test --release -p gircap --test zz_probe -- --nocapture 2>&1
+$out = & cargo nextest run --release -p gircap --test zz_probe --no-capture 2>&1
 $testCode = $LASTEXITCODE
 $testSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 "--- probe exit=$testCode in ${testSec}s ---" | Add-Content $log

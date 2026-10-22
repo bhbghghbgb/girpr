@@ -1,0 +1,28 @@
+# The workspace's test runner.
+#
+# Every crate here runs its tests with `cargo nextest run`: `girpr`,
+# `girpr-log`, `gircap` and `girsync`. This file is where the runner's
+# defaults live, so the behaviour is the same whoever typed the command and
+# whichever crate the command names.
+#
+# `cargo nextest` needs the `cargo-nextest` binary:
+#
+#     cargo install cargo-nextest --locked
+#
+# (or the prebuilt release for the platform, from
+# <https://github.com/nextest-rs/nextest/releases>).
+#
+# What this file cannot do is run **doctests**: nextest does not support them.
+# The workspace's one doctest — the example in `crates/log/src/lib.rs` — is
+# therefore mirrored by a unit test beside it, so `cargo nextest run` on its
+# own still covers everything the suite covers.
+
+[profile.default]
+# Every failure is reported at the end, with the output it captured, rather
+# than the first one scrolling the rest of the list away.
+failure-output = "final"
+
+# A test that has said nothing for a minute is marked slow. Nothing is killed:
+# the bundle-backed suites are legitimately slow, and a killed test is a false
+# alarm dressed up as a hang.
+slow-timeout = { period = "60s" }

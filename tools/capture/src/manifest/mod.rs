@@ -602,8 +602,8 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
             // `checked_add`, because this counter is a *measurement* and must not
             // panic on the thing it measures. A manifest declaring
             // `offset = i64::MAX` overflowed here: an abort in debug and test
-            // builds — so `cargo test` itself would die — and a silent wrap in
-            // release, which reports a file as tiled when nothing was checked.
+            // builds — so `cargo nextest run` itself would die — and a silent wrap
+            // in release, which reports a file as tiled when nothing was checked.
             // An offset that cannot be added to is a file larger than any file,
             // so the tiling is broken by definition.
             cursor = match c.offset.checked_add(c.uncompressed_size) {
@@ -787,8 +787,8 @@ mod tests {
     fn a_manifest_whose_arithmetic_overflows_is_measured_not_fatal() {
         // `offset = i64::MAX` then `offset + uncompressed_size` overflowed: an
         // abort in debug and test builds, so this line alone could kill
-        // `cargo test`, and a silent wrap in release — which would report the
-        // file as tiled when nothing had been checked.
+        // `cargo nextest run`, and a silent wrap in release — which would report
+        // the file as tiled when nothing had been checked.
         let entries = vec![file("huge", vec![chunk(i64::MAX, 4096)], 4096)];
         let d = decode_counts(&entries);
         assert_eq!(

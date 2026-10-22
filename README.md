@@ -332,15 +332,37 @@ One policy, three programs: this binary and the two dev tools (`gircap`,
 
 ## Testing (offline by construction)
 
+The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
+the prebuilt release for the platform. Every crate in the workspace (`girpr`,
+`girpr-log`, `gircap`, `girsync`) runs its suite with it, and
+[`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
+
 ```powershell
-cargo test            # 147 unit + 113 integration, all offline
-cargo test --test repair_offline
-cargo test --test repair_machinery
+cargo nextest run             # 268 tests in this package, all offline
+cargo nextest run --workspace # the whole workspace: girpr, girpr-log, gircap, girsync
+cargo nextest run --test repair_offline
+cargo nextest run --test repair_machinery
 cargo clippy --all-targets
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
-cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 ```
+
+- **`cargo nextest run` is not `cargo test`.** It runs each test in its own
+  process, which is what makes the suite's isolation real rather than
+  incidental: a test that leaks a global, a temp directory or an environment
+  variable cannot reach the next one. Three things follow from it.
+  - A `#[ignore]`d test is skipped unless `--run-ignored only` (or
+    `--run-ignored all`) says otherwise — same rule as `cargo test`, different
+    spelling. nextest also accepts libtest's `-- --ignored`, but the native
+    flag is the one to type.
+  - **`--nocapture` is `--no-capture`** — nextest's spelling, and the only one
+    it has. (`--no-capture` also runs the suite serially, because a captured
+    output cannot be interleaved.)
+  - **Doctests are not run.** Nextest has no doctest support at all, so the
+    workspace's one doctest — the example in `crates/log/src/lib.rs` — is
+    mirrored by a unit test beside it, and `cargo nextest run` alone covers
+    everything the suite covers.
 
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
@@ -387,13 +409,13 @@ cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
   meant to be started **by hand, only when a repair-spec change is
   suspected**:
   ```powershell
-  cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+  cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
   ```
-  It still *compiles* under `cargo test`, so a broken bridge fails to build
-  rather than failing silently. And because it only ever runs deliberately, a
-  **missing prerequisite is an error**: no bundle under `artifacts/` and no
-  `GIRPR_ARTIFACT_BUNDLE` fails the run with the command that would produce
-  one, rather than passing quietly having checked nothing.
+  It still *compiles* under `cargo nextest run`, so a broken bridge fails to
+  build rather than failing silently. And because it only ever runs
+  deliberately, a **missing prerequisite is an error**: no bundle under
+  `artifacts/` and no `GIRPR_ARTIFACT_BUNDLE` fails the run with the command
+  that would produce one, rather than passing quietly having checked nothing.
   - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md).
   - The server rewrites only the **scheme and authority** of the `url_prefix`
     inside each `getBuild` body, because manifest and chunk URLs are built from

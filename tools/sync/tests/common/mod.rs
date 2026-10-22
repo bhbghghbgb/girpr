@@ -53,8 +53,8 @@ pub fn rw() -> CacheOpen {
     }
 }
 
-/// Isolated temp directory per test, so parallel `cargo test` workers never
-/// share a cache file.
+/// Isolated temp directory per test, so parallel `cargo nextest run` workers
+/// never share a cache file.
 pub struct TempRoot {
     path: PathBuf,
 }

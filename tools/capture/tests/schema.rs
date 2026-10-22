@@ -43,10 +43,10 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// `&'static`, so it lives in a `OnceLock` — and a `OnceLock` is never dropped,
 /// which is the one place a `Drop`-based cleanup does not reach. What the name
 /// can still carry is uniqueness: `unique_path` gives every run its own
-/// directory, so a second `cargo test` never writes into the tree this one is
-/// reading, and a run that was killed leaves a directory no later run mistakes
-/// for a fixture. Two directories per test run is the cost, and the system temp
-/// cleaner owns them.
+/// directory, so a second `cargo nextest run` never writes into the tree this
+/// one is reading, and a run that was killed leaves a directory no later run
+/// mistakes for a fixture. Two directories per test run is the cost, and the
+/// system temp cleaner owns them.
 ///
 /// Every other tree in this suite is built by [`common::tempdir::TempDir`],
 /// which is dropped; see `tests/tempdir.rs`.
@@ -78,10 +78,18 @@ fn capture_into(prefix: &str, extra: &[&str]) -> PathBuf {
 
 /// One capture, written once and shared by the tests below.
 ///
-/// `OnceLock` rather than one capture per test: each capture is a process
-/// against a listener, and five tests paying for five captures makes the suite
-/// slow for no extra coverage. The bundle is read-only to every test that uses
+/// `OnceLock` rather than a capture per *call*: a test that needs the bundle
+/// twice reads one tree, and the bundle is read-only to every test that uses
 /// it. See [`capture_into`] for why the tree outlives the run.
+///
+/// **Nextest runs every test in its own process**, so this `OnceLock` is
+/// per-process and each test that needs a bundle builds its own. That is the
+/// price of the isolation nextest buys — a test that leaks a global, a temp
+/// directory or an environment variable cannot reach the next one — and it is
+/// a price worth paying: this file's fifteen cases go from ~0.7 s to ~5 s,
+/// and the workspace as a whole is *faster* under nextest than under
+/// `cargo test`. What the `OnceLock` still buys is that one test never pays
+/// for two captures.
 fn bundle() -> &'static PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| capture_into("gircap-schema", &[]))

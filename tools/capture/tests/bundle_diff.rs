@@ -1,12 +1,13 @@
 //! The band-1 gate: **two captures of the same fixture must agree**, once the
 //! fields that were never deterministic are normalised away.
 //!
-//! `cargo test` proves a refactor did not break the *code*. It does not prove it
-//! did not change what a bundle **says** — and that is the risk that matters
-//! here, because a bundle is a fixture other work depends on. A refactor that
-//! silently dropped a field or rewrote `MANIFEST.json` would pass 450 tests and
-//! still be wrong. This file is the check that cannot see that difference, and
-//! it is what makes the band-1 and band-2 work routine instead of scary.
+//! `cargo nextest run` proves a refactor did not break the *code*. It does not
+//! prove it did not change what a bundle **says** — and that is the risk that
+//! matters here, because a bundle is a fixture other work depends on. A
+//! refactor that silently dropped a field or rewrote `MANIFEST.json` would pass
+//! 450 tests and still be wrong. This file is the check that cannot see that
+//! difference, and it is what makes the band-1 and band-2 work routine instead
+//! of scary.
 //!
 //! ## Why it is "identical after normalisation", not "identical"
 //!
@@ -501,7 +502,7 @@ fn differences(a: &[u8], b: &[u8]) -> String {
 ///
 /// When this fails the message names every differing file and every differing
 /// byte range in each — a refactor that changed what a bundle says is otherwise
-/// very hard to see, because `cargo test` is still green.
+/// very hard to see, because `cargo nextest run` is still green.
 #[test]
 fn two_captures_of_the_same_fixture_agree() {
     let mock = Mock::start(World::all_shapes());

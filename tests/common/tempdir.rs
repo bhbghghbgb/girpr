@@ -10,7 +10,7 @@
 //!
 //! ## Why the name carries so much
 //!
-//! `cargo test` runs the tests of a binary in parallel threads, and CI (or a
+//! `cargo nextest run` runs **each test in its own process**, and CI (or a
 //! developer) routinely runs two copies of the suite at once. A fixed
 //! directory name is therefore shared by more than one test *and* by more than
 //! one process, and both failure modes are silent:

@@ -150,28 +150,28 @@ depend on the reader — so the reader is not what they use.
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
 four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
 The suite is six cases and well under a minute in release. That is worth paying
-when something has gone wrong and not worth paying on every `cargo test`.
+when something has gone wrong and not worth paying on every `cargo nextest run`.
 
 So it runs **by hand, deliberately, and only when the repair spec is suspected
 to have regressed**:
 
 ```
-cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 ```
 
-Nothing else runs it. `cargo test` still *compiles* the file, which is what keeps
-it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY` contract: a
-broken bridge fails to build rather than failing silently.
+Nothing else runs it. `cargo nextest run` still *compiles* the file, which is
+what keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`
+contract: a broken bridge fails to build rather than failing silently.
 
 ### 3.2 Gate 2 — a missing prerequisite is an error, not a skip
 
 This follows directly from Gate 1. Because the suite only ever runs
-intentionally, nobody types `--ignored` here by accident, so the hazard a skip
-would guard against does not exist — while its opposite does. "I ran the check
-and it found nothing to check" must never render as a green line. A run without
-a bundle **fails**, and the failure names the exact command that produces one.
-An absent bundle is *missing input for a check someone asked for*, and it says so
-loudly.
+intentionally, nobody types `--run-ignored only` here by accident, so the hazard
+a skip would guard against does not exist — while its opposite does. "I ran the
+check and it found nothing to check" must never render as a green line. A run
+without a bundle **fails**, and the failure names the exact command that
+produces one. An absent bundle is *missing input for a check someone asked
+for*, and it says so loudly.
 
 Resolution order:
 
@@ -491,11 +491,12 @@ here would fail forever for a reason that has nothing to do with the bridge.
 
 ### 6.2 Isolation is per capture, because the tests run in parallel
 
-**Rust runs `#[test]`s in parallel threads.** A shared scratch tree, a shared
-listener and a shared request log mean concurrent `girpr` processes fighting over
-one tree: two runs would patch the same path, one run's fetch set would see the
-other's requests, and a diff would compare a tree some other run had already
-changed. The failure would be intermittent and would look like a product bug.
+**Rust runs `#[test]`s in parallel, and `cargo nextest` runs each of them in its
+own process.** A shared scratch tree, a shared listener and a shared request log
+mean concurrent `girpr` processes fighting over one tree: two runs would patch
+the same path, one run's fetch set would see the other's requests, and a diff
+would compare a tree some other run had already changed. The failure would be
+intermittent and would look like a product bug.
 
 So, **per capture:**
 

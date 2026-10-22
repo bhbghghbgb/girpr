@@ -26,22 +26,22 @@
 //!
 //! # Why every test here is `#[ignore]`d: cost
 //!
-//! Not "it would be rude under `cargo test`". These cases are **expensive**.
-//! One capture is a `--print-plan` pre-pass plus a real run, and each run
-//! fetches four manifests — ~20 MB of real bundle bytes — before it can plan a
-//! single file. The whole suite is a handful of cases and **minutes** of
-//! wall-clock, which is a price worth paying *when something has gone wrong*
-//! and not worth paying on every `cargo test`.
+//! Not "it would be rude under `cargo nextest run`". These cases are
+//! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
+//! each run fetches four manifests — ~20 MB of real bundle bytes — before it
+//! can plan a single file. The whole suite is a handful of cases and **minutes**
+//! of wall-clock, which is a price worth paying *when something has gone wrong*
+//! and not worth paying on every `cargo nextest run`.
 //!
 //! So it is run **by hand, deliberately**, and only when the repair spec is
 //! suspected to have regressed:
 //!
 //! ```text
-//! cargo test -p girpr --test artifact_bridge -- --ignored --nocapture
+//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 //! ```
 //!
-//! Nothing else runs it. `cargo test` still *compiles* this file, which is what
-//! keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
+//! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
+//! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
 //! contract — a broken bridge would fail to build rather than fail silently.
 //!
 //! # Why a missing bundle is an error, not a skip
@@ -49,10 +49,10 @@
 //! Because this file is only ever run intentionally. A skip on a missing
 //! prerequisite would turn "I ran the check and it found nothing to check" into
 //! a green line — and that is the one reading this harness must never permit.
-//! Nobody types `cargo test -- --ignored` here by accident, so the hazard a
-//! skip guards against (people run it with `--ignored` forever and stop reading)
-//! does not exist; its opposite does. If the bundle is missing, the run
-//! **fails**, and says exactly what to run to produce one:
+//! Nobody types `cargo nextest run --run-ignored only` here by accident, so the
+//! hazard a skip guards against (people run it with `--run-ignored only` forever
+//! and stop reading) does not exist; its opposite does. If the bundle is
+//! missing, the run **fails**, and says exactly what to run to produce one:
 //!
 //! ```text
 //! cargo run -p gircap -- capture --out artifacts
@@ -716,7 +716,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo test -p girpr --test artifact_bridge -- --ignored --nocapture"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
         async fn $name() {
             let bridge = bridge().await;
             drive_named(&bridge, $id).await;

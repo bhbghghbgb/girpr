@@ -34,6 +34,25 @@ the chunks the artifact says it must fetch.
 
 Start with the spec.
 
+## Tests
+
+The runner is **`cargo nextest`** — `cargo install cargo-nextest --locked`, or
+the prebuilt release for the platform. The shared defaults are in
+[`../../.config/nextest.toml`](../../.config/nextest.toml).
+
+```powershell
+cargo nextest run -p gircap   # 619 tests, none ignored, no network
+```
+
+Nextest runs **each test in its own process**, which is what makes the suite's
+isolation real: nothing one test does — a global, a temp directory, an
+environment variable — can reach the next one. The price is that the mock's
+world is built once per *test* rather than once per binary: `tests/schema.rs`
+goes from ~0.7 s to ~5 s, and the suite as a whole stays a few seconds.
+
+**Doctests are not run**: nextest has no doctest support at all. This crate has
+none, so nothing is lost.
+
 ## Artifact bundles
 
 `capture` is the only command here that touches the network. Everything else —
@@ -132,7 +151,7 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 ```powershell
 # in the girpr package. Needs one bundle and FAILS without one.
 $env:GIRPR_ARTIFACT_BUNDLE = "<path to one bundle>"
-cargo test -p girpr --test artifact_bridge -- --ignored --nocapture --test-threads=1
+cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture --test-threads=1
 ```
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on

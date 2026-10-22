@@ -210,10 +210,13 @@ any change to it:
 - **no fixture files under `tests/`** — the directory is 100% `.rs`, and every
   fixture is generated at test time.
 
-**Cheap enough to gate every commit.** 603 tests, none ignored, no sleeps and no
+**Cheap enough to gate every commit.** 619 tests, none ignored, no sleeps and no
 retry loops — which is the property that makes the suite usable as a gate rather
-than something run occasionally. The mock's world is built once per process and
-shared (`OnceLock`), rather than rebuilt per capture.
+than something run occasionally. The runner is `cargo nextest run`, and it runs
+**each test in its own process**: the isolation is the point, so the mock's
+world is built once per *test* rather than once per binary, and nothing one
+test does — a global, a temp directory, an environment variable — can reach the
+next one.
 
 ### The gate that compares two captures, and what it cannot see
 
