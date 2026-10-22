@@ -39,7 +39,7 @@ do not own, and the log-file policy change that fixes one of them.
 | `src/config.rs` | validated run config; failure carrying the exit code | `RunCtx`, `RunCtx::readonly`, `RunCtx::api_bases`, `RunFailure` |
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `env_options` |
-| `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir` |
+| `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
 | `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
@@ -380,6 +380,11 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
   never share a tree, and the guard removes the tree when the test ends
   however it ends. It used to be six copies of this, three of them in the same
   project, each of which had to be kept in step by hand.
+  Every one of those trees lives under **one** directory in the system temp
+  directory: `<temp>/girpr-test/`. So a directory left behind by a killed run
+  is recognisable as this project's — "whose leftover is this?" has an answer —
+  and the whole of what this workspace wrote to the temp directory is one
+  directory to look at.
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
   resolved in `RunCtx::api_bases`).

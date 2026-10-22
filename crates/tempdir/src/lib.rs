@@ -40,6 +40,25 @@
 //! in two processes at two times — and [`Drop`] removes the tree, so cleanup
 //! does not depend on the test reaching its last line.
 //!
+//! ## One root, so a leftover is recognisable
+//!
+//! Every scratch tree this workspace makes lives under **one** directory:
+//! `<temp>/girpr-test/`. Not directly in the system temp directory, where it
+//! would be one anonymous entry among a thousand that belong to other
+//! programs, but under a name that says whose it is.
+//!
+//! The reason is the question a leftover raises. When a directory survives a
+//! run that was killed mid-test, somebody has to decide whether it is this
+//! project's to remove or somebody else's to leave alone. In the system temp
+//! directory that question has no answer — the name is all there is, and it
+//! does not say. Under `girpr-test/` it does: the whole directory is this
+//! project's, and everything in it is either live or a leftover of a run that
+//! did not finish.
+//!
+//! It also makes the cost of a leak visible. "What did this project leave in
+//! the temp directory" becomes "what is under `girpr-test/`", instead of a
+//! question about the history of a machine.
+//!
 //! ## Using it
 //!
 //! ```no_run
@@ -61,6 +80,22 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// The one directory every scratch tree of this workspace lives under.
+///
+/// `<temp>/girpr-test/`: a name that says whose the contents are, so a
+/// directory left behind by a killed run is recognisable as this project's
+/// and not as somebody else's.
+pub const ROOT: &str = "girpr-test";
+
+/// The path of the shared root: `<temp>/girpr-test`.
+///
+/// The root itself is **not** created here. [`TempDir::new`] creates it on the
+/// way down, and a caller who only ever asks for an absent path has no reason
+/// to leave a directory behind.
+pub fn root() -> PathBuf {
+    std::env::temp_dir().join(ROOT)
+}
+
 /// How many directories this process has handed out. The pid and the timestamp
 /// already make the name unique across processes and across runs; this is what
 /// separates two directories created *within* one test, where both would
@@ -68,7 +103,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A path under the system temp dir that no other test, and no other run, will
-/// use: `<temp>/<prefix>-<tag>-<pid>-<nanos>-<seq>`.
+/// use: `<temp>/girpr-test/<prefix>-<tag>-<pid>-<nanos>-<seq>`.
 ///
 /// Every part earns its place. `prefix` says which suite leaked a directory if
 /// one survives a crash, `tag` names the test that wanted it, `pid` separates
@@ -90,13 +125,16 @@ fn unique_path(prefix: &str, tag: &str) -> PathBuf {
         .as_nanos();
     let prefix = prefix.replace('-', "_");
     let tag = tag.replace('-', "_");
-    std::env::temp_dir().join(format!(
+    root().join(format!(
         "{prefix}-{tag}-{}-{nanos}-{seq}",
         std::process::id()
     ))
 }
 
 /// A scratch directory, removed when the value goes out of scope.
+///
+/// Every one of them lives under [`root()`] — `<temp>/girpr-test/` — so that a
+/// directory left behind by a killed run is recognisable as this project's.
 ///
 /// Derefs to [`Path`] and implements `AsRef<Path>`, so `dir.join(..)`, `&dir`
 /// where a `&Path` is wanted, and every other path operation work without a
@@ -112,6 +150,9 @@ impl TempDir {
     /// counter — so there is nothing at it to remove: the directory is
     /// **created, not cleared**. (A "remove first" on a path another run may
     /// already own is the exact failure this crate's name exists to prevent.)
+    ///
+    /// The shared root is created along with it, so a caller never has to make
+    /// `<temp>/girpr-test` itself.
     pub fn new(prefix: &str, tag: &str) -> Self {
         let path = unique_path(prefix, tag);
         std::fs::create_dir_all(&path).expect("create the temp dir");
@@ -245,6 +286,49 @@ mod tests {
         assert_eq!(parts[2], std::process::id().to_string());
         assert!(parts[3].parse::<u128>().is_ok(), "the name is {name}");
         assert!(parts[4].parse::<u64>().is_ok(), "the name is {name}");
+    }
+
+    /// Every scratch tree of this workspace lives under **one** directory in
+    /// the system temp directory: `<temp>/girpr-test`.
+    ///
+    /// The point is recognisability. A directory left behind by a killed run
+    /// has to be attributable — "whose leftover is this?" — and in the system
+    /// temp directory the name is all the answer there is. Under a root named
+    /// for the project the answer is the directory it sits in.
+    #[test]
+    fn every_scratch_tree_lives_under_this_projects_own_root() {
+        let dir = TempDir::new("girpr_tempdir_test", "under_the_root");
+        assert_eq!(
+            dir.parent(),
+            Some(root().as_path()),
+            "the scratch tree is a child of <temp>/{ROOT}"
+        );
+        assert_eq!(
+            dir.parent()
+                .and_then(Path::file_name)
+                .and_then(|s| s.to_str()),
+            Some(ROOT),
+            "and the root says whose it is"
+        );
+        assert!(
+            root().starts_with(std::env::temp_dir()),
+            "the root is in the system temp directory: {}",
+            root().display()
+        );
+    }
+
+    /// The root is there when a scratch tree has been made.
+    ///
+    /// Not "the root was created by this call": another test in another
+    /// process may have made it already, and a test that removed the root to
+    /// find out would delete the tree some other test is halfway through
+    /// writing. The promise worth pinning is the one a caller can rely on —
+    /// after `TempDir::new`, the root exists.
+    #[test]
+    fn the_root_exists_once_a_scratch_tree_has_been_made() {
+        let dir = TempDir::new("girpr_tempdir_test", "makes_the_root");
+        assert!(root().is_dir(), "the root is there");
+        assert!(dir.is_dir(), "and so is the tree under it");
     }
 
     /// The five-part shape is the **code's** promise, not the caller's: a
