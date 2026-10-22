@@ -40,10 +40,11 @@
 //! ## Independence
 //!
 //! There is no dependency on the repair crate, no `Command` against its binary,
-//! no shared flags and no shared exit-code contract. The only shared vocabulary
-//! is the README's version strings (`docs/00-spec.md` §2), and the one shared
-//! crate is `girpr-log` (`crates/log/`): the log-file and log-level *policy*,
-//! which holds no logic of any program.
+//! no shared exit-code contract and no shared flags apart from the log ones.
+//! The only other shared vocabulary is the README's version strings
+//! (`docs/00-spec.md` §2), and the one shared crate is `girpr-log`
+//! (`crates/log/`): the log-file and log-level *policy*, which holds no logic
+//! of any program.
 
 pub mod assemble;
 pub mod biz;
@@ -64,6 +65,12 @@ pub mod select;
 pub mod verify;
 
 pub use exit::ExitCode;
+
+// The log policy crate, re-exported so that a caller can name the type
+// [`logging::LogGuard::plan`] returns without adding a dependency of its own:
+// the policy is part of this crate's public signature, so it is part of this
+// crate's public surface.
+pub use girpr_log;
 
 #[cfg(test)]
 pub(crate) mod testtemp;

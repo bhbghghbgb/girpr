@@ -135,8 +135,8 @@ Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` wi
 
 ## 5. Logging & correlation
 
-`tracing` to stderr (`--log-level`, `info` by default, replaced by `RUST_LOG`)
-plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`,
+`tracing` to stderr (`--log-level`, `info` by default, with `RUST_LOG` adding to
+it) plus a file log at `<exe-dir>/logs/girpr_<timestamp>.log` (`--log-file-level`,
 `debug` by default). Both layers are built in `src/logging.rs` over the shared
 policy in `crates/log/` — the same policy the two dev tools follow. The two
 levels are separate: `--log-level` only affects stderr, `--log-file-level` only

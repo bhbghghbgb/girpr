@@ -14,3 +14,8 @@ chrono = { version = "0.4", features = ["clock"] }
 # For building the console's filter from `--log-level` or `RUST_LOG`, and for
 # the one place a broken spec is turned into a warning.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# For the test that pins the two `EnvFilter` rules the console's spec relies
+# on: a target directive beats a global one, and a tie goes to the last.
+tracing = "0.1"

@@ -52,12 +52,19 @@ pub mod util;
 #[cfg(test)]
 pub(crate) mod testtemp;
 
+// The log policy crate, re-exported so that a caller of [`run`] can name the
+// type of the plan it takes without adding a dependency of its own: the
+// policy is part of this crate's public signature, so it is part of this
+// crate's public surface.
+pub use girpr_log;
+
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
     CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
+pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;
 pub use report::{OutputFormat, Record, Report, verdict};

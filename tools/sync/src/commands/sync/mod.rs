@@ -112,7 +112,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
-        console_level = %log.level.to_ascii_lowercase(),
+        console_level = %log.level,
         file_level = %log.file_level,
         log_file = %log.file_display(),
         output = %log.output,

@@ -11,6 +11,8 @@ use glob::Pattern;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
+use girpr_log::Level;
+
 use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::compile_patterns;
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
@@ -30,12 +32,16 @@ use crate::rw::RwLimits;
 /// variable and the timestamped default have been weighed against each other,
 /// and a span that named a different file from the one being written would be
 /// a span lying.
+///
+/// The two levels are [`Level`]s rather than strings: a span that stamped
+/// `level=INFO` beside a filter that said `info` would be two spellings of one
+/// fact, and a reader would have to know they were the same.
 #[derive(Debug, Clone)]
 pub struct LogCtx {
     /// The console's verbosity, echoed into spans.
-    pub level: String,
+    pub level: Level,
     /// The log file's verbosity, echoed into spans.
-    pub file_level: String,
+    pub file_level: Level,
     /// Where the log file went, echoed into spans.
     pub file: PathBuf,
     /// `--output`: how stdout records are rendered.

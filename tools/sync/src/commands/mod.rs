@@ -55,8 +55,8 @@ pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool, show_identica
 /// two files.
 pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
     let log = LogCtx {
-        level: plan.console_level.to_string(),
-        file_level: plan.file_level.to_string(),
+        level: plan.console_level,
+        file_level: plan.file_level,
         file: plan.file.clone(),
         output: cli.output,
     };

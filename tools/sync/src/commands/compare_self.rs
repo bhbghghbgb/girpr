@@ -91,7 +91,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         rw_mode = common.rw.mode(),
         rw_threads_src = common.rw.src_threads(),
         rw_threads_dst = common.rw.dst_threads(),
-        console_level = %log.level.to_ascii_lowercase(),
+        console_level = %log.level,
         file_level = %log.file_level,
         log_file = %log.file_display(),
         output = %log.output,

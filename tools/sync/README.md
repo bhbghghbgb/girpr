@@ -102,11 +102,21 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   `<exe-dir>/logs/girsync_<timestamp>.log`. There is no "no log file" mode.
 - **Where it goes**, in order of precedence: `--log-file`, then
   `GIRSYNC_LOG_FILE`, then the default.
-- **Two levels.** `--log-level` is the console's (`info` by default, replaced by
-  `RUST_LOG` when it is set); `--log-file-level` is the file's (`debug` by
-  default, or `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run
-  happens; the file is read afterwards.
+- **Two levels.** `--log-level` is the console's (`info` by default);
+  `--log-file-level` is the file's (`debug` by default, or
+  `GIRSYNC_LOG_FILE_LEVEL`). The console is read while the run happens; the
+  file is read afterwards.
+- **`RUST_LOG` adds to the console; it does not replace it.** The console's
+  spec is this program's own directive (`girsync=info`, plus `redb=warn`) with
+  `RUST_LOG`'s directives in front of it, so `RUST_LOG=redb=debug` turns up
+  the cache beside the program's own events, and cannot silence the program —
+  and cannot change *its* level either, because `--log-level` is what the
+  person running the tool typed.
 - **A log file that cannot be opened is a warning, never a failure.**
+- **`sled2redb` writes one too**, and names it `girsync_<timestamp>.log`: the
+  policy names log files after the *project*, and the converter is part of
+  this one. It is a one-shot migration, and a migration that fails should
+  leave a record of how far it got.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).

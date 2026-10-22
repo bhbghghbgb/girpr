@@ -18,8 +18,11 @@ use crate::report::OutputFormat;
     about = "Dev-only one-way folder mirror with hash cache"
 )]
 pub struct Cli {
-    /// Console log level: trace|debug|info|warn|error. `RUST_LOG` replaces it
-    /// when it is set.
+    /// Console log level: trace|debug|info|warn|error.
+    ///
+    /// `RUST_LOG` *adds* to it: it can turn up other crates
+    /// (`RUST_LOG=redb=debug`), but it cannot change this program's own
+    /// level, because a flag is what the person running the tool typed.
     #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
     pub log_level: Level,
     /// Log file level: trace|debug|info|warn|error.

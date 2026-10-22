@@ -36,6 +36,31 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// The console's records, with the colour taken out.
+///
+/// `tracing`'s human format colours the level and the target separately, and
+/// the escape sequences land *between* them: the text is `INFO`, then an
+/// escape, then `girpr::logging`. A substring that spans one is not a
+/// substring at all — and an assertion that a coloured string does *not*
+/// contain one passes for the wrong reason, which is worse than no assertion.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // Skip the escape sequence: ESC, '[', then up to its final byte.
+        for c in chars.by_ref() {
+            if c.is_ascii_alphabetic() || c == '~' {
+                break;
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn help_exits_zero() {
     // `Args` declares no `version`, so only `--help` gets the conventional 0.
@@ -464,7 +489,7 @@ fn the_file_keeps_what_a_quiet_console_drops() {
     ]);
     assert_eq!(code, 1, "{stderr}");
     assert!(
-        !stderr.contains("INFO girpr::logging"),
+        !strip_ansi(&stderr).contains("INFO girpr::logging"),
         "the console is at `error`, so it kept no info record:\n{stderr}"
     );
     let body = std::fs::read_to_string(&log).expect("the log file was written");
@@ -480,6 +505,103 @@ fn exe_dir() -> std::path::PathBuf {
         .parent()
         .expect("the executable has a directory")
         .to_path_buf()
+}
+
+/// The environment sets the log file's level, when the flag does not.
+///
+/// The one seam of the policy that the flag table cannot show: the flag wins,
+/// the environment answers for a flag that was never given, and `debug` — the
+/// default — answers for both.
+#[test]
+fn the_environment_sets_the_log_files_level() {
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "file_level");
+    let log = scratch.join("levels.log");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args([
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "0",
+            "--log-file",
+            log.to_str().unwrap(),
+        ])
+        .env("GIRPR_LOG_FILE_LEVEL", "error")
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        !body.contains("INFO girpr::logging"),
+        "the file is at `error`, so it kept no info record:\n{body}"
+    );
+    assert!(
+        body.contains("ERROR girpr: usage error"),
+        "but it kept the error:\n{body}"
+    );
+}
+
+/// The flag beats the environment for the log file's level too.
+#[test]
+fn the_log_file_level_flag_beats_the_environment() {
+    let scratch = tempdir::TempDir::new("girpr_cli_logfile", "file_level_flag");
+    let log = scratch.join("levels.log");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args([
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "0",
+            "--log-file",
+            log.to_str().unwrap(),
+            "--log-file-level",
+            "debug",
+        ])
+        .env("GIRPR_LOG_FILE_LEVEL", "error")
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        body.contains("INFO girpr::logging: log file:"),
+        "the flag's `debug` beat the environment's `error`:\n{body}"
+    );
+}
+
+/// `RUST_LOG` adds to the console; it cannot silence the program.
+///
+/// A `RUST_LOG` that names some unrelated crate used to replace the console's
+/// whole spec, and the program then said nothing at all. The program's own
+/// level is `--log-level`, and `RUST_LOG` only adds to it.
+#[test]
+fn an_unrelated_rust_log_does_not_silence_the_program() {
+    let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args([
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "0",
+        ])
+        .env("RUST_LOG", "reqwest=debug")
+        .output()
+        .expect("run girpr");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        strip_ansi(&stderr).contains("INFO girpr::logging"),
+        "the program still speaks at its own level:\n{stderr}"
+    );
 }
 
 #[test]

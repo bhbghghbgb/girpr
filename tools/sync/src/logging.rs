@@ -129,10 +129,18 @@ pub fn init_tracing(
             .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()))
     });
 
-    let _ = tracing_subscriber::registry()
+    // A subscriber that is already installed would swallow the file layer
+    // whole: the events would go to somebody else's subscriber and the log file
+    // would stay empty, with nothing to say so. It cannot happen in this
+    // binary's own `main`, and if it ever does, the run says so rather than
+    // pretending to have logged.
+    if let Err(e) = tracing_subscriber::registry()
         .with(console_layer)
         .with(file_layer)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("WARN cannot install the tracing subscriber: {e}");
+    }
 
     info!(
         path = %plan.file.display(),
@@ -148,17 +156,23 @@ pub fn init_tracing(
     }
 }
 
-/// The console's filter spec: the shared policy's, plus `redb` at `warn`.
+/// The console's filter spec: `redb=warn`, then `RUST_LOG`, then this
+/// project's own directive.
 ///
 /// The shared policy keeps third-party crates off the console, and `redb` is
 /// the one exception: it is this tool's cache, and a cache that complains is
-/// worth saying out loud. `RUST_LOG` is left exactly as the user wrote it —
-/// it is the whole console, not a starting point.
+/// worth saying out loud.
+///
+/// The order matters, because `EnvFilter` gives the most specific matching
+/// directive the last word, and a tie on the same target to the *last* one:
+/// this project's own directive is last, so `--log-level` decides it; `RUST_LOG`
+/// sits in front of it, so it adds visibility for other crates without being
+/// able to take the project's own away.
 fn console_filter(plan: &girpr_log::LogPlan) -> String {
-    if plan.rust_log.is_some() {
-        plan.console_filter()
-    } else {
-        format!("{},redb=warn", plan.console_filter())
+    let own = plan.own_console_directive();
+    match plan.rust_log_directives() {
+        Some(spec) => format!("redb=warn,{spec},{own}"),
+        None => format!("redb=warn,{own}"),
     }
 }
 
@@ -167,7 +181,7 @@ fn console_filter(plan: &girpr_log::LogPlan) -> String {
 /// The same spec, without the environment's contribution: a broken `RUST_LOG`
 /// must not be able to widen the console past what the flag asked for.
 fn console_fallback(plan: &girpr_log::LogPlan) -> String {
-    format!("{PROJECT}={},redb=warn", plan.console_level.as_str())
+    format!("redb=warn,{}", plan.own_console_directive())
 }
 
 /// Open the log file for appending, creating the parent directory if needed.

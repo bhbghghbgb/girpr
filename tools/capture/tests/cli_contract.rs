@@ -383,9 +383,13 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
     );
 }
 
+/// `RUST_LOG` does not reach the log file.
+///
+/// The two sinks have two levels; the environment variable is a console lever
+/// and the file's own level is `--log-file-level`.
 #[test]
-fn rust_log_overrides_the_flag() {
-    let dir = tempdir::TempDir::absent("gircap-rustlog", "rust_log_wins");
+fn rust_log_does_not_reach_the_log_file() {
+    let dir = tempdir::TempDir::absent("gircap-rustlog", "rust_log_stays_off_the_file");
     let log = dir.join("run.ndjson");
 
     let argv = offline_capture(&["--log-level", "error", "--log-file", log.to_str().unwrap()]);
@@ -400,6 +404,27 @@ fn rust_log_overrides_the_flag() {
     assert!(
         text.lines().any(|l| l.contains("\"gircap start\"")),
         "the file sink must not inherit the console's `error` filter:\n{text}"
+    );
+}
+
+/// `RUST_LOG` adds to the console; it cannot silence the program.
+///
+/// A `RUST_LOG` naming an unrelated crate used to replace the console's whole
+/// spec, and the program then said nothing at all. The program's own level is
+/// `--log-level`, and `RUST_LOG` only adds to it.
+#[test]
+fn an_unrelated_rust_log_does_not_silence_the_capture() {
+    let out = Command::new(bin())
+        .args(offline_capture(&[]))
+        .env("RUST_LOG", "reqwest=debug")
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(2));
+
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("gircap start"),
+        "the capture still speaks at its own level:\n{stderr}"
     );
 }
 
@@ -494,6 +519,63 @@ fn the_file_is_louder_than_the_console_by_default() {
         !r.stderr.contains("GET"),
         "the console is at `error`, so it did not:\n{}",
         r.stderr
+    );
+}
+
+/// `--log-file-level` narrows the log file.
+///
+/// The flag is the file's own level, and it narrows *only* the file: the
+/// console keeps its own. A file at `error` is the record of what failed and
+/// nothing else.
+#[test]
+fn the_log_file_level_flag_narrows_the_file() {
+    let dir = tempdir::TempDir::absent("gircap-levels", "file_level_flag");
+    let log = dir.join("levels.ndjson");
+
+    let r = run_owned(&offline_capture(&[
+        "--log-file",
+        log.to_str().unwrap(),
+        "--log-file-level",
+        "error",
+    ]));
+    assert_eq!(r.code, 2);
+
+    let text = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        !text.lines().any(|l| l.contains("\"GET\"")),
+        "the file is at `error`, so it kept no debug record:\n{text}"
+    );
+    assert!(
+        !text.lines().any(|l| l.contains("\"gircap start\"")),
+        "nor any info record:\n{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.contains("\"ERROR\"")),
+        "but it kept the error, so the file is filtered rather than empty:\n{text}"
+    );
+}
+
+/// The environment sets the log file's level, when the flag does not.
+///
+/// The one seam of the policy the flag table cannot show: the flag wins, the
+/// environment answers for a flag that was never given, and `debug` — the
+/// default — answers for both.
+#[test]
+fn the_environment_sets_the_log_files_level() {
+    let dir = tempdir::TempDir::absent("gircap-env", "log_file_level");
+    let log = dir.join("levels.ndjson");
+
+    let out = Command::new(bin())
+        .args(offline_capture(&["--log-file", log.to_str().unwrap()]))
+        .env("GIRCAP_LOG_FILE_LEVEL", "error")
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(2));
+
+    let text = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        !text.lines().any(|l| l.contains("\"GET\"")),
+        "the file is at `error`, so it kept no debug record:\n{text}"
     );
 }
 

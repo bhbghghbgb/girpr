@@ -15,7 +15,6 @@ use girpr_log::Level;
 
 use crate::Biz;
 use crate::config::{RepairMode, RunCtx};
-use crate::logging::PROJECT;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 
@@ -189,8 +188,9 @@ pub struct Args {
     /// Console verbosity: `error`/`warn`/`info`/`debug`/`trace`.
     ///
     /// The console is for the person watching the run, so it is `info` by
-    /// default. `RUST_LOG` replaces it when it is set — one lever, not two
-    /// that can disagree.
+    /// default. `RUST_LOG` *adds* to it: it can turn up other crates
+    /// (`RUST_LOG=reqwest=debug`), but it cannot change this program's own
+    /// level, because a flag is what the person running the tool typed.
     #[arg(long, value_name = "LV", default_value = "info", value_parser = girpr_log::parse_level)]
     pub log_level: Level,
 
@@ -272,14 +272,6 @@ impl Args {
             purge_after: self.purge_after,
             purge_before: self.purge_before,
             output: self.output,
-            // Where the log file goes, when the caller named one. The flag
-            // wins over `GIRPR_LOG_FILE`; `None` keeps the timestamped
-            // default beside the executable, which nothing outside the process
-            // can name reliably — the flag and the environment variable are
-            // what make the file findable.
-            log_file: self
-                .log_file
-                .or_else(|| girpr_log::env_options(PROJECT).log_file),
             // Endpoint overrides: explicit flag > GIRPR_*_BASE env > production, resolved
             // by `RunCtx::api_bases`. Omitted flags stay `None`, so the env seam
             // every offline test already uses is untouched.

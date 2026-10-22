@@ -20,6 +20,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// The console's records, with the colour taken out.
+///
+/// `tracing`'s human format colours the level and the target separately, and
+/// the escape sequences land *between* them: the text is `DEBUG`, then an
+/// escape, then the target. A substring that spans one is not a substring at
+/// all — and an assertion that a coloured string does *not* contain one passes
+/// for the wrong reason, which is worse than no assertion.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // Skip the escape sequence: ESC, '[', then up to its final byte.
+        for c in chars.by_ref() {
+            if c.is_ascii_alphabetic() || c == '~' {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// The plain read/write open most tests want: no rebuild, no backup.
 pub fn rw() -> CacheOpen {
     CacheOpen::ReadWrite {
@@ -145,8 +170,8 @@ pub fn opts_dry() -> CommonOpts {
 /// would have been rendered, which no in-process test observes.
 pub fn log() -> LogCtx {
     LogCtx {
-        level: "error".to_string(),
-        file_level: "debug".to_string(),
+        level: girsync::logging::Level::Error,
+        file_level: girsync::logging::Level::Debug,
         file: PathBuf::from("girsync.log"),
         output: OutputFormat::Text,
     }

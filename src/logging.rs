@@ -96,10 +96,18 @@ pub fn init_tracing(
         .with_ansi(false)
         .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()));
 
-    tracing_subscriber::registry()
+    // A subscriber that is already installed would swallow the file layer
+    // whole: the events would go to somebody else's subscriber and the log file
+    // would stay empty, with nothing to say so. It cannot happen in this
+    // binary's own `main`, and if it ever does, the run says so rather than
+    // pretending to have logged.
+    if let Err(e) = tracing_subscriber::registry()
         .with(stderr_layer)
         .with(file_layer)
-        .init();
+        .try_init()
+    {
+        eprintln!("WARN cannot install the tracing subscriber: {e}");
+    }
 
     tracing::info!("log file: {}", plan.file.display());
     plan

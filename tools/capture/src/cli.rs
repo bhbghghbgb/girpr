@@ -67,8 +67,11 @@ pub enum Cmd {
 /// can pass `--log-level debug --output json` to anything and be right.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct CommonArgs {
-    /// stderr verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG`
-    /// replaces it when it is set.
+    /// stderr verbosity: `error`/`warn`/`info`/`debug`/`trace`.
+    ///
+    /// `RUST_LOG` *adds* to it: it can turn up other crates
+    /// (`RUST_LOG=reqwest=debug`), but it cannot change this program's own
+    /// level, because a flag is what the person running the tool typed.
     #[arg(long, value_name = "LV", default_value = "info", global = true, value_parser = girpr_log::parse_level)]
     pub log_level: Level,
 

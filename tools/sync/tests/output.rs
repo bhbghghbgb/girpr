@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{TempRoot, parse_ndjson, summary_of, sync_mtime, wfile};
+use common::{TempRoot, parse_ndjson, strip_ansi, summary_of, sync_mtime, wfile};
 use girsync::hash::AlgoSet;
 use serde_json::Value;
 use std::path::Path;
@@ -440,9 +440,116 @@ fn the_file_is_louder_than_the_console_by_default() {
         "the file's default level is `debug`, so every record is in it"
     );
     assert!(
-        !r.stderr.contains(" DEBUG "),
+        !strip_ansi(&r.stderr).contains(" DEBUG "),
         "the console's default level is `info`, so none of them is on it:\n{}",
         r.stderr
+    );
+}
+
+/// `--log-file-level` narrows the log file.
+///
+/// The flag is the file's own level, and it narrows *only* the file: the
+/// console keeps its own. A file at `error` is the record of what failed and
+/// nothing else.
+#[test]
+fn the_log_file_level_flag_narrows_the_file() {
+    let t = TempRoot::new("out_file_level_flag");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    let mut args = compare_args(&src, &dst, &["--output", "json"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+    args.push("--log-file-level".into());
+    args.push("error".into());
+
+    let r = run(&args);
+    assert_eq!(r.code, 4, "differences exit 4: {}", r.show());
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    assert_eq!(
+        logged
+            .iter()
+            .filter(|e| e["fields"]["message"] == "report")
+            .count(),
+        0,
+        "the file is at `error`, so it kept no debug record: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+}
+
+/// The environment sets the log file's level, when the flag does not.
+///
+/// The one seam of the policy the flag table cannot show: the flag wins, the
+/// environment answers for a flag that was never given, and `debug` — the
+/// default — answers for both.
+#[test]
+fn the_environment_sets_the_log_files_level() {
+    let t = TempRoot::new("out_env_log_file_level");
+    let (src, dst) = fixture(&t);
+    let logfile = t.mkdirs("logs").join("run.json");
+    let mut args = compare_args(&src, &dst, &["--output", "json"]);
+    args.push("--log-file".into());
+    args.push(logfile.display().to_string());
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(&args)
+        .env("GIRSYNC_LOG_FILE_LEVEL", "error")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(out.status.code(), Some(4));
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    assert_eq!(
+        logged
+            .iter()
+            .filter(|e| e["fields"]["message"] == "report")
+            .count(),
+        0,
+        "the file is at `error`, so it kept no debug record: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+}
+
+/// `RUST_LOG` adds to the console; it cannot silence the program, and it
+/// cannot change the program's own level either.
+///
+/// A `RUST_LOG` naming an unrelated crate used to replace the console's whole
+/// spec, and the program then said nothing at all. The program's own level is
+/// `--log-level`, and `RUST_LOG` only adds to it.
+#[test]
+fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
+    let t = TempRoot::new("out_rust_log");
+    let (src, dst) = fixture(&t);
+
+    // The environment names another crate: the program still speaks, at its
+    // own level.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(compare_args(&src, &dst, &[]))
+        .env("RUST_LOG", "redb=debug")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        strip_ansi(&stderr).contains("log start"),
+        "the program still speaks at its own level:\n{stderr}"
+    );
+    assert!(
+        !strip_ansi(&stderr).contains(" DEBUG "),
+        "and at the level the flag asked for:\n{stderr}"
+    );
+
+    // And the flag still decides that level, even with the environment set.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(compare_args(&src, &dst, &["--log-level", "debug"]))
+        .env("RUST_LOG", "redb=debug")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        strip_ansi(&stderr).contains(" DEBUG "),
+        "the flag's `debug` beat the environment:\n{stderr}"
     );
 }
 

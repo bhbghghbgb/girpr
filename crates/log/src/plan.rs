@@ -3,7 +3,7 @@
 //! # The policy
 //!
 //! One policy, every project in this workspace — the repair binary (`girpr`)
-//! and the two dev tools (`gircap`, `girsync`). It is five rules:
+//! and the two dev tools (`gircap`, `girsync`). It is six rules:
 //!
 //! 1. **A log file is always written.** There is no "no log file" mode: a run
 //!    that leaves nothing behind is a run nobody can ask questions of later.
@@ -20,7 +20,11 @@
 //!    separate because they answer separate questions: the console is for the
 //!    person watching, the file is for the person reading it afterwards, and
 //!    the second reader wants more detail than the first.
-//! 5. **A log file that cannot be opened is a warning, never a failure.** A run
+//! 5. **`RUST_LOG` adds to the console; it does not replace it.** The
+//!    program's own level is `--log-level`'s, and the environment can only add
+//!    visibility for other crates — never take the program's own away. The
+//!    reasoning is below.
+//! 6. **A log file that cannot be opened is a warning, never a failure.** A run
 //!    must not end differently because of where it was asked to log.
 //!
 //! # The environment seams
@@ -29,16 +33,46 @@
 //! | --- | --- |
 //! | `<PROJECT>_LOG_FILE` | the log file's path, as `--log-file` would name it |
 //! | `<PROJECT>_LOG_FILE_LEVEL` | the log file's level, as `--log-file-level` would name it |
-//! | `RUST_LOG` | the console's filter spec, replacing `--log-level` |
+//! | `RUST_LOG` | extra console directives, for other crates |
 //!
 //! `<PROJECT>` is the project's name in upper case: `GIRPR_LOG_FILE`,
 //! `GIRCAP_LOG_FILE`, `GIRSYNC_LOG_FILE`. `RUST_LOG` is the one spelling
 //! that is not per-project, because it is `tracing`'s own convention and a
 //! developer who has exported it means it everywhere.
 //!
-//! `RUST_LOG` replaces `--log-level` rather than adding to it. Two filters
-//! that disagree are worse than one: the flag would be a lie about what the
-//! console is doing.
+//! # `RUST_LOG` adds; it does not replace
+//!
+//! The console's spec is this project's own directive — `girpr=info` — with
+//! `RUST_LOG`'s directives *in front of it*:
+//!
+//! ```text
+//! RUST_LOG unset          ->  girpr=info
+//! RUST_LOG=reqwest=debug  ->  reqwest=debug,girpr=info
+//! ```
+//!
+//! Two things follow, and both of them are the point.
+//!
+//! **The program's own level is exactly what `--log-level` says.** The
+//! project's directive is always present, so a `RUST_LOG` that names some
+//! unrelated crate cannot silence the program — which is what happened when
+//! `RUST_LOG` *replaced* the spec, and is the difference between "a user has
+//! an environment variable exported" and "a user cannot see the program at
+//! all". The flag is last in the spec because `EnvFilter` gives a tie on the
+//! same target to the *last* directive, and the flag is what the person
+//! running the tool typed.
+//!
+//! **`RUST_LOG` still does what it is for**: it turns up other crates.
+//! `RUST_LOG=reqwest=debug` shows `reqwest`'s chatter next to the program's
+//! own, and a bare `RUST_LOG=debug` shows every *other* crate at debug — a
+//! global directive is less specific than `girpr=info`, so it cannot widen
+//! this project's own level either.
+//!
+//! A `RUST_LOG` that names this project's target exactly is the one case
+//! where the environment does not win: `RUST_LOG=girpr=trace` leaves the
+//! project at `--log-level`, because `--log-level trace` is the way to say
+//! that, and a flag is a thing a person typed on purpose. A *more specific*
+//! directive still applies — `RUST_LOG=girpr::http=trace` turns up that one
+//! module — because `EnvFilter` gives the most specific match the last word.
 //!
 //! # What is *not* here
 //!
@@ -141,20 +175,40 @@ impl LogPlan {
 
     /// The `tracing` filter spec for the **console** sink.
     ///
-    /// `RUST_LOG` when it is set, verbatim; otherwise the project's own target
-    /// at `--log-level`. The project scoping is what keeps third-party crates
-    /// quiet: a filter that names no target applies to every target there is,
-    /// and `reqwest`'s idea of `info` is not this program's idea of `info`.
+    /// This project's own directive — `girpr=info` — with `RUST_LOG`'s
+    /// directives in front of it. See the module docs for why the order is
+    /// that way round: the project's directive is last because a tie on the
+    /// same target goes to the last directive, and `--log-level` is what the
+    /// person running the tool typed.
+    ///
+    /// The project scoping is what keeps third-party crates quiet: a filter
+    /// that names no target applies to every target there is, and `reqwest`'s
+    /// idea of `info` is not this program's idea of `info`.
     pub fn console_filter(&self) -> String {
-        match self
-            .rust_log
+        match self.rust_log_directives() {
+            Some(spec) => format!("{spec},{}", self.own_console_directive()),
+            None => self.own_console_directive(),
+        }
+    }
+
+    /// This project's own console directive: `girpr=info`.
+    ///
+    /// The part of the console's spec that `--log-level` decides, and the part
+    /// that `RUST_LOG` cannot take away.
+    pub fn own_console_directive(&self) -> String {
+        format!("{}={}", self.project, self.console_level.as_str())
+    }
+
+    /// `RUST_LOG`, trimmed, when it is set to something.
+    ///
+    /// An empty variable is an unset variable: that is what an unset variable
+    /// in a shell profile expands to, and a filter made of nothing but a
+    /// comma would be a filter that says nothing.
+    pub fn rust_log_directives(&self) -> Option<&str> {
+        self.rust_log
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-        {
-            Some(spec) => spec.to_string(),
-            None => format!("{}={}", self.project, self.console_level.as_str()),
-        }
     }
 
     /// The `tracing` filter spec for the **log file** sink.
@@ -338,18 +392,41 @@ mod tests {
     }
 
     #[test]
-    fn rust_log_replaces_the_console_level() {
+    fn rust_log_adds_to_the_console_level_and_never_replaces_it() {
         let env = EnvOptions {
-            rust_log: Some("warn".to_string()),
+            rust_log: Some("reqwest=debug".to_string()),
             ..Default::default()
         };
         let plan = LogPlan::resolve("girpr", opts(), env);
-        assert_eq!(plan.console_filter(), "warn");
+        assert_eq!(
+            plan.console_filter(),
+            "reqwest=debug,girpr=info",
+            "the project's own directive is last: the flag is what was typed, \
+             and a RUST_LOG that names another crate must not silence the program"
+        );
         assert_eq!(
             plan.file_filter(),
             "debug",
             "RUST_LOG is a console lever and never a file lever"
         );
+    }
+
+    #[test]
+    fn the_projects_own_directive_is_the_one_the_flag_decides() {
+        let mut flagged = opts();
+        flagged.console_level = Level::Trace;
+        let env = EnvOptions {
+            rust_log: Some("girpr=error".to_string()),
+            ..Default::default()
+        };
+        let plan = LogPlan::resolve("girpr", flagged, env);
+        assert_eq!(
+            plan.console_filter(),
+            "girpr=error,girpr=trace",
+            "the spec carries both; the flag's is last, and a tie on the same \
+             target goes to the last directive"
+        );
+        assert_eq!(plan.own_console_directive(), "girpr=trace");
     }
 
     #[test]
