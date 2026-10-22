@@ -8,13 +8,11 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{
-    Mock, World,
-    tempdir::{TempDir, unique_path},
-};
+use common::{Mock, World, tempdir::TempDir};
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("the test binary has a path");
@@ -37,24 +35,53 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Build a capture once into a fresh scratch root, and hand back the bundle.
+/// A capture on disk, and the scratch root that owns it.
 ///
-/// **The root is not removed, and cannot be.** The result is handed out as a
-/// `&'static`, so it lives in a `OnceLock` — and a `OnceLock` is never dropped,
-/// which is the one place a `Drop`-based cleanup does not reach. What the name
-/// can still carry is uniqueness: `unique_path` gives every run its own
-/// directory, so a second `cargo nextest run` never writes into the tree this
-/// one is reading, and a run that was killed leaves a directory no later run
-/// mistakes for a fixture. Two directories per test run is the cost, and the
-/// system temp cleaner owns them.
+/// The root is a [`TempDir`], so the tree is removed when this value is
+/// dropped — which, for a test, is when the test ends. The bundle inside it
+/// is what the assertions read, and nothing writes to it once the capture has
+/// finished.
 ///
-/// Every other tree in this suite is built by [`common::tempdir::TempDir`],
-/// which is dropped; see `tests/tempdir.rs`.
-fn capture_into(prefix: &str, extra: &[&str]) -> PathBuf {
-    let scratch = unique_path(prefix, "shared");
-    std::fs::create_dir_all(&scratch).expect("scratch");
+/// It derefs to the bundle's path, so a test reads `b.join("MANIFEST.json")`
+/// rather than reaching into the struct: the bundle is what the test is
+/// about, and the root is only how the bundle is kept alive.
+struct CapturedBundle {
+    /// The scratch root. Never read — it is held for its `Drop`, which is
+    /// what removes the tree.
+    _root: TempDir,
+    /// The bundle directory inside the root.
+    bundle: PathBuf,
+}
+
+impl Deref for CapturedBundle {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.bundle
+    }
+}
+
+impl AsRef<Path> for CapturedBundle {
+    fn as_ref(&self) -> &Path {
+        &self.bundle
+    }
+}
+
+/// Build a capture into a fresh scratch root, and hand back the bundle.
+///
+/// **The root is removed with the returned value.** A test that binds it to a
+/// local pays for one capture and leaves nothing behind; a test that lets it
+/// die with the statement still leaves nothing behind. Every tree in this
+/// suite is built this way — see `tests/tempdir.rs` for what the name carries
+/// and why a killed run's leftover cannot be mistaken for a fixture.
+///
+/// The listener goes away with the call too. The capture has finished writing
+/// by the time [`run`] returns, so the mock has nothing left to answer and
+/// its socket is released rather than leaked into the rest of the run.
+fn capture_into(prefix: &str, extra: &[&str]) -> CapturedBundle {
+    let root = TempDir::new(prefix, "bundle");
     let mock = Mock::start(World::all_shapes());
-    let out = scratch.join("artifacts");
+    let out = root.join("artifacts");
     let hyp_base = mock.hyp_base();
     let sophon_base = mock.sophon_base();
     let out_arg = out.to_string_lossy().into_owned();
@@ -70,29 +97,32 @@ fn capture_into(prefix: &str, extra: &[&str]) -> PathBuf {
     argv.extend_from_slice(extra);
     let (code, stdout, stderr) = run(&argv);
     assert_eq!(code, 0, "{stdout}\n{stderr}");
-    // The listener goes away with this function; the bundle does not, and is
-    // what the assertions read.
-    std::mem::forget(mock);
-    find_bundle(&out)
+    // The capture has exited and the bundle is on disk; the mock has nothing
+    // left to answer, so it goes with this function rather than outliving it.
+    drop(mock);
+    let bundle = find_bundle(&out);
+    CapturedBundle {
+        _root: root,
+        bundle,
+    }
 }
 
-/// One capture, written once and shared by the tests below.
+/// One capture, written for this test and owned by it.
 ///
-/// `OnceLock` rather than a capture per *call*: a test that needs the bundle
-/// twice reads one tree, and the bundle is read-only to every test that uses
-/// it. See [`capture_into`] for why the tree outlives the run.
+/// **Every test builds its own.** `cargo nextest` runs each test in its own
+/// process, so a capture shared between tests is a capture shared between
+/// processes that never exist at the same time: the sharing a `OnceLock` gave
+/// under `cargo test` cannot survive the runner this project uses.
 ///
-/// **Nextest runs every test in its own process**, so this `OnceLock` is
-/// per-process and each test that needs a bundle builds its own. That is the
-/// price of the isolation nextest buys — a test that leaks a global, a temp
-/// directory or an environment variable cannot reach the next one — and it is
-/// a price worth paying: this file's fifteen cases go from ~0.7 s to ~5 s,
-/// and the workspace as a whole is *faster* under nextest than under
-/// `cargo test`. What the `OnceLock` still buys is that one test never pays
-/// for two captures.
-fn bundle() -> &'static PathBuf {
-    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    DIR.get_or_init(|| capture_into("gircap-schema", &[]))
+/// The cost is one capture per test — about half a second each. What it buys
+/// is that no test can see another's tree, and that the tree is removed when
+/// the test ends rather than when the machine's temp cleaner gets round to it.
+///
+/// A test that needs the bundle twice binds it to a local and pays for one
+/// capture; a test that needs it once lets the temporary die with the
+/// statement.
+fn bundle() -> CapturedBundle {
+    capture_into("gircap-schema", &[])
 }
 
 /// A capture with a threshold low enough that the gzip rule both fires and
@@ -100,17 +130,12 @@ fn bundle() -> &'static PathBuf {
 ///
 /// Separate from [`bundle`] because a lower threshold is a *different tree*,
 /// and a test that reused the default bundle could never see the rule fire.
-/// Outlives the run for the same reason [`bundle`] does; see
-/// [`capture_into`].
-fn gzipped() -> &'static PathBuf {
-    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    DIR.get_or_init(|| {
-        capture_into(
-            "gircap-gzip",
-            // Small enough to split a 1.5 KB manifest from a 400 B meta file.
-            &["--gzip-threshold", "1000"],
-        )
-    })
+fn gzipped() -> CapturedBundle {
+    capture_into(
+        "gircap-gzip",
+        // Small enough to split a 1.5 KB manifest from a 400 B meta file.
+        &["--gzip-threshold", "1000"],
+    )
 }
 
 fn find_bundle(dir: &std::path::Path) -> PathBuf {
@@ -234,10 +259,11 @@ fn the_manifest_index_key_set_is_the_documented_one() {
 /// schema has no such defaults; this makes that true of the last one.
 #[test]
 fn a_manifest_without_the_gzip_threshold_does_not_open() {
-    // A copy, because `bundle()` is a `OnceLock` shared by every test in this
-    // file and the mutation below would poison whichever ran next.
+    // A copy, because this test rewrites the manifest: the bundle the capture
+    // wrote is what every other assertion reads, and this one is about a
+    // bundle that has been broken on purpose.
     let dir = TempDir::new("gircap-no-threshold", "copy");
-    copy_tree(bundle(), &dir);
+    copy_tree(&bundle(), &dir);
 
     let path = dir.join("MANIFEST.json");
     let mut doc: serde_json::Value =
@@ -445,7 +471,7 @@ fn checksums_cover_every_file_and_re_hash_to_what_they_record() {
     let b = bundle();
     let raw = std::fs::read(b.join("verify/checksums.json")).unwrap();
     let c: gircap::emit::index::Checksums = serde_json::from_slice(&raw).unwrap();
-    let (ok, detail) = c.a16(b);
+    let (ok, detail) = c.a16(&b);
     assert!(ok, "A16: {detail}");
 
     // And independently: the list is exactly the set of files on disk, minus
@@ -456,11 +482,11 @@ fn checksums_cover_every_file_and_re_hash_to_what_they_record() {
         c.entries.iter().map(|e| e.path.clone()).collect()
     };
     let mut on_disk = Vec::new();
-    collect(b, &mut on_disk);
+    collect(&b, &mut on_disk);
     let mut actual: Vec<String> = on_disk
         .iter()
         .map(|p| {
-            p.strip_prefix(b)
+            p.strip_prefix(&b)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/")
