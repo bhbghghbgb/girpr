@@ -26,6 +26,9 @@ reach.
 behavior is in the library; `src/repair/mod.rs::run` is the pipeline
 coordinator and holds no logic beyond phase order and the exit-code contract.
 
+**Open work is in [`TODO.md`](TODO.md)** — two tests that scan a directory they
+do not own, and the log-file policy change that fixes one of them.
+
 **Entry points.**
 
 | File | Owns | Key symbols |
