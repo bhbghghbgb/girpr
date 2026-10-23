@@ -33,7 +33,10 @@ fn sync_reports_the_same_actions_under_every_rw_setting() {
     for flags in flag_spellings() {
         let t = temp_root("rw_sync");
         let (src, dst) = fixture(&t);
-        let (code, recs) = run(&argv("sync", &src, &dst, &flags));
+        let (code, recs) = run_env(
+            &argv("sync", &src, &dst, &flags),
+            &[("GIRSYNC_TEST_CACHE", "memory")],
+        );
         assert_eq!(code, 0, "{flags:?} exited {code}");
 
         let got = acts(&recs);

@@ -165,12 +165,24 @@ fn argv<'a>(sub: &'a str, src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Ve
 /// builder produces or a literal `&str` array without a conversion dance at every
 /// call site.
 fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        .arg("--output")
-        .arg("json")
-        .output()
-        .expect("spawn girsync");
+    run_env(args, &[])
+}
+
+/// Like [`run`], but forwards `extra` environment variables to the spawned
+/// `girsync.exe`. Used by the per-`--rw`-setting equivalence tests so every
+/// setting runs against an in-memory cache: the actions a run reports must not
+/// depend on the cache's storage backend, and the memory cache skips the per-
+/// command 1 MB create + fsync that dominates these tests on the HDD.
+fn run_env(
+    args: &[&str],
+    extra: &[(&str, &str)],
+) -> (i32, Vec<serde_json::Value>) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
+    cmd.args(args).arg("--output").arg("json");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn girsync");
     (
         out.status.code().unwrap_or(-1),
         common::parse_ndjson(&out.stdout),
