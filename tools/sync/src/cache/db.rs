@@ -82,6 +82,7 @@ impl CacheDb {
 
     pub(super) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
         let txn = db.begin_write().context("begin write (meta)")?;
+        let mut changed = false;
         {
             // Touch the entries table so a fresh file has both tables.
             let _ = txn.open_table(ENTRIES).context("open entries table")?;
@@ -103,6 +104,7 @@ impl CacheDb {
                         .as_slice(),
                     )
                     .context("write meta")?;
+                    changed = true;
                 }
                 Some(raw) => {
                     let m = decode_meta(&raw)
@@ -124,11 +126,20 @@ impl CacheDb {
                             .as_slice(),
                         )
                         .context("write meta")?;
+                        changed = true;
                     }
                 }
             }
         }
-        txn.commit().context("commit meta")?;
+        // Skip the commit when the row already matches: a write-free commit
+        // buys nothing, and on this HDD the flush alone costs 10-100 ms per
+        // open. Behaviour for real runs is unchanged — meta still commits
+        // whenever the row is inserted or rewritten.
+        if changed {
+            txn.commit().context("commit meta")?;
+        } else {
+            drop(txn);
+        }
         Ok(())
     }
 
