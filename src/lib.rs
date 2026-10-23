@@ -37,6 +37,7 @@ pub mod hyp;
 pub mod logging;
 pub mod repair;
 pub mod report;
+pub mod sleep;
 pub mod sophon;
 pub mod util;
 

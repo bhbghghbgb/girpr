@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::Biz;
+use crate::sleep::{RealSleep, Sleep};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
 /// getBuild (latest + local) / getGameDeprecatedFileConfigs.
@@ -20,6 +22,9 @@ pub struct HypClient {
     /// [`Biz::channel_tuple`]. Only `getGameDeprecatedFileConfigs` uses them.
     channel: &'static str,
     sub_channel: &'static str,
+    /// Injectable sleep: production waits for real, tests use [`crate::sleep::NoSleep`]
+    /// so retry backoff is instant.
+    sleep: Arc<dyn Sleep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,13 +210,18 @@ impl HypClient {
     pub fn new(biz: Biz) -> Result<Self> {
         let (host, _, _) = biz.endpoints();
         let (hyp_base, sophon_base) = production_bases(host);
-        Self::new_with_bases(biz, hyp_base, sophon_base)
+        Self::new_with_bases(biz, hyp_base, sophon_base, Arc::new(RealSleep))
     }
 
     /// Test/offline constructor: point the HoYoPlay + Sophon APIs at a mock
     /// server (e.g. `http://127.0.0.1:<port>/hyp/hyp-connect/api`). Production
     /// code must use [`HypClient::new`].
-    pub fn new_with_bases(biz: Biz, hyp_base: String, sophon_base: String) -> Result<Self> {
+    pub fn new_with_bases(
+        biz: Biz,
+        hyp_base: String,
+        sophon_base: String,
+        sleep: Arc<dyn Sleep>,
+    ) -> Result<Self> {
         let (_, launcher_id, game_id) = biz.endpoints();
         let (channel, sub_channel, _) = biz.channel_tuple();
         let client = reqwest::Client::builder()
@@ -227,6 +237,7 @@ impl HypClient {
             game_id,
             channel,
             sub_channel,
+            sleep,
         })
     }
 
@@ -304,7 +315,7 @@ impl HypClient {
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
         }
         Err(last_err)
     }
@@ -326,7 +337,7 @@ impl HypClient {
                         Err(e) => {
                             tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
                             last_err = anyhow::anyhow!("parse sophon wrapper: {}", e);
-                            tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+                            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
                             continue;
                         }
                     };
@@ -359,7 +370,7 @@ impl HypClient {
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
         }
         Err(last_err)
     }
@@ -504,6 +515,7 @@ mod tests {
             biz,
             "http://hyp.test/api".into(),
             "http://sophon.test/api".into(),
+            Arc::new(crate::sleep::NoSleep),
         )
         .unwrap()
     }

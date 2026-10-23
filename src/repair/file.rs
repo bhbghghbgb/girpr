@@ -67,6 +67,7 @@ use tracing::Instrument;
 use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
+use crate::sleep::Sleep;
 use crate::sophon::{self, SophonChunk};
 use crate::util;
 
@@ -166,6 +167,7 @@ pub async fn repair_all(
     dry_run: bool,
     output: crate::report::OutputFormat,
     repair_mode: RepairMode,
+    sleep: Arc<dyn Sleep>,
 ) -> Summary {
     let summary = Arc::new(summary);
     let total_files = plan.files.len();
@@ -181,6 +183,7 @@ pub async fn repair_all(
         summary: summary.clone(),
         dry_run,
         repair_mode,
+        sleep,
     });
     let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
@@ -300,6 +303,9 @@ struct FileCtx {
     dry_run: bool,
     /// How each file is repaired.
     repair_mode: RepairMode,
+    /// Injectable sleep: production waits for real, tests use [`crate::sleep::NoSleep`]
+    /// so retry backoff is instant.
+    sleep: Arc<dyn Sleep>,
 }
 
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
@@ -399,7 +405,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                 if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+                ctx.sleep.sleep(std::time::Duration::from_secs(attempt as u64)).await;
                 attempt += 1;
             }
         }
@@ -1404,7 +1410,15 @@ async fn write_downloaded_chunk(
     // Without this the `?` below would leak `compressed_size` per attempt, for
     // bytes that never arrived — and with no ceiling set the sentinel is
     // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
-    let digest = match sophon::stream_chunk_to(&ctx.http, prefix, &c.id, expected, &mut sink).await
+    let digest = match sophon::stream_chunk_to(
+        &ctx.http,
+        ctx.sleep.as_ref(),
+        prefix,
+        &c.id,
+        expected,
+        &mut sink,
+    )
+    .await
     {
         Ok(d) => d,
         Err(e) => {

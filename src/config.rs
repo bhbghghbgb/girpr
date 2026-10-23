@@ -12,10 +12,12 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::Biz;
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
+use crate::sleep::Sleep;
 
 /// How a file is repaired.
 ///
@@ -156,6 +158,9 @@ pub struct RunCtx {
     /// binary-level e2e runs; explicit `Some` wins over env).
     pub hyp_base_override: Option<String>,
     pub sophon_base_override: Option<String>,
+    /// Injectable sleep: production waits for real; tests use [`crate::sleep::NoSleep`]
+    /// so retry backoff is instant.
+    pub sleep: Arc<dyn Sleep>,
 }
 
 impl RunCtx {

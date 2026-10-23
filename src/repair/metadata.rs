@@ -47,11 +47,12 @@ pub struct Meta {
 fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     let (hyp, sophon) = ctx.api_bases();
     let (default_hyp, default_sophon) = production_bases(ctx.biz.endpoints().0);
+    let sleep = ctx.sleep.clone();
     match (hyp, sophon) {
-        (Some(h), Some(s)) => HypClient::new_with_bases(ctx.biz, h, s),
-        (Some(h), None) => HypClient::new_with_bases(ctx.biz, h, default_sophon),
-        (None, Some(s)) => HypClient::new_with_bases(ctx.biz, default_hyp, s),
-        (None, None) => HypClient::new(ctx.biz),
+        (Some(h), Some(s)) => HypClient::new_with_bases(ctx.biz, h, s, sleep.clone()),
+        (Some(h), None) => HypClient::new_with_bases(ctx.biz, h, default_sophon, sleep.clone()),
+        (None, Some(s)) => HypClient::new_with_bases(ctx.biz, default_hyp, s, sleep.clone()),
+        (None, None) => HypClient::new_with_bases(ctx.biz, default_hyp, default_sophon, sleep),
     }
 }
 

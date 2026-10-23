@@ -17,6 +17,7 @@ use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
 use crate::sophon::{self, SophonChunkFile, WantedManifest};
+use crate::sleep::Sleep;
 
 use super::RunFailure;
 
@@ -28,13 +29,14 @@ pub type LocalChunkMap = HashMap<String, Vec<(String, i64, i64)>>;
 /// one's chunk URL prefix next to its file list (the plan needs the pairing).
 pub async fn fetch_latest(
     http: &Client,
+    sleep: &dyn Sleep,
     latest_build: &ChunkBuild,
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
 ) -> Result<Vec<(String, Vec<SophonChunkFile>)>, RunFailure> {
     let mut per_manifest: Vec<(String, Vec<SophonChunkFile>)> = Vec::new();
     for m in sophon::select_manifests(latest_build, audio_langs, ignore) {
-        let files = sophon::fetch_manifest(http, m)
+        let files = sophon::fetch_manifest(http, sleep, m)
             .await
             .with_context(|| format!("manifest {}", m.matching_field))
             .map_err(RunFailure::metadata)?;
@@ -49,6 +51,7 @@ pub async fn fetch_latest(
 /// yields an empty map (every chunk then downloads).
 pub async fn local_reuse_map(
     http: &Client,
+    sleep: &dyn Sleep,
     local_build: Option<&ChunkBuild>,
     audio_langs: &std::collections::HashSet<String>,
     ignore: &std::collections::HashSet<String>,
@@ -58,7 +61,7 @@ pub async fn local_reuse_map(
     };
     let mut wanted: Vec<WantedManifest> = Vec::new();
     for m in sophon::select_manifests(local_build, audio_langs, ignore) {
-        match sophon::fetch_manifest(http, m).await {
+        match sophon::fetch_manifest(http, sleep, m).await {
             Ok(files) => wanted.push(WantedManifest {
                 meta: m.clone(),
                 files,

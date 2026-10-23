@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -17,6 +18,7 @@ use crate::Biz;
 use crate::config::{RepairMode, RunCtx};
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
+use crate::sleep::RealSleep;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -293,6 +295,7 @@ impl Args {
             // every offline test already uses is untouched.
             hyp_base_override: self.hyp_base,
             sophon_base_override: self.sophon_base,
+            sleep: Arc::new(RealSleep),
         })
     }
 }

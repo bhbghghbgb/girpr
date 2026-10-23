@@ -44,7 +44,9 @@ use common::{
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
+use girpr::sleep::NoSleep;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// Compile a path scope for a test, the way `Args::into_ctx` does.
@@ -81,6 +83,8 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         output: OutputFormat::Text,
         hyp_base_override: Some(mock.hyp_base.clone()),
         sophon_base_override: Some(mock.sophon_base.clone()),
+        // Tests skip retry backoff: a failed fetch is retried immediately.
+        sleep: Arc::new(NoSleep),
     }
 }
 

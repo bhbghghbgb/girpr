@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 use crate::hyp::{ChunkBuild, ChunkManifestMeta};
+use crate::sleep::Sleep;
 
 /// Sophon chunk manifest protobuf (Starward `Sophon.proto` parity).
 /// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
@@ -105,6 +106,7 @@ pub fn select_manifests<'a>(
 /// per run.
 pub async fn fetch_manifest(
     client: &reqwest::Client,
+    sleep: &dyn Sleep,
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
@@ -131,7 +133,7 @@ pub async fn fetch_manifest(
                 last_err = e;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)
 }
@@ -372,6 +374,7 @@ enum StreamError {
 /// gate (the whole-file MD5) is what decides whether the file is good.
 pub async fn stream_chunk_to(
     client: &reqwest::Client,
+    sleep: &dyn Sleep,
     url_prefix: &str,
     id: &str,
     expected: u64,
@@ -391,7 +394,7 @@ pub async fn stream_chunk_to(
                 last_err = e;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
     }
     Err(last_err)
 }
