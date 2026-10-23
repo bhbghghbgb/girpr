@@ -587,13 +587,13 @@ pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf 
         .join(format!("{old_tag}__{new_tag}"))
 }
 
-/// The capture id: a UTC timestamp, `YYYYMMDDTHHMMSSZ`.
+/// The capture id: a UTC timestamp, `YYYYMMDDTHHMMSS.ffffffZ`.
 ///
 /// Time-ordered so a directory listing of a root sorts as a history, and named
 /// for the moment the capture started rather than finished, so a long run's id
 /// still says when the run began.
 pub fn capture_id(now: chrono::DateTime<chrono::Utc>) -> String {
-    now.format("%Y%m%dT%H%M%SZ").to_string()
+    now.format("%Y%m%dT%H%M%S%.6fZ").to_string()
 }
 
 /// The full bundle directory: `<out>/<biz>/<old>__<new>/<id>/`.
@@ -1114,12 +1114,12 @@ mod tests {
         let t = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:15:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        assert_eq!(capture_id(t), "20261014T101500Z");
+        assert_eq!(capture_id(t), "20261014T101500.000000Z");
         let later = t + chrono::Duration::seconds(1);
         assert!(capture_id(later) > capture_id(t));
 
         let full = artifact_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0", t);
-        assert!(full.ends_with("20261014T101500Z"));
+        assert!(full.ends_with("20261014T101500.000000Z"));
         assert_eq!(
             full.parent().unwrap(),
             pair_dir(Path::new("artifacts"), Biz::Hk4eGlobal, "7.0.0", "7.1.0")
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn document_paths_are_slash_separated_and_rooted_at_the_artifact() {
-        let root = Path::new("artifacts/hk4e_global/7.0.0__7.1.0/20261014T101500Z");
+        let root = Path::new("artifacts/hk4e_global/7.0.0__7.1.0/20261014T101500.000000Z");
         let deep = root.join("game").join("GenshinImpact_Data").join("Plugins");
         assert_eq!(
             rel_path_string(root, &deep),

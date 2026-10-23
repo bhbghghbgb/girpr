@@ -902,7 +902,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "# gircap artifact",
         "- **tool** gircap #.#.#",
         "- **region** `hk#e_global`",
-        "- **captured** #   -# -# T# :# :# Z (`#       T#     Z`, windows)",
+        "- **captured** #   -# -# T# :# :# Z (`#       T#     .#     Z`, windows)",
         "**complete**: `#.#.#` (`sMOCKold# `) → `#.#.#` (`sMOCKnew# `)",
         "selfcheck: **Pass** — #  of #  assertions passed",
         "## Matrix",

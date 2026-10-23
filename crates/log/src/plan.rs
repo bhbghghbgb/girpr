@@ -320,13 +320,13 @@ pub fn default_log_path(project: &str) -> PathBuf {
         .join(format!("{project}_{}.log", timestamp()))
 }
 
-/// The timestamp in a default log file name: `2026-10-22_13-45-01.123`.
+/// The timestamp in a default log file name: `20261014T101500.000000Z`.
 ///
-/// Local time, and sortable as text: the files in a `logs/` directory read
-/// oldest-first when they are listed by name.
+/// UTC time in the shared ISO format, and sortable as text: the files in a
+/// `logs/` directory read oldest-first when they are listed by name.
 fn timestamp() -> String {
-    chrono::Local::now()
-        .format("%Y-%m-%d_%H-%M-%S%.3f")
+    chrono::Utc::now()
+        .format("%Y%m%dT%H%M%S%.6fZ")
         .to_string()
 }
 
@@ -414,11 +414,12 @@ mod tests {
             name.starts_with("girpr_") && name.ends_with(".log"),
             "the name carries the project and a timestamp: {name}"
         );
-        // The timestamp: `YYYY-MM-DD_HH-MM-SS.mmm`.
+        // The timestamp: `YYYYMMDDTHHMMSS.ffffffZ`.
         let stamp = name.trim_start_matches("girpr_").trim_end_matches(".log");
         assert_eq!(stamp.len(), 23, "{stamp}");
-        assert_eq!(stamp.as_bytes()[4], b'-');
-        assert_eq!(stamp.as_bytes()[10], b'_');
+        assert_eq!(stamp.as_bytes()[8], b'T');
+        assert_eq!(stamp.as_bytes()[15], b'.');
+        assert_eq!(stamp.as_bytes()[22], b'Z');
     }
 
     /// The shape of the default is the same in every build. What differs is

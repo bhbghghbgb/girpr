@@ -768,7 +768,7 @@ mod tests {
         let root = dir
             .join("hk4e_global")
             .join("7.0.0__7.1.0")
-            .join("20261014T101500Z");
+            .join("20261014T101500.000000Z");
 
         let log = RequestLog::new();
         assert_eq!(write_requests_log(&root, &log).unwrap(), 0);

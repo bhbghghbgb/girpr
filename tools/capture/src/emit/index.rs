@@ -72,7 +72,7 @@ pub struct ManifestInput<'a> {
 /// those two fields; both are now derived here, so the returned document is
 /// whole and there is no second step that can be skipped or reordered.
 pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
-    let id = i.started.format("%Y%m%dT%H%M%SZ").to_string();
+    let id = i.started.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     let manifest_entries: BTreeMap<String, u64> = i
         .fields
         .iter()
@@ -969,7 +969,7 @@ pub struct Tool {
 /// Which run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capture {
-    /// The `<capture_id>` directory component, `20261014T101500Z`.
+    /// The `<capture_id>` directory component, `20261014T101500.000000Z`.
     pub id: String,
     /// When it started.
     pub captured_at: String,

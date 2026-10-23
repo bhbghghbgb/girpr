@@ -10,9 +10,9 @@ pub fn elapsed_s(t0: std::time::Instant) -> f64 {
     t0.elapsed().as_secs_f64()
 }
 
-/// Local-time stamp used to name backups and snapshots.
+/// UTC stamp in the shared ISO format, used to name backups and snapshots.
 pub fn ts_now() -> String {
-    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+    chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
 }
 
 /// First free `<parent>/<prefix>` (then `<prefix>_2`, ...). Backups are keep-all,
