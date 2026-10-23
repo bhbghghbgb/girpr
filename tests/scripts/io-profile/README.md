@@ -1,6 +1,6 @@
 # Test I/O profiler
 
-Scripts behind `test-io-report.md`: they measure how long each test takes, how
+These scripts measure how long each test takes, how
 much of that is CPU, and how much file-system work it does. They are Windows
 tools because the accounting uses a job object, which aggregates the counters
 of the test process *and every child it spawns*.

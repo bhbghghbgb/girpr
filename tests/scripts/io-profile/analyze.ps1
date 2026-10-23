@@ -1,5 +1,5 @@
 # Turn one (or two) `iotime` sweeps into the tables used by
-# `test-io-report.md`.
+# the test I/O profile.
 #
 #   ./analyze.ps1 -Tests tests.json -Csv tasks.tsv.csv -Out analysis
 #   ./analyze.ps1 -Tests tests.json -Csv hdd\tasks.tsv.csv `
