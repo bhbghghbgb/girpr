@@ -8,7 +8,4 @@ description = "The scratch-directory policy every project in the girpr workspace
 name = "girpr_tempdir"
 path = "src/lib.rs"
 
-# No dependencies: this is `std` and nothing else. A test helper that drags in
-# a crate is a test helper whose build can fail for reasons that have nothing
-# to do with the test.
 [dependencies]

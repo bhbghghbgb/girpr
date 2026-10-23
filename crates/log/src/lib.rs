@@ -63,10 +63,6 @@ pub use plan::{
 };
 
 /// Parse a level name, for use as a `clap` value parser.
-///
-/// A function rather than a `ValueEnum`, because the enum would have to live
-/// next to `clap` — and this crate is deliberately the one dependency the
-/// three projects share, so it is kept free of it.
 pub fn parse_level(s: &str) -> Result<Level, String> {
     Level::parse(s)
 }
