@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
 use crate::config::{CommonOpts, ScanMode};
 use crate::util::is_record_path;
 
@@ -147,6 +147,23 @@ pub fn open_folder_cache(
     backup_first: bool,
 ) -> Result<CacheDb> {
     let db_path = root.join(CACHE_PREFIX);
+    // Test-only: semantic suites that assert sync results (not the cache file)
+    // run against an in-memory redb cache, skipping the 1 MB create + fsync
+    // per command. Cache-focused tests (migration_lock, convert, and anything
+    // asserting girpr-cache* on disk) keep TestCacheBackend::File and the real
+    // file.
+    //
+    // The backend is decided per-call from `common.test_cache` (lib-driven
+    // tests) or, for subprocess tests that spawn `girsync.exe`, from the
+    // `GIRSYNC_TEST_CACHE=memory` environment variable the test sets on the
+    // `Command`. Reading it here keeps lib-driven and subprocess tests under one
+    // switch.
+    let want_memory = common.test_cache == TestCacheBackend::Memory
+        || std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory");
+    if want_memory {
+        info!(path = %db_path.display(), "test: using an in-memory cache");
+        return CacheDb::open_temp(common.case_sensitive);
+    }
     if !mode.dry_run {
         return open_db(
             &db_path,

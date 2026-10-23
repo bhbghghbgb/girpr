@@ -8,7 +8,7 @@ use common::{
     TempDir, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
     serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, open_db};
+use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, open_db};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
@@ -386,6 +386,7 @@ fn run_compare_detects_diff_then_sync_converges() {
     assert_eq!(code, 4, "differences must exit 4");
 
     let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
     o.common.rw = RwLimits::Shared(NonZeroUsize::new(2).unwrap());
     let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);

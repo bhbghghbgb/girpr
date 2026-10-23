@@ -303,6 +303,20 @@ impl CacheDb {
     }
 }
 
+/// Test-only switch: which backend a folder cache is opened against.
+///
+/// `File` (the default, and the only one production ever uses) opens the
+/// real `<root>/girpr-cache` redb file. `Memory` serves
+/// [`CacheDb::open_temp`] instead, so semantic tests that assert sync
+/// results — not the cache file itself — pay no 1 MB create + fsync per
+/// command. Deliberately not exposed on the CLI; only test helpers set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TestCacheBackend {
+    #[default]
+    File,
+    Memory,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

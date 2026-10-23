@@ -41,6 +41,7 @@ impl Run {
 fn run(args: &[String]) -> Run {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(args)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     Run {

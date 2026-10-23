@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
@@ -123,6 +123,7 @@ pub fn opts() -> CommonOpts {
         dry_run: false,
         // The unflagged run, which is `Shared(1)` -- see `RwLimits::default`.
         rw: RwLimits::default(),
+        test_cache: TestCacheBackend::default(),
     }
 }
 

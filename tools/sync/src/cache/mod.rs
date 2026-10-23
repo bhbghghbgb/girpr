@@ -43,7 +43,7 @@ const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const META_KEY: &str = "meta";
 
-pub use db::CacheDb;
+pub use db::{CacheDb, TestCacheBackend};
 pub use open::{
     CacheOpen, backup_db, get_rec, load_all_records, open_db, put_rec, remove_cache_path,
     remove_rec, snapshot_old,

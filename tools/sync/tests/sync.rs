@@ -10,7 +10,7 @@ use common::{
     compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
     sync_mtime, temp_root, update, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -36,6 +36,7 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
         .arg("--output")
         .arg("json")
         .args(extra)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert!(
@@ -151,6 +152,7 @@ fn run_sync_keep_extra_and_missing_only() {
     wfile(&dst, "extra.txt", b"keep me");
 
     let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
     o.missing_only = true; // copy newfile, skip content update
     o.keep_extra = true; // leave extra.txt alone
     let code = cmd_sync(o, &log()).unwrap();
@@ -191,6 +193,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     wfile(&dst, "extradir/nested/deep.bin", b"y");
 
     let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
     o.keep_extra = true;
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
@@ -255,11 +258,15 @@ fn run_sync_rejects_bad_inputs() {
     wfile(&dst, "a.txt", b"x");
 
     // src == dst
-    assert!(cmd_sync(sync(src.clone(), src.clone()), &log()).is_err());
+    let mut o = sync(src.clone(), src.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    assert!(cmd_sync(o, &log()).is_err());
 
     // record inputs are compare-only
     cmd_update(update(src.clone()), &log()).unwrap();
-    assert!(cmd_sync(sync(src.join(CACHE_PREFIX), dst.clone()), &log()).is_err());
+    let mut o = sync(src.join(CACHE_PREFIX), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    assert!(cmd_sync(o, &log()).is_err());
 
     // A zero thread count has no equivalent to assert at this layer: `SyncOpts`
     // carries no thread count, `RwLimits` cannot hold a zero (`NonZeroUsize`),
@@ -280,7 +287,9 @@ fn run_sync_resolves_type_conflicts() {
     wfile(&src, "node2/f.txt", b"in src dir");
     wfile(&dst, "node2", b"i am a file");
 
-    let code = cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap();
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "node"), b"i am a file");
     assert!(dst.join("node2").is_dir(), "dst resolves toward src kind");
@@ -307,6 +316,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
+    dry.common.test_cache = TestCacheBackend::Memory;
     dry.common.case_sensitive = false;
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
@@ -318,6 +328,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Real run: dst adopts src's casing.
     let mut real = sync(src.clone(), dst.clone());
+    real.common.test_cache = TestCacheBackend::Memory;
     real.common.case_sensitive = false;
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
     assert_eq!(
@@ -365,6 +376,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     // The dry run must plan the copy, so the failure is visible before it is
     // committed to disk.
     let mut dry = sync(src.clone(), dst.clone());
+    dry.common.test_cache = TestCacheBackend::Memory;
     dry.common.case_sensitive = false;
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
@@ -375,6 +387,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     );
 
     let mut real = sync(src.clone(), dst.clone());
+    real.common.test_cache = TestCacheBackend::Memory;
     real.common.case_sensitive = false;
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
 
