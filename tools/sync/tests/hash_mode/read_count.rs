@@ -25,16 +25,24 @@ fn any_of_avoids_backfilling_an_algorithm_the_pair_already_shares() {
     ];
     let t_all = temp_root("hm_tier1_all");
     let t_any = temp_root("hm_tier1_any");
-    let (a_src, a_dst) = pair(&t_all, spec, &["md5"], true);
-    let (b_src, b_dst) = pair(&t_any, spec, &["md5"], true);
+    let (a_src, a_dst) = pair_mem(&t_all, spec, &["md5"], true);
+    let (b_src, b_dst) = pair_mem(&t_any, spec, &["md5"], true);
 
     assert_eq!(
-        run_pair(&a_src, &a_dst, &asking(&["md5", "sha256"], HashMode::AllOf)),
+        run_pair(
+            &a_src,
+            &a_dst,
+            &asking_mem(&["md5", "sha256"], HashMode::AllOf)
+        ),
         (4, 4),
         "all-of backfills sha256: 2 files x 2 sides, one digest each"
     );
     assert_eq!(
-        run_pair(&b_src, &b_dst, &asking(&["md5", "sha256"], HashMode::AnyOf)),
+        run_pair(
+            &b_src,
+            &b_dst,
+            &asking_mem(&["md5", "sha256"], HashMode::AnyOf)
+        ),
         (0, 0),
         "any-of settles every pair with the md5 both sides already hold"
     );
@@ -58,16 +66,24 @@ fn any_of_still_hashes_when_the_pair_shares_no_algorithm() {
     let t_all = temp_root("hm_tier3_all");
     let t_any = temp_root("hm_tier3_any");
     let spec: &[common::Spec] = &[("a.txt", Some(b"alpha"), Some(b"alpha"))];
-    let (a_src, a_dst) = pair(&t_all, spec, &[], true);
-    let (b_src, b_dst) = pair(&t_any, spec, &[], true);
+    let (a_src, a_dst) = pair_mem(&t_all, spec, &[], true);
+    let (b_src, b_dst) = pair_mem(&t_any, spec, &[], true);
 
     assert_eq!(
-        run_pair(&a_src, &a_dst, &asking(&["md5", "sha256"], HashMode::AllOf)),
+        run_pair(
+            &a_src,
+            &a_dst,
+            &asking_mem(&["md5", "sha256"], HashMode::AllOf)
+        ),
         (2, 4),
         "all-of: one file opened per side, both algorithms computed in that pass"
     );
     assert_eq!(
-        run_pair(&b_src, &b_dst, &asking(&["md5", "sha256"], HashMode::AnyOf)),
+        run_pair(
+            &b_src,
+            &b_dst,
+            &asking_mem(&["md5", "sha256"], HashMode::AnyOf)
+        ),
         (2, 2),
         "any-of reads the same file - it narrows the request, it does not skip the work -
          and the difference is the second digest"
