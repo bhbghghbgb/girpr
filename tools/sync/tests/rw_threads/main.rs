@@ -47,7 +47,7 @@ use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
-use common::{Spec, TempDir, pair, recs_of, serial_rw, temp_root, wfile};
+use common::{Spec, TempDir, compare, log, pair, recs_of, serial_rw, sync_dry, temp_root, wfile};
 use girsync::cache::CACHE_PREFIX;
 use girsync::cli::{Cli, RwArgs};
 use girsync::config::{CommonOpts, ScanMode};
@@ -164,6 +164,7 @@ fn argv<'a>(sub: &'a str, src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Ve
 /// Generic over the argument type so a caller can pass the `Vec<String>` the
 /// builder produces or a literal `&str` array without a conversion dance at every
 /// call site.
+#[allow(dead_code)]
 fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
     run_env(args, &[])
 }

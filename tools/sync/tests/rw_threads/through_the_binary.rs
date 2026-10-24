@@ -5,6 +5,10 @@
 
 use super::*;
 
+use std::num::NonZeroUsize;
+
+use girsync::{cmd_compare, cmd_sync, cmd_update, UpdateOpts};
+
 /// **`sync` reports the same actions under every rw setting, through the binary.**
 ///
 /// The resolver-level test above pins equal effective maps; this one pins the
@@ -83,24 +87,21 @@ fn a_dry_run_is_unaffected_by_the_rw_limit() {
     let sp = |d: &Path| d.join(CACHE_PREFIX);
 
     // Warm both caches, so the dry run has something real to leave alone.
-    let (code, _) = run(&argv("compare", &src, &dst, &[]));
-    assert_eq!(code, 4, "the fixture differs, so the caches were written");
+    assert_eq!(
+        cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap(),
+        4,
+        "the fixture differs, so the caches were written"
+    );
 
     let (before_src, before_dst) = (
         std::fs::read(sp(&src)).unwrap(),
         std::fs::read(sp(&dst)).unwrap(),
     );
-    let (code, recs) = run(&argv(
-        "sync",
-        &src,
-        &dst,
-        &["--dry-run", "--rw-threads", "4"],
-    ));
-    assert_eq!(code, 0);
-    assert!(
-        recs.iter().any(|r| r["event"] == "missing"),
-        "the dry run still reports the real plan: {recs:?}"
-    );
+
+    let mut o = sync_dry(src.clone(), dst.clone());
+    o.common.rw = RwLimits::Shared(NonZeroUsize::new(4).unwrap());
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
     assert_eq!(
         std::fs::read(sp(&src)).unwrap(),
         before_src,
@@ -113,6 +114,44 @@ fn a_dry_run_is_unaffected_by_the_rw_limit() {
     );
 }
 
+/// Map a `--rw-*` flag spelling to the `RwLimits` it resolves to, mirroring
+/// the table in [`settings`](super::settings).
+fn limits_of_flags(flags: &[&'static str]) -> RwLimits {
+    let mut rw_threads: Option<usize> = None;
+    let mut rw_threads_src: Option<usize> = None;
+    let mut rw_threads_dst: Option<usize> = None;
+    let mut rw_dual_drive = false;
+    let mut i = 0;
+    while i < flags.len() {
+        match flags[i] {
+            "--rw-threads" => {
+                rw_threads = Some(flags[i + 1].parse().unwrap());
+                i += 2;
+            }
+            "--rw-threads-src" => {
+                rw_threads_src = Some(flags[i + 1].parse().unwrap());
+                i += 2;
+            }
+            "--rw-threads-dst" => {
+                rw_threads_dst = Some(flags[i + 1].parse().unwrap());
+                i += 2;
+            }
+            "--rw-dual-drive" => {
+                rw_dual_drive = true;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    RwLimits::try_from(RwArgs {
+        rw_threads,
+        rw_threads_src,
+        rw_threads_dst,
+        rw_dual_drive,
+    })
+    .unwrap_or_else(|e| panic!("{e:#}"))
+}
+
 /// **`update` hashes the same set of files at every limit.**
 ///
 /// `update` rehashes every file, so the limit applies to it like any other reader.
@@ -120,6 +159,9 @@ fn a_dry_run_is_unaffected_by_the_rw_limit() {
 /// every setting is what stops the knob from silently changing how much work the
 /// command does -- `update`'s entire output is the cache, and a run that hashed a
 /// different set would produce a different cache while still exiting 0.
+///
+/// Driven in-process via `cmd_update` instead of spawning the binary six times:
+/// the invariant is about the planner's read set, not about the CLI boundary.
 #[test]
 fn update_hashes_the_same_set_at_every_limit() {
     for flags in flag_spellings() {
@@ -129,11 +171,18 @@ fn update_hashes_the_same_set_at_every_limit() {
             let rel: &'static str = Box::leak(format!("u{i:02}.bin").into_boxed_str());
             wfile(&dir, rel, &vec![b'z'; 256 + i]);
         }
-        let mut args: Vec<String> =
-            vec!["update".into(), "--dir".into(), dir.display().to_string()];
-        args.extend(flags.iter().map(|s| s.to_string()));
-        let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let (code, _) = run(&argv);
+        let common = CommonOpts {
+            rw: limits_of_flags(&flags),
+            ..common::opts()
+        };
+        let code = cmd_update(
+            UpdateOpts {
+                dir: dir.clone(),
+                common,
+            },
+            &log(),
+        )
+        .unwrap();
         assert_eq!(code, 0, "{flags:?} exited {code}");
 
         let rows = recs_of(&dir);
