@@ -48,7 +48,7 @@ mod refusal;
 mod verdict;
 
 use common::{
-    TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update, update_mem, wfile,
+    TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update_mem, wfile,
 };
 use girsync::cache::TestCacheBackend;
 use girsync::planner::{CasePairing, StatTrust};

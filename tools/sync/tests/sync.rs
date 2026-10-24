@@ -8,7 +8,7 @@ use girsync::rw::RwLimits;
 
 use common::{
     compare, compare_mem, entry_names, has_backup_sibling, log, parse_ndjson, recs_of, rfile, sync,
-    sync_dry, sync_mem, sync_mtime, temp_root, update, wfile,
+    sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
@@ -84,7 +84,7 @@ fn run_sync_dry_run_writes_nothing() {
     );
 
     // Still different afterwards.
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 4);
 }
 
@@ -269,7 +269,7 @@ fn run_sync_rejects_bad_inputs() {
     assert!(cmd_sync(o, &log()).is_err());
 
     // record inputs are compare-only
-    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
     let mut o = sync(src.join(CACHE_PREFIX), dst.clone());
     o.common.test_cache = TestCacheBackend::Memory;
     assert!(cmd_sync(o, &log()).is_err());

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{
-    compare, compare_self_opts, log, poison_digest, recs_of, sync, sync_mtime, temp_root, update,
+    compare, compare_self_opts, log, poison_digest, recs_of, sync_mem, sync_mtime, temp_root,
     update_mem, wfile,
 };
 use girsync::filter::compile_patterns;
@@ -161,10 +161,10 @@ fn update_fills_the_gap_that_makes_an_audit_of_the_same_folder_fail() {
     }
     sync_mtime(&src.join("f0.txt"), &dst.join("f0.txt"));
     sync_mtime(&src.join("f1.txt"), &dst.join("f1.txt"));
-    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
     // Arrives after the update, so src's cache has no row for it at all.
     wfile(&src, "late.txt", b"late arrival");
-    cmd_sync(sync(src.clone(), dst), &log()).unwrap();
+    cmd_sync(sync_mem(src.clone(), dst), &log()).unwrap();
     assert!(
         recs_of(&src)["late.txt"].hashes.is_empty(),
         "the lazy sync recorded the newcomer's stat and no digest"
@@ -180,7 +180,7 @@ fn update_fills_the_gap_that_makes_an_audit_of_the_same_folder_fail() {
     );
 
     // `update` can, so the same folder is one command from answerable.
-    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
     assert!(
         !recs_of(&src)["late.txt"].hashes.is_empty(),
         "update computed the digest the record could not"
