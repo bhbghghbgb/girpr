@@ -16,7 +16,11 @@ use super::*;
 /// in which map equality means what it says.
 fn drop_caches(src: &Path, dst: &Path) {
     for dir in [src, dst] {
-        std::fs::remove_file(dir.join(CACHE_PREFIX)).ok();
+        let cache = dir.join(CACHE_PREFIX);
+        // Both stores: the suite runs on the memory backend, whose rows are not a
+        // file, and `remove_file` on a path that was never written is a no-op.
+        CacheDb::forget_memory_cache(&cache);
+        std::fs::remove_file(cache).ok();
     }
 }
 
@@ -196,7 +200,9 @@ fn an_overlapping_resolve_agrees_with_a_sequential_one() {
 fn every_hashed_row_is_persisted_with_its_digest() {
     let t = temp_root("rw_rows");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    // The rows are the subject, not the redb file: `recs_of` reads the same
+    // shared memory cache the resolve wrote.
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let ((smap, _), _) = resolve_overlapping(
@@ -216,7 +222,7 @@ fn every_hashed_row_is_persisted_with_its_digest() {
             .unwrap_or_else(|| panic!("{rel} was hashed but left no cache row"));
         assert_eq!(
             rec.hashes, row.hashes,
-            "{rel}: the row on disk disagrees with the map the run returned"
+            "{rel}: the persisted row disagrees with the map the run returned"
         );
         assert_eq!(rec.size, row.size, "{rel}: size disagrees");
         assert_eq!(rec.mtime_ns, row.mtime_ns, "{rel}: mtime disagrees");

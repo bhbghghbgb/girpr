@@ -173,7 +173,7 @@ fn update_hashes_the_same_set_at_every_limit() {
         }
         let common = CommonOpts {
             rw: limits_of_flags(&flags),
-            ..common::opts()
+            ..common::opts_mem()
         };
         let code = cmd_update(
             UpdateOpts {

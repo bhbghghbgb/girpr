@@ -177,7 +177,7 @@ fn four_differing(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 /// A `SyncOpts` for the `sync` cases. Case-sensitive by default, so the counts are
 /// not perturbed by a rename pass; a case that wants insensitive sets it.
 fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncOpts {
-    let mut common = opts();
+    let mut common = opts_mem();
     common.case_sensitive = true;
     girsync::SyncOpts {
         src,

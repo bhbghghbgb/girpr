@@ -7,17 +7,16 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
-    sync_mtime, temp_root, update, wfile,
+    compare, compare_mem, entry_names, has_backup_sibling, log, parse_ndjson, recs_of, rfile, sync,
+    sync_dry, sync_mem, sync_mtime, temp_root, update, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::Path;
 
-fn recs(dir: &Path) -> HashMap<String, FileRec> {
-    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+fn recs(dir: &Path) -> std::collections::HashMap<String, girsync::cache::FileRec> {
+    recs_of(dir)
 }
 
 /// Run the real binary and return the records it reported on stdout.
@@ -174,7 +173,7 @@ fn run_sync_keep_extra_and_missing_only() {
     );
 
     // Default flags converge fully.
-    let code = cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "common.txt"), b"v2-changed-and-longer");
     assert!(!dst.join("extra.txt").exists());
@@ -215,7 +214,10 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     wfile(&src2, "shared.txt", b"same");
     wfile(&dst2, "shared.txt", b"same");
     wfile(&dst2, "extradir/nested/deep.bin", b"y");
-    assert_eq!(cmd_sync(sync(src2, dst2.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src2, dst2.clone()), &log()).unwrap(),
+        0
+    );
     assert!(!dst2.join("extradir").exists(), "collected by default");
 }
 
@@ -299,7 +301,7 @@ fn run_sync_resolves_type_conflicts() {
     assert!(dst.join("node2").is_dir(), "dst resolves toward src kind");
     assert_eq!(rfile(&dst, "node2/f.txt"), b"in src dir");
 
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0);
 }
 
@@ -342,10 +344,10 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     );
 
     // Converged: no further differences in either mode.
-    let mut same = compare(src.clone(), dst.clone());
+    let mut same = compare_mem(src.clone(), dst.clone());
     same.common.case_sensitive = false;
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
-    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
@@ -406,7 +408,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
         "and the bytes are src's, not the ones dst already had"
     );
     assert_eq!(
-        cmd_compare(compare(src, dst), &log()).unwrap(),
+        cmd_compare(compare_mem(src, dst), &log()).unwrap(),
         0,
         "converged"
     );
@@ -437,7 +439,10 @@ fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
     wfile(&src, "fresh/a.txt", b"a");
     wfile(&src, "fresh/b.txt", b"b");
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     // On disk, everything this run wrote is there...
     assert!(dst.join("top.txt").is_file());
@@ -470,13 +475,19 @@ fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
     wfile(&src, "kept.txt", b"kept");
     wfile(&src, "doomed.txt", b"doomed");
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
     assert!(recs(&dst).contains_key("doomed.txt"), "the run recorded it");
 
     // A later run, after the file is gone from both sides.
     std::fs::remove_file(src.join("doomed.txt")).unwrap();
     std::fs::remove_file(dst.join("doomed.txt")).unwrap();
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     let rows = recs(&dst);
     assert!(
@@ -526,7 +537,10 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
         b"and a second level under that too",
     );
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     // The wipe actually happened: x is now a file and the subtree is gone.
     assert!(

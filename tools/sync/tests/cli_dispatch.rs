@@ -10,6 +10,10 @@ use girsync::run;
 
 #[test]
 fn run_cli_dispatch_update_compare_sync() {
+    // The whole dispatch is in-process, so one shared memory registry stands in
+    // for the files a sequence of commands would leave behind. Each test is its
+    // own process under nextest, so the switch cannot leak to another test.
+    unsafe { std::env::set_var("GIRSYNC_TEST_CACHE", "memory") };
     let t = temp_root("cli");
     let src = t.subdir("src");
     let dst = t.subdir("dst");

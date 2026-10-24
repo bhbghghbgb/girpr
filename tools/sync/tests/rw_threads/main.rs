@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
 use common::{Spec, TempDir, compare, log, pair, recs_of, serial_rw, sync_dry, temp_root, wfile};
-use girsync::cache::CACHE_PREFIX;
+use girsync::cache::{CACHE_PREFIX, CacheDb};
 use girsync::cli::{Cli, RwArgs};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{

@@ -4,10 +4,9 @@
 mod common;
 
 use common::{
-    compare, compare_self_opts, log, poison_digest, recs_of, rw, sync, sync_mtime, temp_root,
-    update, wfile,
+    compare, compare_self_opts, log, poison_digest, recs_of, sync, sync_mtime, temp_root, update,
+    update_mem, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, load_all_records, open_db};
 use girsync::filter::compile_patterns;
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -19,20 +18,18 @@ fn run_update_prunes_and_excludes() {
     wfile(&dir, "gone.txt", b"to be deleted");
     wfile(&dir, "skip.me", b"excluded content v1");
 
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
-        let recs = load_all_records(&db).unwrap();
+        let recs = recs_of(&dir);
         assert!(recs.contains_key("gone.txt"));
         assert!(recs.contains_key("skip.me"));
     }
 
     // Deleting a file + re-update prunes it from the record.
     std::fs::remove_file(dir.join("gone.txt")).unwrap();
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
-        let recs = load_all_records(&db).unwrap();
+        let recs = recs_of(&dir);
         assert!(!recs.contains_key("gone.txt"), "deleted file is pruned");
         assert!(recs.contains_key("keep.txt"));
     }
@@ -41,7 +38,7 @@ fn run_update_prunes_and_excludes() {
     // exclude prunes skip.me even though it is still on disk.
     let excluding = CommonOpts {
         excludes: compile_patterns(&["*.me".to_string()]).unwrap(),
-        ..common::opts()
+        ..common::opts_mem()
     };
     cmd_update(
         girsync::UpdateOpts {
@@ -52,8 +49,7 @@ fn run_update_prunes_and_excludes() {
     )
     .unwrap();
     {
-        let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
-        let recs = load_all_records(&db).unwrap();
+        let recs = recs_of(&dir);
         assert!(!recs.contains_key("skip.me"), "excluded path is pruned");
     }
     assert!(
@@ -85,7 +81,9 @@ fn run_update_prunes_and_excludes() {
     filtered.common = excluding.clone();
     let code = cmd_compare(filtered, &log()).unwrap();
     assert_eq!(code, 0, "excluded difference is invisible");
-    let code = cmd_compare(compare(dir.clone(), other.clone()), &log()).unwrap();
+    let mut unfiltered = compare(dir.clone(), other.clone());
+    unfiltered.common = common::opts_mem();
+    let code = cmd_compare(unfiltered, &log()).unwrap();
     assert_eq!(code, 4, "same files differ without the filter");
 }
 
@@ -109,7 +107,7 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"stable content");
 
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     let good = recs_of(&dir)["a.txt"]
         .hashes
         .get_named("md5")
@@ -129,7 +127,7 @@ fn update_recomputes_every_digest_and_repairs_a_wrong_one() {
         "and the row is still fresh, so nothing but a rehash can fix it"
     );
 
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     assert_eq!(
         recs_of(&dir)["a.txt"].hashes.get_named("md5"),
         Some(good.as_slice()),

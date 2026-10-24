@@ -188,12 +188,30 @@ pub fn update(dir: PathBuf) -> UpdateOpts {
     }
 }
 
+/// [`update`] against the shared in-memory cache, for a case that will read the
+/// rows back through [`recs_of`].
+pub fn update_mem(dir: PathBuf) -> UpdateOpts {
+    UpdateOpts {
+        dir,
+        common: opts_mem(),
+    }
+}
+
 pub fn compare(src: PathBuf, dst: PathBuf) -> CompareOpts {
     CompareOpts {
         src,
         dst,
         trust: TrustOpts::default(),
         common: opts(),
+    }
+}
+
+/// [`compare`] served from the shared memory cache, for a case that asserts a
+/// verdict rather than the cache file.
+pub fn compare_mem(src: PathBuf, dst: PathBuf) -> CompareOpts {
+    CompareOpts {
+        common: opts_mem(),
+        ..compare(src, dst)
     }
 }
 
@@ -229,6 +247,15 @@ pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
         missing_only: false,
         keep_extra: false,
         common: opts(),
+    }
+}
+
+/// [`sync`] served from the shared memory cache, for a case that asserts the
+/// tree or the rows rather than the cache file.
+pub fn sync_mem(src: PathBuf, dst: PathBuf) -> SyncOpts {
+    SyncOpts {
+        common: opts_mem(),
+        ..sync(src, dst)
     }
 }
 
@@ -496,6 +523,15 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
     }
 }
 
+/// [`with_algos`] backed by the shared in-memory cache, for a fixture that was
+/// warmed with [`pair_mem`].
+pub fn with_algos_mem(algos: &[&str]) -> CommonOpts {
+    CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..with_algos(algos)
+    }
+}
+
 /// The exact phase sequence `cmd_compare` runs — open both sides, one
 /// `plan_pairs`, resolve both — with the per-side trust flags applied.
 ///
@@ -503,7 +539,13 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
 /// the planner decided *and* what the sides ended up reading. Every phase
 /// happens here, in this order; that is the property under test.
 pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, SideScan) {
-    let common = with_algos(&["md5"]);
+    // Semantic harness: the callers assert maps and verdicts, so the caches can
+    // live in memory. A caller with a warmed fixture must have warmed it with
+    // `pair_mem`, or this resolve starts cold.
+    let common = CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..with_algos(&["md5"])
+    };
     let src = classify(src);
     let dst = classify(dst);
     ensure_distinct_sides(&src, &dst).unwrap();

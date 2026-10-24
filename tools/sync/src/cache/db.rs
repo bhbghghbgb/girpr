@@ -227,6 +227,20 @@ impl CacheDb {
         })
     }
 
+    /// Forget the shared in-memory cache at `db_path`, so the next open is cold.
+    /// Returns whether one was there.
+    ///
+    /// This is the memory counterpart of deleting `girpr-cache`: a test that
+    /// compares a cold run against a cold run has to do it, or the second run
+    /// finds the first one's rows.
+    pub fn forget_memory_cache(db_path: &Path) -> bool {
+        memory_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(db_path)
+            .is_some()
+    }
+
     /// Open an existing record file read-only: no writes, no meta creation,
     /// no case-mode rewrite — but the version is still validated.
     ///

@@ -6,8 +6,6 @@
 
 use super::*;
 
-use girsync::cache::TestCacheBackend;
-
 /// **The cache repair, which is the reason `no-trust-size` exists and the reason no
 /// counter or verdict would ever reveal it.**
 ///
@@ -31,8 +29,8 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
     wfile(&src, "a.txt", b"original");
     wfile(&dst, "a.txt", b"original");
     sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
-    cmd_update(update(src.clone()), &log()).unwrap();
-    cmd_update(update(dst.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(dst.clone()), &log()).unwrap();
     assert!(
         !recs_of(&dst)["a.txt"].hashes.is_empty(),
         "the row starts warm, so the repair has something to repair"
@@ -56,11 +54,7 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
             src: d_src,
             dst: d_dst,
             trust: Default::default(),
-            common: {
-                let mut c = distrusting(&["md5"], StatTrust::default());
-                c.test_cache = TestCacheBackend::File;
-                c
-            },
+            common: distrusting(&["md5"], StatTrust::default()),
         },
         &log(),
     )
@@ -77,8 +71,8 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
     wfile(&src2, "a.txt", b"original");
     wfile(&dst2, "a.txt", b"original");
     sync_mtime(&src2.join("a.txt"), &dst2.join("a.txt"));
-    cmd_update(update(src2.clone()), &log()).unwrap();
-    cmd_update(update(dst2.clone()), &log()).unwrap();
+    cmd_update(update_mem(src2.clone()), &log()).unwrap();
+    cmd_update(update_mem(dst2.clone()), &log()).unwrap();
     wfile(&dst2, "a.txt", b"original but longer now");
     // Re-pinned for the same reason as the first half: size must be the only
     // difference, or the trusted mtime settles the pair and the flag does nothing.
@@ -89,11 +83,7 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
             src: src2,
             dst: dst2.clone(),
             trust: Default::default(),
-            common: {
-                let mut c = distrusting(&["md5"], StatTrust::default().without_size());
-                c.test_cache = TestCacheBackend::File;
-                c
-            },
+            common: distrusting(&["md5"], StatTrust::default().without_size()),
         },
         &log(),
     )

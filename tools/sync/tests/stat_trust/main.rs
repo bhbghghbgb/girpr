@@ -47,7 +47,9 @@ mod other_commands;
 mod refusal;
 mod verdict;
 
-use common::{TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update, wfile};
+use common::{
+    TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update, update_mem, wfile,
+};
 use girsync::cache::TestCacheBackend;
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};

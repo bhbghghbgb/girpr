@@ -163,7 +163,7 @@ fn update_still_hashes_every_file() {
     wfile(&dir, "sub/b.txt", b"bravo");
     let o = UpdateOpts {
         dir: dir.clone(),
-        common: opts(),
+        common: opts_mem(),
     };
     assert_eq!(girsync::cmd_update(o, &log()).unwrap(), 0);
     assert_eq!(digests_of(&dir, "a.txt"), vec!["md5"]);
@@ -225,7 +225,7 @@ fn fixtures_classify_as_folders() {
 #[test]
 fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
     let t = temp_root("lz_prune");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[
             ("keep.txt", Some(b"keep"), Some(b"keep")),
@@ -301,7 +301,7 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
 #[test]
 fn distrusting_the_cache_does_not_suppress_pruning() {
     let t = temp_root("lz_prune_nt");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[("gone.txt", Some(b"gone"), Some(b"gone"))],
         &["md5"],

@@ -103,7 +103,7 @@ fn mixed_tree_reads_only_the_stat_equal_half() {
 #[test]
 fn warm_complete_caches_read_nothing() {
     let t = temp_root("lz_warm");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[
             ("a.txt", Some(b"alpha"), Some(b"alpha")),
@@ -113,7 +113,7 @@ fn warm_complete_caches_read_nothing() {
         &["md5"],
         true,
     );
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(r.exit(), 0);
     assert_eq!((r.hashed, r.src_hashed, r.dst_hashed), (0, 0, 0));
 }
@@ -128,7 +128,7 @@ fn warm_complete_caches_read_nothing() {
 fn stat_equal_pair_costs_only_the_side_missing_the_algorithm() {
     let t = temp_root("lz_missing_algo");
     let both = &["md5", "sha256"];
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[
             ("a.txt", Some(b"alpha"), Some(b"alpha")),
@@ -140,7 +140,7 @@ fn stat_equal_pair_costs_only_the_side_missing_the_algorithm() {
     strip_algo(&dst, "a.txt", "sha256");
     strip_algo(&dst, "b.txt", "sha256");
 
-    let r = run_pair(&src, &dst, &with_algos(both), TrustOpts::default());
+    let r = run_pair(&src, &dst, &with_algos_mem(both), TrustOpts::default());
     assert_eq!(r.exit(), 0, "identical content, so the pair is equal");
     assert_eq!((r.src_hashed, r.dst_hashed), (0, 2), "only dst pays");
     // And the gap is closed: dst's rows now hold both algorithms.
@@ -156,7 +156,7 @@ fn stat_equal_pair_costs_only_the_side_missing_the_algorithm() {
 #[test]
 fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
     let t = temp_root("lz_poison");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[("a.txt", Some(b"alpha"), Some(b"alpha"))],
         &["md5"],
@@ -164,7 +164,7 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
     );
     poison_digest(&src, "a.txt", "md5");
 
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -182,7 +182,7 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
 fn hash_none_reads_nothing_on_a_differing_tree() {
     let t = temp_root("lz_hash_none");
     let (src, dst) = four_differing(&t);
-    let r = run_pair(&src, &dst, &with_algos(&[]), TrustOpts::default());
+    let r = run_pair(&src, &dst, &with_algos_mem(&[]), TrustOpts::default());
     assert_eq!(r.hashed, 0, "an empty plan means no read");
     assert_eq!(r.diff.changed.len(), 4, "still four differences, by size");
 }
@@ -193,7 +193,7 @@ fn hash_none_reads_nothing_on_a_differing_tree() {
 #[test]
 fn no_trust_on_stat_equal_pairs_forces_the_read() {
     let t = temp_root("lz_notrust_equal");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[
             ("a.txt", Some(b"alpha"), Some(b"alpha")),
@@ -319,7 +319,7 @@ fn a_case_only_difference_with_equal_content_is_still_compared() {
 
     let insensitive = CommonOpts {
         case_sensitive: false,
-        ..opts()
+        ..opts_mem()
     };
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
@@ -356,7 +356,7 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
 
     let insensitive = CommonOpts {
         case_sensitive: false,
-        ..opts()
+        ..opts_mem()
     };
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
@@ -384,7 +384,7 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
 #[test]
 fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() {
     let t = temp_root("lz_stale");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[("a.txt", Some(b"alpha"), Some(b"alpha"))],
         &["md5"],
@@ -393,7 +393,7 @@ fn a_stat_differing_pair_is_decided_by_stat_and_its_stale_digests_are_dropped() 
     // src keeps its real content and gets a new mtime; dst keeps the old one.
     age(&src, "a.txt", 120);
 
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -423,7 +423,7 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
         src: src.clone(),
         dst: dst.clone(),
         trust: TrustOpts::default(),
-        common: opts(),
+        common: opts_mem(),
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
 
@@ -433,7 +433,7 @@ fn cmd_compare_reports_the_same_verdict_and_its_exit_code() {
         src: src.clone(),
         dst: dst.clone(),
         trust: TrustOpts::default(),
-        common: opts(),
+        common: opts_mem(),
     };
     assert_eq!(girsync::cmd_compare(o, &log()).unwrap(), 4);
 }

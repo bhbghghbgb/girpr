@@ -5,10 +5,10 @@ mod common;
 use std::num::NonZeroUsize;
 
 use common::{
-    TempDir, compare, compare_dry, compare_self_opts, has_backup_sibling, log, recs_of, rfile, rw,
-    serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
+    TempDir, compare, compare_dry, compare_mem, compare_self_opts, has_backup_sibling, log,
+    recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, open_db};
+use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
@@ -99,7 +99,7 @@ fn effective_maps(
 ) {
     let common = CommonOpts {
         dry_run,
-        ..common::opts()
+        ..common::opts_mem()
     };
     let (s, d) = (classify(src), classify(dst));
     ensure_distinct_sides(&s, &d).unwrap();
@@ -168,7 +168,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
     // something to disagree about.
     for dir in [&src, &dst] {
         let p = dir.join(CACHE_PREFIX);
-        let db = open_db(&p, true, rw()).unwrap();
+        let db = CacheDb::open_memory_cache(&p, true).unwrap();
         db.put(
             "vanished.txt",
             &FileRec {
@@ -185,7 +185,7 @@ fn dry_run_reports_the_same_counters_as_a_real_run() {
     wfile(&src, "moved.txt", b"newer-and-longer");
     for dir in [&src, &dst] {
         let p = dir.join(CACHE_PREFIX);
-        let db = open_db(&p, true, rw()).unwrap();
+        let db = CacheDb::open_memory_cache(&p, true).unwrap();
         db.put(
             "moved.txt",
             &FileRec {
@@ -224,7 +224,7 @@ fn a_dry_run_decides_to_prune_without_dropping_the_row() {
     let (src, dst) = two_trees(&t);
     let p = src.join(CACHE_PREFIX);
     {
-        let db = open_db(&p, true, rw()).unwrap();
+        let db = CacheDb::open_memory_cache(&p, true).unwrap();
         db.put("vanished.txt", &FileRec::dir()).unwrap();
     }
     assert!(
@@ -382,7 +382,7 @@ fn run_compare_detects_diff_then_sync_converges() {
     wfile(&dst, "dst_only.txt", b"only in dst");
     wfile(&src, "sub/nested.txt", b"nested");
 
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 4, "differences must exit 4");
 
     let mut o = sync(src.clone(), dst.clone());
@@ -400,7 +400,7 @@ fn run_compare_detects_diff_then_sync_converges() {
         "extra deleted by default"
     );
 
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0, "dst must equal src after sync");
 }
 
