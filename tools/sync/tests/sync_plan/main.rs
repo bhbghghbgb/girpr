@@ -80,6 +80,7 @@ fn run(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
         .arg("--output")
         .arg("json")
         .args(extra)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert!(

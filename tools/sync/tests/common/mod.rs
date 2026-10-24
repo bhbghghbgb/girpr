@@ -127,6 +127,17 @@ pub fn opts() -> CommonOpts {
     }
 }
 
+/// `opts()` with an in-memory test cache, for semantic suites that assert sync
+/// results rather than the cache file itself. Skips the per-command 1 MB create
+/// and fsync on the HDD. Cache-focused suites (compare_self, update, sync/cache,
+/// compare) keep `opts()` and its `File` backend.
+pub fn opts_mem() -> CommonOpts {
+    CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..opts()
+    }
+}
+
 /// `opts()` with `--dry-run`, for the cases that assert a run writes nothing.
 pub fn opts_dry() -> CommonOpts {
     CommonOpts {

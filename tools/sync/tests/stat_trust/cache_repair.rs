@@ -6,6 +6,8 @@
 
 use super::*;
 
+use girsync::cache::TestCacheBackend;
+
 /// **The cache repair, which is the reason `no-trust-size` exists and the reason no
 /// counter or verdict would ever reveal it.**
 ///
@@ -54,7 +56,11 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
             src: d_src,
             dst: d_dst,
             trust: Default::default(),
-            common: distrusting(&["md5"], StatTrust::default()),
+            common: {
+                let mut c = distrusting(&["md5"], StatTrust::default());
+                c.test_cache = TestCacheBackend::File;
+                c
+            },
         },
         &log(),
     )
@@ -83,7 +89,11 @@ fn no_trust_size_rehashes_a_stale_row_that_the_short_circuit_would_leave_stat_on
             src: src2,
             dst: dst2.clone(),
             trust: Default::default(),
-            common: distrusting(&["md5"], StatTrust::default().without_size()),
+            common: {
+                let mut c = distrusting(&["md5"], StatTrust::default().without_size());
+                c.test_cache = TestCacheBackend::File;
+                c
+            },
         },
         &log(),
     )

@@ -48,6 +48,7 @@ mod refusal;
 mod verdict;
 
 use common::{TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update, wfile};
+use girsync::cache::TestCacheBackend;
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -99,15 +100,11 @@ fn size_differs(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     (src, dst)
 }
 
-/// `opts()` asking for `algos`, with stat trust set.
-///
-/// The flags are on `CommonOpts` rather than on a command's own opts because they are a
-/// property of the *comparison*, not of any one side — the short circuit compares the
-/// two sides' stats against each other, so there is no per-side version to have. This
-/// is unlike `--no-trust-cached-hashes`, which distrusts one side's digest and so does
-/// take a side.
+/// `opts()` asking for `algos`, with stat trust set, served from an in-memory
+/// cache (semantic suite: asserts counts/verdicts, not the cache file).
 fn distrusting(algos: &[&str], stat: StatTrust) -> CommonOpts {
     CommonOpts {
+        test_cache: TestCacheBackend::Memory,
         algos: algos.iter().map(|a| a.parse().unwrap()).collect(),
         stat,
         ..opts()

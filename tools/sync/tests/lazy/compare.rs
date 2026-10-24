@@ -15,7 +15,7 @@ use super::*;
 fn cold_all_stat_differing_pairs_read_nothing() {
     let t = temp_root("lz_cold_differ");
     let (src, dst) = four_differing(&t);
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -47,7 +47,7 @@ fn cold_all_stat_equal_pairs_are_all_hashed() {
         &["md5"],
         false,
     );
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -81,7 +81,7 @@ fn mixed_tree_reads_only_the_stat_equal_half() {
         &["md5"],
         false,
     );
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -207,7 +207,7 @@ fn no_trust_on_stat_equal_pairs_forces_the_read() {
     let r = run_pair(
         &src,
         &dst,
-        &opts(),
+        &opts_mem(),
         TrustOpts {
             no_trust_src: true,
             no_trust_dst: true,
@@ -231,7 +231,7 @@ fn no_trust_on_stat_differing_pairs_is_a_no_op() {
     let r = run_pair(
         &src,
         &dst,
-        &opts(),
+        &opts_mem(),
         TrustOpts {
             no_trust_src: true,
             no_trust_dst: true,
@@ -259,7 +259,7 @@ fn one_sided_paths_and_dirs_need_no_digest() {
         &["md5"],
         false,
     );
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![
@@ -291,7 +291,7 @@ fn a_kind_conflict_needs_no_digest() {
         &["md5"],
         false,
     );
-    let r = run_pair(&src, &dst, &opts(), TrustOpts::default());
+    let r = run_pair(&src, &dst, &opts_mem(), TrustOpts::default());
     assert_eq!(
         r.records(),
         vec![

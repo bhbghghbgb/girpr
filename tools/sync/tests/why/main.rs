@@ -64,6 +64,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
+use girsync::cache::TestCacheBackend;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
@@ -149,14 +150,20 @@ fn resolved(
     let (s_side, d_side) = (classify(src), classify(dst));
     ensure_distinct_sides(&s_side, &d_side)
         .unwrap_or_else(|e| panic!("{temp_tag}: the two sides name one cache: {e:#}"));
+    // Semantic suite: assert verdicts/tags, not the cache file, so serve folder
+    // caches from the in-memory backend and skip the per-open create + fsync.
+    let common = CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..common.clone()
+    };
     let mode = ScanMode {
         no_trust_cached_hashes: false,
         dry_run: false,
     };
     let mut s =
-        open_side(&s_side, common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
+        open_side(&s_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
     let mut d =
-        open_side(&d_side, common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
+        open_side(&d_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,

@@ -81,7 +81,7 @@ fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
     let t = temp_root("lz_sync_differ");
     let (src, dst) = four_differing(&t);
     assert_eq!(
-        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        sync_counts(&src, &dst, &opts_mem(), TrustOpts::default()),
         (0, 0),
         "size decides every pair, so no digest is needed on either side"
     );
@@ -106,7 +106,7 @@ fn a_src_only_file_costs_the_sync_scan_no_digest() {
     );
     // Cold caches, so nothing is cached and only the shared stat-equal pair counts.
     assert_eq!(
-        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        sync_counts(&src, &dst, &opts_mem(), TrustOpts::default()),
         (1, 1),
         "only the shared stat-equal pair is undecided"
     );
