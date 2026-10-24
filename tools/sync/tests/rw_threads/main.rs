@@ -110,10 +110,9 @@ const PAD: [u8; 512] = [b'x'; 512];
 /// digest can settle, a pair settled by size, a src-only and a dst-only path, a
 /// directory and an empty file.
 ///
-/// Deliberately **more files than one resolve window**, so the windowed loop runs
-/// several times. A fixture that fit in a single window would pass even if the
-/// window boundary dropped a file, duplicated one, or lost the write order
-/// between windows.
+/// Deliberately **more files than there are workers at the widest limit tested**,
+/// so every worker has to come back for another item. A fixture with one file per
+/// worker would pass even if a hand-off dropped or duplicated a file.
 fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
     let mut spec: Vec<Spec> = vec![
         ("changed.txt", Some(b"src version"), Some(b"dst")),
@@ -123,9 +122,8 @@ fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
         ("sub/nested.txt", Some(b"nested"), Some(b"nest")),
         ("emptydir", Some(&[]), None),
     ];
-    // 96 files. With the smallest window the limiter computes (32) that is three
-    // windows, so the boundary is exercised three times rather than trivially
-    // satisfied once.
+    // 96 files against a widest tested pool of 8 workers: twelve items per worker,
+    // so the loop is exercised over many hand-offs rather than trivially once.
     for i in 0..96usize {
         let rel: &'static str = Box::leak(format!("pad{i:02}.bin").into_boxed_str());
         spec.push((rel, Some(&PAD[..]), Some(&PAD[..])));

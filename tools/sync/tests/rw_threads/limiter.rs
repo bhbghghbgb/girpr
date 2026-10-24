@@ -182,19 +182,19 @@ fn an_overlapping_resolve_agrees_with_a_sequential_one() {
     );
 }
 
-/// **A window boundary writes every row exactly once, with the digest computed.**
+/// **Every hashed row is persisted, with the digest the run returned.**
 ///
-/// The other half of "same question", aimed at the part windowing alone could get
-/// wrong. A digest is written through the batched handle once its window has
-/// finished, so a row lost at a boundary would still produce a correct map for
-/// *this* run and a stale cache for the *next* one — invisible to any test that
+/// The other half of "same question", aimed at the cache side of the resolve. A
+/// row lost on the way to the shared batch handle would still produce a correct map
+/// for *this* run and a stale cache for the *next* one — invisible to any test that
 /// only reads the run's output.
 ///
-/// So this asserts the persisted rows rather than the returned map, at the
-/// tightest limits where the window is smallest and the boundaries most frequent.
+/// So this asserts the persisted rows rather than the returned map, under wide
+/// enough limits that the mutex is genuinely contended rather than exercised by a
+/// single worker.
 #[test]
-fn a_window_boundary_writes_every_row_exactly_once() {
-    let t = temp_root("rw_window");
+fn every_hashed_row_is_persisted_with_its_digest() {
+    let t = temp_root("rw_rows");
     let (src, dst) = fixture(&t);
     let common = common::opts();
 
@@ -204,8 +204,8 @@ fn a_window_boundary_writes_every_row_exactly_once() {
         &dst,
         &common,
         RwLimits::Split {
-            src: nz(1),
-            dst: nz(1),
+            src: nz(4),
+            dst: nz(4),
         },
     );
 

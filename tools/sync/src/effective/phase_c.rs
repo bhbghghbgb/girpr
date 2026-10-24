@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use crate::cache::CacheDb;
+use crate::cache::{CacheDb, CacheWrite};
 use crate::config::ScanMode;
-use crate::hash::{DigestSet, hash_file};
+use crate::hash::hash_file;
 use crate::planner::HashPlan;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::elapsed_s;
@@ -32,42 +32,38 @@ use super::side::{OpenSide, Side};
 /// through `merge_row`, which is the same write rule phase A used, so the two
 /// phases cannot spell it differently.
 ///
-/// ## Two stages per window, and why they are not one
+/// ## Reads in parallel, each row written as its hash lands
 ///
 /// [`crate::cache::CacheWrite`] owns a live `redb::WriteTransaction`, so it is not
-/// `Sync` and cannot be shared by the parallel reads directly. So a window is
-/// **read** in parallel and then **written** in sequence:
+/// `Sync`. The phase wraps it in a mutex — the same shape the copy phase uses — and
+/// each worker writes its own row as soon as its hash verifies:
 ///
-/// 1. `pool.install`: every path in the window is hashed, each holding one permit
-///    on `side`'s counter. No cache handle is in scope.
-/// 2. the sequential loop: results are folded into the map and written through
-///    the batch handle, in the window's original order.
+/// 1. the worker hashes one path, holding one permit on `side`'s counter;
+/// 2. it releases the permit, takes the mutex, writes the row through the batch
+///    handle, and inserts the `EffRec` into the map.
 ///
-/// The `collect()` is over a slice, so it preserves index order. That is what
-/// makes stage 2's writes land in sorted order, and what makes the reported
-/// error the lowest-index one — a `collect::<Result<_, _>>()` would instead let
-/// rayon short-circuit and surface whichever failure happened to finish first,
-/// which is not reproducible.
+/// A `put` is one table insert, so the hand-off is per file rather than a queue, and
+/// [`crate::cache::CommitLimits`] is checked on every completed digest instead of
+/// once per window of them. At most one digest per pool thread is in flight, so the
+/// hand-off buffer is bounded by the pool; the map the phase returns is tree-sized,
+/// as it has to be.
 ///
-/// Two promises hold, and they differ in shape:
+/// The permit is released before the mutex is taken. A worker waiting on the cache
+/// lock therefore holds no permit, and the cache lock is never nested with another;
+/// the rw wait-for graph is unchanged.
 ///
-/// - **Write order is sorted; read order is not.** The rows must land in the same
-///   order every run, so the cache bytes are reproducible and so is the progress
-///   heartbeat. Which files are *read* in which order is not a promise at all: with
-///   more than one worker the reads interleave.
-/// - **Durability is per-window rather than per-digest.**
-///   [`crate::cache::COMMIT_INTERVAL`] bounds how much hashing work an
-///   interruption can lose, and that only holds if a digest becomes durable
-///   shortly after it is computed. A window keeps it true and bounded; batching
-///   the whole phase until the last hash would keep all of it in memory and none
-///   of it on disk.
+/// **Write order is not a promise.** Rows land in completion order. That cannot
+/// change a decision: the effective map is a `HashMap` and the planner looks paths
+/// up by key, and the cache is a keyed table, so a later read sees the same rows
+/// whatever order they were inserted in. What it does drop is byte-for-byte
+/// reproducibility of `girpr-cache`: redb's physical layout can depend on insertion
+/// order. Nothing consumes those bytes as a contract — the byte-identity promises
+/// are about dry runs doing no writes at all — and the old windowed form bought the
+/// property by holding a whole window's digests in memory until its last hash
+/// finished.
 ///
-/// A window rather than one `collect()` over the whole pending set for a third
-/// reason: peak memory. Every pending file holds its digests until the batch
-/// writes them, and on a 200k-file tree an unbounded `collect()` would hold the
-/// whole hash phase at once. A [`DigestSet`] is 72 bytes and allocates nothing, so
-/// what the window bounds is that 72 bytes per pending file — and the bound is
-/// still worth having, because the *files* are what is unbounded.
+/// A failure is the first one to finish rather than the lowest path: the run aborts,
+/// and the rows in the uncommitted batch are dropped with it.
 pub fn resolve_folder(
     root: &Path,
     cache: &CacheDb,
@@ -85,15 +81,9 @@ pub fn resolve_folder(
         digests = plan.digest_count(),
         "resolve start"
     );
-    let mut batch = if dry_run {
-        None
-    } else {
-        Some(cache.begin_write()?)
-    };
-
-    // Sorted, so a window's **writes** land in the same order every run and the
-    // progress heartbeat is reproducible. The reads inside a window do not keep
-    // this order — see the doc comment.
+    // Sorted even though writes are completion-ordered: it gives the pool the same
+    // starting order every run, so which paths are in flight when a failure aborts
+    // the run does not depend on `HashMap` iteration order.
     let mut pending: Vec<&String> = phase_a
         .map
         .iter()
@@ -102,49 +92,54 @@ pub fn resolve_folder(
         .collect();
     pending.sort();
 
-    let mut map: HashMap<String, EffRec> = HashMap::new();
-    let mut n_hashed = 0usize;
-    let mut last_prog = std::time::Instant::now();
-    let window = rw.window_size();
-    let total = pending.len();
-    for (w, chunk) in pending.chunks(window).enumerate() {
-        // Stage 1 — parallel, one permit per worker, no cache handle in scope.
-        //
-        // The permit is taken *around* the read rather than inside `hash_file`, so
-        // the gate stays a property of a phase and `hash_file` keeps the signature
-        // every other caller already has.
-        let computed: Vec<Result<DigestSet>> = rw.pool().install(|| {
-            use rayon::prelude::*;
-            chunk
-                .par_iter()
-                .map(|rel| {
-                    let _permit = rw.acquire(side);
-                    let path = root.join(rel);
-                    let algos = plan.get(rel);
-                    debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
-                    let r = hash_file(&path, &algos)
-                        .with_context(|| format!("hash {}", path.display()));
-                    trace!(
-                        rel = %rel,
-                        algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
-                        "hashed"
-                    );
-                    r
-                })
-                .collect()
-        });
+    // What the workers share: the batch handle, the map they are building, and the
+    // counters that drive the heartbeat. One mutex covers all three because a row
+    // being on disk and the map holding its `EffRec` is one commit, not two.
+    struct Sink<'a> {
+        batch: Option<CacheWrite<'a>>,
+        map: HashMap<String, EffRec>,
+        hashed: usize,
+        last_prog: std::time::Instant,
+    }
 
-        // Stage 2 — sequential, in the window's original order. The first `Err` in
-        // *index* order is the one that propagates, which is what keeps the
-        // reported path reproducible under any number of workers.
-        for (rel, computed) in chunk.iter().zip(computed) {
-            let computed = computed?;
+    let sink = std::sync::Mutex::new(Sink {
+        batch: if dry_run {
+            None
+        } else {
+            Some(cache.begin_write()?)
+        },
+        map: HashMap::new(),
+        hashed: 0,
+        last_prog: std::time::Instant::now(),
+    });
+    let total = pending.len();
+    let outcome = rw.pool().install(|| {
+        use rayon::prelude::*;
+        pending.par_iter().try_for_each(|rel| -> Result<()> {
+            // The permit covers the read. The row write is cache work, which the
+            // gate deliberately does not cover, and taking the mutex while holding
+            // a permit would put an fsync inside the rw wait-for graph.
+            let computed = {
+                let _permit = rw.acquire(side);
+                let path = root.join(rel);
+                let algos = plan.get(rel);
+                debug!(rel = %rel, path = %path.display(), algos = ?algos, "hashing");
+                let r =
+                    hash_file(&path, &algos).with_context(|| format!("hash {}", path.display()));
+                trace!(
+                    rel = %rel,
+                    algos = ?r.as_ref().map(|h| h.iter().map(|(a, _)| a).collect::<Vec<_>>()),
+                    "hashed"
+                );
+                r?
+            };
             let e = &phase_a.map[*rel];
             let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
-            if let Some(w) = batch.as_mut() {
+            let mut sink = sink.lock().expect("resolve lock is never poisoned");
+            if let Some(w) = sink.batch.as_mut() {
                 w.put(rel, &row)?;
             }
-            map.insert(
+            sink.map.insert(
                 (*rel).clone(),
                 EffRec {
                     kind: "file".into(),
@@ -153,25 +148,37 @@ pub fn resolve_folder(
                     hashes: row.hashes,
                 },
             );
-            n_hashed += 1;
-        }
+            sink.hashed += 1;
+            // Logged under the lock so the `done` counts appear in the order they
+            // were reached rather than the order workers got scheduled to log.
+            if sink.hashed.is_multiple_of(100)
+                || sink.hashed == total
+                || sink.last_prog.elapsed().as_secs() >= 5
+            {
+                info!(
+                    root = %root.display(),
+                    done = sink.hashed,
+                    total,
+                    hashed = sink.hashed,
+                    cache_hit = 0,
+                    elapsed_s = t_eff.elapsed().as_secs_f64(),
+                    "scan progress"
+                );
+                sink.last_prog = std::time::Instant::now();
+            }
+            Ok(())
+        })
+    });
+    outcome?;
 
-        // Heartbeat per window, so it reports whole windows and `window_size` says
-        // how much of the run the counter spans.
-        if n_hashed.is_multiple_of(100) || n_hashed == total || last_prog.elapsed().as_secs() >= 5 {
-            info!(
-                root = %root.display(),
-                done = n_hashed,
-                total,
-                hashed = n_hashed,
-                cache_hit = 0,
-                window = w + 1,
-                window_size = window,
-                elapsed_s = t_eff.elapsed().as_secs_f64(),
-                "scan progress"
-            );
-            last_prog = std::time::Instant::now();
-        }
+    let Sink {
+        batch,
+        mut map,
+        hashed: n_hashed,
+        ..
+    } = sink.into_inner().expect("resolve lock is never poisoned");
+    if let Some(w) = batch {
+        w.commit()?;
     }
 
     // Everything the plan settled: a file, a dir, and no read.
@@ -203,9 +210,6 @@ pub fn resolve_folder(
         );
     }
 
-    if let Some(w) = batch.take() {
-        w.commit()?;
-    }
     let stats = ScanStats {
         hashed: n_hashed,
         cache_hit: n_cache_hit,

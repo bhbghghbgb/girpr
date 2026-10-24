@@ -142,11 +142,6 @@ impl RwRuntime {
         self.limiter.acquire_copy()
     }
 
-    /// How many pending hashes a resolve window holds under these limits.
-    pub fn window_size(&self) -> usize {
-        self.limits.window_size()
-    }
-
     pub fn describe(&self) -> String {
         self.limits.describe()
     }

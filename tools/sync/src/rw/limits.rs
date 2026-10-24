@@ -9,25 +9,6 @@ use std::num::NonZeroUsize;
 /// spawns 128 OS threads is worth a word in the log rather than in a bug report.
 pub(super) const LOUD_THREAD_COUNT: usize = 64;
 
-/// How many pending hashes a resolve window holds.
-///
-/// A window rather than one `collect()` over the whole pending set, because three
-/// properties depend on the bound:
-///
-/// - **durability.** [`crate::cache::COMMIT_INTERVAL`] bounds how much hashing work
-///   an interruption can lose, and that only holds if a digest becomes durable
-///   shortly after it is computed. Per-window keeps that true; one big `collect()`
-///   would put the whole hash phase in memory and none of it on disk.
-/// - **memory.** A window's results are live at once, and every pending file holds
-///   its digests until the batch writes them. A [`crate::hash::DigestSet`] is 72
-///   bytes and allocates nothing, so the window's share of a resolve is bounded by
-///   the window and not by the tree — which the sequential form also got right, and
-///   which a per-file map would have undone.
-/// - **the progress heartbeat**, which reports a `done` count and stays meaningful
-///   with a window in flight and `pending.len() - window` still to go.
-const MIN_WINDOW: usize = 32;
-const WINDOW_PER_THREAD: usize = 8;
-
 /// Which side of a two-sided run an operation reads or writes.
 ///
 /// Under [`RwLimits::Shared`] the side is not consulted — there is one counter and
@@ -111,13 +92,6 @@ impl RwLimits {
         n.max(1)
     }
 
-    /// How many pending hashes one resolve window holds for these limits.
-    pub fn window_size(&self) -> usize {
-        self.pool_size()
-            .saturating_mul(WINDOW_PER_THREAD)
-            .max(MIN_WINDOW)
-    }
-
     /// One line naming the shape, for `--log-level debug` and the run span.
     pub fn describe(&self) -> String {
         match self {
@@ -153,12 +127,6 @@ mod tests {
         assert_eq!(shared(4).limits().dst_threads(), 4);
         assert_eq!(split(3, 5).limits().src_threads(), 3);
         assert_eq!(split(3, 5).limits().dst_threads(), 5);
-    }
-
-    #[test]
-    fn the_window_is_bounded_whatever_the_limits() {
-        assert_eq!(RwLimits::default().window_size(), MIN_WINDOW);
-        assert_eq!(shared(64).limits().window_size(), 64 * WINDOW_PER_THREAD);
     }
 
     #[test]

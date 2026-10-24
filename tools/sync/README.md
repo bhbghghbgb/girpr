@@ -339,16 +339,20 @@ digests included — and reports the same `ScanStats`. Two runs can print identi
 `CHANGED` lines while having hashed different files, so the tests compare the maps,
 not the output: `tests/rw_threads/`.
 
-Two ordering properties hold, both inside `resolve_folder`:
+Two properties hold, both inside `resolve_folder`:
 
-- **Write order is sorted; read order is not.** Cache rows land in the same
-  order every run, so the cache bytes and the progress heartbeat stay reproducible.
-  Which files are *read* in which order is not part of any promise.
-- **Durability is per-window rather than per-digest.** Phase C hashes in windows
-  (`max(threads × 8, 32)`) and writes each window's rows through the batched handle
-  before starting the next. `COMMIT_INTERVAL` bounds how much work an
-  interruption can lose, and peak memory stays bounded instead of holding one
-  digest map per pending file at once.
+- **Each worker writes its row as its hash lands, so rows are in completion
+  order.** Completion order is not a promise, and it cannot change a decision: the
+  effective map is keyed by path and the cache is a keyed table, so a later lookup
+  sees the same rows whatever order they went in. It does drop byte-for-byte
+  reproducibility of `girpr-cache` across runs, because redb's physical layout can
+  depend on insertion order. The byte-identity promises elsewhere are about dry runs
+  not writing at all.
+- **Durability is per-digest.** Each completed hash goes through the batched handle
+  immediately, and `COMMIT_INTERVAL` bounds how much work an interruption can lose.
+  At most one digest per pool thread is in flight, so the buffer between hash and
+  write is bounded by the pool instead of by the tree — the map the phase returns is
+  necessarily tree-sized.
 
 ### update, compare and compare-self
 
