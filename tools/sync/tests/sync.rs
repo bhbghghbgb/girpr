@@ -10,9 +10,7 @@ use common::{
     compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
     sync_mtime, temp_root, update, wfile,
 };
-use girsync::cache::{
-    CACHE_PREFIX, COMMIT_BATCH, FileRec, TestCacheBackend, load_all_records, open_db,
-};
+use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, load_all_records, open_db};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -28,7 +26,10 @@ fn recs(dir: &Path) -> HashMap<String, FileRec> {
 /// alternative — matching rendered text lines — makes every case a second,
 /// quieter statement of the vocabulary, and a reworded message fails a test whose
 /// point was the plan.
-fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
+///
+/// `envs` are added on top of the in-memory cache switch, for the test-only
+/// `GIRSYNC_TEST_COMMIT_*` limits a fixture lowers to make a commit observable.
+fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
         .arg("--src")
@@ -39,6 +40,7 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
         .arg("json")
         .args(extra)
         .env("GIRSYNC_TEST_CACHE", "memory")
+        .envs(envs.iter().copied())
         .output()
         .expect("spawn girsync");
     assert!(
@@ -234,7 +236,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
-    let dry = run_binary(&src, &dst, &["--dry-run"]);
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
     assert!(
         !paths(&dry, "rmdir").iter().any(|p| p.starts_with("clash")),
         "the subtree is wiped by the copy, not removed by the rmdir pass: {dry:?}"
@@ -246,7 +248,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     );
 
     // And the real run agrees.
-    let real = run_binary(&src, &dst, &[]);
+    let real = run_binary(&src, &dst, &[], &[]);
     assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
@@ -611,13 +613,15 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
 /// layout the only batch commit of the phase came after it, with every file
 /// already durable.
 ///
-/// The fixture is one-sided and bigger than `COMMIT_BATCH`, so the op-count
-/// trigger must trip. One-sided on purpose: with nothing to hash, the scan and
-/// the pre-drop each auto-commit before the copy phase starts, and nothing after
-/// it does — so the *last* commit in the log is the copy phase's.
+/// The fixture is one-sided and small: `GIRSYNC_TEST_COMMIT_OPS` lowers the
+/// op-count trigger, so `copy_files` crosses it in ten copies rather than in
+/// `COMMIT_BATCH`. One-sided on purpose: with nothing to hash, the scan and the
+/// pre-drop each auto-commit before the copy phase starts, and nothing after it
+/// does — so the *last* commit in the log is the copy phase's.
 #[test]
 fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
-    let files = COMMIT_BATCH + 1;
+    let ops = 10;
+    let files = 2 * ops;
     let t = temp_root("copy_commit");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
@@ -637,13 +641,20 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
             // The file layer defaults to debug, and the commit event is trace.
             "--log-file-level",
             "trace",
-            // Eight workers, so 500 empty files are not a minute of fsyncs.
+            // Eight workers, so the fixture is not a queue of fsyncs.
             "--rw-threads",
             "8",
             // No digest to compute: this test is about when the row is written,
-            // not about what it holds, and hashing 500 files would only add time.
+            // not about what it holds, and hashing would only add time.
             "--hash-all-of",
             "none",
+        ],
+        &[
+            // A threshold this fixture crosses mid-copy.
+            ("GIRSYNC_TEST_COMMIT_OPS", "10"),
+            // Keep the interval trigger out of it, so the commit seen during
+            // the copies can only be the op-count one.
+            ("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000"),
         ],
     );
     assert_eq!(

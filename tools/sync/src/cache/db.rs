@@ -292,6 +292,10 @@ impl CacheDb {
     /// Start a batched write handle. Must be committed (explicitly or via
     /// periodic auto-commit) for mutations to become durable. Fails on a
     /// read-only cache.
+    ///
+    /// The thresholds are [`CommitLimits::default()`] with the test-only
+    /// `GIRSYNC_TEST_COMMIT_*` overrides applied; use
+    /// [`begin_write_with`](Self::begin_write_with) to choose them explicitly.
     pub fn begin_write(&self) -> Result<CacheWrite<'_>> {
         CacheWrite::new(self.writable()?)
     }

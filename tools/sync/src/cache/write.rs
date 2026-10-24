@@ -16,7 +16,7 @@ use super::schema::FileRec;
 
 /// How many mutations a [`CacheWrite`] batches before committing, so
 /// interrupted runs keep their progress without an fsync per file.
-pub const COMMIT_BATCH: usize = 500;
+pub const COMMIT_BATCH: usize = 50;
 
 /// How much file content (sum of `FileRec.size` on `put`) a [`CacheWrite`]
 /// batches before committing. Bounds re-hash work lost to interruption when
@@ -50,6 +50,49 @@ impl Default for CommitLimits {
     }
 }
 
+impl CommitLimits {
+    /// [`Default`], with the test-only environment overrides applied.
+    ///
+    /// A test that needs a threshold to trip should not have to produce
+    /// [`COMMIT_BATCH`] rows, [`COMMIT_BYTES`] of content, or wait
+    /// [`COMMIT_INTERVAL`]. `GIRSYNC_TEST_COMMIT_OPS`,
+    /// `GIRSYNC_TEST_COMMIT_BYTES`, and `GIRSYNC_TEST_COMMIT_INTERVAL_MS`
+    /// (milliseconds) override the three thresholds instead. They are read when
+    /// a handle is opened, not on every mutation, and an unset or unparseable
+    /// value leaves the default in place.
+    ///
+    /// Deliberately not CLI flags: they exist so a small fixture can make a
+    /// commit observable, not to tune a real run.
+    fn from_env() -> Self {
+        let mut limits = Self::default();
+        if let Some(ops) = env_limit("GIRSYNC_TEST_COMMIT_OPS") {
+            limits.max_ops = ops;
+        }
+        if let Some(bytes) = env_limit("GIRSYNC_TEST_COMMIT_BYTES") {
+            limits.max_bytes = bytes;
+        }
+        if let Some(ms) = env_limit("GIRSYNC_TEST_COMMIT_INTERVAL_MS") {
+            limits.max_interval = Duration::from_millis(ms);
+        }
+        limits
+    }
+}
+
+/// One `GIRSYNC_TEST_COMMIT_*` override, or `None` when it is unset.
+///
+/// A set-but-unparseable value is reported and ignored, so a typo is visible in
+/// the log instead of silently running the test at the production thresholds.
+fn env_limit<T: std::str::FromStr>(name: &str) -> Option<T> {
+    let raw = std::env::var(name).ok()?;
+    match raw.trim().parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(var = name, value = %raw, "ignoring commit-limit override");
+            None
+        }
+    }
+}
+
 /// Batched writes over one cache: mutations accumulate in a single write
 /// transaction and are committed periodically — every `max_ops` operations,
 /// every `max_bytes` of `put` file content, or every `max_interval` of wall
@@ -67,7 +110,7 @@ pub struct CacheWrite<'a> {
 
 impl<'a> CacheWrite<'a> {
     pub(super) fn new(db: &'a Database) -> Result<Self> {
-        Self::with_limits(db, CommitLimits::default())
+        Self::with_limits(db, CommitLimits::from_env())
     }
 
     pub(super) fn with_limits(db: &'a Database, limits: CommitLimits) -> Result<Self> {
