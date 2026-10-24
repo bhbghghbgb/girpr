@@ -10,7 +10,9 @@ use common::{
     compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
     sync_mtime, temp_root, update, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, TestCacheBackend, load_all_records, open_db};
+use girsync::cache::{
+    CACHE_PREFIX, COMMIT_BATCH, FileRec, TestCacheBackend, load_all_records, open_db,
+};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -593,4 +595,80 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
             rows.keys().collect::<Vec<_>>()
         );
     }
+}
+
+/// **The copy phase commits its cache rows while it is still copying.**
+///
+/// `CacheWrite`'s `CommitLimits` are only a bound on the work an interrupted run
+/// loses if they are checked as that work happens. `copy_files` once collected
+/// every verified record and inserted them only after the pool joined, so during
+/// the phase itself no threshold could fire: a run that died mid-copy lost every
+/// row, however many files had already landed on disk.
+///
+/// The log file is the observable. A threshold tripping is logged as
+/// `cache batch committed` (trace), and the phase logs `copy done` after the pool
+/// joins, so the last batch commit must come *before* that line. Under the old
+/// layout the only batch commit of the phase came after it, with every file
+/// already durable.
+///
+/// The fixture is one-sided and bigger than `COMMIT_BATCH`, so the op-count
+/// trigger must trip. One-sided on purpose: with nothing to hash, the scan and
+/// the pre-drop each auto-commit before the copy phase starts, and nothing after
+/// it does — so the *last* commit in the log is the copy phase's.
+#[test]
+fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
+    let files = COMMIT_BATCH + 1;
+    let t = temp_root("copy_commit");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    for i in 0..files {
+        // Empty, so the fixture's cost is file metadata rather than content; the
+        // op-count trigger counts rows, not bytes.
+        wfile(&src, &format!("f{i:04}.bin"), b"");
+    }
+
+    let logfile = t.subdir("logs").join("run.json");
+    let recs = run_binary(
+        &src,
+        &dst,
+        &[
+            "--log-file",
+            logfile.to_str().expect("the temp path is utf-8"),
+            // The file layer defaults to debug, and the commit event is trace.
+            "--log-file-level",
+            "trace",
+            // Eight workers, so 500 empty files are not a minute of fsyncs.
+            "--rw-threads",
+            "8",
+            // No digest to compute: this test is about when the row is written,
+            // not about what it holds, and hashing 500 files would only add time.
+            "--hash-all-of",
+            "none",
+        ],
+    );
+    assert_eq!(
+        paths(&recs, "copy").len(),
+        files,
+        "the fixture must make the copy phase cross the op-count threshold"
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    fn message(e: &Value) -> &str {
+        e["fields"]["message"].as_str().unwrap_or("")
+    }
+    let commits: Vec<usize> = logged
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| message(e) == "cache batch committed")
+        .map(|(i, _)| i)
+        .collect();
+    let done = logged
+        .iter()
+        .position(|e| message(e) == "copy done")
+        .expect("the copy phase logs its end");
+    assert!(
+        commits.last().is_some_and(|&i| i < done),
+        "no batch commit before `copy done` (index {done}): commits were at {commits:?}, \
+         so the copy phase still hoards its rows until every file is on disk"
+    );
 }

@@ -34,9 +34,9 @@ use super::side::{OpenSide, Side};
 ///
 /// ## Two stages per window, and why they are not one
 ///
-/// [`crate::cache::CacheWrite`] owns a live `redb::WriteTransaction`, so it is not `Sync` and
-/// must never be touched from a pool thread. So a window is **read** in parallel
-/// and then **written** in sequence:
+/// [`crate::cache::CacheWrite`] owns a live `redb::WriteTransaction`, so it is not
+/// `Sync` and cannot be shared by the parallel reads directly. So a window is
+/// **read** in parallel and then **written** in sequence:
 ///
 /// 1. `pool.install`: every path in the window is hashed, each holding one permit
 ///    on `side`'s counter. No cache handle is in scope.
