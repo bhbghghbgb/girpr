@@ -12,6 +12,9 @@ use super::*;
 /// have nothing to fall back on and the pair would be reported equal on no evidence.
 /// That is a contradiction rather than a weaker guarantee, so it is refused — the same
 /// call `parse_any_of` already makes for `none`, for the same reason.
+///
+/// One fixture is shared across all three flag spellings so the temp dir + cache are
+/// created once rather than per variant.
 #[test]
 fn no_digest_available_with_a_distrusted_field_is_refused() {
     let t = temp_root("st_refuse");
@@ -57,44 +60,57 @@ fn no_digest_available_with_a_distrusted_field_is_refused() {
 /// false alarm.** Every supported combination still runs, and — the part that matters —
 /// the stat-only audit is untouched, because trusting both fields means the predicate
 /// never becomes vacuous.
+///
+/// Driven in-process via `cmd_compare` instead of spawning the binary three times:
+/// the claim is that the supported combinations still produce a verdict.
 #[test]
 fn the_refusal_leaves_every_supported_combination_alone() {
     let t = temp_root("st_narrow");
     let (src, dst) = size_differs(&t);
-    let (s, d) = (src.display().to_string(), dst.display().to_string());
-    let base = |extra: &[String]| {
-        let mut args = vec![
-            "compare".to_string(),
-            "--src".to_string(),
-            s.clone(),
-            "--dst".to_string(),
-            d.clone(),
-            "--case-sensitive".to_string(),
-        ];
-        args.extend(extra.iter().cloned());
-        bin(&args)
-    };
-    // The stat-only audit, which is the mode `--hash-all-of none` exists for.
-    let (code, stderr) = base(&["--hash-all-of".into(), "none".into()]);
+    // The stat-only audit: `--hash-all-of none`, no distrust — size settles it.
     assert_eq!(
-        code, 4,
-        "and it still answers CHANGED on its own terms: {stderr}"
+        cmd_compare(
+            girsync::CompareOpts {
+                src: src.clone(),
+                dst: dst.clone(),
+                trust: Default::default(),
+                common: distrusting(&[], StatTrust::default()),
+            },
+            &log(),
+        )
+        .unwrap(),
+        4,
+        "size differs, so CHANGED"
     );
-    // A digest named alongside a distrusted field: the supported combination.
-    let (code, stderr) = base(&[
-        "--hash-all-of".into(),
-        "md5".into(),
-        "--no-trust-size".into(),
-    ]);
+    // A digest named alongside a distrusted field: md5 decides, content differs.
     assert_eq!(
-        code, 4,
-        "size distrusted, digest decides: CHANGED: {stderr}"
+        cmd_compare(
+            girsync::CompareOpts {
+                src: src.clone(),
+                dst: dst.clone(),
+                trust: Default::default(),
+                common: distrusting(&["md5"], StatTrust::default().without_size()),
+            },
+            &log(),
+        )
+        .unwrap(),
+        4,
+        "size distrusted, digest decides: CHANGED"
     );
-    // A distrusted field with the default request: likewise.
-    let (code, stderr) = base(&["--no-trust-mtime".into()]);
+    // A distrusted field with the default request: md5 by default decides.
     assert_eq!(
-        code, 4,
-        "mtime distrusted, md5 by default decides: {stderr}"
+        cmd_compare(
+            girsync::CompareOpts {
+                src: src.clone(),
+                dst: dst.clone(),
+                trust: Default::default(),
+                common: distrusting(&["md5"], StatTrust::default().without_mtime()),
+            },
+            &log(),
+        )
+        .unwrap(),
+        4,
+        "mtime distrusted, md5 decides: CHANGED"
     );
 }
 
