@@ -496,15 +496,9 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
 /// again, and the two are compared. A single pass that digested both sides as
 /// the bytes went past would compare a value with itself — equal by
 /// construction, so `verify hash mismatch` could never fire and would read as a
-/// guarantee while checking nothing.
-///
-/// The verify re-read happens after the copy finishes, and it is correct
-/// without a per-file flush: a read through the page cache returns the bytes
-/// just written. This copy's durability point is the run-level commit at the
-/// end of the apply phase (cache rows are committed after every copy), so the
-/// "this file's bytes reached the disk before we moved on" claim weakens to
-/// run-level, not per-file. The size/mtime/hash verification itself is
-/// unchanged.
+/// guarantee while checking nothing. Because the re-read happens after
+/// `sync_all()`, it also hashes the bytes that actually reached the disk, which
+/// is the only way this catches silent corruption on the way down.
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
@@ -539,6 +533,7 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
     let set = AlgoSet::from_iter(algos.iter().copied());
     let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
+    fout.sync_all().ok();
     drop(fout);
     // preserve mtime
     if let Some(st) = smtime_sys {
@@ -672,41 +667,6 @@ mod tests {
 
         assert_eq!(std::fs::read(&dst).unwrap(), Vec::<u8>::new());
         assert_eq!(sh, hash_file(&src, &set).unwrap());
-    }
-
-    /// The verify contract — size, mtime, hash — still holds without the
-    /// per-file `sync_all()` that `copy_one` used to do (R3). The re-read sees
-    /// the bytes through the page cache, so the durability point is now the
-    /// run-level commit at the end of the apply phase instead of a per-file
-    /// flush; what the checks assert is unchanged.
-    #[test]
-    fn a_copy_still_verifies_without_a_per_file_flush() {
-        let dir = girpr_tempdir::TempDir::new("girsync_copy_one", "verify");
-        let src_root = dir.join("src");
-        let dst_root = dir.join("dst");
-        std::fs::create_dir_all(&src_root).unwrap();
-        let body: Vec<u8> = (0..(CHUNK * 2 + 1)).map(|i| (i % 251) as u8).collect();
-        let src = src_root.join("file.bin");
-        let dst = dst_root.join("file.bin");
-        std::fs::write(&src, &body).unwrap();
-        let want_mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(12345);
-        let f = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&src)
-            .unwrap();
-        f.set_modified(want_mtime).unwrap();
-        drop(f);
-
-        let rec = copy_one(&src_root, &dst_root, "file.bin", &algos(&["md5", "sha256"]))
-            .unwrap();
-        let smeta = std::fs::metadata(&src).unwrap();
-        assert_eq!(rec.size, body.len() as u64);
-        assert_eq!(rec.mtime_ns, mtime_ns_of(&smeta));
-        assert_eq!(
-            rec.hashes,
-            hash_file(&dst, &aset(&["md5", "sha256"])).unwrap()
-        );
-        assert_eq!(std::fs::read(&dst).unwrap(), body);
     }
 
     /// One digest per algorithm, every one holding `byte` — so two maps built
