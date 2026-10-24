@@ -108,7 +108,7 @@ fn resolve_sequential(src: &Path, dst: &Path, common: &CommonOpts) -> (Resolved,
 fn every_rw_setting_answers_the_same_question() {
     let t = temp_root("rw_same");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let baseline = resolve_overlapping(&src, &dst, &common, RwLimits::default());
@@ -148,7 +148,7 @@ fn every_rw_setting_answers_the_same_question() {
 fn an_overlapping_resolve_agrees_with_a_sequential_one() {
     let t = temp_root("rw_overlap");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let concurrent = resolve_overlapping(

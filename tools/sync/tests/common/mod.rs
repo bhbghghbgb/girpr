@@ -156,7 +156,7 @@ pub fn log() -> LogCtx {
     LogCtx {
         level: girsync::logging::Level::Error,
         file_level: girsync::logging::Level::Debug,
-        file: Some(PathBuf::from("girsync.log")),
+        file: None,
         output: OutputFormat::Text,
     }
 }
