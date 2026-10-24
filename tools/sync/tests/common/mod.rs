@@ -5,7 +5,9 @@
 
 #![allow(dead_code)]
 
-use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db};
+use girsync::cache::{
+    CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
+};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
@@ -315,12 +317,27 @@ pub fn summary_of(recs: &[serde_json::Value]) -> serde_json::Value {
 /// Every row a side's cache currently holds, for asserting what a run left
 /// behind or dropped.
 pub fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
-    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+    load_all_records(&cache_at(dir)).unwrap()
 }
 
-fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+/// The cache a run in this process left at `dir`.
+///
+/// A suite that ran with [`opts_mem`] has its rows in the shared in-memory cache
+/// for `<dir>/girpr-cache`; every other suite has the real file. Preferring the
+/// memory entry when one exists keeps the assertions identical while letting a
+/// cache-content case leave the HDD.
+fn cache_at(dir: &Path) -> CacheDb {
     let p = dir.join(CACHE_PREFIX);
-    let db = open_db(&p, true, rw()).unwrap();
+    CacheDb::memory_cache_at(&p).unwrap_or_else(|| open_db(&p, true, rw()).unwrap())
+}
+
+/// Edit one row of whichever cache a run left at `dir`.
+///
+/// Public because a suite that builds a cache state by hand needs the same
+/// memory-or-file decision `recs_of` makes; opening the file directly would
+/// invent an empty cache beside the in-memory one.
+pub fn edit_row<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+    let db = cache_at(dir);
     let mut rec = db
         .get(rel)
         .unwrap()
@@ -336,7 +353,7 @@ fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
 /// caller deleting "md5" has to look in both places. The rebuild does that by
 /// construction rather than by remembering to.
 pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
-    edit_rec(dir, rel, |r| {
+    edit_row(dir, rel, |r| {
         let mut kept = DigestSet::default();
         for (a, d) in r.hashes.iter() {
             if a.as_str() != algo {
@@ -356,7 +373,7 @@ pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
 /// mtime. The stat still matches, so only the content disagrees — the case where
 /// a digest is the only thing that can decide the pair.
 pub fn poison_digest(dir: &Path, rel: &str, algo: &str) {
-    edit_rec(dir, rel, |r| {
+    edit_row(dir, rel, |r| {
         // By *name*, so the length that gets replaced is whatever the row really
         // holds -- including the unexpected length a corrupt row would carry.
         let n = r.hashes.get_named(algo).map(|d| d.len()).unwrap_or(32);
@@ -406,6 +423,26 @@ pub type Spec = (&'static str, Side, Side);
 ///
 /// With `warmed: false` both caches are left cold.
 pub fn pair(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    pair_with(t, spec, algos, warmed, TestCacheBackend::File)
+}
+
+/// [`pair`] warmed into the shared in-memory cache.
+///
+/// Only the fixture's own rows move: the suite still calls `recs_of`, which
+/// finds the memory entry, so a case can assert the same record contents it did
+/// against a file cache. Use it together with [`opts_mem`] — a file-backed run
+/// cannot see rows written to memory.
+pub fn pair_mem(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    pair_with(t, spec, algos, warmed, TestCacheBackend::Memory)
+}
+
+fn pair_with(
+    t: &TempDir,
+    spec: &[Spec],
+    algos: &[&str],
+    warmed: bool,
+    backend: TestCacheBackend,
+) -> (PathBuf, PathBuf) {
     let s = t.subdir("src");
     let d = t.subdir("dst");
     for (rel, sb, db) in spec {
@@ -429,7 +466,10 @@ pub fn pair(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBu
     }
     if warmed {
         for dir in [&s, &d] {
-            let o = with_algos(algos);
+            let o = CommonOpts {
+                test_cache: backend,
+                ..with_algos(algos)
+            };
             girsync::cmd_update(
                 girsync::UpdateOpts {
                     dir: dir.clone(),

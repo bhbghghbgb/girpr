@@ -44,6 +44,10 @@ const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const META_KEY: &str = "meta";
 
 pub use db::{CacheDb, TestCacheBackend};
+// Test-only seams: `open_memory_cache` is the shared (path-keyed) variant of
+// `CacheDb::open_temp`, and `memory_cache_at` lets a test read what a run left
+// there. Both are reached only through `TestCacheBackend::Memory` or
+// `GIRSYNC_TEST_CACHE=memory`.
 pub use open::{
     CacheOpen, backup_db, get_rec, load_all_records, open_db, put_rec, remove_cache_path,
     remove_rec, snapshot_old,

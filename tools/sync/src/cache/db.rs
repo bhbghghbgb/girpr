@@ -7,7 +7,8 @@
 use anyhow::{Context, Result, bail};
 use redb::{Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::codec::encode_meta;
 use super::codec::{decode_meta, decode_rec};
@@ -23,14 +24,17 @@ use super::{ENTRIES, META_KEY, META_TBL};
 /// other; only a read/write handle excludes everyone, which is what makes the
 /// one-handle-per-file rule below about writers.
 pub(super) enum Handle {
-    Writable(Database),
+    /// `Arc` because a test memory cache is shared between the commands that open
+    /// it by the same path; a file cache has exactly one owner and the extra
+    /// indirection costs nothing measurable.
+    Writable(Arc<Database>),
     ReadOnly(redb::ReadOnlyDatabase),
 }
 
 impl Handle {
     pub(super) fn writable(&self) -> Option<&Database> {
         match self {
-            Handle::Writable(d) => Some(d),
+            Handle::Writable(d) => Some(d.as_ref()),
             Handle::ReadOnly(_) => None,
         }
     }
@@ -52,6 +56,15 @@ impl ReadableDatabase for Handle {
     }
 }
 
+/// The path-keyed in-memory caches tests share across calls.
+///
+/// One process is one test under `cargo nextest`, so this grows to at most the
+/// caches a single test opened and is released with the process.
+fn memory_registry() -> &'static Mutex<HashMap<PathBuf, Arc<Database>>> {
+    static CACHES: OnceLock<Mutex<HashMap<PathBuf, Arc<Database>>>> = OnceLock::new();
+    CACHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// An open redb cache file, read/write or read-only.
 ///
 /// Note: redb takes a file lock per *writable* database, so two read/write
@@ -69,7 +82,7 @@ impl CacheDb {
     /// answer rather than one per caller.
     pub(super) fn open_writable(db: Database) -> Self {
         Self {
-            db: Handle::Writable(db),
+            db: Handle::Writable(Arc::new(db)),
         }
     }
 
@@ -166,7 +179,51 @@ impl CacheDb {
             .context("open temp cache")?;
         Self::init_meta(&db, case_sensitive)?;
         Ok(Self {
+            db: Handle::Writable(Arc::new(db)),
+        })
+    }
+
+    /// The test-only in-memory cache for `db_path`, created on first use and
+    /// **shared by every later open of the same path in this process**.
+    ///
+    /// [`open_temp`](Self::open_temp) is deliberately not shared: it serves a
+    /// single dry-run fallback, and a fresh empty DB is exactly what that answer
+    /// describes. A test suite switching `TestCacheBackend` to `Memory` needs the
+    /// other property instead — the rows a command wrote must still be there for
+    /// the next command, because that is what a file cache does. Keying the
+    /// registry by the cache path gives that without touching the filesystem, so
+    /// the assertions (which read rows) stay exactly what they were.
+    ///
+    /// Only ever reached through [`TestCacheBackend::Memory`] or
+    /// `GIRSYNC_TEST_CACHE=memory`; production opens files.
+    pub fn open_memory_cache(db_path: &Path, case_sensitive: bool) -> Result<Self> {
+        let db = {
+            let mut caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
+            match caches.get(db_path) {
+                Some(db) => db.clone(),
+                None => {
+                    let db = Database::builder()
+                        .create_with_backend(InMemoryBackend::new())
+                        .context("open shared temp cache")?;
+                    Self::init_meta(&db, case_sensitive)?;
+                    let db = Arc::new(db);
+                    caches.insert(db_path.to_path_buf(), db.clone());
+                    db
+                }
+            }
+        };
+        Ok(Self {
             db: Handle::Writable(db),
+        })
+    }
+
+    /// The shared in-memory cache at `db_path`, if a run in this process opened
+    /// one. `None` means the path was served from a file (or never opened), so a
+    /// caller falls back to the file cache.
+    pub fn memory_cache_at(db_path: &Path) -> Option<Self> {
+        let caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
+        caches.get(db_path).map(|db| Self {
+            db: Handle::Writable(db.clone()),
         })
     }
 

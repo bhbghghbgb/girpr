@@ -162,7 +162,11 @@ pub fn open_folder_cache(
         || std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory");
     if want_memory {
         info!(path = %db_path.display(), "test: using an in-memory cache");
-        return CacheDb::open_temp(common.case_sensitive);
+        // Path-keyed and shared: a suite that runs two commands against one
+        // folder must see the rows the first one wrote, exactly as it would with
+        // the file cache. `open_temp`'s fresh DB is for a single dry-run
+        // fallback, where "empty" is the answer.
+        return CacheDb::open_memory_cache(&db_path, common.case_sensitive);
     }
     if !mode.dry_run {
         return open_db(

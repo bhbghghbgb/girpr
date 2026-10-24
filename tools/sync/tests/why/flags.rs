@@ -13,6 +13,10 @@ use super::*;
 fn bin(args: &[String]) -> (i32, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(args)
+        // These cases assert the rendered report, not the cache file. Serving the
+        // caches from memory keeps the real flag journey (clap, `CommonOpts`,
+        // the reporter) and drops the per-spawn redb create + fsync.
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     (
@@ -268,6 +272,8 @@ fn compare_self_reports_a_reason_too() {
             "--case-sensitive".to_string(),
         ];
         args.extend(extra.iter().map(|s| s.to_string()));
+        // No memory override here: `compare-self` needs the cache `cmd_update`
+        // wrote above, and a child process has its own (empty) memory registry.
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
             .args(&args)
             .output()
