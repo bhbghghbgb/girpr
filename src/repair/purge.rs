@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use walkdir::WalkDir;
 
-use super::RepairPlan;
+use crate::repair::phases::plan::RepairPlan;
 use crate::repair::scope::PathScope;
 
 /// One file the files-cleanup has decided to delete.
@@ -300,7 +300,7 @@ fn file_name(rel: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::plan::PlannedFile;
+    use crate::repair::phases::plan::PlannedFile;
     use girpr_tempdir::TempDir;
     use std::collections::HashMap;
 

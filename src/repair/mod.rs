@@ -43,15 +43,15 @@ mod check;
 mod file;
 pub mod lock;
 pub mod phases;
-mod plan;
 mod post;
+pub mod purge;
 pub mod reuse;
 pub mod scan;
 pub mod scope;
 
 pub use phases::metadata::Meta;
-pub use plan::purge::PurgeVerdict;
-pub use plan::{PlannedFile, PurgeCandidate, PurgePlan, RepairPlan};
+pub use phases::plan::{PlannedFile, RepairPlan};
+pub use purge::{PurgeCandidate, PurgePlan, PurgeVerdict};
 pub use scope::PathScope;
 
 use std::sync::Arc;
@@ -63,7 +63,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 
-use phases::{manifest, metadata}; // temporary single import; grows in later steps
+use phases::{manifest, metadata, plan}; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
@@ -143,7 +143,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let plan = Arc::new(plan::build_plan(
+    let plan = Arc::new(phases::plan::build_plan(
         per_manifest,
         &meta.blacklist,
         &meta.latest,
@@ -175,7 +175,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
     let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
+        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), scope));
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
@@ -373,7 +373,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         && !ctx.check_only
         && let Some(pp) = purge_plan.as_ref()
     {
-        let bytes = plan::purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
+        let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
@@ -498,7 +498,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // nothing; the byte count stays 0 by design). Skipped when the
         // purge-before pass above already listed the same candidates, so
         // `--purge-before --purge-after --dry-run` does not log each file twice.
-        plan::purge::apply_purge(pp, true).map_err(RunFailure::write)?;
+        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))

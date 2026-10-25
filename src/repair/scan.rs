@@ -27,7 +27,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 
 use crate::repair::manifest::LocalChunkMap;
-use crate::repair::plan::{PlannedFile, RepairPlan};
+use crate::repair::phases::plan::{PlannedFile, RepairPlan};
 use crate::repair::reuse;
 use crate::util;
 

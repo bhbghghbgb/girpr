@@ -13,16 +13,12 @@
 //! makes any-version → latest work: the local manifest is only ever an
 //! optimization (chunk reuse), never an input to correctness.
 
-pub mod purge;
-
 use std::collections::{HashMap, HashSet};
 
 use crate::sophon::{SophonChunk, SophonChunkFile};
 
-pub use purge::{PurgeCandidate, PurgePlan};
-
 use super::manifest::LocalChunkMap;
-use super::scope::PathScope;
+use crate::repair::scope::PathScope;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 #[derive(Clone)]

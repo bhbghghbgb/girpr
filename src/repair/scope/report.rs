@@ -27,7 +27,8 @@ use serde::Serialize;
 
 use crate::config::RepairMode;
 use crate::repair::file::{Mode, resolve_mode};
-use crate::repair::plan::{PurgePlan, RepairPlan};
+use crate::repair::phases::plan::RepairPlan;
+use crate::repair::purge::PurgePlan;
 use crate::report::Record;
 use crate::util;
 
@@ -307,7 +308,8 @@ impl<'a> PlanDocument<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::plan::{PlannedFile, PurgeCandidate};
+    use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
     use std::collections::HashMap;
 
