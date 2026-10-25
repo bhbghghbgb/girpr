@@ -114,7 +114,9 @@ impl<'a> CacheWrite<'a> {
     }
 
     pub(super) fn with_limits(db: &'a Database, limits: CommitLimits) -> Result<Self> {
-        let txn = db.begin_write().context("begin write")?;
+        let mut txn = db.begin_write().context("begin write")?;
+        txn.set_durability(super::write_durability())
+            .context("set cache write durability")?;
         Ok(Self {
             db,
             txn: Some(txn),
@@ -206,7 +208,10 @@ impl<'a> CacheWrite<'a> {
         let elapsed = self.last_commit.elapsed();
         let txn = self.txn.take().context("write txn gone")?;
         txn.commit().context("commit cache batch")?;
-        self.txn = Some(self.db.begin_write().context("begin write")?);
+        let mut txn = self.db.begin_write().context("begin write")?;
+        txn.set_durability(super::write_durability())
+            .context("set cache write durability")?;
+        self.txn = Some(txn);
         self.dirty = 0;
         self.bytes_since_commit = 0;
         self.last_commit = Instant::now();
@@ -220,7 +225,12 @@ impl<'a> CacheWrite<'a> {
     }
 
     /// Commit all pending mutations. This is the `flush()` analogue: after
-    /// it returns, the mutations survive a process kill.
+    /// it returns, the mutations survive a process kill — unless the test-only
+    /// `GIRSYNC_TEST_DURABILITY=none` switch lowered the transaction's
+    /// durability. In that case they survive a clean exit (redb flushes on
+    /// `Database` drop) but not a kill. Production always keeps
+    /// [`Durability::Immediate`](redb::Durability::Immediate); see
+    /// [`write_durability`](super::write_durability).
     pub fn commit(mut self) -> Result<()> {
         let txn = self.txn.take().context("write txn gone")?;
         txn.commit().context("commit cache")?;

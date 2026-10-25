@@ -18,6 +18,45 @@
 # them, so `cargo nextest run` on its own still covers everything the suite
 # covers.
 
+# Setup scripts are how a test-only environment variable reaches every test
+# process (and the processes they spawn). Nextest has no profile-level `env`
+# table: `env` is a field of a script's `command`, and the only documented way
+# to export a variable *to tests* is a setup script writing it to
+# `$NEXTEST_ENV`.
+experimental = ["setup-scripts"]
+
+# Test-only: cache write transactions skip their per-commit fsync. Production
+# always commits with `Durability::Immediate` (see
+# `tools/sync/src/cache/mod.rs::write_durability`); redb still flushes on a
+# clean `Database` drop, so a test that reopens the cache file sees every row.
+# This is deliberately not `cfg(test)`: the slowest suites spawn the real
+# `girsync` binary, and child processes inherit the variable.
+#
+# One script per platform, because Windows needs PowerShell to append to a path
+# that may contain spaces, while the Unix shell can do it directly. Both only
+# run on a `cargo nextest run` that includes a `girsync` test.
+[scripts.setup.girsync-test-durability-unix]
+command = ['sh', '-c', 'echo GIRSYNC_TEST_DURABILITY=none >> "$NEXTEST_ENV"']
+
+[scripts.setup.girsync-test-durability-windows]
+command = [
+    'powershell',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    '$ErrorActionPreference = "Stop"; Add-Content -LiteralPath $env:NEXTEST_ENV -Value "GIRSYNC_TEST_DURABILITY=none"',
+]
+
+[[profile.default.scripts]]
+filter = 'package(girsync)'
+platform = { host = "cfg(unix)" }
+setup = 'girsync-test-durability-unix'
+
+[[profile.default.scripts]]
+filter = 'package(girsync)'
+platform = { host = "cfg(windows)" }
+setup = 'girsync-test-durability-windows'
+
 [profile.default]
 # Every failure is reported at the end, with the output it captured, rather
 # than the first one scrolling the rest of the list away.

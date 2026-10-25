@@ -19,6 +19,11 @@
 //! corresponding filesystem change (notably the apply pre-drop), so a killed
 //! run re-copies rather than trusting a half-written file.
 //!
+//! Production commits are durable (`Durability::Immediate`). Tests may lower
+//! that to `Durability::None` through `GIRSYNC_TEST_DURABILITY=none`, which
+//! removes the per-commit fsync but still flushes on a clean `Database` drop;
+//! see [`write_durability`].
+//!
 //! ## The submodules
 //!
 //! | module | what it owns |
@@ -42,6 +47,42 @@ use redb::TableDefinition;
 const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const META_KEY: &str = "meta";
+
+/// The durability every cache write transaction is given.
+///
+/// Production always commits with [`redb::Durability::Immediate`]: once
+/// `commit()` returns, the rows survive a crash. Tests may set
+/// `GIRSYNC_TEST_DURABILITY=none` on the process (the test runner does it in
+/// `.config/nextest.toml`; a developer does not) to skip the per-commit fsync.
+/// It is the sibling of the `GIRSYNC_TEST_CACHE` switch in
+/// [`effective::side`](crate::effective::side), and like it the default is off:
+/// an unset variable — or any value other than exactly `none` — keeps durable
+/// commits, so a real run is unaffected unless someone deliberately opts in.
+///
+/// `None` is safe for tests because redb still flushes on a clean `Database`
+/// drop: the drop runs an allocator-state commit with the default
+/// `Durability::Immediate` and then flushes the shutdown header. A command
+/// that reopens the file — the next `recs_of`, a backup, a snapshot, a lock
+/// check — therefore sees every row. Only a process killed *between* a commit
+/// and the drop loses rows, and no test does that.
+///
+/// The value is read once per transaction creation rather than cached, so a
+/// test that sets the variable in-process before opening a cache gets what it
+/// asked for. Any value other than exactly `none` (including a typo) means
+/// `Immediate`.
+///
+/// redb refuses `Durability::None` in its multiprocess modes. This crate opens
+/// every database in the default single-writer mode, so the gate is valid here;
+/// if that ever changes, the `set_durability` call sites start returning
+/// `NonDurableCommitUnsupported` under the test switch rather than silently
+/// weakening the commit.
+pub(crate) fn write_durability() -> redb::Durability {
+    if std::env::var("GIRSYNC_TEST_DURABILITY").as_deref() == Ok("none") {
+        redb::Durability::None
+    } else {
+        redb::Durability::Immediate
+    }
+}
 
 pub use db::{CacheDb, TestCacheBackend};
 // Test-only seams: `open_memory_cache` is the shared (path-keyed) variant of

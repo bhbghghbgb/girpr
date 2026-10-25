@@ -108,7 +108,9 @@ impl CacheDb {
     }
 
     pub(super) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
-        let txn = db.begin_write().context("begin write (meta)")?;
+        let mut txn = db.begin_write().context("begin write (meta)")?;
+        txn.set_durability(super::write_durability())
+            .context("set cache write durability")?;
         let mut changed = false;
         {
             // Touch the entries table so a fresh file has both tables.
