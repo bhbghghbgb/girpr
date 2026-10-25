@@ -42,7 +42,6 @@ mod audio;
 mod check;
 mod file;
 pub mod lock;
-mod manifest;
 pub mod phases;
 mod plan;
 mod post;
@@ -64,7 +63,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 
-use phases::metadata; // temporary single import; grows in later steps
+use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
