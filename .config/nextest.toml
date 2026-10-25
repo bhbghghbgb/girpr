@@ -44,24 +44,29 @@ experimental = ["setup-scripts"]
 # slowest suites spawn the real binaries, and child processes inherit the
 # variables.
 #
-# One script per platform, because Windows needs PowerShell to append to a path
-# that may contain spaces, while the Unix shell can do it directly. Both run on
-# every `cargo nextest run`, whichever crate the command names.
+# The hooks are listed in exactly one place, `.config/nextest-test-env`, and the
+# setup commands below only copy that file to `$NEXTEST_ENV`. Adding a hook
+# means editing the env file, not the commands. `.gitattributes` pins the file
+# to LF: a CRLF checkout would leave a trailing `\r` in every value, and
+# `GIRSYNC_TEST_DURABILITY` would not equal `"none"`.
+#
+# One script per platform. The Windows script uses `cmd.exe` instead of
+# PowerShell, whose startup alone cost ~1.7 s on every `cargo nextest run`.
+# nextest passes arguments through Rust's `Command`, which escapes an embedded
+# `"` as `\"`; cmd.exe reads that backslash literally and fails, so the quoted
+# paths live in a two-line `.cmd` wrapper (`type` plus `>> "%NEXTEST_ENV%"`)
+# rather than in this command line. Both scripts run on every
+# `cargo nextest run`, whichever crate the command names; nextest runs setup
+# scripts with the workspace root as their working directory.
 [scripts.setup.test-hooks-unix]
 command = [
     'sh',
     '-c',
-    'printf "%s\n" GIRSYNC_TEST_DURABILITY=none GIRSYNC_TEST_NO_FSYNC=1 GIRPR_TEST_NO_FSYNC=1 >> "$NEXTEST_ENV"',
+    'cat .config/nextest-test-env >> "$NEXTEST_ENV"',
 ]
 
 [scripts.setup.test-hooks-windows]
-command = [
-    'powershell',
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    '$ErrorActionPreference = "Stop"; Add-Content -LiteralPath $env:NEXTEST_ENV -Value @("GIRSYNC_TEST_DURABILITY=none", "GIRSYNC_TEST_NO_FSYNC=1", "GIRPR_TEST_NO_FSYNC=1")',
-]
+command = ['cmd', '/D', '/Q', '/C', '.config\\nextest-test-env.cmd']
 
 [[profile.default.scripts]]
 filter = 'all()'

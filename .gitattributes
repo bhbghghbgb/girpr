@@ -2,6 +2,10 @@
 # repository and checks text files out as CRLF on Windows.
 * text=auto
 
+# nextest reads this as KEY=VALUE. A CRLF checkout would leave a trailing \r in
+# every value, so pin it to LF on every platform.
+/.config/nextest-test-env text eol=lf
+
 *.rs    text
 *.toml  text
 *.lock  text
