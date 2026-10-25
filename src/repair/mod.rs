@@ -113,8 +113,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     let http = meta.hyp.http();
     let sleep = ctx.sleep.as_ref();
     let per_manifest =
-        manifest::fetch_latest(&http, sleep, &meta.latest_build, &meta.audio, &meta.ignore)
-            .await?;
+        manifest::fetch_latest(&http, sleep, &meta.latest_build, &meta.audio, &meta.ignore).await?;
     let local_map = manifest::local_reuse_map(
         &http,
         sleep,

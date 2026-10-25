@@ -455,7 +455,10 @@ fn lock_empty_dirs_and_nesting_sync() {
     std::fs::create_dir_all(src.join("a/empty1")).unwrap();
     std::fs::create_dir_all(src.join("lonely")).unwrap();
 
-    assert_eq!(cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
     assert!(dst.join("a/empty1").is_dir());
     assert!(dst.join("lonely").is_dir());
     assert_eq!(common::rfile(&dst, "a/b/c/deep.txt"), b"deep");

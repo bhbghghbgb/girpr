@@ -214,10 +214,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     wfile(&src2, "shared.txt", b"same");
     wfile(&dst2, "shared.txt", b"same");
     wfile(&dst2, "extradir/nested/deep.bin", b"y");
-    assert_eq!(
-        cmd_sync(sync_mem(src2, dst2.clone()), &log()).unwrap(),
-        0
-    );
+    assert_eq!(cmd_sync(sync_mem(src2, dst2.clone()), &log()).unwrap(), 0);
     assert!(!dst2.join("extradir").exists(), "collected by default");
 }
 

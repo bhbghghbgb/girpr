@@ -7,7 +7,7 @@ use super::*;
 
 use std::num::NonZeroUsize;
 
-use girsync::{cmd_compare, cmd_sync, cmd_update, UpdateOpts};
+use girsync::{UpdateOpts, cmd_compare, cmd_sync, cmd_update};
 
 /// **`sync` reports the same actions under every rw setting, through the binary.**
 ///

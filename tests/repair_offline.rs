@@ -43,8 +43,8 @@ use common::{
     write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
-use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
 use girpr::sleep::NoSleep;
+use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

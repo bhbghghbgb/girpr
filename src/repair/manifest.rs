@@ -16,8 +16,8 @@ use anyhow::Context;
 use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
-use crate::sophon::{self, SophonChunkFile, WantedManifest};
 use crate::sleep::Sleep;
+use crate::sophon::{self, SophonChunkFile, WantedManifest};
 
 use super::RunFailure;
 

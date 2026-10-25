@@ -46,9 +46,7 @@ mod read_count;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{
-    digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile,
-};
+use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;

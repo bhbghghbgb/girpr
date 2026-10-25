@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use girpr_log::Level;
 
-use crate::cli::{CommonArgs, RwArgs};
 use crate::cache::TestCacheBackend;
+use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::compile_patterns;
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};

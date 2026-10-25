@@ -87,6 +87,10 @@ fn the_flags_compose_with_both_hash_modes() {
         common.hash_mode = mode;
         let mut o = common::update(dir.clone());
         o.common = common;
-        assert_eq!(cmd_update(o, &log()).unwrap(), 0, "{algos:?} with --no-trust-size");
+        assert_eq!(
+            cmd_update(o, &log()).unwrap(),
+            0,
+            "{algos:?} with --no-trust-size"
+        );
     }
 }

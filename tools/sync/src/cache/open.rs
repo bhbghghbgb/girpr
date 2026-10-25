@@ -174,14 +174,12 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// untouched: the backend has no write path at all, so there is nothing to
 /// accidentally commit through, and open-time recovery cannot rewrite pages.
 pub(super) fn open_read_only(db_path: &Path) -> Result<redb::ReadOnlyDatabase> {
-    redb_builder()
-        .open_read_only(db_path)
-        .with_context(|| {
-            format!(
-                "open redb cache {} (corrupt? use --ignore-cache)",
-                db_path.display()
-            )
-        })
+    redb_builder().open_read_only(db_path).with_context(|| {
+        format!(
+            "open redb cache {} (corrupt? use --ignore-cache)",
+            db_path.display()
+        )
+    })
 }
 
 /// The `meta` row, or `None` when the table or the key is absent.

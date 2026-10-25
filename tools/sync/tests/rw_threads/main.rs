@@ -172,10 +172,7 @@ fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
 /// setting runs against an in-memory cache: the actions a run reports must not
 /// depend on the cache's storage backend, and the memory cache skips the per-
 /// command 1 MB create + fsync that dominates these tests on the HDD.
-fn run_env(
-    args: &[&str],
-    extra: &[(&str, &str)],
-) -> (i32, Vec<serde_json::Value>) {
+fn run_env(args: &[&str], extra: &[(&str, &str)]) -> (i32, Vec<serde_json::Value>) {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
     cmd.args(args).arg("--output").arg("json");
     for (k, v) in extra {

@@ -405,7 +405,9 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                 if attempt == max_attempts || ctx.summary.aborted() {
                     return Err(e);
                 }
-                ctx.sleep.sleep(std::time::Duration::from_secs(attempt as u64)).await;
+                ctx.sleep
+                    .sleep(std::time::Duration::from_secs(attempt as u64))
+                    .await;
                 attempt += 1;
             }
         }

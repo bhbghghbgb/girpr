@@ -315,7 +315,9 @@ impl HypClient {
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
-            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
+            self.sleep
+                .sleep(std::time::Duration::from_secs(attempt))
+                .await;
         }
         Err(last_err)
     }
@@ -337,7 +339,9 @@ impl HypClient {
                         Err(e) => {
                             tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
                             last_err = anyhow::anyhow!("parse sophon wrapper: {}", e);
-                            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
+                            self.sleep
+                                .sleep(std::time::Duration::from_secs(attempt))
+                                .await;
                             continue;
                         }
                     };
@@ -370,7 +374,9 @@ impl HypClient {
                     last_err = anyhow::anyhow!("http {}", e);
                 }
             }
-            self.sleep.sleep(std::time::Duration::from_secs(attempt)).await;
+            self.sleep
+                .sleep(std::time::Duration::from_secs(attempt))
+                .await;
         }
         Err(last_err)
     }

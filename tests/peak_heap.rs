@@ -54,8 +54,8 @@ use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use girpr::sophon::{self, ChunkSink};
 use girpr::sleep::RealSleep;
+use girpr::sophon::{self, ChunkSink};
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -271,9 +271,16 @@ async fn the_chunk_paths_peak_live_heap() {
     // so they belong to the baseline and not to the operation.
     {
         let mut sink = FileSink::new(&path);
-        sophon::stream_chunk_to(&client, &RealSleep, &base, "chunk", payload.len() as u64, &mut sink)
-            .await
-            .expect("the warm-up fetch");
+        sophon::stream_chunk_to(
+            &client,
+            &RealSleep,
+            &base,
+            "chunk",
+            payload.len() as u64,
+            &mut sink,
+        )
+        .await
+        .expect("the warm-up fetch");
     }
 
     // The streamed path: the body is decoded as it arrives and the decoded
