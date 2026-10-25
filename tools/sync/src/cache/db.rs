@@ -5,7 +5,7 @@
 //! rather than a boolean somebody has to keep in step.
 
 use anyhow::{Context, Result, bail};
-use redb::{Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
+use redb::{Builder, Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -16,6 +16,20 @@ use super::open::{is_table_missing, open_read_only, read_meta, require_current_v
 use super::schema::{CACHE_VERSION, FileRec, Meta};
 use super::write::{CacheWrite, CommitLimits};
 use super::{ENTRIES, META_KEY, META_TBL};
+
+/// redb's default page cache is 1 GiB per handle. Tests run one process per
+/// test case (nextest), so parallel tests each reserve that much virtual
+/// memory and exhaust this machine's commit limit. Keep it small so they fit.
+const CACHE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+
+/// A [`redb::Database`] builder with [`CACHE_SIZE`] applied, so every redb
+/// open in this crate sets the cache size from one place instead of repeating
+/// `.set_cache_size` at each call site.
+pub(super) fn redb_builder() -> Builder {
+    let mut b = Database::builder();
+    b.set_cache_size(CACHE_SIZE);
+    b
+}
 
 /// The redb handle a [`CacheDb`] wraps.
 ///
@@ -163,7 +177,7 @@ impl CacheDb {
                 db_path.display()
             );
         }
-        Database::create(db_path).with_context(|| {
+        redb_builder().create(db_path).with_context(|| {
             format!(
                 "open redb cache {} (corrupt? use --ignore-cache)",
                 db_path.display()
@@ -174,7 +188,7 @@ impl CacheDb {
     /// In-memory cache for `--dry-run` fallbacks and unit tests. Never
     /// touches the filesystem.
     pub fn open_temp(case_sensitive: bool) -> Result<Self> {
-        let db = Database::builder()
+        let db = redb_builder()
             .create_with_backend(InMemoryBackend::new())
             .context("open temp cache")?;
         Self::init_meta(&db, case_sensitive)?;
@@ -202,7 +216,7 @@ impl CacheDb {
             match caches.get(db_path) {
                 Some(db) => db.clone(),
                 None => {
-                    let db = Database::builder()
+                    let db = redb_builder()
                         .create_with_backend(InMemoryBackend::new())
                         .context("open shared temp cache")?;
                     Self::init_meta(&db, case_sensitive)?;
@@ -595,7 +609,7 @@ mod tests {
         // A redb file with no `meta` row: nothing to validate the schema against.
         let bare = dir.join("bare");
         {
-            let db = Database::create(&bare).unwrap();
+            let db = redb_builder().create(&bare).unwrap();
             let txn = db.begin_write().unwrap();
             {
                 let _ = txn.open_table(ENTRIES).unwrap();
@@ -607,7 +621,7 @@ mod tests {
         // A well-formed cache stamped with a version this build cannot read.
         let future = dir.join("future");
         {
-            let db = Database::create(&future).unwrap();
+            let db = redb_builder().create(&future).unwrap();
             let txn = db.begin_write().unwrap();
             {
                 let mut m = txn.open_table(META_TBL).unwrap();
