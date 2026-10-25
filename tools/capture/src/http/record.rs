@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use reqwest::header::{HeaderName, HeaderValue};
 use serde::Serialize;
 
 use crate::hash::hex_bytes;

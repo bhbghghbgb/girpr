@@ -2,7 +2,6 @@ use super::record::RequestRecord;
 use chrono;
 use serde_json;
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
