@@ -24,7 +24,11 @@ use std::io::Write as _;
 use std::sync::Mutex;
 
 use crate::VERSION;
+use crate::encoding::{self, percent};
 
+// `percent_decode` is part of this module's public API; its definition now
+// lives in `crate::encoding` and is re-exported here so the path is stable.
+pub use crate::encoding::percent_decode;
 /// How a record is rendered on stdout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
@@ -88,59 +92,11 @@ impl Val {
     /// only reason to prefer text over JSON in the first place.
     fn text(&self) -> String {
         match self {
-            Val::Str(s) => percent_encode(s),
+            Val::Str(s) => encoding::percent_encode(s),
             Val::Int(i) => i.to_string(),
             Val::Bool(b) => b.to_string(),
         }
     }
-}
-
-/// Percent-encode exactly the bytes that would break `k=v` tokenisation.
-///
-/// The set is deliberately the minimum: everything else stays as typed, so the
-/// common line reads as a human wrote it.
-const TEXT_ESCAPES: &[char] = &[' ', '\t', '\n', '\r', '%'];
-
-fn percent_encode(s: &str) -> String {
-    if !s.contains(TEXT_ESCAPES) {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() + 8);
-    let mut buf = [0u8; 4];
-    for c in s.chars() {
-        if TEXT_ESCAPES.contains(&c) {
-            // Non-ASCII is encoded too, as UTF-8 bytes, so the encoding is
-            // reversible on any host and not just one with the right codepage.
-            out.push_str(&crate::biz::percent(c.encode_utf8(&mut buf).as_bytes()));
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// The inverse of `percent_encode`. Exposed so a consumer — and a test — can
-/// read a value back without re-implementing the rule.
-pub fn percent_decode(s: &str) -> String {
-    if !s.contains('%') {
-        return s.to_string();
-    }
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(b) = u8::from_str_radix(hex, 16) {
-                out.push(b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl From<&str> for Val {
@@ -802,6 +758,7 @@ pub fn emit(line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoding::percent_encode;
     use serde_json::Value as Json;
 
     fn sample() -> Record {
