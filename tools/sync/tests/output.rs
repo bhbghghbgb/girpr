@@ -41,6 +41,7 @@ impl Run {
 fn run(args: &[String]) -> Run {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(args)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     Run {
@@ -494,6 +495,7 @@ fn the_environment_sets_the_log_files_level() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(&args)
         .env("GIRSYNC_LOG_FILE_LEVEL", "error")
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert_eq!(out.status.code(), Some(4));
@@ -526,6 +528,7 @@ fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &[]))
         .env("RUST_LOG", "redb=debug")
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert_eq!(out.status.code(), Some(4));
@@ -543,6 +546,7 @@ fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &["--log-level", "debug"]))
         .env("RUST_LOG", "redb=debug")
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert_eq!(out.status.code(), Some(4));
@@ -612,6 +616,7 @@ fn no_log_file_turns_the_file_off_even_when_the_environment_names_one() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &["--no-log-file"]))
         .env("GIRSYNC_LOG_FILE", &logfile)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -669,6 +674,7 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(compare_args(&src, &dst, &[]))
         .env("GIRSYNC_LOG_FILE", &logfile)
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert_eq!(out.status.code(), Some(4));

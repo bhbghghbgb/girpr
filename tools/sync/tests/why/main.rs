@@ -64,6 +64,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
+use girsync::cache::TestCacheBackend;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
@@ -118,13 +119,16 @@ fn any_of_md5_sha256() -> CommonOpts {
 /// Two folders holding `rel` with the given bytes on each side, dst's mtime pinned
 /// to src's.
 ///
+/// Takes a plain root so the table can hand each row a directory inside one shared
+/// temp root; the other cases pass a [`TempDir`] and rely on its deref to `Path`.
+///
 /// The pin is load-bearing wherever a *rewrite* is the fixture: writing moves the
 /// mtime, and a pair whose mtime also differs is settled by a stat field instead of
 /// by the digest this row is about — so the row would appear not to work, for a
 /// reason that has nothing to do with the code.
-fn pinned(t: &TempDir, rel: &str, src_bytes: &[u8], dst_bytes: &[u8]) -> (PathBuf, PathBuf) {
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
+fn pinned(t: &Path, rel: &str, src_bytes: &[u8], dst_bytes: &[u8]) -> (PathBuf, PathBuf) {
+    let src = t.join("src");
+    let dst = t.join("dst");
     wfile(&src, rel, src_bytes);
     wfile(&dst, rel, dst_bytes);
     sync_mtime(&src.join(rel), &dst.join(rel));
@@ -149,14 +153,20 @@ fn resolved(
     let (s_side, d_side) = (classify(src), classify(dst));
     ensure_distinct_sides(&s_side, &d_side)
         .unwrap_or_else(|e| panic!("{temp_tag}: the two sides name one cache: {e:#}"));
+    // Semantic suite: assert verdicts/tags, not the cache file, so serve folder
+    // caches from the in-memory backend and skip the per-open create + fsync.
+    let common = CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..common.clone()
+    };
     let mode = ScanMode {
         no_trust_cached_hashes: false,
         dry_run: false,
     };
     let mut s =
-        open_side(&s_side, common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
+        open_side(&s_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
     let mut d =
-        open_side(&d_side, common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
+        open_side(&d_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,

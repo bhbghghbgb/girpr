@@ -29,7 +29,7 @@ fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempDir, PathBuf) {
     girsync::cmd_update(
         UpdateOpts {
             dir: dir.clone(),
-            common: opts(),
+            common: opts_mem(),
         },
         &log(),
     )
@@ -56,13 +56,17 @@ fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempDir, PathBuf) {
 /// two cannot pass unless the command reaches the planner: a command that served
 /// the disk side from the record would report "in step" on hidden content drift.
 fn self_audit(dir: &Path) -> Run {
-    let common = opts();
+    let common = opts_mem();
     let mode = ScanMode {
         no_trust_cached_hashes: false,
         dry_run: true,
     };
     // The record: the folder's own cache, read-only. Its side of the comparison.
-    let record = open_db(&dir.join(CACHE_PREFIX), true, CacheOpen::ReadOnly).unwrap();
+    // A folder `update`d with `opts_mem` left its rows in the shared memory cache;
+    // fall back to the file for any future case that warms one on disk.
+    let cache_path = dir.join(CACHE_PREFIX);
+    let record = CacheDb::memory_cache_at(&cache_path)
+        .unwrap_or_else(|| open_db(&cache_path, true, CacheOpen::ReadOnly).unwrap());
     let rec = load_record_side_from(&record, &common, "record").unwrap();
     // The disk: **an empty handle**, because this audit must not be able to
     // compare the record with itself. A folder side's phase A takes only digests

@@ -47,8 +47,8 @@ use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
-use common::{Spec, TempDir, pair, recs_of, serial_rw, temp_root, wfile};
-use girsync::cache::CACHE_PREFIX;
+use common::{Spec, TempDir, compare, log, pair, recs_of, serial_rw, sync_dry, temp_root, wfile};
+use girsync::cache::{CACHE_PREFIX, CacheDb};
 use girsync::cli::{Cli, RwArgs};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
@@ -110,10 +110,9 @@ const PAD: [u8; 512] = [b'x'; 512];
 /// digest can settle, a pair settled by size, a src-only and a dst-only path, a
 /// directory and an empty file.
 ///
-/// Deliberately **more files than one resolve window**, so the windowed loop runs
-/// several times. A fixture that fit in a single window would pass even if the
-/// window boundary dropped a file, duplicated one, or lost the write order
-/// between windows.
+/// Deliberately **more files than there are workers at the widest limit tested**,
+/// so every worker has to come back for another item. A fixture with one file per
+/// worker would pass even if a hand-off dropped or duplicated a file.
 fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
     let mut spec: Vec<Spec> = vec![
         ("changed.txt", Some(b"src version"), Some(b"dst")),
@@ -123,9 +122,8 @@ fn fixture(t: &TempDir) -> (PathBuf, PathBuf) {
         ("sub/nested.txt", Some(b"nested"), Some(b"nest")),
         ("emptydir", Some(&[]), None),
     ];
-    // 96 files. With the smallest window the limiter computes (32) that is three
-    // windows, so the boundary is exercised three times rather than trivially
-    // satisfied once.
+    // 96 files against a widest tested pool of 8 workers: twelve items per worker,
+    // so the loop is exercised over many hand-offs rather than trivially once.
     for i in 0..96usize {
         let rel: &'static str = Box::leak(format!("pad{i:02}.bin").into_boxed_str());
         spec.push((rel, Some(&PAD[..]), Some(&PAD[..])));
@@ -164,13 +162,23 @@ fn argv<'a>(sub: &'a str, src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Ve
 /// Generic over the argument type so a caller can pass the `Vec<String>` the
 /// builder produces or a literal `&str` array without a conversion dance at every
 /// call site.
+#[allow(dead_code)]
 fn run(args: &[&str]) -> (i32, Vec<serde_json::Value>) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
-        .args(args)
-        .arg("--output")
-        .arg("json")
-        .output()
-        .expect("spawn girsync");
+    run_env(args, &[])
+}
+
+/// Like [`run`], but forwards `extra` environment variables to the spawned
+/// `girsync.exe`. Used by the per-`--rw`-setting equivalence tests so every
+/// setting runs against an in-memory cache: the actions a run reports must not
+/// depend on the cache's storage backend, and the memory cache skips the per-
+/// command 1 MB create + fsync that dominates these tests on the HDD.
+fn run_env(args: &[&str], extra: &[(&str, &str)]) -> (i32, Vec<serde_json::Value>) {
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
+    cmd.args(args).arg("--output").arg("json");
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("spawn girsync");
     (
         out.status.code().unwrap_or(-1),
         common::parse_ndjson(&out.stdout),

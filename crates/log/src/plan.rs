@@ -325,9 +325,7 @@ pub fn default_log_path(project: &str) -> PathBuf {
 /// UTC time in the shared ISO format, and sortable as text: the files in a
 /// `logs/` directory read oldest-first when they are listed by name.
 fn timestamp() -> String {
-    chrono::Utc::now()
-        .format("%Y%m%dT%H%M%S%.6fZ")
-        .to_string()
+    chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
 }
 
 /// Read the environment seams for one project.

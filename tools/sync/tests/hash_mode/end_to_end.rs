@@ -102,7 +102,7 @@ fn update_populates_every_algorithm_under_any_of() {
     cmd_update(
         girsync::UpdateOpts {
             dir: dir.clone(),
-            common: asking(&["md5", "sha256"], HashMode::AnyOf),
+            common: asking_mem(&["md5", "sha256"], HashMode::AnyOf),
         },
         &log(),
     )
@@ -118,6 +118,9 @@ fn update_populates_every_algorithm_under_any_of() {
 fn bin(args: &[&str]) -> (i32, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .args(args)
+        // The cases assert flag acceptance and the error text, not the cache
+        // file; the successful invocations need no cache on disk.
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     (

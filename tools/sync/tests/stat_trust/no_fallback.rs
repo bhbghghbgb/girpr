@@ -117,7 +117,7 @@ fn compare_self_does_not_claim_in_step_with_a_pair_it_cannot_verify() {
     let t = temp_root("st_unverifiable_self");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"short");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     let stamped = std::fs::metadata(dir.join("a.txt"))
         .unwrap()
         .modified()

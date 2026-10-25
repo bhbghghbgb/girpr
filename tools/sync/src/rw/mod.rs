@@ -72,6 +72,8 @@ pub use gate::{RwLimiter, RwPermit};
 pub use limits::{RwLimits, RwSide};
 
 use anyhow::{Context, Result};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use tracing::warn;
 
 use limits::LOUD_THREAD_COUNT;
@@ -83,7 +85,16 @@ use limits::LOUD_THREAD_COUNT;
 pub struct RwRuntime {
     limits: RwLimits,
     limiter: RwLimiter,
-    pool: rayon::ThreadPool,
+    /// `None` only while [`Drop`] is signalling the pool and joining its workers.
+    pool: Option<rayon::ThreadPool>,
+    /// The OS threads the pool spawned, so [`Drop`] can wait for them to exit.
+    ///
+    /// `rayon::ThreadPool::drop` only signals termination; it does not join. If
+    /// the process exits while a worker is in a thread-local destructor, Windows
+    /// can terminate that worker mid-destructor and leave a process-global lock
+    /// held (for example `thread_local`'s thread-ID mutex), which deadlocks this
+    /// thread's own TLS destructors at exit.
+    workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl RwRuntime {
@@ -96,15 +107,41 @@ impl RwRuntime {
                  the flags are what you meant"
             );
         }
+        let workers = Arc::new(Mutex::new(Vec::new()));
+        let spawned = Arc::clone(&workers);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(limits.pool_size())
             .thread_name(|i| format!("girsync-rw-{i}"))
-            .build()
-            .context("build rw thread pool")?;
+            .spawn_handler(move |thread| {
+                let mut builder = std::thread::Builder::new();
+                if let Some(name) = thread.name() {
+                    builder = builder.name(name.to_owned());
+                }
+                if let Some(size) = thread.stack_size() {
+                    builder = builder.stack_size(size);
+                }
+                let handle = builder.spawn(move || thread.run())?;
+                spawned
+                    .lock()
+                    .expect("worker handle lock is never poisoned")
+                    .push(handle);
+                Ok(())
+            })
+            .build();
+        let pool = match pool {
+            Ok(pool) => pool,
+            Err(e) => {
+                // `build` has already signalled any workers it managed to spawn;
+                // join them before returning so none can outlive this call.
+                join_workers(&workers);
+                return Err(e).context("build rw thread pool");
+            }
+        };
         Ok(Self {
             limits,
             limiter: RwLimiter::new(limits),
-            pool,
+            pool: Some(pool),
+            workers,
         })
     }
 
@@ -129,7 +166,9 @@ impl RwRuntime {
     /// The pool every parallel phase installs into. One pool for the whole run, so
     /// two phases cannot each size their own and quietly double the thread count.
     pub fn pool(&self) -> &rayon::ThreadPool {
-        &self.pool
+        self.pool
+            .as_ref()
+            .expect("rw pool is only taken while the runtime is dropped")
     }
 
     /// One permit for one side's read or write.
@@ -142,12 +181,87 @@ impl RwRuntime {
         self.limiter.acquire_copy()
     }
 
-    /// How many pending hashes a resolve window holds under these limits.
-    pub fn window_size(&self) -> usize {
-        self.limits.window_size()
-    }
-
     pub fn describe(&self) -> String {
         self.limits.describe()
+    }
+}
+
+impl Drop for RwRuntime {
+    fn drop(&mut self) {
+        // Signal the workers to terminate, then wait for them. `ThreadPool::drop`
+        // does not join, and a worker that is still running when the process exits
+        // can be terminated inside a thread-local destructor while holding a
+        // process-global lock. That lock then stays locked for this thread's own
+        // TLS destructors at exit, which is a real deadlock, not just a leak.
+        drop(self.pool.take());
+        join_workers(&self.workers);
+    }
+}
+
+/// Join every worker we spawned, skipping the current thread.
+///
+/// The skip matters only for the pathological case where a runtime is dropped
+/// from inside its own pool; a thread cannot join itself.
+fn join_workers(workers: &Arc<Mutex<Vec<JoinHandle<()>>>>) {
+    let current = std::thread::current().id();
+    let mut handles = workers
+        .lock()
+        .expect("worker handle lock is never poisoned");
+    for handle in handles.drain(..) {
+        if handle.thread().id() != current {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZeroUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier, mpsc};
+
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    thread_local! {
+        static MARK: Mark = const { Mark };
+    }
+
+    struct Mark;
+
+    impl Drop for Mark {
+        fn drop(&mut self) {
+            DROPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Dropping the runtime must wait for every worker, not merely signal it.
+    ///
+    /// A worker that outlives the runtime can be killed by `ExitProcess` inside a
+    /// thread-local destructor while holding a process-global lock. This test
+    /// pins the observable half of the fix: after `drop`, the workers' TLS
+    /// destructors have run.
+    #[test]
+    fn drop_joins_workers_and_runs_their_tls_destructors() {
+        DROPPED.store(0, Ordering::SeqCst);
+        let rw = RwRuntime::new(RwLimits::Shared(NonZeroUsize::new(4).unwrap())).unwrap();
+        let barrier = Arc::new(Barrier::new(4));
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..4 {
+            let barrier = Arc::clone(&barrier);
+            let tx = tx.clone();
+            rw.pool().spawn(move || {
+                MARK.with(|_| ());
+                barrier.wait();
+                tx.send(()).unwrap();
+            });
+        }
+        drop(tx);
+        for _ in 0..4 {
+            rx.recv().unwrap();
+        }
+        assert_eq!(DROPPED.load(Ordering::SeqCst), 0);
+        drop(rw);
+        assert_eq!(DROPPED.load(Ordering::SeqCst), 4);
     }
 }

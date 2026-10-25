@@ -111,11 +111,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
     let http = meta.hyp.http();
+    let sleep = ctx.sleep.as_ref();
     let per_manifest =
-        manifest::fetch_latest(&http, &meta.latest_build, &meta.audio, &meta.ignore).await?;
-    let local_map =
-        manifest::local_reuse_map(&http, meta.local_build.as_ref(), &meta.audio, &meta.ignore)
-            .await;
+        manifest::fetch_latest(&http, sleep, &meta.latest_build, &meta.audio, &meta.ignore).await?;
+    let local_map = manifest::local_reuse_map(
+        &http,
+        sleep,
+        meta.local_build.as_ref(),
+        &meta.audio,
+        &meta.ignore,
+    )
+    .await;
     // The local manifest loading is the one degradation that changes the
     // reported numbers while leaving the exit code at `0`: with no local build
     // the reuse map is empty, so every chunk downloads and both
@@ -416,6 +422,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.dry_run,
         ctx.output,
         ctx.repair_mode,
+        ctx.sleep.clone(),
     )
     .await;
     // The byte figures, when their ceilings were asked for. The **settled**

@@ -68,7 +68,7 @@ fn compare_self_reads_a_touched_file_when_mtime_is_distrusted() {
     let t = temp_root("st_self");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"identical");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     age(&dir, "a.txt", 60);
 
     let self_opts = |stat: StatTrust| girsync::CompareSelfOpts {

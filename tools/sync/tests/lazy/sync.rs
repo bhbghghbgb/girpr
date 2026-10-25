@@ -81,7 +81,7 @@ fn a_sync_scan_reads_nothing_when_every_pair_differs_in_size() {
     let t = temp_root("lz_sync_differ");
     let (src, dst) = four_differing(&t);
     assert_eq!(
-        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        sync_counts(&src, &dst, &opts_mem(), TrustOpts::default()),
         (0, 0),
         "size decides every pair, so no digest is needed on either side"
     );
@@ -106,7 +106,7 @@ fn a_src_only_file_costs_the_sync_scan_no_digest() {
     );
     // Cold caches, so nothing is cached and only the shared stat-equal pair counts.
     assert_eq!(
-        sync_counts(&src, &dst, &opts(), TrustOpts::default()),
+        sync_counts(&src, &dst, &opts_mem(), TrustOpts::default()),
         (1, 1),
         "only the shared stat-equal pair is undecided"
     );
@@ -163,7 +163,7 @@ fn update_still_hashes_every_file() {
     wfile(&dir, "sub/b.txt", b"bravo");
     let o = UpdateOpts {
         dir: dir.clone(),
-        common: opts(),
+        common: opts_mem(),
     };
     assert_eq!(girsync::cmd_update(o, &log()).unwrap(), 0);
     assert_eq!(digests_of(&dir, "a.txt"), vec!["md5"]);
@@ -225,7 +225,7 @@ fn fixtures_classify_as_folders() {
 #[test]
 fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
     let t = temp_root("lz_prune");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[
             ("keep.txt", Some(b"keep"), Some(b"keep")),
@@ -301,7 +301,7 @@ fn a_folder_prunes_its_own_cache_before_the_planner_sees_it() {
 #[test]
 fn distrusting_the_cache_does_not_suppress_pruning() {
     let t = temp_root("lz_prune_nt");
-    let (src, dst) = pair(
+    let (src, dst) = pair_mem(
         &t,
         &[("gone.txt", Some(b"gone"), Some(b"gone"))],
         &["md5"],

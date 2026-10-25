@@ -16,7 +16,11 @@ use super::*;
 /// in which map equality means what it says.
 fn drop_caches(src: &Path, dst: &Path) {
     for dir in [src, dst] {
-        std::fs::remove_file(dir.join(CACHE_PREFIX)).ok();
+        let cache = dir.join(CACHE_PREFIX);
+        // Both stores: the suite runs on the memory backend, whose rows are not a
+        // file, and `remove_file` on a path that was never written is a no-op.
+        CacheDb::forget_memory_cache(&cache);
+        std::fs::remove_file(cache).ok();
     }
 }
 
@@ -108,7 +112,7 @@ fn resolve_sequential(src: &Path, dst: &Path, common: &CommonOpts) -> (Resolved,
 fn every_rw_setting_answers_the_same_question() {
     let t = temp_root("rw_same");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let baseline = resolve_overlapping(&src, &dst, &common, RwLimits::default());
@@ -148,7 +152,7 @@ fn every_rw_setting_answers_the_same_question() {
 fn an_overlapping_resolve_agrees_with_a_sequential_one() {
     let t = temp_root("rw_overlap");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let concurrent = resolve_overlapping(
@@ -182,21 +186,23 @@ fn an_overlapping_resolve_agrees_with_a_sequential_one() {
     );
 }
 
-/// **A window boundary writes every row exactly once, with the digest computed.**
+/// **Every hashed row is persisted, with the digest the run returned.**
 ///
-/// The other half of "same question", aimed at the part windowing alone could get
-/// wrong. A digest is written through the batched handle once its window has
-/// finished, so a row lost at a boundary would still produce a correct map for
-/// *this* run and a stale cache for the *next* one — invisible to any test that
+/// The other half of "same question", aimed at the cache side of the resolve. A
+/// row lost on the way to the shared batch handle would still produce a correct map
+/// for *this* run and a stale cache for the *next* one — invisible to any test that
 /// only reads the run's output.
 ///
-/// So this asserts the persisted rows rather than the returned map, at the
-/// tightest limits where the window is smallest and the boundaries most frequent.
+/// So this asserts the persisted rows rather than the returned map, under wide
+/// enough limits that the mutex is genuinely contended rather than exercised by a
+/// single worker.
 #[test]
-fn a_window_boundary_writes_every_row_exactly_once() {
-    let t = temp_root("rw_window");
+fn every_hashed_row_is_persisted_with_its_digest() {
+    let t = temp_root("rw_rows");
     let (src, dst) = fixture(&t);
-    let common = common::opts();
+    // The rows are the subject, not the redb file: `recs_of` reads the same
+    // shared memory cache the resolve wrote.
+    let common = common::opts_mem();
 
     drop_caches(&src, &dst);
     let ((smap, _), _) = resolve_overlapping(
@@ -204,8 +210,8 @@ fn a_window_boundary_writes_every_row_exactly_once() {
         &dst,
         &common,
         RwLimits::Split {
-            src: nz(1),
-            dst: nz(1),
+            src: nz(4),
+            dst: nz(4),
         },
     );
 
@@ -216,7 +222,7 @@ fn a_window_boundary_writes_every_row_exactly_once() {
             .unwrap_or_else(|| panic!("{rel} was hashed but left no cache row"));
         assert_eq!(
             rec.hashes, row.hashes,
-            "{rel}: the row on disk disagrees with the map the run returned"
+            "{rel}: the persisted row disagrees with the map the run returned"
         );
         assert_eq!(rec.size, row.size, "{rel}: size disagrees");
         assert_eq!(rec.mtime_ns, row.mtime_ns, "{rel}: mtime disagrees");

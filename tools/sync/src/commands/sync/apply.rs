@@ -230,11 +230,22 @@ impl Applier<'_> {
     /// bounds I/O while the pool decides how many workers exist is two knobs
     /// pretending to be one.
     ///
-    /// Each copy holds **both** permits for its whole life — the stream copy and
-    /// the verify re-hash of dst — because the file is not finished until it
-    /// verifies. Under a shared counter that is one permit; under a split counter
+    /// Each copy holds **both** permits for the whole of `copy_one` — the stream
+    /// copy and the verify re-hash of dst — because the file is not finished until
+    /// it verifies. Under a shared counter that is one permit; under a split counter
     /// it is one per side, which is what admits `min(src, dst)` concurrent
-    /// copies.
+    /// copies. The permit is released before the cache row is written, because the
+    /// gate covers file content and not the cache's own writes.
+    ///
+    /// **Cache rows are written as the copies complete**, through the phase's
+    /// batched handle, rather than collected and inserted after the pool joins.
+    /// [`CommitLimits`](crate::cache::CommitLimits) is checked on each `put`; if the
+    /// rows were hoisted to the end, every threshold would be evaluated after the
+    /// last file was already durable on disk, so it would bound nothing during the
+    /// copy phase. The handle is behind a mutex for the reason
+    /// [`CacheWrite`](crate::cache::CacheWrite) is not `Sync` (it owns a live write
+    /// transaction), not because the writes want to be serialised: the lock is held
+    /// for one `put`, never across a copy.
     fn copy_files(&self, plan: &Plan) -> Result<usize> {
         info!(
             files = plan.copy.len(),
@@ -250,67 +261,90 @@ impl Applier<'_> {
         // `Report::emit` prints a line and logs a matching event as one unit, and
         // without this two workers could interleave between the two — putting a log
         // event about one file between the line and the event for another. The lock
-        // is held for exactly one emit, never across the copy, so it does not
-        // serialise the work it is protecting.
+        // is held for exactly one emit, never across the copy or the cache write, so
+        // it does not serialise the work it is protecting.
         //
         // **It cannot deadlock.** It is a leaf: nothing is called while it is held,
         // no other lock is ever held while waiting for it, and it is released before
-        // the worker returns to the pool. It is also strictly *inside* the rw
-        // permit, which is held across the whole copy — so a copy waiting for the
-        // emit lock is never also holding a permit some other copy needs, and the
-        // permit wait-for graph stays the `src -> dst` DAG it has to be.
+        // the worker returns to the pool. The rw permits are released by then too
+        // (they cover `copy_one` and not the bookkeeping after it), so a worker
+        // waiting here holds nothing another worker needs and the permit wait-for
+        // graph stays the `src -> dst` DAG it has to be.
         let emit = std::sync::Mutex::new(());
+        // The phase's batched cache handle, written from each worker as that copy
+        // verifies. `CacheWrite` owns a live `redb::WriteTransaction` and so is not
+        // `Sync`; a mutex is all it needs, and cheaper than a channel here — a `put`
+        // is one table insert, so the hand-off is per file rather than a queue, and
+        // the interval since the last commit is measured when the batch is next
+        // touched, which is now during the copies.
+        //
+        // It cannot deadlock either: held for one `put`, never while an rw permit is
+        // held, and never nested with the emit lock above. A commit that trips
+        // inside `put` only makes another worker's `put` wait; that worker holds no
+        // permit and needs none.
+        let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
         let results = self.rw.pool().install(|| {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map(|item| {
-                    let _rw = self.rw.acquire_copy();
-                    debug!(rel = %item.rel, "copy start");
-                    let r = copy_one(self.src, self.dst, &item.rel, &self.common.algos);
+                .map(|item| -> Result<()> {
+                    // The permit covers the copy itself. Writing the row is cache
+                    // work, which the rw gate deliberately does not cover, so it is
+                    // done after the permit is released rather than stretching the
+                    // permit over an unrelated fsync.
+                    let r = {
+                        let _rw = self.rw.acquire_copy();
+                        debug!(rel = %item.rel, "copy start");
+                        copy_one(self.src, self.dst, &item.rel, &self.common.algos)
+                    };
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     if n.is_multiple_of(25) || n == copy_total {
                         info!(done = n, total = copy_total, "copy progress");
                     } else {
                         trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
                     }
+                    // A failed copy aborts the run before the summary, so no `COPY`
+                    // line is announced and no row is written: a cache must never
+                    // claim content the dst does not have.
+                    let rec = r?;
                     // **As done.** Announced the moment the file is in place, not
                     // after every copy finishes — so with more than one rw operation
                     // permitted the `COPY` lines come out in completion order rather
                     // than plan order.
-                    //
-                    // Only on success: a failed copy aborts the run before the
-                    // summary, so announcing one would be a claim about work that
-                    // did not happen.
-                    if r.is_ok() {
+                    {
                         let _guard = emit.lock().expect("emit lock is never poisoned");
                         self.report.emit(
                             Record::path("COPY", &item.rel).put("because", item.because.as_str()),
                         );
                     }
-                    r
+                    // Only verified copies reach here, and the row is put now — while
+                    // the copy phase is still running — so the batch handle's
+                    // `CommitLimits` bound uncommitted work instead of checking three
+                    // thresholds after the last file is already durable.
+                    cache
+                        .lock()
+                        .expect("cache lock is never poisoned")
+                        .put(&item.rel, &rec)?;
+                    Ok(())
                 })
                 .collect::<Vec<_>>()
         });
         let mut copied = 0usize;
-        let mut new_recs: Vec<(String, FileRec)> = Vec::new();
-        // Records only — the `COPY` line was already emitted above, as each copy
-        // completed. The results come back in plan order because `collect` preserves
-        // input order, so the cache rows below are written deterministically even
-        // though the lines are not.
+        // Plan order, so the failure reported is the lowest-index one rather than
+        // whichever worker happened to lose. The `COPY` lines were already emitted
+        // above, as each copy completed, and the rows were already written.
         for (item, r) in plan.copy.iter().zip(results) {
-            let rec = r.with_context(|| format!("copy {}", item.rel))?;
-            new_recs.push((item.rel.clone(), rec));
+            r.with_context(|| format!("copy {}", item.rel))?;
             copied += 1;
         }
         info!(copied, total = copy_total, "copy done");
-        // Only record files that actually verified, so a partial failure never
-        // leaves a cache claiming content the dst does not have.
-        let mut w = self.dst_db.begin_write()?;
-        for (rel, rec) in &new_recs {
-            w.put(rel, rec)?;
-        }
-        w.commit()?;
+        // The final partial batch. Batches the thresholds committed during the copy
+        // phase are already durable; a run that errored above never reaches this, so
+        // its uncommitted rows are discarded with the transaction.
+        cache
+            .into_inner()
+            .expect("cache lock is never poisoned")
+            .commit()?;
         Ok(copied)
     }
 
@@ -486,6 +520,26 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
     Ok(())
 }
 
+/// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
+///
+/// Default **off**: an unset variable, or any value other than an unambiguous
+/// truthy one (`1`, `true`, `yes`, `on`), leaves the per-file `sync_all` in
+/// place. Production therefore always flushes a copied file before the verify
+/// re-read. Tests opt in through `.config/nextest.toml` so the HDD copy suites
+/// stop paying a flush per file; the value is read once per process, not once
+/// per copied file. The bytes written, the size/mtime checks and the cache
+/// records are unchanged, so content and reopen assertions still hold — the
+/// tests merely stop exercising the `sync_all` itself.
+fn test_no_fsync() -> bool {
+    static NO_FSYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NO_FSYNC.get_or_init(|| {
+        matches!(
+            std::env::var("GIRSYNC_TEST_NO_FSYNC").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+        )
+    })
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
@@ -497,8 +551,9 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
 /// the bytes went past would compare a value with itself — equal by
 /// construction, so `verify hash mismatch` could never fire and would read as a
 /// guarantee while checking nothing. Because the re-read happens after
-/// `sync_all()`, it also hashes the bytes that actually reached the disk, which
-/// is the only way this catches silent corruption on the way down.
+/// `sync_all()` (or, under the test-only hook above, after the write is
+/// dropped), it also hashes the bytes that actually reached the disk, which is
+/// the only way this catches silent corruption on the way down.
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
@@ -533,7 +588,9 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
     let set = AlgoSet::from_iter(algos.iter().copied());
     let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
-    fout.sync_all().ok();
+    if !test_no_fsync() {
+        fout.sync_all().ok();
+    }
     drop(fout);
     // preserve mtime
     if let Some(st) = smtime_sys {

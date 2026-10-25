@@ -10,19 +10,31 @@ struct Row {
     name: &'static str,
     /// The path this row is about — the key the table is indexed by.
     rel: &'static str,
-    /// Build the fixture, in a fresh [`TempDir`] of its own.
+    /// Build the fixture under `root`, which is the row's own directory inside the
+    /// table's shared temp root.
     ///
     /// A closure rather than shared state because resolving a folder side **writes
     /// to its cache**: measuring two configurations against one fixture makes the
     /// second find whatever the first backfilled, and the tag under test is a
     /// function of what was *not* read.
-    build: fn(&TempDir) -> (PathBuf, PathBuf),
+    build: fn(&Path) -> (PathBuf, PathBuf),
     /// The run's options for this row.
     common: fn() -> CommonOpts,
     /// The classification the pair must carry.
     verdict: Verdict,
     /// The tag [`Verdict::why_tag`] must render for it — the contract a parser sees.
     tag: &'static str,
+}
+
+/// `rel` under the row's `root`, with its parents created.
+///
+/// Rows build their fixtures through this rather than through [`TempDir::subdir`]
+/// because the whole table shares one [`TempDir`]: the per-row isolation comes from
+/// the distinct `root` each row is handed.
+fn subdir(root: &Path, rel: &str) -> PathBuf {
+    let p = root.join(rel);
+    std::fs::create_dir_all(&p).expect("create the row's subdir");
+    p
 }
 
 /// Every pair state the diff can reach, and the tag each must print.
@@ -165,8 +177,8 @@ fn rows() -> Vec<Row> {
             name: "directory on both sides",
             rel: "d",
             build: |t| {
-                let s = t.subdir("src");
-                let d = t.subdir("dst");
+                let s = subdir(t, "src");
+                let d = subdir(t, "dst");
                 std::fs::create_dir_all(s.join("d")).unwrap();
                 std::fs::create_dir_all(d.join("d")).unwrap();
                 (s, d)
@@ -184,8 +196,8 @@ fn rows() -> Vec<Row> {
             name: "hash-any-of md5 sha256, record holds only md5",
             rel: "a.txt",
             build: |t| {
-                let old = t.subdir("old");
-                let live = t.subdir("live");
+                let old = subdir(t, "old");
+                let live = subdir(t, "live");
                 wfile(&old, "a.txt", b"aaaa");
                 // Warm only md5, so the record is short of sha256 exactly as an
                 // older run would leave it.
@@ -216,9 +228,13 @@ fn rows() -> Vec<Row> {
 /// and the other way round, and `--why` ships both.
 #[test]
 fn every_pair_state_has_one_classification_and_one_tag() {
-    for row in rows() {
-        let t = temp_root(&format!("why_{}", row.name.replace(' ', "_")));
-        let (src, dst) = (row.build)(&t);
+    // One temp root for the whole table: 22 roots would be 22 trees to create and
+    // remove. Each row still gets a subdirectory of its own, so no row can see
+    // another's fixture or the cache that resolving it wrote.
+    let t = temp_root("why_pair_states");
+    for (i, row) in rows().into_iter().enumerate() {
+        let root = t.subdir(&format!("row_{i:02}"));
+        let (src, dst) = (row.build)(&root);
         let common = (row.common)();
         let (sm, dm, plans) = resolved(row.name, &src, &dst, &common);
 

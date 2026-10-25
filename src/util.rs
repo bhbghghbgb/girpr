@@ -334,6 +334,25 @@ pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
     set
 }
 
+/// Whether the test-only `GIRPR_TEST_NO_FSYNC` hook is on.
+///
+/// Default **off**: an unset variable, or any value other than an unambiguous
+/// truthy one (`1`, `true`, `yes`, `on`), leaves the `config.ini` `sync_all` in
+/// place, so production still flushes the temp file before the rename. Tests
+/// opt in through `.config/nextest.toml` to stop paying an HDD flush per real
+/// repair; the value is read once per process, not once per write. The temp-file
+/// write and the rename are unchanged, so the file contents and any reopen
+/// assertion are unaffected — only the durable write-back is skipped.
+fn test_no_fsync() -> bool {
+    static NO_FSYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NO_FSYNC.get_or_init(|| {
+        matches!(
+            std::env::var("GIRPR_TEST_NO_FSYNC").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+        )
+    })
+}
+
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
 ///
 /// Collapse parity (`GameVersionBase.UpdateGameVersion` /
@@ -512,7 +531,9 @@ pub fn write_config_ini(
     {
         let mut f = File::create(&tmp)?;
         f.write_all(out.as_bytes())?;
-        f.sync_all().ok();
+        if !test_no_fsync() {
+            f.sync_all().ok();
+        }
     }
     std::fs::rename(&tmp, &path)?;
     Ok(())

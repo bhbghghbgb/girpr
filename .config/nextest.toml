@@ -18,6 +18,66 @@
 # them, so `cargo nextest run` on its own still covers everything the suite
 # covers.
 
+# Setup scripts are how a test-only environment variable reaches every test
+# process (and the processes they spawn). Nextest has no profile-level `env`
+# table: `env` is a field of a script's `command`, and the only documented way
+# to export a variable *to tests* is a setup script writing it to
+# `$NEXTEST_ENV`.
+experimental = ["setup-scripts"]
+
+# Test-only hooks, all default-off in production:
+#
+# * `GIRSYNC_TEST_DURABILITY=none` — cache write transactions skip their
+#   per-commit fsync. Production always commits with `Durability::Immediate`
+#   (see `tools/sync/src/cache/mod.rs::write_durability`); redb still flushes on
+#   a clean `Database` drop, so a test that reopens the cache file sees every
+#   row.
+# * `GIRSYNC_TEST_NO_FSYNC=1` — `copy_one` skips its per-file `sync_all` after
+#   writing (see `tools/sync/src/commands/sync/apply.rs::test_no_fsync`). The
+#   bytes, size/mtime checks and cache records are unchanged.
+# * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
+#   rename (see `src/util.rs::test_no_fsync`). The temp-file write and rename
+#   are unchanged.
+#
+# Production defaults to durable: an unset variable (or a non-truthy value)
+# leaves every flush in place. These are deliberately not `cfg(test)`: the
+# slowest suites spawn the real binaries, and child processes inherit the
+# variables.
+#
+# The hooks are listed in exactly one place, `.config/nextest-test-env`, and the
+# setup commands below only copy that file to `$NEXTEST_ENV`. Adding a hook
+# means editing the env file, not the commands. `.gitattributes` pins the file
+# to LF: a CRLF checkout would leave a trailing `\r` in every value, and
+# `GIRSYNC_TEST_DURABILITY` would not equal `"none"`.
+#
+# One script per platform. The Windows script uses `cmd.exe` instead of
+# PowerShell, whose startup alone cost ~1.7 s on every `cargo nextest run`.
+# nextest passes arguments through Rust's `Command`, which escapes an embedded
+# `"` as `\"`; cmd.exe reads that backslash literally and fails, so the quoted
+# paths live in a two-line `.cmd` wrapper (`type` plus `>> "%NEXTEST_ENV%"`)
+# rather than in this command line. Both scripts run on every
+# `cargo nextest run`, whichever crate the command names; nextest runs setup
+# scripts with the workspace root as their working directory.
+[scripts.setup.test-hooks-unix]
+command = [
+    'sh',
+    '-c',
+    'cat .config/nextest-test-env >> "$NEXTEST_ENV"',
+]
+
+[scripts.setup.test-hooks-windows]
+command = ['cmd', '/D', '/Q', '/C', '.config\\nextest-test-env.cmd']
+
+[[profile.default.scripts]]
+filter = 'all()'
+platform = { host = "cfg(unix)" }
+setup = 'test-hooks-unix'
+
+[[profile.default.scripts]]
+filter = 'all()'
+platform = { host = "cfg(windows)" }
+setup = 'test-hooks-windows'
+
 [profile.default]
 # Every failure is reported at the end, with the output it captured, rather
 # than the first one scrolling the rest of the list away.

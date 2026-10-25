@@ -12,11 +12,11 @@
 
 mod common;
 
-use common::{compare, log, rw, sync, temp_root, update, wfile};
-use girsync::cache::{CACHE_PREFIX, get_rec, load_all_records, open_db, put_rec};
+use common::{compare, log, sync, temp_root, update, wfile};
+use girsync::cache::CACHE_PREFIX;
 use girsync::hash::hash_file;
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
-use girsync::{CommonOpts, cmd_compare, cmd_sync, cmd_update};
+use girsync::{CommonOpts, CompareOpts, SyncOpts, UpdateOpts, cmd_compare, cmd_sync, cmd_update};
 use std::collections::HashMap;
 
 fn md5s() -> Vec<HashAlg> {
@@ -43,19 +43,60 @@ fn aset(names: &[HashAlg]) -> AlgoSet {
     AlgoSet::from_iter(names.iter().copied())
 }
 
-fn with_algos(dir: std::path::PathBuf, algos: Vec<HashAlg>) -> girsync::UpdateOpts {
-    girsync::UpdateOpts {
+/// The cache-row tests below assert *what a run recorded*, not where it recorded
+/// it, so they run against the shared in-memory backend: same rows, no per-command
+/// redb file create + fsync on the HDD. `recs` and `poison` read the same store, so
+/// the assertions are unchanged. The cases whose subject *is* the file (the cache
+/// path existing, backups, a record side) keep the file backend below.
+fn with_algos(dir: std::path::PathBuf, algos: Vec<HashAlg>) -> UpdateOpts {
+    UpdateOpts {
         dir,
         common: CommonOpts {
             algos,
-            ..common::opts()
+            ..common::opts_mem()
         },
     }
 }
 
+fn update_mem(dir: std::path::PathBuf) -> UpdateOpts {
+    UpdateOpts {
+        common: common::opts_mem(),
+        ..update(dir)
+    }
+}
+
+fn compare_mem(src: std::path::PathBuf, dst: std::path::PathBuf) -> CompareOpts {
+    CompareOpts {
+        common: common::opts_mem(),
+        ..compare(src, dst)
+    }
+}
+
+fn sync_mem(src: std::path::PathBuf, dst: std::path::PathBuf) -> SyncOpts {
+    SyncOpts {
+        common: common::opts_mem(),
+        ..sync(src, dst)
+    }
+}
+
 fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
-    let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
-    load_all_records(&db).unwrap()
+    common::recs_of(dir)
+}
+
+/// The cache file's length and mtime: what a run that leaves the file alone
+/// must not change.
+///
+/// Cheaper and stricter than [`recs`] for that question: it does not reopen
+/// redb (an open costs ~0.5 s on the HDD), and it sees a rewrite that keeps the
+/// row count but changes the bytes. Taking it succeeds only if the file exists,
+/// which is also the proof that a cache was there before the run.
+fn cache_snapshot(dir: &std::path::Path) -> (u64, std::time::SystemTime) {
+    let meta = std::fs::metadata(dir.join(CACHE_PREFIX))
+        .unwrap_or_else(|e| panic!("{} has a cache file: {e}", dir.display()));
+    (
+        meta.len(),
+        meta.modified().expect("the cache file has an mtime"),
+    )
 }
 
 /// The cache path exists after update, and files + dirs are recorded with hashes.
@@ -92,9 +133,9 @@ fn lock_update_is_idempotent() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"stable content");
 
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     let first = recs(&dir);
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     let second = recs(&dir);
 
     assert_eq!(first.len(), second.len());
@@ -207,11 +248,11 @@ fn lock_hash_none_tracks_without_digests() {
     // equality (the only signal under --hash none) holds.
     common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
 
-    let none_opts = |d: std::path::PathBuf| girsync::UpdateOpts {
+    let none_opts = |d: std::path::PathBuf| UpdateOpts {
         dir: d,
         common: CommonOpts {
             algos: vec![],
-            ..common::opts()
+            ..common::opts_mem()
         },
     };
     cmd_update(none_opts(src.clone()), &log()).unwrap();
@@ -223,12 +264,12 @@ fn lock_hash_none_tracks_without_digests() {
     assert_eq!(r["a.txt"].size, 10);
 
     // Compare + sync under --hash none converge.
-    let mut c = compare(src.clone(), dst.clone());
+    let mut c = compare_mem(src.clone(), dst.clone());
     c.common.algos = vec![];
     // dst has no cache yet; folder side builds one lazily under --hash none.
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
 
-    let mut s = sync(src.clone(), dst.clone());
+    let mut s = sync_mem(src.clone(), dst.clone());
     s.common.algos = vec![];
     assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
 }
@@ -242,7 +283,7 @@ fn lock_sha256_sync_converges() {
     wfile(&src, "a.txt", b"sha payload v2 longer");
     wfile(&dst, "a.txt", b"old");
 
-    let mut s = sync(src.clone(), dst.clone());
+    let mut s = sync_mem(src.clone(), dst.clone());
     s.common.algos = sha256s();
     assert_eq!(cmd_sync(s, &log()).unwrap(), 0);
     assert_eq!(common::rfile(&dst, "a.txt"), b"sha payload v2 longer");
@@ -253,7 +294,7 @@ fn lock_sha256_sync_converges() {
         hash_file(&dst.join("a.txt"), &aset(&sha256s())).unwrap()
     );
 
-    let mut c = compare(src.clone(), dst.clone());
+    let mut c = compare_mem(src.clone(), dst.clone());
     c.common.algos = sha256s();
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
 }
@@ -274,27 +315,27 @@ fn lock_no_trust_cached_hashes_is_per_side() {
     wfile(&dst, "a.txt", b"identical bytes");
     common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
 
-    cmd_update(update(src.clone()), &log()).unwrap();
-    cmd_update(update(dst.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(dst.clone()), &log()).unwrap();
 
     // Plant a wrong md5 for dst, leaving size/mtime intact.
     poison(&dst, "a.txt");
 
     // Default trusts the cache, so the planted digest surfaces as a diff.
     assert_eq!(
-        cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap(),
+        cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap(),
         4
     );
 
     // Distrusting dst forces a rehash, which repairs the entry in place.
-    let mut c = compare(src.clone(), dst.clone());
+    let mut c = compare_mem(src.clone(), dst.clone());
     c.trust.no_trust_dst = true;
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
 
     // dst is repaired now, so re-poison and check the flag is really
     // per-side: distrusting src alone must not repair dst.
     poison(&dst, "a.txt");
-    let mut c = compare(src.clone(), dst.clone());
+    let mut c = compare_mem(src.clone(), dst.clone());
     c.trust.no_trust_src = true;
     assert_eq!(
         cmd_compare(c, &log()).unwrap(),
@@ -305,7 +346,7 @@ fn lock_no_trust_cached_hashes_is_per_side() {
     // Distrusting both sides repairs both.
     poison(&src, "a.txt");
     poison(&dst, "a.txt");
-    let mut c = compare(src.clone(), dst.clone());
+    let mut c = compare_mem(src.clone(), dst.clone());
     c.trust.no_trust_src = true;
     c.trust.no_trust_dst = true;
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
@@ -313,21 +354,20 @@ fn lock_no_trust_cached_hashes_is_per_side() {
 
 /// Overwrite a cached digest with a wrong one, keeping size and mtime as-is.
 fn poison(dir: &std::path::Path, rel: &str) {
-    let db = open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap();
-    let mut rec = get_rec(&db, rel).unwrap().expect("row exists after update");
     let real = hash_file(&dir.join(rel), &aset(&md5s())).unwrap();
     assert_eq!(
         real.get_named("md5").map(<[u8]>::len),
         Some(16),
         "md5 digest is 16 raw bytes"
     );
-    rec.hashes.insert_named("md5", &[0u8; 16]);
-    assert_ne!(
-        rec.hashes.get_named("md5"),
-        real.get_named("md5"),
-        "planted digest differs"
-    );
-    put_rec(&db, rel, &rec).unwrap();
+    common::edit_row(dir, rel, |rec| {
+        rec.hashes.insert_named("md5", &[0u8; 16]);
+        assert_ne!(
+            rec.hashes.get_named("md5"),
+            real.get_named("md5"),
+            "planted digest differs"
+        );
+    });
 }
 
 /// Second update leaves a `girpr-cache-backup-*` sibling; sync leaves a
@@ -393,7 +433,12 @@ fn lock_record_side_is_read_only() {
 }
 
 /// Dry-run sync changes no disk bytes, creates no backups, and leaves the
-/// caches' logical content identical.
+/// caches' files byte-identical.
+///
+/// The caches are compared by file length and mtime instead of by reopening redb
+/// and counting rows. That avoids two more opens (each ~0.5 s on the HDD), and it
+/// is the stronger assertion: a dry run that rewrote a cache while preserving its
+/// row count would pass a count comparison but not a byte-level one.
 #[test]
 fn lock_dry_run_changes_nothing() {
     let t = temp_root("lock_dry");
@@ -404,8 +449,9 @@ fn lock_dry_run_changes_nothing() {
     // Pre-create both caches so dry-run has no reason to create anything.
     cmd_update(update(src.clone()), &log()).unwrap();
     cmd_update(update(dst.clone()), &log()).unwrap();
-    let src_before = recs(&src);
-    let dst_before = recs(&dst);
+    // Reading the metadata also asserts the caches exist before the run.
+    let src_before = cache_snapshot(&src);
+    let dst_before = cache_snapshot(&dst);
 
     assert_eq!(
         cmd_sync(common::sync_dry(src.clone(), dst.clone()), &log()).unwrap(),
@@ -417,8 +463,16 @@ fn lock_dry_run_changes_nothing() {
         !common::has_backup_sibling(&dst.join(CACHE_PREFIX)),
         "dry-run makes no backups"
     );
-    assert_eq!(recs(&src).len(), src_before.len());
-    assert_eq!(recs(&dst).len(), dst_before.len());
+    assert_eq!(
+        cache_snapshot(&src),
+        src_before,
+        "dry-run leaves the src cache file untouched"
+    );
+    assert_eq!(
+        cache_snapshot(&dst),
+        dst_before,
+        "dry-run leaves the dst cache file untouched"
+    );
 }
 
 /// Empty dirs and nesting survive a full sync and compare equal after.
@@ -431,9 +485,12 @@ fn lock_empty_dirs_and_nesting_sync() {
     std::fs::create_dir_all(src.join("a/empty1")).unwrap();
     std::fs::create_dir_all(src.join("lonely")).unwrap();
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
     assert!(dst.join("a/empty1").is_dir());
     assert!(dst.join("lonely").is_dir());
     assert_eq!(common::rfile(&dst, "a/b/c/deep.txt"), b"deep");
-    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }

@@ -8,10 +8,18 @@
 //!
 //! **No case touches a network.** `capture` really does reach the live APIs, so
 //! every `capture` case here points `--hyp-base`/`--sophon-base` at
-//! `127.0.0.1:1`, where nothing is listening: the request is refused immediately
-//! and the run takes its documented exit `2` without a packet leaving the host.
-//! That is what makes the seam worth having — the contract is asserted against a
-//! run that started, failed, and reported, rather than against a stub.
+//! `127.0.0.1:0`, where nothing can be listening: the connect is refused
+//! immediately and the run takes its documented exit `2` without a packet
+//! leaving the host. That is what makes the seam worth having — the contract is
+//! asserted against a run that started, failed, and reported, rather than
+//! against a stub.
+//!
+//! Port `0` rather than a closed high port like `1` is deliberate. On Windows a
+//! connect to a closed port waits ~2 s for the SYN retry before failing; port
+//! `0` is not a connectable port, so the failure is immediate. The contract is
+//! identical either way (transport failure → exit `2`, `network` slug,
+//! trustworthy artifact), so the tests use the fast refusal. `validate_base`
+//! only requires loopback, which `127.0.0.1:0` satisfies.
 
 use std::process::Command;
 
@@ -29,15 +37,21 @@ fn bin() -> std::path::PathBuf {
     p
 }
 
-/// Flags that point `capture` at a dead loopback port.
+/// Flags that point `capture` at a loopback port that cannot be connected to.
+///
+/// Port `0` is used on purpose, not as a placeholder to "fix" later: Windows
+/// fails the connect immediately instead of waiting ~2 s for a closed port's SYN
+/// retry. The run still produces the same contract — exit `2`, the
+/// `network` slug, a trustworthy artifact — it just gets there without the dead
+/// port's penalty.
 ///
 /// `--retries 1` keeps the test to one attempt: a backoff would make a contract
 /// test take seconds to prove something that is true immediately.
 const OFFLINE: &[&str] = &[
     "--hyp-base",
-    "http://127.0.0.1:1/hyp",
+    "http://127.0.0.1:0/hyp",
     "--sophon-base",
-    "http://127.0.0.1:1/sophon",
+    "http://127.0.0.1:0/sophon",
     "--retries",
     "1",
     "--timeout",

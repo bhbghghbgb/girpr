@@ -2,29 +2,35 @@
 
 mod common;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use common::{age, log, rw, strip_algo, sync, sync_mtime, temp_root, update, wfile};
-use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
+use common::{
+    age, log, recs_of, strip_algo, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+};
+use girsync::cache::CACHE_PREFIX;
 use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_sync, cmd_update};
-
-fn recs(dir: &Path) -> HashMap<String, FileRec> {
-    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
-}
 
 fn self_compare(dir: PathBuf) -> CompareSelfOpts {
     CompareSelfOpts {
         dir,
         no_trust_cached_hashes: false,
+        common: common::opts_mem(),
+    }
+}
+
+/// [`self_compare`] against the real file, for the one case that must prove a
+/// missing cache is refused and remains missing.
+fn self_compare_file(dir: PathBuf) -> CompareSelfOpts {
+    CompareSelfOpts {
         common: common::opts(),
+        ..self_compare(dir)
     }
 }
 
 /// Re-pin a file's mtime to the stamp the cache recorded, so size+mtime match
 /// again after a rewrite of the same length.
 fn restore_recorded_mtime(dir: &Path, rel: &str) {
-    let want = recs(dir)[rel].mtime_ns;
+    let want = recs_of(dir)[rel].mtime_ns;
     let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(want as u64);
     std::fs::OpenOptions::new()
         .write(true)
@@ -40,7 +46,7 @@ fn run_compare_self_is_clean_after_update() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
 
     assert_eq!(cmd_compare_self(self_compare(dir), &log()).unwrap(), 0);
 }
@@ -52,7 +58,7 @@ fn run_compare_self_reports_drift_with_record_as_src() {
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
     std::fs::create_dir_all(dir.join("empty")).unwrap();
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
 
     // A new file and a deleted one. The record is the src side, so the path it
     // never learned is EXTRA and the one it still holds is MISSING.
@@ -71,8 +77,8 @@ fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
     let t = temp_root("cs_nowrite");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
-    let before = recs(&dir);
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    let before = recs_of(&dir);
 
     wfile(&dir, "added.txt", b"new");
     std::fs::remove_file(dir.join("a.txt")).unwrap();
@@ -81,14 +87,14 @@ fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
         4
     );
 
-    assert_eq!(recs(&dir), before, "cache untouched");
+    assert_eq!(recs_of(&dir), before, "cache untouched");
     // Reporting it a second time must report it again, not find it fixed.
     assert_eq!(
         cmd_compare_self(self_compare(dir.clone()), &log()).unwrap(),
         4,
         "the same drift is still there on a rerun"
     );
-    assert_eq!(recs(&dir), before);
+    assert_eq!(recs_of(&dir), before);
 }
 
 /// A file whose size+mtime still match must be hashed against nothing, not against
@@ -103,8 +109,8 @@ fn hidden_content_drift_is_reported_without_a_flag() {
     let t = temp_root("cs_hidden");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
-    let before = recs(&dir);
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    let before = recs_of(&dir);
 
     wfile(&dir, "a.txt", b"world");
     restore_recorded_mtime(&dir, "a.txt");
@@ -114,7 +120,7 @@ fn hidden_content_drift_is_reported_without_a_flag() {
         4,
         "the audit must read the folder, not re-read the record"
     );
-    assert_eq!(recs(&dir), before, "reading it changes nothing");
+    assert_eq!(recs_of(&dir), before, "reading it changes nothing");
 }
 
 /// The disk side is cache-free, so a preserved stat means the file is rehashed and
@@ -129,8 +135,8 @@ fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
     let t = temp_root("cs_flag");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
-    let before = recs(&dir);
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    let before = recs_of(&dir);
     wfile(&dir, "a.txt", b"world");
     restore_recorded_mtime(&dir, "a.txt");
 
@@ -141,7 +147,7 @@ fn the_no_trust_flag_is_redundant_here_rather_than_a_second_mode() {
         4,
         "accepted, and the same answer the default gives"
     );
-    assert_eq!(recs(&dir), before, "still writes nothing");
+    assert_eq!(recs_of(&dir), before, "still writes nothing");
 }
 
 /// The records the real binary reported for a `compare-self` run.
@@ -200,7 +206,7 @@ fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched
     let dir = t.subdir("w");
     wfile(&dir, "case.txt", b"payload");
     cmd_update(update(dir.clone()), &log()).unwrap();
-    let before = recs(&dir);
+    let before = recs_of(&dir);
 
     // A rename on disk plus a same-length rewrite, with the stat put back, so the
     // pair is undecided and the digest is the only thing that can settle it.
@@ -224,7 +230,7 @@ fn a_case_only_pair_with_differing_content_is_changed_as_well_as_case_mismatched
         vec!["case.txt"],
         "and so is the content disagreement, which only a digest can see"
     );
-    assert_eq!(recs(&dir), before, "still writes nothing");
+    assert_eq!(recs_of(&dir), before, "still writes nothing");
 }
 
 /// `--hash-all-of none` still means "decide by size+mtime", and it is the only cheap
@@ -241,8 +247,8 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world");
-    cmd_update(update(dir.clone()), &log()).unwrap();
-    let before = recs(&dir);
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    let before = recs_of(&dir);
 
     // Content drift under a preserved stat: invisible to a stat-only audit.
     wfile(&dir, "a.txt", b"world");
@@ -251,7 +257,7 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
     let mut o = self_compare(dir.clone());
     o.common = CommonOpts {
         algos: vec![],
-        ..common::opts()
+        ..common::opts_mem()
     };
     assert_eq!(
         cmd_compare_self(o, &log()).unwrap(),
@@ -266,7 +272,7 @@ fn hash_none_is_a_stat_only_audit_and_still_runs() {
         4,
         "a size difference needs no digest either way"
     );
-    assert_eq!(recs(&dir), before, "still writes nothing");
+    assert_eq!(recs_of(&dir), before, "still writes nothing");
 }
 
 /// A record that cannot supply a digest the run asked for must **fail**, not
@@ -283,7 +289,7 @@ fn an_uncovered_record_fails_rather_than_degrading_to_size_and_mtime() {
     let t = temp_root("cs_cover");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     strip_algo(&dir, "a.txt", "md5");
 
     let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
@@ -319,7 +325,7 @@ fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "b.txt", b"world");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     // `b.txt` loses its digest *and* its stat, so it is already decided.
     strip_algo(&dir, "b.txt", "md5");
     age(&dir, "b.txt", 60);
@@ -330,7 +336,7 @@ fn a_stat_differing_pair_needs_no_coverage_so_a_stripped_row_is_just_changed() {
         "b.txt is CHANGED by stat, so the missing digest is not in question"
     );
     assert_eq!(
-        recs(&dir)["b.txt"].hashes.len(),
+        recs_of(&dir)["b.txt"].hashes.len(),
         0,
         "and the row is untouched"
     );
@@ -359,14 +365,14 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
     }
     sync_mtime(&src.join("f0.txt"), &dst.join("f0.txt"));
     sync_mtime(&src.join("f1.txt"), &dst.join("f1.txt"));
-    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
     // Arrives after the update, so src's cache has no row for it at all.
     wfile(&src, "late.txt", b"late arrival");
-    cmd_sync(sync(src.clone(), dst), &log()).unwrap();
+    cmd_sync(sync_mem(src.clone(), dst), &log()).unwrap();
 
     // The row exists, carries the file's current stat, and has no digest. Fresh,
     // because it was taken from disk: this is not a stale entry.
-    let late = &recs(&src)["late.txt"];
+    let late = &recs_of(&src)["late.txt"];
     assert!(
         late.hashes.is_empty(),
         "phase A recorded stat only: {late:?}"
@@ -394,7 +400,7 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
 
     // The remedy works, and this is the point of the test: one command, and the
     // audit answers again.
-    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
     assert_eq!(
         cmd_compare_self(self_compare(src), &log()).unwrap(),
         0,
@@ -414,13 +420,13 @@ fn hash_none_is_not_a_coverage_failure() {
     let t = temp_root("cs_cover_none");
     let dir = t.subdir("w");
     wfile(&dir, "a.txt", b"hello");
-    cmd_update(update(dir.clone()), &log()).unwrap();
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
     strip_algo(&dir, "a.txt", "md5");
 
     let mut o = self_compare(dir.clone());
     o.common = CommonOpts {
         algos: vec![],
-        ..common::opts()
+        ..common::opts_mem()
     };
     assert_eq!(
         cmd_compare_self(o, &log()).unwrap(),
@@ -437,7 +443,7 @@ fn run_compare_self_rejects_a_missing_cache_and_ignore_cache() {
 
     // No cache yet: an audit with no subject, and creating one would make the
     // first run vacuously clean.
-    let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
+    let err = cmd_compare_self(self_compare_file(dir.clone()), &log()).unwrap_err();
     assert!(
         format!("{:#}", err).contains("update"),
         "the error should say how to make one: {:#}",
@@ -448,7 +454,7 @@ fn run_compare_self_rejects_a_missing_cache_and_ignore_cache() {
     cmd_update(update(dir.clone()), &log()).unwrap();
 
     // --ignore-cache would delete the record under audit.
-    let mut o = self_compare(dir.clone());
+    let mut o = self_compare_file(dir.clone());
     o.common = CommonOpts {
         ignore_cache: true,
         ..common::opts()
@@ -459,5 +465,5 @@ fn run_compare_self_rejects_a_missing_cache_and_ignore_cache() {
     // Not a folder.
     let file = t.subdir("afile");
     wfile(&file, "x.txt", b"x");
-    assert!(cmd_compare_self(self_compare(file.join("x.txt")), &log()).is_err());
+    assert!(cmd_compare_self(self_compare_file(file.join("x.txt")), &log()).is_err());
 }

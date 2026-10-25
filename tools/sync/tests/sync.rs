@@ -7,17 +7,16 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, entry_names, has_backup_sibling, log, parse_ndjson, rfile, rw, sync, sync_dry,
-    sync_mtime, temp_root, update, wfile,
+    compare, compare_mem, entry_names, has_backup_sibling, log, parse_ndjson, recs_of, rfile, sync,
+    sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, FileRec, load_all_records, open_db};
+use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::Path;
 
-fn recs(dir: &Path) -> HashMap<String, FileRec> {
-    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+fn recs(dir: &Path) -> std::collections::HashMap<String, girsync::cache::FileRec> {
+    recs_of(dir)
 }
 
 /// Run the real binary and return the records it reported on stdout.
@@ -26,7 +25,10 @@ fn recs(dir: &Path) -> HashMap<String, FileRec> {
 /// alternative — matching rendered text lines — makes every case a second,
 /// quieter statement of the vocabulary, and a reworded message fails a test whose
 /// point was the plan.
-fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
+///
+/// `envs` are added on top of the in-memory cache switch, for the test-only
+/// `GIRSYNC_TEST_COMMIT_*` limits a fixture lowers to make a commit observable.
+fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> Vec<Value> {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
         .arg("--src")
@@ -36,6 +38,8 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str]) -> Vec<Value> {
         .arg("--output")
         .arg("json")
         .args(extra)
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .envs(envs.iter().copied())
         .output()
         .expect("spawn girsync");
     assert!(
@@ -80,7 +84,7 @@ fn run_sync_dry_run_writes_nothing() {
     );
 
     // Still different afterwards.
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 4);
 }
 
@@ -151,6 +155,7 @@ fn run_sync_keep_extra_and_missing_only() {
     wfile(&dst, "extra.txt", b"keep me");
 
     let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
     o.missing_only = true; // copy newfile, skip content update
     o.keep_extra = true; // leave extra.txt alone
     let code = cmd_sync(o, &log()).unwrap();
@@ -168,7 +173,7 @@ fn run_sync_keep_extra_and_missing_only() {
     );
 
     // Default flags converge fully.
-    let code = cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "common.txt"), b"v2-changed-and-longer");
     assert!(!dst.join("extra.txt").exists());
@@ -191,6 +196,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     wfile(&dst, "extradir/nested/deep.bin", b"y");
 
     let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
     o.keep_extra = true;
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
@@ -208,7 +214,7 @@ fn run_sync_keep_extra_spares_extra_dirs_too() {
     wfile(&src2, "shared.txt", b"same");
     wfile(&dst2, "shared.txt", b"same");
     wfile(&dst2, "extradir/nested/deep.bin", b"y");
-    assert_eq!(cmd_sync(sync(src2, dst2.clone()), &log()).unwrap(), 0);
+    assert_eq!(cmd_sync(sync_mem(src2, dst2.clone()), &log()).unwrap(), 0);
     assert!(!dst2.join("extradir").exists(), "collected by default");
 }
 
@@ -229,7 +235,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     wfile(&src, "clash", b"iamafile");
     std::fs::create_dir_all(dst.join("clash/sub/deep")).unwrap();
 
-    let dry = run_binary(&src, &dst, &["--dry-run"]);
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
     assert!(
         !paths(&dry, "rmdir").iter().any(|p| p.starts_with("clash")),
         "the subtree is wiped by the copy, not removed by the rmdir pass: {dry:?}"
@@ -241,7 +247,7 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     );
 
     // And the real run agrees.
-    let real = run_binary(&src, &dst, &[]);
+    let real = run_binary(&src, &dst, &[], &[]);
     assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
@@ -255,11 +261,15 @@ fn run_sync_rejects_bad_inputs() {
     wfile(&dst, "a.txt", b"x");
 
     // src == dst
-    assert!(cmd_sync(sync(src.clone(), src.clone()), &log()).is_err());
+    let mut o = sync(src.clone(), src.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    assert!(cmd_sync(o, &log()).is_err());
 
     // record inputs are compare-only
-    cmd_update(update(src.clone()), &log()).unwrap();
-    assert!(cmd_sync(sync(src.join(CACHE_PREFIX), dst.clone()), &log()).is_err());
+    cmd_update(update_mem(src.clone()), &log()).unwrap();
+    let mut o = sync(src.join(CACHE_PREFIX), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    assert!(cmd_sync(o, &log()).is_err());
 
     // A zero thread count has no equivalent to assert at this layer: `SyncOpts`
     // carries no thread count, `RwLimits` cannot hold a zero (`NonZeroUsize`),
@@ -280,13 +290,15 @@ fn run_sync_resolves_type_conflicts() {
     wfile(&src, "node2/f.txt", b"in src dir");
     wfile(&dst, "node2", b"i am a file");
 
-    let code = cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap();
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    let code = cmd_sync(o, &log()).unwrap();
     assert_eq!(code, 0);
     assert_eq!(rfile(&dst, "node"), b"i am a file");
     assert!(dst.join("node2").is_dir(), "dst resolves toward src kind");
     assert_eq!(rfile(&dst, "node2/f.txt"), b"in src dir");
 
-    let code = cmd_compare(compare(src.clone(), dst.clone()), &log()).unwrap();
+    let code = cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap();
     assert_eq!(code, 0);
 }
 
@@ -307,6 +319,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
+    dry.common.test_cache = TestCacheBackend::Memory;
     dry.common.case_sensitive = false;
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
@@ -318,6 +331,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Real run: dst adopts src's casing.
     let mut real = sync(src.clone(), dst.clone());
+    real.common.test_cache = TestCacheBackend::Memory;
     real.common.case_sensitive = false;
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
     assert_eq!(
@@ -327,10 +341,10 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     );
 
     // Converged: no further differences in either mode.
-    let mut same = compare(src.clone(), dst.clone());
+    let mut same = compare_mem(src.clone(), dst.clone());
     same.common.case_sensitive = false;
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
-    assert_eq!(cmd_compare(compare(src, dst), &log()).unwrap(), 0);
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
@@ -365,6 +379,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     // The dry run must plan the copy, so the failure is visible before it is
     // committed to disk.
     let mut dry = sync(src.clone(), dst.clone());
+    dry.common.test_cache = TestCacheBackend::Memory;
     dry.common.case_sensitive = false;
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
@@ -375,6 +390,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     );
 
     let mut real = sync(src.clone(), dst.clone());
+    real.common.test_cache = TestCacheBackend::Memory;
     real.common.case_sensitive = false;
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
 
@@ -389,7 +405,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
         "and the bytes are src's, not the ones dst already had"
     );
     assert_eq!(
-        cmd_compare(compare(src, dst), &log()).unwrap(),
+        cmd_compare(compare_mem(src, dst), &log()).unwrap(),
         0,
         "converged"
     );
@@ -420,7 +436,10 @@ fn files_copied_into_a_directory_this_run_created_keep_their_cache_rows() {
     wfile(&src, "fresh/a.txt", b"a");
     wfile(&src, "fresh/b.txt", b"b");
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     // On disk, everything this run wrote is there...
     assert!(dst.join("top.txt").is_file());
@@ -453,13 +472,19 @@ fn a_cache_row_for_a_path_deleted_after_the_run_is_dropped() {
     wfile(&src, "kept.txt", b"kept");
     wfile(&src, "doomed.txt", b"doomed");
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
     assert!(recs(&dst).contains_key("doomed.txt"), "the run recorded it");
 
     // A later run, after the file is gone from both sides.
     std::fs::remove_file(src.join("doomed.txt")).unwrap();
     std::fs::remove_file(dst.join("doomed.txt")).unwrap();
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     let rows = recs(&dst);
     assert!(
@@ -509,7 +534,10 @@ fn rows_for_a_subtree_a_copy_wiped_are_dropped() {
         b"and a second level under that too",
     );
 
-    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
 
     // The wipe actually happened: x is now a file and the subtree is gone.
     assert!(
@@ -580,4 +608,89 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
             rows.keys().collect::<Vec<_>>()
         );
     }
+}
+
+/// **The copy phase commits its cache rows while it is still copying.**
+///
+/// `CacheWrite`'s `CommitLimits` are only a bound on the work an interrupted run
+/// loses if they are checked as that work happens. `copy_files` once collected
+/// every verified record and inserted them only after the pool joined, so during
+/// the phase itself no threshold could fire: a run that died mid-copy lost every
+/// row, however many files had already landed on disk.
+///
+/// The log file is the observable. A threshold tripping is logged as
+/// `cache batch committed` (trace), and the phase logs `copy done` after the pool
+/// joins, so the last batch commit must come *before* that line. Under the old
+/// layout the only batch commit of the phase came after it, with every file
+/// already durable.
+///
+/// The fixture is one-sided and small: `GIRSYNC_TEST_COMMIT_OPS` lowers the
+/// op-count trigger, so `copy_files` crosses it in ten copies rather than in
+/// `COMMIT_BATCH`. One-sided on purpose: with nothing to hash, the scan and the
+/// pre-drop each auto-commit before the copy phase starts, and nothing after it
+/// does — so the *last* commit in the log is the copy phase's.
+#[test]
+fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
+    let ops = 10;
+    let files = 2 * ops;
+    let t = temp_root("copy_commit");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    for i in 0..files {
+        // Empty, so the fixture's cost is file metadata rather than content; the
+        // op-count trigger counts rows, not bytes.
+        wfile(&src, &format!("f{i:04}.bin"), b"");
+    }
+
+    let logfile = t.subdir("logs").join("run.json");
+    let recs = run_binary(
+        &src,
+        &dst,
+        &[
+            "--log-file",
+            logfile.to_str().expect("the temp path is utf-8"),
+            // The file layer defaults to debug, and the commit event is trace.
+            "--log-file-level",
+            "trace",
+            // Eight workers, so the fixture is not a queue of fsyncs.
+            "--rw-threads",
+            "8",
+            // No digest to compute: this test is about when the row is written,
+            // not about what it holds, and hashing would only add time.
+            "--hash-all-of",
+            "none",
+        ],
+        &[
+            // A threshold this fixture crosses mid-copy.
+            ("GIRSYNC_TEST_COMMIT_OPS", "10"),
+            // Keep the interval trigger out of it, so the commit seen during
+            // the copies can only be the op-count one.
+            ("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000"),
+        ],
+    );
+    assert_eq!(
+        paths(&recs, "copy").len(),
+        files,
+        "the fixture must make the copy phase cross the op-count threshold"
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    fn message(e: &Value) -> &str {
+        e["fields"]["message"].as_str().unwrap_or("")
+    }
+    let commits: Vec<usize> = logged
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| message(e) == "cache batch committed")
+        .map(|(i, _)| i)
+        .collect();
+    let done = logged
+        .iter()
+        .position(|e| message(e) == "copy done")
+        .expect("the copy phase logs its end");
+    assert!(
+        commits.last().is_some_and(|&i| i < done),
+        "no batch commit before `copy done` (index {done}): commits were at {commits:?}, \
+         so the copy phase still hoards its rows until every file is on disk"
+    );
 }

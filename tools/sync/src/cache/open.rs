@@ -14,7 +14,7 @@ use tracing::{info, trace, warn};
 use crate::util::{copy_dir_all, ts_now, unique_sibling};
 
 use super::codec::decode_meta;
-use super::db::CacheDb;
+use super::db::{CacheDb, redb_builder};
 use super::schema::{CACHE_VERSION, FileRec, Meta};
 use super::{META_KEY, META_TBL};
 
@@ -174,7 +174,7 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// untouched: the backend has no write path at all, so there is nothing to
 /// accidentally commit through, and open-time recovery cannot rewrite pages.
 pub(super) fn open_read_only(db_path: &Path) -> Result<redb::ReadOnlyDatabase> {
-    redb::ReadOnlyDatabase::open(db_path).with_context(|| {
+    redb_builder().open_read_only(db_path).with_context(|| {
         format!(
             "open redb cache {} (corrupt? use --ignore-cache)",
             db_path.display()

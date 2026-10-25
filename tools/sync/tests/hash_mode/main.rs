@@ -46,8 +46,8 @@ mod read_count;
 use std::collections::HashMap;
 use std::path::Path;
 
-use common::{digests_of, log, opts, pair, recs_of, serial_rw, sync_mtime, temp_root, wfile};
-use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
+use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
 use girsync::effective::{
@@ -167,6 +167,16 @@ fn asking(algos: &[&str], mode: HashMode) -> CommonOpts {
         algos: algos.iter().map(|a| a.parse().unwrap()).collect(),
         hash_mode: mode,
         ..opts()
+    }
+}
+
+/// [`asking`] served from the shared in-memory cache, for the cases that measure
+/// reads rather than inspect the cache file. The warmed fixture must have been
+/// built with [`pair_mem`](common::pair_mem) so the rows are in the same store.
+fn asking_mem(algos: &[&str], mode: HashMode) -> CommonOpts {
+    CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..asking(algos, mode)
     }
 }
 

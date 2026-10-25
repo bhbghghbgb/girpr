@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use girpr_log::Level;
 
+use crate::cache::TestCacheBackend;
 use crate::cli::{CommonArgs, RwArgs};
 use crate::filter::compile_patterns;
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
@@ -134,6 +135,10 @@ pub struct CommonOpts {
     /// rather than on a single command. Phase C and the copy phase are the two
     /// places that consume it, and both are reached from every subcommand.
     pub rw: RwLimits,
+    /// Test-only: `Memory` opens folder caches in redb's in-memory backend
+    /// instead of the real `<root>/girpr-cache` file. `File` (default) opens
+    /// the real file, which production and cache-focused tests keep.
+    pub test_cache: TestCacheBackend,
 }
 
 impl TryFrom<RwArgs> for RwLimits {
@@ -285,6 +290,7 @@ impl TryFrom<CommonArgs> for CommonOpts {
             ignore_cache: a.ignore_cache,
             dry_run: a.dry_run,
             rw: RwLimits::try_from(a.rw)?,
+            test_cache: TestCacheBackend::default(),
         })
     }
 }

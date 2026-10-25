@@ -130,7 +130,11 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         bail!("--dir {} is not a directory", dir.display());
     }
     let db_path = dir.join(CACHE_PREFIX);
-    if !db_path.exists() {
+    // Test-only: a suite that warmed the folder with `TestCacheBackend::Memory`
+    // left the record in the shared in-memory cache instead of at `db_path`, so
+    // there is no file to require. Production never has a registry entry here.
+    let memory_record = CacheDb::memory_cache_at(&db_path);
+    if memory_record.is_none() && !db_path.exists() {
         // Creating one would make the check vacuous on the first run and
         // meaningless on the second.
         bail!(
@@ -146,7 +150,10 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // what carries the no-write promise for this handle — it has no write path
     // at all, so a cache write could not commit even if some future code asked
     // for one.
-    let record = open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?;
+    let record = match memory_record {
+        Some(db) => db,
+        None => open_db(&db_path, common.case_sensitive, CacheOpen::ReadOnly)?,
+    };
     info!(
         cache = %db_path.display(),
         entries = record.load_keys()?.len(),

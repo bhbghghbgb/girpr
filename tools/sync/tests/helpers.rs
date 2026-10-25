@@ -153,12 +153,9 @@ fn cold_then_warm(tag: &str, algos: Vec<HashAlg>) -> (Run, Run) {
     wfile(&dir, "sub/b.txt", b"world!");
     wfile(&dir, "sub/deep/c.txt", b"third");
     let common = CommonOpts { algos, ..opts() };
-    let db_path = dir.join(CACHE_PREFIX);
+    let db = CacheDb::open_temp(common.case_sensitive).unwrap();
 
-    let one = || {
-        let db = open_db(&db_path, true, rw()).unwrap();
-        phased(&dir, &db, &common, scan(false, false))
-    };
+    let one = || phased(&dir, &db, &common, scan(false, false));
     (one(), one())
 }
 
@@ -269,11 +266,10 @@ fn phase_a_never_hashes() {
     wfile(&dir, "a.txt", b"hello");
     wfile(&dir, "sub/b.txt", b"world!");
     wfile(&dir, "sub/deep/c.txt", b"third");
-    let db_path = dir.join(CACHE_PREFIX);
 
     // Cold cache, md5 requested, trust denied: the most eager configuration there
     // is. Phase A must still read zero bytes.
-    let db = open_db(&db_path, true, rw()).unwrap();
+    let db = CacheDb::open_temp(opts().case_sensitive).unwrap();
     let pa = scan_stat_only(&dir, &db, &opts(), scan(true, false)).unwrap();
     assert_eq!(
         (pa.stats.hashed, pa.stats.cache_hit, pa.stats.files),
@@ -288,7 +284,7 @@ fn phase_a_never_hashes() {
 
     // Warm cache: phase A carries the digests, and still reads nothing. This is
     // the availability picture the planner needs.
-    let db = open_db(&db_path, true, rw()).unwrap();
+    let db = CacheDb::open_temp(opts().case_sensitive).unwrap();
     let _ = phased(&dir, &db, &opts(), scan(false, false));
     let pa = scan_stat_only(&dir, &db, &opts(), scan(false, false)).unwrap();
     assert_eq!(pa.stats.hashed, 0);

@@ -5,7 +5,9 @@
 
 #![allow(dead_code)]
 
-use girsync::cache::{CACHE_PREFIX, CacheOpen, FileRec, load_all_records, open_db};
+use girsync::cache::{
+    CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
+};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
@@ -123,6 +125,18 @@ pub fn opts() -> CommonOpts {
         dry_run: false,
         // The unflagged run, which is `Shared(1)` -- see `RwLimits::default`.
         rw: RwLimits::default(),
+        test_cache: TestCacheBackend::default(),
+    }
+}
+
+/// `opts()` with an in-memory test cache, for semantic suites that assert sync
+/// results rather than the cache file itself. Skips the per-command 1 MB create
+/// and fsync on the HDD. Cache-focused suites (compare_self, update, sync/cache,
+/// compare) keep `opts()` and its `File` backend.
+pub fn opts_mem() -> CommonOpts {
+    CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..opts()
     }
 }
 
@@ -144,7 +158,7 @@ pub fn log() -> LogCtx {
     LogCtx {
         level: girsync::logging::Level::Error,
         file_level: girsync::logging::Level::Debug,
-        file: Some(PathBuf::from("girsync.log")),
+        file: None,
         output: OutputFormat::Text,
     }
 }
@@ -174,12 +188,30 @@ pub fn update(dir: PathBuf) -> UpdateOpts {
     }
 }
 
+/// [`update`] against the shared in-memory cache, for a case that will read the
+/// rows back through [`recs_of`].
+pub fn update_mem(dir: PathBuf) -> UpdateOpts {
+    UpdateOpts {
+        dir,
+        common: opts_mem(),
+    }
+}
+
 pub fn compare(src: PathBuf, dst: PathBuf) -> CompareOpts {
     CompareOpts {
         src,
         dst,
         trust: TrustOpts::default(),
         common: opts(),
+    }
+}
+
+/// [`compare`] served from the shared memory cache, for a case that asserts a
+/// verdict rather than the cache file.
+pub fn compare_mem(src: PathBuf, dst: PathBuf) -> CompareOpts {
+    CompareOpts {
+        common: opts_mem(),
+        ..compare(src, dst)
     }
 }
 
@@ -215,6 +247,15 @@ pub fn sync(src: PathBuf, dst: PathBuf) -> SyncOpts {
         missing_only: false,
         keep_extra: false,
         common: opts(),
+    }
+}
+
+/// [`sync`] served from the shared memory cache, for a case that asserts the
+/// tree or the rows rather than the cache file.
+pub fn sync_mem(src: PathBuf, dst: PathBuf) -> SyncOpts {
+    SyncOpts {
+        common: opts_mem(),
+        ..sync(src, dst)
     }
 }
 
@@ -303,12 +344,27 @@ pub fn summary_of(recs: &[serde_json::Value]) -> serde_json::Value {
 /// Every row a side's cache currently holds, for asserting what a run left
 /// behind or dropped.
 pub fn recs_of(dir: &Path) -> HashMap<String, FileRec> {
-    load_all_records(&open_db(&dir.join(CACHE_PREFIX), true, rw()).unwrap()).unwrap()
+    load_all_records(&cache_at(dir)).unwrap()
 }
 
-fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+/// The cache a run in this process left at `dir`.
+///
+/// A suite that ran with [`opts_mem`] has its rows in the shared in-memory cache
+/// for `<dir>/girpr-cache`; every other suite has the real file. Preferring the
+/// memory entry when one exists keeps the assertions identical while letting a
+/// cache-content case leave the HDD.
+fn cache_at(dir: &Path) -> CacheDb {
     let p = dir.join(CACHE_PREFIX);
-    let db = open_db(&p, true, rw()).unwrap();
+    CacheDb::memory_cache_at(&p).unwrap_or_else(|| open_db(&p, true, rw()).unwrap())
+}
+
+/// Edit one row of whichever cache a run left at `dir`.
+///
+/// Public because a suite that builds a cache state by hand needs the same
+/// memory-or-file decision `recs_of` makes; opening the file directly would
+/// invent an empty cache beside the in-memory one.
+pub fn edit_row<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
+    let db = cache_at(dir);
     let mut rec = db
         .get(rel)
         .unwrap()
@@ -324,7 +380,7 @@ fn edit_rec<F: FnOnce(&mut FileRec)>(dir: &Path, rel: &str, f: F) {
 /// caller deleting "md5" has to look in both places. The rebuild does that by
 /// construction rather than by remembering to.
 pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
-    edit_rec(dir, rel, |r| {
+    edit_row(dir, rel, |r| {
         let mut kept = DigestSet::default();
         for (a, d) in r.hashes.iter() {
             if a.as_str() != algo {
@@ -344,7 +400,7 @@ pub fn strip_algo(dir: &Path, rel: &str, algo: &str) {
 /// mtime. The stat still matches, so only the content disagrees — the case where
 /// a digest is the only thing that can decide the pair.
 pub fn poison_digest(dir: &Path, rel: &str, algo: &str) {
-    edit_rec(dir, rel, |r| {
+    edit_row(dir, rel, |r| {
         // By *name*, so the length that gets replaced is whatever the row really
         // holds -- including the unexpected length a corrupt row would carry.
         let n = r.hashes.get_named(algo).map(|d| d.len()).unwrap_or(32);
@@ -394,6 +450,26 @@ pub type Spec = (&'static str, Side, Side);
 ///
 /// With `warmed: false` both caches are left cold.
 pub fn pair(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    pair_with(t, spec, algos, warmed, TestCacheBackend::File)
+}
+
+/// [`pair`] warmed into the shared in-memory cache.
+///
+/// Only the fixture's own rows move: the suite still calls `recs_of`, which
+/// finds the memory entry, so a case can assert the same record contents it did
+/// against a file cache. Use it together with [`opts_mem`] — a file-backed run
+/// cannot see rows written to memory.
+pub fn pair_mem(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBuf, PathBuf) {
+    pair_with(t, spec, algos, warmed, TestCacheBackend::Memory)
+}
+
+fn pair_with(
+    t: &TempDir,
+    spec: &[Spec],
+    algos: &[&str],
+    warmed: bool,
+    backend: TestCacheBackend,
+) -> (PathBuf, PathBuf) {
     let s = t.subdir("src");
     let d = t.subdir("dst");
     for (rel, sb, db) in spec {
@@ -417,7 +493,10 @@ pub fn pair(t: &TempDir, spec: &[Spec], algos: &[&str], warmed: bool) -> (PathBu
     }
     if warmed {
         for dir in [&s, &d] {
-            let o = with_algos(algos);
+            let o = CommonOpts {
+                test_cache: backend,
+                ..with_algos(algos)
+            };
             girsync::cmd_update(
                 girsync::UpdateOpts {
                     dir: dir.clone(),
@@ -444,6 +523,15 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
     }
 }
 
+/// [`with_algos`] backed by the shared in-memory cache, for a fixture that was
+/// warmed with [`pair_mem`].
+pub fn with_algos_mem(algos: &[&str]) -> CommonOpts {
+    CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..with_algos(algos)
+    }
+}
+
 /// The exact phase sequence `cmd_compare` runs — open both sides, one
 /// `plan_pairs`, resolve both — with the per-side trust flags applied.
 ///
@@ -451,7 +539,13 @@ pub fn with_algos(algos: &[&str]) -> CommonOpts {
 /// the planner decided *and* what the sides ended up reading. Every phase
 /// happens here, in this order; that is the property under test.
 pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, SideScan) {
-    let common = with_algos(&["md5"]);
+    // Semantic harness: the callers assert maps and verdicts, so the caches can
+    // live in memory. A caller with a warmed fixture must have warmed it with
+    // `pair_mem`, or this resolve starts cold.
+    let common = CommonOpts {
+        test_cache: TestCacheBackend::Memory,
+        ..with_algos(&["md5"])
+    };
     let src = classify(src);
     let dst = classify(dst);
     ensure_distinct_sides(&src, &dst).unwrap();
