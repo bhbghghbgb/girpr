@@ -1893,20 +1893,26 @@ mod tests {
         assert!(text.ends_with('\n'), "ndjson must be newline-terminated");
     }
 
-    /// A writer that announces it has started writing, then stays inside
-    /// `write` for long enough that a lock held across the write is observable.
+    /// A writer that announces it has entered `write`, then blocks there until
+    /// the test releases it — a rendezvous, so the lock's state can be observed
+    /// with no timing assumption.
+    ///
+    /// Only the first `write` call takes part: the pair is `take`n, so later calls
+    /// pass straight through. A single release therefore cannot deadlock if
+    /// `write_ndjson_to` calls `write` more than once. The release wait still has
+    /// a timeout as a deadlock guard, so a panicking test fails rather than hangs.
     struct SlowWrite {
-        started: std::sync::mpsc::Sender<()>,
+        rendezvous: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
     }
 
     impl std::io::Write for SlowWrite {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            // One signal, however many times `write` is called.
-            // Unbounded std channel: `send` only fails if the receiver is gone, and
-            // the receiver is alive here. Only the first call matters; the rest are
-            // buffered and never read.
-            let _ = self.started.send(());
-            std::thread::sleep(std::time::Duration::from_millis(150));
+            if let Some((entered, release)) = self.rendezvous.take() {
+                let _ = entered.send(());
+                // The test is alive and sends after its `try_lock`; the timeout
+                // only stops a failing test from hanging the runner.
+                let _ = release.recv_timeout(std::time::Duration::from_secs(5));
+            }
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -1988,10 +1994,11 @@ mod tests {
     /// is shared with the fetchers: a slow disk holding the log lock would stall
     /// every in-flight request's bookkeeping.
     ///
-    /// So it is checked directly. The writer is held inside `write` for 150 ms; if
-    /// the lock were held across that window, `try_lock` could not succeed for any
-    /// of it. Correct code releases the lock before writing, so `try_lock` succeeds
-    /// on the first attempt.
+    /// So it is checked directly. The writer signals from inside `write` and then
+    /// blocks there until the test releases it; if the lock were held across that
+    /// window, `try_lock` could not succeed while the writer waits. Correct code
+    /// releases the lock before writing, so `try_lock` succeeds on the first
+    /// attempt — and the rendezvous means that is observed, not assumed.
     #[test]
     fn the_write_happens_with_the_log_lock_released() {
         use std::sync::mpsc;
@@ -2018,18 +2025,23 @@ mod tests {
             });
         }
 
-        let (tx, rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
         let writer_log = log.clone();
         let handle = std::thread::spawn(move || {
-            let mut w = SlowWrite { started: tx };
+            let mut w = SlowWrite {
+                rendezvous: Some((entered_tx, release_rx)),
+            };
             writer_log.write_ndjson_to(&mut w).expect("write");
         });
 
-        rx.recv_timeout(Duration::from_secs(5))
-            .expect("the writer should have reached write()");
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the writer should have entered write()");
 
-        // We are now inside the writer's sleep, on the other thread.
+        // The writer is inside `write` and parked there, on the other thread.
         let free = log.0.try_lock().is_ok();
+        release_tx.send(()).expect("the writer is waiting");
         handle.join().expect("writer thread");
 
         assert!(
@@ -2389,20 +2401,20 @@ mod tests {
         // that worker for its whole duration — which is what makes `--jobs 64` on
         // a 4-core box stall with every worker asleep.
         //
-        // The margin is deliberate and wide: blocked, this takes >= 300 ms;
-        // yielding, it takes ~30 ms. A timing assertion is only meaningful if
-        // the two outcomes are far apart rather than close.
+        // The margin is still wide relative to the work: blocked, this takes
+        // >= 100 ms; yielding, it takes ~10 ms. A timing assertion is only
+        // meaningful if the two outcomes are far apart rather than close.
         let waiter = tokio::spawn(async {
-            RealSleep.sleep(Duration::from_millis(300)).await;
+            RealSleep.sleep(Duration::from_millis(100)).await;
         });
         let started = Instant::now();
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         let elapsed = started.elapsed();
         waiter.await.expect("the waiter finished");
 
         assert!(
-            elapsed < Duration::from_millis(200),
-            "a 30 ms sleep took {elapsed:?} while one task waited 300 ms: \
+            elapsed < Duration::from_millis(60),
+            "a 10 ms sleep took {elapsed:?} while one task waited 100 ms: \
              the waiter is holding the only worker"
         );
     }
@@ -2530,15 +2542,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_transport_failure_is_retried_and_reported_as_transport() {
-        // A port nothing is listening on: connection refused on every attempt.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
+        // Port 0 is not connectable, so every attempt is refused immediately:
+        // on Windows a closed high port would instead wait ~2 s for its SYN
+        // retry. The error under test is still a transport failure, not a status.
         let sleeper = Arc::new(RecordingSleep::default());
         let f = fetcher(2, sleeper.clone());
         let err = f
-            .get(&format!("http://127.0.0.1:{port}/x"), Kind::Api, None)
+            .get("http://127.0.0.1:0/x", Kind::Api, None)
             .await
             .expect_err("nothing is listening");
 
@@ -2556,7 +2566,7 @@ mod tests {
             "no response means no status: {:?}",
             records.iter().map(|r| r.status).collect::<Vec<_>>()
         );
-        assert!(err.url().unwrap().contains(&format!("127.0.0.1:{port}")));
+        assert!(err.url().unwrap().contains("127.0.0.1:0"));
     }
 
     /// A body to stream: big enough to arrive in several chunks, binary enough to
