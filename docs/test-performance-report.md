@@ -499,3 +499,21 @@ parallel CI run.
 
 P0 alone is the highest-value change per line of diff: **four edits, ~30 s, no behavioural
 risk**, and it makes the `gircap` suite roughly 30 s faster on every machine regardless of disk.
+
+---
+
+## 8. Implementation status
+
+This section is updated by the task that lands each change. A task is `done` only when the
+targeted tests pass and the change is committed; `skipped` records a deliberate decision not to
+apply a recommendation.
+
+| Task | Scope | Status | Commit / note |
+|---|---|---|---|
+| T1 | P0 #1–#4: remove the dead loopback port and the real sleeps in `gircap` | pending | |
+| T2 | P1 #5–#8: use the memory cache in the subprocess tests that do not assert it, and shrink the 24-file fixture | pending | |
+| T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | pending | |
+| T4 | P3 #11–#12: test-only file-`sync_all` gates for `girsync` copies and `girpr` config writes | pending | |
+| T5 | P2 #9–#10: fewer cache opens in `migration_lock`, one temp root for the `why` table | pending | |
+| T6 | Final workspace verification and measured before/after summary | pending | |
+| — | P4: consolidate the capture suites | skipped | Optional, high churn; the suites are CPU-bound and parallelise well. |
