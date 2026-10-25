@@ -1588,7 +1588,6 @@ mod tests {
     use super::*;
     use crate::biz::{Biz, BranchParams};
     use crate::cli::Biz as BizId;
-    use std::net::TcpListener;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
