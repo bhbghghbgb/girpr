@@ -25,9 +25,9 @@ use crate::report::Summary;
 use crate::util;
 
 use super::metadata::Meta;
-use super::scope::PathScope;
 use crate::repair::phases::plan::RepairPlan;
 use crate::repair::purge;
+use crate::repair::scope::PathScope;
 
 /// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
 /// the bytes are already repaired, so a half-finished bookkeeping write would

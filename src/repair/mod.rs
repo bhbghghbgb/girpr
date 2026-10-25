@@ -42,7 +42,6 @@ mod audio;
 mod file;
 pub mod lock;
 pub mod phases;
-mod post;
 pub mod purge;
 pub mod reuse;
 pub mod scan;
@@ -62,7 +61,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 
-use phases::{manifest, metadata, plan}; // temporary single import; grows in later steps
+use phases::{manifest, metadata, plan, post}; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
@@ -395,7 +394,8 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome =
+            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
@@ -485,7 +485,8 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // (check-only already returned, but gating on `readonly` keeps the
     // invariant obvious).
     if !readonly {
-        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome =
+            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     } else if ctx.dry_run
@@ -510,9 +511,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 /// `stopped=--max-delete-bytes` says which one — deletion is the one
 /// irreversible act in the tool, so a bounded delete that got refused has to be
 /// visible.
-fn finish(outcome: post::PostOutcome, summary: &mut Summary) -> i32 {
+fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
     match outcome {
-        post::PostOutcome::Ok | post::PostOutcome::DeletedNothing => 0,
+        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => 0,
         post::PostOutcome::DeleteCeiling => {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
