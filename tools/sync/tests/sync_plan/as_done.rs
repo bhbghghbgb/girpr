@@ -107,6 +107,7 @@ fn parallel_copies_actually_land_on_disk() {
         .arg("4")
         .arg("--output")
         .arg("json")
+        .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
         .expect("spawn girsync");
     assert!(out.status.success(), "sync failed");
@@ -144,13 +145,14 @@ fn a_multi_file_parallel_copy_reports_the_same_set_whatever_the_order() {
     let t = temp_root("asdone_many");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    // Increasing sizes, so the copies take measurably different times and completion
-    // order is free to diverge from plan order.
+    // Increasing sizes (1 KB up to ~920 KB, ~11 MB total), so the copies take
+    // measurably different times and completion order is free to diverge from plan
+    // order.
     for i in 0..24usize {
         wfile(
             &src,
             &format!("pad{i:02}.bin"),
-            &vec![b'x'; i * 200_000 + 1024],
+            &vec![b'x'; i * 40_000 + 1024],
         );
     }
     let recs = run(&src, &dst, &["--rw-threads", "4"]);

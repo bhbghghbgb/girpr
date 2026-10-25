@@ -70,6 +70,20 @@ fn bin(args: &[String]) -> (i32, String) {
     )
 }
 
+/// [`bin`] with the memory cache: for invocations whose assertions never read
+/// the cache back, since the child's memory cache dies with the child.
+fn bin_mem(args: &[String]) -> (i32, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args(args)
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    (
+        out.status.code().expect("girsync exits with a code"),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// Restore a file's mtime to a value captured earlier.
 ///
 /// Load-bearing wherever a *rewrite* is part of the fixture: rewriting moves the mtime,

@@ -40,7 +40,8 @@ fn update_warns_that_the_flags_do_not_apply_and_still_populates() {
     );
 
     // Unflagged, no warning: the default run must stay silent about them.
-    let (code, stderr) = bin(&["update".to_string(), "--dir".to_string(), d]);
+    // This half asserts stderr only, so the child can keep its cache in memory.
+    let (code, stderr) = bin_mem(&["update".to_string(), "--dir".to_string(), d]);
     assert_eq!(code, 0);
     assert!(
         !stderr.contains("no-trust"),
