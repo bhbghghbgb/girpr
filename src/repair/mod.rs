@@ -61,7 +61,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 
-use phases::{manifest, metadata, plan, post}; // temporary single import; grows in later steps
+use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
@@ -514,7 +514,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
     match outcome {
         phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => 0,
-        post::PostOutcome::DeleteCeiling => {
+        phases::post::PostOutcome::DeleteCeiling => {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );
