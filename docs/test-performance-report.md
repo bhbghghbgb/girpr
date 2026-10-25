@@ -515,5 +515,36 @@ apply a recommendation.
 | T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | done | `75bf000` — warm full-suite nextest (E:, 326 tests, alternating, 5 runs per arm): `Immediate` median 47.3 s (45.9–50.6) vs `none` median 39.9 s (35.3–55.0), **−7.4 s (−16%)**; the first three tightly paired runs were 46.2/45.9/47.3 vs 39.9/35.3/35.4 s (−9.6 s, −21%), and one later `none` run was a 55 s disk-contention outlier. Net of the +1.8 s setup-script cost; the raw commit saving is ~9 s. nextest 0.9.149 has no profile-level `env` table (it warns and ignores `profile.default.env`), so the opt-in is a setup script writing `$NEXTEST_ENV`. |
 | T4 | P3 #11–#12: test-only file-`sync_all` gates for `girsync` copies and `girpr` config writes | done | `24c5d0c` — warm nextest A/B (E: HDD, alternating runs): `girpr::repair_offline` + `repair_machinery` median 9.9 s fsync-on vs 7.6 s fsync-off (**−2.3 s, −23%**; 3 runs/arm); `girsync::sync_plan` 5.4 → 3.9 s (**−1.5 s, −27%**; 3 runs/arm); full `girsync` 36.8 → 34.5 s (**−2.2 s, −6%**; 2 runs/arm). Trade-off: tests no longer exercise the fsync itself; production still defaults to durable and its flush is unchanged. |
 | T5 | P2 #9–#10: fewer cache opens in `migration_lock`, one temp root for the `why` table | done | `7bf6731` — warm nextest summaries (E: HDD, 2 runs/arm, ~1.7 s setup in both arms): `migration_lock` median 6.13 s → 5.32 s (**−0.8 s, −13%**); `why` 4.51 s → 3.98 s (**−0.5 s, −12%**). Per test: `lock_dry_run_changes_nothing` 4.23 → 2.53 s, `every_pair_state_has_one_classification_and_one_tag` 1.37 → 0.98 s. The dry run now compares cache-file length+mtime instead of row counts, so a rewrite that preserved the count would fail. |
-| T6 | Final workspace verification and measured before/after summary | pending | |
+| T6 | Final workspace verification and measured before/after summary | done | This docs commit records the row. Warm `cargo nextest run --workspace`: `1252 tests run: 1252 passed, 8 skipped` in 80.1 s (the preceding run was 93.1 s); serial HDD sweep 119.6 s vs the 199.8 s baseline (see "Measured outcome" below). |
 | — | P4: consolidate the capture suites | skipped | Optional, high churn; the suites are CPU-bound and parallelise well. |
+
+**Measured outcome.** On the same E: HDD, `cargo fmt --all -- --check` and
+`cargo check --workspace --all-targets` passed, and two warm `cargo nextest run --workspace` runs
+reported `1252 tests run: 1252 passed, 8 skipped` in 93.1 s and 80.1 s; the second is the warm
+wall. The serial sweep (`target/io-profile/after-e`, `SWEEP_SECONDS=119.9535874`, 1260 rows,
+`NonZeroExit=0`) totalled **119.6 s against the 199.8 s baseline, −80.2 s (−40%)**, below the
+~136 s estimate in §7. Part of that gap is order bias rather than the changes: the baseline was
+the first, cold sweep while this one ran warm, so the like-for-like saving is smaller than 80 s.
+The other measured movements — wait 136.5 → 60.1 s, write 154.5 → 57.7 MB, CPU 66.6 → 62.3 s —
+are the direction the removed delays and test-only fsync gates should move them, but one warm
+sample cannot separate them from cache effects.
+
+By crate, `girsync` fell 93.7 → 58.3 s (−35.4 s, −38%), `gircap` 82.2 → 49.7 s (−32.5 s, −40%),
+and `girpr` 23.5 → 11.1 s (−12.4 s, −53%); `girpr-log` and `girpr-tempdir` are unchanged. The
+largest suite moves are `gircap::cli_contract` 25.7 → 1.7 s (−24.0), the `gircap` unit suite
+19.7 → 12.0 s (−7.7), `girsync::sync_plan` 10.6 → 3.1 s (−7.5), `girpr::repair_offline`
+10.7 → 4.2 s (−6.5), `girsync::output` 7.5 → 1.1 s (−6.4), `girsync::compare` 11.0 → 6.8 s
+(−4.2) and `girsync::migration_lock` 8.6 → 4.5 s (−4.1).
+
+Not every suite improved. `girsync::hash_mode` was 3.4 s slower (5.2 → 8.6 s; its four
+`end_to_end` tests are 0.2–1.7 s slower each), as were the CPU-bound
+`gircap::capture_layout` 2.0 s (12.2 → 14.2 s), `girsync::compare_self` 0.8 s and
+`gircap::measured_fixture` 0.4 s. None of those four suites was modified by T1–T5, and every
+sweep row exited zero; with one sample each, treat the regressions as noise, not as an effect of
+the changes.
+
+The serial sweep invokes the test executables directly, so nextest's setup script does not run;
+the three hooks (`GIRSYNC_TEST_DURABILITY=none`, `GIRSYNC_TEST_NO_FSYNC=1`,
+`GIRPR_TEST_NO_FSYNC=1`) were exported explicitly in the PowerShell environment before the
+sweep. Under `cargo nextest run`, `.config/nextest.toml`'s setup script supplies the same three
+variables. P4 was deliberately skipped.
