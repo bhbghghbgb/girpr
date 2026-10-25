@@ -39,7 +39,6 @@
 //! 7. post-phase, then the caller prints `SUMMARY`.
 
 mod audio;
-mod check;
 mod file;
 pub mod lock;
 pub mod phases;
@@ -382,7 +381,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
+        let bad = phases::check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }

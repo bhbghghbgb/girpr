@@ -16,7 +16,7 @@ use crate::report::{self, Summary};
 use crate::util;
 
 use super::plan::RepairPlan;
-use super::scan::ScanReport;
+use crate::repair::scan::ScanReport;
 
 /// Verify the whole plan; returns the number of damaged files.
 ///

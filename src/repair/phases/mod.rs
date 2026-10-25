@@ -11,6 +11,7 @@
 //! | `--check-only` verify | `check` | step 6.5 |
 //! | post-phase | `post` | step 7 |
 
+pub mod check;
 pub mod manifest;
 pub mod metadata;
 pub mod plan;
