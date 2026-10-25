@@ -511,7 +511,7 @@ apply a recommendation.
 | Task | Scope | Status | Commit / note |
 |---|---|---|---|
 | T1 | P0 #1–#4: remove the dead loopback port and the real sleeps in `gircap` | done | `5d97c50` — `cli_contract` nextest summary 6.9 s → 0.8–2.8 s; the three `http::tests` 4.11 s → 0.13 s (4-core HDD). |
-| T2 | P1 #5–#8: use the memory cache in the subprocess tests that do not assert it, and shrink the 24-file fixture | pending | |
+| T2 | P1 #5–#8: use the memory cache in the subprocess tests that do not assert it, and shrink the 24-file fixture | done | `59bad4b` — warm nextest summaries (E:): `output` 5.3–5.8 s → 0.6–1.5 s, `sync_plan` 7.6–7.9 s → 4.6 s, `stat_trust` 2.8–3.0 s → ~2.3 s (HDD noise). |
 | T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | pending | |
 | T4 | P3 #11–#12: test-only file-`sync_all` gates for `girsync` copies and `girpr` config writes | pending | |
 | T5 | P2 #9–#10: fewer cache opens in `migration_lock`, one temp root for the `why` table | pending | |
