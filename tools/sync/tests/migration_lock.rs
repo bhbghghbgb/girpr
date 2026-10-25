@@ -83,6 +83,22 @@ fn recs(dir: &std::path::Path) -> HashMap<String, girsync::cache::FileRec> {
     common::recs_of(dir)
 }
 
+/// The cache file's length and mtime: what a run that leaves the file alone
+/// must not change.
+///
+/// Cheaper and stricter than [`recs`] for that question: it does not reopen
+/// redb (an open costs ~0.5 s on the HDD), and it sees a rewrite that keeps the
+/// row count but changes the bytes. Taking it succeeds only if the file exists,
+/// which is also the proof that a cache was there before the run.
+fn cache_snapshot(dir: &std::path::Path) -> (u64, std::time::SystemTime) {
+    let meta = std::fs::metadata(dir.join(CACHE_PREFIX))
+        .unwrap_or_else(|e| panic!("{} has a cache file: {e}", dir.display()));
+    (
+        meta.len(),
+        meta.modified().expect("the cache file has an mtime"),
+    )
+}
+
 /// The cache path exists after update, and files + dirs are recorded with hashes.
 ///
 #[test]
@@ -417,7 +433,12 @@ fn lock_record_side_is_read_only() {
 }
 
 /// Dry-run sync changes no disk bytes, creates no backups, and leaves the
-/// caches' logical content identical.
+/// caches' files byte-identical.
+///
+/// The caches are compared by file length and mtime instead of by reopening redb
+/// and counting rows. That avoids two more opens (each ~0.5 s on the HDD), and it
+/// is the stronger assertion: a dry run that rewrote a cache while preserving its
+/// row count would pass a count comparison but not a byte-level one.
 #[test]
 fn lock_dry_run_changes_nothing() {
     let t = temp_root("lock_dry");
@@ -428,8 +449,9 @@ fn lock_dry_run_changes_nothing() {
     // Pre-create both caches so dry-run has no reason to create anything.
     cmd_update(update(src.clone()), &log()).unwrap();
     cmd_update(update(dst.clone()), &log()).unwrap();
-    let src_before = recs(&src);
-    let dst_before = recs(&dst);
+    // Reading the metadata also asserts the caches exist before the run.
+    let src_before = cache_snapshot(&src);
+    let dst_before = cache_snapshot(&dst);
 
     assert_eq!(
         cmd_sync(common::sync_dry(src.clone(), dst.clone()), &log()).unwrap(),
@@ -441,8 +463,16 @@ fn lock_dry_run_changes_nothing() {
         !common::has_backup_sibling(&dst.join(CACHE_PREFIX)),
         "dry-run makes no backups"
     );
-    assert_eq!(recs(&src).len(), src_before.len());
-    assert_eq!(recs(&dst).len(), dst_before.len());
+    assert_eq!(
+        cache_snapshot(&src),
+        src_before,
+        "dry-run leaves the src cache file untouched"
+    );
+    assert_eq!(
+        cache_snapshot(&dst),
+        dst_before,
+        "dry-run leaves the dst cache file untouched"
+    );
 }
 
 /// Empty dirs and nesting survive a full sync and compare equal after.
