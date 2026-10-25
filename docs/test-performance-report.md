@@ -301,7 +301,7 @@ write transaction is created.
 
 | # | Change | File | Save |
 |---|---|---|---:|
-| 8a | Add `GIRSYNC_TEST_DURABILITY=none`; set `WriteTransaction::set_durability(Durability::None)` in `CacheWrite::with_limits`, `CacheWrite::flush_txn` and `CacheDb::init_meta` | `tools/sync/src/cache/write.rs:116,209`, `tools/sync/src/cache/db.rs:97` | **~14 s** |
+| 8a | Add `GIRSYNC_TEST_DURABILITY=none`; set `WriteTransaction::set_durability(Durability::None)` in `CacheWrite::with_limits`, `CacheWrite::flush_txn` and `CacheDb::init_meta` | `tools/sync/src/cache/write.rs:116,203`, `tools/sync/src/cache/db.rs:110` | **~14 s** |
 
 All command write transactions already funnel through `CacheWrite` (`apply`, `rename`, `convert`
 and both phases), so this is **three call sites, not one per command**. The probe patch was one
@@ -347,7 +347,7 @@ Two details keep the drop path honest:
 
 - `girsync`'s `main` returns `ExitCode`, not `process::exit`, specifically so destructors run
   (`tools/sync/src/main.rs:7-13`). The only `process::exit` calls in the crate are `sled2redb`'s
-  usage and error paths (`src/bin/sled2redb.rs:15,72`). The usage path exits before opening a
+  usage and error paths (`tools/sync/src/bin/sled2redb.rs:15,72`). The usage path exits before opening a
   cache, but the error path can skip the drop flush; either fix that path or leave the gate off
   for that binary.
 - `Durability::None` is refused in redb's multiprocess modes. The crate uses the default
