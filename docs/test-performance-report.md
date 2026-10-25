@@ -510,7 +510,7 @@ apply a recommendation.
 
 | Task | Scope | Status | Commit / note |
 |---|---|---|---|
-| T1 | P0 #1–#4: remove the dead loopback port and the real sleeps in `gircap` | pending | |
+| T1 | P0 #1–#4: remove the dead loopback port and the real sleeps in `gircap` | done | `5d97c50` — `cli_contract` nextest summary 6.9 s → 0.8–2.8 s; the three `http::tests` 4.11 s → 0.13 s (4-core HDD). |
 | T2 | P1 #5–#8: use the memory cache in the subprocess tests that do not assert it, and shrink the 24-file fixture | pending | |
 | T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | pending | |
 | T4 | P3 #11–#12: test-only file-`sync_all` gates for `girsync` copies and `girpr` config writes | pending | |
