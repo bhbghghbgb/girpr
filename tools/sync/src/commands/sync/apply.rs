@@ -520,6 +520,26 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
     Ok(())
 }
 
+/// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
+///
+/// Default **off**: an unset variable, or any value other than an unambiguous
+/// truthy one (`1`, `true`, `yes`, `on`), leaves the per-file `sync_all` in
+/// place. Production therefore always flushes a copied file before the verify
+/// re-read. Tests opt in through `.config/nextest.toml` so the HDD copy suites
+/// stop paying a flush per file; the value is read once per process, not once
+/// per copied file. The bytes written, the size/mtime checks and the cache
+/// records are unchanged, so content and reopen assertions still hold — the
+/// tests merely stop exercising the `sync_all` itself.
+fn test_no_fsync() -> bool {
+    static NO_FSYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NO_FSYNC.get_or_init(|| {
+        matches!(
+            std::env::var("GIRSYNC_TEST_NO_FSYNC").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+        )
+    })
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
@@ -531,8 +551,9 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
 /// the bytes went past would compare a value with itself — equal by
 /// construction, so `verify hash mismatch` could never fire and would read as a
 /// guarantee while checking nothing. Because the re-read happens after
-/// `sync_all()`, it also hashes the bytes that actually reached the disk, which
-/// is the only way this catches silent corruption on the way down.
+/// `sync_all()` (or, under the test-only hook above, after the write is
+/// dropped), it also hashes the bytes that actually reached the disk, which is
+/// the only way this catches silent corruption on the way down.
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
@@ -567,7 +588,9 @@ fn copy_one(src_root: &Path, dst_root: &Path, rel: &str, algos: &[HashAlg]) -> R
     let set = AlgoSet::from_iter(algos.iter().copied());
     let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
-    fout.sync_all().ok();
+    if !test_no_fsync() {
+        fout.sync_all().ok();
+    }
     drop(fout);
     // preserve mtime
     if let Some(st) = smtime_sys {
