@@ -17,7 +17,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient, production_bases};
 use crate::util;
 
-use super::audio;
+use crate::repair::audio;
 
 /// Everything steps 3+ need from steps 1–2.
 pub struct Meta {

@@ -43,14 +43,14 @@ mod check;
 mod file;
 pub mod lock;
 mod manifest;
-mod metadata;
+pub mod phases;
 mod plan;
 mod post;
 pub mod reuse;
 pub mod scan;
 pub mod scope;
 
-pub use metadata::Meta;
+pub use phases::metadata::Meta;
 pub use plan::purge::PurgeVerdict;
 pub use plan::{PlannedFile, PurgeCandidate, PurgePlan, RepairPlan};
 pub use scope::PathScope;
@@ -63,6 +63,8 @@ use anyhow::Context;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
+
+use phases::metadata; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
