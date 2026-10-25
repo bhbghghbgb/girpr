@@ -512,7 +512,7 @@ apply a recommendation.
 |---|---|---|---|
 | T1 | P0 #1–#4: remove the dead loopback port and the real sleeps in `gircap` | done | `5d97c50` — `cli_contract` nextest summary 6.9 s → 0.8–2.8 s; the three `http::tests` 4.11 s → 0.13 s (4-core HDD). |
 | T2 | P1 #5–#8: use the memory cache in the subprocess tests that do not assert it, and shrink the 24-file fixture | done | `59bad4b` — warm nextest summaries (E:): `output` 5.3–5.8 s → 0.6–1.5 s, `sync_plan` 7.6–7.9 s → 4.6 s, `stat_trust` 2.8–3.0 s → ~2.3 s (HDD noise). |
-| T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | pending | |
+| T3 | P1.5 #8a: `GIRSYNC_TEST_DURABILITY=none` for test cache commits | done | `75bf000` — warm full-suite nextest (E:, 326 tests, 3 runs each, alternating): `Immediate` 46.2 / 45.9 / 47.3 s (mean 46.5 s) vs `none` 39.9 / 35.3 / 35.4 s (mean 36.9 s), **−9.6 s (−21%)** net of the +1.8 s setup-script cost. nextest 0.9.149 has no profile-level `env` table (it warns and ignores `profile.default.env`), so the opt-in is a setup script writing `$NEXTEST_ENV`; the raw commit saving without that overhead is ~11.4 s. |
 | T4 | P3 #11–#12: test-only file-`sync_all` gates for `girsync` copies and `girpr` config writes | pending | |
 | T5 | P2 #9–#10: fewer cache opens in `migration_lock`, one temp root for the `why` table | pending | |
 | T6 | Final workspace verification and measured before/after summary | pending | |
