@@ -21,7 +21,7 @@ use super::manifest::LocalChunkMap;
 use crate::repair::scope::PathScope;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PlannedFile {
     /// `/`-separated rel path, as it appears in the manifest.
     pub rel: String,
@@ -82,8 +82,17 @@ impl PlannedFile {
                 out.overlaps.push((prev_offset, offset));
                 out.tiled = false;
             }
-            if offset + len > cursor {
-                cursor = offset + len;
+            // Offsets and sizes are i64 from the manifest (already filtered
+            // for negatives above); the sum can still wrap u64 at the extreme
+            // end, so use checked arithmetic and give up tiling rather than
+            // wrapping to a nonsense cursor.
+            let Some(end) = offset.checked_add(len) else {
+                out.tiled = false;
+                prev_offset = offset;
+                continue;
+            };
+            if end > cursor {
+                cursor = end;
                 prev_offset = offset;
             }
         }
@@ -114,6 +123,7 @@ pub struct Layout {
 }
 
 /// The sorted, deduped work list for one run.
+#[derive(Debug, Clone)]
 pub struct RepairPlan {
     pub latest: String,
     pub files: Vec<PlannedFile>,
@@ -174,7 +184,7 @@ pub fn build_plan(
     blacklist: &HashSet<String>,
     latest_tag: &str,
     scope: &PathScope,
-) -> RepairPlan {
+) -> Result<RepairPlan, anyhow::Error> {
     let mut files: Vec<PlannedFile> = Vec::new();
     let mut prefix: HashMap<String, String> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -185,6 +195,13 @@ pub fn build_plan(
                 continue;
             }
             let rel = f.file.replace('\\', "/");
+            // A manifest rel that escapes the install root (`..` segments,
+            // absolute paths, a drive root such as `C:`) would make
+            // `game_dir.join(normalize_rel(&rel))` land outside `game_dir`
+            // wherever the plan is used: repair targets, scan reads, reuse
+            // slices, purge candidates. Fail the plan (exit 2: the manifest
+            // is server data, not a user typo) rather than write outside.
+            validate_rel(&rel)?;
             if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(rel.clone()) {
                 continue;
             }
@@ -234,11 +251,31 @@ pub fn build_plan(
     }
     // Stable order so log lines and the parallel spawn order are reproducible.
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    RepairPlan {
+    Ok(RepairPlan {
         latest: latest_tag.to_string(),
         files,
         url_prefix_by_file: prefix,
+    })
+}
+
+/// Reject a manifest rel path that escapes the install root: `..` segments,
+/// absolute paths (leading `/`), and drive-rooted paths on Windows
+/// (`C:/evil`). After the backslash-to-slash normalization, `game_dir.join`
+/// on any of these lands outside `game_dir`, so a hostile or corrupt manifest
+/// must fail the plan rather than drive reads/writes outside the install.
+fn validate_rel(rel: &str) -> Result<(), anyhow::Error> {
+    if rel.starts_with('/') {
+        anyhow::bail!("manifest path escapes the install root: {rel}");
     }
+    for seg in rel.split('/') {
+        if seg == ".." {
+            anyhow::bail!("manifest path escapes the install root: {rel}");
+        }
+    }
+    if std::path::Path::new(rel).is_absolute() {
+        anyhow::bail!("manifest path escapes the install root: {rel}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -352,7 +389,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         let offsets: Vec<i64> = plan.files[0].chunks.iter().map(|c| c.offset).collect();
         assert_eq!(offsets, vec![0, 64, 128]);
     }
@@ -367,7 +404,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files[0].chunks.len(), 1);
         assert_eq!(plan.files[0].chunks[0].id, "c0");
     }
@@ -385,7 +422,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         let layout = plan.files[0].layout();
         assert!(!layout.tiled);
@@ -419,7 +456,7 @@ mod tests {
         ];
         let per = vec![("http://x".to_string(), files)];
         let bl: HashSet<String> = ["drop.dat".to_string()].into_iter().collect();
-        let plan = build_plan(per, &bl, "5.0", &PathScope::default());
+        let plan = build_plan(per, &bl, "5.0", &PathScope::default()).unwrap();
         assert_eq!(
             plan.files
                 .iter()
@@ -452,7 +489,7 @@ mod tests {
             ("http://x".to_string(), vec![dup.clone()]),
             ("http://y".to_string(), vec![dup, folder]),
         ];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
@@ -489,13 +526,104 @@ mod tests {
             &HashSet::new(),
             "5.0",
             &PathScope::new(&inc, &[]).unwrap(),
-        );
+        )
+        .unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
         assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
         assert!(
             !plan.url_prefix_by_file.contains_key("game/bar.dat"),
             "a dropped path must not keep a prefix entry either"
+        );
+    }
+
+    /// Manifest rel paths that escape the install root fail the plan (exit 2:
+    /// the manifest is server data, not a user typo) instead of landing in it.
+    #[test]
+    fn build_plan_refuses_dotdot_segments() {
+        let traversal = SophonChunkFile {
+            file: "../outside.dat".into(),
+            chunks: vec![],
+            is_folder: false,
+            size: 1,
+            md5: "m".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![traversal])];
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("escapes the install root"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// A leading `/` is absolute and is refused the same way.
+    #[test]
+    fn build_plan_refuses_absolute_path() {
+        let absolute = SophonChunkFile {
+            file: "/abs/evil.dat".into(),
+            chunks: vec![],
+            is_folder: false,
+            size: 1,
+            md5: "m".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![absolute])];
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("escapes the install root"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Backslashes are normalized to `/` before the check, so `..\..\` is
+    /// refused too.
+    #[test]
+    fn build_plan_refuses_backslash_traversal() {
+        let traversal = SophonChunkFile {
+            file: "..\\..\\outside.dat".into(),
+            chunks: vec![],
+            is_folder: false,
+            size: 1,
+            md5: "m".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![traversal])];
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("escapes the install root"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Plain relative paths still reach the plan, and a file whose name merely
+    /// contains `..` (like `..x.dat`) is not a traversal segment.
+    #[test]
+    fn build_plan_admits_plain_relative_paths() {
+        let files = vec![
+            SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: "m".into(),
+            },
+            SophonChunkFile {
+                file: "..x.dat".into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: "m".into(),
+            },
+        ];
+        let per = vec![("http://x".to_string(), files)];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+        assert_eq!(
+            plan.files
+                .iter()
+                .map(|f| f.rel.as_str())
+                .collect::<Vec<_>>(),
+            vec!["..x.dat", "a/b.dat"]
         );
     }
 }

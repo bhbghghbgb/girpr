@@ -39,13 +39,14 @@
 mod common;
 
 use common::{
-    LATEST_TAG, MockOpts, MockServer, build_fixture, build_moved_fixture, read_game_file, temp_dir,
-    write_game_file,
+    LATEST_TAG, MockOpts, MockServer, build_fixture, build_moved_fixture, encode_manifest,
+    read_game_file, temp_dir, write_game_file, FixtureChunk, FixtureFile, GameFixture,
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::sleep::NoSleep;
 use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
-use std::collections::HashSet;
+use girpr::sophon::{SophonChunk, SophonChunkFile};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -3380,5 +3381,134 @@ async fn deprecated_files_call_carries_the_per_launcher_channel() {
         assert!(!t.contains("channel="), "{api} must omit channel: {t}");
     }
 
+    mock.stop();
+}
+
+// ---------------------------------------------------------------------------
+// pinning tests for the adversarial review findings (F-1, F-2)
+// ---------------------------------------------------------------------------
+
+/// A manifest advertising a chunk at offset `i64::MAX` must fail the file
+/// (exit 3, `failed=1`) instead of panicking the repair task and letting the
+/// run exit 0 with an unrepaired file.
+#[tokio::test]
+async fn a_huge_manifest_offset_fails_the_file_instead_of_panicking() {
+    let payload = vec![0x41u8; 16];
+    let empty_md5 = "00000000000000000000000000000000";
+    let pb_files = vec![SophonChunkFile {
+        file: "game/foo.dat".into(),
+        chunks: vec![SophonChunk {
+            id: "chunk_huge_offset".into(),
+            uncompressed_md5: empty_md5.into(),
+            offset: i64::MAX,
+            compressed_size: 16,
+            uncompressed_size: 16,
+            unknown: 0,
+            compressed_md5: empty_md5.into(),
+        }],
+        is_folder: false,
+        size: 16,
+        md5: empty_md5.into(),
+    }];
+    let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
+    let fx = GameFixture {
+        latest_tag: LATEST_TAG.to_string(),
+        manifest_id: "manifest_test_game_001".into(),
+        manifest_zstd,
+        manifest_checksum,
+        files: vec![FixtureFile {
+            rel: "game/foo.dat".into(),
+            md5: empty_md5.into(),
+            data: payload.clone(),
+            chunks: vec![FixtureChunk {
+                id: "chunk_huge_offset".into(),
+                data: payload,
+                offset: i64::MAX,
+            }],
+        }],
+        chunk_store: HashMap::new(),
+        corrupt_chunk_store: HashMap::new(),
+        local_manifest: None,
+        old_data: None,
+        disk: BTreeMap::new(),
+    };
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("huge_offset");
+    // `--repair-mode temp` forces the path whose `try_reuse_slice` did the
+    // unchecked `(offset + size) as u64` before the fix.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.repair_mode = RepairMode::Temp;
+    ctx.repair_mode_explicit = true;
+    let (summary, code) = repair::run(ctx)
+        .await
+        .expect("a corrupt offset must reach the SUMMARY, not panic the task");
+    assert_eq!(code, 3, "a failed file is exit 3, never exit 0");
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        1,
+        "the oversized chunk must fail the file"
+    );
+    assert_eq!(summary.files_total, 1);
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
+    assert!(
+        read_game_file(&dir, "game/foo.dat").is_none(),
+        "no file was repaired"
+    );
+    mock.stop();
+}
+
+/// A manifest rel with `..` segments fails the plan (exit 2) before anything
+/// is created, so nothing is written outside `game_dir`.
+#[tokio::test]
+async fn a_traversing_manifest_path_fails_the_plan() {
+    let empty_md5 = "00000000000000000000000000000000";
+    let pb_files = vec![SophonChunkFile {
+        file: "../outside.dat".into(),
+        chunks: vec![SophonChunk {
+            id: "chunk_escape".into(),
+            uncompressed_md5: empty_md5.into(),
+            offset: 0,
+            compressed_size: 16,
+            uncompressed_size: 16,
+            unknown: 0,
+            compressed_md5: empty_md5.into(),
+        }],
+        is_folder: false,
+        size: 16,
+        md5: empty_md5.into(),
+    }];
+    let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
+    let fx = GameFixture {
+        latest_tag: LATEST_TAG.to_string(),
+        manifest_id: "manifest_test_game_001".into(),
+        manifest_zstd,
+        manifest_checksum,
+        files: vec![FixtureFile {
+            rel: "../outside.dat".into(),
+            md5: empty_md5.into(),
+            data: vec![0x41u8; 16],
+            chunks: vec![FixtureChunk {
+                id: "chunk_escape".into(),
+                data: vec![0x41u8; 16],
+                offset: 0,
+            }],
+        }],
+        chunk_store: HashMap::new(),
+        corrupt_chunk_store: HashMap::new(),
+        local_manifest: None,
+        old_data: None,
+        disk: BTreeMap::new(),
+    };
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let parent = temp_dir("traversal");
+    let dir = parent.join("game");
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
+        .await
+        .expect_err("a traversing rel must fail the plan");
+    assert_eq!(err.exit_code, 2, "a bad manifest rel is exit 2");
+    // The refusal comes before `create_dir_all`: nothing exists outside the
+    // install, and nothing exists inside it either.
+    assert!(!parent.join("outside.dat").exists(), "no write outside game_dir");
+    assert!(!dir.exists(), "the plan failure creates nothing");
     mock.stop();
 }

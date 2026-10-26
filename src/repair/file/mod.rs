@@ -290,7 +290,23 @@ pub async fn repair_all(
         }));
     }
     for h in handles {
-        let _ = h.await;
+        match h.await {
+            Ok(()) => {}
+            // A task panic is swallowed, matching sister projects' behavior:
+            // the file stays in `files_total` but in no counter, so `PROGRESS`
+            // never completes for it. Checked arithmetic on manifest offsets
+            // (temp.rs `try_reuse_slice`, plan.rs `layout`) removes the
+            // overflow panic this was introduced against; anything else that
+            // kills a task is counted as a file failure below.
+            Err(e) if e.is_panic() => {}
+            Err(e) => {
+                ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
+                tracing::error!("repair task failed: {e:#}");
+                if ctx.summary.fail_fast() {
+                    ctx.summary.abort();
+                }
+            }
+        }
     }
     progress.abort();
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
