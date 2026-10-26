@@ -22,7 +22,7 @@
 //! Production commits are durable (`Durability::Immediate`). Tests may lower
 //! that to `Durability::None` through `GIRSYNC_TEST_DURABILITY=none`, which
 //! removes the per-commit fsync but still flushes on a clean `Database` drop;
-//! see [`write_durability`].
+//! see `write_durability`.
 //!
 //! ## The submodules
 //!
@@ -30,7 +30,8 @@
 //! | --- | --- |
 //! | `schema` | [`Meta`] and [`FileRec`]: what a row *is* |
 //! | `codec` | the binary encoding of both, and its tests |
-//! | `db` | [`CacheDb`]: the read/write-or-read-only handle |
+//! | `db` | [`CacheDb`]: the read/write-or-read-only handle; `db/` now holds the
+//!   `backend`, `cachedb` and `handle` leaves |
 //! | `write` | [`CacheWrite`]: batched mutations and when they commit |
 //! | `open` | [`open_db`], the backups and snapshots, and the free functions over a handle |
 

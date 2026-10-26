@@ -230,7 +230,7 @@ impl<'a> CacheWrite<'a> {
     /// durability. In that case they survive a clean exit (redb flushes on
     /// `Database` drop) but not a kill. Production always keeps
     /// [`Durability::Immediate`](redb::Durability::Immediate); see
-    /// [`write_durability`](super::write_durability).
+    /// `write_durability`.
     pub fn commit(mut self) -> Result<()> {
         let txn = self.txn.take().context("write txn gone")?;
         txn.commit().context("commit cache")?;

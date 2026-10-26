@@ -16,13 +16,15 @@
 //!   flight, and whether the two sides draw on one counter or two
 //! - [`diff`] — path-set diffing
 //! - [`commands`] — `update`, `compare`, `compare-self`, `sync`
-//! - [`filter`], [`hash`], [`util`], [`logging`] — supporting primitives
+//! - [`filter`], [`util`], [`logging`] — supporting primitives
+//! - [`hash`] — directory module whose `mod.rs` is a facade; see [`hash`] for
+//!   the submodule map
 //! - [`report`] — the stdout data plane: [`report::Record`] rendered as text
 //!   or JSON by `--output`
 //!
-//! `cache`, `config`, `diff`, `effective`, `planner`, `report` and `rw` are each
-//! a directory module whose `mod.rs` is a facade; the leaves own one concern
-//! apiece.
+//! `cache`, `config`, `diff`, `effective`, `hash`, `planner`, `report` and `rw`
+//! are each a directory module whose `mod.rs` is a facade; the leaves own one
+//! concern apiece.
 //!
 //! Two channels, deliberately separate. **stdout** is the answer: differences,
 //! plan actions and summaries, as [`report::Record`]s in the `--output` format.

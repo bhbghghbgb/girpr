@@ -23,6 +23,11 @@
 use crate::cli::Biz as BizId;
 use crate::http::ApiError;
 
+// `percent` lives in `crate::encoding` now; this re-export keeps the
+// `crate::biz::percent` path that `report` and callers resolve today, and it
+// also brings `percent` into scope for `enc` below.
+pub use crate::encoding::percent;
+
 /// Which API/CDN family serves a region.
 ///
 /// `hk4e_cn` and `hk4e_bilibili` both live on the `mihoyo` family; the ids
@@ -376,22 +381,6 @@ pub fn enc(s: &str) -> String {
     }
     if !run.is_empty() {
         out.push_str(&percent(&run));
-    }
-    out
-}
-
-/// `%XX` for each byte, uppercase — the spelling `application/x-www-form-
-/// urlencoded` requires.
-///
-/// Public because `report` percent-encodes the same way for the `SUMMARY`
-/// line; two encoders that disagree would make a value unquotable.
-pub fn percent(bytes: &[u8]) -> String {
-    let hex = crate::hash::hex_bytes_upper(bytes);
-    let mut out = String::with_capacity(bytes.len() * 3);
-    for pair in hex.as_bytes().chunks(2) {
-        out.push('%');
-        out.push(pair[0] as char);
-        out.push(pair[1] as char);
     }
     out
 }

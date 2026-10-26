@@ -66,17 +66,23 @@ tools/capture/
 ├── src/
 │   ├── main.rs           # shim: parse -> tracing -> run -> records -> exit
 │   ├── lib.rs            # module map + re-exports + VERSION + SCHEMA_VERSION
-│   ├── cli.rs            # clap surface
-│   ├── exit.rs           # ExitCode enum + the exit-code table
-│   ├── failure.rs        # Failure, its four constructors, the failure summary
-│   ├── config.rs         # the resolved run plan: tags, classes, budgets, paths
-│   ├── biz.rs            # launcher/game ids, hyp+sophon bases, channel tuple
-│   ├── hash.rs           # md5/sha256 one-pass + one-shot, hex, gzip rule, zstd helpers
-│   ├── run.rs            # command dispatch: the four entry points
-│   ├── report.rs         # stdout data plane (single owner of println!)
-│   ├── logging.rs        # tracing init + the log file (JSON lines), over the shared log policy
+│   ├── encoding.rs       # shared percent-encoding (text + URL)
+│   ├── cli/mod.rs        # clap surface
+│   ├── exit/mod.rs       # ExitCode enum + the exit-code table
+│   ├── failure/mod.rs    # Failure, its four constructors, the failure summary
+│   ├── config/mod.rs     # the resolved run plan: tags, classes, budgets, paths
+│   ├── biz/mod.rs        # launcher/game ids, hyp+sophon bases, channel tuple
+│   ├── hash/mod.rs       # md5/sha256 one-pass + one-shot, hex, gzip rule, zstd helpers
+│   ├── run/mod.rs        # command dispatch: the four entry points
+│   ├── report/mod.rs     # stdout data plane (single owner of println!)
+│   ├── logging/mod.rs    # tracing init + the log file (JSON lines), over the shared log policy
 │   ├── http/
-│   │   ├── mod.rs        # Fetcher: retries, timeout, headers, reqlog sink, size ceiling
+│   │   ├── mod.rs        # module declarations + re-exports
+│   │   ├── error.rs      # ApiError
+│   │   ├── transport.rs  # RetryPolicy, SleepFuture, Sleep, RealSleep, RecordingSleep, DEFAULT_MAX_RESPONSE_BYTES, Transport
+│   │   ├── record.rs     # Kind, RequestRecord, ACCEPT, ACCEPT_ENCODING, header_map
+│   │   ├── log.rs        # RequestLog, now_rfc3339
+│   │   ├── fetcher.rs    # Fetcher, Fetched, Streamed, Destination + private helpers
 │   │   ├── probe.rs      # tag_probe.json + error_shapes.json
 │   │   └── negative.rs   # choosing the inputs for the negative probes
 │   ├── hyp/
@@ -125,7 +131,8 @@ tools/capture/
     └── bundle_diff.rs    # two captures of one fixture must agree
 ```
 
-`src/` is 42 files and `tests/` is 8. The largest file is `src/http/mod.rs`; the
+`src/` is 48 files and `tests/` is 8. The largest files are `src/report/mod.rs`
+and `src/select/mod.rs`; `src/http/mod.rs` is now a slim facade, and the
 orchestrator (`src/run.rs`) is one of the smaller ones, because each phase of a
 capture lives in the module that owns the work it does.
 

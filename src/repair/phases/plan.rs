@@ -7,22 +7,18 @@
 //! point in the pipeline — which is what the scope-of-work ceilings
 //! (`--max-files`, `--max-download-bytes`, `--max-delete-bytes`) and
 //! `--print-plan` are written against.
-//! [`purge`] owns the cleanup half; the repair half is this module.
+//! [`super::super::purge`] owns the cleanup half; the repair half is this module.
 //!
 //! The repair plan is derived from the **latest** manifest alone, which is what
 //! makes any-version → latest work: the local manifest is only ever an
 //! optimization (chunk reuse), never an input to correctness.
 
-pub mod purge;
-
 use std::collections::{HashMap, HashSet};
 
 use crate::sophon::{SophonChunk, SophonChunkFile};
 
-pub use purge::{PurgeCandidate, PurgePlan};
-
 use super::manifest::LocalChunkMap;
-use super::scope::PathScope;
+use crate::repair::scope::PathScope;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 #[derive(Clone)]

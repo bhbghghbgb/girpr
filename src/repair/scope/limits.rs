@@ -23,7 +23,8 @@
 //! finished plan; the impure side (the ledger the runtime stops read) lives in
 //! [`ledger`](super::ledger).
 
-use crate::repair::plan::{PurgePlan, RepairPlan};
+use crate::repair::phases::plan::RepairPlan;
+use crate::repair::purge::PurgePlan;
 
 /// What the pre-flight predicates are allowed to look at.
 ///
@@ -184,7 +185,8 @@ impl std::fmt::Display for LimitHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::plan::{PlannedFile, PurgeCandidate};
+    use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::purge::PurgeCandidate;
     use std::collections::HashMap;
     use std::path::PathBuf;
 

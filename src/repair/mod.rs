@@ -39,20 +39,17 @@
 //! 7. post-phase, then the caller prints `SUMMARY`.
 
 mod audio;
-mod check;
 mod file;
 pub mod lock;
-mod manifest;
-mod metadata;
-mod plan;
-mod post;
+pub mod phases;
+pub mod purge;
 pub mod reuse;
 pub mod scan;
 pub mod scope;
 
-pub use metadata::Meta;
-pub use plan::purge::PurgeVerdict;
-pub use plan::{PlannedFile, PurgeCandidate, PurgePlan, RepairPlan};
+pub use phases::metadata::Meta;
+pub use phases::plan::{PlannedFile, RepairPlan};
+pub use purge::{PurgeCandidate, PurgePlan, PurgeVerdict};
 pub use scope::PathScope;
 
 use std::sync::Arc;
@@ -63,6 +60,8 @@ use anyhow::Context;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
+
+use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
 /// Bring one install to the latest live version.
 ///
@@ -142,7 +141,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let plan = Arc::new(plan::build_plan(
+    let plan = Arc::new(phases::plan::build_plan(
         per_manifest,
         &meta.blacklist,
         &meta.latest,
@@ -174,7 +173,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
     let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| plan::purge::plan_purge(&game_dir, &plan, &plan::purge::keep_set(), scope));
+        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), scope));
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
@@ -372,7 +371,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         && !ctx.check_only
         && let Some(pp) = purge_plan.as_ref()
     {
-        let bytes = plan::purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
+        let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
@@ -381,7 +380,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
+        let bad = phases::check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
@@ -395,7 +394,8 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome =
+            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
@@ -485,7 +485,8 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // (check-only already returned, but gating on `readonly` keeps the
     // invariant obvious).
     if !readonly {
-        let outcome = post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome =
+            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     } else if ctx.dry_run
@@ -497,7 +498,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // nothing; the byte count stays 0 by design). Skipped when the
         // purge-before pass above already listed the same candidates, so
         // `--purge-before --purge-after --dry-run` does not log each file twice.
-        plan::purge::apply_purge(pp, true).map_err(RunFailure::write)?;
+        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))
@@ -510,10 +511,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 /// `stopped=--max-delete-bytes` says which one — deletion is the one
 /// irreversible act in the tool, so a bounded delete that got refused has to be
 /// visible.
-fn finish(outcome: post::PostOutcome, summary: &mut Summary) -> i32 {
+fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
     match outcome {
-        post::PostOutcome::Ok | post::PostOutcome::DeletedNothing => 0,
-        post::PostOutcome::DeleteCeiling => {
+        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => 0,
+        phases::post::PostOutcome::DeleteCeiling => {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );

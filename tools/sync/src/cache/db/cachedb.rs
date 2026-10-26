@@ -1,83 +1,18 @@
-//! [`CacheDb`]: the handle, read/write or read-only.
-//!
-//! The read/write-or-read-only distinction is a **type**, not a flag — see
-//! [`Handle`] — so "can this handle write?" has a real answer at every call site
-//! rather than a boolean somebody has to keep in step.
+//! [`CacheDb`] itself: the read/write-or-read-only handle and all of its
+//! methods.
 
 use anyhow::{Context, Result, bail};
-use redb::{Builder, Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
+use redb::{Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::path::Path;
+use std::sync::Arc;
 
-use super::codec::encode_meta;
-use super::codec::{decode_meta, decode_rec};
-use super::open::{is_table_missing, open_read_only, read_meta, require_current_version};
-use super::schema::{CACHE_VERSION, FileRec, Meta};
-use super::write::{CacheWrite, CommitLimits};
-use super::{ENTRIES, META_KEY, META_TBL};
-
-/// redb's default page cache is 1 GiB per handle. Tests run one process per
-/// test case (nextest), so parallel tests each reserve that much virtual
-/// memory and exhaust this machine's commit limit. Keep it small so they fit.
-const CACHE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
-
-/// A [`redb::Database`] builder with [`CACHE_SIZE`] applied, so every redb
-/// open in this crate sets the cache size from one place instead of repeating
-/// `.set_cache_size` at each call site.
-pub(super) fn redb_builder() -> Builder {
-    let mut b = Database::builder();
-    b.set_cache_size(CACHE_SIZE);
-    b
-}
-
-/// The redb handle a [`CacheDb`] wraps.
-///
-/// `ReadOnlyDatabase` is a distinct type rather than a flag on `Database`, so
-/// the two have to be matched on. Read-only handles *share* the file with each
-/// other; only a read/write handle excludes everyone, which is what makes the
-/// one-handle-per-file rule below about writers.
-pub(super) enum Handle {
-    /// `Arc` because a test memory cache is shared between the commands that open
-    /// it by the same path; a file cache has exactly one owner and the extra
-    /// indirection costs nothing measurable.
-    Writable(Arc<Database>),
-    ReadOnly(redb::ReadOnlyDatabase),
-}
-
-impl Handle {
-    pub(super) fn writable(&self) -> Option<&Database> {
-        match self {
-            Handle::Writable(d) => Some(d.as_ref()),
-            Handle::ReadOnly(_) => None,
-        }
-    }
-}
-
-impl ReadableDatabase for Handle {
-    fn begin_read(&self) -> std::result::Result<redb::ReadTransaction, redb::TransactionError> {
-        match self {
-            Handle::Writable(d) => d.begin_read(),
-            Handle::ReadOnly(d) => d.begin_read(),
-        }
-    }
-
-    fn cache_stats(&self) -> redb::CacheStats {
-        match self {
-            Handle::Writable(d) => d.cache_stats(),
-            Handle::ReadOnly(d) => d.cache_stats(),
-        }
-    }
-}
-
-/// The path-keyed in-memory caches tests share across calls.
-///
-/// One process is one test under `cargo nextest`, so this grows to at most the
-/// caches a single test opened and is released with the process.
-fn memory_registry() -> &'static Mutex<HashMap<PathBuf, Arc<Database>>> {
-    static CACHES: OnceLock<Mutex<HashMap<PathBuf, Arc<Database>>>> = OnceLock::new();
-    CACHES.get_or_init(|| Mutex::new(HashMap::new()))
-}
+use super::{Handle, memory_registry, redb_builder};
+use crate::cache::codec::{decode_meta, decode_rec, encode_meta};
+use crate::cache::open::{is_table_missing, open_read_only, read_meta, require_current_version};
+use crate::cache::schema::{CACHE_VERSION, FileRec, Meta};
+use crate::cache::write::{CacheWrite, CommitLimits};
+use crate::cache::{ENTRIES, META_KEY, META_TBL};
 
 /// An open redb cache file, read/write or read-only.
 ///
@@ -94,22 +29,22 @@ impl CacheDb {
     /// Wrap an already-open handle as this crate's participant side. The only
     /// place a [`Handle::Writable`] is built, so "who may create one" has one
     /// answer rather than one per caller.
-    pub(super) fn open_writable(db: Database) -> Self {
+    pub(in crate::cache) fn open_writable(db: Database) -> Self {
         Self {
             db: Handle::Writable(Arc::new(db)),
         }
     }
 
     /// Wrap an already-open handle as this crate's observer side.
-    pub(super) fn open_read_only(db: redb::ReadOnlyDatabase) -> Self {
+    pub(in crate::cache) fn open_read_only(db: redb::ReadOnlyDatabase) -> Self {
         Self {
             db: Handle::ReadOnly(db),
         }
     }
 
-    pub(super) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
+    pub(in crate::cache) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
         let mut txn = db.begin_write().context("begin write (meta)")?;
-        txn.set_durability(super::write_durability())
+        txn.set_durability(crate::cache::write_durability())
             .context("set cache write durability")?;
         let mut changed = false;
         {
@@ -172,7 +107,7 @@ impl CacheDb {
         Ok(())
     }
 
-    pub(super) fn open_file(db_path: &Path) -> Result<Database> {
+    pub(in crate::cache) fn open_file(db_path: &Path) -> Result<Database> {
         if db_path.is_dir() {
             bail!(
                 "cache {} is a directory (sled format): use --ignore-cache to rebuild or sled2redb to convert",
@@ -210,7 +145,7 @@ impl CacheDb {
     /// registry by the cache path gives that without touching the filesystem, so
     /// the assertions (which read rows) stay exactly what they were.
     ///
-    /// Only ever reached through [`TestCacheBackend::Memory`] or
+    /// Only ever reached through [`super::TestCacheBackend::Memory`] or
     /// `GIRSYNC_TEST_CACHE=memory`; production opens files.
     pub fn open_memory_cache(db_path: &Path, case_sensitive: bool) -> Result<Self> {
         let db = {
@@ -291,7 +226,7 @@ impl CacheDb {
     }
 
     /// True when this handle cannot write, i.e. it was opened
-    /// [`CacheOpen::ReadOnly`](super::CacheOpen::ReadOnly).
+    /// [`CacheOpen::ReadOnly`](crate::cache::CacheOpen::ReadOnly).
     pub fn is_read_only(&self) -> bool {
         matches!(self.db, Handle::ReadOnly(_))
     }
@@ -328,8 +263,8 @@ impl CacheDb {
     /// answer rather than an error — only the decoding is skipped. Order is
     /// redb's business and is not part of what a caller may rely on; membership
     /// is. There is deliberately no way to get a key and its value from here: a
-    /// caller that needs the value wants `load_all`, and one that does not should
-    /// not be able to ask for half of it by accident.
+    /// caller that needs the value wants `load_all`, and one that does not
+    /// should not be able to ask for half of it by accident.
     pub fn load_keys(&self) -> Result<Vec<String>> {
         let txn = self.db.begin_read().context("begin read")?;
         let tbl = match txn.open_table(ENTRIES) {
@@ -394,25 +329,14 @@ impl CacheDb {
     }
 }
 
-/// Test-only switch: which backend a folder cache is opened against.
-///
-/// `File` (the default, and the only one production ever uses) opens the
-/// real `<root>/girpr-cache` redb file. `Memory` serves
-/// [`CacheDb::open_temp`] instead, so semantic tests that assert sync
-/// results — not the cache file itself — pay no 1 MB create + fsync per
-/// command. Deliberately not exposed on the CLI; only test helpers set it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TestCacheBackend {
-    #[default]
-    File,
-    Memory,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::open::{CacheOpen, open_db};
+    use crate::cache::codec::encode_meta;
+    use crate::cache::open::{CacheOpen, open_db, read_meta};
     use crate::cache::schema::CACHE_PREFIX;
+    use crate::cache::write::CommitLimits;
+    use crate::cache::{CACHE_VERSION, ENTRIES, FileRec, META_KEY, META_TBL, Meta};
     use std::path::PathBuf;
 
     fn file_rec() -> FileRec {

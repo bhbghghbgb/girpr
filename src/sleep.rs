@@ -1,6 +1,6 @@
 //! Injectable sleep, so tests can skip retry backoff instead of spending it.
 //!
-//! Mirror of [`gircap::http::Sleep`]; kept in girpr because girpr has no
+//! Mirror of `gircap::http::Sleep`; kept in girpr because girpr has no
 //! dependency on gircap and the seam belongs to the crate that sleeps.
 
 use std::fmt;

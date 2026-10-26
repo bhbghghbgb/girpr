@@ -52,6 +52,7 @@ pub mod blobs;
 pub mod cli;
 pub mod config;
 pub mod emit;
+mod encoding;
 pub mod exit;
 pub mod failure;
 pub mod hash;

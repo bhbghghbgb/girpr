@@ -6,7 +6,7 @@
 //!
 //! The audio selection is resolved here rather than in step 1 because it needs
 //! `audio_pkg_scan_dir` from `getGameConfigs`; the work is split between this
-//! module (which calls it) and [`super::audio`] (which owns the file format).
+//! module (which calls it) and `audio` (which owns the file format).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -17,7 +17,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient, production_bases};
 use crate::util;
 
-use super::audio;
+use crate::repair::audio;
 
 /// Everything steps 3+ need from steps 1–2.
 pub struct Meta {

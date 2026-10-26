@@ -19,7 +19,7 @@ use crate::hyp::ChunkBuild;
 use crate::sleep::Sleep;
 use crate::sophon::{self, SophonChunkFile, WantedManifest};
 
-use super::RunFailure;
+use crate::config::RunFailure;
 
 /// `path -> [(uncompressed_md5, uncompressed_size, offset)]`, built from the
 /// local build's manifests. Keyed by path only: reuse is same-file-only (S2).
