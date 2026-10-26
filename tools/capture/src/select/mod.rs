@@ -495,6 +495,7 @@ pub fn select(
     let mut admitted: Vec<Admission> = Vec::new();
     let mut spent = Budget::unlimited();
     let mut forced_skipped: Vec<String> = Vec::new();
+    let mut rejected: Vec<Rejection> = Vec::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
@@ -509,7 +510,19 @@ pub fn select(
         };
         let cost = c.budget_cost();
         if !budget.admits(cost) {
-            break;
+            // Refused by the budget: record it rather than silently dropping it,
+            // and keep going — a refused forced path consumes nothing, so a
+            // later, cheaper one may still fit.
+            rejected.push(Rejection {
+                capture_id: c.candidate.capture_id(primary, 0),
+                primary_class: primary,
+                path: c.candidate.path.clone(),
+                matching_field: c.candidate.field.clone(),
+                state: c.candidate.state,
+                budget_cost: cost,
+                reason: unfunded(cost),
+            });
+            continue;
         }
         spent.charge(cost);
         admitted.push(Admission {
@@ -650,8 +663,6 @@ pub fn select(
     let costs: Vec<u64> = ordered.iter().map(|&i| wants[i].2.budget_cost()).collect();
     let (fates, final_budget) =
         budget::admit_in_order(&costs, Budget::with_spent(budget.limit(), initial));
-    let mut rejected: Vec<Rejection> = Vec::new();
-
     for (rank, i) in ordered.into_iter().enumerate() {
         let (class, ordinal, c) = &wants[i];
         if fates[rank] != Fate::Admitted {
@@ -1144,6 +1155,41 @@ mod tests {
             "the reason names what happened: {:?}",
             row.reason
         );
+    }
+
+    /// Later `--files` entries are **not** silently dropped when an earlier one
+    /// is refused by the budget. The refused one is recorded as `over_budget`
+    /// and the loop keeps going, so a cheaper forced path that follows it can
+    /// still be admitted.
+    ///
+    /// Pinning case: `--files a --files b` under a 200 B ceiling where `a`
+    /// costs 500 B (refused) and `b` costs 100 B (admitted). `a` is in
+    /// `rejected`, `b` is in `admitted`, neither is silently dropped.
+    #[test]
+    fn forced_paths_after_a_refused_one_are_recorded_not_dropped() {
+        let mk = |p: &str, size: i64| row(p, State::Added, None, size);
+        let pool = candidates(&[field("game", vec![mk("a", 500), mk("b", 100)])]);
+        let s = select(&pool, 1, Budget::capped(200), &["a".into(), "b".into()]);
+
+        let rejected_a = s
+            .rejected
+            .iter()
+            .find(|r| r.path == "a")
+            .expect("`a` is recorded as over budget, not dropped");
+        assert_eq!(rejected_a.budget_cost, 500);
+        assert!(
+            rejected_a.reason.contains("could not fund it"),
+            "reason: {:?}",
+            rejected_a.reason
+        );
+
+        assert!(
+            s.admitted.iter().any(|a| a.path == "b"),
+            "`b` was admitted despite `a` being refused first"
+        );
+
+        assert_eq!(s.rejected.len(), 1, "only `a` is rejected");
+        assert_eq!(s.admitted.len(), 1, "only `b` is admitted");
     }
 
     /// A class with no candidate is recorded as `unavailable` **with a reason**,
