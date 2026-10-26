@@ -71,12 +71,12 @@ All existing tests pass because manifests in the mock are well behaved.
 `config.ini` is exactly the launcher-desync scenario the post-phase ordering
 exists to prevent.
 
-**Recommended action.** Fix: await each handle and treat a panic/join error as
-a file failure (count `files_failed`, do not continue as if nothing happened),
-or propagate it so `repair::run` fails the run. Use checked arithmetic
+**Recommended action.** Fix: await each file task; treat an `Err` result as a
+file failure (count `files_failed`). Do **not** handle a task panic — let it
+remain swallowed (matching the other projects' behavior). Use checked arithmetic
 (`checked_add`, checked casts) in `try_reuse_slice` and `PlannedFile::layout`
-for manifest-sourced offsets/sizes. Recommend a pinning test: a manifest with
-a huge offset must fail the file (exit 3, `failed=1`), never silently succeed.
+for manifest-sourced offsets/sizes. Recommend a pinning test: a manifest with a
+huge offset must fail the file (exit 3, `failed=1`), never silently succeed.
 
 ---
 
@@ -108,9 +108,9 @@ a hostile/corrupt manifest, not a typo.
 
 **Recommended action.** Fix: validate each `rel` at plan-build time — reject
 `..` segments, absolute paths, and paths that escape the root — and fail the
-plan (metadata/network class, exit 2, or usage exit 1 — pick one and document
-it). Recommend a pinning test: manifest with `../outside.dat` is refused, no
-write outside `game_dir`.
+plan with **exit code 2** (API is variable, not user error). Recommend a
+pinning test: manifest with `../outside.dat` is refused, no write outside
+`game_dir`.
 
 ---
 
@@ -343,8 +343,8 @@ gap: refusals assert zero chunk hits (`max_download_bytes_refuses...`).
 
 | # | Class | Severity | Action |
 |---|-------|----------|--------|
-| F-1 | (a) bug | high | Stop swallowing file-task panics (count as failures); checked arithmetic on manifest offsets/sizes; pinning test for oversized manifest offset. |
-| F-2 | (a) bug | medium | Reject `..`/absolute/out-of-root `rel` paths at plan time; pinning test. |
+| F-1 | (a) bug | high | Stop swallowing file-task `Err` results (count as `files_failed`); do not handle task panics; checked arithmetic on manifest offsets/sizes; pinning test for oversized manifest offset. |
+| F-2 | (a) bug | medium | Reject `..`/absolute/out-of-root `rel` paths at plan time — fail the plan with exit code 2 (API is variable, not user error); pinning test. |
 | F-3 | (b) intentional | low | Correct the partial-refund comment or charge actual delivered bytes; pinning test with a partial-body-then-drop mock. |
 | F-4 | (b) intentional | low | Pinning test for full-length corrupt `_tmp` under `--repair-mode temp`. |
 | F-5 | (b) docs | low | Fix `--max-write-bytes` help text in `cli.rs`. |

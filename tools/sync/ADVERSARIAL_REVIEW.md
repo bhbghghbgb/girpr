@@ -29,7 +29,7 @@ commit was created.
 | # | Class | Severity | Location | Finding (one line) |
 |---|-------|----------|----------|--------------------|
 | G-1 | (a) bug | medium | `src/scan.rs:74-94` vs README | Symlink handling is documented as "followed/materialized" but `walk_live` bails on anything that is not `is_dir`/`is_file`; unverifiable here (symlinks need admin), untested |
-| G-2 | (b) intentional | medium | `src/commands/sync/apply/copy.rs:119-151` | `copy_one` follows dst symlinks (`File::create`, `set_modified`, `hash_file` all follow), so a symlink in `dst` at a copy target writes **outside** the mirror root |
+| G-2 | (b) intentional | medium | `src/commands/sync/apply/copy.rs:119-151` | `copy_one` follows dst symlinks — **decision: follow symlink per doc**; test may not be runnable where symlinks can't be created (environment-gated) |
 | G-3 | (b) intentional | medium | `src/commands/sync/apply/phases.rs:16-50` | A single apply-phase failure (one bad file, one `unsupported type`) aborts the whole run with exit 3 and leaves a partially mirrored dst; fail-fast is documented only for input validation |
 | G-4 | (b) intentional | low | `src/scan.rs:38`, README gotchas | `--max-depth` (default 10) silently skips deeper files; `sync` never mirrors or warns about them |
 | G-5 | (b) docs | low | `src/diff/mod.rs:78-91,318-323` | `Diff::total()` excludes `case_mismatch` but `is_empty()` includes it: a case-only compare reports `total_diff=0` yet exits 4 |
@@ -100,11 +100,13 @@ follow for removal), `README.md:1004-1006`.
 
 **Severity.** Medium: write outside `dst` driven by a symlink in `dst`.
 
-**Recommended action.** Keep as intentional but pin it: a test that places a
-symlink (to an outside file) in `dst` at a copy target and asserts the bytes
-land on the target (documented behavior), plus a README note that symlinks in
-`dst` are followed on write. Not written here due to the admin/symlink
-environment limitation.
+**Recommended action.** Follow symlink per doc: `copy_one` follows `dst`
+symlinks and writes to the link target (may be outside `dst`), matching the
+README ("link targets outside the root are followed and materialized"). Note
+that a pinning test may not be runnable in environments where symlinks cannot
+be created (e.g. this machine without admin privileges), so the test should
+be conditional or documented as environment-gated. Add a README note that
+symlinks in `dst` are followed on write.
 
 ---
 
@@ -327,7 +329,7 @@ record paths and non-directories and enforces one-cache-per-run
 | Priority | Action |
 |----------|--------|
 | High | Verify and resolve the symlink discrepancy (G-1); decide documented vs actual behavior and add pinning tests once symlinks can be created in CI. |
-| Medium | Document the whole-run abort / partial-mirror semantics (G-3) and the dst-symlink write-outside-root footgun (G-2); add pinning tests where runnable. |
+| Medium | Document the whole-run abort / partial-mirror semantics (G-3). G-2 decided: follow symlink per doc (test environment-gated). |
 | Low | Clarify `Diff::total()` vs `is_empty()` on `case_mismatch` (G-5); document `--max-depth` silent skip (G-4) and `compare` cache backups (G-7); add CLI-level pinning tests for G-6/G-8/G-9. |
 | None | Path-traversal class (G-11) does not apply to girsync; no action. |
 

@@ -43,9 +43,9 @@ a harness reading stdout gets nothing.
 `parse_from` already succeeded with an `OsString`; the second collection is
 redundant and is the only path that can panic.
 
-**Recommended action:** fix — collect `argv` from `std::env::args_os()` and
-convert losslessly (e.g. `to_string_lossy()`), or wrap the collection so a
-non-Unicode argument becomes a usage error rather than a panic.
+**Recommended action:** let it panic, matching `girpr` and `girsync` (both
+  inherit clap's `std::env::args()` panic on non-Unicode argv on Windows).
+  No code change; the behavior is consistent across the workspace.
 
 ---
 
@@ -70,10 +70,10 @@ plus "first unfundable stops everything" is acceptable.
   `spent` is carried into `select`, so a refused forced path genuinely consumes
   nothing, yet later forced paths are never reached.
 
-**Recommended action:** pin with a test (`--files a --files b` under a tight
-ceiling where `b` fits but `a` does not), and decide whether later forced paths
-should still be evaluated (and recorded as `forced_skipped`/`over_budget`) rather
-than abandoned by `break`.
+**Recommended action:** record later forced paths as `over_budget` rather than
+abandoning them by `break`. Pin with a test (`--files a --files b` under a tight
+ceiling where `b` fits but `a` does not): `a` is refused, `b` is recorded as
+`over_budget`, neither is silently dropped.
 
 ---
 
@@ -140,10 +140,11 @@ files whose chunk id is never retried.
 - `src/blobs/mod.rs:484–492` (`paths_for`): temp names live beside the blob,
   slot-suffixed; orphans are never scanned for.
 
-**Recommended action:** clarify the docs (it is intentional) or add startup
-cleanup of stale `.*.tmp` files under `chunks/blobs/`; recommend a pinning test
-that a failed fetch leaves no orphan when the same id is never retried, if the
-behavior is meant to stay.
+**Recommended action:** clarify the docs — leaving the `.tmp` behind is
+  intentional (the next run truncates/reuses it; deleting it on the failure
+  path would add a second failure mode). Recommend a pinning test that a failed
+  fetch leaves a `.tmp` that the next run truncates, and that no orphan remains
+  when the same id is never retried.
 
 ---
 
@@ -167,10 +168,13 @@ documented purpose is to bound "any single response".
 - Contrast `drain_capped` (fetcher.rs:122–153), which does cap, used for 2xx and
   for `observe`.
 
-**Recommended action:** either apply `drain_capped`-style capping to the
-error-body drain, or document the asymmetry explicitly (and note that
-`bytes_in` for a failed request reflects the full un-capped body). If left as
-is, recommend a pinning test.
+**Recommended action:** split the ceiling into two knobs:
+`max_response_bytes` counts **both** error and success response bodies, and
+`max_success_response_bytes` counts **only** success (2xx) bodies. Apply
+`drain_capped`-style capping to the non-2xx error-body drain under
+`max_response_bytes`. Recommend a pinning test that a hostile 5xx with a huge
+body is capped against `max_response_bytes` while a 2xx body is capped against
+`max_success_response_bytes`.
 
 ---
 
@@ -277,20 +281,20 @@ measured values confirm it is not a hash of anything observable.
 
 | ID | Kind | Severity | Location | One-line summary |
 |----|------|----------|----------|------------------|
-| F1 | Bug (crash) | medium | `src/main.rs:58` | non-Unicode `argv` panics instead of a clean exit-1 usage error |
-| F2 | Behavioral gap | medium | `src/select/mod.rs:508–513` | `--files` entries after the first budget-refused one are silently dropped |
+| F1 | Bug (crash) | medium | `src/main.rs:58` | non-Unicode `argv` panics instead of a clean exit-1 usage error — **decision: let it panic, same as girpr and girsync** |
+| F2 | Behavioral gap | medium | `src/select/mod.rs:508–513` | `--files` entries after the first budget-refused one are silently dropped — **decision: record as `over_budget`** |
 | F3 | Doc bug | low | `src/cli/mod.rs:161` | `--require-class` help says "Default: all", actual default is nothing |
 | F4 | Doc bug | low | `src/cli/mod.rs:187` | `--no-chunk-blobs` doc says A7-A10, actual skip set is A6–A12 + A19 + A21–A23 |
-| F5 | Temp-file hygiene | low | `src/blobs/mod.rs:432–436` | failed chunk fetches leave orphan `.tmp` files in `chunks/blobs/` |
-| F6 | Ceiling asymmetry | low | `src/http/fetcher.rs:741–747` | non-2xx response bodies are not subject to `max_response_bytes` |
+| F5 | Temp-file hygiene | low | `src/blobs/mod.rs:432–436` | failed chunk fetches leave `.tmp` files in `chunks/blobs/` — **decision: clarify that it is intentional** |
+| F6 | Ceiling asymmetry | low | `src/http/fetcher.rs:741–747` | non-2xx response bodies are not subject to `max_response_bytes` — **decision: split into `max_response_bytes` (error + success) and `max_success_response_bytes` (success only)** |
 | F7–F9 | Intentional | n/a | — | A9 byte-vs-digest; `--per-class 0` floored; `--require-class` defaults to nothing |
 | F10–F11 | Verified | n/a | — | independence and manifest-id-prefix claims hold |
 
 ## Recommended next steps (in priority order)
 
-1. Fix F1 (crash on non-Unicode args) — collect `argv` from `args_os()`.
+1. F1 decided: let it panic, same as girpr and girsync (no code change).
 2. Re-evaluate F2 (budget `break` drops later `--files`) and either change it or pin it with a test.
 3. Fix F3 and F4 doc comments.
-4. Decide on F5/F6 (cleanup or document; pin with tests if kept).
+4. F5 decided: clarify docs that leaving `.tmp` behind is intentional. F6 decided: split into `max_response_bytes` (error + success) and `max_success_response_bytes` (success only).
 
 No PR or commit was made; this report is for human review.
