@@ -98,17 +98,18 @@ difference between a five-second loop and a two-minute one.
   to. Pin both when you want a specific pair, especially when the result is going
   to be kept.
 
-**Compatibility.** Every document carries `"schema_version": 1`, and a reader
+**Compatibility.** Every document carries `"schema_version": 2`, and a reader
 should reject an unknown one rather than guess. A bundle whose documents all
 validate is a bundle every reader can use — which is why a **new field** is
 additive and a **new document** is not: adding either leaves `schema_version` at
-`1`, but a new document becomes required and the bundles that predate it are
+`2`, but a new document becomes required and the bundles that predate it are
 stale by definition. `verify` reports what it cannot re-derive instead of
 refusing, so a bundle whose `selfcheck` disagrees is a finding rather than an
 unreadable tree; a bundle *missing a required document* is refused, because a
 fixture that half-answers a question is worse than one that does not answer it.
-A bundle whose `schema_version` has moved on, or whose selfcheck does not pass,
-is not a fixture: re-capture it.
+A bundle written by schema version `1` is refused outright — `gircap verify`
+names the command that produces a current one — and a bundle whose selfcheck
+does not pass is not a fixture: re-capture it.
 
 ## Status
 

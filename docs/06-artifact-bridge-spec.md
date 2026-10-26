@@ -463,7 +463,7 @@ is tested on a crafted fixture.
 disk cost:
 
 ```
-PLAN files=1 est_download_bytes=274426 purge_files=0 purge_bytes=0 max_chunk_bytes=… scoped=1
+PLAN files=1 est_download_bytes=274426 est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 max_chunk_bytes=… scoped=1
 ```
 
 Run it once per capture first. It separates the two failure modes that otherwise
@@ -481,7 +481,7 @@ When the first fails, the glob is wrong. When the second fails, reuse is wrong.
 its pre-pass prints
 
 ```
-PLAN files=0 est_download_bytes=0 purge_files=1 purge_bytes=1731133 scoped=1
+PLAN files=0 est_download_bytes=0 est_write_bytes=… est_extra_bytes=… purge_files=1 purge_bytes=1731133 scoped=1
 ```
 
 So for that capture the **purge counters are the pre-pass assertion**: `files=0`

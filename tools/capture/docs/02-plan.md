@@ -132,9 +132,11 @@ tools/capture/
 ```
 
 `src/` is 48 files and `tests/` is 8. The largest files are `src/report/mod.rs`
-and `src/select/mod.rs`; `src/http/mod.rs` is now a slim facade, and the
-orchestrator (`src/run.rs`) is one of the smaller ones, because each phase of a
-capture lives in the module that owns the work it does.
+and `src/select/mod.rs`; `src/http/mod.rs` is the transport layer itself — the
+fetcher, its retry policy and body ceiling, the request log, the tag probe and
+the negative probes — and the orchestrator (`src/run.rs`) is one of the smaller
+ones, because each phase of a capture lives in the module that owns the work it
+does.
 
 ### Dependencies
 

@@ -1049,7 +1049,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 323 tests, one of them #[ignore]d
+cargo nextest run -p girsync   # 327 test functions, one of them #[ignore]d (326 run by default)
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's

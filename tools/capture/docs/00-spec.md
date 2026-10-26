@@ -763,7 +763,13 @@ gircap capture
   [--manifest-detail full|paths-only]         (default full)
   [--gzip-threshold <bytes>]                  (default 1048576)
   [--probe-tags <tag>…]                       (default: diff_tags ∪ {old,new}; JSON only)
-  [--no-chunk-blobs]                          (metadata only; breaks A6-A12 by design)
+  [--no-chunk-blobs]                          (metadata only; declares A6–A12,
+                                             A19 and A21–A23 skipped)
+  [--hyp-base <URL>]                          (testing seam; default: the
+                                             production base for --biz)
+  [--sophon-base <URL>]                       (testing seam; see --hyp-base)
+  [--max-response-bytes <bytes>]              (default 67108864; one response
+                                             body's ceiling)
   [--jobs N] [--retries N] [--timeout S] [--log-level LV] [--log-file-level LV] [--log-file P]
   [--no-log-file] [--output text|json]
 
@@ -1132,7 +1138,7 @@ makes it **2 290 529 B**.
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| `schema_version` | **stays `1`** unless the bundle's byte layout changes incompatibly | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| `schema_version` | **stays `2`** unless the bundle's byte layout changes incompatibly | [`01-artifact-schema.md`](01-artifact-schema.md) |
 | commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---

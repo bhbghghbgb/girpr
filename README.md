@@ -181,7 +181,8 @@ flowchart TD
   re-verifies and continues — and `SUMMARY stopped=` says which ceiling bound and
   that it happened at all: the value is the **flag** that bound
   (`stopped=--max-download-bytes`, `stopped=--max-write-bytes`,
-  `stopped=--max-delete-bytes` — a cleanup pass refused). That key is
+  `stopped=--max-delete-bytes`, `stopped=--max-verified-download-bytes`,
+   `stopped=--max-verified-write-bytes` — a cleanup pass refused). That key is
   what distinguishes "nothing was written because the plan was too big" from
   "something was written and then we ran out".
 - `SUMMARY download_bytes` means **the bytes of files that were actually
@@ -354,7 +355,7 @@ the prebuilt release for the platform. Every crate in the workspace (`girpr`,
 [`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
 
 ```powershell
-cargo nextest run             # 268 tests in this package, all offline
+cargo nextest run             # 265 tests in this package, all offline
 cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery

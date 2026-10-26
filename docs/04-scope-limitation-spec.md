@@ -389,7 +389,7 @@ post-phase. It returns before `create_dir_all`, so it is read-only by
 construction — and it short-circuits `--dry-run` for the same reason.
 
 ```
-PLAN files=8 est_download_bytes=2373385 purge_files=0 purge_bytes=0 \
+PLAN files=8 est_download_bytes=2373385 est_write_bytes=… est_extra_bytes=… purge_files=0 purge_bytes=0 \
      max_chunk_bytes=3689476 scoped=1
 ```
 
