@@ -549,8 +549,7 @@ mod tests {
             md5: "m".into(),
         };
         let per = vec![("http://x".to_string(), vec![traversal])];
-        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
-            .unwrap_err();
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap_err();
         assert!(
             err.to_string().contains("escapes the install root"),
             "unexpected error: {err:#}"
@@ -568,8 +567,7 @@ mod tests {
             md5: "m".into(),
         };
         let per = vec![("http://x".to_string(), vec![absolute])];
-        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
-            .unwrap_err();
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap_err();
         assert!(
             err.to_string().contains("escapes the install root"),
             "unexpected error: {err:#}"
@@ -588,8 +586,7 @@ mod tests {
             md5: "m".into(),
         };
         let per = vec![("http://x".to_string(), vec![traversal])];
-        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default())
-            .unwrap_err();
+        let err = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap_err();
         assert!(
             err.to_string().contains("escapes the install root"),
             "unexpected error: {err:#}"

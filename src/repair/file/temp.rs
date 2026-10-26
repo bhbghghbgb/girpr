@@ -196,7 +196,9 @@ fn try_reuse_slice(
     // builds (i64 overflow) or wrap to a nonsense offset in release.
     let offset = u64::try_from(c.offset).context("chunk offset is negative")?;
     let size = u64::try_from(c.uncompressed_size).context("chunk uncompressed size is negative")?;
-    let end = offset.checked_add(size).context("chunk offset+size overflows")?;
+    let end = offset
+        .checked_add(size)
+        .context("chunk offset+size overflows")?;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final

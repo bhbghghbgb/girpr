@@ -39,13 +39,13 @@
 mod common;
 
 use common::{
-    LATEST_TAG, MockOpts, MockServer, build_fixture, build_moved_fixture, encode_manifest,
-    read_game_file, temp_dir, write_game_file, FixtureChunk, FixtureFile, GameFixture,
+    FixtureChunk, FixtureFile, GameFixture, LATEST_TAG, MockOpts, MockServer, build_fixture,
+    build_moved_fixture, encode_manifest, read_game_file, temp_dir, write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::sleep::NoSleep;
-use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
 use girpr::sophon::{SophonChunk, SophonChunkFile};
+use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -3508,7 +3508,10 @@ async fn a_traversing_manifest_path_fails_the_plan() {
     assert_eq!(err.exit_code, 2, "a bad manifest rel is exit 2");
     // The refusal comes before `create_dir_all`: nothing exists outside the
     // install, and nothing exists inside it either.
-    assert!(!parent.join("outside.dat").exists(), "no write outside game_dir");
+    assert!(
+        !parent.join("outside.dat").exists(),
+        "no write outside game_dir"
+    );
     assert!(!dir.exists(), "the plan failure creates nothing");
     mock.stop();
 }
