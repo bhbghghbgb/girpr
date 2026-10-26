@@ -220,9 +220,6 @@ pub struct CapturePlan {
     /// a run admits to fetch; this limits any single response, whether or not the
     /// file was admitted.
     pub max_response_bytes: u64,
-    /// Ceiling on one 2xx (success) response body. Defaults to the same value as
-    /// `--max-response-bytes`; error bodies always use `--max-response-bytes`.
-    pub max_success_response_bytes: Option<u64>,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
@@ -302,7 +299,6 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         args.retries,
         args.timeout,
         args.max_response_bytes,
-        args.max_success_response_bytes,
     )?;
     let audio = validate_audio(&args.audio)?;
     validate_paths(&args.files, "--files")?;
@@ -353,7 +349,6 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         retries: transport.retries,
         timeout: transport.timeout,
         max_response_bytes: transport.max_response_bytes,
-        max_success_response_bytes: transport.max_success_response_bytes,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
         argv,
@@ -381,7 +376,6 @@ fn validate_transport(
     retries: u32,
     timeout_secs: u64,
     max_response_bytes: u64,
-    max_success_response_bytes: Option<u64>,
 ) -> Result<crate::http::Transport> {
     if jobs == 0 {
         return Err(UsageError::new("--jobs must be at least 1"));
@@ -416,7 +410,6 @@ fn validate_transport(
         retries,
         timeout: std::time::Duration::from_secs(timeout_secs),
         max_response_bytes,
-        max_success_response_bytes,
     })
 }
 
@@ -671,7 +664,6 @@ mod tests {
             retries: 3,
             timeout: 60,
             max_response_bytes: crate::http::DEFAULT_MAX_RESPONSE_BYTES,
-            max_success_response_bytes: None,
             hyp_base: None,
             sophon_base: None,
             common: CommonArgs {

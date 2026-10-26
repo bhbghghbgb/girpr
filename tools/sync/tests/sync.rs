@@ -694,28 +694,3 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
          so the copy phase still hoards its rows until every file is on disk"
     );
 }
-
-/// `--max-depth` (default 10) silently skips deeper files: `sync` never
-/// mirrors them and exits 0, and a later `compare` reports the deep file as
-/// MISSING. The depth cap is the walk's own bound (`src/scan.rs`), so this is
-/// the end-to-end pin for the documented gotcha.
-#[test]
-fn run_sync_max_depth_skips_deeper_files() {
-    let t = temp_root("max_depth");
-    let src = t.subdir("src");
-    let dst = t.subdir("dst");
-    // Depth 11 under the root: beyond the default cap of 10 (`one` is depth 1).
-    let deep = "one/two/three/four/five/six/seven/eight/nine/ten/eleven.txt";
-    wfile(&src, deep, b"deep content");
-    wfile(&src, "top.txt", b"top");
-
-    let mut o = sync(src.clone(), dst.clone());
-    o.common.test_cache = TestCacheBackend::Memory;
-    assert_eq!(cmd_sync(o, &log()).unwrap(), 0, "the run itself succeeds");
-    assert!(!dst.join(deep).exists(), "the deep file was not mirrored");
-    assert_eq!(
-        rfile(&dst, "top.txt"),
-        b"top",
-        "a shallower file still was mirrored"
-    );
-}

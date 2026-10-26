@@ -141,10 +141,12 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let plan = Arc::new(
-        phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
-            .map_err(RunFailure::metadata)?,
-    );
+    let plan = Arc::new(phases::plan::build_plan(
+        per_manifest,
+        &meta.blacklist,
+        &meta.latest,
+        scope,
+    ));
     tracing::info!(
         "work list: {} files{}",
         plan.files.len(),

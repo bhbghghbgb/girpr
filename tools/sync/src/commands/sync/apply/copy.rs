@@ -127,10 +127,6 @@ pub(super) fn copy_one(
     let ssize = smeta.len();
     let smtime_sys = smeta.modified().ok();
     let smtime_ns = mtime_ns_of(&smeta);
-    // **mtime restore is load-bearing:** if `set_modified` below fails (a
-    // read-only dst, a permission lapse) the copy aborts even though the bytes
-    // are already correct — the run fails rather than silently recording a
-    // mtime it did not set.
     // stream copy (truncate + write in place), digesting src as it goes
     let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;

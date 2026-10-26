@@ -792,22 +792,16 @@ mod tests {
     use local_server::*;
 
     fn fetcher(retries: u32, sleeper: Arc<dyn Sleep>) -> Fetcher {
-        fetcher_with(retries, sleeper, DEFAULT_MAX_RESPONSE_BYTES, None)
+        fetcher_with(retries, sleeper, DEFAULT_MAX_RESPONSE_BYTES)
     }
 
     /// [`fetcher`] with an explicit body ceiling, for the ceiling's own tests.
-    fn fetcher_with(
-        retries: u32,
-        sleeper: Arc<dyn Sleep>,
-        max_response_bytes: u64,
-        max_success_response_bytes: Option<u64>,
-    ) -> Fetcher {
+    fn fetcher_with(retries: u32, sleeper: Arc<dyn Sleep>, max_response_bytes: u64) -> Fetcher {
         Fetcher::with_sleeper(
             Transport {
                 retries,
                 timeout: Duration::from_secs(5),
                 max_response_bytes,
-                max_success_response_bytes,
             },
             RequestLog::new(),
             sleeper,
@@ -1101,7 +1095,6 @@ mod tests {
             1,
             Arc::new(RecordingSleep::default()),
             body.len() as u64 - 1,
-            None,
         );
 
         let err = f
@@ -1123,7 +1116,6 @@ mod tests {
             1,
             Arc::new(RecordingSleep::default()),
             body.len() as u64 - 1,
-            None,
         );
 
         let err = f
@@ -1155,12 +1147,7 @@ mod tests {
         // through `drain_capped` did not alter what a caller receives.
         let body = big_body(4096);
         let mock = spawn(vec![(200, leak(&body))], "");
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            body.len() as u64,
-            None,
-        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
         let got = f
             .get(&url(&mock, "/ok"), Kind::Chunk, None)
@@ -1189,12 +1176,7 @@ mod tests {
             }],
             "",
         );
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            body.len() as u64,
-            None,
-        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
 
         let err = f
             .get(&url(&mock, "/lying"), Kind::Chunk, None)
@@ -1216,7 +1198,7 @@ mod tests {
         let dir = scratch("file-cap");
         let path = dir.join("blob.bin");
         let mut out = crate::hash::HashingFile::create(&path).expect("create");
-        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 16, None);
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 16);
 
         let err = f
             .get_to_file(&url(&mock, "/big"), Kind::Chunk, &mut out)
@@ -1247,7 +1229,6 @@ mod tests {
             1,
             Arc::new(RecordingSleep::default()),
             body.len() as u64 - 1,
-            None,
         );
 
         let err = f
@@ -1297,57 +1278,6 @@ mod tests {
             "`attempts: 1` is hardcoded, and is the claim"
         );
         assert_eq!(rows[0].kind, Kind::Probe);
-    }
-
-    /// F6: non-2xx bodies are capped against `--max-response-bytes`, while 2xx
-    /// bodies are capped against `--max-success-response-bytes` when it is set.
-    #[tokio::test]
-    async fn error_and_success_bodies_have_separate_ceilings() {
-        // A hostile 5xx with a huge body is capped against `max_response_bytes`.
-        let big = big_body(4096);
-        let mock = spawn(vec![(503, leak(&big))], "");
-        let f = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            big.len() as u64 - 1,
-            None,
-        );
-
-        let err = f
-            .get(&url(&mock, "/hostile"), Kind::Chunk, None)
-            .await
-            .expect_err("a 5xx body over `max_response_bytes` is refused");
-        assert!(err.to_string().contains("ceiling"), "{err}");
-        // A `Shape` is not retried: one attempt is all it gets.
-        assert_eq!(
-            mock.hits.load(Ordering::SeqCst),
-            1,
-            "a hostile 5xx is not retried"
-        );
-
-        // A 2xx body that fits under `max_response_bytes` but not under
-        // `max_success_response_bytes` is refused on the success ceiling.
-        let mock2 = spawn(vec![(200, leak(&big_body(4096)))], "");
-        let f2 = fetcher_with(
-            1,
-            Arc::new(RecordingSleep::default()),
-            4096,       // max_response_bytes allows it
-            Some(4095), // max_success_response_bytes refuses it
-        );
-        let err2 = f2
-            .get(&url(&mock2, "/ok"), Kind::Chunk, None)
-            .await
-            .expect_err("a 2xx body over `max_success_response_bytes` is refused");
-        assert!(err2.to_string().contains("ceiling"), "{err2}");
-
-        // And a 2xx body under both ceilings lands fine.
-        let mock3 = spawn(vec![(200, leak(&big_body(4096)))], "");
-        let f3 = fetcher_with(1, Arc::new(RecordingSleep::default()), 4096, Some(4096));
-        let got = f3
-            .get(&url(&mock3, "/ok"), Kind::Chunk, None)
-            .await
-            .expect("a 2xx body under both ceilings is allowed");
-        assert_eq!(got.body.len(), 4096);
     }
 
     #[tokio::test]

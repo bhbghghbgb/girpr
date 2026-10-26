@@ -155,18 +155,7 @@ pub struct Transport {
     ///
     /// Exceeding it is a [`super::ApiError::Shape`], so it is **not** retried: an origin
     /// that sent too much will send too much again.
-    ///
-    /// This is the ceiling for **non-2xx (error) response bodies**. 2xx bodies
-    /// are capped against [`max_success_response_bytes`] when it is set, and
-    /// fall back to this ceiling when it is not.
     pub max_response_bytes: u64,
-    /// The ceiling on one 2xx (success) response body, in bytes.
-    ///
-    /// When `None`, success bodies fall back to `max_response_bytes`. Error
-    /// bodies always use `max_response_bytes`, so splitting the two knobs only
-    /// tightens the success path — a hostile 5xx with a huge body is still
-    /// capped against `max_response_bytes`.
-    pub max_success_response_bytes: Option<u64>,
 }
 
 impl Transport {
@@ -177,7 +166,6 @@ impl Transport {
             retries: 1,
             timeout: Duration::from_secs(10),
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
-            max_success_response_bytes: None,
         }
     }
 }

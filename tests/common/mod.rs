@@ -445,7 +445,7 @@ pub fn build_moved_fixture() -> GameFixture {
 
 /// Encode a manifest body the way the server sends it: zstd over the
 /// protobuf, with the checksum being the MD5 of the *decompressed* bytes.
-pub(crate) fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
+fn encode_manifest(files: &[SophonChunkFile]) -> (Vec<u8>, String) {
     let manifest = SophonChunkManifest {
         chuncks: files.to_vec(),
     };

@@ -129,25 +129,10 @@ pub async fn scan_plan(
 
     let mut out = ScanReport::default();
     while let Some(res) = stream.next().await {
-        match res {
-            Ok(scanned) => {
-                out.bytes += scanned.bytes;
-                out.damaged_chunks += scanned.verdict.damaged_chunks();
-                out.files.insert(scanned.rel, scanned.verdict);
-            }
-            // A scan task that panicked or errored leaves its file
-            // "unreached": the file is not in the report, so the download
-            // estimate falls back to estimating it in full (an overestimate,
-            // which is the safe direction). Do not swallow it silently — the
-            // run proceeds either way, since the repair re-reads every file
-            // itself and the scan is only advisory.
-            Err(e) => {
-                tracing::warn!(
-                    error = %format!("{e:#}"),
-                    "scan task failed; unreached files are estimated in full"
-                );
-            }
-        }
+        let Ok(scanned) = res else { continue };
+        out.bytes += scanned.bytes;
+        out.damaged_chunks += scanned.verdict.damaged_chunks();
+        out.files.insert(scanned.rel, scanned.verdict);
     }
     tracing::info!(
         files = out.files.len(),

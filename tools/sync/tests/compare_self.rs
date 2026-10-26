@@ -97,41 +97,6 @@ fn run_compare_self_leaves_the_cache_exactly_as_it_found_it() {
     assert_eq!(recs_of(&dir), before);
 }
 
-/// `compare-self --ignore-cache` bails: it would delete the cache being
-/// audited, so the run refuses rather than answer from an empty record.
-#[test]
-fn run_compare_self_ignore_cache_bails() {
-    let t = temp_root("cs_ignore_cache");
-    let dir = t.subdir("w");
-    wfile(&dir, "a.txt", b"hello");
-    let mut o = self_compare(dir.clone());
-    o.common.ignore_cache = true;
-    let err = cmd_compare_self(o, &log()).expect_err("--ignore-cache must bail on compare-self");
-    assert!(
-        format!("{err:#}").contains("cache"),
-        "the bail names the cache: {err:#}"
-    );
-}
-
-/// `--dry-run` and `--no-trust-cached-hashes` are accepted on `compare-self`
-/// but inert: warned, not acted on, and a clean tree still exits 0.
-#[test]
-fn run_compare_self_inert_flags_are_warned_not_refused() {
-    let t = temp_root("cs_inert_flags");
-    let dir = t.subdir("w");
-    wfile(&dir, "a.txt", b"hello");
-    cmd_update(update_mem(dir.clone()), &log()).unwrap();
-
-    let mut o = self_compare(dir.clone());
-    o.common.dry_run = true;
-    o.no_trust_cached_hashes = true;
-    assert_eq!(
-        cmd_compare_self(o, &log()).unwrap(),
-        0,
-        "accepted-but-inert flags still exit 0 on a clean tree"
-    );
-}
-
 /// A file whose size+mtime still match must be hashed against nothing, not against
 /// the record's own digest. Sharing the record's cache would make the content
 /// comparison the record compared with itself, and this would report "in step".

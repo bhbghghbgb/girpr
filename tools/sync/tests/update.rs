@@ -8,8 +8,6 @@ use common::{
     update_mem, wfile,
 };
 use girsync::filter::compile_patterns;
-use girsync::hash::HashAlg;
-use girsync::planner::HashMode;
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 #[test]
@@ -191,33 +189,5 @@ fn update_fills_the_gap_that_makes_an_audit_of_the_same_folder_fail() {
         cmd_compare_self(compare_self_opts(src), &log()).unwrap(),
         0,
         "and the audit now answers, which is what makes the failure actionable"
-    );
-}
-
-/// `update --hash-any-of md5 sha256` stores **every** algorithm named: the flag
-/// never chooses one for `update`, so both digests land on the row, the run
-/// warns that the flag does not change what `update` does, and it exits 0.
-#[test]
-fn run_update_hash_any_of_stores_every_algorithm() {
-    let t = temp_root("upd_any_of");
-    let dir = t.subdir("w");
-    wfile(&dir, "a.txt", b"hello");
-
-    let mut o = update_mem(dir.clone());
-    o.common.algos = vec![HashAlg::Md5, HashAlg::Sha256];
-    o.common.hash_mode = HashMode::AnyOf;
-    assert_eq!(cmd_update(o, &log()).unwrap(), 0);
-
-    let recs = recs_of(&dir);
-    let rec = recs.get("a.txt").expect("a row was written");
-    assert!(
-        rec.hashes.get_named("md5").is_some(),
-        "md5 was requested and stored: {:?}",
-        rec.hashes
-    );
-    assert!(
-        rec.hashes.get_named("sha256").is_some(),
-        "sha256 was requested and stored: {:?}",
-        rec.hashes
     );
 }

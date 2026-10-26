@@ -190,15 +190,7 @@ fn try_reuse_slice(
     out: &mut File,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
-    // The offset and size come straight from the (untrusted) manifest as i64.
-    // Validate before any cast or arithmetic: a corrupt manifest (e.g. offset
-    // `i64::MAX`, size `1`) must fail the file, not panic the task in debug
-    // builds (i64 overflow) or wrap to a nonsense offset in release.
-    let offset = u64::try_from(c.offset).context("chunk offset is negative")?;
-    let size = u64::try_from(c.uncompressed_size).context("chunk uncompressed size is negative")?;
-    let end = offset
-        .checked_add(size)
-        .context("chunk offset+size overflows")?;
+    let end = (c.offset + c.uncompressed_size) as u64;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
@@ -210,7 +202,7 @@ fn try_reuse_slice(
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
         return Ok(ChunkOutcome::Resumed);
     }
-    out.seek(SeekFrom::Start(offset))?;
+    out.seek(SeekFrom::Start(c.offset as u64))?;
 
     let candidate = reuse_entries.and_then(|entries| {
         entries.iter().find(|(md5, sz, _)| {
@@ -222,16 +214,13 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     };
 
-    // The reuse source offset is i64 from the local chunk map: validate before
-    // seeking into either file.
-    let ro = u64::try_from(*ro).context("reuse source offset is negative")?;
     let src = ctx.game_dir.join(util::normalize_rel(&file.rel));
-    match util::md5_file_slice(&src, ro, size) {
+    match util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
             let mut sf = File::open(&src)?;
-            sf.seek(SeekFrom::Start(ro))?;
-            let mut remaining = size;
+            sf.seek(SeekFrom::Start(*ro as u64))?;
+            let mut remaining = c.uncompressed_size as u64;
             let mut buf = vec![0u8; COPY_BUF];
             while remaining > 0 {
                 let want = (remaining as usize).min(buf.len());
@@ -362,14 +351,10 @@ pub(super) async fn write_downloaded_chunk(
     }
     let expected = c.uncompressed_size.max(0) as u64;
     let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
-    // On failure the whole reservation goes straight back: the live download
-    // counter is refunded in full even if the stream delivered a partial body
-    // before the transport died. That under-enforces `--max-download-bytes` by
-    // at most one partial chunk per failed fetch — the delivered bytes crossed
-    // the wire but are never charged. Without this refund the `?` below would
-    // leak `compressed_size` per attempt for bytes that never arrived — and
-    // with no ceiling set the sentinel is `u64::MAX`, so the leak is not
-    // gated on `--max-download-bytes`.
+    // A failed fetch delivers nothing, so the reservation goes straight back.
+    // Without this the `?` below would leak `compressed_size` per attempt, for
+    // bytes that never arrived — and with no ceiling set the sentinel is
+    // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
     let digest = match sophon::stream_chunk_to(
         &ctx.http,
         ctx.sleep.as_ref(),

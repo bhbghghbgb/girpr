@@ -51,10 +51,6 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             retries: plan.retries,
             timeout: plan.timeout,
             max_response_bytes: plan.max_response_bytes,
-            max_success_response_bytes: Some(
-                plan.max_success_response_bytes
-                    .unwrap_or(plan.max_response_bytes),
-            ),
         },
         log.clone(),
     )

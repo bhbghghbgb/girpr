@@ -123,7 +123,6 @@ async fn drain_capped<W: std::io::Write>(
     mut resp: reqwest::Response,
     sink: &mut W,
     cap: u64,
-    flag: &str,
     url: &str,
     attempts: u32,
 ) -> Result<u64, ApiError> {
@@ -131,7 +130,7 @@ async fn drain_capped<W: std::io::Write>(
     if let Some(d) = declared
         && d > cap
     {
-        return Err(too_big(url, d, cap, flag));
+        return Err(too_big(url, d, cap));
     }
     let mut seen = 0_u64;
     loop {
@@ -142,7 +141,7 @@ async fn drain_capped<W: std::io::Write>(
                     // The bytes are already gone, so this cannot stop the
                     // transfer — the running total stops the *memory*, which is
                     // what the ceiling is for.
-                    return Err(too_big(url, seen, cap, flag));
+                    return Err(too_big(url, seen, cap));
                 }
                 std::io::Write::write_all(sink, &chunk)
                     .map_err(|e| body_failure(url, attempts, false, e))?;
@@ -171,12 +170,13 @@ fn is_read_failure(e: &ApiError) -> bool {
 /// A `Shape` and not a `Transport`, so it is not retried: the network worked, the
 /// origin simply sent more than this tool will hold, and asking again produces the
 /// same answer at the same cost.
-fn too_big(url: &str, seen: u64, cap: u64, flag: &str) -> ApiError {
+fn too_big(url: &str, seen: u64, cap: u64) -> ApiError {
     ApiError::shape(
         url,
         format!(
             "the response body reached {seen} B, over the {cap} B ceiling \
-             ({flag}); raise it with {flag} if this origin is one you meant to trust"
+             (--max-response-bytes); raise it with --max-response-bytes if this \
+             origin is one you meant to trust"
         ),
     )
 }
@@ -277,9 +277,6 @@ pub struct Fetcher {
     base_req_headers: BTreeMap<String, String>,
     /// The ceiling on one response body, from [Transport::max_response_bytes].
     max_response_bytes: u64,
-    /// The ceiling on one 2xx (success) response body. `None` = fall back to
-    /// `max_response_bytes`. Error bodies always use `max_response_bytes`.
-    max_success_response_bytes: Option<u64>,
 }
 
 impl Fetcher {
@@ -398,7 +395,6 @@ impl Fetcher {
             log,
             base_req_headers: RequestRecord::default_req_headers(&ua, None),
             max_response_bytes: transport.max_response_bytes,
-            max_success_response_bytes: transport.max_success_response_bytes,
         })
     }
 
@@ -461,16 +457,7 @@ impl Fetcher {
         // an empty shape for that would put a falsehood in
         // `api/error_shapes.json`.
         let mut body: Vec<u8> = Vec::new();
-        let bytes_in = match drain_capped(
-            resp,
-            &mut body,
-            self.max_response_bytes,
-            "--max-response-bytes",
-            url,
-            1,
-        )
-        .await
-        {
+        let bytes_in = match drain_capped(resp, &mut body, self.max_response_bytes, url, 1).await {
             Ok(n) => n,
             Err(e) if is_read_failure(&e) => {
                 body = Vec::new();
@@ -749,42 +736,15 @@ impl Fetcher {
             // other count here: reporting `0` for bytes that demonstrably crossed
             // the network would be a lie in the direction that matters least to
             // notice.
-            let resp = resp;
-            // **The body of a failure is drained under the ceiling.** Not
-            // capped in the old code meant a hostile 5xx with a huge body forced
-            // the client to read it all — unbounded time, and `bytes_in`
-            // over-reporting the cost of a failed request. `drain_capped`
-            // applies the same two checks (declared length, then running total)
-            // as the success path, writing to `sink()` since the content is
-            // useless and only the length is recorded.
-            let bytes_in = match drain_capped(
-                resp,
-                &mut std::io::sink(),
-                self.max_response_bytes,
-                "--max-response-bytes",
-                url,
-                attempts,
-            )
-            .await
-            {
-                Ok(n) => n,
-                Err(e) => {
-                    let record = self.record(
-                        seq,
-                        kind,
-                        url,
-                        range,
-                        status,
-                        resp_headers,
-                        &final_url,
-                        redirected,
-                        0,
-                        attempts,
-                        started,
-                    );
-                    return Err((e, record));
+            let mut resp = resp;
+            let mut bytes_in: u64 = 0;
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(c)) => bytes_in += c.len() as u64,
+                    Ok(None) => break,
+                    Err(_) => break,
                 }
-            };
+            }
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,
@@ -811,15 +771,7 @@ impl Fetcher {
         // materialises it. The two differ only here — the status check above and
         // the record below are shared, which is the reason this is one function
         // with a parameter rather than two functions.
-        //
-        // 2xx bodies are capped against `max_success_response_bytes`, falling
-        // back to `max_response_bytes` when that knob is unset. Error bodies
-        // (drained above) always use `max_response_bytes`.
         let bytes_in: u64;
-        let (success_cap, success_flag) = match self.max_success_response_bytes {
-            Some(cap) => (cap, "--max-success-response-bytes"),
-            None => (self.max_response_bytes, "--max-response-bytes"),
-        };
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
                 // One record for both outcomes, as before — the failure and the
@@ -842,7 +794,7 @@ impl Fetcher {
                 };
                 let mut buf: Vec<u8> =
                     Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
-                match drain_capped(resp, &mut buf, success_cap, success_flag, url, attempts).await {
+                match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
                     Ok(n) => {
                         bytes_in = n;
                         Some(buf)
@@ -881,7 +833,7 @@ impl Fetcher {
                         format!("preparing the body file: {e}"),
                     )));
                 }
-                match drain_capped(resp, out, success_cap, success_flag, url, attempts).await {
+                match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
                     Ok(n) => bytes_in = n,
                     Err(e) => return Err(fail(e)),
                 }
