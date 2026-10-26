@@ -52,7 +52,7 @@ impl RetryPolicy {
 
 /// The future [`Sleep::sleep`] hands back.
 ///
-/// **Boxed on purpose.** [`Fetcher`] holds an `Arc<dyn Sleep>`, and a trait
+/// **Boxed on purpose.** [`super::Fetcher`] holds an `Arc<dyn Sleep>`, and a trait
 /// method returning `impl Future` or declared `async fn` is not dyn-compatible.
 /// One `Box` per *retry backoff* is nothing beside the 55.5 s of waiting it may
 /// be standing in for. `'static` because neither implementor borrows `self`.
@@ -63,7 +63,7 @@ pub type SleepFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 
 ///
 /// **Async on purpose.** This was `fn sleep(&self, d: Duration)` and the real
 /// implementation was [`std::thread::sleep`], called from inside
-/// [`Fetcher::get`] — an `async fn` whose tasks are spawned onto the runtime.
+/// [`super::Fetcher::get`] — an `async fn` whose tasks are spawned onto the runtime.
 /// So a retry backoff *blocked a tokio worker thread* rather than yielding it:
 /// with `--retries 10` the schedule is 0.5+1+2+4+8+10+10+10+10 = 55.5 s of
 /// thread-blocked time per failing request, and on a 4-core box at `--jobs 64`
@@ -153,7 +153,7 @@ pub struct Transport {
     /// refused immediately), and against the running total as bytes arrive (so a
     /// server that lies about or omits the header is still stopped).
     ///
-    /// Exceeding it is a [`ApiError::Shape`], so it is **not** retried: an origin
+    /// Exceeding it is a [`super::ApiError::Shape`], so it is **not** retried: an origin
     /// that sent too much will send too much again.
     pub max_response_bytes: u64,
 }

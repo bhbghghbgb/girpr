@@ -220,7 +220,7 @@ impl Observation {
 /// **`identity`, deliberately.** See `RequestRecord::default_req_headers` for
 /// why claiming `gzip` was wrong and why adopting it would be worse: reqwest's
 /// `gzip` feature is off, so naming it on the wire would buy compressed bodies
-
+///
 /// The headers every request carries, as the record spells them.
 ///
 /// **One list, two consumers.** [`client_default_headers`] turns this into the

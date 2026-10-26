@@ -145,7 +145,7 @@ impl CacheDb {
     /// registry by the cache path gives that without touching the filesystem, so
     /// the assertions (which read rows) stay exactly what they were.
     ///
-    /// Only ever reached through [`TestCacheBackend::Memory`] or
+    /// Only ever reached through [`super::TestCacheBackend::Memory`] or
     /// `GIRSYNC_TEST_CACHE=memory`; production opens files.
     pub fn open_memory_cache(db_path: &Path, case_sensitive: bool) -> Result<Self> {
         let db = {

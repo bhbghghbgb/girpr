@@ -13,7 +13,7 @@
 /// this build has never heard of — a cache written by a newer binary with
 /// `--hash blake3` has to stay readable here — so the persistence layer cannot be
 /// an enum without giving that up. See `crate::cache::codec`, which keeps names
-/// inline for exactly that reason, and [`DigestSet`]'s `foreign` arm for the
+/// inline for exactly that reason, and [`super::DigestSet`]'s `foreign` arm for the
 /// in-memory end of the same guarantee. A closed enum here and an open set there
 /// is the whole design; the two are deliberately not reconciled.
 ///
@@ -32,8 +32,8 @@ pub enum HashAlg {
 impl HashAlg {
     /// Every algorithm, in canonical order.
     ///
-    /// The single list that defines "canonical order": [`AlgoSet::iter`] filters
-    /// this, [`DigestSet::iter`] walks it, and the codec emits rows in it.
+    /// The single list that defines "canonical order": [`super::AlgoSet::iter`] filters
+    /// this, [`super::DigestSet::iter`] walks it, and the codec emits rows in it.
     pub const ALL: [HashAlg; 2] = [HashAlg::Md5, HashAlg::Sha256];
 
     /// The command-line spelling. Also the cache key, verbatim.
@@ -48,7 +48,7 @@ impl HashAlg {
     ///
     /// Also the length a decoded row of this algorithm must have: a name with a
     /// digest of any other length is not this algorithm's digest, and the codec
-    /// routes it to [`DigestSet`]'s `foreign` arm rather than rejecting it.
+    /// routes it to [`super::DigestSet`]'s `foreign` arm rather than rejecting it.
     pub const fn digest_len(self) -> usize {
         match self {
             HashAlg::Md5 => 16,

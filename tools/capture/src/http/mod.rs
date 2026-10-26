@@ -33,10 +33,14 @@
 //! capped; there is no jitter, because a capture that adds randomness to its own
 //! request log is harder to diff against a previous one.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use crate::exit::ExitCode;
 
 pub mod error;
@@ -48,8 +52,11 @@ pub mod record;
 pub mod transport;
 
 pub use error::ApiError;
+pub(crate) use fetcher::shared_req_headers;
 pub use fetcher::{Destination, Fetched, Fetcher, Observation, Streamed};
-pub(crate) use fetcher::{body_failure, client_default_headers, shared_req_headers};
+
+#[cfg(test)]
+use fetcher::{body_failure, client_default_headers};
 pub use log::{RequestLog, now_rfc3339};
 pub use probe::TagProbe;
 pub(crate) use record::header_map;

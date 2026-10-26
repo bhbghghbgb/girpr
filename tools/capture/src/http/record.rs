@@ -27,8 +27,8 @@ pub enum Kind {
     /// `404`.
     ///
     /// **Two paths share this kind, and they differ in retry behaviour.** The tag
-    /// probe goes through [`Fetcher::get`] and so through [`RetryPolicy`]; the
-    /// negative probes go through [`Fetcher::observe`], which sends once and
+    /// probe goes through [`super::Fetcher::get`] and so through [`super::RetryPolicy`]; the
+    /// negative probes go through [`super::Fetcher::observe`], which sends once and
     /// records `attempts: 1` unconditionally. A reader of `api/requests.ndjson`
     /// therefore cannot tell them apart from the row alone, and the `kind` was
     /// deliberately not split to fix that — see the note on [`Kind`]'s wire

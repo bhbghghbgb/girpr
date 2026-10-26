@@ -14,7 +14,7 @@
 //!
 //! The rules, and the reasoning behind them, are in [`plan`]; the level names
 //! are in [`level`]; the one place a broken filter spec is turned into a
-//! warning is in [`filter`].
+//! warning is in [`filter()`].
 //!
 //! # What this crate is not
 //!

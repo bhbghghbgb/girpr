@@ -51,7 +51,7 @@ pub struct PurgePlan {
 }
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
-/// See https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263
+/// See <https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263>
 ///
 /// V1 GAP (deliberate, documented): Collapse's expected set is the union of
 /// the Sophon primary manifests + dispatcher persistent manifests
@@ -223,7 +223,7 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 /// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
-/// [`super::build_plan`] and the purge walk).
+/// [`super::phases::plan::build_plan`] and the purge walk).
 pub fn keep_set() -> HashSet<String> {
     HashSet::from([
         "config.ini".to_string(),

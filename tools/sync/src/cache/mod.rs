@@ -22,7 +22,7 @@
 //! Production commits are durable (`Durability::Immediate`). Tests may lower
 //! that to `Durability::None` through `GIRSYNC_TEST_DURABILITY=none`, which
 //! removes the per-commit fsync but still flushes on a clean `Database` drop;
-//! see [`write_durability`].
+//! see `write_durability`.
 //!
 //! ## The submodules
 //!

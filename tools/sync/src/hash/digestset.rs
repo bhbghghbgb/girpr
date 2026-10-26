@@ -6,7 +6,7 @@ use super::algo::HashAlg;
 ///
 /// ## Not `Digests`
 ///
-/// [`Digests`] is the streaming *context* that absorbs bytes; this is the *result*.
+/// [`super::Digests`] is the streaming *context* that absorbs bytes; this is the *result*.
 /// Different jobs, and they must not be merged: the context is per-file-per-phase and
 /// thrown away, this one lives in the cache and in both sides' effective maps.
 ///
@@ -43,7 +43,7 @@ pub struct DigestSet {
 impl DigestSet {
     /// How many digests this holds, foreign ones included.
     ///
-    /// Not `const`, unlike [`AlgoSet::len`]: counting `foreign` means dereferencing a
+    /// Not `const`, unlike [`super::AlgoSet::len`]: counting `foreign` means dereferencing a
     /// boxed slice, and a count that silently ignored the foreign arm would be wrong
     /// for exactly the rows forward compatibility exists to preserve.
     pub fn len(&self) -> usize {

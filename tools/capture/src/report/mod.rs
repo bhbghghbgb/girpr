@@ -24,7 +24,7 @@ use std::io::Write as _;
 use std::sync::Mutex;
 
 use crate::VERSION;
-use crate::encoding::{self, percent};
+use crate::encoding;
 
 // `percent_decode` is part of this module's public API; its definition now
 // lives in `crate::encoding` and is re-exported here so the path is stable.

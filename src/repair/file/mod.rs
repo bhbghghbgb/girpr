@@ -68,6 +68,7 @@ use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
 use crate::sleep::Sleep;
+#[cfg(test)]
 use crate::sophon::SophonChunk;
 use crate::util;
 
@@ -78,6 +79,7 @@ mod inplace;
 mod mode;
 mod temp;
 
+#[cfg(test)]
 use self::inplace::trim_is_free;
 
 /// Max attempts per file before it is counted as failed.

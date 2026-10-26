@@ -6,7 +6,7 @@
 //!
 //! The audio selection is resolved here rather than in step 1 because it needs
 //! `audio_pkg_scan_dir` from `getGameConfigs`; the work is split between this
-//! module (which calls it) and [`super::audio`] (which owns the file format).
+//! module (which calls it) and `audio` (which owns the file format).
 
 use std::collections::HashSet;
 use std::path::Path;
