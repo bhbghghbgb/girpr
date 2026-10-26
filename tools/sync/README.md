@@ -732,7 +732,11 @@ Mirrors `src` → `dst`:
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
-   than one rw operation permitted those lines come out in completion order. No resume.
+   than one rw operation permitted those lines come out in completion order.
+**No resume checkpoint:** one apply-phase failure (an unreadable src file, a
+permission error, an unsupported type) aborts the run with exit 3 and leaves
+`dst` partially mirrored — but completed copies have their cache rows written,
+so a rerun skips them and the mirror converges on the next run.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -1004,12 +1008,17 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
 - **Symlinks** are followed (`--max-depth`, default 10, applies to the whole walk —
   raise for deep trees). Dangling links abort. Link targets outside the root are
   followed and materialized as plain files/dirs. Dirs compare by presence only.
+  Writes follow `dst` symlinks too: a `sync` copy lands on a link's target, which
+  may live outside `dst`; removals remove the link itself, not the target.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
-  (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
-  stderr;
+  (bad flag values, both sides naming one cache, one apply-phase failure such as an
+  unreadable src file, IO/verify/corrupt — message on stderr;
   note runtime usage mistakes also exit `3`, unlike `girpr`'s `1`)
   · `4` compare found diff. `--rw-threads 0` is a runtime error → exit `3`;
   conflicting `--rw-threads*` combinations are a parse error → exit `2`.
+  `compare`'s `SUMMARY` reports `total_diff` (missing + extra + changed +
+  type_conflict) and `case_mismatch` separately: a case-only compare has
+  `total_diff=0` yet exits `4`, because casing is a difference for `compare`.
 
 ## Typical dev workflow
 

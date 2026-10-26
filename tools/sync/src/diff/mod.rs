@@ -62,10 +62,14 @@ pub struct Diff {
 }
 
 impl Diff {
-    /// Number of differences that force a nonzero exit, ignoring case mismatches
-    /// (which `compare` counts separately but which are still a difference).
+    /// Number of differences that force a nonzero exit, **excluding**
+    /// `case_mismatch` (which `compare` counts separately but which is still a
+    /// difference: `is_empty()` consults it, so a case-only compare reports
+    /// `total_diff=0` yet exits `4`).
     ///
-    /// Counts the four difference buckets **and nothing else**.
+    /// Counts the four difference buckets **and nothing else**. A reader of
+    /// `total_diff` must not treat it as "nothing differs at all" — use
+    /// `is_empty()` for that.
     ///
     /// [`Self::identical`] is absent here deliberately rather than by oversight, and
     /// this is the most consequential line in the crate: `total()` feeds the exit
@@ -511,6 +515,25 @@ mod tests {
         );
         assert_eq!(d.identical, vec!["sub/B.txt".to_string()]);
         assert_eq!(d.total(), 0, "nothing differs: the content matched");
+    }
+
+    /// The flip side of the previous test: `total()` excludes `case_mismatch`
+    /// but `is_empty()` does not, so a case-only compare reports
+    /// `total_diff=0` in its `SUMMARY` yet exits `4`. That asymmetry is exactly
+    /// why `sync` renames dst to src casing before diffing — left in place, a
+    /// clean tree would exit 4 on spelling alone.
+    #[test]
+    fn a_case_only_diff_reports_total_zero_but_is_not_empty() {
+        let src = side(vec![("sub/B.txt", file(10, 100))]);
+        let dst = side(vec![("sub/b.txt", file(10, 100))]);
+        let d = run(&src, &dst, false, true);
+        assert_eq!(d.total(), 0, "the pair compared equal: total_diff=0");
+        assert_eq!(
+            d.case_mismatch.len(),
+            1,
+            "but the casing difference is reported"
+        );
+        assert!(!d.is_empty(), "compare exits 4 on a case-only difference");
     }
 
     /// The sensitive branch pairs by exact key, so `Data.txt` and `data.txt` are

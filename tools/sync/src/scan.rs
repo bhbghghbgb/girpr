@@ -74,7 +74,33 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 let ft = ent.file_type();
                 // Progress: trace every entry (file log), debug heartbeat every 2000.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
-                if ft.is_dir() {
+                // `follow_links(true)` above makes walkdir descend into symlinked
+                // directories, but `file_type()` reports the link itself, never the
+                // target — a symlink is neither `is_dir` nor `is_file` here. Look
+                // through it so a symlink is handled the way the docs promise:
+                // followed, materialized as a plain file or dir, and a dangling link
+                // aborts the walk. A link target outside the root is followed too.
+                if ft.is_symlink() {
+                    let meta = std::fs::metadata(ent.path())
+                        .with_context(|| format!("stat symlink {}", ent.path().display()))?;
+                    if meta.is_dir() {
+                        out.push(LiveEnt {
+                            rel,
+                            is_dir: true,
+                            size: 0,
+                            mtime_ns: 0,
+                        });
+                    } else if meta.is_file() {
+                        out.push(LiveEnt {
+                            rel,
+                            is_dir: false,
+                            size: meta.len(),
+                            mtime_ns: mtime_ns_of(&meta),
+                        });
+                    } else {
+                        bail!("unsupported file type {}", ent.path().display());
+                    }
+                } else if ft.is_dir() {
                     out.push(LiveEnt {
                         rel,
                         is_dir: true,
@@ -137,6 +163,25 @@ pub fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> 
 mod tests {
     use super::*;
 
+    /// Create a symlink. On Windows links carry a type (file vs dir), so the
+    /// two platforms spell the creation differently.
+    #[cfg(unix)]
+    fn make_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(original, link)
+    }
+    #[cfg(windows)]
+    fn make_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(original, link)
+    }
+    #[cfg(unix)]
+    fn make_symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(original, link)
+    }
+    #[cfg(windows)]
+    fn make_symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(original, link)
+    }
+
     /// Pruning is asserted as the *set* of surviving rels, which is the property
     /// every caller depends on, rather than as the order the walk happened to
     /// produce. It covers both halves of the decision that a `girpr-cache*` entry
@@ -189,5 +234,101 @@ mod tests {
         rels.sort();
 
         assert_eq!(rels, vec!["one", "one/mid.txt", "one/two", "top.txt"]);
+    }
+
+    /// Symlink creation requires elevation on some hosts, so a test that needs
+    /// one skips here rather than failing. The assertions run only where links
+    /// actually exist — which is also where the symlink arms of `walk_live`
+    /// can be exercised at all.
+    fn symlink_root(tag: &str) -> Option<girpr_tempdir::TempDir> {
+        let root = girpr_tempdir::TempDir::new("girsync_scan", tag);
+        match make_symlink(std::path::Path::new("probe"), &root.join("probe-link")) {
+            Ok(()) => Some(root),
+            Err(_) => {
+                eprintln!(
+                    "skipping symlink test {tag}: symlinks cannot be created in this environment"
+                );
+                None
+            }
+        }
+    }
+
+    /// A symlink to a file is materialized as a plain file: present in the walk
+    /// with the target's size and mtime, so `sync` can copy it like any other
+    /// file.
+    #[test]
+    fn a_file_symlink_is_walked_as_a_file() {
+        let Some(root) = symlink_root("symlink_file") else {
+            return;
+        };
+        let target = root.join("target.bin");
+        std::fs::write(&target, b"symlinked content").unwrap();
+        make_symlink(&target, &root.join("link.bin")).unwrap();
+
+        let got: std::collections::HashMap<String, LiveEnt> = walk_live(&root, 16)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.rel.clone(), e))
+            .collect();
+        let link = got.get("link.bin").expect("the symlink is walked: {got:?}");
+        assert!(!link.is_dir, "a file symlink is a file entry: {link:?}");
+        assert_eq!(link.size, b"symlinked content".len() as u64);
+        let target_meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            link.mtime_ns,
+            mtime_ns_of(&target_meta),
+            "the target's mtime"
+        );
+    }
+
+    /// A symlink to a directory is materialized as a plain dir, and walkdir
+    /// (`follow_links(true)`) descends through it, so the whole subtree shows up
+    /// under the link's rel — including a link target outside the root.
+    #[test]
+    fn a_dir_symlink_is_walked_as_a_dir_with_its_subtree() {
+        let Some(root) = symlink_root("symlink_dir") else {
+            return;
+        };
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::write(root.join("real/sub/file.txt"), b"nested").unwrap();
+        make_symlink_dir(&root.join("real"), &root.join("link")).unwrap();
+
+        let got: std::collections::HashMap<String, LiveEnt> = walk_live(&root, 16)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.rel.clone(), e))
+            .collect();
+        assert!(
+            got.contains_key("link"),
+            "the link itself is a dir entry: {got:?}"
+        );
+        assert!(
+            got.contains_key("link/sub"),
+            "descended directories follow the link"
+        );
+        assert!(
+            got.contains_key("link/sub/file.txt"),
+            "and nested files are walked through the link"
+        );
+        let link = got.get("link").expect("link entry");
+        assert!(link.is_dir, "a dir symlink is a dir entry: {link:?}");
+        assert_eq!(link.size, 0, "dirs carry no size");
+    }
+
+    /// A dangling symlink cannot be stat'd and aborts the walk, as the docs
+    /// promise ("Dangling links abort"). walkdir's own error arm would catch a
+    /// loop; this one is caught at stat time.
+    #[test]
+    fn a_dangling_symlink_aborts_the_walk() {
+        let Some(root) = symlink_root("symlink_dangling") else {
+            return;
+        };
+        make_symlink(&root.join("does-not-exist"), &root.join("broken")).unwrap();
+
+        let err = walk_live(&root, 16).unwrap_err();
+        assert!(
+            err.to_string().contains("broken"),
+            "the error names the dangling link: {err}"
+        );
     }
 }
