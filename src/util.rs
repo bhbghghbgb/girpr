@@ -331,8 +331,10 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
     let rel = contained_rel(rel)?;
     let joined = base.join(rel);
-    let base_resolved = resolve_existing_prefix(base);
-    let joined_resolved = resolve_existing_prefix(&joined);
+    let base_resolved = resolve_existing_prefix(base)
+        .with_context(|| format!("resolve the game dir {}", base.display()))?;
+    let joined_resolved = resolve_existing_prefix(&joined)
+        .with_context(|| format!("resolve {}", joined.display()))?;
     anyhow::ensure!(
         joined_resolved.starts_with(&base_resolved),
         "path escapes {}: {}",
@@ -348,7 +350,16 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 /// before `game_dir` is created; resolving the longest existing prefix keeps
 /// the symlink resolution where it matters without requiring the leaf (or the
 /// whole tree) to exist.
-fn resolve_existing_prefix(path: &Path) -> PathBuf {
+///
+/// Only [`ErrorKind::NotFound`] means "this component is not there yet". Every
+/// other error means the component **could not be resolved** — a denied
+/// attribute read, a sharing violation, a regular file used as a directory —
+/// and is returned instead of being swallowed. Treating such a component as a
+/// literal name and continuing lexically is exactly the "filesystem check that
+/// silently became a lexical check" failure this helper exists to prevent: a
+/// symlink whose target cannot be canonicalized would pass the containment
+/// comparison.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
     let mut missing: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = path;
     loop {
@@ -357,17 +368,22 @@ fn resolve_existing_prefix(path: &Path) -> PathBuf {
                 for part in missing.iter().rev() {
                     resolved.push(part);
                 }
-                return resolved;
+                return Ok(resolved);
             }
-            Err(_) => match (cur.parent(), cur.file_name()) {
-                (Some(parent), Some(name)) => {
-                    missing.push(name.to_os_string());
-                    cur = parent;
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match (cur.parent(), cur.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        missing.push(name.to_os_string());
+                        cur = parent;
+                    }
+                    // No existing prefix at all (or a root): the lexical form is
+                    // the best answer, and both sides use the same rule.
+                    _ => return Ok(path.to_path_buf()),
                 }
-                // No existing prefix at all (or a root): the lexical form is
-                // the best answer, and both sides use the same rule.
-                _ => return path.to_path_buf(),
-            },
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("canonicalize {}", cur.display()));
+            }
         }
     }
 }
@@ -742,6 +758,83 @@ mod tests {
         std::fs::create_dir_all(dir.join("real")).unwrap();
         std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// A component that cannot be **resolved** is not a missing component: the
+    /// containment check must fail closed instead of falling back to a lexical
+    /// comparison.
+    ///
+    /// A NUL in a path component is the portable way to make `canonicalize`
+    /// return an error that is not `NotFound` (`InvalidInput` on both
+    /// platforms). Unix additionally reports `NotADirectory` for a regular
+    /// file used as a parent; Windows reports `NotFound` there, which is a
+    /// missing path rather than an unresolvable one.
+    #[test]
+    fn contained_join_fails_closed_when_a_component_cannot_be_resolved() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "unresolvable");
+        let got = contained_join(&dir, "bad\0name");
+        assert!(
+            got.is_err(),
+            "an unresolvable component must be refused, got {got:?}"
+        );
+        // The error surfaced from the resolver itself, not from the
+        // `starts_with` comparison.
+        let direct = resolve_existing_prefix(&dir.join("bad\0name"));
+        assert!(
+            direct.is_err(),
+            "a non-NotFound canonicalize error must be propagated"
+        );
+
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("blocker"), b"not a directory").unwrap();
+            let got = contained_join(&dir, "blocker/child.dat");
+            assert!(
+                got.is_err(),
+                "a file used as a parent is NotADirectory, not missing: {got:?}"
+            );
+        }
+    }
+
+    /// Windows: a directory junction inside the install that points out of it
+    /// is an escape, exactly like a Unix symlink. The product is
+    /// Windows-first, so the resolution path needs a test on the platform
+    /// whose reparse points it will meet.
+    ///
+    /// Junctions need no privilege (unlike symlinks), but if the host refuses
+    /// to create one the case is skipped rather than failed.
+    #[cfg(windows)]
+    #[test]
+    fn contained_join_resolves_a_junction_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_out");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
+        let link = dir.join("game");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&*outside)
+            .status();
+        let made = matches!(status, Ok(s) if s.success()) && link.exists();
+        if !made {
+            eprintln!("skipping: this host cannot create a directory junction");
+            return;
+        }
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(
+            got.is_err(),
+            "a junction out of the base must be refused: {got:?}"
+        );
+        // A junction that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        let alias = dir.join("alias");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(dir.join("real"))
+            .status();
+        if matches!(status, Ok(s) if s.success()) {
+            assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+        }
     }
 
     #[test]
