@@ -704,4 +704,8 @@ fn a_named_path_the_manifests_do_not_carry_is_skipped_and_reported() {
     );
     assert_eq!(c.summary["forced_files_requested"], "1");
     assert_eq!(c.summary["forced_files_skipped"], "1");
+    assert_eq!(
+        c.summary["forced_files_unscored"], "0",
+        "absent from the manifests is not the same as present but unscored"
+    );
 }

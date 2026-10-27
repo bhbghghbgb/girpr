@@ -395,6 +395,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             captures_over_budget: selection.rejected.len() as u64,
             forced_files_requested: plan.files.len() as u64,
             forced_files_skipped: selection.forced_skipped.len() as u64,
+            forced_files_unscored: selection.forced_unscored.len() as u64,
             capture_bytes_admitted: selection.bytes_admitted,
             budget_unlimited: selection.budget.limit().is_none(),
             budget_limit: selection.budget.limit().unwrap_or(0),

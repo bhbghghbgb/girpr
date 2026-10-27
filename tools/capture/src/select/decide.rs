@@ -71,6 +71,15 @@ pub fn decide(
             "--files named a path neither manifest carries; nothing to capture for it"
         );
     }
+    for p in &selection.forced_unscored {
+        // Present in the pool but a degenerate patch shape no class claims. It
+        // is still a path the caller named, and "the matrix has no class for
+        // this" is a different finding from "this file is not in the manifests".
+        tracing::warn!(
+            path = %p,
+            "--files named a path that answers no matrix class; recorded, not captured"
+        );
+    }
     for row in &selection.matrix {
         if row.is_satisfied() {
             continue;

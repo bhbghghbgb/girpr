@@ -124,6 +124,7 @@ mod tests {
             admitted: Vec::new(),
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
             matrix: rows,
             bytes_admitted: 0,
             budget: super::super::Budget::unlimited(),

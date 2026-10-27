@@ -283,6 +283,15 @@ pub struct Selection {
     /// omission and a refusal are the same bytes and very different findings, so
     /// the run reports the count and the names on stderr.
     pub forced_skipped: Vec<String>,
+    /// `--files` paths the pool carries but which answer **no matrix class**.
+    ///
+    /// Separate from [`Selection::forced_skipped`] because the two are different
+    /// facts: one path is absent from the manifests, the other is present and is
+    /// a degenerate patch shape (a one-chunk file with no reuse, for example)
+    /// that no class claims. Neither is a capture, and a caller who named the
+    /// path needs to be told which one it was. Inventing a class for it would
+    /// make the matrix claim something false.
+    pub forced_unscored: Vec<String>,
     /// One row per required class, in admission order.
     pub matrix: Vec<MatrixRow>,
     /// Total charged against the budget.
@@ -501,6 +510,7 @@ pub fn select(
     // number the flag is about.
     let mut admitted: Vec<Admission> = Vec::new();
     let mut forced_skipped: Vec<String> = Vec::new();
+    let mut forced_unscored: Vec<String> = Vec::new();
     let mut forced_rejected: Vec<Rejection> = Vec::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
@@ -512,6 +522,12 @@ pub fn select(
             continue;
         };
         let Some(primary) = c.candidate.classes.first().copied() else {
+            // The pool carries the path, but the class set is a partition and
+            // this shape answers none of it (a degenerate patch). It is still a
+            // path the caller named, so it is recorded rather than dropped; it
+            // is not a capture, because a capture with no class would make the
+            // matrix claim something false.
+            forced_unscored.push(want.clone());
             continue;
         };
         let cost = c.budget_cost();
@@ -778,6 +794,7 @@ pub fn select(
         admitted,
         rejected,
         forced_skipped,
+        forced_unscored,
         matrix,
         budget: final_budget,
     }
@@ -1237,6 +1254,42 @@ mod tests {
                 .map(|r| r.status),
             Some(MatrixStatus::CoveredBy),
             "the class is answered by the admitted forced path"
+        );
+    }
+
+    /// A forced path the pool carries but which answers **no** class is
+    /// recorded, not silently dropped.
+    ///
+    /// A one-chunk file with no reuse is a degenerate patch: `added` already
+    /// covers "the file is created whole", so the class set is legitimately
+    /// empty. The old loop `continue`d past it, and a caller who named it saw
+    /// `requested: 1` and nothing else.
+    #[test]
+    fn a_forced_path_that_answers_no_class_is_recorded_as_unscored() {
+        let pool = candidates(&[field(
+            "game",
+            vec![row(
+                "x/degenerate",
+                State::Changed,
+                Some(scored("x/degenerate", 10, (5, 5), (1, 0, 0), false)),
+                5,
+            )],
+        )]);
+        assert!(
+            pool[0].candidate.classes.is_empty(),
+            "the fixture is the degenerate shape this test is about"
+        );
+
+        let s = select(&pool, 1, Budget::unlimited(), &["x/degenerate".into()]);
+        assert!(s.admitted.is_empty(), "no class, so no capture");
+        assert_eq!(
+            s.forced_unscored,
+            vec!["x/degenerate"],
+            "the path is recorded as present but unscored"
+        );
+        assert!(
+            s.forced_skipped.is_empty(),
+            "it is in the manifests, so it is not `skipped`"
         );
     }
 

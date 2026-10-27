@@ -746,6 +746,7 @@ mod tests {
                     admitted: Vec::new(),
                     rejected: Vec::new(),
                     forced_skipped: Vec::new(),
+                    forced_unscored: Vec::new(),
                     matrix: Vec::new(),
                     bytes_admitted: 0,
                     budget: crate::select::Budget::capped(10_000),

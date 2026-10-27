@@ -831,6 +831,25 @@ mod m5_matrix {
         );
     }
 
+    /// The frozen corpus has a real degenerate path: a one-chunk file with no
+    /// reuse answers no class. Naming it with `--files` must record that fact,
+    /// not drop it between `requested` and `skipped`.
+    #[test]
+    fn a_named_degenerate_path_is_recorded_as_unscored() {
+        let degenerate = "GenshinImpact_Data/AssetBundles/data_revision";
+        let pool = select::candidates(&[game()]);
+        let s = select::select(&pool, 1, Budget::unlimited(), &[degenerate.to_string()]);
+        assert!(
+            s.admitted.iter().all(|a| a.path != degenerate),
+            "a capture with no class would make the matrix claim something false"
+        );
+        assert_eq!(s.forced_unscored, vec![degenerate.to_string()]);
+        assert!(
+            s.forced_skipped.is_empty(),
+            "the manifests carry it, so it is not `skipped`"
+        );
+    }
+
     /// The scoring document is written from the same diff the admission used, so
     /// it can be checked against the answer without re-deriving anything.
     #[test]

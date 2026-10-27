@@ -470,6 +470,8 @@ pub struct SelectionStats {
     pub forced_files_requested: u64,
     /// Of those, the manifests do not carry.
     pub forced_files_skipped: u64,
+    /// Of those, present in the manifests but answering no matrix class.
+    pub forced_files_unscored: u64,
     /// What admission charged.
     pub capture_bytes_admitted: u64,
     /// Whether `--budget` capped the run at all.
@@ -640,6 +642,10 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
         (
             "forced_files_skipped",
             Val::from(s.selection.forced_files_skipped),
+        ),
+        (
+            "forced_files_unscored",
+            Val::from(s.selection.forced_files_unscored),
         ),
         // Chunks.
         ("chunk_blobs_wanted", Val::from(s.chunks.wanted)),
@@ -1096,6 +1102,7 @@ mod tests {
                 captures_over_budget: 0,
                 forced_files_requested: 0,
                 forced_files_skipped: 0,
+                forced_files_unscored: 0,
                 capture_bytes_admitted: 0,
                 budget_unlimited: false,
                 budget_limit: 0,
@@ -1185,6 +1192,7 @@ mod tests {
             "captures_over_budget",
             "forced_files_requested",
             "forced_files_skipped",
+            "forced_files_unscored",
             "chunk_blobs_wanted",
             "chunk_blobs_stored",
             "chunk_bytes_projected",

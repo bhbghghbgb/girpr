@@ -884,6 +884,7 @@ mod tests {
             }],
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
             matrix: Vec::new(),
             bytes_admitted: 10,
             budget: crate::select::Budget::unlimited(),
