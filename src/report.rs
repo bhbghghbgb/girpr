@@ -294,9 +294,16 @@ pub struct Summary {
     pub files_inplace: AtomicU64,
     /// Files repaired through `{path}_tmp`.
     pub files_temp: AtomicU64,
-    /// Bytes that were already correct where they belonged and were **not**
-    /// written. The disk claim of the run, in one number: the bytes the
-    /// repair did not have to touch.
+    /// Bytes the file's size says the repair did **not** have to write: the
+    /// ranges that were already correct in place, and a `{path}_tmp` prefix a
+    /// resumed run kept instead of rewriting. The disk claim of the run, in one
+    /// number.
+    ///
+    /// A kept `_tmp` prefix is **not verified yet** — it is unverified bytes the
+    /// repair chose not to rewrite, and only the final whole-file MD5 gate
+    /// proves them. A file whose prefix fails that gate is deleted and rebuilt,
+    /// so those bytes were counted here but did not survive. In-place kept
+    /// ranges, by contrast, were checked as they were read.
     ///
     /// It is the complement of the **settled** writes — the bytes that landed
     /// in the install from a source that passed its gate — and the settled
@@ -434,7 +441,8 @@ pub struct SummaryFlags {
     pub files_inplace: Option<u64>,
     /// Files repaired through `{path}_tmp`.
     pub files_temp: Option<u64>,
-    /// Bytes that were already correct and were not rewritten.
+    /// Bytes the repair did not rewrite: in-place ranges that were already
+    /// correct, plus a resumed, not-yet-verified `{path}_tmp` prefix.
     ///
     /// The complement of the **settled** writes: see
     /// [`Summary::kept_bytes`].
