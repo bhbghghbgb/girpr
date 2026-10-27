@@ -295,31 +295,42 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
             )
         })
         .collect();
-    let source_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .zip(sources.iter())
-        .map(|(c, src)| {
-            (
-                src.unwrap_or(0),
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
+    // Only chunks that **have** a source get a source range. Coercing the
+    // absent ones to offset 0 would ask the scan to verify the chunk's bytes
+    // at the head of the file, so unrelated bytes that happen to match (the
+    // file reflowed, or the head holds the content under a different layout)
+    // would mark a non-existent source intact while the writer, which gates on
+    // `sources[i].is_some()`, downloads the chunk anyway.
+    let mut source_ranges: Vec<util::ScanRange<'_>> = Vec::new();
+    let mut source_owner: Vec<usize> = Vec::new();
+    for (i, (c, src)) in file.chunks.iter().zip(sources.iter()).enumerate() {
+        let Some(offset) = src else { continue };
+        source_owner.push(i);
+        source_ranges.push((
+            *offset,
+            c.uncompressed_size.max(0) as u64,
+            c.uncompressed_md5.as_str(),
+        ));
+    }
     let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
         // An unreadable file is not a failed scan: the verdict is "nothing
         // is correct", which is what the repair would find too.
         tracing::debug!(file = %file.rel, error = %format!("{e:#}"), "scan: unreadable");
         util::Scan::absent(dest_ranges.len(), source_ranges.len())
     });
+    // Back to one verdict per chunk, in the plan's order: a chunk with no
+    // source has no intact source, by definition.
+    let mut source_ok = vec![false; file.chunks.len()];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
+    }
     Scanned {
         rel: file.rel.clone(),
         bytes: scan.file_len,
         verdict: Verdict {
             file_md5: scan.file_md5,
             dest_ok: scan.dest_ok,
-            source_ok: scan.source_ok,
+            source_ok,
         },
     }
 }
@@ -492,6 +503,55 @@ mod tests {
                 Mode::Inplace
             ),
             u64::MAX
+        );
+    }
+
+    #[test]
+    fn a_chunk_with_no_source_is_never_scanned_at_offset_zero() {
+        // The chunk's bytes sit at offset 10, but the same content also sits
+        // at the head of the file under a different layout, and the local map
+        // has no entry for it. Scanning "no source" as offset 0 would call the
+        // non-existent source intact and hide the download from the estimate.
+        let x = vec![0x58u8; 10];
+        let y = vec![0x59u8; 10];
+        let md5_x = format!("{:x}", md5::compute(&x));
+        let mut bytes = x.clone();
+        bytes.extend_from_slice(&y);
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "no_source");
+        std::fs::write(dir.join("a.dat"), &bytes).unwrap();
+        let file = PlannedFile {
+            rel: "a.dat".into(),
+            size: 20,
+            md5: format!("{:x}", md5::compute(&bytes)),
+            chunks: vec![chunk_at("c0", &md5_x, 10, 10)],
+        };
+
+        // The seam is real: the bytes at offset 0 do match the chunk.
+        let buggy =
+            util::scan_file(&dir.join("a.dat"), &[(10, 10, &md5_x)], &[(0, 10, &md5_x)]).unwrap();
+        assert!(!buggy.dest_ok[0], "the destination is the other copy");
+        assert!(
+            buggy.source_ok[0],
+            "the head copy really would verify at offset 0"
+        );
+
+        let scanned = scan_one(&dir, &file, &LocalChunkMap::new());
+        assert_eq!(scanned.verdict.dest_ok, vec![false]);
+        assert_eq!(
+            scanned.verdict.source_ok,
+            vec![false],
+            "a chunk with no source has no intact source"
+        );
+        assert_eq!(
+            est_file_download_bytes(
+                &file.chunks,
+                Some(&scanned.verdict),
+                &[None],
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            10,
+            "the estimate must count the chunk it cannot copy"
         );
     }
 
