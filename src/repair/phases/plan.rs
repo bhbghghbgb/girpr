@@ -494,6 +494,26 @@ mod tests {
         }
     }
 
+    /// A leading `.` component is accepted but must not survive into the
+    /// plan: the purge walk reports the plain form, so a stored `./game/foo.dat`
+    /// would not match `expected_paths()` and `--purge-after` would delete the
+    /// file the run just repaired.
+    #[test]
+    fn a_leading_dot_component_is_stripped_from_the_plan() {
+        let f = SophonChunkFile {
+            file: "./game/foo.dat".into(),
+            chunks: vec![],
+            is_folder: false,
+            size: 1,
+            md5: "m".into(),
+        };
+        let per = vec![("http://x".to_string(), vec![f])];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].rel, "game/foo.dat");
+        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
+    }
+
     /// The scope is applied *before* the plan exists, so `expected_paths()` —
     /// the only manifest-derived input to the files-cleanup's keep set — is
     /// narrowed too. Applying it anywhere downstream instead would leave the

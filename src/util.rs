@@ -308,16 +308,27 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
         "path is absolute: {rel}"
     );
     let mut named = false;
+    // Build the cleaned form rather than returning the input: `a/./b` is
+    // accepted but must not survive as `a/./b`, because the plan stores this
+    // string and every later comparison (the purge's expected set, the reuse
+    // map, the scope) works on the plain form. A leading `.` in particular
+    // would make `expected_paths()` disagree with the purge walk — which
+    // reports `game/foo.dat` — and the cleanup would delete the file this run
+    // just repaired.
+    let mut clean = PathBuf::new();
     for c in path.components() {
         match c {
-            Component::Normal(_) => named = true,
+            Component::Normal(part) => {
+                named = true;
+                clean.push(part);
+            }
             // `a/./b` is still contained; it just says nothing.
             Component::CurDir => {}
             _ => anyhow::bail!("path is not a plain relative path: {rel}"),
         }
     }
     anyhow::ensure!(named, "path names no file: {rel}");
-    Ok(path.to_path_buf())
+    Ok(clean)
 }
 
 /// Join a server-controlled relative path under `base`, refusing anything that
@@ -709,7 +720,16 @@ mod tests {
     fn contained_rel_accepts_only_plain_relative_paths() {
         assert!(contained_rel("a/b.dat").is_ok());
         assert!(contained_rel("a\\b.dat").is_ok());
-        assert!(contained_rel("./a/b.dat").is_ok());
+        // Accepted, but returned in the plain `/` form: a leading `.` would
+        // make the plan's expected set disagree with the purge walk.
+        assert_eq!(
+            contained_rel("./a/b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
+        assert_eq!(
+            contained_rel("a/./b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
 
         for bad in [
             "",
