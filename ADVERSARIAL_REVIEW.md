@@ -690,7 +690,9 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 
 Landed on branch `fix-gaps/girpr` in the §6 order, one commit per finding
 (F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
-they pin, plus one test-only commit). No commit re-lands the reverted series
+they pin, plus one test-only commit). This is the **first-pass** table: the
+second pass (§8) re-validated the residual claims and fixed them; see §8.1 for
+the final verdicts. No commit re-lands the reverted series
 verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
 `layout`'s dead `checked_add` is not reintroduced, `validate_rel` is replaced
 by `util::contained_rel` / `contained_join` applied to every server-path sink,
@@ -751,7 +753,8 @@ and all six `*_tmp` doc sites plus the `kept_bytes` comment are corrected.
 
 ### 7.2 Verification
 
-Run on the final tree on Windows (`cargo` 1.x, debug profile):
+Run on the first-pass final tree on Windows (`cargo` 1.x, debug profile). The
+final second-pass numbers are in §8.3.
 
 - `cargo build` — ok.
 - `cargo test -p girpr` — **286 passed, 0 failed, 7 ignored** (156 lib + 7 binary + 16 + 25 + 82 integration). The 7 ignored are the 6 `artifact_bridge` tests and the 1 `peak_heap` measurement.
@@ -767,5 +770,101 @@ not run), and `--print-plan --audio` under an active path scope (the fix gates
 the write; the scope-refusal interaction is covered by the existing
 `explicit_audio_under_a_scope_...` test, not by a print-plan variant).
 
-*End of review. No source, test, or Cargo file was modified; no test was run;
-nothing was staged or committed. The only file created is this document.*
+## 8. Second pass — reviewer's notes validated
+
+The second-pass reviewer's notes (reviewed tip `48e7dd2`, delivered as a
+separate untracked document) were checked against this tree, one claim at a
+time, at the cited source site. Every finding below was reproduced or refuted
+by reading the code and, where a behaviour was testable, by a regression test
+that fails on the old shape. That document was then deleted; this section is
+the surviving record. The `§2` text above still describes the first-pass
+baseline, including `util::normalize_rel`, which no longer exists after N-9.
+
+### 8.1 Per-finding verdicts
+
+The F-findings the notes accepted (F-4, F-5, F-6, F-7) hold as written. The
+five residual claims were valid and are now closed:
+
+| # | Second-pass verdict | What changed | Commit |
+|---|---|---|---|
+| F-1 / F-8 | **Valid** — the helper was tested, the wiring was not. | Added a `#[cfg(test)]` panic seam in `repair_one_file` and a test that calls **`repair_all`**, not `join_file_tasks`. Mutation check: restoring `let _ = h.await` makes it fail with `files_failed = 0`. | `d5ef6fa` |
+| F-2 (helper) | **Valid** — a non-`NotFound` `canonicalize` error fell through to a lexical compare. | `resolve_existing_prefix` walks up only on `NotFound`; every other error propagates. Windows junction test added; the `#[cfg(unix)]` symlink test remains. | `ddb4371` |
+| F-3 / N-2 | **Valid** — a settle could cross the limit and the run still exited `0`. | `settle_reservation` trips `StoppedBy::Download` as soon as the reconciled live figure is over the limit. The partial-body test now asserts exit `5` and `stopped=--max-download-bytes` instead of pinning the overrun. | `0bcd6a6` |
+| F-8 (remainder) | **Valid** — panic wiring was the last uncovered gap. | Pinned by the `repair_all` test above. | `d5ef6fa` |
+| F-9 / N-10 | **Valid** — the canonical field doc still described only in-place correctness. | `Summary::kept_bytes` and `ReportFlags::kept_bytes` now say a resumed `_tmp` prefix is counted though not yet verified, and that only the final MD5 gate proves it. | `ce45a2f` |
+
+| # | Second-pass verdict | What changed | Commit |
+|---|---|---|---|
+| N-1 | **Valid** (Medium, security) | Fail closed on non-`NotFound` containment probes, as above. | `ddb4371` |
+| N-2 | **Valid** (Medium, contract) | Settle-time stop, as above. | `0bcd6a6` |
+| N-3 | **Valid** (Medium, data loss) | The cache source is removed only after a successful copy; refused deletes/moves are logged and the source left in place. A unit test occupies the destination with a directory. The phase doc no longer claims every failure is fatal: `config.ini` and the delete ceiling still are; housekeeping is best-effort. | `dafed9b` |
+| N-4 | **Valid** (Medium, consistency) | `audio_pkg_cache_dir` / `audio_pkg_res_dir` are validated at metadata (exit `2`) alongside the scan dir; the post-phase check stays as defence in depth. | `c999b5f` |
+| N-5 | **Valid** (Medium, concurrency) | Plan dedup keys case-fold on Windows only; Unix keeps two distinct files. | `56a8a45` |
+| N-6 | **Valid** (Low, data loss) | `contained_rel` builds the cleaned component list, so `./game/foo.dat` is stored as `game/foo.dat`; the purge's expected set matches the walk. | `df52195` |
+| N-7 | **Valid** (Low, fail-fast) | Handles are drained through `FuturesUnordered`, observing a panic as it happens; a slower earlier task sees the abort flag already set. | `9d4e420` |
+| N-8 | **Valid** (Low, diagnostic) | Both check branches match the resolver error and log “escapes the game dir”; the disk estimator names a file it must omit instead of dropping it silently. Unreachable after `build_plan`, so no behavioural test. | `f9a6967` |
+| N-9 | **Valid** (Low, dead code/doc) | `util::normalize_rel` removed; README, `lib.rs`, `docs/03`, `docs/04` and `filter.rs` now name `contained_rel` / `contained_join`. | `2dfc1b5` |
+| N-10 | **Valid** (Low, doc) | Folded into F-9 above. | `ce45a2f` |
+| N-11 | **Valid** (Low, swallowed errors) | Delete/copy/walk failures are warned and counted where a counter exists; the delete-after-failed-copy case is N-3. Module docs match the behaviour. | `dafed9b` |
+| N-12 | **Valid** (Low, panic path) | `acquire_owned().expect("the file semaphore is never closed")`; the invariant is named and the join loop still counts a panic. | `9d4e420` |
+| N-13 | **Valid** (Low, overflow) | Scan and plan estimates saturate instead of wrapping; both branches are unit-tested. | `682058e` |
+| N-14 | **Valid** (Low, Windows names) | `contained_rel` now refuses a trailing separator, reserved device names (`NUL`, `con.dat`, `COM1`, `CONIN$`, …), components ending in `.` or space, and a `:` other than the drive prefix (NTFS ADS). The install is a Windows tree, so the rules apply on every host. | `f7449f5` |
+| Decision 7 | **Valid** — `readonly()` alone was a false invariant. | The doc now says `--print-plan` is read-only by construction and the audio-scan write must ask `!readonly() && !print_plan`, not `readonly()` alone. | `d6e2d0c` |
+
+### 8.2 Decisions that survive
+
+1. **F-3 is a hard stop, not a soft budget.** The stop is tripped after a
+   settle, so the overrun bound is the body already in flight — the bytes that
+   actually crossed the wire — not a whole reservation. README, `docs/04` and
+   the ledger docs describe that order.
+2. **Containment stays strict.** A manifest entry outside the install is
+   metadata (exit `2`) even when a scope filter would have dropped it; the
+   Windows naming rules are part of that lexical gate.
+3. **`./` is cleaned, not refused** (N-6), because both spellings mean the same
+   path and the purge compares strings.
+4. **Case folding is Windows-only** (N-5). Linux permits `Foo` and `foo` side
+   by side; deduping them would drop a real file.
+5. **The post phase is best-effort housekeeping.** `config.ini` bump and the
+   delete ceiling remain fatal; a refused audio move or delete is warned and
+   left in place, and the doc says so (N-3/N-11).
+6. **`kept_bytes` counts a resumed `_tmp` prefix** (F-9). The counter is “bytes
+   not rewritten”; the docs state that this prefix is unverified until the
+   whole-file MD5 gate, while in-place kept ranges were verified as read.
+7. **Completion-order join** (N-7) is kept over a bare `JoinSet`: it is the
+   same observation semantics with one fewer abstraction, and the test pins the
+   fail-fast consequence.
+8. **`readonly()` is one of two read-only gates** (Decision 7). New write
+   sites must account for `--print-plan` separately.
+
+### 8.3 Final verification
+
+Full run on Windows, debug profile, final second-pass tree:
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **296 passed, 0 failed, 7 ignored** (166 lib +
+  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
+  82 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings.
+- `cargo fmt --check` — clean (exit `0`).
+
+**Not run:** the `#[cfg(unix)]` symlink escape test (Windows host); the
+Windows junction test **did** run and pass. No shared crate changed, so no
+workspace-wide run was needed.
+
+### 8.4 Open for maintainers
+
+- `expected_paths()` and `classify_purge_path` still compare case-sensitively
+  on Windows. N-5 closed duplicate **plan entries**; an existing on-disk file
+  whose case differs from the manifest could still be classified as an orphan
+  by `--purge-after`. Not a regression from this pass, but the same Windows
+  case rule argues for folding it there too.
+- F-6 remains log-only by nature: a `spawn_blocking` scan panic has no public
+  seam to inject it through, so its “fixed” status is a code-reading claim.
+- `--dry-run` / `--check-only` still skip `validate_chunk_ranges` (§7.1 item
+  6); a corrupt range is refused by the repair paths, not by the plan.
+- The live CDN and real transport drop timing are still not exercised; all
+  tests use the in-process mock.
+
+*End of review. The finding text above records the first pass; §8 records the
+second pass, which changed source, tests and docs and ran the full suite on the
+tree that §8.3 describes.*
