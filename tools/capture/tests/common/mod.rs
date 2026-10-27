@@ -42,6 +42,12 @@ use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------- the world
 
+/// A path whose patch shape answers no matrix class: one chunk, no reuse.
+///
+/// It is the same shape the frozen measured corpus carries, so a test that
+/// forces it exercises the real degenerate case rather than an invented one.
+pub const DEGENERATE_PATH: &str = "GenshinImpact_Data/AssetBundles/data_revision";
+
 /// One chunk, with the bytes a CDN would serve and everything a manifest
 /// declares about it.
 ///
@@ -357,6 +363,27 @@ impl World {
         let mut w = World::all_shapes();
         w.old.fields.retain(|(f, _)| f == "game");
         w.new.fields.retain(|(f, _)| f == "game");
+        w
+    }
+
+    /// [`World::all_shapes`] plus one path that answers no matrix class.
+    ///
+    /// The path is a one-chunk file whose content changes on both sides: one
+    /// new chunk, no reuse. `Class::all_satisfied_by` is legitimately empty for
+    /// that shape, so a `--files` request for it must be recorded as *unscored*
+    /// rather than dropped between `requested` and `skipped`. Nothing else in
+    /// the world changes, so the six ordinary classes are still capturable.
+    pub fn with_degenerate_file() -> World {
+        let mut w = World::all_shapes();
+        for (build, seed) in [(&mut w.old, 777), (&mut w.new, 778)] {
+            build
+                .fields
+                .iter_mut()
+                .find(|(field, _)| field == "game")
+                .expect("the all-shapes world publishes game")
+                .1
+                .push(File::new(DEGENERATE_PATH, &[seed], 256));
+        }
         w
     }
 

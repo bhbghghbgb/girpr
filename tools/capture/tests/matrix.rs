@@ -13,7 +13,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{DEGENERATE_PATH, Mock, World};
 use girpr_tempdir::TempDir;
 
 fn bin() -> PathBuf {
@@ -714,5 +714,47 @@ fn a_named_path_the_manifests_do_not_carry_is_skipped_and_reported() {
     assert_eq!(
         c.summary["forced_files_unscored"], "0",
         "absent from the manifests is not the same as present but unscored"
+    );
+}
+
+/// A forced path the manifests carry but no matrix class claims is reported as
+/// **unscored**, end to end: selection → summary → matrix document.
+///
+/// `measured_fixture.rs` covers the selector against the frozen corpus and this
+/// test covers the wiring the selector's value has to travel through. It is the
+/// third "requested but invisible" branch, beside a missing path (above) and a
+/// budget refusal.
+#[test]
+fn a_named_path_that_answers_no_class_is_reported_as_unscored() {
+    let c = captured(
+        "explicit-unscored",
+        World::with_degenerate_file(),
+        &["--files", DEGENERATE_PATH],
+    );
+    assert_eq!(c.summary["exit_code"], "0", "it is recorded, not fatal");
+    assert_eq!(c.summary["forced_files_requested"], "1");
+    assert_eq!(
+        c.summary["forced_files_skipped"], "0",
+        "the manifests carry it, so it is not skipped"
+    );
+    assert_eq!(
+        c.summary["forced_files_unscored"], "1",
+        "present but answers no class"
+    );
+    assert_eq!(
+        c.summary["captures_admitted"], "6",
+        "a capture with no class would make the matrix claim something false"
+    );
+
+    let matrix = json(&c.bundle.join("diff/matrix.json"));
+    let admitted: Vec<&str> = matrix["admitted"]
+        .as_array()
+        .expect("admitted rows")
+        .iter()
+        .map(|a| a["path"].as_str().expect("a path"))
+        .collect();
+    assert!(
+        !admitted.contains(&DEGENERATE_PATH),
+        "the unscored path is not an admission: {admitted:?}"
     );
 }
