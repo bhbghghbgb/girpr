@@ -454,7 +454,14 @@ fn normalize_audio(raw: &str) -> String {
 /// Manifest paths are `/`-separated and rooted at the game directory, so an
 /// absolute path, a drive letter, a parent hop or a backslash cannot name a file
 /// in a manifest and would otherwise be silently admitted and then missed.
+///
+/// **Repeats are a usage error**, for the same reason `--audio` rejects them: a
+/// second identical `--files` entry finds the same candidate and is admitted
+/// with the same capture id, which produces two admissions, two patchmap writes
+/// (the second overwriting the first) and a `files_captured` count of two for
+/// one file. Naming a path twice is never a different request.
 fn validate_paths(paths: &[String], flag: &str) -> Result<()> {
+    let mut seen: Vec<&str> = Vec::with_capacity(paths.len());
     for p in paths {
         if p.is_empty() {
             return Err(UsageError::new(format!("{flag} was given an empty path")));
@@ -485,6 +492,12 @@ fn validate_paths(paths: &[String], flag: &str) -> Result<()> {
                 "{flag} {p:?} has an empty component (a doubled or trailing separator)"
             )));
         }
+        if seen.contains(&p.as_str()) {
+            return Err(UsageError::new(format!(
+                "{flag} {p:?} was given twice; a repeated path adds no capture"
+            )));
+        }
+        seen.push(p.as_str());
     }
     Ok(())
 }
@@ -854,6 +867,28 @@ mod tests {
         })
         .unwrap();
         assert_eq!(p.files.len(), 2);
+    }
+
+    #[test]
+    fn a_repeated_files_path_is_a_usage_error() {
+        // A duplicate finds the same candidate and would be admitted again with
+        // the same capture id: two admissions, two patchmap writes (the second
+        // overwriting the first) and a `files_captured` count of two for one
+        // file. `--audio` already refuses a repeated value for the same reason.
+        let e = plan(|a| {
+            a.files = vec![
+                "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
+                "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
+            ]
+        })
+        .unwrap_err();
+        assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage);
+        assert!(e.message().contains("twice"), "{}", e.message());
+        assert!(
+            e.message().contains("HoYoChannel.dll"),
+            "the message names the repeated path: {}",
+            e.message()
+        );
     }
 
     #[test]
