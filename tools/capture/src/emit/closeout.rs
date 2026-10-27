@@ -635,26 +635,36 @@ mod tests {
             "a declared gap is incomplete"
         );
         let skipped: Vec<&str> = closed.selfcheck.skipped();
-        // **The whole constant, not a hand-written subset.** This used to loop
-        // over eight ids, so dropping A21-A23 -- the rows a metadata-only run
-        // would otherwise fail on -- was invisible.
+        // **An explicit literal, not the constant filtered against itself.**
+        // Comparing `skipped()` filtered by `SKIPPED_WITHOUT_CHUNK_BLOBS` to
+        // `SKIPPED_WITHOUT_CHUNK_BLOBS` was a tautology: if the constant lost an
+        // id, both sides lost it and the assertion still passed. This literal is
+        // the claim; the first assertion keeps the constant from drifting away
+        // from it, and the second keeps the rows from dropping one.
         //
         // The fixture here is a seeded minimal tree, not a complete capture, so
         // `skipped()` also reports the ids this tree never asserts (A1-A5, A15).
-        // Comparing those against the constant would be wrong; comparing the
-        // constant as a subset of the derived set is exactly the claim that
-        // matters, and it pins each id, once.
+        // Those are not part of the flag's declared set; the literal comparison
+        // below is the whole claim that matters.
+        let expected = [
+            "A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19", "A21", "A22", "A23",
+        ];
+        assert_eq!(
+            super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS,
+            expected,
+            "the declared-skip constant is exactly these eleven ids"
+        );
         let mut declared: Vec<&str> = skipped
             .iter()
             .copied()
-            .filter(|id| super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS.contains(id))
+            .filter(|id| expected.contains(id))
             .collect();
         declared.sort_unstable();
-        let mut expected = super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS.to_vec();
-        expected.sort_unstable();
+        let mut expected_sorted = expected;
+        expected_sorted.sort_unstable();
         assert_eq!(
-            declared, expected,
-            "every id the flag declares skipped must be missing from the rows, once"
+            declared, expected_sorted,
+            "every explicitly declared id must be missing from the rows, once"
         );
         // A declared gap must not also appear as a failing row.
         let failing: Vec<&str> = closed
