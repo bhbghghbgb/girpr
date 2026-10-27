@@ -82,11 +82,13 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 let ft = ent.file_type();
                 // `path_is_symlink` is true for a followed symlink even though
                 // `file_type()` is the target's type (walkdir remembers the
-                // original entry). A Windows junction is *not* a symlink by that
-                // test and is not followed through `walkdir`'s `follow` path, so
-                // directories get the extra reparse-point check; files would
-                // already have been caught by `path_is_symlink`.
-                let is_link = ent.path_is_symlink() || crate::link::is_reparse_dir(ent.path());
+                // original entry). Some toolchains report a Windows junction as
+                // a symlink and some do not, so a directory gets the reparse
+                // attribute as a second test; a file link is already covered by
+                // `path_is_symlink`, and gating on `is_dir` keeps a stat per
+                // regular file out of a cold scan.
+                let is_link = ent.path_is_symlink()
+                    || (ft.is_dir() && crate::link::is_reparse_point(ent.path()));
                 // Progress: trace every entry (file log), debug heartbeat every 2000.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
