@@ -587,18 +587,43 @@ maintainer can overrule one without re-reading the diff.
 
 | Finding | Status | Commit | What landed |
 |---|---|---|---|
-| F1 | fixed | `39304be` | Phase 0 charges the caller's `budget` in place (the separate `spent` ledger is gone) and passes it to phase 2, so forced admissions share one cumulative limit. Test: two 60 B forced paths under a 100 B cap admit exactly one. |
+| F1 | fixed | `39304be`, `abe7bdc`, `998649c` | Phase 0 charges the caller's `budget` in place (the separate `spent` ledger is gone) and passes it to phase 2, so forced admissions share one cumulative limit. Test: two 60 B forced paths under a 100 B cap admit exactly one. Second pass removed the now-dead, unclamped `Budget::with_spent` and made `matrix.json` report the charged ledger, with a debug assertion tying it to `bytes_admitted`. |
 | F2 | fixed | `39304be` | A refused forced path is recorded in `rejected` and the loop `continue`s instead of `break`ing; later forced paths are still considered. Duplicate refused ids are deduped. |
-| F3 | fixed | `83eac6d` | A forced path whose candidate answers no matrix class is recorded in the new `Selection::forced_unscored` and summarised as `forced_files_unscored`; `decide` warns. Measured-fixture and matrix integration assertions added. Field choice flagged below. |
-| F4 | fixed | `f31850b` | `Store::one` returns the slot with the error, so `fill` records the row and the failure together: one `fetches_failed` entry per failed chunk, no hole, and the real reason in `decode_error`. Dead-port test asserts the count and the reason. |
-| F5 | fixed | `71a1321` | Error bodies are drained through a counting `drain_error_body` with the declared-length precheck and a running-total stop. The status is always preserved (never `Transport`), partial bytes are recorded, and a 404 is still never retried. Three HTTP tests. |
-| F6 | fixed | `efc5322` | Tag validation refuses `\`, `:`, path prefixes, and backslash-separated traversal before interpolation. |
+| F3 | fixed | `83eac6d`, `d8514c7` | A forced path whose candidate answers no matrix class is recorded in the new `Selection::forced_unscored` and summarised as `forced_files_unscored`; `decide` warns. Measured-fixture and matrix integration assertions added. Second pass added an end-to-end capture with a nonzero value. Field choice flagged below. |
+| F4 | fixed | `f31850b`, `583aa79` | `Store::one` returns the slot with the error, so `fill` records the row and the failure together: one `fetches_failed` entry per failed chunk, no hole, and the real reason in `decode_error`. Dead-port test asserts the count and the reason. Second pass logs the downcast `JoinError` payload and corrects `fill.rs`'s error-order doc. |
+| F5 | fixed | `71a1321`, `0259220` | Error bodies are drained through a counting `drain_error_body` with the declared-length precheck and a running-total stop. The status is always preserved (never `Transport`), partial bytes are recorded, and a 404 is still never retried. Three HTTP tests. Second pass logs a mid-read failure and documents what a zero count means. |
+| F6 | fixed | `efc5322`, `de85df2` | Tag validation refuses `\`, `:`, path prefixes, and backslash-separated traversal before interpolation. Second pass closes the API hole: `VersionPair::select` validates the resolved `main.tag`/`diff_tags[0]` before `pair_dir` sees them, and rejects Windows-reserved characters and leading/trailing dots. |
 | F7 | fixed | `801d91d` | `blobs::plan::plan` takes `no_chunk_blobs` and skips `check_byte_ceiling` on a metadata-only run; the plan ceiling is documented as a guard (`projected <= bytes_admitted <= cap`), not a second budget. |
 | F8 | fixed | `df366ee` | `recorded_argv` builds the recorded argv from `args_os` lossily; `main` uses it. Unit test for an unpaired surrogate and an end-to-end test that a non-Unicode `--out` still exits with its normal code and prints `SUMMARY`. |
 | F9 | fixed | `39304be` | Repeated `--files` paths are a usage error in `validate_paths`, so no duplicate ids or rows and no overwritten patchmap. |
 | F10 | fixed | `4dd1c05` | Both help strings corrected. A CLI-contract test pins them; it compares whitespace-normalised output because clap strips the trailing period and wraps the line. |
-| F11 | fixed | `882a53b` | The temp file is removed best-effort on every error between creating and renaming it, after the handle is dropped (Windows). Removal failure is logged, never substituted for the fetch error. Test: the dead-port fetch leaves `chunks/blobs/` empty. |
-| F12 | fixed | `4dd1c05` | The closeout test compares the whole `SKIPPED_WITHOUT_CHUNK_BLOBS` constant as the declared subset instead of eight contained ids. |
+| F11 | fixed | `882a53b`, `7c64557` | The temp file is removed best-effort on every error between creating and renaming it, after the handle is dropped (Windows). Removal failure is logged, never substituted for the fetch error. Test: the dead-port fetch leaves `chunks/blobs/` empty. Second pass corrected the doc: a panic still unwinds past the cleanup, and the module no longer claims a `tmp/` staging directory it does not use. |
+| F12 | fixed | `4dd1c05`, `d538d4d` | The closeout test compares the whole `SKIPPED_WITHOUT_CHUNK_BLOBS` constant as the declared subset instead of eight contained ids. Second pass replaced the self-referential expectation with an independent eleven-id literal and pins the constant to it. |
+
+### Second pass
+
+A reviewer re-derived every finding from source at `b726054`, then re-ran the
+suite. All twelve were confirmed fixed or partly fixed, and the review named one
+blocking residual plus eight smaller ones. Each was verified again against the
+tree, and all were accepted; none was dismissed as invalid or out of scope.
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| F6 residual: API-resolved tags reach `pair_dir` unvalidated (**blocking**) | valid, fixed | `de85df2` | `VersionPair::select` now runs the shape validator on the resolved `main.tag` and `diff_tags[0]` before the pair is named, prefixed with the source (`main.tag`, `diff_tags[0]`). The hostile-`BranchParams` test asserts `..\..\escape` is rejected before any directory is reachable. |
+| Windows-reserved `* ? " < > \|` accepted in tags | valid, fixed | `de85df2` | Rejected by the same validator, so the run fails at selection instead of at `create_dir_all` after the network work. |
+| Trailing/leading `.` collides on Windows | valid, fixed | `de85df2` | A leading or trailing `.` is rejected. Trailing dots are stripped by Windows, so `7.1.0.` and `7.1.0` would otherwise share one pair directory; the rationale is in the validator and `docs/01-artifact-schema.md`. |
+| F4: `fill.rs` says errors are in `wants` order | valid, fixed | `583aa79` | The doc now says completion order (`JoinSet::join_next`). No consumer zips the two lists, so this is documentation only. |
+| F4: panic payload discarded | valid, fixed | `583aa79` | The `JoinError` is downcast and its message logged before the hole-fill records the stable generic row text. Test: a panicking chunk task reports its message. |
+| F5: mid-read error-body failure is silent | valid, fixed | `0259220` | Logged at debug with the URL and error; the status is still preserved and the partial count kept. The `bytes_in = 0` meaning on a declared-over-cap body is now stated in the schema doc: bytes of body read, not header bytes. |
+| `Budget::with_spent` dead and unclamped | valid, fixed | `abe7bdc` | Removed; no caller remained after phase 0 started charging in place. |
+| `matrix.json` reports `bytes_admitted`, not the charged ledger | valid, fixed | `998649c` | The document now reports `budget.spent()`, and a debug assertion plus a matrix test tie it to `bytes_admitted`. |
+| Test gap: nonzero `forced_files_unscored` end to end | valid, fixed | `d8514c7` | `World::with_degenerate_file` / `DEGENERATE_PATH` drive a capture whose forced path answers no class; the matrix test asserts `1` in the summary and JSON. |
+| F12: expectation derived from the constant under test | valid, fixed | `d538d4d` | The test now compares `skipped()` filtered by the constant against an independent eleven-id literal, which is also asserted equal to the constant. |
+| F11: doc overstates the cleanup guarantee | valid, fixed | `7c64557` | “Never orphaned” became the exact rule: removed best-effort on every handled error after the handle is dropped; a panic unwinds past it. The stale `tmp/` staging claim is gone. |
+
+F1, F2, F7, F8, F9 and F10 were re-checked against source and their tests and
+needed no change. With `de85df2` landed, the blocking F6 residual is closed: the
+flag path and the API path now reach `pair_dir` through the same validator.
 
 ### Choices a maintainer may want to revisit
 
@@ -610,35 +635,49 @@ maintainer can overrule one without re-reading the diff.
 - **F4 reason field.** The fetch reason goes in `decode_error`, the field A6
   already reads to ask why a blob is unusable. A dedicated `fetch_error` would
   describe the case more precisely but needs an artifact-schema change; that
-  remains open.
+  remains open. A panicking chunk now logs its `JoinError` payload, but the
+  index row still carries the stable generic text, not the panic message.
+- **F6 tag policy.** The validator rejects characters that are legal on Unix but
+  reserved on Windows (`* ? " < > |`), and leading/trailing dots. This is
+  deliberately stricter than the API contract needs on Unix; it keeps one tag
+  set usable on every host and keeps pair directories injective. A leading dot
+  is rejected too, although only the trailing one is known to collide.
 - **F7 semantics.** The behaviour now matches the help and the spec: a
   metadata-only run does not enforce a wire-byte ceiling it pays nothing
   towards. If the ceiling was meant as an input-independent policy check, the
   skip should be reverted and the help changed instead.
+- **F8 recorded argv.** The lossy string is not byte-exact on Unix either. If a
+  bundle is ever replayed, it needs a raw-bytes companion; that is schema work,
+  not a fix.
 - **F11 cleanup vs comment.** Cleanup was chosen, so the old comment is gone
   rather than corrected. Orphans left by older binaries are still not swept;
   a store-creation sweep with an age guard remains a possible follow-up.
 
 ### Verification
 
-Run at `882a53b` plus this section:
+Run at `d8514c7` (the last code/test commit; the documents below and this
+section change no code):
 
 | Command | Result |
 |---|---|
 | `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | 637 passed, 0 failed (504 lib + 133 integration) |
+| `cargo test -p gircap` | 640 passed, 0 failed (506 lib + 134 integration) |
 | `cargo clippy -p gircap --all-targets` | finished, no warnings |
 | `cargo fmt -p gircap --check` | clean |
+
+No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
+`#[cfg(windows)]` tests ran.
 
 ### Still unverified
 
 - F6: whether a live `getBuild`/`getGameBranches` would echo a tag containing
-  `\`, `:`, or `..`. The local sink and the rejection are tested; the network
-  precondition is not.
+  `\`, `:`, or `..`. The local sink and both rejection paths (flags and
+  API-resolved tags) are tested; the network precondition is not.
 - F5: real production error-body sizes, so the practical effect of the cap is
   unknown; the code path and the 404/truncation tests are real.
 - F11: how often a failed chunk moves to a different slot on the next run. The
-  leak is removed per run; the historical accumulation rate is not measured.
+  leak is removed per run; the historical accumulation rate is not measured,
+  and a panic still unwinds past the cleanup.
 - F8: which non-`PathBuf` argument types clap accepts non-Unicode values for.
   Only `--out` is exercised end to end; the helper itself is exercised
   directly.
