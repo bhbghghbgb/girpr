@@ -35,59 +35,77 @@ pub fn verify_plan(
     let mut damaged_chunks = 0u64;
     let mut last_emit = std::time::Instant::now();
     for (i, f) in plan.files.iter().enumerate() {
+        // Resolve once. A containment failure is a *diagnostic*: `build_plan`
+        // already refused an escaping rel, so this is defence in depth, and it
+        // must not be mislabelled as a size mismatch (which is what `.ok()`
+        // did here).
+        let path = util::contained_join(game_dir, &f.rel);
         match scan.and_then(|s| s.files.get(&f.rel)) {
-            Some(v) => {
-                // The scan is a shortcut for the *read*, not for the "is it
-                // there" answer: an absent or unreadable file's scan verdict
-                // carries the empty digest, and a legitimate empty file's
-                // manifest entry has exactly that digest. Presence and length
-                // are therefore checked here too, the same way the fallback
-                // below does it, so the two spellings of `--check-only` agree
-                // on a missing empty file.
-                let path = util::contained_join(game_dir, &f.rel).ok();
-                let actual_len = path.as_deref().and_then(util::file_len);
-                if actual_len != Some(f.size as u64) {
+            Some(v) => match &path {
+                Err(e) => {
                     bad += 1;
-                    tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
-                } else if v.file_md5.eq_ignore_ascii_case(&f.md5) {
-                    // intact
-                } else {
-                    bad += 1;
-                    damaged_chunks += v.damaged_chunks();
                     tracing::warn!(
                         file = %f.rel,
-                        expect_md5 = %f.md5,
-                        actual_md5 = %v.file_md5,
-                        damaged_chunks = v.damaged_chunks(),
-                        "CHECK fail: md5"
+                        error = %format!("{e:#}"),
+                        "CHECK fail: path escapes the game dir"
                     );
                 }
-            }
-            None => {
-                let path = util::contained_join(game_dir, &f.rel).ok();
-                let actual_len = path.as_deref().and_then(util::file_len);
-                if actual_len != Some(f.size as u64) {
+                Ok(path) => {
+                    // The scan is a shortcut for the *read*, not for the "is
+                    // it there" answer: an absent or unreadable file's scan
+                    // verdict carries the empty digest, and a legitimate empty
+                    // file's manifest entry has exactly that digest. Presence
+                    // and length are therefore checked here too, the same way
+                    // the fallback below does it, so the two spellings of
+                    // `--check-only` agree on a missing empty file.
+                    let actual_len = util::file_len(path);
+                    if actual_len != Some(f.size as u64) {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
+                    } else if v.file_md5.eq_ignore_ascii_case(&f.md5) {
+                        // intact
+                    } else {
+                        bad += 1;
+                        damaged_chunks += v.damaged_chunks();
+                        tracing::warn!(
+                            file = %f.rel,
+                            expect_md5 = %f.md5,
+                            actual_md5 = %v.file_md5,
+                            damaged_chunks = v.damaged_chunks(),
+                            "CHECK fail: md5"
+                        );
+                    }
+                }
+            },
+            None => match &path {
+                Err(e) => {
                     bad += 1;
-                    tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
-                } else {
-                    match path.as_deref().map(util::md5_file) {
-                        Some(Ok(h)) if h.eq_ignore_ascii_case(&f.md5) => {}
-                        Some(Ok(h)) => {
-                            bad += 1;
-                            tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
-                        }
-                        Some(Err(e)) => {
-                            bad += 1;
-                            tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
-                        }
-                        None => {
-                            // `build_plan` already refused it; defence in depth.
-                            bad += 1;
-                            tracing::warn!(file = %f.rel, "CHECK fail: path escapes the game dir");
+                    tracing::warn!(
+                        file = %f.rel,
+                        error = %format!("{e:#}"),
+                        "CHECK fail: path escapes the game dir"
+                    );
+                }
+                Ok(path) => {
+                    let actual_len = util::file_len(path);
+                    if actual_len != Some(f.size as u64) {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
+                    } else {
+                        match util::md5_file(path) {
+                            Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
+                            Ok(h) => {
+                                bad += 1;
+                                tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
+                            }
+                            Err(e) => {
+                                bad += 1;
+                                tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
+                            }
                         }
                     }
                 }
-            }
+            },
         }
         // Keep the counters live so PROGRESS reflects work done so far.
         summary

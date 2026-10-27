@@ -75,9 +75,19 @@ impl DiskPlan {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
         for f in &plan.files {
-            let Ok(path) = util::contained_join(game_dir, &f.rel) else {
-                // `build_plan` refused an escaping rel; defence in depth.
-                continue;
+            let path = match util::contained_join(game_dir, &f.rel) {
+                Ok(p) => p,
+                Err(e) => {
+                    // `build_plan` refused an escaping rel; defence in depth.
+                    // Omitting the file silently would understate the disk
+                    // estimate with nothing to explain it.
+                    tracing::warn!(
+                        file = %f.rel,
+                        error = %format!("{e:#}"),
+                        "disk plan: path escapes the game dir; file omitted from the estimate"
+                    );
+                    continue;
+                }
             };
             let on_disk = std::fs::metadata(&path).ok().map(|m| m.len());
             let size = f.size.max(0) as u64;
