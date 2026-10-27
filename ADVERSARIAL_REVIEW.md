@@ -688,7 +688,7 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 
 ## 7. Implementation progress
 
-Landed on branch `all/fix-gaps` in the §6 order, one commit per finding
+Landed on branch `fix-gaps/girpr` in the §6 order, one commit per finding
 (F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
 they pin, plus one test-only commit). No commit re-lands the reverted series
 verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
