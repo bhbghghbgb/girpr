@@ -61,17 +61,20 @@ impl std::fmt::Display for OutputFormat {
 
 /// A field value on the data plane.
 ///
-/// **Two variants, not three.** There is no boolean: every flag-shaped fact in
-/// the contract is a `1`/`0` integer (`scoped=1`, `config_bumped=0`,
-/// `limited=1`), with `SUMMARY` the documented shape. Leaving `Bool` out is what
-/// stops a `true`-in-one-object / `1`-in-the-other collision from being
-/// reintroduced.
+/// **No boolean.** Every flag-shaped fact in the contract is a `1`/`0` integer
+/// (`scoped=1`, `config_bumped=0`, `limited=1`), with `SUMMARY` the documented
+/// shape. Leaving `Bool` out is what stops a `true`-in-one-object /
+/// `1`-in-the-other collision from being reintroduced.
+///
+/// The two integer widths exist so a `u64` count is never squeezed through an
+/// `i64`: a saturated estimate is exactly `u64::MAX`, and `as i64` would print
+/// it as `-1` — a total that is not merely wrong but has the wrong sign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Val {
     Str(String),
-    /// A count, a byte total, or the process exit code. `i64` rather than `u64`
-    /// so one variant covers both the `u64` counters and the `i32` exit code;
-    /// a counter that large would have exceeded the disk it is counting.
+    /// An unsigned count or byte total.
+    UInt(u64),
+    /// A signed number: the process exit code.
     Int(i64),
 }
 
@@ -89,7 +92,7 @@ impl From<String> for Val {
 
 impl From<u64> for Val {
     fn from(v: u64) -> Self {
-        Val::Int(v as i64)
+        Val::UInt(v)
     }
 }
 
@@ -200,6 +203,7 @@ impl Record {
 fn bare(v: &Val) -> String {
     match v {
         Val::Str(s) => s.clone(),
+        Val::UInt(u) => u.to_string(),
         Val::Int(i) => i.to_string(),
     }
 }
@@ -225,6 +229,7 @@ fn json_string(s: &str) -> String {
 fn json_value(v: &Val) -> String {
     match v {
         Val::Str(s) => json_string(s),
+        Val::UInt(u) => u.to_string(),
         Val::Int(i) => i.to_string(),
     }
 }
@@ -692,6 +697,23 @@ mod tests {
         assert_eq!(rec.render(OutputFormat::Json), rec.json());
         assert_eq!(OutputFormat::default(), OutputFormat::Text);
         assert_eq!(OutputFormat::Json.as_str(), "json");
+    }
+
+    #[test]
+    fn a_saturated_estimate_renders_as_an_unsigned_number_not_a_negative_one() {
+        // The plan's aggregates saturate at `u64::MAX`. Rendering that through
+        // an `i64` would print `-1`: a byte total with the wrong sign, on both
+        // planes. The value is unsigned, so it must print as one.
+        let rec = Record::keyed("PLAN").put("est_write_bytes", u64::MAX);
+        assert_eq!(
+            rec.text(),
+            format!("PLAN est_write_bytes={}", u64::MAX),
+            "a saturated estimate is the largest unsigned number, not -1"
+        );
+        assert_eq!(
+            rec.json(),
+            format!(r#"{{"event":"plan","est_write_bytes":{}}}"#, u64::MAX)
+        );
     }
 
     #[test]

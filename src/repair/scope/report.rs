@@ -99,7 +99,10 @@ impl DiskPlan {
                 // that is already the right size needs nothing at all.
                 Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk.unwrap_or(0))),
             };
-            out.est_write_bytes += size;
+            // Manifest sizes are server data. Three files at `i64::MAX` do not
+            // fit in a `u64`; a debug-build panic (or a release wrap that makes
+            // the `PLAN` line lie) is not an answer to a corrupt manifest.
+            out.est_write_bytes = out.est_write_bytes.saturating_add(size);
             peak = peak.max(extra);
             out.per_file.insert(
                 f.rel.clone(),
@@ -258,17 +261,20 @@ impl<'a> PlanDocument<'a> {
         // would disagree with the `PLAN` line. `est` is the caller-computed plan
         // total; the split is only trusted when it adds up, and the difference
         // is folded into the first file so the two always agree.
+        //
+        // `compressed_size` is server data. Three chunks at `i64::MAX` do not
+        // fit in a `u64`, so both folds saturate: a corrupt manifest must not
+        // panic the plan phase in a debug build (or wrap in a release one).
         let mut per_file: Vec<u64> = plan
             .files
             .iter()
             .map(|f| {
-                f.chunks
-                    .iter()
-                    .map(|c| c.compressed_size.max(0) as u64)
-                    .sum()
+                f.chunks.iter().fold(0u64, |n, c| {
+                    n.saturating_add(c.compressed_size.max(0) as u64)
+                })
             })
             .collect();
-        let summed: u64 = per_file.iter().sum();
+        let summed = per_file.iter().fold(0u64, |n, v| n.saturating_add(*v));
         if summed != est_download_bytes
             && let Some(first) = per_file.first_mut()
         {
@@ -535,6 +541,59 @@ mod tests {
         let doc = PlanDocument::new(&plan, None, 100, &DiskPlan::default());
         let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
         assert_eq!(sum, 100);
+    }
+
+    #[test]
+    fn an_overflowing_write_estimate_saturates_instead_of_panicking() {
+        // `size` is server manifest data. Three files at `i64::MAX` do not
+        // fit in a `u64`: the debug build must not panic and a release build
+        // must not wrap a smaller "estimate" onto the PLAN line.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "overflow");
+        let plan = RepairPlan {
+            latest: "9.9".into(),
+            files: ["a.dat", "b.dat", "c.dat"]
+                .into_iter()
+                .map(|rel| PlannedFile {
+                    rel: rel.into(),
+                    size: i64::MAX,
+                    md5: "m".into(),
+                    chunks: vec![],
+                })
+                .collect(),
+            url_prefix_by_file: HashMap::new(),
+        };
+        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 3);
+        assert_eq!(disk.est_write_bytes, u64::MAX);
+        // The peak is the largest single file (`i64::MAX`); three files in
+        // flight overflow the multiplication, so that fold must saturate too.
+        assert_eq!(disk.est_extra_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn an_overflowing_document_estimate_saturates_instead_of_panicking() {
+        // Same hostile class, one layer down: three chunks at `i64::MAX`
+        // overflow the per-file and the document folds.
+        let plan = RepairPlan {
+            latest: "9.9".into(),
+            files: vec![PlannedFile {
+                rel: "game/huge.dat".into(),
+                size: 192,
+                md5: "m".into(),
+                chunks: vec![
+                    chunk("c0", i64::MAX),
+                    chunk("c1", i64::MAX),
+                    chunk("c2", i64::MAX),
+                ],
+            }],
+            url_prefix_by_file: HashMap::new(),
+        };
+        let doc = PlanDocument::new(&plan, None, u64::MAX, &DiskPlan::default());
+        assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
+        let sum: u64 = doc
+            .repair
+            .iter()
+            .fold(0u64, |n, e| n.saturating_add(e.est_download_bytes));
+        assert_eq!(sum, u64::MAX);
     }
 
     #[test]

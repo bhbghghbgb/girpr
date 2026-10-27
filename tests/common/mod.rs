@@ -174,6 +174,18 @@ pub struct Lies {
     /// fixture's own layout keeps the real offset, so only the manifest lies:
     /// that is what a corrupt server response looks like.
     pub huge_offset: Vec<String>,
+    /// File rel paths whose declared `size` is `i64::MAX`.
+    ///
+    /// The plan's disk estimate sums the sizes of every planned file. Three
+    /// files at `i64::MAX` do not fit in a `u64`, so the aggregate has to
+    /// saturate rather than panic (debug) or wrap (release). The layout on
+    /// disk is unchanged; only the claim is hostile.
+    pub huge_file_size: Vec<String>,
+    /// Chunk ids whose declared `compressed_size` is `i64::MAX`.
+    ///
+    /// Same class as [`Self::huge_file_size`], for the download estimate and
+    /// the per-file document: three such chunks overflow the sum.
+    pub huge_compressed_size: Vec<String>,
 }
 
 /// A whole fixture: the new side, the old side, and what is on disk.
@@ -306,6 +318,10 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
                 },
                 compressed_size: if spec.lies.wrong_chunk_size.contains(&c.id) {
                     compressed.len() as i64 + 7
+                } else if spec.lies.huge_compressed_size.contains(&c.id) {
+                    // The blob on the wire is still a normal frame; only the
+                    // manifest's claim about its length is hostile.
+                    i64::MAX
                 } else {
                     compressed.len() as i64
                 },
@@ -318,7 +334,13 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             file: f.rel.clone(),
             chunks: pb_chunks,
             is_folder: false,
-            size: f.data.len() as i64,
+            size: if spec.lies.huge_file_size.contains(&f.rel) {
+                // The bytes on disk are the fixture's real layout; only the
+                // manifest's claim about the file's length is hostile.
+                i64::MAX
+            } else {
+                f.data.len() as i64
+            },
             md5: f.md5.clone(),
         });
     }

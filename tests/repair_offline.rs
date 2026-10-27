@@ -2194,6 +2194,88 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
 }
 
 #[tokio::test]
+async fn a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking() {
+    // `size` and `compressed_size` are server manifest data. Three files at
+    // `i64::MAX` and one file with three chunks at `i64::MAX` each overflow the
+    // plan's aggregates: the plan phase must saturate, not panic a debug build
+    // (or wrap a smaller figure onto the PLAN line in a release build).
+    let big =
+        |rel: &str, id: &str| FileSpec::new(rel, vec![ChunkSpec::new(id, vec![0x41u8; 16], 0)]);
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![
+            big("game/big1.dat", "chunk_b1"),
+            big("game/big2.dat", "chunk_b2"),
+            big("game/big3.dat", "chunk_b3"),
+            FileSpec::new(
+                "game/chunky.dat",
+                vec![
+                    ChunkSpec::new("chunk_h0", vec![0x10u8; 16], 0),
+                    ChunkSpec::new("chunk_h1", vec![0x11u8; 16], 16),
+                    ChunkSpec::new("chunk_h2", vec![0x12u8; 16], 32),
+                ],
+            ),
+        ])
+        .with_lies(Lies {
+            huge_file_size: vec![
+                "game/big1.dat".into(),
+                "game/big2.dat".into(),
+                "game/big3.dat".into(),
+            ],
+            huge_compressed_size: vec!["chunk_h0".into(), "chunk_h1".into(), "chunk_h2".into()],
+            ..Default::default()
+        }),
+    );
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_overflow");
+    let out = dir.join("plan.json");
+    let game = dir.to_string_lossy().into_owned();
+    let out_arg = out.to_string_lossy().into_owned();
+    let args = [
+        "--game-path",
+        &game,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+        "--print-plan",
+        "--plan-out",
+        &out_arg,
+    ];
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let plan_line = stdout
+        .lines()
+        .find(|l| l.starts_with("PLAN "))
+        .expect("the PLAN line");
+    assert_eq!(field(plan_line, "est_write_bytes"), u64::MAX, "{plan_line}");
+    assert_eq!(
+        field(plan_line, "est_download_bytes"),
+        u64::MAX,
+        "{plan_line}"
+    );
+
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let entry = v["repair"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["rel"] == "game/chunky.dat")
+        .expect("chunky.dat is planned");
+    assert_eq!(entry["est_download_bytes"], u64::MAX);
+    let sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
+    });
+    assert_eq!(sum, u64::MAX, "the document agrees with the PLAN line");
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn print_plan_out_writes_the_per_file_json_document() {
     let fx = build_fixture();
     let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
