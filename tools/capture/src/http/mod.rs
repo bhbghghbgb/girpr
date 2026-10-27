@@ -1369,6 +1369,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_declared_oversized_error_body_is_not_read_at_all() {
+        // A `503` that *says* it is sending 10 MiB is refused on the header, so
+        // the failure costs the status line and nothing else. Before this, the
+        // error body was drained with no ceiling at all, so a hostile origin could
+        // hold the request open until the timeout — once per retry.
+        let body = big_body(4096);
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 503,
+                body: leak(&body),
+                claim: Some(10 * 1024 * 1024),
+                omit_length: false,
+            }],
+            "",
+        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 1024);
+
+        let err = f
+            .get(&url(&mock, "/busy"), Kind::Chunk, None)
+            .await
+            .expect_err("503 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 503, .. }),
+            "the status is the failure, not the body: {err:?}"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].bytes_in, 0,
+            "a declared length over the ceiling is refused before a byte is read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_truncated_error_body_keeps_its_status_and_is_not_retried() {
+        // The regression the reverted `f9352f7` patch introduced: routing the
+        // error body through `drain_capped` turned a mid-read failure into a
+        // `Transport`, which the retry policy then retried. A `404` with a
+        // truncated body would be fetched again, three times, for the same answer.
+        let sent = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 404,
+                body: sent,
+                // Promise more than is sent, then hang up: a truncated body.
+                claim: Some(sent.len() * 10),
+                omit_length: false,
+            }],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let err = f
+            .get(&url(&mock, "/gone"), Kind::Chunk, None)
+            .await
+            .expect_err("404 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 404, .. }),
+            "a truncated error body must not replace the status: {err:?}"
+        );
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            1,
+            "a 404 is not retryable, and a broken body does not make it one"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the bytes that did arrive are still priced"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_error_body_is_counted_only_as_far_as_it_arrived() {
+        // The second check, for an error body that omits `Content-Length`: the
+        // running total has to stop it too, or the ceiling has a hole exactly
+        // where a hostile origin would aim.
+        //
+        // The body is far larger than a socket read, so "stopped early" is
+        // observable: `bytes_in` is over the ceiling but nowhere near the body.
+        let body = big_body(1024 * 1024);
+        let cap = 64 * 1024;
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 503,
+                body: leak(&body),
+                claim: None,
+                omit_length: true,
+            }],
+            "",
+        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), cap);
+
+        let err = f
+            .get(&url(&mock, "/endless"), Kind::Chunk, None)
+            .await
+            .expect_err("503 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 503, .. }),
+            "the ceiling must not turn the status into a `Shape`: {err:?}"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].bytes_in > cap,
+            "the count must include the chunk that crossed the ceiling: {}",
+            rows[0].bytes_in
+        );
+        assert!(
+            rows[0].bytes_in < body.len() as u64,
+            "reading must stop at the ceiling, not drain a megabyte: {}",
+            rows[0].bytes_in
+        );
+    }
+
+    #[tokio::test]
     async fn a_streamed_fetch_writes_the_body_and_reports_the_digests_of_those_bytes() {
         // The buffered path is the reference: this asserts the streamed path
         // produced the same bytes on disk and the same digests and the same

@@ -103,11 +103,20 @@ pub(crate) fn body_failure(
         }
     }
 }
-/// Drain a response body into `sink`, refusing to exceed the transport's ceiling.
+/// The length a response declares, when that declaration alone is over `cap`.
 ///
-/// **The one place a body is read, for every destination** — the buffered path,
-/// the file path, `observe`, and the drain of an *error* body. A ceiling enforced
-/// in three of those four would be a ceiling with a hole in it.
+/// The cheap half of the ceiling, shared so a successful body and an error body
+/// cannot disagree about what "declared too large" means.
+fn declared_over_ceiling(resp: &reqwest::Response, cap: u64) -> Option<u64> {
+    resp.content_length().filter(|d| *d > cap)
+}
+
+/// Drain a **successful** response body into `sink`, refusing to exceed the
+/// transport's ceiling.
+///
+/// Every successful read goes through here — the buffered path, the file path and
+/// `observe`. A ceiling enforced in two of those three would be a ceiling with a
+/// hole in it.
 ///
 /// Two checks, because one is not enough:
 ///
@@ -116,9 +125,14 @@ pub(crate) fn body_failure(
 /// - against the running total as bytes arrive, for an origin that omits the
 ///   header or understates it.
 ///
-/// `sink` is generic rather than "either a `Vec` or a file" so all four callers
-/// share this, including the error-body drain, which writes to
-/// [`std::io::sink()`].
+/// `sink` is generic rather than "either a `Vec` or a file" so all three callers
+/// share this.
+///
+/// **An error body does not come through here.** It has the same two checks in
+/// [`drain_error_body`], but it must not *fail* the way this does: the primary
+/// fact of a non-2xx response is its status, and replacing a `404` with a
+/// `Shape`/`Transport` about the body both misreports the cause and — for
+/// `Transport` — would retry a request that will answer `404` again.
 async fn drain_capped<W: std::io::Write>(
     mut resp: reqwest::Response,
     sink: &mut W,
@@ -126,10 +140,7 @@ async fn drain_capped<W: std::io::Write>(
     url: &str,
     attempts: u32,
 ) -> Result<u64, ApiError> {
-    let declared = resp.content_length();
-    if let Some(d) = declared
-        && d > cap
-    {
+    if let Some(d) = declared_over_ceiling(&resp, cap) {
         return Err(too_big(url, d, cap));
     }
     let mut seen = 0_u64;
@@ -150,6 +161,66 @@ async fn drain_capped<W: std::io::Write>(
             Err(e) => return Err(body_failure(url, attempts, true, e)),
         }
     }
+}
+
+/// Count the body of a failed response, stopping at the transport's ceiling.
+///
+/// **Counting only, and never fallible.** The body of a `4xx`/`5xx` is discarded;
+/// only its length is data (`bytes_in` prices the request, including the ones a
+/// throttle made expensive). So this applies the same two checks as
+/// [`drain_capped`] — the declared length before reading, the running total as
+/// bytes arrive — and returns how many bytes crossed the wire, without turning
+/// any outcome into a different error.
+///
+/// That last part is the whole reason this is not `drain_capped` plus
+/// `io::sink()`:
+///
+/// - a body that fails mid-read is still a `Status` failure, so it is counted up
+///   to the failure and not retried as if the network were at fault;
+/// - a body over the ceiling is still a `Status` failure, so a lying `503` does
+///   not become a `Shape` (which would hide the status) nor a `Transport` (which
+///   would retry it);
+/// - a `404` with a truncated body stays a `404` and is not fetched again.
+///
+/// The ceiling still bounds time and bandwidth: an origin that declares a huge
+/// body is not read at all, and one that omits or understates the header is
+/// stopped once the running total crosses it.
+async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u64 {
+    if let Some(declared) = declared_over_ceiling(&resp, cap) {
+        // Nothing has crossed the wire yet, so `0` is the honest count.
+        tracing::warn!(
+            url,
+            declared,
+            cap,
+            "error body declares more than --max-response-bytes; not read"
+        );
+        return 0;
+    }
+    let mut seen = 0_u64;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                seen += chunk.len() as u64;
+                if seen > cap {
+                    // The chunk is already received, so it is counted; what the
+                    // ceiling prevents is waiting for the rest of it.
+                    tracing::warn!(
+                        url,
+                        seen,
+                        cap,
+                        "error body crossed --max-response-bytes; stopped reading"
+                    );
+                    break;
+                }
+            }
+            Ok(None) => break,
+            // A read failure ends the count at what arrived. The status is still
+            // the failure the caller sees: an unreadable error body is not a
+            // reason to lose the `404`/`503` that explains the request.
+            Err(_) => break,
+        }
+    }
+    seen
 }
 
 /// Whether a body read failed because it could not be read, rather than because
@@ -728,23 +799,17 @@ impl Fetcher {
             // run's cost figures are optimistic by exactly the amount the throttle
             // cost.
             //
-            // **Streamed and discarded**, not read into a buffer: the content is
-            // useless, only the length is not. Draining also lets the connection
-            // go back to the pool, which dropping a response mid-body would not.
+            // **Streamed and discarded, and capped**, not read into a buffer: the
+            // content is useless, only the length is not. Draining also lets the
+            // connection go back to the pool, which dropping a response mid-body
+            // would not. `drain_error_body` stops at `--max-response-bytes`, so a
+            // hostile `503` costs the ceiling rather than the timeout.
             //
             // A body that fails to read mid-way counts what arrived, like every
             // other count here: reporting `0` for bytes that demonstrably crossed
             // the network would be a lie in the direction that matters least to
-            // notice.
-            let mut resp = resp;
-            let mut bytes_in: u64 = 0;
-            loop {
-                match resp.chunk().await {
-                    Ok(Some(c)) => bytes_in += c.len() as u64,
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
+            // notice. What it must not do is replace the status.
+            let bytes_in = drain_error_body(resp, self.max_response_bytes, url).await;
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,
