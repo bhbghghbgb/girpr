@@ -691,8 +691,8 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 Landed on branch `fix-gaps/girpr` in the §6 order, one commit per finding
 (F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
 they pin, plus one test-only commit). This is the **first-pass** table: the
-second pass (§8) re-validated the residual claims and fixed them; see §8.1 for
-the final verdicts. No commit re-lands the reverted series
+second pass (§8) and the third pass (§9) re-validated the residual claims and
+fixed them; see §8.1 and §9.1 for the final verdicts. No commit re-lands the reverted series
 verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
 `layout`'s dead `checked_add` is not reintroduced, `validate_rel` is replaced
 by `util::contained_rel` / `contained_join` applied to every server-path sink,
@@ -865,6 +865,80 @@ workspace-wide run was needed.
 - The live CDN and real transport drop timing are still not exercised; all
   tests use the in-process mock.
 
+## 9. Third pass — N-15…N-20 validated
+
+The third-pass notes (reviewed tip `fa89641`, delivered as another untracked
+document) were checked at each cited site; the arithmetic findings were also
+executed through the same throwaway probe. All six claims were valid and are
+fixed. The note was deleted; this section is the surviving record. Its re-check
+of F-1…F-9 found no contradiction; the one wording caveat was the purge walk,
+which N-19 closes because the second pass's “walk failures are warned” covered
+only the audio walk.
+
+### 9.1 Per-finding verdicts
+
+| # | Verdict | What changed | Commit |
+|---|---|---|---|
+| N-15 | **Valid** (Medium, overflow) | `DiskPlan` and the document's totals saturate. The document's fold was later removed by N-16; its short-vector fallback still saturates. `Val::UInt` renders a saturated estimate as an unsigned figure instead of the `-1` a signed cast produced. | `cbfaf4e` |
+| N-16 | **Valid** (Medium, contract) | `PlanDocument::new` takes the per-file `Vec<u64>` the `PLAN` total also folds, instead of re-deriving `Σ compressed_size` and reconciling only the upward direction. `mod.rs` computes the vector once. | `d88c76a` |
+| N-17 | **Valid** (Medium, under-estimate) | The scanned estimate resolves the file's mode and models discard, temp and in-place with the writer's `salvage_order`, so a source the chosen direction overwrites is downloaded in the figure too. A missing verdict still means the whole file. | `0b01501` |
+| N-18 | **Valid** (Low, false reuse) | `scan_one` builds ranges only for `Some(source)` and maps the verdicts back to chunk indices; a chunk with no source is `source_ok = false` and is never verified against offset 0. | `d5f84b3` |
+| N-19 | **Valid** (Low, swallowed errors) | The purge walk matches its items: a non-`NotFound` error is warned and counted in `PurgePlan.errors`, as is a candidate `metadata()` failure; a root/subtree `NotFound` stays the documented empty plan. `total_bytes` saturates and the summary warns when errors were counted. | `408b239` |
+| N-20 | **Valid** (Low, swallowed errors) | The resume stat, the debug stat and `rollback_tmp` propagate `File::metadata()` with the temp path as context instead of substituting length 0. | `c04da2e` |
+
+Regression coverage: unit tests for both saturated totals, the downward
+per-file split, three tier/mode estimates, the no-source offset-0 seam, the
+counted walk error and the missing-root empty plan; binary-level tests with a
+hostile manifest (`--print-plan --plan-out`) and with swapped sources under
+`--max-ram-bytes 0`, asserting `PLAN est_download_bytes == SUMMARY
+download_bytes` and the actual chunks (`chunk_p`, `chunk_t`). N-20 has no
+deterministic seam: `metadata()` on the already-open `_tmp` handle cannot be
+made to fail through a public entry point on Windows, and on Unix an unlink does
+not affect `fstat`; its status is a code-reading claim.
+
+### 9.2 Decisions that survive
+
+1. **The scanned estimate models the write path, not the scan's could-reuse.**
+   In-place uses the ordered tier's figure, which is also the staged tier's
+   over-approximation; the RAM budget that picks the tier is a runtime decision,
+   so the larger figure is the honest pre-flight one.
+2. **An in-place open that falls back to temp is still unpredicted.** That file
+   then downloads its already-correct chunks; the runtime
+   `--max-download-bytes` stop bounds the spend. The pre-flight refusal is an
+   early warning, not a guarantee, with or without `--scan`.
+3. **An unreadable purge subtree is counted, warned and not fatal.** The plan
+   still deletes the candidates it can see; exit `0` with `PurgePlan.errors > 0`
+   is deliberate, matching the best-effort housekeeping policy. A maintainer
+   who prefers “refuse the purge when the walk cannot be trusted” changes that
+   one branch.
+4. **One vector feeds both the line and the document.** Any future change to the
+   estimate must change `est_download_bytes_by_file`, or the `PLAN` line and
+   `--plan-out` diverge again.
+
+### 9.3 Final verification
+
+Full run on Windows, debug profile, final third-pass tree:
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **306 passed, 0 failed, 7 ignored** (174 lib +
+  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
+  84 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings.
+- `cargo fmt --check` — clean (exit `0`).
+
+**Not run:** the `#[cfg(unix)]` blocks of
+`contained_join_resolves_a_symlink_and_refuses_the_escape`,
+`contained_join_fails_closed_when_a_component_cannot_be_resolved` and
+`the_mode_is_part_of_the_file_stats` (Windows host); the 7 ignored tests. The
+third pass still has no release-profile run (the wrap side of N-15 is arithmetic,
+not observed), no Linux/macOS run, and no live CDN traffic.
+
+### 9.4 Open for maintainers
+
+- N-19's `errors` counter is diagnostic only; the delete ceilings still see the
+  candidates the walk could reach, not the ones under an unreadable directory.
+- N-20 and F-6 remain code-reading claims for want of an injection seam.
+
 *End of review. The finding text above records the first pass; §8 records the
-second pass, which changed source, tests and docs and ran the full suite on the
-tree that §8.3 describes.*
+second pass and §9 the third, each of which changed source, tests and docs and
+ran the full suite on the tree its final-verification subsection describes.*
