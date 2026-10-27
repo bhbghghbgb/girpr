@@ -1,11 +1,11 @@
-//! Links in the walk.
+//! Links in the walk and in `copy`.
 //!
 //! The walk follows links, so a directory link is reported as the directory it
 //! points at. That is the documented comparison behaviour and it is what makes
 //! the *deletion* side dangerous: a relative path under the link resolves
 //! through it, so `DELETE`/`RMDIR` can reach a file that is not in `dst` at all.
-//! These cases pin the walk (F-3); the deletion and copy-side cases build on
-//! them.
+//! These cases pin the walk (F-3) and the copy-side type conflict (F-2); the
+//! deletion cases build on them.
 //!
 //! ## Skipping
 //!
@@ -17,7 +17,8 @@
 
 mod common;
 
-use common::{dir_link, file_link, temp_root, wfile};
+use common::{dir_link, file_link, is_link, log, rfile, sync_mem, temp_root, wfile};
+use girsync::cmd_sync;
 use girsync::scan::walk_live;
 
 // ---------------------------------------------------------------------------
@@ -93,5 +94,38 @@ fn walk_aborts_on_a_dangling_link() {
     assert!(
         msg.contains("dangling.bin"),
         "the error names the link: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-2: src file, dst link-to-directory
+// ---------------------------------------------------------------------------
+
+/// A `dst` directory link blocking a file copy is unlinked, and its target is
+/// left intact. Before the fix the guard skipped the link (`is_dir() &&
+/// !is_symlink()`), then `File::create` failed and aborted the whole run.
+#[test]
+fn sync_replaces_a_dst_directory_link_at_a_file_path() {
+    let t = temp_root("dst_dir_link_conflict");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "a.bin", b"file now");
+    wfile(&outside, "keep.txt", b"outside content");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("a.bin")));
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(
+        !is_link(&dst.join("a.bin")),
+        "the type conflict resolved toward src: a real file, not the link"
+    );
+    assert_eq!(rfile(&dst, "a.bin"), b"file now");
+    assert_eq!(
+        rfile(&outside, "keep.txt"),
+        b"outside content",
+        "the link target was not touched"
     );
 }

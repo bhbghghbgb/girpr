@@ -116,9 +116,19 @@ pub(super) fn copy_one(
     trace!("copy_one start");
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
-    // dst dir that is in the way of a file copy: remove first
-    if d.is_dir() && !d.is_symlink() {
-        std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;
+    // dst dir that is in the way of a file copy: remove first.
+    //
+    // A link to a directory is *not* a directory to recurse into. Unlinking the
+    // link is what resolves the type conflict toward src's kind (a file); the
+    // target is somebody else's tree and is left alone. `is_dir` follows the
+    // link, so it is true for a Unix directory symlink and for a Windows
+    // junction, and `is_link` covers both plus a directory symlink.
+    if d.is_dir() {
+        if crate::link::is_link(&d) {
+            crate::link::remove(&d).with_context(|| format!("unlink {}", d.display()))?;
+        } else {
+            std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;
+        }
     }
     if let Some(parent) = d.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
@@ -129,6 +139,9 @@ pub(super) fn copy_one(
     let smtime_ns = mtime_ns_of(&smeta);
     // stream copy (truncate + write in place), digesting src as it goes
     let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
+    // A dst symlink to a *file* is followed and written through here, by design
+    // (the README documents write-through). Only a directory link is unlinked
+    // above, because `File::create` cannot truncate one.
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
     // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
