@@ -1885,13 +1885,16 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
 }
 
 /// A transport that delivers part of a chunk and then drops still spent those
-/// bytes, and the retry's body is charged on top.
+/// bytes, the retry's body is charged on top, and crossing the ceiling is a
+/// hard stop — even though the retry repaired the file.
 ///
 /// The old code refunded the whole reservation on any error, so a flaky
 /// transport could deliver half of every chunk for free and the live figure
 /// (`download_bytes_spent`) under-reported what the run actually caused. The
 /// partial body is now charged, and the settled figure — the bytes of the file
-/// that was promoted — stays the manifest's size.
+/// that was promoted — stays the manifest's size. The ceiling is exactly that
+/// size, so the partial body is the bytes that cross it: the run must exit `5`
+/// with the stop named, not `0`.
 #[tokio::test]
 async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
     // Incompressible bytes: `compressed_size` is close to the payload's length,
@@ -1923,11 +1926,19 @@ async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
     let dir = temp_dir("partial_body_meter");
 
     // The estimate is every chunk's `compressed_size`, and the ceiling is
-    // exactly that: the plan passes, and only the real traffic can cross it.
+    // exactly that: the plan passes, and the retry's traffic is what crosses it.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(compressed);
-    let (summary, code) = repair::run(ctx).await.expect("a flaky origin is not fatal");
-    assert_eq!(code, 0, "the retry repairs the file");
+    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    assert_eq!(
+        code, 5,
+        "a settle that crosses the ceiling is the runtime hard stop"
+    );
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-download-bytes"),
+        "the stop names the flag that bound"
+    );
     assert_eq!(
         summary.download.settled(),
         compressed,

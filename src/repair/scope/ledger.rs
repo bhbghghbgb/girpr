@@ -301,15 +301,18 @@ impl Summary {
     /// Reserve `n` bytes against the download ceiling, adding them to the live
     /// counter — all or nothing.
     ///
-    /// Reserving *before* the fetch is what makes the stop exact rather than
-    /// approximate: with N files in flight, a check-then-add would overshoot by
-    /// up to N-1 chunks, and `--max-download-bytes` is a ceiling, not a
-    /// guideline. Returns `false` — having added nothing — when the ceiling
-    /// blocks the reservation, which is the caller's signal to stop the run.
+    /// Reserving *before* the fetch is what bounds the run under
+    /// `--io-threads N`: with N files in flight, a check-then-add would
+    /// overshoot by up to N-1 chunks. Returns `false` — having added nothing —
+    /// when the ceiling blocks the reservation, which is the caller's signal
+    /// to stop the run.
     ///
     /// The reservation is the manifest's `compressed_size`; the caller's real
-    /// measurement (`blob.len()`) is folded back in by
-    /// [`Self::adjust_download_bytes`].
+    /// measurement (`blob.len()`, or the bytes a failed attempt delivered) is
+    /// folded back in by [`Self::adjust_download_bytes`]. A body that arrives
+    /// after its reservation can therefore carry the live figure past the
+    /// limit between two reservations; the settle site trips the stop as soon
+    /// as it sees that, so the overrun is the in-flight body, not a free pass.
     pub fn reserve_download_bytes(&self, n: u64) -> bool {
         self.download.charge_live(n)
     }

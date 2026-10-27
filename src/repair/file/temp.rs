@@ -365,8 +365,9 @@ pub(super) async fn write_downloaded_chunk(
     let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
     // What the fetch really spent, across every attempt: the checks below run
     // after the stream ends, so on failure the bytes of the attempt that died
-    // mid-body would otherwise be lost. They crossed the wire, and the ceiling
-    // is a ceiling.
+    // mid-body would otherwise be lost. They crossed the wire, and the
+    // ceiling is a ceiling: a settle that pushes the live figure past it trips
+    // the stop right there, even if this was the run's last chunk.
     let mut consumed = 0u64;
     let digest = match sophon::stream_chunk_to(
         &ctx.http,
@@ -428,8 +429,14 @@ pub(super) async fn write_downloaded_chunk(
 /// part of the reservation that never arrived. A chunk can therefore spend up
 /// to `ATTEMPTS × reserved` in one call, and — because a file is attempted up
 /// to `MAX_ATTEMPTS` times — up to `ATTEMPTS × MAX_ATTEMPTS` partial bodies per
-/// chunk per run. The ceiling is enforced on the next reservation; the bytes
-/// already delivered are spent and are reported as spent.
+/// chunk per run.
+///
+/// The reservation before the *next* fetch is what normally stops the run, but
+/// a partial body can push the live figure over the line between two
+/// reservations — including on the last chunk of the run. The bytes are
+/// already spent, so the stop is tripped here, as soon as the real figure is
+/// known. The overrun is bounded by the body that was already in flight: it is
+/// the bytes of the piece that crossed the line, not a whole new reservation.
 fn settle_reservation(ctx: &FileCtx, reserved: u64, consumed: u64) {
     use std::cmp::Ordering;
 
@@ -439,6 +446,16 @@ fn settle_reservation(ctx: &FileCtx, reserved: u64, consumed: u64) {
         Ordering::Equal => 0,
     };
     ctx.summary.adjust_download_bytes(delta);
+    if let Some(limit) = ctx.summary.max_download_bytes()
+        && ctx.summary.download.live() > limit
+    {
+        ctx.summary.stop(StoppedBy::Download);
+        tracing::warn!(
+            limit,
+            have = ctx.summary.download.live(),
+            "download-bytes ceiling crossed by a body already in flight -> stopping the run"
+        );
+    }
 }
 
 /// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the
