@@ -226,6 +226,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &old_tag,
         &new_tag,
         plan.max_download_bytes,
+        plan.no_chunk_blobs,
     )?;
     let pairs = chunk_plan.pairs;
     let wants = chunk_plan.wants;

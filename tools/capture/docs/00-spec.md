@@ -582,6 +582,12 @@ taken until the budget is exhausted; the rest are recorded as
 swallowed — and because the run's own assertions decide the exit code, a
 deliberate exclusion is a recorded status, not a failure.
 
+The same flag also caps the chunk store's **projected wire cost** before a blob
+is fetched (`Σ compressed_size` over the distinct chunks the plan would request).
+That second ceiling is about bytes crossing the network, so it does not apply to
+`--no-chunk-blobs`: the run fetches nothing, and refusing it would price a store
+that is never written. The projection is still recorded.
+
 ---
 
 ## 6. Invariants asserted in `verify/selfcheck.json`

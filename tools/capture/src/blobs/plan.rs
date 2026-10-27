@@ -25,7 +25,8 @@ use super::{file_pairs, projected_download};
 ///
 /// **A second, independent ceiling.** The budget is charged against `total_cost`
 /// in M5; this is over the bytes actually on the wire. Both hold, and they are
-/// not the same number, so neither can stand in for the other.
+/// not the same number, so neither can stand in for the other. A
+/// `--no-chunk-blobs` run fetches nothing, so [`plan`] does not call this at all.
 ///
 /// The boundary is `>`, not `>=`: a store that lands exactly on the ceiling is
 /// affordable, and a run that refused it would be refusing the case the operator
@@ -73,6 +74,11 @@ pub struct ChunkPlan {
 /// 2. **`--max-download-bytes`**, over the whole store. The budget is charged
 ///    against `total_cost` in M5; this is a *second*, independent ceiling over
 ///    the bytes actually on the wire. Both hold.
+///
+/// **The second check does not apply to `--no-chunk-blobs`.** That run fetches no
+/// chunk bytes at all, so the only bytes its plan could bound are hypothetical;
+/// refusing it would charge for a store that is never written. `projected` is
+/// still computed and returned, because the plan document records it.
 pub fn plan(
     fields: &[String],
     manifests: &[Vec<CapturedManifest>],
@@ -80,6 +86,7 @@ pub fn plan(
     old_tag: &str,
     new_tag: &str,
     max_download_bytes: Option<u64>,
+    no_chunk_blobs: bool,
 ) -> Result<ChunkPlan, Failure> {
     let pairs = file_pairs(selection, fields, manifests, old_tag, new_tag);
 
@@ -112,7 +119,23 @@ pub fn plan(
         "chunk store planned"
     );
 
-    if let Some(cap) = max_download_bytes {
+    // **A metadata-only run is not bound by a wire-byte ceiling.** It is a
+    // ceiling on bytes that will cross the wire, and this run sends none. The
+    // A12 check above still runs, because a plan that cannot be materialized is
+    // wrong whether or not this run writes it.
+    //
+    // (Admission already charges every capture against the same flag, and the
+    // projected store is a distinct-chunk subset of those charges, so this
+    // ceiling is a guard against a future charging change more than a limit a
+    // current run can hit. It stays because the two numbers are not the same
+    // number, and the second is the one that costs bandwidth.)
+    if no_chunk_blobs {
+        tracing::info!(
+            projected_bytes = projected,
+            "--no-chunk-blobs: the wire-byte ceiling is not applied to a store \
+             nothing fetches"
+        );
+    } else if let Some(cap) = max_download_bytes {
         check_byte_ceiling(projected, Some(cap))?;
     }
 
@@ -126,6 +149,118 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::diff::State;
+    use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+    use crate::select::{Admission, Budget, Class, Selection};
+
+    fn chunk(md5: &str, offset: i64, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: format!("{md5}_{offset}"),
+            uncompressed_md5: md5.to_string(),
+            offset,
+            compressed_size: size,
+            uncompressed_size: size,
+            ..Default::default()
+        }
+    }
+
+    fn file(path: &str, md5: &str, chunks: Vec<SophonChunk>) -> SophonChunkFile {
+        let size = chunks.iter().map(|c| c.uncompressed_size).sum();
+        SophonChunkFile {
+            file: path.into(),
+            chunks,
+            is_folder: false,
+            size,
+            md5: md5.into(),
+        }
+    }
+
+    /// One admitted `identical` capture: the same single chunk on both sides, so
+    /// `projected` is exactly that chunk's `compressed_size`.
+    fn identical_capture(projected: i64) -> (Selection, Vec<Vec<CapturedManifest>>, Vec<String>) {
+        let id = "1111111111111111_22222222222222222222222222222222";
+        let f = file("big.bin", "same", vec![chunk(id, 0, projected)]);
+        let manifests = vec![vec![
+            CapturedManifest::empty("7.0.0", "game", vec![f.clone()]),
+            CapturedManifest::empty("7.1.0", "game", vec![f]),
+        ]];
+        let selection = Selection {
+            admitted: vec![Admission {
+                capture_id: "identical".into(),
+                primary_class: Class::Identical,
+                path: "big.bin".into(),
+                matching_field: "game".into(),
+                state: State::Identical,
+                also_satisfies: Vec::new(),
+                budget_cost: projected as u64,
+                patch_bytes: 0,
+            }],
+            rejected: Vec::new(),
+            forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
+            matrix: Vec::new(),
+            bytes_admitted: projected as u64,
+            budget: Budget::unlimited(),
+        };
+        (selection, manifests, vec!["game".to_string()])
+    }
+
+    #[test]
+    fn a_metadata_only_plan_is_not_refused_by_the_wire_ceiling() {
+        // `projected` is what a fetching run would pay. This run fetches nothing,
+        // so a ceiling below the projection has nothing to bound.
+        let (selection, manifests, fields) = identical_capture(1_000);
+        let err = plan(
+            &fields,
+            &manifests,
+            &selection,
+            "7.0.0",
+            "7.1.0",
+            Some(1),
+            false,
+        )
+        .err()
+        .expect("the guard is real for a fetching run");
+        assert!(
+            err.detail.contains("1000 B"),
+            "and it names the projection: {}",
+            err.detail
+        );
+
+        let ok = plan(
+            &fields,
+            &manifests,
+            &selection,
+            "7.0.0",
+            "7.1.0",
+            Some(1),
+            true,
+        )
+        .expect("a run that fetches no chunk bytes has no wire ceiling");
+        assert_eq!(
+            ok.projected, 1_000,
+            "the plan still records what the store would have cost"
+        );
+    }
+
+    #[test]
+    fn a_metadata_only_plan_still_lists_every_want() {
+        // Skipping the ceiling must not turn into skipping the plan: the index a
+        // `--no-chunk-blobs` run writes still lists every chunk and its roles.
+        let (selection, manifests, fields) = identical_capture(1_000);
+        let ok = plan(
+            &fields,
+            &manifests,
+            &selection,
+            "7.0.0",
+            "7.1.0",
+            Some(1),
+            true,
+        )
+        .expect("a metadata-only plan is legal");
+        assert_eq!(ok.pairs.len(), 1);
+        assert_eq!(ok.wants.len(), 1, "the distinct chunk is still planned");
+    }
 
     #[test]
     fn a_store_over_the_ceiling_is_refused_with_both_numbers() {
