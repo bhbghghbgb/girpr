@@ -686,5 +686,86 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 
 ---
 
+## 7. Implementation progress
+
+Landed on branch `all/fix-gaps` in the §6 order, one commit per finding
+(F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
+they pin, plus one test-only commit). No commit re-lands the reverted series
+verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
+`layout`'s dead `checked_add` is not reintroduced, `validate_rel` is replaced
+by `util::contained_rel` / `contained_join` applied to every server-path sink,
+and all six `*_tmp` doc sites plus the `kept_bytes` comment are corrected.
+
+| # | Finding | Status | Regression tests | Commit |
+|---|---|---|---|---|
+| F-1 | Panicked file tasks exit `0` | **Fixed.** `join_file_tasks` awaits every handle and counts *any* join error as `files_failed`, logs it, and aborts under `--fail-fast`. The `temp.rs` range end is `u64::try_from` + `checked_add`; a new `validate_chunk_ranges` also refuses negative/overflowing/out-of-file ranges before a seek. | Unit: `a_panicked_file_task_is_counted_as_a_failure`, `a_chunk_past_the_files_end_is_refused`. Integration: `a_manifest_offset_overflow_fails_the_file_instead_of_panicking` (exit `3`, `files_failed=1`, no `config.ini`, no target). | `a3e5caf` |
+| F-2 | Uncontained server paths | **Fixed.** `util::contained_rel` / `contained_join` reject empty, drive prefix (`C:`, `C:/`), root/absolute, UNC, `ParentDir` and non-`Normal` components, then resolve the nearest existing ancestor and require `starts_with(base)` (catches symlink escapes). Applied to the plan, repair target, `_tmp` reuse/promote, scan read, check, config/blacklist dirs, audio read/write, deprecated deletes, audio cache/res moves and the scope report. `build_plan` is now fallible: a bad rel is metadata, exit `2`, before any mutation. | Unit spellings incl. `C:`, `C:/`, `../`, `/abs`, UNC, a legitimate `a/b.dat`, a missing base, and `#[cfg(unix)]` symlink escape. Integration: `a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write`, `a_deprecated_path_that_escapes_the_game_dir_is_kept`, `an_audio_cache_dir_that_escapes_the_game_dir_is_not_moved`; unit `a_scan_path_that_escapes_the_game_dir_is_not_read_or_written`. | `5b9159e` |
+| F-4 | `--print-plan --audio` writes the scan file | **Fixed.** The scan write and the scope refusal that exists for it are gated on `!ctx.readonly() && !ctx.print_plan`; the audio set is still resolved for the report. | `print_plan_with_audio_writes_no_scan_file_and_names_the_language` (exit `0`, no game dir, no `Audio/` dir, `audio_langs=en-us`). | `183f316` |
+| F-3 | Failed fetch refunds bytes already sent | **Fixed.** `stream_chunk_to` takes `&mut u64` consumed bytes, accumulates them across every attempt (including the successful one), and `temp.rs` reconciles the reservation with `consumed - reserved` on both success and failure. Each body is capped at its reservation; the body of an attempt that fails is charged. The bound is now stated correctly: up to `ATTEMPTS` partial bodies per call, `ATTEMPTS × MAX_ATTEMPTS` per chunk per run. | Unit: `a_mid_stream_transport_failure_reports_what_arrived`, `a_body_past_its_reservation_is_refused`; integration: `a_partial_body_then_a_drop_is_charged_to_the_download_meter` (live = full + partial, settled = full, retried once). | `82a6d85` |
+| F-5 | `--check-only --scan` calls a missing empty file clean | **Fixed.** The scan branch now checks `util::file_len == f.size` *and* the digest, matching the non-scan path; the never-read `Verdict.len` is gone. | `check_only_scan_treats_an_absent_empty_file_as_damage` (absent → exit `4` in both spellings, present-empty → `0`). Verified the test fails without the fix. | `778ae1d` |
+| F-6 | Panicked scan tasks are dropped silently | **Fixed.** The `let Ok(...) else continue` is a `warn!` naming the error and the estimate's safety; the file stays absent from the report and is estimated in full. | None added: `scan_one` catches unreadable files itself, and a `spawn_blocking` panic is not reachable through a public seam; the change is a log line only. | `64c80d6` |
+| F-7 | `--max-write-bytes` documented as `*_tmp`-only | **Fixed.** All six sites (`cli.rs`, `limits.rs:20`/`:55`, `report.rs`, `ledger.rs`, `docs/04:168`/`:291`) now say the install — the target for the in-place path, `{path}_tmp` for the temp path. No counter or ceiling changed. | None needed (prose only; the CLI-contract test already pins the flag itself). | `0b0aec8` |
+| F-8 | Regression coverage gaps | **Fixed.** All six listed gaps are covered: panic → `3`, the drive-relative/absolute/UNC/traversal spellings and the two post-phase sinks, the partial body, `--print-plan --audio`, `--check-only --scan` zero-length absence, and the full-length corrupt `_tmp`. | The first five are in the F-1/F-2/F-3/F-4/F-5 commits above; the last is `a_full_length_corrupt_tmp_is_deleted_and_rebuilt` (delete → retry → rebuild, `_tmp` not reused). | `3546902` |
+| F-9 | `kept_bytes` comment says the temp path keeps nothing | **Fixed.** The comment now says the temp path rewrites every chunk it does not resume and that an earlier `_tmp` prefix counts as kept; the resume test sets `repair_mode_explicit` and pins `kept_bytes == 64`. | `partial_tmp_prefix_is_resumed` (extended). | `64e32ac` |
+
+### 7.1 Behavioural notes and pending maintainer decisions
+
+1. **F-3 hard cap vs. documenting A6 (decided: cap).** A body that sends more
+   than the manifest's `compressed_size` is now refused at the piece that
+   crosses the line instead of being streamed. That is stricter than capture
+   invariant A6 and means a *well-formed but different-length* frame is refused
+   before its digest can be checked; the write-meter test pins its corrupt body
+   by giving the manifest a few bytes of `compressed_size` slack. The review
+   allows the alternative (trust A6 and document the approximation). Keep the
+   cap: it bounds the traffic, and a body past its claim is not the blob the
+   manifest describes.
+2. **F-3 reported vs. live figures (decided: unchanged split).** `download_bytes`
+   (settled) still counts only the successful body of each chunk, because it is
+   a function of the promoted install; `download_bytes_spent` (live) now counts
+   every partial body. A chunk can charge up to `ATTEMPTS × reserved` per call,
+   so a flaky origin can pass the ceiling by the bytes it actually delivered
+   before the next reservation stops the run. That is the honest number; the
+   alternative (refuse the retry once the reservation is spent) would reject
+   recoverable transfers.
+3. **F-2 plan validation runs before the blacklist/scope/dedup filters
+   (decided: strict).** Any escaping manifest entry fails the plan with exit
+   `2`, even one that would have been filtered out. The alternative is to
+   validate after filtering and silently ignore a hostile entry that is out of
+   scope. Keep strict: a manifest that names a path outside the install is not
+   trustworthy for the parts that happen to be in scope.
+4. **F-5 checks presence with one `stat` per planned file under
+   `--check-only --scan` (decided: stat).** It matches the non-scan path's
+   answer and avoids a second notion of presence. A `Verdict.present` flag
+   would avoid the syscall but add state that can drift from the disk between
+   the scan and the check.
+5. **F-9 `kept_bytes` on resume (product decision, implemented as kept).** A
+   resumed `_tmp` prefix is bytes the repair did not write, so it counts as
+   kept, consistent with the field's definition. If maintainers prefer "kept"
+   to mean only correct-where-it-belongs in-place bytes, the counter needs a
+   different definition and the new assertion changes with it.
+6. **F-1 dry runs skip `validate_chunk_ranges`.** A range that would fail a
+   write is still planned under `--dry-run`/`--check-only`, because those modes
+   never seek; a corrupt range is reported by the repair paths that would use
+   it. If the plan should refuse such a manifest instead, the validation moves
+   into `build_plan` (exit `2`) rather than the per-file path (exit `3`).
+
+### 7.2 Verification
+
+Run on the final tree on Windows (`cargo` 1.x, debug profile):
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **286 passed, 0 failed, 7 ignored** (156 lib + 7 binary + 16 + 25 + 82 integration). The 7 ignored are the 6 `artifact_bridge` tests and the 1 `peak_heap` measurement.
+- `cargo clippy --all-targets` — clean (no warnings).
+- `cargo fmt --check` — clean.
+- No shared crate changed, so no workspace-wide run was needed.
+
+**Not verified here:** the live CDN (all tests use the in-process mock; the
+manifest shapes are the captured ones, not a fresh fetch), the number of bytes a
+real transport delivers before dropping (the mock truncates deterministically),
+the `#[cfg(unix)]` symlink test (this host is Windows, so it compiled but did
+not run), and `--print-plan --audio` under an active path scope (the fix gates
+the write; the scope-refusal interaction is covered by the existing
+`explicit_audio_under_a_scope_...` test, not by a print-plan variant).
+
 *End of review. No source, test, or Cargo file was modified; no test was run;
 nothing was staged or committed. The only file created is this document.*
