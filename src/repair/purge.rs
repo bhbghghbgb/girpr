@@ -48,6 +48,14 @@ pub struct PurgePlan {
     /// an unflagged run; the "scope and a purge flag agree" warn is driven off
     /// this.
     pub hidden: u64,
+    /// Walk or metadata failures that made the candidate list incomplete.
+    ///
+    /// A purge that could not read part of the install still deletes what it
+    /// can see, but `total_bytes` is then a lower bound: the caller must not
+    /// treat it as the whole delete set. Zero for a complete plan, and for the
+    /// documented "`game_dir` is not there yet" case, which is an empty plan
+    /// rather than a failure.
+    pub errors: u64,
 }
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
@@ -84,12 +92,32 @@ pub fn plan_purge(
     // the purge and eligible for the emptied-dir sweep.
     let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
     let mut hidden = 0u64;
+    let mut errors = 0u64;
 
-    for e in WalkDir::new(game_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for e in WalkDir::new(game_dir).follow_links(false) {
+        let e = match e {
+            Ok(e) => e,
+            // The documented missing-`game_dir` case: nothing to plan, not a
+            // failure. Every other error means part of the install could not
+            // be read — that is one candidate set the plan does not have, so
+            // it is counted and logged, never dropped silently.
+            Err(err)
+                if err
+                    .io_error()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(err) => {
+                errors = errors.saturating_add(1);
+                tracing::warn!(
+                    path = ?err.path(),
+                    error = %err,
+                    "purge walk: a path could not be read; the candidate list may be incomplete"
+                );
+                continue;
+            }
+        };
         if e.file_type().is_dir() {
             all_dirs.push(e.path().to_path_buf());
             continue;
@@ -104,7 +132,21 @@ pub fn plan_purge(
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
                 debug_assert!(!outside, "a hidden path must classify Keep");
-                let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
+                // A candidate that cannot be stat'd is still a candidate: the
+                // delete does not need its size. Counting it as zero would
+                // understate the ceiling, so say so and count the failure.
+                let bytes = match e.metadata() {
+                    Ok(m) => m.len(),
+                    Err(err) => {
+                        errors = errors.saturating_add(1);
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %err,
+                            "purge: cannot stat a delete candidate; its bytes are not counted"
+                        );
+                        0
+                    }
+                };
                 files.push(PurgeCandidate {
                     rel,
                     path: path.to_path_buf(),
@@ -124,7 +166,7 @@ pub fn plan_purge(
         .filter(|d| *d != game_dir && !kept_dirs.contains(d))
         .collect();
     dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
-    let total_bytes = files.iter().map(|c| c.bytes).sum();
+    let total_bytes = files.iter().fold(0u64, |n, c| n.saturating_add(c.bytes));
     // The scope and a purge flag agreeing is correct, but it should be
     // visible. `plan_purge` runs once per purge pass, so a run with both
     // `--purge-before` and `--purge-after` says this twice — one line per
@@ -134,11 +176,18 @@ pub fn plan_purge(
             "{hidden} on-disk paths are outside the active --include/--exclude scope and will not be deleted"
         );
     }
+    if errors > 0 {
+        tracing::warn!(
+            errors,
+            "purge plan is incomplete: the delete total is a lower bound"
+        );
+    }
     PurgePlan {
         files,
         dirs,
         total_bytes,
         hidden,
+        errors,
     }
 }
 
@@ -588,6 +637,41 @@ mod tests {
         );
         assert_eq!(std::fs::read(dir.join("adopted/stray.dat")).unwrap(), b"y");
         assert_eq!(std::fs::read(dir.join("login.dat")).unwrap(), b"z");
+    }
+
+    #[test]
+    fn a_walk_that_cannot_be_read_is_counted_not_silently_dropped() {
+        // An invalid root path (an embedded NUL) is not "not there yet": the
+        // walk yields an error rather than a tree. The plan is empty, but it
+        // says so instead of reporting a complete, zero-byte delete set. A
+        // permission failure takes the same branch; this seam is the one that
+        // is deterministic on every platform without an ACL.
+        let dir = TempDir::new("girpr_test_purge", "walk_error");
+        let pp = plan_purge(
+            &dir.join("bad\0name"),
+            &plan_of("game.dat"),
+            &keep_set(),
+            &PathScope::default(),
+        );
+        assert!(pp.files.is_empty(), "{:?}", pp.files);
+        assert_eq!(pp.total_bytes, 0);
+        assert!(pp.errors >= 1, "the unreadable walk is counted");
+    }
+
+    #[test]
+    fn a_missing_game_dir_is_an_empty_plan_and_not_an_error() {
+        // The documented case: `--print-plan` before `game_dir` exists. It is
+        // an empty plan, not a walk failure.
+        let dir = TempDir::new("girpr_test_purge", "missing_root");
+        let pp = plan_purge(
+            &dir.join("not_there_yet"),
+            &plan_of("game.dat"),
+            &keep_set(),
+            &PathScope::default(),
+        );
+        assert!(pp.files.is_empty());
+        assert_eq!(pp.total_bytes, 0);
+        assert_eq!(pp.errors, 0);
     }
 
     #[test]

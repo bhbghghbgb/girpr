@@ -373,6 +373,7 @@ mod tests {
             dirs: vec![],
             total_bytes: 4096,
             hidden: 3,
+            errors: 0,
         }
     }
 

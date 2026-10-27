@@ -215,6 +215,7 @@ mod tests {
             dirs: vec![],
             total_bytes: total,
             hidden: 0,
+            errors: 0,
         }
     }
 
