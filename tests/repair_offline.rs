@@ -40,7 +40,8 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, build_moved_fixture, read_game_file, temp_dir, write_game_file,
+    build_fixture_spec, build_fixture_with_lies, build_moved_fixture, read_game_file, temp_dir,
+    write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::sleep::NoSleep;
@@ -1794,6 +1795,78 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     mock.stop();
 }
 
+/// A transport that delivers part of a chunk and then drops still spent those
+/// bytes, and the retry's body is charged on top.
+///
+/// The old code refunded the whole reservation on any error, so a flaky
+/// transport could deliver half of every chunk for free and the live figure
+/// (`download_bytes_spent`) under-reported what the run actually caused. The
+/// partial body is now charged, and the settled figure — the bytes of the file
+/// that was promoted — stays the manifest's size.
+#[tokio::test]
+async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
+    // Incompressible bytes: `compressed_size` is close to the payload's length,
+    // so truncating at half of it is a meaningful partial body.
+    let mut x = 0x1234_5678u32;
+    let payload: Vec<u8> = (0..16 * 1024)
+        .map(|_| {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (x >> 24) as u8
+        })
+        .collect();
+    let spec = FixtureSpec::new(vec![FileSpec::new(
+        "game/big.dat",
+        vec![ChunkSpec::new("c0", payload, 0)],
+    )]);
+    let fx = build_fixture_spec(&spec);
+    let compressed = fx.chunk_store["c0"].len() as u64;
+    let cut = (compressed / 2) as usize;
+    assert!(cut > 0, "the fixture's body is big enough to cut");
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            truncate_first_chunks: 1,
+            truncate_bytes: cut,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("partial_body_meter");
+
+    // The estimate is every chunk's `compressed_size`, and the ceiling is
+    // exactly that: the plan passes, and only the real traffic can cross it.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.limits.download_bytes = Some(compressed);
+    let (summary, code) = repair::run(ctx).await.expect("a flaky origin is not fatal");
+    assert_eq!(code, 0, "the retry repairs the file");
+    assert_eq!(
+        summary.download.settled(),
+        compressed,
+        "the promoted file's bytes are the settled figure"
+    );
+    assert_eq!(
+        summary.download.live(),
+        compressed + cut as u64,
+        "the partial body crossed the wire, so the live figure has it too"
+    );
+    assert!(
+        summary.download.live() > compressed,
+        "the ceiling was passed by the bytes that really arrived"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["c0".to_string(), "c0".to_string()],
+        "the dropped body was retried once"
+    );
+    assert_eq!(
+        read_game_file(&dir, "game/big.dat").expect("the file was repaired"),
+        spec.new[0].chunks[0].payload,
+        "and the retry's body is what landed"
+    );
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     // The case that justifies B2 having *two* mechanisms. `config.ini` already
@@ -3086,11 +3159,30 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
     // its digest is known, so "what was written" and "what was allowed to be
     // written" are two different figures, and only the second one is a
     // function of the install.
+    //
+    // The manifest claims a `compressed_size` a few bytes larger than the good
+    // body. That is not what the test is about: the streamed body is capped at
+    // what the caller reserved, and the mock's corrupt body recompresses one
+    // byte longer than the good one, so without the slack the cap would refuse
+    // it before a single decoded byte landed — and the write meter would have
+    // nothing to count. The corrupt body still has to pass its decode to fail
+    // its digest, which is the case this test names.
+    fn lying_fixture() -> common::GameFixture {
+        build_fixture_with_lies(Lies {
+            wrong_chunk_size: vec![
+                "chunk_foo0".to_string(),
+                "chunk_foo1".to_string(),
+                "chunk_bar0".to_string(),
+            ],
+            ..Default::default()
+        })
+    }
+
     async fn run(opts: MockOpts, tag: &str) -> (u64, u64) {
-        let fx = build_fixture();
+        let fx = lying_fixture();
         let mock = MockServer::start(fx, opts).await;
         let dir = temp_dir(tag);
-        let fx2 = build_fixture();
+        let fx2 = lying_fixture();
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }

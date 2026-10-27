@@ -383,24 +383,35 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
 }
 
 pub fn build_fixture() -> GameFixture {
+    build_fixture_with_lies(Lies::default())
+}
+
+/// The standard fixture, with the manifest lying in the given ways.
+///
+/// The bytes are the same; only the manifest's claims about them change, which
+/// is what a test about a hint-versus-reality branch needs.
+pub fn build_fixture_with_lies(lies: Lies) -> GameFixture {
     // Fixed payloads (distinct bytes per chunk so corruption is detectable).
     let foo_c0 = vec![0x41u8; 64]; // 'A' x64
     let foo_c1 = vec![0x42u8; 64]; // 'B' x64
     let bar_c0 = vec![0x43u8; 48]; // 'C' x48
 
-    build_fixture_spec(&FixtureSpec::new(vec![
-        FileSpec::new(
-            "game/foo.dat",
-            vec![
-                ChunkSpec::new("chunk_foo0", foo_c0, 0),
-                ChunkSpec::new("chunk_foo1", foo_c1, 64),
-            ],
-        ),
-        FileSpec::new(
-            "game/bar.dat",
-            vec![ChunkSpec::new("chunk_bar0", bar_c0, 0)],
-        ),
-    ]))
+    build_fixture_spec(
+        &FixtureSpec::new(vec![
+            FileSpec::new(
+                "game/foo.dat",
+                vec![
+                    ChunkSpec::new("chunk_foo0", foo_c0, 0),
+                    ChunkSpec::new("chunk_foo1", foo_c1, 64),
+                ],
+            ),
+            FileSpec::new(
+                "game/bar.dat",
+                vec![ChunkSpec::new("chunk_bar0", bar_c0, 0)],
+            ),
+        ])
+        .with_lies(lies),
+    )
 }
 
 /// A fixture whose **old** file has a different chunk layout from the new
@@ -544,6 +555,14 @@ pub struct MockOpts {
     /// is served unchanged, so the only thing that can catch it is the
     /// checksum gate — the MD5 of the **decompressed** bytes.
     pub wrong_manifest_checksum: bool,
+    /// Serve the first N chunk responses as a body that is **cut short**: the
+    /// `Content-Length` promises the whole blob and only `truncate_bytes` of it
+    /// are written, then the connection closes. Models a transport that dies
+    /// mid-body — the case where bytes crossed the wire but no complete chunk
+    /// arrived, so the download ceiling has to charge the partial body.
+    pub truncate_first_chunks: u32,
+    /// How many bytes of a truncated body to write before closing.
+    pub truncate_bytes: usize,
 }
 
 pub struct MockServer {
@@ -654,6 +673,11 @@ struct Responses {
     /// attempt has already written a chunk that passed its gate before it
     /// fails.
     corrupt_chunks: Vec<String>,
+    /// Chunk responses to serve cut short, counted over the requests like
+    /// `corrupt_first_chunks`: the first N responses promise a full body and
+    /// deliver `truncate_bytes` of it.
+    truncate_first_chunks: u32,
+    truncate_bytes: usize,
     /// The ids whose first response was already served corrupt. An id is in
     /// here from its first corrupt response onwards, so the second request for
     /// the same id gets the good bytes: a flaky origin, not a broken one.
@@ -795,6 +819,8 @@ fn build_responses(
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
         corrupt_chunks: opts.corrupt_chunks.clone(),
+        truncate_first_chunks: opts.truncate_first_chunks,
+        truncate_bytes: opts.truncate_bytes,
         corrupt_served: Mutex::new(HashSet::new()),
         served: AtomicU64::new(0),
     }
@@ -843,6 +869,9 @@ async fn serve_one(
         .to_string();
     seen.lock().unwrap().push(target.clone());
 
+    // A body that is cut short is written in full-length header terms and then
+    // abandoned, which is what a transport that dies mid-body looks like.
+    let mut cut: Option<usize> = None;
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
         ("200 OK", "application/json", r.configs.clone())
     } else if target.contains("getGameBranches") {
@@ -930,6 +959,9 @@ async fn serve_one(
                             .unwrap_or_else(|| bytes.clone());
                         ("200 OK", "application/octet-stream", bad)
                     } else {
+                        if n < r.truncate_first_chunks as u64 {
+                            cut = Some(r.truncate_bytes.min(bytes.len()));
+                        }
                         ("200 OK", "application/octet-stream", bytes.clone())
                     }
                 }
@@ -954,6 +986,6 @@ async fn serve_one(
         body.len()
     );
     let _ = sock.write_all(header.as_bytes()).await;
-    let _ = sock.write_all(&body).await;
+    let _ = sock.write_all(&body[..cut.unwrap_or(body.len())]).await;
     let _ = sock.flush().await;
 }

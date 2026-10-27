@@ -363,29 +363,34 @@ pub(super) async fn write_downloaded_chunk(
     }
     let expected = c.uncompressed_size.max(0) as u64;
     let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
-    // A failed fetch delivers nothing, so the reservation goes straight back.
-    // Without this the `?` below would leak `compressed_size` per attempt, for
-    // bytes that never arrived — and with no ceiling set the sentinel is
-    // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
+    // What the fetch really spent, across every attempt: the checks below run
+    // after the stream ends, so on failure the bytes of the attempt that died
+    // mid-body would otherwise be lost. They crossed the wire, and the ceiling
+    // is a ceiling.
+    let mut consumed = 0u64;
     let digest = match sophon::stream_chunk_to(
         &ctx.http,
         ctx.sleep.as_ref(),
         prefix,
         &c.id,
         expected,
+        reserved,
+        &mut consumed,
         &mut sink,
     )
     .await
     {
         Ok(d) => d,
         Err(e) => {
-            ctx.summary.adjust_download_bytes(-(reserved as i64));
+            settle_reservation(ctx, reserved, consumed);
             return Err(e).with_context(|| format!("chunk {}", c.id));
         }
     };
+    // The body may not exceed its reservation (`stream_chunk_to` refuses one
+    // that does), and a failed attempt's partial body is in `consumed` too, so
+    // the live figure is what crossed the wire rather than the manifest's claim.
+    settle_reservation(ctx, reserved, consumed);
     let actual = digest.compressed_bytes;
-    ctx.summary
-        .adjust_download_bytes(actual as i64 - reserved as i64);
     stats.download_bytes += actual;
     tracing::trace!(chunk = %c.id, compressed_bytes = actual, decompressed_bytes = digest.bytes, "chunk decoded");
     // The size and the digest are checked **after** the stream ends, which is
@@ -412,6 +417,28 @@ pub(super) async fn write_downloaded_chunk(
     note_write(ctx, writes, sink.written())?;
     stats.chunks_downloaded += 1;
     Ok(())
+}
+
+/// Fold the bytes a fetch really spent into the live download meter.
+///
+/// The reservation was the manifest's `compressed_size`; `consumed` is what
+/// crossed the wire for this chunk in this call. `stream_chunk_to` retries up
+/// to `ATTEMPTS` times and each attempt can deliver a partial body before it
+/// fails, so a failed chunk is charged for those bodies and refunded only the
+/// part of the reservation that never arrived. A chunk can therefore spend up
+/// to `ATTEMPTS × reserved` in one call, and — because a file is attempted up
+/// to `MAX_ATTEMPTS` times — up to `ATTEMPTS × MAX_ATTEMPTS` partial bodies per
+/// chunk per run. The ceiling is enforced on the next reservation; the bytes
+/// already delivered are spent and are reported as spent.
+fn settle_reservation(ctx: &FileCtx, reserved: u64, consumed: u64) {
+    use std::cmp::Ordering;
+
+    let delta = match consumed.cmp(&reserved) {
+        Ordering::Greater => i64::try_from(consumed - reserved).unwrap_or(i64::MAX),
+        Ordering::Less => -i64::try_from(reserved - consumed).unwrap_or(i64::MAX),
+        Ordering::Equal => 0,
+    };
+    ctx.summary.adjust_download_bytes(delta);
 }
 
 /// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the
