@@ -131,6 +131,88 @@ fn walk_aborts_on_a_dangling_link() {
 }
 
 // ---------------------------------------------------------------------------
+// Copying a src link: materialize, do not recreate the link
+// ---------------------------------------------------------------------------
+
+/// `src` file link -> a plain file in `dst`, with the target's bytes.
+#[test]
+fn sync_materializes_a_src_file_link() {
+    let t = temp_root("sync_src_file_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&outside, "real.bin", b"payload");
+    skip_if_no_link!(
+        "file",
+        file_link(&outside.join("real.bin"), &src.join("a.bin"))
+    );
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(
+        !is_link(&dst.join("a.bin")),
+        "the mirror materializes the target as a plain file"
+    );
+    assert_eq!(rfile(&dst, "a.bin"), b"payload");
+}
+
+/// `src` directory link -> a plain directory and its files in `dst`.
+#[test]
+fn sync_materializes_a_src_directory_link() {
+    let t = temp_root("sync_src_dir_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&outside, "x.txt", b"x");
+    wfile(&outside, "sub/y.txt", b"yy");
+    skip_if_no_link!("directory", dir_link(&outside, &src.join("link")));
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(
+        !is_link(&dst.join("link")),
+        "the mirror materializes a real directory"
+    );
+    assert!(dst.join("link").is_dir());
+    assert_eq!(rfile(&dst, "link/x.txt"), b"x");
+    assert_eq!(rfile(&dst, "link/sub/y.txt"), b"yy");
+}
+
+/// A `dst` link to a *file* is written through, by design: `File::create`
+/// truncates the target. This is the documented write-through, and it must keep
+/// working when a `dst` link to a *directory* is unlinked instead (F-2).
+#[test]
+fn sync_writes_through_a_dst_file_link() {
+    let t = temp_root("sync_dst_file_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"the new, longer content");
+    wfile(&dst, "target.bin", b"old");
+    skip_if_no_link!(
+        "file",
+        file_link(&dst.join("target.bin"), &dst.join("a.bin"))
+    );
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(
+        is_link(&dst.join("a.bin")),
+        "the link is still a link: write-through does not replace it"
+    );
+    assert_eq!(
+        rfile(&dst, "target.bin"),
+        b"the new, longer content",
+        "the bytes went to the target"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F-2: src file, dst link-to-directory
 // ---------------------------------------------------------------------------
 
