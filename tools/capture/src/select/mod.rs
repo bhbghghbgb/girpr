@@ -298,10 +298,10 @@ pub struct Selection {
     pub bytes_admitted: u64,
     /// The budget as it stood after admission.
     ///
-    /// Carried rather than recomputed by the caller: the caller's own `Budget`
-    /// was never charged — [`Budget`] is copyable and the charge happens
-    /// internally — so reporting *it* would say "0 of 1 000 000 spent" about a
-    /// run that spent 882 940.
+    /// Carried rather than recomputed by the caller: phase 0 and phase 2 charge
+    /// the same ledger, and [`Budget`] is copyable, so a caller holding its own
+    /// value would still see `spent == 0` after a run that spent 882 940 B. The
+    /// returned value is the one the admissions actually moved.
     pub budget: Budget,
 }
 

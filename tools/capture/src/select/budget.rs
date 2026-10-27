@@ -37,15 +37,6 @@ impl Budget {
         }
     }
 
-    /// A budget with the same ceiling, already charged by `spent`.
-    ///
-    /// The forced `--files` captures' cost rides in the same ledger the class
-    /// loop draws from, so `Σ total_cost` is one number rather than two that a
-    /// reader has to add up.
-    pub fn with_spent(limit: Option<u64>, spent: u64) -> Self {
-        Budget { limit, spent }
-    }
-
     /// The configured ceiling, if any.
     pub const fn limit(&self) -> Option<u64> {
         self.limit
