@@ -536,6 +536,17 @@ pub fn validate_new_tag(tag: &str) -> Result<()> {
 }
 
 /// The shape every tag must have, sentinel or not.
+///
+/// A tag is interpolated raw into `<root>/<biz>/<old>__<new>/` (`pair_dir`) and
+/// into the capture directory, so it is a path component on every host. The
+/// checks here are the same rule `--files` applies to a manifest path
+/// ([`validate_paths`]): no separator of either flavour, no drive prefix, no
+/// parent component, no control character. `/` and space were the only ones
+/// checked before, so `C:`, `..\..` and `a\b` reached the path sink intact.
+///
+/// Split on both separators even though both are rejected above: the rules are
+/// then stated independently, which is what stops a future relaxation of one
+/// from silently reopening the other.
 fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
     if tag.is_empty() {
         return Err(UsageError::new(format!("{flag} was given an empty tag")));
@@ -545,9 +556,25 @@ fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
             "{flag} {tag:?} is longer than 32 characters; that is not a version tag"
         )));
     }
-    if tag.contains('/') || tag.contains(' ') {
+    if tag.chars().any(char::is_control) {
+        return Err(UsageError::new(format!(
+            "{flag} {tag:?} contains a control character; a tag is a bare version string"
+        )));
+    }
+    if tag.contains('/') || tag.contains('\\') || tag.contains(' ') {
         return Err(UsageError::new(format!(
             "{flag} {tag:?} contains a separator or a space; a tag is a bare version string"
+        )));
+    }
+    if tag.contains(':') {
+        return Err(UsageError::new(format!(
+            "{flag} {tag:?} looks like a drive-qualified or namespaced path; a tag is a \
+             bare version string"
+        )));
+    }
+    if tag.split(['/', '\\']).any(|c| c == "..") {
+        return Err(UsageError::new(format!(
+            "{flag} {tag:?} escapes the artifact directory"
         )));
     }
     Ok(())
@@ -918,6 +945,34 @@ mod tests {
         }
         for good in ["7.1.0", "6.7.0", "5.5.0-nightly", "v7.1"] {
             assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix() {
+        // A tag is joined into the artifact directory raw. On Windows `\` is a
+        // separator and `C:` is a path prefix, so either one can move the
+        // bundle - and `..\..` can move it out of the root. The same rule must
+        // cover the pair flags and the probes, because all three reach the same
+        // sink.
+        for bad in ["C:", r"..\..", r"a\b", "a:b", "..", "7.1.0\u{7}"] {
+            assert!(
+                validate_tag(bad, "--old-tag").is_err(),
+                "--old-tag {bad:?} must be refused"
+            );
+            assert!(
+                validate_new_tag(bad).is_err(),
+                "--new-tag {bad:?} must be refused"
+            );
+            assert!(
+                plan(|a| a.probe_tags = vec![bad.to_string()]).is_err(),
+                "--probe-tags {bad:?} must be refused"
+            );
+        }
+        // And the shape rule did not become a ban on ordinary tags.
+        for good in ["7.1.0", "6.7.0", "5.5.0-nightly", "v7.1"] {
+            assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
+            assert!(validate_new_tag(good).is_ok(), "{good:?}");
         }
     }
 
