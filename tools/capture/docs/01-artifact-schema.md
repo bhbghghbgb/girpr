@@ -617,7 +617,9 @@ never fetched at all has a null `stored_path`, a null-ish row body and no
 
 A `stored_path` that is `null` has three causes that cannot all be described the
 same way — a source that refused, a write that failed, and a fetch task that
-panicked mid-measure — and the row records which.
+panicked mid-measure — and the row records which, in `decode_error`. The message
+is the same one the run's error list carries, and the chunk is counted once
+among the failed fetches.
 
 ### `build_id` — part of the chunk's address
 

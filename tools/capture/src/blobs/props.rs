@@ -143,13 +143,20 @@ pub struct BlobProps {
     pub unknown_field6: i64,
     /// The four A6 checks, or `null` when the blob was not measured.
     pub verified: Option<Verified>,
-    /// Why the blob would not decompress, when it would not.
+    /// Why this blob has no usable bytes, when it has none.
     ///
     /// Separate from `verified` because it is a *different kind* of finding:
     /// the four checks are "is this the chunk the manifest named", while this is
-    /// "the bytes are not a complete frame". A truncated download fails two of
+    /// "these bytes are not a complete frame". A truncated download fails two of
     /// the four as a side effect, and without this field a reader would go
     /// looking for a wrong-content problem they do not have.
+    ///
+    /// **On a row with no `stored_path` it carries the fetch failure itself** —
+    /// the source that refused, the write that failed, or the task that panicked.
+    /// The name says "decode", but the question a reader (and A6) asks of this
+    /// field is "why is this blob unusable", and a fetch that produced no body is
+    /// the extreme case of that. Splitting it into a second field would be a
+    /// schema change for one string that is already in the run's error list.
     pub decode_error: Option<String>,
 }
 

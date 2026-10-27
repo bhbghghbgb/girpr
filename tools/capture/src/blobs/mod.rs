@@ -268,12 +268,18 @@ impl Store {
         }
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok(Ok((i, entry))) => out[i] = Some(entry),
-                Ok(Err(e)) => errors.push(e),
-                // A panicking task. Recorded rather than propagated: this is
-                // bookkeeping around network I/O, and losing the whole index to
-                // one thread would be worse than a hole in it.
-                Err(_) => errors.push("a chunk fetch task panicked".to_string()),
+                Ok((i, Ok(entry))) => out[i] = Some(entry),
+                // **The index and the error are recorded together.** The slot is
+                // known, so the row that says the chunk is absent can also say
+                // why -- and the failure is pushed exactly once.
+                Ok((i, Err(e))) => {
+                    out[i] = Some(self.unfilled(&wants[i], &e));
+                    errors.push(e);
+                }
+                // A panicking task takes its slot number with it, so its hole is
+                // filled below. Pushing a second, slotless error here would count
+                // the same failure twice, which is the bug this function had.
+                Err(_) => {}
             }
             if next < wants.len() {
                 let i = next;
@@ -287,24 +293,17 @@ impl Store {
             }
         }
 
-        // A `None` slot is a fetch that neither succeeded nor reported, which
-        // can only be the panic above. Fill it so the index has no holes and
-        // the count of stored blobs is honest.
-        let missing: Vec<String> = out
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| o.is_none())
-            .map(|(i, _)| wants[i].chunk.id.clone())
-            .collect();
+        // A `None` slot is a fetch that neither succeeded nor reported, which can
+        // only be the panic above. Fill it so the index has no holes, and record
+        // it once, with the chunk id the task could not report.
         for (i, o) in out.iter_mut().enumerate() {
             if o.is_none() {
-                *o = Some(self.unfilled(&wants[i]));
+                let why = "the chunk fetch task panicked while storing it";
+                *o = Some(self.unfilled(&wants[i], why));
+                errors.push(format!("{}: {why}", wants[i].chunk.id));
             }
         }
-        (
-            out.into_iter().flatten().collect(),
-            [errors, missing].concat(),
-        )
+        (out.into_iter().flatten().collect(), errors)
     }
 
     /// The index for a run that stored no blobs at all (`--no-chunk-blobs`).
@@ -323,21 +322,27 @@ impl Store {
     ///
     /// Takes the store by value rather than by reference so the future is
     /// 'static and can run on the runtime's threads.
+    ///
+    /// **The slot number comes back even on failure.** It used to be a bare
+    /// `Result<(usize, entry), String>`, which threw the index away exactly when
+    /// the caller needed it: the caller could no longer tell a slot that failed
+    /// from one that never reported, so it recorded the failure as an error *and*
+    /// as a missing chunk, and the index row could only say "not stored".
     async fn one(
         this: Store,
         slot: usize,
         fetcher: Fetcher,
         want: Want,
-    ) -> Result<(usize, (IndexedBlob, Vec<Set>)), String> {
+    ) -> (usize, Result<(IndexedBlob, Vec<Set>), String>) {
         let self_ = &this;
         let mut last: Option<String> = None;
         // Sources are ordered newest-first, so the new build's CDN is asked
         // before the old one's, which is the one that may have stopped serving.
         for src in &want.sources {
-            let url = self_
-                .sources
-                .url(&src.tag, &want.chunk.id)
-                .map_err(|e| e.to_string())?;
+            let url = match self_.sources.url(&src.tag, &want.chunk.id) {
+                Ok(u) => u,
+                Err(e) => return (slot, Err(e.to_string())),
+            };
             match self_.stream_from(&fetcher, &url, &want, slot).await {
                 Ok((mut props, rel, seq)) => {
                     props.set_stored(rel.clone());
@@ -352,7 +357,7 @@ impl Store {
                         );
                     }
                     // The two fields are moved rather than cloned: this is the last use of `want`.
-                    return Ok((slot, indexed_from(props, &want)));
+                    return (slot, Ok(indexed_from(props, &want)));
                 }
                 Err(e) => {
                     tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e, "chunk fetch failed");
@@ -360,7 +365,10 @@ impl Store {
                 }
             }
         }
-        Err(last.unwrap_or_else(|| format!("{}: no source to fetch from", want.chunk.id)))
+        (
+            slot,
+            Err(last.unwrap_or_else(|| format!("{}: no source to fetch from", want.chunk.id))),
+        )
     }
 
     /// The index entry for a want whose bytes never landed.
@@ -369,16 +377,17 @@ impl Store {
     /// nothing was *asked* for. Here something was asked for and did not come,
     /// and the difference is the whole point of the row.
     ///
-    /// **"not stored", with no claim about fetching.** It used to read "fetched
-    /// but not stored", which is a statement about the *fetch* that three
-    /// different paths cannot support: a source that refused, a `write` that
-    /// failed, and a task that panicked mid-`measure`. The last one is not a
-    /// fetch failure at all. Each of those names itself in the run's error list
-    /// and in `fetch_fetches_failed` on the summary, so the row does not have to
-    /// guess.
-    fn unfilled(&self, want: &Want) -> (IndexedBlob, Vec<Set>) {
+    /// **The row carries the reason it is unusable**, from the fetch itself: a
+    /// source that refused, a `write` that failed, or a task that panicked. The
+    /// message is the one the run's error list carries, so the summary count and
+    /// the row cannot tell different stories. `decode_error` is where it goes
+    /// because that is the field a reader (and `selfcheck`'s A6) already uses to
+    /// ask *why is this blob unusable*; the name says "decode" but the answer is
+    /// "no usable bytes", and a fetch that never produced a body is the extreme
+    /// case of that.
+    fn unfilled(&self, want: &Want, why: &str) -> (IndexedBlob, Vec<Set>) {
         let mut props = BlobProps::unmeasured(&want.chunk);
-        props.decode_error = Some("not stored".to_string());
+        props.decode_error = Some(why.to_string());
         indexed_from(props, want)
     }
 
@@ -1044,25 +1053,75 @@ mod tests {
         assert!(d.contains("5 of 5 stored"), "{d}");
     }
 
-    /// A blob that was never fetched is not silently absent from the index.
+    /// A blob that was never fetched is not silently absent from the index, and
+    /// its row carries **why**.
     #[test]
-    fn an_unfilled_want_still_has_a_row_and_says_it_was_not_stored() {
+    fn an_unfilled_want_still_has_a_row_and_carries_the_fetch_failure() {
         let w = chunks::wants(&[pair()]);
         let root = girpr_tempdir::TempDir::new("gircap-m6", "unfilled_want");
         let store = Store::new(&root, sources());
-        let (entry, roles) = store.unfilled(&w[0]);
+        let why = "old-zero via 7.1.0: HTTP 404 Not Found";
+        let (entry, roles) = store.unfilled(&w[0], why);
         assert_eq!(roles, w[0].sets);
         assert!(entry.props.stored_path.is_none());
-        assert!(
-            entry
+        assert_eq!(
+            entry.props.decode_error.as_deref(),
+            Some(why),
+            "the row must name the fetch failure, not a generic `not stored`"
+        );
+        assert!(!entry.props.is_usable());
+    }
+
+    /// **One failed fetch is one failure.** The slot's index and the error are
+    /// returned together, so the row can carry the reason and the run's failed
+    /// count cannot see the same chunk twice.
+    ///
+    /// Before this, `Store::one` threw the slot away on failure: `fill` pushed
+    /// the error, the `None` slot looked like a task that never reported, and a
+    /// second bare chunk id was pushed for it. One failure, two entries, and a
+    /// row that could only say "not stored".
+    #[tokio::test]
+    async fn a_chunk_the_cdn_will_not_serve_is_one_failure_with_its_reason_in_the_row() {
+        let w = chunks::wants(&[pair()]);
+        let root = girpr_tempdir::TempDir::new("gircap-m6", "one_failed_fetch");
+        // Port 0 is never bound: every attempt is an immediate refusal, with no
+        // network, no timeout and no retry (one attempt is the whole policy).
+        let dead = "http://127.0.0.1:0".to_string();
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([
+                ("7.0.0".to_string(), dead.clone()),
+                ("7.1.0".to_string(), dead),
+            ]),
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+
+        assert_eq!(
+            errors.len(),
+            w.len(),
+            "one entry per failed chunk, not one plus its bare id: {errors:?}"
+        );
+        assert_eq!(entries.len(), w.len(), "every want still has a row");
+        for (entry, want) in entries.iter().zip(&w) {
+            assert_eq!(entry.0.props.chunk_id, want.chunk.id);
+            assert!(entry.0.props.stored_path.is_none());
+            let why = entry
+                .0
                 .props
                 .decode_error
                 .as_deref()
-                .unwrap()
-                .contains("not stored"),
-            "{:?}",
-            entry.props.decode_error
-        );
-        assert!(!entry.props.is_usable());
+                .expect("the row says why it is absent");
+            assert_ne!(why, "not stored", "the generic message tells nobody why");
+            assert!(
+                why.starts_with(&want.chunk.id) && why.contains(" via 7."),
+                "the reason names the chunk and the source it last tried: {why}"
+            );
+        }
     }
 }

@@ -22,13 +22,18 @@ use super::{IndexedBlob, Set, Store};
 pub struct Filled {
     /// One entry per chunk, with the roles it plays.
     pub entries: Vec<(IndexedBlob, Vec<Set>)>,
-    /// Fetches that failed, in completion order.
+    /// Fetches that failed, one entry per chunk, in `wants` order.
     ///
     /// **Not an error.** A chunk the CDN would not serve is recorded as a blob
     /// with its failure and the run continues; A6 is what decides whether that
     /// is acceptable. Turning it into a `Result::Err` here would collapse "one
     /// chunk failed" and "the store could not be built at all" into one outcome,
     /// and the second is the only one that should stop a capture.
+    ///
+    /// **One chunk, one entry.** The error and the index row for a failed fetch
+    /// are produced together, so a chunk cannot be counted here *and* as a slot
+    /// that never reported. `run` prices the summary's failed-fetch count off
+    /// this length, which is why the distinction matters.
     pub errors: Vec<String>,
 }
 

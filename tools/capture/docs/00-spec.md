@@ -484,6 +484,12 @@ real reason and the two decode-dependent `verified` keys false, instead of being
 discarded. A truncated or mis-served response is the evidence this tool exists
 to keep.
 
+**A chunk that never arrived is a row too, and it says why.** A refused source, a
+failed write or a panicked task leaves `stored_path` null and carries the fetch
+failure in `decode_error`; the run counts that chunk **once** among the failed
+fetches, so the summary and the index cannot disagree about how many chunks are
+missing.
+
 Corollaries that must hold and are asserted:
 
 - `patch_fetch ⊆ materialize_new` — every byte the patch needs is already retained
