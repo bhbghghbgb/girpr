@@ -93,13 +93,19 @@ async fn repair_attempt_inner(
         .truncate(false) // keep tmp resume data; explicit to satisfy clippy::suspicious_open_options
         .open(tmp_path)
         .with_context(|| format!("open tmp {}", tmp_path.display()))?;
-    let have = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let have = f
+        .metadata()
+        .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+        .len();
     if have > file.size as u64 {
         tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
     }
     tracing::debug!(
-        tmp_bytes = f.metadata().map(|m| m.len()).unwrap_or(0),
+        tmp_bytes = f
+            .metadata()
+            .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+            .len(),
         expect_size = file.size,
         "tmp resume point"
     );
@@ -119,7 +125,7 @@ async fn repair_attempt_inner(
                     // chunk's offset makes the resume honest — the chunks
                     // before it were each digest-checked when they were
                     // written, and everything from it on is gone.
-                    rollback_tmp(&mut f, c.offset.max(0) as u64)?;
+                    rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64)?;
                     return Err(e);
                 }
             }
@@ -160,8 +166,15 @@ enum ChunkOutcome {
 ///
 /// The truncation never extends: a `_tmp` shorter than the offset is left
 /// alone.
-fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
-    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+fn rollback_tmp(f: &mut File, tmp_path: &std::path::Path, offset: u64) -> Result<()> {
+    // The handle is already open, so a stat failure here is a real I/O error,
+    // not "empty". Treating it as 0 would skip the truncate and let the next
+    // attempt resume the failed chunk's partial bytes by length — a corrupt
+    // `_tmp` that only the final MD5 gate catches, with nothing logged.
+    let len = f
+        .metadata()
+        .with_context(|| format!("stat tmp {} before rollback", tmp_path.display()))?
+        .len();
     if len <= offset {
         return Ok(());
     }
