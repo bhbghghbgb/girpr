@@ -137,10 +137,9 @@ impl RepairPlan {
     /// `--max-download-bytes` refuses on, and the runtime hard stop is what
     /// actually enforces.
     pub fn est_download_bytes(&self, local_map: &LocalChunkMap) -> u64 {
-        self.files
-            .iter()
-            .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
-            .sum()
+        self.files.iter().fold(0u64, |total, f| {
+            total.saturating_add(est_file_download_bytes(f, local_map.get(&f.rel)))
+        })
     }
 }
 
@@ -161,8 +160,12 @@ pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i
             }),
             None => true,
         })
-        .map(|c| c.compressed_size.max(0) as u64)
-        .sum()
+        // Server-controlled sizes can overflow a `u64` (three chunks at
+        // `i64::MAX`); saturate so a corrupt manifest is an over-approximation,
+        // not a panic in the plan phase.
+        .fold(0u64, |total, c| {
+            total.saturating_add(c.compressed_size.max(0) as u64)
+        })
 }
 
 /// The key the plan dedups on.
@@ -533,6 +536,21 @@ mod tests {
         let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1, "case variants are one file");
         assert_eq!(plan.files[0].rel, "Game/Foo.dat", "the first spelling wins");
+    }
+
+    /// Server-controlled chunk sizes can overflow the `u64` sum: three chunks
+    /// at `i64::MAX` do not fit (two do). Saturating keeps the estimate an
+    /// over-approximation instead of panicking the plan phase.
+    #[test]
+    fn an_overflowing_download_estimate_saturates() {
+        let huge = chunk("c", 0, i64::MAX);
+        let file = PlannedFile {
+            rel: "f.bin".into(),
+            size: 64,
+            md5: "m".into(),
+            chunks: vec![huge.clone(), huge.clone(), huge],
+        };
+        assert_eq!(est_file_download_bytes(&file, None), u64::MAX);
     }
 
     /// A leading `.` component is accepted but must not survive into the

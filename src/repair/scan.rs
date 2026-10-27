@@ -73,25 +73,28 @@ impl ScanReport {
     /// the reuse map cannot supply, even the ones that are already correct
     /// where they belong.
     pub fn est_download_bytes(&self, plan: &RepairPlan) -> u64 {
-        plan.files
-            .iter()
-            .map(|f| match self.files.get(&f.rel) {
+        plan.files.iter().fold(0u64, |total, f| {
+            let per_file = match self.files.get(&f.rel) {
                 Some(v) => f
                     .chunks
                     .iter()
                     .enumerate()
                     .filter(|(i, _)| !v.dest_ok[*i] && !v.source_ok[*i])
-                    .map(|(_, c)| c.compressed_size.max(0) as u64)
-                    .sum::<u64>(),
+                    .fold(0u64, |n, (_, c)| {
+                        n.saturating_add(c.compressed_size.max(0) as u64)
+                    }),
                 // A file the scan did not reach: the whole thing is unknown,
                 // so the whole thing is estimated.
-                None => f
-                    .chunks
-                    .iter()
-                    .map(|c| c.compressed_size.max(0) as u64)
-                    .sum(),
-            })
-            .sum()
+                None => f.chunks.iter().fold(0u64, |n, c| {
+                    n.saturating_add(c.compressed_size.max(0) as u64)
+                }),
+            };
+            // Server-controlled sizes: three chunks at `i64::MAX` do not fit
+            // in a `u64`, and a debug-build panic in the plan phase is not an
+            // answer to a corrupt manifest. Saturating keeps the estimate an
+            // over-approximation (which is the safe direction for a ceiling).
+            total.saturating_add(per_file)
+        })
     }
 }
 
@@ -273,6 +276,39 @@ mod tests {
         // And a file the scan never reached is estimated in full.
         let report = ScanReport::default();
         assert_eq!(report.est_download_bytes(&plan), 30);
+    }
+
+    #[test]
+    fn an_overflowing_estimate_saturates_instead_of_panicking() {
+        // Three chunks at `i64::MAX` do not fit in a `u64` (two do). The
+        // manifest is server data, so the estimate must not panic the plan
+        // phase in a debug build; saturating keeps it an over-approximation.
+        let huge = i64::MAX;
+        let plan = RepairPlan {
+            latest: "9.9".into(),
+            files: vec![file(
+                "a.dat",
+                vec![
+                    chunk("c0", "m", huge),
+                    chunk("c1", "m", huge),
+                    chunk("c2", "m", huge),
+                ],
+            )],
+            url_prefix_by_file: HashMap::new(),
+        };
+        let unreached = ScanReport::default();
+        assert_eq!(unreached.est_download_bytes(&plan), u64::MAX);
+
+        let mut all_wrong = ScanReport::default();
+        all_wrong.files.insert(
+            "a.dat".to_string(),
+            Verdict {
+                file_md5: "x".into(),
+                dest_ok: vec![false; 3],
+                source_ok: vec![false; 3],
+            },
+        );
+        assert_eq!(all_wrong.est_download_bytes(&plan), u64::MAX);
     }
 
     #[test]
