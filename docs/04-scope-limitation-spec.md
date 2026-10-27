@@ -243,7 +243,7 @@ does not refuse; the boundary is the point. `0` is a valid ceiling.
 This is the ceiling the `gircap` byte assertion is written against, so its
 accuracy matters.
 
-**The estimate is exactly computable up front.** `manifest::local_reuse_map` has
+**The plan estimate is computable up front.** `manifest::local_reuse_map` has
 already built `local_map: path -> [(uncompressed_md5, size, offset)]` by the time
 the plan exists, and per planned file:
 
@@ -258,17 +258,33 @@ That is character-for-character the capture's `patch_fetch` definition and
 therefore its `totals.download_bytes`. Because capture invariant **A6** asserts
 `len(raw blob) == compressed_size` while `file.rs` counts
 `stats.download_bytes += blob.len()`, the estimate and the runner's counter are
-the same quantity by construction.
+the same quantity by construction. This is the figure without `--scan`, and
+there it is an upper bound: the map describes the local *old* build, so a chunk
+already correct in a partially updated target is counted even though the
+in-place path keeps it.
+
+**`--scan` replaces that formula with the path the run will really take.** Per
+file it resolves the mode at plan time — temp when requested or the target is
+not a regular file, discard (delete first, so every chunk downloads), in place
+otherwise — and models the ordered salvage tier with the writer's own
+`salvage_order` liveness. A chunk whose source the chosen direction overwrites
+is counted even if the scan found the source intact. In place uses the ordered
+tier's (larger) figure, which is also the staged tier's over-approximation,
+because the RAM budget that chooses between the tiers is a runtime decision.
+The scan cannot predict an in-place open that fails and falls back to temp; that
+file fetches its correct chunks too, and only the runtime hard stop bounds it.
 
 **Both mechanisms are needed, and the second is the one that actually enforces.**
 
 - **Refusal (deterministic, pre-flight).** `Σ est_download_bytes over the
   filtered plan > N` → exit `5`, nothing written, no `_tmp` created. Its value is
   that it fails *before* the expensive part.
-- **Hard stop (the enforcement).** The estimate is a **lower bound, not a
-  promise**: `try_reuse_slice` falls back to a download whenever the local slice
-  fails its MD5, so a file estimated at 0 bytes can still download its whole
-  body. Refusing on the estimate alone would therefore not bound anything. A
+- **Hard stop (the enforcement).** The estimate is **not a promise**:
+  `try_reuse_slice` falls back to a download whenever the local slice fails its
+  MD5, so a file estimated at 0 bytes can still download its whole body. Even
+  under `--scan`, an in-place open that falls back to temp, or a source that
+  changes after the scan, downloads more than predicted. Refusing on the
+  estimate alone would therefore not bound anything. A
   live reservation on `Summary` trips at the real ceiling; in-flight and
   remaining files are dropped, their `*_tmp` left in place — S3 resume-by-length
   means an aborted run is not a corrupt run, it is a run that did less — and the
