@@ -165,7 +165,7 @@ Two enforcement points exist and are not interchangeable:
 | shape | when | suits |
 |---|---|---|
 | **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
-| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp`, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
+| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into the install, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
 
 Both produce exit `5`.
 
@@ -288,7 +288,8 @@ the ceiling, because they crossed the wire.
 The only ceiling that *cannot* be a refusal, and the reason it exists:
 **`download_bytes` does not count most of the disk the run touches.** Every
 reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
-downloaded-chunk write goes into `*_tmp`, and none of it appears in
+downloaded-chunk write lands in the install — the target itself on the
+in-place path, `{path}_tmp` on the temp path — and none of it appears in
 `SUMMARY.download_bytes`. A zero-reuse run writes its entire payload to disk
 while reporting a network cost only.
 

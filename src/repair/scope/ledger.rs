@@ -391,7 +391,8 @@ impl Summary {
     /// **This is the only genuinely un-counted cost in the tool.**
     /// `SUMMARY download_bytes` counts the network; this counts the disk. Every
     /// reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
-    /// downloaded-chunk write lands in `*_tmp` and appears in *neither*
+    /// downloaded-chunk write lands in the install — the target itself on the
+    /// in-place path, `{path}_tmp` on the temp path — and appears in *neither*
     /// `download_bytes` nor the plan's estimate, so a zero-reuse run writes its
     /// entire payload to disk while reporting a network cost of almost nothing.
     pub fn reserve_write_bytes(&self, n: u64) -> bool {

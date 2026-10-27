@@ -17,7 +17,7 @@
 //! | shape | when | suits |
 //! |---|---|---|
 //! | **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
-//! | **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp` |
+//! | **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into the install |
 //!
 //! Both produce exit `5`. Both are implemented here as pure predicates over a
 //! finished plan; the impure side (the ledger the runtime stops read) lives in
@@ -52,7 +52,7 @@ pub struct Limits {
     pub files: Option<u64>,
     /// `--max-download-bytes`: estimated chunk downloads for the plan.
     pub download_bytes: Option<u64>,
-    /// `--max-write-bytes`: cumulative bytes written into `*_tmp`.
+    /// `--max-write-bytes`: cumulative bytes written into the install.
     pub write_bytes: Option<u64>,
     /// `--max-verified-download-bytes`: the **settled** download bytes — the
     /// bytes of the files that were actually repaired.

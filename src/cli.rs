@@ -87,7 +87,8 @@ pub struct Args {
     pub max_download_bytes: Option<u64>,
 
     /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`)
-    /// once this many bytes have been written into `*_tmp`. Unlike
+    /// once this many bytes have been written into the install — the target
+    /// itself on the in-place path, `{path}_tmp` on the temp path. Unlike
     /// `download_bytes`, this is the disk cost: every reuse-copy and every
     /// chunk write is counted, so a zero-reuse run is bounded too. Cannot be a
     /// pre-flight refusal — reuse success is decided per chunk at runtime.

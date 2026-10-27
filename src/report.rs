@@ -387,7 +387,7 @@ pub struct SummaryFlags {
     /// differ exactly when the transport misbehaved, and a reader who has only
     /// one of them cannot tell a clean run from a lucky one.
     pub download_bytes_spent: Option<u64>,
-    /// Bytes written into `*_tmp`, when `--max-write-bytes` is active.
+    /// Bytes written into the install, when `--max-write-bytes` is active.
     pub write_bytes: Option<u64>,
     /// The bytes that landed in the install — the **live** write figure.
     ///
