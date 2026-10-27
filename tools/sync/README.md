@@ -386,7 +386,8 @@ from a bad prune; it is a recovery aid, not a correctness mechanism.
 The prune keeps rows for what the run *created* — new directories, copied files,
 directories that replaced a file — as well as what it found, and drops rows for
 what it *destroyed*, including the whole subtree under a directory a copy had to
-clear out of the way. One case reaches neither: with `--case-sensitive` on a
+clear out of the way and the followed descendants of a link it removed. One case
+reaches neither: with `--case-sensitive` on a
 case-insensitive filesystem, a directory the run creates can be the same
 directory a later step removes, and its row then survives until the next run
 prunes it.
@@ -1005,13 +1006,24 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
 - **Filters.** `glob`-crate patterns on relpaths; `--include` narrows, `--exclude`
   wins over include. Excluded paths are treated as nonexistent on **both** sides
   (skipped in walks, filtered from records, pruned from DBs, kept untouched in
-  dst during sync). Glob case-sensitivity follows the case mode.
+  dst during sync). An excluded directory excludes its whole subtree, so
+  `--exclude link` covers `link/x.txt` as well as `link`. An include that matches
+  only a descendant keeps the ancestor directories in the map, which is what
+  keeps a link above an included path visible to the plan. Glob case-sensitivity
+  follows the case mode.
 - **Symlinks** are followed (`--max-depth`, default 10, applies to the whole walk —
   raise for deep trees). Dangling links abort. Link targets outside the root are
-  followed and materialized as plain files/dirs. Deleting an extra directory link
-  removes **the link**, never its target: paths under a `dst` link are not deleted
-  through it, the link is removed when `src` does not have that path, and anything
-  under a link `src` also has is left untouched. Dirs compare by presence only.
+  followed and materialized as plain files/dirs. A `dst` link to a **file** is
+  followed and written through: the copy lands on the target. A `dst` directory
+  link where `src` has a file is unlinked, and the file is written in its place.
+  Deleting an extra directory link removes **the link**, never its target: a path
+  under a `dst` link is never deleted through it, and the link is removed when
+  `src` does not have that path. A link `src` **also** has is not a write-through
+  path: a run that would create, fix, copy or rename through it fails before
+  touching the filesystem, naming the link (remove it, or `--exclude` it). Its
+  extra descendants are left in place, so a default run fails rather than exit 0
+  on a tree it did not converge; `--keep-extra` and `--missing-only` accept that
+  non-convergence. Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
   stderr;
@@ -1057,7 +1069,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 327 test functions, one of them #[ignore]d (326 run by default)
+cargo nextest run -p girsync   # 352 test functions, one of them #[ignore]d (351 run by default)
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's
