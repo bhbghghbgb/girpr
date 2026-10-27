@@ -571,7 +571,7 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
 
 ## 7. Implementation progress
 
-Landed on `all/fix-gaps`, scoped to `tools/sync`. The review text above is
+Landed on `fix-gaps/girsync`, scoped to `tools/sync`. The review text above is
 unchanged; this section records what happened to each finding and what remains
 unverified. The closing line still describes the review itself, not the
 implementation.
@@ -591,7 +591,7 @@ fix files stashed). F-1 panicked reading `real/x` (`NotFound`) for both the
 inside-dst and external-target fixtures; F-2 aborted with
 `create ...\dst\a.bin: Access is denied. (os error 5)`. Both pass with the fixes.
 
-**Final verification.** On Windows 11, on `all/fix-gaps` (source at `cca7218`;
+**Final verification.** On Windows 11, on `fix-gaps/girsync` (source at `cca7218`;
 this section is a later docs-only commit):
 
 - `cargo build -p girsync` — Finished, no warnings.
