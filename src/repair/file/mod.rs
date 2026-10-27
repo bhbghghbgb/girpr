@@ -209,7 +209,10 @@ pub async fn repair_all(
         let sem = sem.clone();
         let ctx = ctx.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire_owned().await.unwrap();
+            let _permit = sem
+                .acquire_owned()
+                .await
+                .expect("the file semaphore is never closed");
             // Each file task gets a `file{seq,total,task,path}` span so its
             // progress can be grouped in logs; `task` is the tokio async-task id
             // (stable across thread hops), and the `picked up by worker` event
@@ -346,9 +349,15 @@ fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
 /// `files_failed == 0`: the run would bump `config.ini` and exit `0` with that
 /// file unrepaired, which is the launcher-desync failure the post-phase
 /// ordering exists to prevent.
+///
+/// The handles are awaited in **completion order**, not spawn order. A panic
+/// has already finished; waiting for all earlier handles first would let the
+/// queued files keep starting under `--fail-fast`, because the abort flag is
+/// only set once this loop observes the panic.
 async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Summary) {
-    for h in handles {
-        if let Err(e) = h.await {
+    let mut pending: futures::stream::FuturesUnordered<_> = handles.into_iter().collect();
+    while let Some(result) = futures::StreamExt::next(&mut pending).await {
+        if let Err(e) = result {
             summary.files_failed.fetch_add(1, Ordering::Relaxed);
             tracing::error!(error = %e, "repair task failed");
             if summary.fail_fast() {
@@ -780,6 +789,37 @@ mod tests {
             "the panicked task must be the failed file"
         );
         assert!(summary.aborted(), "fail-fast must trip on the join error");
+    }
+
+    /// N-7: the join loop must observe a panic as soon as its task finishes.
+    /// Sequential awaiting in spawn order would wait for every earlier (here:
+    /// deliberately slower) handle first, so under `--fail-fast` the queued
+    /// files would keep starting after the run already knew it had failed.
+    ///
+    /// The slower task samples the abort flag when it finishes: it must
+    /// already be set by then. With spawn-order awaiting it is not, because
+    /// the panicked handle comes after it.
+    #[tokio::test]
+    async fn a_panic_is_observed_before_a_slower_earlier_task() {
+        let summary = Arc::new({
+            let mut s = Summary::new();
+            s.set_fail_fast(true);
+            s
+        });
+        let saw_abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slow_summary = Arc::clone(&summary);
+        let slow_saw = Arc::clone(&saw_abort);
+        let slow = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            slow_saw.store(slow_summary.aborted(), Ordering::SeqCst);
+        });
+        let panicking = tokio::spawn(async { panic!("injected file-task panic") });
+        join_file_tasks(vec![slow, panicking], &summary).await;
+        assert!(
+            saw_abort.load(Ordering::SeqCst),
+            "the panic must be observed before the slower task finishes"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
     }
 
     /// F-1: a corrupt chunk range fails the file without panicking or seeking
