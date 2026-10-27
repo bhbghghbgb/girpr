@@ -164,6 +164,40 @@ fn every_argument_error_is_one() {
     }
 }
 
+/// A non-Unicode `--out` is recorded, not fatal.
+///
+/// The `PathBuf`-typed flags are the realistic carriers of an argument that is
+/// not valid Unicode; `std::env::args()` panicked on it *after* clap had already
+/// parsed the same value through `args_os`, which exited `101` and printed no
+/// `SUMMARY`. The contract is the code and the line, whichever way the run ends.
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_output_path_reports_instead_of_panicking() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt as _;
+
+    let mut argv: Vec<OsString> = vec![
+        OsString::from("capture"),
+        OsString::from("--out"),
+        OsString::from_wide(&[0xD800]),
+    ];
+    argv.extend(OFFLINE.iter().map(OsString::from));
+    let out = Command::new(bin())
+        .args(&argv)
+        .output()
+        .expect("the binary spawns with a non-Unicode argument");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "an unreachable base is still exit 2:\n{stdout}"
+    );
+    assert!(
+        stdout.starts_with("SUMMARY "),
+        "the run must still report:\n{stdout:?}"
+    );
+}
+
 #[test]
 fn a_usage_error_prints_a_summary_on_stdout_too() {
     // A failure the *run* discovers — rather than the parser — still prints

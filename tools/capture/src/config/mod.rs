@@ -225,6 +225,9 @@ pub struct CapturePlan {
     /// Sophon base override; `None` = the production base for [`Self::biz`].
     pub sophon_base: Option<String>,
     /// The argv as given, recorded in the artifact so a bundle says how it was made.
+    ///
+    /// Built by [`crate::cli::recorded_argv`] from `args_os`, so a non-Unicode
+    /// path is recorded lossily rather than panicking after a successful parse.
     pub argv: Vec<String>,
 }
 

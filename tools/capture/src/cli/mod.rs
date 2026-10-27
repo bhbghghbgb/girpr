@@ -395,6 +395,26 @@ where
     Cli::try_parse_from(argv)
 }
 
+/// The `argv` a capture records, **lossily** rather than fatally.
+///
+/// `std::env::args()` panics on any argument that is not valid Unicode, and the
+/// realistic carriers are the `PathBuf`-typed flags (`--out`, `--log-file`) plus
+/// `argv[0]` itself. clap already parsed the same argv through `args_os`, so
+/// panicking here would be a crash *after* a successful parse — exiting `101`
+/// and printing no `SUMMARY`, which breaks the one thing every run promises.
+///
+/// A recorded path with a replacement character is a worse record than the real
+/// bytes, but it is a record; the alternative is none at all, and the flag whose
+/// value it was has already been used from the `OsString` clap parsed.
+pub fn recorded_argv<I>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    args.into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+}
+
 /// Exit with `code` on a clap error, having printed clap's own message.
 ///
 /// Only `--help` and `--version` are `0`. Everything else — including a
@@ -430,6 +450,36 @@ mod tests {
     #[test]
     fn the_cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    /// A non-Unicode argument is recorded, not fatal.
+    ///
+    /// Windows is where an unpaired surrogate can reach `argv` (a very old or
+    /// unusual filesystem path). `std::env::args()` panics on it; `args_os`
+    /// plus this helper does not, and a recorded path with U+FFFD is still a
+    /// truthful record of "the caller named a path this process could not spell
+    /// in Unicode".
+    #[cfg(windows)]
+    #[test]
+    fn a_non_unicode_argument_is_recorded_lossily_instead_of_panicking() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let bad = OsString::from_wide(&[0xD800]);
+        let argv = recorded_argv([OsString::from("gircap"), bad.clone()]);
+        assert_eq!(argv.len(), 2);
+        assert_eq!(argv[0], "gircap");
+        assert!(
+            argv[1].contains('\u{FFFD}'),
+            "the surrogate is replaced, not dropped: {:?}",
+            argv[1]
+        );
+        // And it does not panic for a plain ASCII path either, so the helper is
+        // not merely tolerating the one case it was written for.
+        assert_eq!(
+            recorded_argv([OsString::from("--out"), OsString::from(r"C:\a")]),
+            vec!["--out".to_string(), r"C:\a".to_string()]
+        );
     }
 
     fn parse(args: &[&str]) -> Cli {
