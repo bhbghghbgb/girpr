@@ -261,7 +261,9 @@ pub async fn repair_all(
                         // The bytes that did not have to be written: the file's
                         // size minus what was written. The in-place path
                         // leaves the correct chunks alone; the temp path
-                        // rewrites the whole file and keeps nothing.
+                        // rewrites every chunk it does not resume, and a `_tmp`
+                        // prefix left by an earlier run is kept and counts
+                        // here.
                         //
                         // The subtraction is against the file's **settled**
                         // writes, accumulated across its attempts: a chunk an

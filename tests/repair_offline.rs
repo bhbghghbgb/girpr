@@ -385,10 +385,19 @@ async fn partial_tmp_prefix_is_resumed() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
+    ctx.repair_mode_explicit = true;
     let (summary, code) = repair::run(ctx).await.expect("resume run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
+    // The prefix was kept, not rewritten: the temp path resumes by length, so
+    // the first chunk's 64 bytes count as bytes the repair did not have to
+    // touch — the same definition `kept_bytes` uses for the in-place path.
+    assert_eq!(
+        summary.kept_bytes.load(Ordering::Relaxed),
+        64,
+        "the resumed `_tmp` prefix is kept, not rewritten"
+    );
     assert_eq!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         fx2.files[0].data
