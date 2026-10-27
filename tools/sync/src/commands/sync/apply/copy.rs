@@ -66,6 +66,22 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
     Ok(())
 }
 
+/// Whether the test-only `GIRSYNC_TEST_FAIL_COPY` hook names `rel`, i.e. this
+/// copy must fail before it writes anything.
+///
+/// Default **off**: an unset variable matches nothing. A test that needs a
+/// mid-copy failure - to observe what the cache committed before the abort -
+/// names one relative path and gets a deterministic failure in that copy only.
+/// The failure is raised before the dst file is opened, so the fixture asserts
+/// the cache's durability without also having to reason about a truncated file.
+fn test_fail_copy(rel: &str) -> bool {
+    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAIL_REL
+        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_COPY").ok())
+        .as_deref()
+        == Some(rel)
+}
+
 /// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
 ///
 /// Default **off**: an unset variable, or any value other than an unambiguous
@@ -114,6 +130,9 @@ pub(super) fn copy_one(
     algos: &[HashAlg],
 ) -> Result<FileRec> {
     trace!("copy_one start");
+    if test_fail_copy(rel) {
+        bail!("test: injected copy failure for {rel}");
+    }
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
     // dst dir that is in the way of a file copy: remove first.

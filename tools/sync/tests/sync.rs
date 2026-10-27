@@ -694,3 +694,138 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
          so the copy phase still hoards its rows until every file is on disk"
     );
 }
+
+/// **`--max-depth` silently skips deeper files, and `sync` calls that success.**
+///
+/// The walk is unit-tested at a small cap; this is the end-to-end half, and the
+/// half that matters: a real game tree deeper than the default 10 gets a green
+/// run and an incomplete mirror, with nothing on stdout saying a file was
+/// skipped. The shallow file is asserted present in the same fixture so "the
+/// deep file is absent" cannot pass because the run did nothing at all.
+#[test]
+fn run_sync_max_depth_skips_deeper_files() {
+    let t = temp_root("maxdepth");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "top.txt", b"top");
+    // Depth 11 (ten directories, then the file); the default cap is 10.
+    let deep = "d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/deep.txt";
+    wfile(&src, deep, b"deep");
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0,
+        "a file beyond the cap is not a run failure"
+    );
+    assert_eq!(rfile(&dst, "top.txt"), b"top", "the shallow file is copied");
+    assert!(
+        !dst.join(deep).exists(),
+        "the depth-11 file is beyond the default cap and is not mirrored"
+    );
+}
+
+/// **A failed copy discards only the cache tail since the last commit.**
+///
+/// `copy_files` writes each verified copy's row as it completes, and
+/// `CommitLimits` commits periodically. The final partial batch is committed
+/// only after every copy succeeded, so an abort returns before that commit and
+/// the in-flight batch is dropped with its transaction.
+///
+/// The fixture is exactly that shape: four copies, one injected failure, and an
+/// op threshold of two. Three copies reach `put`; the threshold commits after
+/// the second, the third stays in the dropped batch. The counts - two rows, not
+/// zero and not three - are the assertion: zero means the phase hoarded its rows
+/// until the end, three means every `put` was durable and there was no tail.
+///
+/// Which two rows survive depends on completion order, so the case asserts the
+/// count and the membership, never the names. The rerun then converges, which is
+/// the property a user actually cares about ("No resume" in the README).
+#[test]
+fn a_failed_copy_discards_only_the_uncommitted_cache_tail() {
+    let t = temp_root("copy_fail_tail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    for i in 0..4 {
+        wfile(
+            &src,
+            &format!("f{i}.bin"),
+            format!("content {i}").as_bytes(),
+        );
+    }
+
+    // A file-cache run: the rows have to outlive the process that wrote them.
+    let run = |fail: Option<&str>| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
+        cmd.arg("sync")
+            .arg("--src")
+            .arg(&src)
+            .arg("--dst")
+            .arg(&dst)
+            .arg("--output")
+            .arg("json")
+            .env("GIRSYNC_TEST_COMMIT_OPS", "2")
+            // Keep the time trigger out of it: the op count is the only commit
+            // this fixture may observe during the copy phase.
+            .env("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000");
+        if let Some(rel) = fail {
+            cmd.env("GIRSYNC_TEST_FAIL_COPY", rel);
+        }
+        cmd.output().expect("spawn girsync")
+    };
+
+    let out = run(Some("f2.bin"));
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an injected copy failure is a run failure: stderr {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The three copies that did not fail landed on disk.
+    let copied = ["f0.bin", "f1.bin", "f3.bin"];
+    for rel in copied {
+        assert!(
+            dst.join(rel).is_file(),
+            "{rel} should have been copied before the abort"
+        );
+    }
+    assert!(
+        !dst.join("f2.bin").exists(),
+        "the failing copy wrote nothing"
+    );
+
+    let rows = recs(&dst);
+    let cached: Vec<&str> = copied
+        .iter()
+        .copied()
+        .filter(|rel| rows.contains_key(*rel))
+        .collect();
+    assert_eq!(
+        cached.len(),
+        2,
+        "two rows committed, the third discarded with the batch; rows are {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !rows.contains_key("f2.bin"),
+        "a cache row must never claim content the dst does not have"
+    );
+
+    // And the rerun converges: no resume, but no missing copy either.
+    let out = run(None);
+    assert!(
+        out.status.success(),
+        "the rerun failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows = recs(&dst);
+    for i in 0..4 {
+        let rel = format!("f{i}.bin");
+        assert!(rows.contains_key(&rel), "rerun left no row for {rel}");
+    }
+    assert_eq!(
+        cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0,
+        "the rerun produces a clean mirror"
+    );
+}

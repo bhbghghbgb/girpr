@@ -732,7 +732,10 @@ Mirrors `src` → `dst`:
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
-   than one rw operation permitted those lines come out in completion order. No resume.
+   than one rw operation permitted those lines come out in completion order.
+   **No resume**: cache rows written since the last periodic commit are discarded
+   when a run aborts. Copies that completed stay on disk, but a rerun re-stats
+   (and may re-hash) that tail before converging. It never resumes mid-file.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
