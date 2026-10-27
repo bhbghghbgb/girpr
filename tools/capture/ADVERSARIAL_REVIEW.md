@@ -581,7 +581,7 @@ resurrecting the old text.
 
 ## Implementation progress
 
-Landed on `all/fix-gaps` in the order above. Every finding is addressed; the
+Landed on `fix-gaps/gircap` in the order above. Every finding is addressed; the
 notes below name the choices where the review offered more than one, so a
 maintainer can overrule one without re-reading the diff.
 
