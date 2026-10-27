@@ -271,7 +271,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // The temp path writes every chunk of a file it repairs, so its
         // figure is the reuse map's one.
         (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes_by_file(&local_map),
-        (Some(s), _) => s.est_download_bytes_by_file(&plan),
+        (Some(s), _) => s.est_download_bytes_by_file(&plan, &game_dir, ctx.repair_mode, &local_map),
         (None, _) => plan.est_download_bytes_by_file(&local_map),
     };
     let est_download_bytes = est_download_by_file

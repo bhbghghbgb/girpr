@@ -874,6 +874,76 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
 }
 
 #[tokio::test]
+async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
+    // N-17: the scan finds both moved sources intact, but the ordered tier's
+    // write order keeps only one direction's worth. The estimate must model
+    // the writer's order, not "the source verified", or the PLAN line is below
+    // the bytes the same run downloads.
+    let fx = build_moved_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scan_ordered");
+    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=9.9.8-test\n",
+    )
+    .unwrap();
+    write_game_file(&dir, &old_rel, &old_bytes);
+    let game = dir.to_string_lossy().into_owned();
+    let base: Vec<&str> = vec![
+        "--game-path",
+        &game,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+        "--max-ram-bytes",
+        "0",
+    ];
+
+    // 1. the plan, scanned: the ordered tier is selected by the RAM budget.
+    let mut args = base.clone();
+    args.extend_from_slice(&["--scan", "--print-plan"]);
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let estimate = field(
+        stdout
+            .lines()
+            .find(|l| l.starts_with("PLAN "))
+            .expect("the PLAN line"),
+        "est_download_bytes",
+    );
+
+    // 2. the repair: the same budget, so the same tier and order.
+    let mut args = base.clone();
+    args.push("--scan");
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let downloaded = field(
+        stdout
+            .lines()
+            .find(|l| l.starts_with("SUMMARY "))
+            .expect("the SUMMARY line"),
+        "download_bytes",
+    );
+    assert_eq!(
+        estimate, downloaded,
+        "the scanned estimate is the ordered tier's real cost: {estimate} vs {downloaded}"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_p".to_string(), "chunk_t".to_string()],
+        "the source the losing direction needed is downloaded"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn the_run_counts_the_paths_it_used() {
     // The disk claim of the run, in two numbers: how many files were written
     // where they lie, and how many went through a `_tmp`.

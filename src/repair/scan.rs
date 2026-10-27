@@ -26,9 +26,12 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
+use super::file::Mode;
+use crate::config::RepairMode;
 use crate::repair::manifest::LocalChunkMap;
 use crate::repair::phases::plan::{PlannedFile, RepairPlan};
 use crate::repair::reuse;
+use crate::sophon::SophonChunk;
 use crate::util;
 
 /// What one file's scan found.
@@ -61,51 +64,137 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// The bytes the repair will really download.
+    /// The bytes the repair will really download, per file, in `plan.files`
+    /// order.
     ///
     /// A chunk is downloaded when it is **wrong where it belongs** and has
-    /// **no intact source** to copy from. Everything else is either already
-    /// correct — the in-place path leaves it alone — or copied from inside
-    /// the file.
+    /// **no source the chosen write order keeps alive** to copy from.
+    /// "Alive" is the writer's own rule ([`reuse::salvage_order`]), not "the
+    /// source bytes verified" alone: the ordered tier can only reuse one
+    /// direction's worth, and a source the direction overwrites is downloaded
+    /// even though the scan found it intact. The estimate therefore takes the
+    /// ordered tier's (larger) figure, which is also the staged tier's
+    /// over-approximation — the RAM budget that picks between them is a
+    /// runtime decision this phase cannot make.
     ///
-    /// This is the figure the temp path's estimate over-counts: the temp path
-    /// writes every chunk of a file it repairs, so it downloads every chunk
-    /// the reuse map cannot supply, even the ones that are already correct
-    /// where they belong.
-    pub fn est_download_bytes(&self, plan: &RepairPlan) -> u64 {
-        self.est_download_bytes_by_file(plan)
-            .iter()
-            .fold(0u64, |total, n| total.saturating_add(*n))
-    }
-
-    /// The same estimate, per file, in `plan.files` order.
+    /// The write path is part of the estimate, not assumed:
+    ///
+    /// - **temp** (requested, or the target is not a regular file) writes every
+    ///   chunk of the file, so it downloads every chunk whose reuse source is
+    ///   not intact — including chunks already correct where they belong.
+    /// - **discard** deletes the target first, so every chunk is downloaded.
+    /// - **in place** leaves the correct chunks alone and reuses only what the
+    ///   chosen direction keeps.
+    ///
+    /// The one thing this cannot see is an in-place open that fails at runtime
+    /// and falls back to temp (`file/mod.rs`); that file then downloads its
+    /// correct chunks too. It is bounded by the runtime `--max-download-bytes`
+    /// hard stop, which is what the preflight estimate sits beside.
     ///
     /// The `PLAN` total and the `--plan-out` document are fed from this one
     /// vector, so the document cannot disagree with the line.
-    pub fn est_download_bytes_by_file(&self, plan: &RepairPlan) -> Vec<u64> {
+    pub fn est_download_bytes_by_file(
+        &self,
+        plan: &RepairPlan,
+        game_dir: &Path,
+        requested: RepairMode,
+        local_map: &LocalChunkMap,
+    ) -> Vec<u64> {
         plan.files
             .iter()
-            .map(|f| match self.files.get(&f.rel) {
-                Some(v) => f
-                    .chunks
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| !v.dest_ok[*i] && !v.source_ok[*i])
-                    .fold(0u64, |n, (_, c)| {
-                        n.saturating_add(c.compressed_size.max(0) as u64)
-                    }),
-                // A file the scan did not reach: the whole thing is unknown,
-                // so the whole thing is estimated.
-                None => f.chunks.iter().fold(0u64, |n, c| {
-                    // Server-controlled sizes: three chunks at `i64::MAX` do
-                    // not fit in a `u64`, and a debug-build panic in the plan
-                    // phase is not an answer to a corrupt manifest. Saturating
-                    // keeps the estimate an over-approximation (which is the
-                    // safe direction for a ceiling).
-                    n.saturating_add(c.compressed_size.max(0) as u64)
-                }),
+            .map(|f| {
+                let entries = local_map.get(&f.rel).map(|v| v.as_slice()).unwrap_or(&[]);
+                let sources = reuse::sources_for(&f.chunks, entries);
+                let resolved = match util::contained_join(game_dir, &f.rel) {
+                    Ok(path) => super::file::resolve_mode(requested, &path),
+                    // Defence in depth, matching the scan itself: a path that
+                    // escapes is not readable, so nothing is reusable.
+                    Err(_) => return all_chunks_download_bytes(&f.chunks),
+                };
+                est_file_download_bytes(
+                    &f.chunks,
+                    self.files.get(&f.rel),
+                    &sources,
+                    requested,
+                    resolved,
+                )
             })
             .collect()
+    }
+}
+
+/// `Σ compressed_size` over every chunk: the temp-after-discard and
+/// unreachable-file figure. Saturated, because the sizes are server data.
+fn all_chunks_download_bytes(chunks: &[SophonChunk]) -> u64 {
+    chunks.iter().fold(0u64, |n, c| {
+        n.saturating_add(c.compressed_size.max(0) as u64)
+    })
+}
+
+/// One file's download figure, for the write path it will really take.
+///
+/// See [`ScanReport::est_download_bytes_by_file`] for the rules. `sources[i]`
+/// is where chunk `i`'s bytes live, from `reuse::sources_for`; it is only
+/// consulted when the scan found those bytes intact.
+fn est_file_download_bytes(
+    chunks: &[SophonChunk],
+    verdict: Option<&Verdict>,
+    sources: &[Option<u64>],
+    requested: RepairMode,
+    resolved: Mode,
+) -> u64 {
+    // `discard` deletes the target before writing, so no source survives and
+    // every chunk is fetched.
+    if requested == RepairMode::Discard {
+        return all_chunks_download_bytes(chunks);
+    }
+    // A file the scan did not reach: the whole thing is unknown, so the whole
+    // thing is estimated.
+    let Some(v) = verdict else {
+        return all_chunks_download_bytes(chunks);
+    };
+    match resolved {
+        // The temp path writes every chunk; only the reuse sources save a
+        // download, and `source_ok` is exactly the scan's verdict on them.
+        Mode::Temp => chunks
+            .iter()
+            .zip(v.source_ok.iter())
+            .filter(|(_, ok)| !**ok)
+            .fold(0u64, |n, (c, _)| {
+                n.saturating_add(c.compressed_size.max(0) as u64)
+            }),
+        Mode::Inplace => {
+            let bad: Vec<&SophonChunk> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !v.dest_ok[*i])
+                .map(|(_, c)| c)
+                .collect();
+            // The writer's own inputs: only sources the scan found intact,
+            // and the same "does this source survive the direction" rule.
+            // `usable_len = u64::MAX` is sound because `source_ok` already
+            // proved the source range was read from inside the file.
+            let order_chunks: Vec<SophonChunk> = bad.iter().map(|c| (*c).clone()).collect();
+            let srcs: Vec<Option<u64>> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !v.dest_ok[*i])
+                .map(|(i, _)| {
+                    if v.source_ok[i] {
+                        sources.get(i).copied().flatten()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let order = reuse::salvage_order(&order_chunks, &srcs, u64::MAX);
+            bad.iter()
+                .enumerate()
+                .filter(|(k, _)| !order.live[*k])
+                .fold(0u64, |n, (_, c)| {
+                    n.saturating_add(c.compressed_size.max(0) as u64)
+                })
+        }
     }
 }
 
@@ -241,10 +330,14 @@ mod tests {
     use crate::sophon::SophonChunk;
 
     fn chunk(id: &str, md5: &str, size: i64) -> SophonChunk {
+        chunk_at(id, md5, 0, size)
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
         SophonChunk {
             id: id.into(),
             uncompressed_md5: md5.into(),
-            offset: 0,
+            offset,
             compressed_size: size,
             uncompressed_size: size,
             unknown: 0,
@@ -252,47 +345,121 @@ mod tests {
         }
     }
 
-    fn file(rel: &str, chunks: Vec<SophonChunk>) -> PlannedFile {
-        PlannedFile {
-            rel: rel.into(),
-            size: 128,
-            md5: "m".into(),
-            chunks,
-        }
-    }
-
     /// The estimate is the figure the repair will really spend: a chunk that
-    /// is wrong **and** has no intact source.
+    /// is wrong and whose source the write order does not keep.
     #[test]
     fn the_exact_estimate_counts_the_chunks_that_must_be_downloaded() {
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: vec![file(
-                "a.dat",
-                vec![chunk("c0", "m0", 10), chunk("c1", "m1", 20)],
-            )],
-            url_prefix_by_file: HashMap::new(),
+        let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
+        // c0 is wrong but has an intact source the ascending order keeps; c1
+        // is wrong and has none.
+        let verdict = Verdict {
+            file_md5: "x".into(),
+            dest_ok: vec![false, false],
+            source_ok: vec![true, false],
         };
-        let mut report = ScanReport::default();
-        // c0 is wrong but has an intact source; c1 is wrong and has none.
-        report.files.insert(
-            "a.dat".to_string(),
-            Verdict {
-                file_md5: "x".into(),
-                dest_ok: vec![false, false],
-                source_ok: vec![true, false],
-            },
-        );
-        assert_eq!(report.est_download_bytes(&plan), 20, "only c1 is fetched");
+        let sources = vec![Some(20u64), None];
         assert_eq!(
-            report.est_download_bytes_by_file(&plan),
-            vec![20],
-            "the document's per-file split comes from the same derivation"
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            20,
+            "only c1 is fetched"
         );
-        // And a file the scan never reached is estimated in full.
-        let report = ScanReport::default();
-        assert_eq!(report.est_download_bytes(&plan), 30);
-        assert_eq!(report.est_download_bytes_by_file(&plan), vec![30]);
+        // A file the scan never reached is estimated in full.
+        assert_eq!(
+            est_file_download_bytes(&chunks, None, &sources, RepairMode::Auto, Mode::Inplace),
+            30
+        );
+    }
+
+    /// N-17: the scan's `source_ok` alone is not the writer's decision. Two
+    /// damaged chunks whose intact sources point at each other (a swap): the
+    /// ordered tier keeps one direction's worth, so one chunk is downloaded
+    /// even though the scan found both sources intact.
+    #[test]
+    fn the_ordered_tier_can_download_a_chunk_whose_source_the_scan_found_intact() {
+        let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
+        let verdict = Verdict {
+            file_md5: "x".into(),
+            dest_ok: vec![false, false],
+            source_ok: vec![true, true],
+        };
+        // Each chunk's bytes live where the other lands.
+        let sources = vec![Some(20u64), Some(0)];
+        // In place (ordered): one direction survives, one chunk downloads.
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            20,
+            "the direction that loses a source must be estimated as a download"
+        );
+        // The temp path can still reuse both: it copies each chunk before the
+        // target is replaced, so no order issue exists there.
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Temp
+            ),
+            0
+        );
+    }
+
+    /// The temp path writes every chunk, so a chunk that is already correct
+    /// where it belongs still costs a download when its source is not intact.
+    #[test]
+    fn the_temp_estimate_counts_the_correct_chunks_the_in_place_path_keeps() {
+        let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
+        let verdict = Verdict {
+            file_md5: "x".into(),
+            dest_ok: vec![true, false],
+            source_ok: vec![false, false],
+        };
+        let sources = vec![None, None];
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            20,
+            "c0 is correct where it belongs; the in-place path keeps it"
+        );
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Temp
+            ),
+            30,
+            "the temp path rewrites c0 and has no source for it"
+        );
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Discard,
+                Mode::Inplace
+            ),
+            30,
+            "discard deletes the target, so every chunk downloads"
+        );
     }
 
     #[test]
@@ -301,32 +468,31 @@ mod tests {
         // manifest is server data, so the estimate must not panic the plan
         // phase in a debug build; saturating keeps it an over-approximation.
         let huge = i64::MAX;
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: vec![file(
-                "a.dat",
-                vec![
-                    chunk("c0", "m", huge),
-                    chunk("c1", "m", huge),
-                    chunk("c2", "m", huge),
-                ],
-            )],
-            url_prefix_by_file: HashMap::new(),
-        };
-        let unreached = ScanReport::default();
-        assert_eq!(unreached.est_download_bytes(&plan), u64::MAX);
-        assert_eq!(unreached.est_download_bytes_by_file(&plan), vec![u64::MAX]);
-
-        let mut all_wrong = ScanReport::default();
-        all_wrong.files.insert(
-            "a.dat".to_string(),
-            Verdict {
-                file_md5: "x".into(),
-                dest_ok: vec![false; 3],
-                source_ok: vec![false; 3],
-            },
+        let chunks = vec![
+            chunk("c0", "m", huge),
+            chunk("c1", "m", huge),
+            chunk("c2", "m", huge),
+        ];
+        assert_eq!(
+            est_file_download_bytes(&chunks, None, &[], RepairMode::Auto, Mode::Inplace),
+            u64::MAX
         );
-        assert_eq!(all_wrong.est_download_bytes(&plan), u64::MAX);
+
+        let all_wrong = Verdict {
+            file_md5: "x".into(),
+            dest_ok: vec![false; 3],
+            source_ok: vec![false; 3],
+        };
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&all_wrong),
+                &[None, None, None],
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            u64::MAX
+        );
     }
 
     #[test]
