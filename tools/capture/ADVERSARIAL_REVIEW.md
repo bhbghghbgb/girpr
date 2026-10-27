@@ -576,3 +576,73 @@ resurrecting the old text.
 8. **F8** — replace `args()` with `args_os` + lossy recording. Low risk.
 9. **F11** — choose cleanup or a precise comment, and add the corresponding
    test. Lowest priority because the leak is bounded.
+
+---
+
+## Implementation progress
+
+Landed on `all/fix-gaps` in the order above. Every finding is addressed; the
+notes below name the choices where the review offered more than one, so a
+maintainer can overrule one without re-reading the diff.
+
+| Finding | Status | Commit | What landed |
+|---|---|---|---|
+| F1 | fixed | `39304be` | Phase 0 charges the caller's `budget` in place (the separate `spent` ledger is gone) and passes it to phase 2, so forced admissions share one cumulative limit. Test: two 60 B forced paths under a 100 B cap admit exactly one. |
+| F2 | fixed | `39304be` | A refused forced path is recorded in `rejected` and the loop `continue`s instead of `break`ing; later forced paths are still considered. Duplicate refused ids are deduped. |
+| F3 | fixed | `83eac6d` | A forced path whose candidate answers no matrix class is recorded in the new `Selection::forced_unscored` and summarised as `forced_files_unscored`; `decide` warns. Measured-fixture and matrix integration assertions added. Field choice flagged below. |
+| F4 | fixed | `f31850b` | `Store::one` returns the slot with the error, so `fill` records the row and the failure together: one `fetches_failed` entry per failed chunk, no hole, and the real reason in `decode_error`. Dead-port test asserts the count and the reason. |
+| F5 | fixed | `71a1321` | Error bodies are drained through a counting `drain_error_body` with the declared-length precheck and a running-total stop. The status is always preserved (never `Transport`), partial bytes are recorded, and a 404 is still never retried. Three HTTP tests. |
+| F6 | fixed | `efc5322` | Tag validation refuses `\`, `:`, path prefixes, and backslash-separated traversal before interpolation. |
+| F7 | fixed | `801d91d` | `blobs::plan::plan` takes `no_chunk_blobs` and skips `check_byte_ceiling` on a metadata-only run; the plan ceiling is documented as a guard (`projected <= bytes_admitted <= cap`), not a second budget. |
+| F8 | fixed | `df366ee` | `recorded_argv` builds the recorded argv from `args_os` lossily; `main` uses it. Unit test for an unpaired surrogate and an end-to-end test that a non-Unicode `--out` still exits with its normal code and prints `SUMMARY`. |
+| F9 | fixed | `39304be` | Repeated `--files` paths are a usage error in `validate_paths`, so no duplicate ids or rows and no overwritten patchmap. |
+| F10 | fixed | `4dd1c05` | Both help strings corrected. A CLI-contract test pins them; it compares whitespace-normalised output because clap strips the trailing period and wraps the line. |
+| F11 | fixed | `882a53b` | The temp file is removed best-effort on every error between creating and renaming it, after the handle is dropped (Windows). Removal failure is logged, never substituted for the fetch error. Test: the dead-port fetch leaves `chunks/blobs/` empty. |
+| F12 | fixed | `4dd1c05` | The closeout test compares the whole `SKIPPED_WITHOUT_CHUNK_BLOBS` constant as the declared subset instead of eight contained ids. |
+
+### Choices a maintainer may want to revisit
+
+- **F3 summary field.** `forced_unscored` / `forced_files_unscored` is a new
+  field rather than an overload of `forced_skipped`. The latter already means
+  "forced path refused before selection" (budget, missing, duplicate), and the
+  empty-class case is "selected but classless"; merging them would make the
+  summary key unable to distinguish the two.
+- **F4 reason field.** The fetch reason goes in `decode_error`, the field A6
+  already reads to ask why a blob is unusable. A dedicated `fetch_error` would
+  describe the case more precisely but needs an artifact-schema change; that
+  remains open.
+- **F7 semantics.** The behaviour now matches the help and the spec: a
+  metadata-only run does not enforce a wire-byte ceiling it pays nothing
+  towards. If the ceiling was meant as an input-independent policy check, the
+  skip should be reverted and the help changed instead.
+- **F11 cleanup vs comment.** Cleanup was chosen, so the old comment is gone
+  rather than corrected. Orphans left by older binaries are still not swept;
+  a store-creation sweep with an age guard remains a possible follow-up.
+
+### Verification
+
+Run at `882a53b` plus this section:
+
+| Command | Result |
+|---|---|
+| `cargo build -p gircap` | finished, no warnings |
+| `cargo test -p gircap` | 637 passed, 0 failed (504 lib + 133 integration) |
+| `cargo clippy -p gircap --all-targets` | finished, no warnings |
+| `cargo fmt -p gircap --check` | clean |
+
+### Still unverified
+
+- F6: whether a live `getBuild`/`getGameBranches` would echo a tag containing
+  `\`, `:`, or `..`. The local sink and the rejection are tested; the network
+  precondition is not.
+- F5: real production error-body sizes, so the practical effect of the cap is
+  unknown; the code path and the 404/truncation tests are real.
+- F11: how often a failed chunk moves to a different slot on the next run. The
+  leak is removed per run; the historical accumulation rate is not measured.
+- F8: which non-`PathBuf` argument types clap accepts non-Unicode values for.
+  Only `--out` is exercised end to end; the helper itself is exercised
+  directly.
+- F1: behaviour on a real corpus where `blobs::plan`'s projected check might
+  also fire. The selection-level test is the guarantee; the plan number is a
+  separate, documented guard.
+
