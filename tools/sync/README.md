@@ -733,9 +733,11 @@ Mirrors `src` → `dst`:
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
    than one rw operation permitted those lines come out in completion order.
-   **No resume**: cache rows written since the last periodic commit are discarded
-   when a run aborts. Copies that completed stay on disk, but a rerun re-stats
-   (and may re-hash) that tail before converging. It never resumes mid-file.
+   **No resume**, in two senses: a failed mtime restore aborts the run although the
+   bytes are already correct (a rerun recopies that file), and cache rows written
+   since the last periodic commit are discarded when a run aborts (copies that
+   completed stay on disk, but a rerun re-stats, and may re-hash, that tail before
+   converging). Neither ever resumes mid-file.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -1006,7 +1008,10 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   dst during sync). Glob case-sensitivity follows the case mode.
 - **Symlinks** are followed (`--max-depth`, default 10, applies to the whole walk —
   raise for deep trees). Dangling links abort. Link targets outside the root are
-  followed and materialized as plain files/dirs. Dirs compare by presence only.
+  followed and materialized as plain files/dirs. Deleting an extra directory link
+  removes **the link**, never its target: paths under a `dst` link are not deleted
+  through it, the link is removed when `src` does not have that path, and anything
+  under a link `src` also has is left untouched. Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
   stderr;

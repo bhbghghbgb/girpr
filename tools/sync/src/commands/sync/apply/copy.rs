@@ -176,6 +176,14 @@ pub(super) fn copy_one(
     }
     drop(fout);
     // preserve mtime
+    //
+    // **This is load-bearing, and its failure aborts the copy.** The bytes are
+    // already durable at this point, so a `set_modified` failure leaves a correct
+    // file with the wrong stamp: the run exits 3, and a rerun sees the mtime
+    // difference and copies the file again. Fail-fast rather than a silent
+    // mismatch, but "aborts an otherwise-good copy" is the documented shape
+    // (README, `copy` step) - a test needs a platform-specific read-only/ACL
+    // setup, so none injects this failure.
     if let Some(st) = smtime_sys {
         let f = std::fs::OpenOptions::new().write(true).open(&d)?;
         f.set_modified(st)
