@@ -67,7 +67,7 @@ use crate::rw::{RwRuntime, RwSide};
 use crate::util::{elapsed_s, is_record_path};
 
 use apply::Applier;
-use plan::build_plan;
+use plan::{build_plan, ensure_link_safe};
 use rename::rename_to_src_casing;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
@@ -315,6 +315,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     }
 
     let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
+    // Before the dry-run branch: a plan that cannot be applied is not a plan a
+    // dry run should print as if it could be. The apply passes re-check the
+    // paths they touch; this is the one place that fails before *any* of them.
+    ensure_link_safe(&plan, &dst, missing_only, keep_extra)?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),

@@ -133,6 +133,19 @@ pub(super) fn copy_one(
     if test_fail_copy(rel) {
         bail!("test: injected copy failure for {rel}");
     }
+    // A link *above* the destination is not ours to write through: the OS would
+    // resolve it as an intermediate component, so `File::create` would truncate
+    // a file in the target - possibly outside `dst`. The final component is
+    // handled below, because a link *at* the path is the type conflict this copy
+    // resolves.
+    if let Some(link) = crate::link::link_ancestor_above(dst_root, rel)
+        .with_context(|| format!("check link ancestors for {rel}"))?
+    {
+        bail!(
+            "refusing to copy `{rel}` through dst link `{link}`: \
+             remove the link, or exclude it with --exclude"
+        );
+    }
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
     // dst dir that is in the way of a file copy: remove first.
@@ -143,7 +156,7 @@ pub(super) fn copy_one(
     // link, so it is true for a Unix directory symlink and for a Windows
     // junction, and `is_link` covers both plus a directory symlink.
     if d.is_dir() {
-        if crate::link::is_link(&d) {
+        if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
             crate::link::remove(&d).with_context(|| format!("unlink {}", d.display()))?;
         } else {
             std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;

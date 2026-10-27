@@ -4,7 +4,7 @@
 //! must be renamed on dst *before* the diff runs, so the two maps line up on
 //! exact keys. After this pass the diff can be taken case-sensitively.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -80,6 +80,18 @@ pub(super) fn rename_to_src_casing(
         ));
     }
     info!(pending = renames.len(), "rename pass");
+    // Validate the whole pass before the first filesystem call: a rename under a
+    // dst link resolves the link as an intermediate component and moves a file
+    // in its target. A partial pass would leave dst half-renamed, so this is a
+    // pre-loop check rather than a guard inside the loop.
+    for (_, _, drel, srel) in &renames {
+        if let Some(link) = crate::link::link_ancestor_above(dst_root, drel)? {
+            bail!(
+                "refusing to rename `{drel}` -> `{srel}` through dst link `{link}`: \
+                 remove the link, or exclude it with --exclude"
+            );
+        }
+    }
     let mut renamed = 0usize;
     for (from, to, drel, srel) in renames {
         // One record, one log event. `Report::emit` does both, so there is no

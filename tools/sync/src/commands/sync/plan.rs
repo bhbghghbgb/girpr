@@ -5,6 +5,9 @@
 //! plan a real run would execute.
 
 use std::collections::HashMap;
+use std::path::Path;
+
+use anyhow::{Result, bail};
 
 use super::apply::Applied;
 use crate::diff::Diff;
@@ -82,6 +85,14 @@ pub(super) struct Plan {
     /// than deriving one: two derivations of the same set is the drift this
     /// whole plan exists to avoid.
     pub rmdir: Vec<String>,
+    /// Extra paths under a dst link that `src` also has, as `(link, example)`.
+    ///
+    /// Such a link is deliberately left in place (unlinking it would remove a
+    /// path `src` mirrors into), but its extra descendants cannot be removed
+    /// without reaching through it. A default run therefore refuses to call
+    /// itself a mirror; `--keep-extra` and `--missing-only` explicitly accept
+    /// the non-convergence. See [`ensure_link_safe`].
+    pub shared_link_extras: Vec<(String, String)>,
 }
 
 impl Plan {
@@ -173,6 +184,7 @@ pub(super) fn build_plan(
     copy.dedup_by(|a, b| a.rel == b.rel);
 
     let mut delete_files: Vec<String> = Vec::new();
+    let mut shared_link_extras: Vec<(String, String)> = Vec::new();
     if !keep_extra {
         for r in &diff.extra {
             // A path *under* a dst link resolves through it: `remove_file` on
@@ -185,9 +197,20 @@ pub(super) fn build_plan(
             // exists, and removing dst's link would delete a directory src is
             // mirroring into. Its extra descendants are the target's files, and
             // deleting them is exactly the reach-through this guard exists to
-            // stop - so they stay, and stay reported by a later `compare`.
+            // stop - so they stay. A default run refuses to call that a mirror
+            // (`shared_link_extras`); `--keep-extra`/`--missing-only` accept it.
             if let Some(link) = link_ancestor(r, dm) {
-                if !sm.contains_key(link) {
+                // A type conflict *at* the link replaces it (F-2), which takes
+                // the followed subtree with it: those extras are not left
+                // behind, so this is not the non-convergence case below.
+                let replaced = diff.type_conflict.iter().any(|t| t.as_str() == link);
+                if sm.contains_key(link) && !replaced {
+                    // Shared: removing the link would delete a directory `src`
+                    // is mirroring into, and removing the descendant would reach
+                    // through it. Record the non-convergence for
+                    // `ensure_link_safe`; the apply passes never see this path.
+                    shared_link_extras.push((link.to_string(), r.clone()));
+                } else if !sm.contains_key(link) {
                     delete_files.push(link.to_string());
                 }
                 continue;
@@ -231,9 +254,10 @@ pub(super) fn build_plan(
     // `rmdir` the real run cannot reach.
     //
     // Nothing else moves the set: `mkdir` and `fix_dirs` both create directories
-    // src has, and `delete_files` holds files only. And `dm` is the post-rename
-    // map, walked with the same depth cap and filters as a live walk would be,
-    // so reading it instead of the filesystem yields the same paths.
+    // src has, and `delete_files` holds files and links (a link takes its
+    // followed subtree, not a directory row). And `dm` is the post-rename map,
+    // walked with the same depth cap and filters as a live walk would be, so
+    // reading it instead of the filesystem yields the same paths.
     let mut rmdir: Vec<String> = Vec::new();
     if !keep_extra {
         let wiped: Vec<String> = copy
@@ -266,7 +290,66 @@ pub(super) fn build_plan(
         delete_files,
         fix_dirs,
         rmdir,
+        shared_link_extras,
     }
+}
+
+/// Refuse to mirror through a `dst` link, before any apply phase changes
+/// anything.
+///
+/// The planner resolves an extra descendant to the topmost link, but writes and
+/// type-conflict fixes under a link are a different question: a shared link
+/// (one `src` also has) is deliberately left in place, and `mkdir`/`fix_dirs`/
+/// `copy` would then resolve the link as an intermediate path component. That
+/// writes into the link target — possibly outside `dst` — and used to delete
+/// external data while reporting success. The same applies to a rename, which
+/// `rename_to_src_casing` guards before its first filesystem call.
+///
+/// This is a **fail-fast** policy: remove the link from `dst`, or exclude it
+/// (`--exclude link`), and rerun. `--keep-extra` and `--missing-only` accept
+/// non-convergence for *extras* under a shared link, but they do not license a
+/// write through one.
+///
+/// The check asks the filesystem rather than `dm` on purpose: `dm` is the
+/// filtered, depth-capped view the plan was computed from, while the disk is
+/// what the apply phase will actually traverse.
+pub(super) fn ensure_link_safe(
+    plan: &Plan,
+    dst: &Path,
+    missing_only: bool,
+    keep_extra: bool,
+) -> Result<()> {
+    let actions = plan
+        .mkdir
+        .iter()
+        .chain(plan.copy.iter().map(|item| &item.rel))
+        .chain(plan.fix_dirs.iter())
+        .chain(plan.delete_files.iter())
+        .chain(plan.rmdir.iter());
+    for rel in actions {
+        if let Some(link) = crate::link::link_ancestor_above(dst, rel)? {
+            bail!(
+                "refusing to change `{rel}` through dst link `{link}`: \
+                 remove the link, or exclude it with --exclude"
+            );
+        }
+    }
+    if !missing_only && !keep_extra {
+        if let Some((link, path)) = plan.shared_link_extras.first() {
+            bail!(
+                "dst link `{link}` is shared with src and has extra paths under it \
+                 (for example `{path}`); sync cannot converge without deleting through \
+                 the link: remove the link, or pass --keep-extra"
+            );
+        }
+    } else if let Some((link, path)) = plan.shared_link_extras.first() {
+        tracing::warn!(
+            link = %link,
+            path = %path,
+            "leaving extras under a shared dst link; this run does not converge"
+        );
+    }
+    Ok(())
 }
 
 /// The `SUMMARY` record's fields, in both modes.
