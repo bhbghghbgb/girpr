@@ -29,9 +29,14 @@ use crate::repair::phases::plan::RepairPlan;
 use crate::repair::purge;
 use crate::repair::scope::PathScope;
 
-/// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
-/// the bytes are already repaired, so a half-finished bookkeeping write would
-/// desync the launcher from the game.
+/// Run the post-phase.
+///
+/// Failures in the bookkeeping the launcher depends on are fatal (`exit 3`):
+/// by that point the bytes are already repaired, so a half-finished
+/// `config.ini` write would desync the launcher from the game. The
+/// best-effort housekeeping steps — deprecated deletes, the audio cache move,
+/// the cleanup's directory sweep — cannot be retried into success by failing
+/// the run, so a refused delete or move is logged and the phase carries on.
 ///
 /// `deprecated` is the server's deprecated-file list, already fetched (and
 /// already possibly empty, if the call failed) during the plan phase.
@@ -158,9 +163,23 @@ fn delete_deprecated(
         let sz = util::file_len(&p).unwrap_or(0);
         if dry_run {
             tracing::info!("would delete deprecated {n} ({sz} bytes)");
-        } else if std::fs::remove_file(&p).is_ok() {
-            summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
-            tracing::info!("deleted deprecated {n}");
+        } else {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+                    tracing::info!("deleted deprecated {n}");
+                }
+                Err(e) => {
+                    // Not fatal: a locked or vanished file is not something a
+                    // retry of the whole run would fix, but it must not look
+                    // like a delete either.
+                    tracing::warn!(
+                        path = %n,
+                        error = %e,
+                        "deprecated file could not be deleted; left in place"
+                    );
+                }
+            }
         }
     }
 }
@@ -218,7 +237,18 @@ fn move_audio_cache(
     }
     let files: Vec<std::path::PathBuf> = WalkDir::new(&cache)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(e) => Some(e),
+            Err(e) => {
+                // The move is best effort: an unreadable entry is logged and
+                // the rest of the cache still moves.
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    "audio cache walk: entry unreadable; skipped"
+                );
+                None
+            }
+        })
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -244,11 +274,45 @@ fn move_audio_cache(
         let target = res.join(rel);
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
-        if std::fs::create_dir_all(target.parent().unwrap_or(&res)).is_ok()
-            && std::fs::rename(&src, &target).is_err()
-        {
-            let _ = std::fs::copy(&src, &target);
-            let _ = std::fs::remove_file(&src);
+        if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
+            tracing::warn!(
+                src = %src.display(),
+                error = %e,
+                "audio cache move: destination directory could not be created; source kept"
+            );
+            continue;
+        }
+        match std::fs::rename(&src, &target) {
+            Ok(()) => {}
+            Err(rename_err) => {
+                match std::fs::copy(&src, &target) {
+                    Ok(_) => {
+                        // Only now is there a destination: the source is
+                        // removed **after** a successful copy, never before.
+                        // Removing it unconditionally would delete a cache
+                        // file that had no copy if the copy failed.
+                        if let Err(e) = std::fs::remove_file(&src) {
+                            tracing::warn!(
+                                src = %src.display(),
+                                error = %e,
+                                "audio cache move: copied, but the source could not be removed"
+                            );
+                        }
+                    }
+                    Err(copy_err) => {
+                        // Hard data-loss bug in the old shape: it removed the
+                        // source even when the copy failed. Keep the source and
+                        // say why.
+                        tracing::warn!(
+                            src = %src.display(),
+                            target = %target.display(),
+                            rename_error = %rename_err,
+                            error = %copy_err,
+                            "audio cache move failed; source kept"
+                        );
+                    }
+                }
+            }
         }
     }
     tracing::info!("moved audio cache -> res");
@@ -261,5 +325,52 @@ fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
         name
     } else {
         format!("{dir_rel}/{name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hyp::GameConfig;
+
+    fn config(cache: &str, res: &str) -> GameConfig {
+        serde_json::from_value(serde_json::json!({
+            "audio_pkg_cache_dir": cache,
+            "audio_pkg_res_dir": res,
+        }))
+        .unwrap()
+    }
+
+    /// N-3: the copy fallback used to remove the source **after** a failed
+    /// copy, so a locked destination or a cross-volume refusal deleted the
+    /// cache file without a destination. The source is now removed only after
+    /// a successful copy.
+    ///
+    /// A directory at the destination makes both `rename` and `copy` fail on
+    /// every platform, which is the deterministic shape of that failure.
+    #[test]
+    fn a_failed_copy_keeps_the_audio_cache_source() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "copy_fail");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::write(base.join("Audio/cache/a.pck"), b"cache bytes").unwrap();
+        std::fs::create_dir_all(base.join("Audio/res/a.pck")).unwrap();
+
+        move_audio_cache(
+            base,
+            &config("Audio/cache", "Audio/res"),
+            &PathScope::default(),
+            false,
+        );
+
+        assert_eq!(
+            std::fs::read(base.join("Audio/cache/a.pck")).unwrap(),
+            b"cache bytes",
+            "the source must survive a failed copy"
+        );
+        assert!(
+            base.join("Audio/res/a.pck").is_dir(),
+            "the destination that made the move fail is untouched"
+        );
     }
 }

@@ -171,9 +171,23 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
         if dry_run {
             would_be += c.bytes;
             tracing::info!("would purge extra {} ({} bytes)", c.path.display(), c.bytes);
-        } else if std::fs::remove_file(&c.path).is_ok() {
-            deleted_bytes += c.bytes;
-            tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
+        } else {
+            match std::fs::remove_file(&c.path) {
+                Ok(()) => {
+                    deleted_bytes += c.bytes;
+                    tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
+                }
+                Err(e) => {
+                    // Best effort: a locked file is not a reason to fail a run
+                    // whose repair already succeeded, but it must not be
+                    // counted as freed space either.
+                    tracing::warn!(
+                        path = %c.path.display(),
+                        error = %e,
+                        "cleanup could not delete a candidate; left in place"
+                    );
+                }
+            }
         }
     }
     if dry_run {

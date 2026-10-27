@@ -479,7 +479,15 @@ fn promote_tmp(
     let h = util::md5_file(tmp_path)?;
     tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
     if !h.eq_ignore_ascii_case(&file.md5) {
-        std::fs::remove_file(tmp_path).ok();
+        if let Err(e) = std::fs::remove_file(tmp_path) {
+            // The next attempt resumes by length, so a `_tmp` that cannot be
+            // deleted only costs work: the final MD5 gate refuses it again.
+            tracing::warn!(
+                tmp = %tmp_path.display(),
+                error = %e,
+                "cannot delete the corrupt temp file; the next attempt will re-check it"
+            );
+        }
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel,
