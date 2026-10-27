@@ -520,42 +520,60 @@ async fn a_deprecated_path_that_escapes_the_game_dir_is_kept() {
 }
 
 #[tokio::test]
-async fn an_audio_cache_dir_that_escapes_the_game_dir_is_not_moved() {
-    // The cache/res move is a **mutation** sink fed by server strings. A `..`
-    // cache dir must be skipped, not walked and renamed out of the install.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            cache_dir: "../audio_cache".to_string(),
-            res_dir: "Audio/res".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("escape_audio");
-    let game = dir.join("install");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&game, &f.rel, &f.data);
-    }
-    std::fs::create_dir_all(dir.join("audio_cache")).unwrap();
-    std::fs::write(dir.join("audio_cache").join("a.pck"), b"cache bytes").unwrap();
+async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
+    // The cache/res pair is a **mutation** sink fed by server strings. Both
+    // are validated with the other config dirs at metadata time, so a `..`
+    // value refuses the run (exit 2) before `config.ini` is bumped or a file
+    // moves — it must not report success after skipping the move.
+    for (cache, res) in [
+        ("../audio_cache".to_string(), "Audio/res".to_string()),
+        ("Audio/cache".to_string(), "../audio_res".to_string()),
+    ] {
+        let fx = build_fixture();
+        let mock = MockServer::start(
+            fx,
+            MockOpts {
+                cache_dir: cache,
+                res_dir: res,
+                ..Default::default()
+            },
+        )
+        .await;
+        let dir = temp_dir("escape_audio");
+        let game = dir.join("install");
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&game, &f.rel, &f.data);
+        }
+        std::fs::create_dir_all(dir.join("audio_cache")).unwrap();
+        std::fs::write(dir.join("audio_cache").join("a.pck"), b"cache bytes").unwrap();
+        std::fs::create_dir_all(dir.join("audio_res")).unwrap();
+        std::fs::write(dir.join("audio_res").join("keep.pck"), b"res bytes").unwrap();
 
-    let (_summary, code) = repair::run(ctx_for(game.clone(), &mock, 2))
-        .await
-        .expect("the run itself is fine");
-    assert_eq!(code, 0);
-    assert_eq!(
-        std::fs::read(dir.join("audio_cache").join("a.pck")).unwrap(),
-        b"cache bytes",
-        "the outside cache must not move"
-    );
-    assert!(
-        !game.join("Audio").join("res").join("a.pck").exists(),
-        "nothing may be moved into the install from outside it"
-    );
-    mock.stop();
+        let err = repair::run(ctx_for(game.clone(), &mock, 2))
+            .await
+            .expect_err("an escaping audio dir is metadata");
+        assert_eq!(err.exit_code, 2, "an escaping audio dir is metadata");
+        assert!(
+            !game.join("config.ini").exists(),
+            "the version must not be bumped for refused server data"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("audio_cache").join("a.pck")).unwrap(),
+            b"cache bytes",
+            "the outside cache must not move"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("audio_res").join("keep.pck")).unwrap(),
+            b"res bytes",
+            "the outside res dir must not be touched"
+        );
+        assert!(
+            !game.join("Audio").join("res").exists(),
+            "nothing may be moved into the install from outside it"
+        );
+        mock.stop();
+    }
 }
 
 #[tokio::test]

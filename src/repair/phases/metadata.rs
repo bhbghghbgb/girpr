@@ -141,6 +141,22 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             .context("audio_pkg_scan_dir")
             .map_err(RunFailure::metadata)?;
     }
+    // The cache/res pair feeds the post-phase **move** sink. It is server data
+    // exactly like the scan dir above, so a bad value is metadata and refuses
+    // the run before any mutation. The post phase still contains both (defence
+    // in depth), but reaching it with a hostile value would bump `config.ini`
+    // and exit `0` after skipping the move, which says the install is healthy
+    // when the server data was not.
+    for (name, dir) in [
+        ("audio_pkg_cache_dir", &config.audio_pkg_cache_dir),
+        ("audio_pkg_res_dir", &config.audio_pkg_res_dir),
+    ] {
+        if !dir.is_empty() {
+            util::contained_join(game_dir, dir)
+                .with_context(|| name.to_string())
+                .map_err(RunFailure::metadata)?;
+        }
+    }
 
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
     // and overwrites the scan file; omitted flag keeps the detected set,
