@@ -167,6 +167,13 @@ pub struct Lies {
     /// Chunk ids the store serves as a body that is **not a zstd frame**: the
     /// decode has to fail on it rather than land garbage in the install.
     pub not_zstd: Vec<String>,
+    /// Chunk ids whose declared `offset` is `i64::MAX`.
+    ///
+    /// The range they claim ends past `i64::MAX`, so the old `i64` add that
+    /// computed a chunk's end overflowed and panicked the file task. The
+    /// fixture's own layout keeps the real offset, so only the manifest lies:
+    /// that is what a corrupt server response looks like.
+    pub huge_offset: Vec<String>,
 }
 
 /// A whole fixture: the new side, the old side, and what is on disk.
@@ -290,7 +297,13 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
                 } else {
                     md5hex(&c.data)
                 },
-                offset: c.offset,
+                offset: if spec.lies.huge_offset.contains(&c.id) {
+                    // Past `i64::MAX` once the chunk's length is added: the
+                    // layout of the file on disk is unchanged, only the claim.
+                    i64::MAX
+                } else {
+                    c.offset
+                },
                 compressed_size: if spec.lies.wrong_chunk_size.contains(&c.id) {
                     compressed.len() as i64 + 7
                 } else {

@@ -190,7 +190,18 @@ fn try_reuse_slice(
     out: &mut File,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
-    let end = (c.offset + c.uncompressed_size) as u64;
+    // The manifest controls both numbers; a corrupt pair must fail this file
+    // normally rather than panic (release builds would wrap here).
+    let end = u64::try_from(c.offset)
+        .ok()
+        .zip(u64::try_from(c.uncompressed_size).ok())
+        .and_then(|(offset, size)| offset.checked_add(size))
+        .with_context(|| {
+            format!(
+                "chunk {} has an invalid offset/size: {} + {}",
+                c.id, c.offset, c.uncompressed_size
+            )
+        })?;
     let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final

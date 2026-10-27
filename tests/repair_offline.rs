@@ -39,8 +39,8 @@
 mod common;
 
 use common::{
-    LATEST_TAG, MockOpts, MockServer, build_fixture, build_moved_fixture, read_game_file, temp_dir,
-    write_game_file,
+    ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, Lies, MockOpts, MockServer, build_fixture,
+    build_fixture_spec, build_moved_fixture, read_game_file, temp_dir, write_game_file,
 };
 use girpr::repair::scope::{Limits, PathScope};
 use girpr::sleep::NoSleep;
@@ -360,6 +360,51 @@ async fn partial_tmp_prefix_is_resumed() {
         "tmp promoted"
     );
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_manifest_offset_overflow_fails_the_file_instead_of_panicking() {
+    // The old code computed a chunk's end as `c.offset + c.uncompressed_size`
+    // in `i64`, so an offset near `i64::MAX` panicked the file task in a debug
+    // build. A panicked task used to be dropped with `let _ = h.await`, which
+    // left `files_failed == 0`: the run reached the post phase, bumped
+    // `config.ini`, and exited `0` with the file unrepaired.
+    //
+    // Both halves are pinned here: the range is refused (no panic, no seek to
+    // `i64::MAX`), the file is counted as failed, exit is `3`, and the
+    // post-phase does not run.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/foo.dat",
+            vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
+        )])
+        .with_lies(Lies {
+            huge_offset: vec!["chunk_foo0".into()],
+            ..Default::default()
+        }),
+    );
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("huge_offset");
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    ctx.repair_mode_explicit = true;
+    let (summary, code) = repair::run(ctx)
+        .await
+        .expect("a per-file failure is not a run error");
+    assert_eq!(code, 3, "a corrupt chunk range is a failed file");
+    let (_, repaired, failed, _, _) = load_counters(&summary);
+    assert_eq!((repaired, failed), (0, 1));
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the version must not be bumped with a failed file"
+    );
+    assert!(
+        read_game_file(&dir, "game/foo.dat").is_none(),
+        "the target must not be created"
+    );
 
     mock.stop();
 }

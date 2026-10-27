@@ -289,15 +289,71 @@ pub async fn repair_all(
             .await
         }));
     }
-    for h in handles {
-        let _ = h.await;
-    }
+    join_file_tasks(handles, &summary).await;
     progress.abort();
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
     // its clone yet. Either way `snapshot` reads the live counters.
     Arc::try_unwrap(summary)
         .map(|s| s.snapshot())
         .unwrap_or_else(|a| a.snapshot())
+}
+
+/// Reject a chunk range a corrupt manifest can carry before it reaches a seek.
+///
+/// `offset` and `size` are `i64` values from the server, and the old end
+/// computation added them as `i64`, which panicked on an overflow. A negative
+/// value is not a range at all, and a range that ends past the file's declared
+/// size cannot produce the file the manifest describes. Both are per-file
+/// failures (exit `3`), not plan failures: the rest of the install can still be
+/// repaired.
+fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
+    let file_size = u64::try_from(file.size)
+        .map_err(|_| anyhow::anyhow!("file has an invalid size: {}", file.size))?;
+    for c in &file.chunks {
+        let offset = u64::try_from(c.offset)
+            .map_err(|_| anyhow::anyhow!("chunk {} has a negative offset: {}", c.id, c.offset))?;
+        let len = u64::try_from(c.uncompressed_size).map_err(|_| {
+            anyhow::anyhow!(
+                "chunk {} has a negative size: {}",
+                c.id,
+                c.uncompressed_size
+            )
+        })?;
+        let end = offset.checked_add(len).ok_or_else(|| {
+            anyhow::anyhow!(
+                "chunk {} range overflows: {} + {}",
+                c.id,
+                c.offset,
+                c.uncompressed_size
+            )
+        })?;
+        if end > file_size {
+            anyhow::bail!(
+                "chunk {} ends at {end}, past the file's size {file_size}",
+                c.id
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Await every spawned file task and charge each join error to `files_failed`.
+///
+/// A file task returns `()`, so its only `Err` is a panic or a cancellation —
+/// never an `anyhow::Error`. Dropping it would let a panicked file leave
+/// `files_failed == 0`: the run would bump `config.ini` and exit `0` with that
+/// file unrepaired, which is the launcher-desync failure the post-phase
+/// ordering exists to prevent.
+async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Summary) {
+    for h in handles {
+        if let Err(e) = h.await {
+            summary.files_failed.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(error = %e, "repair task failed");
+            if summary.fail_fast() {
+                summary.abort();
+            }
+        }
+    }
 }
 
 /// Read-only inputs shared by every file task.
@@ -326,6 +382,9 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
+    if !ctx.dry_run {
+        validate_chunk_ranges(file)?;
+    }
     let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
     if let Some(parent) = final_path.parent()
         && !ctx.dry_run
@@ -696,5 +755,61 @@ mod tests {
             ..file.clone()
         };
         assert!(trim_is_free(&bigger, &chunks, &[Some(0), Some(30)]));
+    }
+
+    /// F-1: a panicked file task is a **failed file**, not a silent success.
+    ///
+    /// The task body returns `()`, so the only `Err` from its join handle is a
+    /// panic or a cancellation. The join loop has to count that error: with
+    /// `files_failed == 0` the run would reach the post phase, bump
+    /// `config.ini`, and exit `0` with the file unrepaired.
+    #[tokio::test]
+    async fn a_panicked_file_task_is_counted_as_a_failure() {
+        let mut summary = Summary::new();
+        summary.set_fail_fast(true);
+        let handles = vec![
+            tokio::spawn(async {}),
+            tokio::spawn(async { panic!("injected file-task panic") }),
+        ];
+        join_file_tasks(handles, &summary).await;
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            1,
+            "the panicked task must be the failed file"
+        );
+        assert!(summary.aborted(), "fail-fast must trip on the join error");
+    }
+
+    /// F-1: a corrupt chunk range fails the file without panicking or seeking
+    /// to it. `i64::MAX` is the value the old `i64` addition overflowed on.
+    #[test]
+    fn a_chunk_past_the_files_end_is_refused() {
+        let chunk = SophonChunk {
+            id: "c".into(),
+            uncompressed_md5: "m".into(),
+            offset: i64::MAX,
+            compressed_size: 8,
+            uncompressed_size: 64,
+            unknown: 0,
+            compressed_md5: String::new(),
+        };
+        let file = PlannedFile {
+            rel: "f.bin".into(),
+            size: 64,
+            md5: "m".into(),
+            chunks: vec![chunk.clone()],
+        };
+        assert!(validate_chunk_ranges(&file).is_err());
+
+        // A negative offset is not a range either.
+        let mut negative = chunk;
+        negative.offset = -1;
+        assert!(
+            validate_chunk_ranges(&PlannedFile {
+                chunks: vec![negative],
+                ..file
+            })
+            .is_err()
+        );
     }
 }
