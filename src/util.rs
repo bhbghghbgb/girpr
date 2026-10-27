@@ -279,7 +279,14 @@ pub fn file_len(path: &Path) -> Option<u64> {
 ///
 /// - empty, a drive prefix (`C:`), a root (`/x`, `\\server\share`), or any
 ///   `ParentDir` component;
-/// - anything that names no file (only `.` components).
+/// - anything that names no file (only `.` components);
+/// - a trailing separator (`game/`): every caller expects the rel to name one
+///   object, and a spelling that also says "directory" cannot be both;
+/// - Windows name rules, because the install is a Windows tree even when the
+///   checker runs elsewhere: a reserved device name (`NUL`, `con.dat`,
+///   `COM1`, `CONIN$`, …), a component ending in `.` or a space (Windows
+///   strips those and aliases the name), or a `:` other than the drive prefix
+///   (an NTFS alternate data stream).
 ///
 /// The check is lexical and platform-independent: `C:evil` is a `Prefix`
 /// component on Windows but a plain component on Unix, so the drive spelling is
@@ -289,6 +296,10 @@ pub fn file_len(path: &Path) -> Option<u64> {
 pub fn contained_rel(rel: &str) -> Result<PathBuf> {
     let normalized = rel.replace('\\', "/");
     anyhow::ensure!(!normalized.is_empty(), "path is empty");
+    anyhow::ensure!(
+        !normalized.ends_with('/'),
+        "path has a trailing separator: {rel}"
+    );
     let bytes = normalized.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
         anyhow::bail!("path has a drive prefix: {rel}");
@@ -310,6 +321,21 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
     for c in path.components() {
         match c {
             Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .with_context(|| format!("path is not UTF-8: {rel}"))?;
+                anyhow::ensure!(
+                    !part.ends_with('.') && !part.ends_with(' '),
+                    "path has a Windows-trailing dot or space: {rel}"
+                );
+                anyhow::ensure!(
+                    !part.contains(':'),
+                    "path has a Windows alternate-stream separator: {rel}"
+                );
+                anyhow::ensure!(
+                    !is_windows_device_name(part),
+                    "path names a Windows device: {rel}"
+                );
                 named = true;
                 clean.push(part);
             }
@@ -320,6 +346,26 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
     }
     anyhow::ensure!(named, "path names no file: {rel}");
     Ok(clean)
+}
+
+/// Is this component a name Windows reserves for a device in every directory?
+///
+/// The comparison uses the part before the first `.` — `NUL.txt` is still the
+/// `NUL` device — and ignores case, which NTFS does for these names too.
+fn is_windows_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default();
+    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) {
+        return true;
+    }
+    ["COM", "LPT"].iter().any(|prefix| {
+        upper
+            .strip_prefix(prefix)
+            .is_some_and(|n| n.len() == 1 && ('1'..='9').contains(&n.chars().next().unwrap()))
+    })
 }
 
 /// Join a server-controlled relative path under `base`, refusing anything that
@@ -735,9 +781,53 @@ mod tests {
             "C:/evil.dat",
             "C:\\evil.dat",
             "c:/evil.dat",
+            "game/",
+            "game\\",
+            "game/./",
         ] {
             let got = contained_rel(bad);
             assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
+    /// N-14: Windows name rules are checked on every host, because the install
+    /// is a Windows tree. A device name writes to a device (or, for `NUL`,
+    /// nowhere) and a trailing dot/space aliases another name; neither is a
+    /// file a manifest can legitimately name.
+    #[test]
+    fn contained_rel_refuses_windows_device_and_alias_names() {
+        for bad in [
+            "NUL",
+            "nul",
+            "game/CON",
+            "game/con.dat",
+            "game/PRN.txt",
+            "game/AUX",
+            "game/COM1",
+            "game/com9.dat",
+            "game/lpt1.tar.gz",
+            "game/CONIN$",
+            "game/CONOUT$",
+            "game/CLOCK$",
+            "game/trailing.",
+            "game/trailing ",
+            "dir./file.dat",
+            "dir /file.dat",
+            "game/a:b",
+            "game/a:stream.dat",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+        // Near-misses stay legal: only the exact reserved stem is a device.
+        for good in [
+            "game/conifer.dat",
+            "game/nullable.bin",
+            "game/console",
+            "game/com10.dat",
+            "game/lpt",
+        ] {
+            assert!(contained_rel(good).is_ok(), "{good:?} must be accepted");
         }
     }
 
@@ -752,6 +842,8 @@ mod tests {
         assert_eq!(joined, missing.join("game/foo.dat"));
         // A traversal attempt cannot reach the sibling file.
         assert!(contained_join(&dir, "../outside.dat").is_err());
+        // A trailing separator does not name a file, so it is refused here too.
+        assert!(contained_join(&dir, "game/").is_err());
     }
 
     /// A symlink inside the install that points out of it is an escape even
