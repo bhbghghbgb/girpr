@@ -107,6 +107,21 @@ impl VersionPair {
             ),
             OldTagSelector::Explicit(t) => (t.to_string(), "--old-tag".to_string()),
         };
+        // **The resolved tags are validated here, not only at the flags.** When
+        // `new`/`old` are `BranchHead`/`FirstDiffTag`, these strings come from
+        // the API's `main.tag` and `diff_tags[0]`, and `pair_dir` joins them raw
+        // into `<root>/<biz>/<old>__<new>/`. The flag path already checks its
+        // input; without this, a hostile or compromised API (or a local proxy)
+        // could reach the same path sink with `..\..\escape` or `C:evil` even
+        // though the flags were clean.
+        for (tag, source) in [
+            (&new_tag, new_source.as_str()),
+            (&old_tag, old_source.as_str()),
+        ] {
+            if let Some(problem) = tag_shape_problem(tag) {
+                return Err(format!("{source} {problem}"));
+            }
+        }
         Ok(VersionPair {
             old: VersionRef {
                 tag: old_tag,
@@ -547,40 +562,69 @@ pub fn validate_new_tag(tag: &str) -> Result<()> {
 /// parent component, no control character. `/` and space were the only ones
 /// checked before, so `C:`, `..\..` and `a\b` reached the path sink intact.
 ///
+/// **The Windows rules are here too.** `* ? " < > |` cannot appear in a Windows
+/// directory name, and a trailing `.` is stripped by the filesystem, so `7.1.0.`
+/// and `7.1.0` would otherwise be two strings that name one directory. Both are
+/// rejected with the same message class as the traversal checks: a tag is a
+/// directory component, and the directory is named before the network work is
+/// useful, so a late `create_dir_all` failure would waste the whole run.
+///
 /// Split on both separators even though both are rejected above: the rules are
 /// then stated independently, which is what stops a future relaxation of one
 /// from silently reopening the other.
 fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
+    match tag_shape_problem(tag) {
+        Some(problem) => Err(UsageError::new(format!("{flag} {problem}"))),
+        None => Ok(()),
+    }
+}
+
+/// Why `tag` cannot be a directory component, or `None` when it can.
+///
+/// The message names the tag and the rule, so both the flag path (which prefixes
+/// the flag) and the API path (which prefixes `main.tag` or `diff_tags[0]`) say
+/// which string was refused and why.
+fn tag_shape_problem(tag: &str) -> Option<String> {
     if tag.is_empty() {
-        return Err(UsageError::new(format!("{flag} was given an empty tag")));
+        return Some("was given an empty tag".to_string());
     }
     if tag.len() > 32 {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} is longer than 32 characters; that is not a version tag"
-        )));
+        return Some(format!(
+            "{tag:?} is longer than 32 characters; that is not a version tag"
+        ));
     }
     if tag.chars().any(char::is_control) {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} contains a control character; a tag is a bare version string"
-        )));
+        return Some(format!(
+            "{tag:?} contains a control character; a tag is a bare version string"
+        ));
     }
     if tag.contains('/') || tag.contains('\\') || tag.contains(' ') {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} contains a separator or a space; a tag is a bare version string"
-        )));
+        return Some(format!(
+            "{tag:?} contains a separator or a space; a tag is a bare version string"
+        ));
     }
     if tag.contains(':') {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} looks like a drive-qualified or namespaced path; a tag is a \
+        return Some(format!(
+            "{tag:?} looks like a drive-qualified or namespaced path; a tag is a \
              bare version string"
-        )));
+        ));
+    }
+    if tag.contains(['*', '?', '"', '<', '>', '|']) {
+        return Some(format!(
+            "{tag:?} contains a character Windows cannot use in a directory name; \
+             a tag is a bare version string"
+        ));
+    }
+    if tag.starts_with('.') || tag.ends_with('.') {
+        return Some(format!(
+            "{tag:?} starts or ends with `.`; Windows strips a trailing dot from a \
+             directory name, so two tags could name one directory"
+        ));
     }
     if tag.split(['/', '\\']).any(|c| c == "..") {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} escapes the artifact directory"
-        )));
+        return Some(format!("{tag:?} escapes the artifact directory"));
     }
-    Ok(())
+    None
 }
 
 /// `gircap verify` resolved and checked.
@@ -958,7 +1002,25 @@ mod tests {
         // bundle - and `..\..` can move it out of the root. The same rule must
         // cover the pair flags and the probes, because all three reach the same
         // sink.
-        for bad in ["C:", r"..\..", r"a\b", "a:b", "..", "7.1.0\u{7}"] {
+        for bad in [
+            "C:",
+            r"..\..",
+            r"a\b",
+            "a:b",
+            "..",
+            "7.1.0\u{7}",
+            // Windows cannot create these directory names, and a late
+            // `create_dir_all` failure would come after the network work.
+            "7.1.0?",
+            "7.1.0*",
+            "7.1.0\"",
+            "7.1.0<",
+            "7.1.0>",
+            "7.1.0|",
+            // Windows strips a trailing dot, so this and `7.1.0` would collide.
+            "7.1.0.",
+            ".7.1.0",
+        ] {
             assert!(
                 validate_tag(bad, "--old-tag").is_err(),
                 "--old-tag {bad:?} must be refused"
@@ -1137,6 +1199,40 @@ mod tests {
                 .tag,
             "5.5.0"
         );
+    }
+
+    /// A hostile or compromised API can supply `main.tag`/`diff_tags[0]`
+    /// without the caller ever passing a bad flag. Those strings reach
+    /// `pair_dir`, so they must pass the same shape check the flags do.
+    #[test]
+    fn api_resolved_tags_are_validated_before_they_name_a_directory() {
+        let p = pair_plan(None, None);
+
+        let mut b = branch();
+        b.tag = r"..\..\escape".into();
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(
+            e.contains("main.tag") && e.contains("escape"),
+            "the message names the API field and the offending tag: {e}"
+        );
+
+        let mut b = branch();
+        b.diff_tags[0] = "C:evil".into();
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(
+            e.contains("diff_tags[0]") && e.contains("drive-qualified"),
+            "the default old tag is validated too: {e}"
+        );
+
+        // An explicit tag is validated in `capture_plan`, and again here for a
+        // direct caller of `select`.
+        let e = VersionPair::select(
+            &branch(),
+            NewTagSelector::Explicit("7.1.0?"),
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap_err();
+        assert!(e.contains("--new-tag"), "{e}");
     }
 
     /// Swapping them would attach a build id to the wrong tag, and every chunk
