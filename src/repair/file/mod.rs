@@ -382,6 +382,13 @@ struct FileCtx {
     sleep: Arc<dyn Sleep>,
 }
 
+/// The manifest-relative path whose file task panics in tests.
+///
+/// Only [`repair_one_file`] and the wiring test use it; a real manifest cannot
+/// contain it, because it names no file the repair would ever plan.
+#[cfg(test)]
+const TEST_PANIC_REL: &str = "__girpr_test_panic__";
+
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // A runtime hard stop already fired: drop out without touching the file.
@@ -393,6 +400,15 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
+    // A test-only seam for the wiring, not the helper: the unit test on
+    // `join_file_tasks` proves the join loop counts a `JoinError`, but only a
+    // panic raised *inside* a real `repair_all` task proves that `repair_all`
+    // still calls it. Without this, reverting line 294 to `let _ = h.await`
+    // would be invisible to the suite.
+    #[cfg(test)]
+    if file.rel == TEST_PANIC_REL {
+        panic!("injected panic in the file task");
+    }
     if !ctx.dry_run {
         validate_chunk_ranges(file)?;
     }
@@ -766,6 +782,45 @@ mod tests {
             ..file.clone()
         };
         assert!(trim_is_free(&bigger, &chunks, &[Some(0), Some(30)]));
+    }
+
+    /// F-8: the seam is reached **through `repair_all`**, not just through
+    /// `join_file_tasks`. Reverting `repair_all`'s join loop to a bare
+    /// `let _ = handle.await` (or dropping the handles) would leave the panic
+    /// invisible: the run would report success with the file unrepaired. This
+    /// test fails in exactly that case, because it never calls the join helper
+    /// itself.
+    #[tokio::test]
+    async fn a_panic_inside_a_file_task_fails_the_run() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_panic_wiring", "run");
+        let plan = Arc::new(RepairPlan {
+            latest: "1.0".into(),
+            files: vec![PlannedFile {
+                rel: TEST_PANIC_REL.into(),
+                size: 4,
+                md5: String::new(),
+                chunks: Vec::new(),
+            }],
+            url_prefix_by_file: Default::default(),
+        });
+        let summary = repair_all(
+            reqwest::Client::new(),
+            dir.to_path_buf(),
+            plan,
+            LocalChunkMap::new(),
+            Summary::new(),
+            1,
+            false,
+            crate::report::OutputFormat::Text,
+            RepairMode::Inplace,
+            Arc::new(crate::sleep::NoSleep),
+        )
+        .await;
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            1,
+            "a panic in the file task must surface as a failed file"
+        );
     }
 
     /// F-1: a panicked file task is a **failed file**, not a silent success.
