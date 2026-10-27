@@ -216,8 +216,17 @@ async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u
             Ok(None) => break,
             // A read failure ends the count at what arrived. The status is still
             // the failure the caller sees: an unreadable error body is not a
-            // reason to lose the `404`/`503` that explains the request.
-            Err(_) => break,
+            // reason to lose the `404`/`503` that explains the request. Log the
+            // failure anyway, or a suspiciously short `bytes_in` has no cause.
+            Err(e) => {
+                tracing::debug!(
+                    url,
+                    bytes = seen,
+                    error = %e,
+                    "error-body read failed; counting what arrived"
+                );
+                break;
+            }
         }
     }
     seen

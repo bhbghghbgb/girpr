@@ -240,6 +240,9 @@ digest in the bundle would become a digest of compressed JSON.
 `bytes_in` is the number of body bytes the run actually transferred, **on every
 row including the non-2xx ones**. It is the only way to price a request without
 re-downloading it, so a throttled or errored attempt is counted like any other.
+A non-2xx body refused on its declared length before any read counts `0` (the
+status line and headers are not body bytes); one that crosses the ceiling
+mid-read counts what arrived, including the chunk that crossed it.
 
 `stored_as` is the path, relative to the artifact root, the body was written to,
 or `null` when it was not kept. Per kind:
