@@ -174,10 +174,16 @@ impl RunCtx {
         self.limits.ram_bytes
     }
 
-    /// Read-only modes must not write anything: `--dry-run` logs actions only,
-    /// `--check-only` verifies only. Every delete/write in the pipeline is
-    /// gated on this, which covers `--purge-before` as well as the phases
-    /// `--check-only` never reaches.
+    /// `--dry-run` and `--check-only` must not write anything: `--dry-run`
+    /// logs actions only, `--check-only` verifies only. Every delete/write in
+    /// the pipeline is gated on this, which covers `--purge-before` as well as
+    /// the phases `--check-only` never reaches.
+    ///
+    /// This is **not** the whole read-only story: `--print-plan` is read-only
+    /// by construction (it returns before the mutation phases), but it does
+    /// reach the metadata phase, whose audio-scan write is therefore gated on
+    /// `!readonly() && !print_plan`. A new write site must ask both, not trust
+    /// this method alone.
     pub fn readonly(&self) -> bool {
         self.dry_run || self.check_only
     }
