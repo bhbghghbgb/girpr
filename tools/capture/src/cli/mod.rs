@@ -158,7 +158,8 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "BYTES")]
     pub max_download_bytes: Option<u64>,
 
-    /// Fail with exit 4 unless these matrix classes are satisfied. Default: all.
+    /// Fail with exit 4 unless these matrix classes are satisfied. Default: none
+    /// (nothing is required unless named).
     #[arg(long = "require-class", value_name = "ID")]
     pub require_class: Vec<String>,
 
@@ -184,7 +185,7 @@ pub struct CaptureArgs {
     #[arg(long = "probe-tags", value_name = "TAG")]
     pub probe_tags: Vec<String>,
 
-    /// Capture metadata only. Breaks assertions A7-A10 by design.
+    /// Capture metadata only. Breaks assertions A6-A12, A19, A21-A23 by design.
     #[arg(long = "no-chunk-blobs", default_value_t = false)]
     pub no_chunk_blobs: bool,
 

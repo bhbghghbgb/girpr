@@ -112,6 +112,30 @@ fn help_and_version_are_zero() {
     }
 }
 
+/// The two `capture` help strings that used to contradict the code and the spec.
+///
+/// Neither was pinned anywhere. `--require-class` said "Default: all" while an
+/// empty list means nothing is required, and `--no-chunk-blobs` named three of
+/// the eleven assertions it skips. `--help` is where a reader finds out what a
+/// flag does, so it is the wrong place to be wrong.
+#[test]
+fn the_two_help_strings_that_were_stale_match_the_code() {
+    let r = assert_code(&["capture", "--help"], 0);
+    // clap wraps to the terminal width, so compare with the wrapping removed
+    // rather than betting on where a line break lands.
+    let help = r.stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        help.contains("Default: none (nothing is required unless named)"),
+        "--require-class requires nothing unless named:\n{}",
+        r.stdout
+    );
+    assert!(
+        help.contains("Breaks assertions A6-A12, A19, A21-A23 by design"),
+        "--no-chunk-blobs skips eleven assertions, not three:\n{}",
+        r.stdout
+    );
+}
+
 /// Every argument-level failure is `1`, never clap's default `2` — `2` means
 /// "network or API failure" here, and a flag typo must not be indistinguishable
 /// from a CDN outage.
