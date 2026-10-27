@@ -1949,6 +1949,60 @@ async fn print_plan_reports_the_plan_and_writes_nothing() {
 }
 
 #[tokio::test]
+async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
+    // `--print-plan` is documented as read-only by construction. An explicit
+    // `--audio` used to write the scan file (and create the game dir) because
+    // the gate consulted `readonly()`, which does not include `print_plan`.
+    //
+    // The report must still name the requested language: resolving the audio
+    // set is not the write.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("print_plan_audio");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--audio",
+            "en-us",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(!game.exists(), "--print-plan must not create the game dir");
+    assert!(
+        !game.join("Audio").exists(),
+        "--print-plan must not create the scan dir"
+    );
+    assert!(
+        stdout.contains("audio_langs=en-us"),
+        "the report must name the requested language:\n{stdout}"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn print_plan_out_writes_the_per_file_json_document() {
     let fx = build_fixture();
     let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
