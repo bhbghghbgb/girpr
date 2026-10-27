@@ -26,7 +26,9 @@ impl<'a> Applier<'a> {
             // Belt and braces: the plan was computed before this run changed
             // anything, so ask the filesystem once more. `None` means no
             // component is a link (including when the path is already gone).
-            let rel = crate::link::topmost_link_ancestor(self.dst, r).unwrap_or_else(|| r.clone());
+            let rel = crate::link::topmost_link_ancestor(self.dst, r)
+                .with_context(|| format!("check link ancestors for {r}"))?
+                .unwrap_or_else(|| r.clone());
             if rel != *r {
                 tracing::warn!(
                     planned = %r,
@@ -43,20 +45,30 @@ impl<'a> Applier<'a> {
             {
                 continue;
             }
-            if crate::link::is_link(&p) {
-                crate::link::remove(&p).with_context(|| format!("unlink {}", p.display()))?;
+            if crate::link::try_is_link(&p)
+                .with_context(|| format!("check link {}", p.display()))?
+            {
+                remove_link(&p)?;
                 self.report.emit(Record::path("DELETE", &rel));
                 deleted += 1;
-            } else if p.is_file() {
-                std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
-                self.report.emit(Record::path("DELETE", &rel));
-                deleted += 1;
-            } else if p.is_dir() {
-                std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
-                self.report.emit(Record::path("RMDIR", &rel));
-                deleted += 1;
-            } else if p.exists() {
-                bail!("unsupported type {}", p.display());
+            } else {
+                match std::fs::symlink_metadata(&p) {
+                    Ok(md) if md.is_file() => {
+                        remove_file(&p)?;
+                        self.report.emit(Record::path("DELETE", &rel));
+                        deleted += 1;
+                    }
+                    Ok(md) if md.is_dir() => {
+                        remove_dir_all(&p)?;
+                        self.report.emit(Record::path("RMDIR", &rel));
+                        deleted += 1;
+                    }
+                    Ok(_) => bail!("unsupported type {}", p.display()),
+                    // Gone between the plan and now: nothing to remove, and the
+                    // cache row was already pre-dropped.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e).with_context(|| format!("stat {}", p.display())),
+                }
             }
             if (i + 1) % 100 == 0 {
                 info!(
@@ -212,33 +224,45 @@ impl<'a> Applier<'a> {
         let mut removed_dirs = 0usize;
         info!(unknown = plan.rmdir.len(), "rmdir pass");
         let mut w = self.dst_db.begin_write()?;
+        // Cache prefixes this pass removed recursively. A link takes its whole
+        // followed subtree with it, and `remove_dir_all` can take rows the plan
+        // did not enumerate; those rows describe paths that are gone.
+        let mut wiped: Vec<String> = Vec::new();
         for (i, r) in plan.rmdir.iter().enumerate() {
             // The plan excludes links and everything under one; re-check disk as
             // the belt-and-braces half, so a recursive removal can never run
             // through a link component.
-            let rel = crate::link::topmost_link_ancestor(self.dst, r).unwrap_or_else(|| r.clone());
+            let rel = crate::link::topmost_link_ancestor(self.dst, r)
+                .with_context(|| format!("check link ancestors for {r}"))?
+                .unwrap_or_else(|| r.clone());
             let p = self.dst.join(&rel);
-            if crate::link::is_link(&p) {
-                if let Err(e) = crate::link::remove(&p)
-                    && p.exists()
-                {
-                    bail!("unlink {}: {:#}", p.display(), e);
-                }
+            if crate::link::try_is_link(&p)
+                .with_context(|| format!("check link {}", p.display()))?
+            {
+                remove_link(&p)?;
                 w.remove(r)?;
                 if rel != *r {
                     w.remove(&rel)?;
                 }
+                wiped.push(format!("{rel}/"));
                 self.report.emit(Record::path("RMDIR", &rel));
                 removed_dirs += 1;
-            } else if p.is_dir() {
-                if let Err(e) = std::fs::remove_dir_all(&p)
-                    && p.exists()
-                {
-                    bail!("rmdir {}: {:#}", p.display(), e);
+            } else {
+                match std::fs::symlink_metadata(&p) {
+                    Ok(md) if md.is_dir() => {
+                        remove_dir_all(&p)?;
+                        w.remove(r)?;
+                        wiped.push(format!("{r}/"));
+                        self.report.emit(Record::path("RMDIR", r));
+                        removed_dirs += 1;
+                    }
+                    // The plan said directory. A file here means dst changed
+                    // under the plan; refusing beats reporting a removal the
+                    // run did not make.
+                    Ok(_) => bail!("rmdir {}: not a directory", p.display()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e).with_context(|| format!("stat {}", p.display())),
                 }
-                w.remove(r)?;
-                self.report.emit(Record::path("RMDIR", r));
-                removed_dirs += 1;
             }
             if (i + 1) % 100 == 0 {
                 info!(
@@ -247,6 +271,13 @@ impl<'a> Applier<'a> {
                     removed = removed_dirs,
                     "rmdir progress"
                 );
+            }
+        }
+        if !wiped.is_empty() {
+            for key in w.load_keys()? {
+                if wiped.iter().any(|p| key.starts_with(p.as_str())) {
+                    w.remove(&key)?;
+                }
             }
         }
         w.commit()?;
@@ -271,13 +302,15 @@ impl<'a> Applier<'a> {
     /// here — it surfaces later as a `compare-self` reporting drift for a file that
     /// never moved.
     ///
-    /// **Subtracted** — what a copy destroys. `delete_files` and `rmdir` drop their
-    /// own rows, so those need nothing. The one that does is `copy_one` clearing a
-    /// blocking dst directory *recursively*, which takes a whole subtree with it.
-    /// `Plan::rmdir` deliberately excludes that subtree from its own list — the
-    /// directory is gone by the time the removal pass runs, so listing it would
-    /// promise an `rmdir` the run cannot reach — which leaves this the only place
-    /// that can tell "dst held this before the run" from "dst holds it now".
+    /// **Subtracted** — what a copy or an unlink destroys. `rmdir` drops its own
+    /// rows, and `delete_files` drops the row it names. The subtrees are the two
+    /// that need this pass: `copy_one` clearing a blocking dst directory
+    /// *recursively*, and a `delete_files` link, whose followed descendants were
+    /// never paths of their own on disk. `Plan::rmdir` deliberately excludes the
+    /// copy-wiped subtree from its own list — the directory is gone by the time
+    /// the removal pass runs, so listing it would promise an `rmdir` the run
+    /// cannot reach — which leaves this the place that can tell "dst held this
+    /// before the run" from "dst holds it now".
     ///
     /// The subtraction is by path prefix, so it covers the subtree at any depth
     /// rather than only the entries the plan happened to enumerate.
@@ -302,6 +335,12 @@ impl<'a> Applier<'a> {
             .iter()
             .filter(|item| self.dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
             .map(|item| format!("{}/", item.rel))
+            .chain(
+                plan.delete_files
+                    .iter()
+                    .filter(|r| self.dm.get(*r).is_some_and(|rec| rec.is_link))
+                    .map(|r| format!("{r}/")),
+            )
             .collect();
         let mut present: HashSet<&str> = self.dm.keys().map(String::as_str).collect();
         for r in &plan.mkdir {
@@ -326,5 +365,40 @@ impl<'a> Applier<'a> {
         }
         w.commit()?;
         Ok(())
+    }
+}
+
+/// Remove a link itself, treating "already gone" as success.
+///
+/// A removal error used to be swallowed when the path no longer existed, which
+/// also hid a failed unlink of a dangling link. `NotFound` is the one error that
+/// means there is nothing left to remove; everything else aborts the run.
+fn remove_link(p: &std::path::Path) -> Result<()> {
+    match crate::link::remove(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("unlink {}", p.display())),
+    }
+}
+
+/// Remove a regular file, treating "already gone" as success.
+fn remove_file(p: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("delete {}", p.display())),
+    }
+}
+
+/// Remove a directory tree, treating "already gone" as success.
+///
+/// The caller has already established that `p` is a directory and not a link,
+/// so this never resolves a link as the final component. An intermediate link
+/// is the caller's guard, not this function's.
+fn remove_dir_all(p: &std::path::Path) -> Result<()> {
+    match std::fs::remove_dir_all(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("rmdir {}", p.display())),
     }
 }

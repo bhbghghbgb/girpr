@@ -21,7 +21,7 @@
 //! action twice by hand. `--dry-run` reports the same records for the same plan,
 //! which is why the plan printer and these phases agree field for field.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
@@ -100,6 +100,7 @@ impl Applier<'_> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
         let mut w = self.dst_db.begin_write()?;
         for (i, r) in plan.mkdir.iter().enumerate() {
+            self.guard_no_link_ancestor(r, "create")?;
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
             w.put(r, &FileRec::dir())?;
@@ -129,8 +130,16 @@ impl Applier<'_> {
             w.commit()?;
         }
         for r in &plan.fix_dirs {
+            // A link *above* this path would resolve the removal and the mkdir
+            // into its target. A link *at* it is the type conflict itself, and
+            // is unlinked below.
+            self.guard_no_link_ancestor(r, "replace")?;
             let p = self.dst.join(r);
-            if p.is_file() || p.is_symlink() {
+            if crate::link::try_is_link(&p)
+                .with_context(|| format!("check link {}", p.display()))?
+            {
+                crate::link::remove(&p).with_context(|| format!("unlink {}", p.display()))?;
+            } else if p.is_file() {
                 std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             } else if p.is_dir() {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
@@ -138,6 +147,14 @@ impl Applier<'_> {
             std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
             self.report.emit(Record::path("FIX-DIR", r));
         }
+        // The directory exists now, so it owes a row like `mkdirs` writes. The
+        // old row was removed and committed above; leaving the new one out made
+        // `compare-self` report the directory this run created as extra.
+        let mut w = self.dst_db.begin_write()?;
+        for r in &plan.fix_dirs {
+            w.put(r, &FileRec::dir())?;
+        }
+        w.commit()?;
         Ok(())
     }
 
@@ -181,8 +198,37 @@ impl Applier<'_> {
         }
         for r in &plan.delete_files {
             w.remove(r)?;
+            // Removing a link removes everything the walk reported under it.
+            // Those rows describe paths that will not exist after the unlink, so
+            // they are dropped here, before the filesystem change, rather than
+            // left for `compare-self` to report as missing.
+            if self.dm.get(r).is_some_and(|rec| rec.is_link) {
+                let prefix = format!("{r}/");
+                for key in w.load_keys()? {
+                    if key.starts_with(&prefix) {
+                        w.remove(&key)?;
+                    }
+                }
+            }
         }
         w.commit()?;
+        Ok(())
+    }
+
+    /// Fail before touching a path whose ancestor is a `dst` link.
+    ///
+    /// The plan-level check (`ensure_link_safe`) runs before any apply phase;
+    /// this is the per-phase belt and braces, so a path that changed since the
+    /// plan (or one a future phase adds) cannot resolve a link as an
+    /// intermediate component. The final component is deliberately not checked:
+    /// a link *at* the path is what a type conflict replaces.
+    fn guard_no_link_ancestor(&self, rel: &str, action: &str) -> Result<()> {
+        if let Some(link) = crate::link::link_ancestor_above(self.dst, rel)? {
+            bail!(
+                "refusing to {action} `{rel}` through dst link `{link}`: \
+                 remove the link, or exclude it with --exclude"
+            );
+        }
         Ok(())
     }
 }
