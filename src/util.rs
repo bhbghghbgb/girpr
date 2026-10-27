@@ -269,15 +269,6 @@ pub fn file_len(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|m| m.len())
 }
 
-/// Turn a `/`-separated manifest rel path into a native one.
-///
-/// Manifests always use `/`; every comparison in this crate (plan, reuse map,
-/// purge classification) is done on the `/` form, and the conversion happens
-/// only at the filesystem boundary.
-pub fn normalize_rel(rel: &str) -> String {
-    rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
-}
-
 /// Validate a **server-controlled relative path** and return it in `/` form.
 ///
 /// The manifest, the deprecated-files list and the audio directory names are

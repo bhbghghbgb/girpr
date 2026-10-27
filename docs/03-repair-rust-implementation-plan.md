@@ -27,7 +27,7 @@ src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formattin
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
-src/util.rs           # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, rel-path normalization
+src/util.rs           # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, server-path containment
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
 src/repair/metadata.rs# local config.ini version, ignore/blacklist files, server metadata (step 1-2)
 src/repair/manifest.rs# select+fetch latest manifests, build the local chunk-reuse map (step 3)
