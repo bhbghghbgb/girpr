@@ -19,9 +19,11 @@ mod common;
 
 use std::path::Path;
 
-use common::{dir_link, file_link, is_link, log, parse_ndjson, rfile, sync_mem, temp_root, wfile};
-use girsync::cmd_sync;
+use common::{
+    dir_link, entry_names, file_link, is_link, log, parse_ndjson, rfile, sync_mem, temp_root, wfile,
+};
 use girsync::scan::walk_live;
+use girsync::{cmd_compare_self, cmd_sync};
 use serde_json::Value;
 
 /// Run the real binary, returning its exit status and records.
@@ -329,4 +331,226 @@ fn keep_extra_spares_a_dst_directory_link_and_its_target() {
         paths(&recs, "delete").is_empty(),
         "keep-extra deletes nothing: {recs:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// N-1: a shared link is never a write-through path
+// ---------------------------------------------------------------------------
+
+/// The `fix_dirs` shape: `src/link/x` is a directory, the shared `dst/link`
+/// junction resolves `x` to an external **file**, and the planner asks to
+/// replace it with a directory. Before the guard this removed the external file
+/// and exited 0; now the run refuses before touching it.
+#[test]
+fn sync_refuses_to_fix_a_directory_through_a_shared_dst_link() {
+    let t = temp_root("shared_link_fix_dir");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "link/x/y.txt", b"SRC");
+    wfile(&outside, "x", b"EXTERNAL-DATA");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let err = cmd_sync(sync_mem(src.clone(), dst.clone()), &log())
+        .expect_err("writing through a shared dst link must fail");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("link") && msg.contains("refusing"),
+        "the error names the link and the refusal: {msg}"
+    );
+    assert_eq!(
+        rfile(&outside, "x"),
+        b"EXTERNAL-DATA",
+        "the external file is untouched"
+    );
+    assert!(outside.join("x").is_file(), "and still a file");
+    assert!(is_link(&dst.join("link")), "the link is left in place");
+}
+
+/// The `copy_one` shape: `src/link/x` is a file, the shared `dst/link` junction
+/// resolves `x` to an external **directory**, and a recursive removal would
+/// delete its subtree. Before the guard that subtree was gone and the run exited
+/// 0; now it refuses before the first filesystem change.
+#[test]
+fn sync_refuses_to_copy_through_a_shared_dst_link() {
+    let t = temp_root("shared_link_copy");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "link/x", b"SRC-FILE");
+    wfile(&outside, "x/y.txt", b"EXTERNAL");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let err = cmd_sync(sync_mem(src.clone(), dst.clone()), &log())
+        .expect_err("copying through a shared dst link must fail");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("link") && msg.contains("refusing"),
+        "the error names the link and the refusal: {msg}"
+    );
+    assert_eq!(rfile(&outside, "x/y.txt"), b"EXTERNAL");
+    assert!(outside.join("x").is_dir(), "the external subtree survives");
+    assert!(is_link(&dst.join("link")), "the link is left in place");
+}
+
+// ---------------------------------------------------------------------------
+// N-4: a shared link with extras is not a converged sync
+// ---------------------------------------------------------------------------
+
+/// A default run must not exit 0 with extras it deliberately left under a
+/// shared link: `compare` immediately reports them. `--keep-extra` is the
+/// explicit opt-in to that non-convergence.
+#[test]
+fn a_shared_link_with_extras_fails_unless_keep_extra() {
+    let t = temp_root("shared_link_extras");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "link/x.txt", b"shared");
+    wfile(&outside, "x.txt", b"shared");
+    wfile(&outside, "y.txt", b"extra");
+    common::sync_mtime(&src.join("link/x.txt"), &outside.join("x.txt"));
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let err = cmd_sync(sync_mem(src.clone(), dst.clone()), &log())
+        .expect_err("a default run cannot converge while extras remain");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("shared") && msg.contains("--keep-extra"),
+        "the error explains the non-convergence and the escape hatch: {msg}"
+    );
+
+    let mut keep = sync_mem(src.clone(), dst.clone());
+    keep.keep_extra = true;
+    assert_eq!(
+        cmd_sync(keep, &log()).unwrap(),
+        0,
+        "keep-extra accepts the non-convergence"
+    );
+    assert_eq!(rfile(&outside, "y.txt"), b"extra");
+    assert!(is_link(&dst.join("link")), "the shared link is kept");
+}
+
+// ---------------------------------------------------------------------------
+// N-5: a case-only rename is not a way through a shared link
+// ---------------------------------------------------------------------------
+
+/// `rename_to_src_casing` would otherwise move the target's `x.txt` to
+/// `X.txt`. The pass validates every pair before its first filesystem call.
+#[test]
+fn sync_refuses_to_rename_through_a_shared_dst_link() {
+    let t = temp_root("shared_link_rename");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "link/X.txt", b"payload");
+    wfile(&outside, "x.txt", b"payload");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let mut opts = sync_mem(src.clone(), dst.clone());
+    opts.common.case_sensitive = false;
+    let err = cmd_sync(opts, &log()).expect_err("renaming through a shared dst link must fail");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("rename") && msg.contains("link"),
+        "the error names the rename and the link: {msg}"
+    );
+    assert_eq!(
+        entry_names(&outside),
+        ["x.txt"],
+        "the target's entry name is unchanged"
+    );
+    assert!(is_link(&dst.join("link")), "the link is left in place");
+}
+
+// ---------------------------------------------------------------------------
+// N-2: a successful sync leaves the cache in step
+// ---------------------------------------------------------------------------
+
+/// Removing a link removes the followed descendants too. Their cache rows used
+/// to survive, so `compare-self` reported the link's target paths as missing
+/// immediately after a successful sync.
+#[test]
+fn a_sync_that_removes_a_link_leaves_compare_self_clean() {
+    let t = temp_root("link_cache_prune");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "real/x.txt", b"shared content");
+    wfile(&dst, "real/x.txt", b"shared content");
+    common::sync_mtime(&src.join("real/x.txt"), &dst.join("real/x.txt"));
+    skip_if_no_link!("directory", dir_link(&dst.join("real"), &dst.join("link")));
+
+    assert_eq!(
+        cmd_sync(common::sync(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(!dst.join("link").exists(), "the link is removed");
+    assert_eq!(rfile(&dst, "real/x.txt"), b"shared content");
+    assert_eq!(
+        cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
+        0,
+        "the dst cache no longer claims the link's descendants"
+    );
+}
+
+/// `fix_dirs` creates a directory but used to leave no row for it, so
+/// `compare-self` reported the directory the sync just created as extra. This
+/// is the non-link half of the same cache-drift bug.
+#[test]
+fn a_type_conflict_fix_leaves_compare_self_clean() {
+    let t = temp_root("fix_dir_cache_row");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "dir/x.txt", b"x");
+    wfile(&dst, "dir", b"blocking file");
+
+    assert_eq!(
+        cmd_sync(common::sync(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(dst.join("dir").is_dir());
+    assert_eq!(rfile(&dst, "dir/x.txt"), b"x");
+    assert_eq!(
+        cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
+        0,
+        "the directory this run created has a cache row"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// N-3: an excluded link is left alone, and the dry run says so
+// ---------------------------------------------------------------------------
+
+/// The exclude is a subtree, so neither the link nor its followed descendants
+/// enter the plan. The dry run and the real run therefore name the same
+/// (empty) set of removals, and the link survives both.
+#[test]
+fn excluding_a_dst_link_leaves_it_and_its_target_alone() {
+    let t = temp_root("exclude_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "a.txt", b"a");
+    wfile(&outside, "x.txt", b"external");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let (dry_status, dry) = sync_bin(&src, &dst, &["--exclude", "link", "--dry-run"]);
+    assert!(dry_status.success(), "dry run failed: {dry:?}");
+    assert!(is_link(&dst.join("link")), "the dry run touches nothing");
+    assert!(
+        paths(&dry, "delete").is_empty(),
+        "the excluded link is not deleted: {dry:?}"
+    );
+
+    let (status, recs) = sync_bin(&src, &dst, &["--exclude", "link"]);
+    assert!(status.success(), "sync failed: {recs:?}");
+    assert!(is_link(&dst.join("link")), "the excluded link survives");
+    assert_eq!(rfile(&outside, "x.txt"), b"external");
+    assert_eq!(
+        paths(&dry, "delete"),
+        paths(&recs, "delete"),
+        "the dry run names the same removals as the real run"
+    );
+    assert_eq!(paths(&dry, "rmdir"), paths(&recs, "rmdir"));
+    assert!(paths(&recs, "delete").is_empty(), "{recs:?}");
 }
