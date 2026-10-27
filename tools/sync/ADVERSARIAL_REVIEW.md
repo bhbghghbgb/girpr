@@ -505,14 +505,19 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
    control flow is source-verified; the OS error codes for `File::create` on a
    directory link and for `remove_file` through an intermediate link are standard but
    not observed here.
-2. **Windows junctions.** `FileType::is_symlink()` is false for a junction, while
-   `is_dir()` is true. The walk follows junctions (they are reparse points resolved by
-   `fs::metadata`), so F-1’s deletion shape applies to junctions too. A naive
-   `d.is_symlink()` check would not catch a junction; whether `remove_dir_all` on a
-   junction removes only the junction or recurses into the target is **not verified**
-   here. A robust fix should detect reparse points via
-   `std::os::windows::fs::MetadataExt::file_attributes()` and
-   `FILE_ATTRIBUTE_REPARSE_POINT`, or use `symlink_metadata` plus a platform helper.
+2. **Windows junctions — corrected in the second pass.** This section originally
+   said `FileType::is_symlink()` is false for a junction and `is_dir()` is true.
+   That is wrong on rustc 1.98.1: `symlink_metadata` on a junction reports
+   `is_symlink = true`, `is_dir = false`, `is_file = false`, `attrs = 0x410`,
+   while `path_is_symlink()` is true and followed `metadata()` is a directory.
+   Older toolchains have been reported to differ, so the `FileType` bits are not
+   a portable test. The walk follows junctions (they are reparse points resolved
+   by `fs::metadata`), so F-1’s deletion shape applies to them too. The reliable
+   test is `FILE_ATTRIBUTE_REPARSE_POINT` from
+   `std::os::windows::fs::MetadataExt::file_attributes()`; `src/link.rs` now
+   uses it and does not depend on the `FileType` bits. Whether `remove_dir_all`
+   on a junction removes only the junction or recurses into the target is still
+   **not verified** here, and the fix avoids depending on it.
 3. **`remove_dir_all` on a directory symlink.** Rust’s documentation says it removes
    the link rather than following it, but I did not run it. F-1 does not depend on
    this: the data loss is the `remove_file` of a descendant.
@@ -572,57 +577,195 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
 ## 7. Implementation progress
 
 Landed on `fix-gaps/girsync`, scoped to `tools/sync`. The review text above is
-unchanged; this section records what happened to each finding and what remains
-unverified. The closing line still describes the review itself, not the
-implementation.
+unchanged except where this section marks a correction. This section records what
+happened to each finding; §8 records the second adversarial pass that re-opened
+F-1 and the fixes for it. The closing line still describes the original audit,
+not the implementation.
 
 | ID | Status | Change | Commits |
 |----|--------|--------|---------|
-| F-1 | **fixed**, covered | Link-ness is carried from the walk (`link::is_link`, junction-aware via the reparse attribute) into `LiveEnt`/`SideEntry`/`EffRec`. `build_plan` replaces any extra path under a dst link with the topmost link and drops its descendants from `delete_files`/`rmdir`; both apply passes re-check disk before removing. A link `src` also has is left in place. Tests: inside-dst target, external target, `--keep-extra`. | `1c827b2`, `42b9766`, `cca7218` |
-| F-2 | **fixed**, covered | `copy_one` unlinks a directory link at a file path with a platform-correct call (`remove_dir` on Windows, `remove_file` on Unix) instead of skipping it and failing in `File::create`. A file link is still followed and written through. Test uses a directory link to an external target. | `2bec6b3`, `cca7218` |
-| F-3 | **tests** | Nine link cases plus the F-2 regression: three walk cases (file link stats as target, directory link subtree, dangling link aborts) and seven `sync` cases (src file link, src dir link, dst file-link write-through, F-2, F-1 inside/external, `--keep-extra`). Directory links fall back to a junction where `symlink_dir` needs a privilege. | `1c827b2`, `2bec6b3`, `42b9766`, `f4ffb59` |
+| F-1 | **fixed**, covered after the second pass | Link-ness is carried from the walk (`link::try_is_link`, reparse-attribute based, so junctions are included) into `LiveEnt`/`SideEntry`/`EffRec`. `build_plan` replaces any extra path under a dst link with the topmost link and drops its descendants from `delete_files`/`rmdir`; both apply passes re-check disk before removing. The second pass found that a **shared** dst link (src also has the path) still let writes and type-conflict fixes traverse it; `plan::ensure_link_safe` now refuses such a plan before the dry run or any filesystem change, and every destructive apply path re-checks its ancestors. Tests: inside-dst target, external target, `--keep-extra`, shared-link fix/copy/rename refusal, shared-link extras. | `1c827b2`, `42b9766`, `cca7218`; `9beede2`, `00f3e39`, `dae1a78`, `943e2d5` |
+| F-2 | **fixed**, covered | `copy_one` unlinks a directory link at a file path with a platform-correct call (`link::remove`: `remove_dir` on Windows for a directory target, `remove_file` on Unix) instead of skipping it and failing in `File::create`. A file link is still followed and written through, and the README now says so. Test uses a directory link to an external target. | `2bec6b3`, `cca7218` |
+| F-3 | **tests** | 17 link cases in `tests/symlink.rs`: three walk cases (file link stats as target, directory link subtree, dangling link aborts) and fourteen `sync` cases (src file link, src dir link, dst file-link write-through, F-2, F-1 inside/external, `--keep-extra`, shared-link fix/copy/rename refusal, shared-link extras fail vs `--keep-extra`, `compare-self` clean after link removal and after a type-conflict fix, `--exclude link`). Directory links fall back to a junction where `symlink_dir` needs a privilege. | `1c827b2`, `2bec6b3`, `42b9766`, `f4ffb59`, `943e2d5` |
 | F-4 | **tests** | Depth-11 file with the default cap: `sync` exits 0, the deep file stays unmirrored, the shallow file is copied. | `d077a78` |
 | F-5 | **tests** | Case-only pair (`src/a.txt`, `dst/A.txt`, equal bytes): exit 4, JSON `SUMMARY` has `case_mismatch=1`, `total_diff=0`. | `ddadcc9` |
 | F-6 | **documented**, no test | The copy step now says a failed mtime restore aborts the run although the bytes are correct (a rerun recopies), and `copy_one` carries the same point at the call site. No behavior change. The review made a test optional; none was added. | `d077a78`, `1d723cb` |
 | F-7 | **tests** + README | Test-only `GIRSYNC_TEST_FAIL_COPY` (fails one path before opening dst) plus `GIRSYNC_TEST_COMMIT_OPS=2`: four copies, failure on `f2.bin`, exactly two committed rows, the failing path uncached, rerun converges. The “No resume” note now states that the uncommitted cache tail is lost. | `d077a78` |
 
-**Failing first.** The F-1 and F-2 tests were run against the pre-fix tree (the
-fix files stashed). F-1 panicked reading `real/x` (`NotFound`) for both the
-inside-dst and external-target fixtures; F-2 aborted with
+**Failing first.** The first-pass F-1 and F-2 tests were run against the pre-fix
+tree (the fix files stashed). F-1 panicked reading `real/x` (`NotFound`) for both
+the inside-dst and external-target fixtures; F-2 aborted with
 `create ...\dst\a.bin: Access is denied. (os error 5)`. Both pass with the fixes.
+The second-pass fixes were driven by the reviewer’s binary reproductions at
+`6d0e118` (§8), not by a new failing-first run; the new tests pin the refusal
+before any write.
 
-**Final verification.** On Windows 11, on `fix-gaps/girsync` (source at `cca7218`;
+**Final verification.** On Windows 11, on `fix-gaps/girsync` (source at `943e2d5`;
 this section is a later docs-only commit):
 
 - `cargo build -p girsync` — Finished, no warnings.
-- `cargo test -p girsync` — 339 passed, 0 failed, 1 ignored
-  (`tests/sync.rs:583`, a pre-existing `#[ignore]` for a known issue).
+- `cargo test -p girsync` — 351 passed, 0 failed, 1 ignored
+  (`tests/sync.rs`, a pre-existing `#[ignore]` for a known issue).
+- `cargo nextest run -p girsync` — 351/351 passed, 1 skipped.
 - `cargo clippy -p girsync --all-targets` — clean, no warnings.
 - `cargo fmt -p girsync --check` — exit 0.
+
+The suite has 352 test functions, 351 of them run by default.
 
 This host refuses to create a file link without the privilege (`os error 1314`),
 so the four file-link cases (`walk_follows_a_file_link`,
 `walk_aborts_on_a_dangling_link`, `sync_materializes_a_src_file_link`,
 `sync_writes_through_a_dst_file_link`) print
 `skip: this platform refused a file link: …` and return early; they count
-as passes in the 10/10 `tests/symlink.rs` result. Every directory-link case runs
+as passes in the 17/17 `tests/symlink.rs` result. Every directory-link case runs
 here through `cmd /c mklink /J`, including F-1 and F-2.
 
 **Not verified; decisions left.**
 
 - True `symlink_dir` (as opposed to a junction) is not exercised on this host,
-  and no Unix link path was run. `link::is_reparse_dir` covers junctions because
-  `FileType::is_symlink` is false for them.
+  and no Unix link path was run. Junctions are detected by the reparse attribute,
+  not by `FileType::is_symlink`, which is true for them on rustc 1.98.1.
 - `std::fs::remove_dir_all` on a *genuine* directory that contains a junction is
   still unexercised; only paths that are themselves links are special-cased. The
   pre-existing recursive removals keep their old behavior.
-- The planner intentionally leaves a dst link at a path `src` also has, so
-  its extra descendants remain and a later `compare` still reports them. This is
-  documented in the README; confirm that keeping content is preferred over
-  removing the shared link.
+- A shared link is now a hard boundary: default `sync` fails before touching the
+  filesystem if it would write, delete or rename through one, or if it would
+  leave extras under one. `--keep-extra`/`--missing-only` opt out of the extras
+  failure only and warn that the run does not converge; writes remain refused.
 - An mtime-restore failure (F-6) still has no injected test.
 
 ---
 
-*End of review. No source, test, Cargo, README, or other project file was changed;
-no build, test, or binary run was performed.*
+## 8. Second adversarial pass (N-1…N-8)
+
+A second review re-audited the first-pass tip `6d0e118` with the built binary in
+`E:\Symlinks\Temp\audit2`, a standalone junction probe on rustc 1.98.1, and the
+source at that tip. Its notes are folded in here; the notes file itself is
+removed. All eight findings are **valid**. N-1, N-2, N-3, N-4 and N-5 were
+reproduced with the binary or by `compare-self`; N-6 is a cost claim confirmed
+from the call sites; N-7 and N-8 are confirmed from the source.
+
+| ID | Severity | Verdict | Resolution | Commits |
+|----|----------|---------|------------|---------|
+| N-1 | high | valid, fixed | Shared-link type conflict deleted external data through `fix_dirs` and `copy_one`. `plan::ensure_link_safe` now refuses any action with a strict link ancestor before the dry run or apply, and `mkdirs`, `fix_dirs`, `copy_one`, `rename_to_src_casing` re-check. | `00f3e39`, `dae1a78`, `943e2d5` |
+| N-2 | medium | valid, fixed | (a) Cache rows under a removed link are pruned by prefix; (b) `fix_dirs` writes its `FileRec::dir()` row. `compare-self` is clean after either. | `dae1a78`, `943e2d5` |
+| N-3 | medium | valid, fixed | An excluded directory now excludes its subtree; include-filtered descendants keep their ancestor directories, so a link above them stays visible. Dry run and real run name the same path. | `5092cce`, `943e2d5` |
+| N-4 | medium | valid, resolved | Shared link with extra descendants: default `sync` now fails instead of exiting 0; `--keep-extra`/`--missing-only` warn and accept the non-convergence. | `00f3e39`, `943e2d5` |
+| N-5 | medium | valid, fixed | Rename through a shared link is refused before the rename. | `00f3e39`, `943e2d5` |
+| N-6 | low/medium | valid, fixed | Reparse check gated on `ft.is_dir()`; `try_is_link` is one `symlink_metadata`; `topmost_link_ancestor` is one stat per component, and its comment says so. | `9beede2` |
+| N-7 | low | valid, fixed | Junction doc corrected; README symlink/filter bullets rewritten to match the code; the `link.rs` “only place” claim softened; `prune_dst_cache` comment made true; test count and §7 overclaim corrected. | `9beede2`, `5092cce`, `dae1a78`, this commit |
+| N-8 | low | valid, fixed | `try_is_link` propagates non-`NotFound` errors; `link::remove` propagates metadata errors; removal helpers match `NotFound` explicitly and propagate the rest; `fix_dirs` uses `link::remove`. | `9beede2`, `dae1a78` |
+
+### N-1 — shared-link type conflict deleted external data
+
+Reproduction A: `src/link/x/y.txt`; `dst/link` a junction to `outside`;
+`outside/x` a file holding external bytes. `sync` reported
+`type-conflict link/x` then `fix-dir link/x`, replaced the external file with a
+directory containing src’s `y.txt`, and exited 0 with `deleted=0`.
+
+Reproduction B: `src/link/x` a file; `dst/link` the same junction;
+`outside/x/y.txt` external. The planner refused the extra under the shared link,
+but `copy_one`’s `remove_dir_all(dst/link/x)` deleted the external subtree and
+wrote src’s file; exit 0, `deleted=0`.
+
+The class is “a destructive operation must not traverse a link ancestor”, not
+just the delete-extras path. The branch chooses fail-fast: `ensure_link_safe`
+iterates every `mkdir`/`copy`/`fix_dirs`/`delete_files`/`rmdir` action, asks
+`link::link_ancestor_above`, and bails naming the link before the dry run or the
+first filesystem change. The apply phases re-check as belt and braces. Tests:
+`sync_refuses_to_fix_a_directory_through_a_shared_dst_link`,
+`sync_refuses_to_copy_through_a_shared_dst_link`,
+`sync_refuses_to_rename_through_a_shared_dst_link`.
+
+### N-2 — cache drift after a successful sync
+
+(a) Removing a dst-only link dropped only the planned row, so `compare-self`
+reported the followed descendant as missing and exited 4.
+`predrop_cache_entries`, `remove_unknown_dirs` and `prune_dst_cache` now drop
+every row with the removed link’s prefix. Test
+`a_sync_that_removes_a_link_leaves_compare_self_clean`.
+
+(b) `fix_dirs` created the directory but never wrote a cache row, so
+`compare-self` reported the new directory as extra — for a plain type conflict
+as well as under a link. It now writes `FileRec::dir()`. Test
+`a_type_conflict_fix_leaves_compare_self_clean`.
+
+### N-3 — `--exclude` of a directory
+
+`--exclude link` removed the exact entry but kept `link/x.txt`, because the glob
+did not match the descendant. The plan therefore scheduled the descendant, and
+the runtime guard deleted the excluded link: dry run said `DELETE link/x.txt`,
+the real run said `DELETE link`. `filter.rs` now treats an excluded directory as
+excluding its whole subtree; `effective/phase_a.rs` keeps ancestor directories
+when an include matches only a descendant, which is what keeps a link above an
+included path visible. Test `excluding_a_dst_link_leaves_it_and_its_target_alone`
+asserts the excluded link and its target survive and the dry/real records agree;
+unit tests cover subtree exclusion and ancestor retention.
+
+### N-4 — shared link with extra descendants
+
+`sync` reported `extra link/y.txt`, deleted nothing, and exited 0; `compare` on
+the same tree exited 4. `build_plan` records `shared_link_extras`;
+`ensure_link_safe` fails by default because the run cannot converge without
+deleting through the link. `--keep-extra` and `--missing-only` deliberately allow
+that extra-only non-convergence and log a warning; writes are still refused.
+Test `a_shared_link_with_extras_fails_unless_keep_extra`.
+
+### N-5 — rename through a shared link
+
+`rename_to_src_casing` renamed `dst/link/x.txt` to `dst/link/X.txt`, mutating the
+external target and exiting 0. It now refuses when the path has a link ancestor,
+and the plan guard catches the same case earlier. Test
+`sync_refuses_to_rename_through_a_shared_dst_link`.
+
+### N-6 — scan and deletion cost
+
+The walk called the reparse check for every entry, including regular files;
+`is_link` cost two `symlink_metadata` calls per non-link component. The reparse
+check is now gated on `ft.is_dir()`, `try_is_link` is one `symlink_metadata`, and
+`topmost_link_ancestor` is one stat per component. The comment in `link.rs` now
+matches the cost.
+
+### N-7 — documentation and claims
+
+- The junction claim is corrected in §5.2 and in `link.rs`: on rustc 1.98.1 a
+  junction reports `is_symlink = true`, `is_dir = false`, `attrs = 0x410`; the
+  reparse attribute is the test, not the `FileType` bits.
+- The README symlink bullet now says a dst file link is written through, a dst
+  directory link at a file path is unlinked, a path under a dst link is never
+  deleted through it, and a shared link fails before writes/renames. The filter
+  bullet documents subtree exclusion and ancestor retention. The old absolutes
+  (“not deleted through it”, “left untouched”) are scoped to the delete pass.
+- “The README documents write-through” is now true: the sentence was added.
+- `link.rs`’s “the only place that decides link-ness” became “the single
+  definition of link-ness; … every destructive apply path asks them”, and those
+  paths do use `try_is_link`/`link_ancestor_above`.
+- `prune_dst_cache`’s “all three put a cache row” comment is true now that
+  `fix_dirs` writes its row.
+- The test count is 352 functions / 351 run, and §7’s “F-1 fixed, covered” is
+  corrected above.
+
+### N-8 — swallowed errors
+
+`try_is_link` propagates every error except `NotFound`; `link::remove` propagates
+a metadata error instead of guessing; the delete/rmdir/link removal helpers match
+`NotFound` explicitly and propagate everything else, so a failed unlink of a
+dangling link is no longer hidden; `fix_dirs` uses `link::remove` rather than raw
+`remove_file`. `delete_extras` still treats an absent path as done, which is
+correct after the pre-drop; the plan guard makes the link case unreachable.
+
+### Policy decision
+
+The reviewer’s preferred single decision was “shared links are unsupported, fail
+fast.” That is what the branch now does: a default sync refuses any
+write/delete/rename through a shared link and refuses to leave extras under one.
+`--keep-extra`/`--missing-only` are explicit opt-outs for the extras case only,
+and they warn that the run does not converge. This resolves N-1, N-4 and N-5
+with one testable rule instead of the earlier hybrid.
+
+---
+
+*End of review. Sections 1–6 describe the original source-only audit: no source,
+test, Cargo, README, or other project file was changed and no build, test, or
+binary run was performed for them. Sections 7–8 record the implementation and the
+second pass, which did build, test and run the binary.*
