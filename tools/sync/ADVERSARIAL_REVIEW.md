@@ -569,5 +569,60 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
 
 ---
 
+## 7. Implementation progress
+
+Landed on `all/fix-gaps`, scoped to `tools/sync`. The review text above is
+unchanged; this section records what happened to each finding and what remains
+unverified. The closing line still describes the review itself, not the
+implementation.
+
+| ID | Status | Change | Commits |
+|----|--------|--------|---------|
+| F-1 | **fixed**, covered | Link-ness is carried from the walk (`link::is_link`, junction-aware via the reparse attribute) into `LiveEnt`/`SideEntry`/`EffRec`. `build_plan` replaces any extra path under a dst link with the topmost link and drops its descendants from `delete_files`/`rmdir`; both apply passes re-check disk before removing. A link `src` also has is left in place. Tests: inside-dst target, external target, `--keep-extra`. | `1c827b2`, `42b9766`, `cca7218` |
+| F-2 | **fixed**, covered | `copy_one` unlinks a directory link at a file path with a platform-correct call (`remove_dir` on Windows, `remove_file` on Unix) instead of skipping it and failing in `File::create`. A file link is still followed and written through. Test uses a directory link to an external target. | `2bec6b3`, `cca7218` |
+| F-3 | **tests** | Nine link cases plus the F-2 regression: three walk cases (file link stats as target, directory link subtree, dangling link aborts) and seven `sync` cases (src file link, src dir link, dst file-link write-through, F-2, F-1 inside/external, `--keep-extra`). Directory links fall back to a junction where `symlink_dir` needs a privilege. | `1c827b2`, `2bec6b3`, `42b9766`, `f4ffb59` |
+| F-4 | **tests** | Depth-11 file with the default cap: `sync` exits 0, the deep file stays unmirrored, the shallow file is copied. | `d077a78` |
+| F-5 | **tests** | Case-only pair (`src/a.txt`, `dst/A.txt`, equal bytes): exit 4, JSON `SUMMARY` has `case_mismatch=1`, `total_diff=0`. | `ddadcc9` |
+| F-6 | **documented**, no test | The copy step now says a failed mtime restore aborts the run although the bytes are correct (a rerun recopies), and `copy_one` carries the same point at the call site. No behavior change. The review made a test optional; none was added. | `d077a78`, `1d723cb` |
+| F-7 | **tests** + README | Test-only `GIRSYNC_TEST_FAIL_COPY` (fails one path before opening dst) plus `GIRSYNC_TEST_COMMIT_OPS=2`: four copies, failure on `f2.bin`, exactly two committed rows, the failing path uncached, rerun converges. The “No resume” note now states that the uncommitted cache tail is lost. | `d077a78` |
+
+**Failing first.** The F-1 and F-2 tests were run against the pre-fix tree (the
+fix files stashed). F-1 panicked reading `real/x` (`NotFound`) for both the
+inside-dst and external-target fixtures; F-2 aborted with
+`create ...\dst\a.bin: Access is denied. (os error 5)`. Both pass with the fixes.
+
+**Final verification.** On Windows 11, on `all/fix-gaps` (source at `cca7218`;
+this section is a later docs-only commit):
+
+- `cargo build -p girsync` — Finished, no warnings.
+- `cargo test -p girsync` — 339 passed, 0 failed, 1 ignored
+  (`tests/sync.rs:583`, a pre-existing `#[ignore]` for a known issue).
+- `cargo clippy -p girsync --all-targets` — clean, no warnings.
+- `cargo fmt -p girsync --check` — exit 0.
+
+This host refuses to create a file link without the privilege (`os error 1314`),
+so the four file-link cases (`walk_follows_a_file_link`,
+`walk_aborts_on_a_dangling_link`, `sync_materializes_a_src_file_link`,
+`sync_writes_through_a_dst_file_link`) print
+`skip: this platform refused a file link: …` and return early; they count
+as passes in the 10/10 `tests/symlink.rs` result. Every directory-link case runs
+here through `cmd /c mklink /J`, including F-1 and F-2.
+
+**Not verified; decisions left.**
+
+- True `symlink_dir` (as opposed to a junction) is not exercised on this host,
+  and no Unix link path was run. `link::is_reparse_dir` covers junctions because
+  `FileType::is_symlink` is false for them.
+- `std::fs::remove_dir_all` on a *genuine* directory that contains a junction is
+  still unexercised; only paths that are themselves links are special-cased. The
+  pre-existing recursive removals keep their old behavior.
+- The planner intentionally leaves a dst link at a path `src` also has, so
+  its extra descendants remain and a later `compare` still reports them. This is
+  documented in the README; confirm that keeping content is preferred over
+  removing the shared link.
+- An mtime-restore failure (F-6) still has no injected test.
+
+---
+
 *End of review. No source, test, Cargo, README, or other project file was changed;
 no build, test, or binary run was performed.*
