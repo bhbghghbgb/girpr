@@ -412,6 +412,49 @@ async fn partial_tmp_prefix_is_resumed() {
 }
 
 #[tokio::test]
+async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
+    // Resume-by-length keeps a prefix it has not verified, so a `_tmp` that is
+    // already the right length can be entirely wrong. The whole-file MD5 gate
+    // is what refuses it: the promote deletes the `_tmp`, the file attempt is
+    // retried, and the second attempt downloads the file from scratch instead
+    // of promoting the corrupt bytes.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("corrupt_tmp_full");
+    let fx2 = build_fixture();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let bad = vec![0xEEu8; fx2.files[0].data.len()];
+    write_game_file(&dir, "game/foo.dat_tmp", &bad);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.repair_mode = RepairMode::Temp;
+    ctx.repair_mode_explicit = true;
+    let (summary, code) = repair::run(ctx).await.expect("the retry repairs the file");
+    assert_eq!(code, 0);
+    assert_eq!(
+        summary.files_failed.load(Ordering::Relaxed),
+        0,
+        "the corrupt attempt was retried, not counted as a failure"
+    );
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the rebuilt file is the manifest's"
+    );
+    assert!(
+        !dir.join("game").join("foo.dat_tmp").exists(),
+        "the `_tmp` was deleted by the failed gate and rebuilt"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
+        "the full-length corrupt `_tmp` was not reused"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write() {
     // The manifest is server data. Every spelling that `Path::join` would use
     // to replace the base — a parent traversal, a drive-relative `C:`, an
