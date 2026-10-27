@@ -127,7 +127,21 @@ pub async fn scan_plan(
 
     let mut out = ScanReport::default();
     while let Some(res) = stream.next().await {
-        let Ok(scanned) = res else { continue };
+        let scanned = match res {
+            Ok(scanned) => scanned,
+            Err(e) => {
+                // `scan_one` catches unreadable files itself and answers
+                // "nothing is correct", so the only error here is a panic or a
+                // cancellation. Dropping it silently would undercount the scan
+                // with no trace of why; the estimate stays safe (an unreached
+                // file is estimated in full, see `est_download_bytes`).
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    "scan task failed; unreached files are estimated in full"
+                );
+                continue;
+            }
+        };
         out.bytes += scanned.bytes;
         out.damaged_chunks += scanned.verdict.damaged_chunks();
         out.files.insert(scanned.rel, scanned.verdict);
