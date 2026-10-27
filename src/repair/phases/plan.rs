@@ -165,6 +165,19 @@ pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i
         .sum()
 }
 
+/// The key the plan dedups on.
+///
+/// On Windows two paths that differ only in case are the same file, so they
+/// must not both be planned: the transform is case folding. On Unix they are
+/// distinct files, so the key is the path itself.
+fn dedup_key(rel: &str) -> String {
+    if cfg!(windows) {
+        rel.to_lowercase()
+    } else {
+        rel.to_string()
+    }
+}
+
 /// Build sorted, deduped, blacklist-filtered, scope-filtered plan.
 /// `per_manifest`: (chunk_url_prefix, files).
 ///
@@ -194,7 +207,12 @@ pub fn build_plan(
             let rel = util::contained_rel(&f.file)
                 .with_context(|| format!("manifest path {:?}", f.file))?;
             let rel = rel.to_string_lossy().replace('\\', "/");
-            if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(rel.clone()) {
+            // Windows paths are case-insensitive, and the path scope is
+            // matched case-insensitively too. Two manifest spellings that
+            // differ only in case therefore name **one** file; planning both
+            // would hand the same target to two workers at once.
+            if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(dedup_key(&rel))
+            {
                 continue;
             }
             prefix.insert(rel.clone(), url_prefix.clone());
@@ -492,6 +510,29 @@ mod tests {
             let got = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
             assert!(got.is_err(), "{bad:?} must not reach the plan");
         }
+    }
+
+    /// Windows: two manifest spellings that differ only in case name the same
+    /// file. Planning both would spawn two workers writing the same target
+    /// concurrently; the scope is already case-insensitive, so the plan has to
+    /// agree.
+    #[cfg(windows)]
+    #[test]
+    fn the_plan_dedups_case_insensitively_on_windows() {
+        let mut files = Vec::new();
+        for (file, md5) in [("Game/Foo.dat", "m1"), ("game/foo.dat", "m2")] {
+            files.push(SophonChunkFile {
+                file: file.into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: md5.into(),
+            });
+        }
+        let per = vec![("http://x".to_string(), files)];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+        assert_eq!(plan.files.len(), 1, "case variants are one file");
+        assert_eq!(plan.files[0].rel, "Game/Foo.dat", "the first spelling wins");
     }
 
     /// A leading `.` component is accepted but must not survive into the
