@@ -365,6 +365,110 @@ async fn partial_tmp_prefix_is_resumed() {
 }
 
 #[tokio::test]
+async fn a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write() {
+    // The manifest is server data. Every spelling that `Path::join` would use
+    // to replace the base — a parent traversal, a drive-relative `C:`, an
+    // absolute POSIX path — must fail the plan (metadata, exit 2) before a
+    // directory is created or a byte is written.
+    for bad in ["../outside.dat", "C:evil.dat", "/abs/evil.dat"] {
+        let fx = build_fixture_spec(&FixtureSpec::new(vec![FileSpec::new(
+            bad,
+            vec![ChunkSpec::new("chunk_evil", vec![0x45u8; 16], 0)],
+        )]));
+        let mock = MockServer::start(fx, MockOpts::default()).await;
+        let dir = temp_dir("escape_manifest");
+        let game = dir.join("install");
+
+        let err = repair::run(ctx_for(game.clone(), &mock, 1))
+            .await
+            .expect_err("an escaping manifest path is metadata");
+        assert_eq!(err.exit_code, 2, "{bad}");
+        assert!(!game.exists(), "{bad}: the game dir must not be created");
+        assert!(!dir.join("outside.dat").exists(), "{bad}: escaped write");
+        assert!(!dir.join("evil.dat").exists(), "{bad}: escaped write");
+
+        mock.stop();
+    }
+}
+
+#[tokio::test]
+async fn a_deprecated_path_that_escapes_the_game_dir_is_kept() {
+    // The deprecated list is a **delete** sink. A `../` name must be skipped
+    // with a warning, not resolved outside the install.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            deprecated_files: vec!["../victim.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("escape_deprecated");
+    let game = dir.join("install");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&game, &f.rel, &f.data);
+    }
+    std::fs::write(dir.join("victim.dll"), b"do not delete").unwrap();
+
+    let (summary, code) = repair::run(ctx_for(game, &mock, 2))
+        .await
+        .expect("the run itself is fine");
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read(dir.join("victim.dll")).unwrap(),
+        b"do not delete",
+        "the outside file must survive"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "nothing was deleted"
+    );
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_audio_cache_dir_that_escapes_the_game_dir_is_not_moved() {
+    // The cache/res move is a **mutation** sink fed by server strings. A `..`
+    // cache dir must be skipped, not walked and renamed out of the install.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            cache_dir: "../audio_cache".to_string(),
+            res_dir: "Audio/res".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("escape_audio");
+    let game = dir.join("install");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&game, &f.rel, &f.data);
+    }
+    std::fs::create_dir_all(dir.join("audio_cache")).unwrap();
+    std::fs::write(dir.join("audio_cache").join("a.pck"), b"cache bytes").unwrap();
+
+    let (_summary, code) = repair::run(ctx_for(game.clone(), &mock, 2))
+        .await
+        .expect("the run itself is fine");
+    assert_eq!(code, 0);
+    assert_eq!(
+        std::fs::read(dir.join("audio_cache").join("a.pck")).unwrap(),
+        b"cache bytes",
+        "the outside cache must not move"
+    );
+    assert!(
+        !game.join("Audio").join("res").join("a.pck").exists(),
+        "nothing may be moved into the install from outside it"
+    );
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_manifest_offset_overflow_fails_the_file_instead_of_panicking() {
     // The old code computed a chunk's end as `c.offset + c.uncompressed_size`
     // in `i64`, so an offset near `i64::MAX` panicked the file task in a debug

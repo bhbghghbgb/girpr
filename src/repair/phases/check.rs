@@ -52,21 +52,26 @@ pub fn verify_plan(
                 }
             }
             None => {
-                let p = game_dir.join(util::normalize_rel(&f.rel));
-                let actual_len = util::file_len(&p);
+                let path = util::contained_join(game_dir, &f.rel).ok();
+                let actual_len = path.as_deref().and_then(util::file_len);
                 if actual_len != Some(f.size as u64) {
                     bad += 1;
                     tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
                 } else {
-                    match util::md5_file(&p) {
-                        Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
-                        Ok(h) => {
+                    match path.as_deref().map(util::md5_file) {
+                        Some(Ok(h)) if h.eq_ignore_ascii_case(&f.md5) => {}
+                        Some(Ok(h)) => {
                             bad += 1;
                             tracing::warn!(file = %f.rel, expect_md5 = %f.md5, actual_md5 = %h, "CHECK fail: md5");
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             bad += 1;
                             tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
+                        }
+                        None => {
+                            // `build_plan` already refused it; defence in depth.
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, "CHECK fail: path escapes the game dir");
                         }
                     }
                 }

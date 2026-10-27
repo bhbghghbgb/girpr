@@ -385,7 +385,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if !ctx.dry_run {
         validate_chunk_ranges(file)?;
     }
-    let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
+    let final_path = util::contained_join(&ctx.game_dir, &file.rel)?;
     if let Some(parent) = final_path.parent()
         && !ctx.dry_run
     {

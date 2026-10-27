@@ -139,7 +139,19 @@ fn delete_deprecated(
             tracing::debug!("deprecated path out of scope, kept: {n}");
             continue;
         }
-        let p = game_dir.join(util::normalize_rel(n));
+        let p = match util::contained_join(game_dir, n) {
+            Ok(p) => p,
+            Err(e) => {
+                // The list is server data and this is a **delete** sink: an
+                // escape is skipped, never followed, and the skip is visible.
+                tracing::warn!(
+                    path = %n,
+                    error = %format!("{e:#}"),
+                    "deprecated path escapes the game dir; kept"
+                );
+                continue;
+            }
+        };
         if !p.is_file() {
             continue;
         }
@@ -182,8 +194,25 @@ fn move_audio_cache(
         tracing::debug!("audio cache->res out of scope, skipped");
         return;
     }
-    let cache = game_dir.join(util::normalize_rel(cache_dir));
-    let res = game_dir.join(util::normalize_rel(res_dir));
+    let (cache, res) = match (
+        util::contained_join(game_dir, cache_dir),
+        util::contained_join(game_dir, res_dir),
+    ) {
+        (Ok(cache), Ok(res)) => (cache, res),
+        (cache, res) => {
+            // Both are server data and this sink **moves files**: an escape is
+            // skipped, never followed. `--print-plan`/`--dry-run` cannot reach
+            // this (the post-phase is not run), but a real race would.
+            tracing::warn!(
+                cache = %cache_dir,
+                res = %res_dir,
+                cache_ok = cache.is_ok(),
+                res_ok = res.is_ok(),
+                "audio cache/res dir escapes the game dir; skipped"
+            );
+            return;
+        }
+    };
     if !cache.is_dir() {
         return;
     }

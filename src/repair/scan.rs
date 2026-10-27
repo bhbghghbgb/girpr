@@ -145,7 +145,29 @@ pub async fn scan_plan(
 
 /// Scan one file: one read, every answer.
 fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> Scanned {
-    let path = game_dir.join(util::normalize_rel(&file.rel));
+    let path = match util::contained_join(game_dir, &file.rel) {
+        Ok(p) => p,
+        Err(e) => {
+            // `build_plan` already refused an escaping rel, so this is defence
+            // in depth. Treat it like an unreadable file: nothing is correct.
+            tracing::warn!(
+                file = %file.rel,
+                error = %format!("{e:#}"),
+                "scan: path escapes the game dir; nothing is correct"
+            );
+            let n = file.chunks.len();
+            return Scanned {
+                rel: file.rel.clone(),
+                bytes: 0,
+                verdict: Verdict {
+                    file_md5: util::EMPTY_MD5.to_string(),
+                    len: 0,
+                    dest_ok: vec![false; n],
+                    source_ok: vec![false; n],
+                },
+            };
+        }
+    };
     let entries = local_map.get(&file.rel);
     let sources = reuse::sources_for(&file.chunks, entries.map(|v| v.as_slice()).unwrap_or(&[]));
     let dest_ranges: Vec<util::ScanRange<'_>> = file

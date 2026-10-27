@@ -50,7 +50,7 @@ pub(super) async fn attempt_temp(
         tracing::info!("would repair");
         return Ok(Inplace::DryRun);
     }
-    let stats = repair_attempt(ctx, file, prefix, tmp_path, writes).await?;
+    let stats = repair_attempt(ctx, file, prefix, tmp_path, final_path, writes).await?;
     Ok(Inplace::Repaired(stats))
 }
 
@@ -60,6 +60,7 @@ async fn repair_attempt(
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
     let mut stats = ChunkStats {
@@ -71,7 +72,7 @@ async fn repair_attempt(
     // not part of the install, so the reported `download_bytes` — "the bytes
     // of the files that were actually repaired" — does not count them. The
     // settle happens where the file is promoted, in `repair_all`.
-    repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats, writes).await
+    repair_attempt_inner(ctx, file, prefix, tmp_path, final_path, &mut stats, writes).await
 }
 
 /// One full pass over a file's chunks, then verify + promote. The caller
@@ -81,6 +82,7 @@ async fn repair_attempt_inner(
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     stats: &mut ChunkStats,
     writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
@@ -103,7 +105,7 @@ async fn repair_attempt_inner(
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, writes)? {
+        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, writes)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -125,7 +127,7 @@ async fn repair_attempt_inner(
     }
     f.flush()?;
     drop(f);
-    promote_tmp(ctx, file, tmp_path, stats, writes)
+    promote_tmp(file, tmp_path, final_path, stats, writes)
 }
 
 /// What one chunk needed. `Resumed` (already complete) and `Reused` (copied
@@ -184,7 +186,7 @@ fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
 fn try_reuse_slice(
     ctx: &FileCtx,
-    file: &PlannedFile,
+    src: &std::path::Path,
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
@@ -225,11 +227,10 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     };
 
-    let src = ctx.game_dir.join(util::normalize_rel(&file.rel));
-    match util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
+    match util::md5_file_slice(src, *ro as u64, c.uncompressed_size as u64) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            let mut sf = File::open(&src)?;
+            let mut sf = File::open(src)?;
             sf.seek(SeekFrom::Start(*ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
             let mut buf = vec![0u8; COPY_BUF];
@@ -421,9 +422,9 @@ pub(super) async fn write_downloaded_chunk(
 /// deleted and the file is retried/failed, never promoted partially.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
 fn promote_tmp(
-    ctx: &FileCtx,
     file: &PlannedFile,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     stats: &ChunkStats,
     writes: &FileWrites,
 ) -> Result<ChunkStats> {
@@ -442,8 +443,7 @@ fn promote_tmp(
             h
         );
     }
-    let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
-    std::fs::rename(tmp_path, &final_path).with_context(|| format!("promote {}", file.rel))?;
+    std::fs::rename(tmp_path, final_path).with_context(|| format!("promote {}", file.rel))?;
     tracing::info!(chunks_total = stats.chunks_total, chunks_reused = stats.chunks_reused, chunks_downloaded = stats.chunks_downloaded, chunks_resumed = stats.chunks_resumed, download_bytes = stats.download_bytes, final_md5 = %h, "repaired");
     Ok(ChunkStats {
         download_bytes: stats.download_bytes,

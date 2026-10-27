@@ -120,13 +120,27 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let ignore = if config.res_category_dir.is_empty() {
         HashSet::new()
     } else {
-        util::read_ignore_categories(&game_dir.join(util::normalize_rel(&config.res_category_dir)))
+        let p = util::contained_join(game_dir, &config.res_category_dir)
+            .context("res_category_dir")
+            .map_err(RunFailure::metadata)?;
+        util::read_ignore_categories(&p)
     };
     let blacklist = if config.enable_resource_blacklist && !config.blacklist_dir.is_empty() {
-        util::read_blacklist(&game_dir.join(util::normalize_rel(&config.blacklist_dir)))
+        let p = util::contained_join(game_dir, &config.blacklist_dir)
+            .context("blacklist_dir")
+            .map_err(RunFailure::metadata)?;
+        util::read_blacklist(&p)
     } else {
         HashSet::new()
     };
+    // The audio scan dir is server data too, and an explicit `--audio` writes
+    // it. Validate it with the other config dirs: a path out of the install is
+    // metadata, refused before the scan read and the write.
+    if !config.audio_pkg_scan_dir.is_empty() {
+        util::contained_join(game_dir, &config.audio_pkg_scan_dir)
+            .context("audio_pkg_scan_dir")
+            .map_err(RunFailure::metadata)?;
+    }
 
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
     // and overwrites the scan file; omitted flag keeps the detected set,

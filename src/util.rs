@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 const MD5_BUF: usize = 512 * 1024;
 
@@ -276,6 +276,100 @@ pub fn file_len(path: &Path) -> Option<u64> {
 /// only at the filesystem boundary.
 pub fn normalize_rel(rel: &str) -> String {
     rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+}
+
+/// Validate a **server-controlled relative path** and return it in `/` form.
+///
+/// The manifest, the deprecated-files list and the audio directory names are
+/// all strings a server chose. [`Path::join`] **replaces** the base for an
+/// absolute path, for a Windows drive-relative path (`C:evil`), and for a UNC
+/// path, and `..` walks out of it. This refuses all of those spellings before
+/// any sink sees them:
+///
+/// - empty, a drive prefix (`C:`), a root (`/x`, `\\server\share`), or any
+///   `ParentDir` component;
+/// - anything that names no file (only `.` components).
+///
+/// The check is lexical and platform-independent: `C:evil` is a `Prefix`
+/// component on Windows but a plain component on Unix, so the drive spelling is
+/// rejected explicitly rather than left to `std`.
+///
+/// This is not a filesystem check; [`contained_join`] adds that.
+pub fn contained_rel(rel: &str) -> Result<PathBuf> {
+    let normalized = rel.replace('\\', "/");
+    anyhow::ensure!(!normalized.is_empty(), "path is empty");
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        anyhow::bail!("path has a drive prefix: {rel}");
+    }
+    let path = Path::new(&normalized);
+    anyhow::ensure!(
+        !path.has_root() && !path.is_absolute(),
+        "path is absolute: {rel}"
+    );
+    let mut named = false;
+    for c in path.components() {
+        match c {
+            Component::Normal(_) => named = true,
+            // `a/./b` is still contained; it just says nothing.
+            Component::CurDir => {}
+            _ => anyhow::bail!("path is not a plain relative path: {rel}"),
+        }
+    }
+    anyhow::ensure!(named, "path names no file: {rel}");
+    Ok(path.to_path_buf())
+}
+
+/// Join a server-controlled relative path under `base`, refusing anything that
+/// resolves outside it.
+///
+/// The lexical check is [`contained_rel`]. The filesystem check resolves the
+/// **nearest existing ancestor** of both sides — so a missing `game_dir` (a
+/// `--print-plan` run, a fresh install) still works — and requires the joined
+/// path to stay under the base. That is what catches a symlink inside the
+/// install that points out of it, which a lexical `starts_with` cannot.
+pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
+    let rel = contained_rel(rel)?;
+    let joined = base.join(rel);
+    let base_resolved = resolve_existing_prefix(base);
+    let joined_resolved = resolve_existing_prefix(&joined);
+    anyhow::ensure!(
+        joined_resolved.starts_with(&base_resolved),
+        "path escapes {}: {}",
+        base.display(),
+        joined.display()
+    );
+    Ok(joined)
+}
+
+/// Canonicalize `path` as far as it exists, then append the missing tail.
+///
+/// `canonicalize` fails on a path that is not there yet, and the plan runs
+/// before `game_dir` is created; resolving the longest existing prefix keeps
+/// the symlink resolution where it matters without requiring the leaf (or the
+/// whole tree) to exist.
+fn resolve_existing_prefix(path: &Path) -> PathBuf {
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    loop {
+        match std::fs::canonicalize(cur) {
+            Ok(mut resolved) => {
+                for part in missing.iter().rev() {
+                    resolved.push(part);
+                }
+                return resolved;
+            }
+            Err(_) => match (cur.parent(), cur.file_name()) {
+                (Some(parent), Some(name)) => {
+                    missing.push(name.to_os_string());
+                    cur = parent;
+                }
+                // No existing prefix at all (or a root): the lexical form is
+                // the best answer, and both sides use the same rule.
+                _ => return path.to_path_buf(),
+            },
+        }
+    }
 }
 
 /// Parse `config.ini` last `game_version=` match.
@@ -587,6 +681,67 @@ mod tests {
     #[test]
     fn the_empty_md5_constant_is_the_empty_files_md5() {
         assert_eq!(hex(b""), EMPTY_MD5);
+    }
+
+    // -----------------------------------------------------------------------
+    // server-controlled path containment
+    // -----------------------------------------------------------------------
+
+    /// The spellings a hostile/corrupt server can send. Every one of them must
+    /// be refused; `a/b.dat` is the only legitimate shape.
+    #[test]
+    fn contained_rel_accepts_only_plain_relative_paths() {
+        assert!(contained_rel("a/b.dat").is_ok());
+        assert!(contained_rel("a\\b.dat").is_ok());
+        assert!(contained_rel("./a/b.dat").is_ok());
+
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../outside.dat",
+            "a/../outside.dat",
+            "/abs/evil.dat",
+            "//server/share/evil.dat",
+            "\\\\server\\share\\evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            "C:\\evil.dat",
+            "c:/evil.dat",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
+    #[test]
+    fn contained_join_keeps_a_legitimate_path_under_the_base() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
+        let joined = contained_join(&dir, "game/foo.dat").unwrap();
+        assert_eq!(joined, dir.join("game/foo.dat"));
+        // The base does not need to exist: `--print-plan` runs before it does.
+        let missing = dir.join("not-created-yet");
+        let joined = contained_join(&missing, "game/foo.dat").unwrap();
+        assert_eq!(joined, missing.join("game/foo.dat"));
+        // A traversal attempt cannot reach the sibling file.
+        assert!(contained_join(&dir, "../outside.dat").is_err());
+    }
+
+    /// A symlink inside the install that points out of it is an escape even
+    /// though the path is lexically relative. Windows needs a privilege to
+    /// create one, so the case only runs where it can be made.
+    #[cfg(unix)]
+    #[test]
+    fn contained_join_resolves_a_symlink_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "outside");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "link");
+        std::os::unix::fs::symlink(&outside, dir.join("game")).unwrap();
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(got.is_err(), "a symlink out of the base must be refused");
+        // A symlink that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        assert!(contained_join(&dir, "alias/ok.dat").is_ok());
     }
 
     #[test]

@@ -75,7 +75,10 @@ impl DiskPlan {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
         for f in &plan.files {
-            let path = game_dir.join(util::normalize_rel(&f.rel));
+            let Ok(path) = util::contained_join(game_dir, &f.rel) else {
+                // `build_plan` refused an escaping rel; defence in depth.
+                continue;
+            };
             let on_disk = std::fs::metadata(&path).ok().map(|m| m.len());
             let size = f.size.max(0) as u64;
             let (mode, extra) = match resolve_mode(requested, &path) {

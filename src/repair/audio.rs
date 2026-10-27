@@ -63,8 +63,14 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> HashSet<String> {
     if scan_dir.is_empty() {
         return set;
     }
-    let Ok(text) = std::fs::read_to_string(game_dir.join(crate::util::normalize_rel(scan_dir)))
-    else {
+    let Ok(p) = crate::util::contained_join(game_dir, scan_dir) else {
+        tracing::warn!(
+            scan_dir,
+            "audio scan path escapes the game dir; treating it as unreadable"
+        );
+        return set;
+    };
+    let Ok(text) = std::fs::read_to_string(p) else {
         return set;
     };
     for line in text.lines() {
@@ -92,7 +98,7 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
         .filter(|(code, _)| langs.contains(*code))
         .map(|(_, name)| *name)
         .collect();
-    let p = game_dir.join(crate::util::normalize_rel(scan_dir));
+    let p = crate::util::contained_join(game_dir, scan_dir)?;
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -140,5 +146,17 @@ mod tests {
         assert!(set.contains("en-us") && set.contains("zh-cn"));
         assert!(read_scan_file(&d, "").is_empty());
         assert!(read_scan_file(&d, "missing.txt").is_empty());
+    }
+
+    /// The scan dir is server data and the write creates its parent. An escape
+    /// must not create or write anything outside the game dir; the read path
+    /// treats it as unreadable.
+    #[test]
+    fn a_scan_path_that_escapes_the_game_dir_is_not_read_or_written() {
+        let d = dir("escape");
+        let set: HashSet<String> = ["en-us".to_string()].into_iter().collect();
+        assert!(write_scan_file(&d, "../outside.txt", &set).is_err());
+        assert!(!d.parent().unwrap().join("outside.txt").exists());
+        assert!(read_scan_file(&d, "../outside.txt").is_empty());
     }
 }

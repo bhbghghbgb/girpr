@@ -15,10 +15,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use anyhow::{Context, Result};
+
 use crate::sophon::{SophonChunk, SophonChunkFile};
 
 use super::manifest::LocalChunkMap;
 use crate::repair::scope::PathScope;
+use crate::util;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 #[derive(Clone)]
@@ -174,7 +177,7 @@ pub fn build_plan(
     blacklist: &HashSet<String>,
     latest_tag: &str,
     scope: &PathScope,
-) -> RepairPlan {
+) -> Result<RepairPlan> {
     let mut files: Vec<PlannedFile> = Vec::new();
     let mut prefix: HashMap<String, String> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -184,7 +187,13 @@ pub fn build_plan(
             if f.is_folder || f.file.is_empty() {
                 continue;
             }
-            let rel = f.file.replace('\\', "/");
+            // The server chose this path, and every sink below (scan read,
+            // repair write, `_tmp` promote) joins it under `game_dir`. Refuse
+            // an escape here, before any of them exists: a bad manifest is
+            // metadata, exit `2`, not a file to repair.
+            let rel = util::contained_rel(&f.file)
+                .with_context(|| format!("manifest path {:?}", f.file))?;
+            let rel = rel.to_string_lossy().replace('\\', "/");
             if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(rel.clone()) {
                 continue;
             }
@@ -234,11 +243,11 @@ pub fn build_plan(
     }
     // Stable order so log lines and the parallel spawn order are reproducible.
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    RepairPlan {
+    Ok(RepairPlan {
         latest: latest_tag.to_string(),
         files,
         url_prefix_by_file: prefix,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -352,7 +361,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         let offsets: Vec<i64> = plan.files[0].chunks.iter().map(|c| c.offset).collect();
         assert_eq!(offsets, vec![0, 64, 128]);
     }
@@ -367,7 +376,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files[0].chunks.len(), 1);
         assert_eq!(plan.files[0].chunks[0].id, "c0");
     }
@@ -385,7 +394,7 @@ mod tests {
             md5: "m1".into(),
         };
         let per = vec![("http://x".to_string(), vec![f])];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         let layout = plan.files[0].layout();
         assert!(!layout.tiled);
@@ -419,7 +428,7 @@ mod tests {
         ];
         let per = vec![("http://x".to_string(), files)];
         let bl: HashSet<String> = ["drop.dat".to_string()].into_iter().collect();
-        let plan = build_plan(per, &bl, "5.0", &PathScope::default());
+        let plan = build_plan(per, &bl, "5.0", &PathScope::default()).unwrap();
         assert_eq!(
             plan.files
                 .iter()
@@ -452,12 +461,37 @@ mod tests {
             ("http://x".to_string(), vec![dup.clone()]),
             ("http://y".to_string(), vec![dup, folder]),
         ];
-        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
         assert_eq!(plan.url_prefix_by_file.get("a/b.dat").unwrap(), "http://x");
         assert_eq!(plan.expected_paths().len(), 1);
+    }
+
+    /// A manifest path is server data. Anything that can leave `game_dir` is
+    /// refused at plan time — exit `2`, before a directory is created or a byte
+    /// is written — rather than joined and followed by the sinks.
+    #[test]
+    fn a_manifest_path_that_escapes_the_game_dir_is_refused() {
+        for bad in [
+            "../outside.dat",
+            "/abs/evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            r"\\server\share\evil.dat",
+        ] {
+            let f = SophonChunkFile {
+                file: bad.into(),
+                chunks: vec![],
+                is_folder: false,
+                size: 1,
+                md5: "m".into(),
+            };
+            let per = vec![("http://x".to_string(), vec![f])];
+            let got = build_plan(per, &HashSet::new(), "5.0", &PathScope::default());
+            assert!(got.is_err(), "{bad:?} must not reach the plan");
+        }
     }
 
     /// The scope is applied *before* the plan exists, so `expected_paths()` —
@@ -489,7 +523,8 @@ mod tests {
             &HashSet::new(),
             "5.0",
             &PathScope::new(&inc, &[]).unwrap(),
-        );
+        )
+        .unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
         assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
