@@ -120,9 +120,6 @@ pub fn topmost_link_ancestor(root: &Path, rel: &str) -> Option<String> {
         if is_link(&root.join(prefix)) {
             return Some(prefix.to_string());
         }
-        match next {
-            Some(end_at) => end = end_at,
-            None => return None,
-        }
+        end = next?;
     }
 }

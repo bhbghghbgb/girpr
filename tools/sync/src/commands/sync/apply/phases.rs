@@ -26,7 +26,7 @@ impl<'a> Applier<'a> {
             // Belt and braces: the plan was computed before this run changed
             // anything, so ask the filesystem once more. `None` means no
             // component is a link (including when the path is already gone).
-            let rel = crate::link::topmost_link_ancestor(&self.dst, r).unwrap_or_else(|| r.clone());
+            let rel = crate::link::topmost_link_ancestor(self.dst, r).unwrap_or_else(|| r.clone());
             if rel != *r {
                 tracing::warn!(
                     planned = %r,
@@ -216,7 +216,7 @@ impl<'a> Applier<'a> {
             // The plan excludes links and everything under one; re-check disk as
             // the belt-and-braces half, so a recursive removal can never run
             // through a link component.
-            let rel = crate::link::topmost_link_ancestor(&self.dst, r).unwrap_or_else(|| r.clone());
+            let rel = crate::link::topmost_link_ancestor(self.dst, r).unwrap_or_else(|| r.clone());
             let p = self.dst.join(&rel);
             if crate::link::is_link(&p) {
                 if let Err(e) = crate::link::remove(&p)

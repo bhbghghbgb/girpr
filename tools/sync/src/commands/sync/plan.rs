@@ -110,10 +110,7 @@ fn link_ancestor<'a>(rel: &str, dm: &'a HashMap<String, EffRec>) -> Option<&'a s
         {
             return Some(key.as_str());
         }
-        match next {
-            Some(end_at) => end = end_at,
-            None => return None,
-        }
+        end = next?;
     }
 }
 
