@@ -234,7 +234,12 @@ pub fn write_selection(
         "per_class": per_class,
         "budget": {
             "limit": selection.budget.limit(),
-            "spent": selection.bytes_admitted,
+            // **The charged ledger, not a second sum.** `bytes_admitted` is the
+            // same number today, but reading it here made the document own a
+            // second representation of one fact; a future admission path could
+            // change one and not the other. The `debug_assert` in `select`
+            // keeps the two equal while the summary still reports the sum.
+            "spent": selection.budget.spent(),
             "unlimited": selection.budget.limit().is_none(),
         },
         "required_order": crate::select::Class::REQUIRED_ORDER.map(|c| c.id()),

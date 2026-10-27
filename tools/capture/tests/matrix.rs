@@ -239,6 +239,13 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
     );
 
     let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
+    let matrix_budget = json(&c.bundle.join("diff/matrix.json"))["budget"]["spent"]
+        .as_u64()
+        .expect("a spent total");
+    assert_eq!(
+        matrix_budget, bytes_admitted,
+        "the matrix's charged ledger and the summary's admitted sum are one fact"
+    );
     // The admission total is the sum of what the admitted captures cost, and a
     // reader can recompute it from `diff/candidates.json`.
     // candidates.json is columnar: a columns header and one object per row.

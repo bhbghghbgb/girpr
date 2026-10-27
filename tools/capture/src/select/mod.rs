@@ -789,8 +789,20 @@ pub fn select(
         matrix.push(row);
     }
 
+    let bytes_admitted: u64 = admitted.iter().map(|a| a.budget_cost).sum();
+    // The ledger and the sum describe one fact. A future admission path could
+    // charge one without adding an `Admission` (or the reverse), and the matrix
+    // would then report a different spent total from the summary; keep the two
+    // tied in debug builds so that change is caught here rather than in a
+    // bundle.
+    debug_assert_eq!(
+        bytes_admitted,
+        final_budget.spent(),
+        "the admitted sum and the charged budget must be the same number"
+    );
+
     Selection {
-        bytes_admitted: admitted.iter().map(|a| a.budget_cost).sum(),
+        bytes_admitted,
         admitted,
         rejected,
         forced_skipped,
