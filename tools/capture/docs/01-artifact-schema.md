@@ -72,7 +72,11 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `reuse_in_place`,
 `reuse_moved+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
-Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
+Nothing published under `chunks/` or `manifests/` is ever deleted by the tool.
+The `.tmp` file that a chunk fetch writes is not an exception: it is removed,
+best-effort, on every error between creating it and renaming it into place. It
+was never a blob, and the slot in its name means a later run would not
+necessarily reuse the path.
 
 **Atomicity is not uniform, and this is deliberate.** Chunk blobs are the only
 artifacts written through a `tmp/` file that is then renamed into place, and a

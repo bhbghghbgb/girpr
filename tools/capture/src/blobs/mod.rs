@@ -400,8 +400,8 @@ impl Store {
     ///
     /// The order is deliberate and is why the digests can be trusted:
     ///
-    /// 1. stream into `chunks/blobs/.<name>.tmp`, hashing as it writes — nothing
-    ///    is ever whole in memory;
+    /// 1. stream into `chunks/blobs/.<name>.<slot>.tmp`, hashing as it writes —
+    ///    nothing is ever whole in memory;
     /// 2. take the digests from the write itself;
     /// 3. **rename** the tmp file into place, the atomic step, and the reason a
     ///    reader never sees a half-written blob;
@@ -416,6 +416,12 @@ impl Store {
     /// they are ever measured, so a body that is not a zstd frame becomes a row
     /// carrying its digests and the reason — rather than a hole, and rather than a
     /// bundle claiming the fetch failed when it succeeded.
+    ///
+    /// **A temp file is never orphaned.** Every error between creating it and
+    /// renaming it removes it, best-effort. The slot is part of the name, so a
+    /// leftover would only be reused if the same chunk id landed in the same
+    /// slot — a different chunk set, `--files`, or the budget can move it, and
+    /// nothing sweeps `chunks/blobs/`. A failed fetch is not a blob.
     ///
     /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
     /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
@@ -438,24 +444,33 @@ impl Store {
         let seq = match fetcher.get_to_file(url, Kind::Chunk, &mut out).await {
             Ok(s) => s.seq,
             Err(e) => {
-                // The tmp file is left behind rather than removed: it is
-                // dot-prefixed inside `chunks/blobs/`, nothing reads it, and the
-                // next run truncates it. Deleting it here would be a second
-                // failure mode on the path that has already failed once.
+                // Close before unlinking: on Windows an open handle refuses the
+                // delete. Both steps are best-effort, because this path has
+                // already failed once and the fetch error is what the row must
+                // carry.
+                drop(out);
+                Self::discard_tmp(&tmp_path);
                 return Err(format!("{id}: {e}"));
             }
         };
-        let digests = out.finish().map_err(|e| format!("{id}: flush: {e}"))?;
+        let digests = match out.finish() {
+            Ok(d) => d,
+            Err(e) => {
+                Self::discard_tmp(&tmp_path);
+                return Err(format!("{id}: flush: {e}"));
+            }
+        };
 
         // The atomic step: until this, nothing outside this function looks at the
         // path; after it, the blob is complete.
-        std::fs::rename(&tmp_path, &final_path).map_err(|e| {
-            format!(
+        if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
+            Self::discard_tmp(&tmp_path);
+            return Err(format!(
                 "{id}: {} -> {}: {e}",
                 tmp_path.display(),
                 final_path.display()
-            )
-        })?;
+            ));
+        }
 
         let path = final_path;
         let props =
@@ -465,6 +480,25 @@ impl Store {
                 .map_err(|e| e.to_string())?;
 
         Ok((props, rel, seq))
+    }
+
+    /// Best-effort removal of a temp file this run will never publish.
+    ///
+    /// **The handle is closed first.** On Windows an open handle refuses the
+    /// delete, so every caller drops its [`crate::hash::HashingFile`] before
+    /// calling this. A failure is logged and swallowed: the caller is already
+    /// returning the error that sent it here, and a cleanup failure must not
+    /// replace the reason the fetch failed.
+    fn discard_tmp(path: &Path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                tmp = %path.display(),
+                error = %e,
+                "a failed blob left its temp file behind"
+            ),
+        }
     }
 
     /// The final path for a blob, and the tmp path it is written under.
@@ -1123,5 +1157,25 @@ mod tests {
                 "the reason names the chunk and the source it last tried: {why}"
             );
         }
+
+        // F11: every one of those attempts created `chunks/blobs/.<id>.<slot>.tmp`
+        // before the connection was refused. A leftover would be invisible to a
+        // reader but permanent: the slot is part of the name, so a later run only
+        // truncates it if the same id lands in the same slot again.
+        let blobs = root.join("chunks/blobs");
+        let leftovers: Vec<String> = std::fs::read_dir(&blobs)
+            .expect("the blob dir was created before the first attempt")
+            .map(|entry| {
+                entry
+                    .expect("read a dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "a failed fetch must leave nothing behind: {leftovers:?}"
+        );
     }
 }
