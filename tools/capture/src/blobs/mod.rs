@@ -16,7 +16,8 @@
 //!
 //! ## Writing
 //!
-//! Every blob goes to `tmp/` first and is renamed into `chunks/blobs/`. A
+//! Every blob is written to a dot-prefixed `.tmp` file beside its final path,
+//! then renamed into `chunks/blobs/`. A
 //! half-written `.zst` that a reader finds under its final name is worse than no
 //! blob at all: `verify` would report a digest failure for a file that simply
 //! had not finished arriving, and the two demand opposite responses.
@@ -424,11 +425,15 @@ impl Store {
     /// carrying its digests and the reason — rather than a hole, and rather than a
     /// bundle claiming the fetch failed when it succeeded.
     ///
-    /// **A temp file is never orphaned.** Every error between creating it and
-    /// renaming it removes it, best-effort. The slot is part of the name, so a
-    /// leftover would only be reused if the same chunk id landed in the same
-    /// slot — a different chunk set, `--files`, or the budget can move it, and
-    /// nothing sweeps `chunks/blobs/`. A failed fetch is not a blob.
+    /// **Every handled error removes the temp file.** The three failure paths
+    /// below — fetch, flush and rename — drop the handle and call
+    /// [`Store::discard_tmp`], best-effort. A *panic* unwinds past that cleanup,
+    /// so a `.tmp` can survive a panicking task; the hole-fill records the panic
+    /// in the index, and a sweep for old `.*.tmp` files remains a possible
+    /// follow-up. The slot is part of the name, so a leftover would only be
+    /// reused if the same chunk id landed in the same slot — a different chunk
+    /// set, `--files`, or the budget can move it, and nothing sweeps
+    /// `chunks/blobs/`. A failed fetch is not a blob.
     ///
     /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
     /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
