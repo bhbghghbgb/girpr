@@ -37,7 +37,19 @@ pub fn verify_plan(
     for (i, f) in plan.files.iter().enumerate() {
         match scan.and_then(|s| s.files.get(&f.rel)) {
             Some(v) => {
-                if v.file_md5.eq_ignore_ascii_case(&f.md5) {
+                // The scan is a shortcut for the *read*, not for the "is it
+                // there" answer: an absent or unreadable file's scan verdict
+                // carries the empty digest, and a legitimate empty file's
+                // manifest entry has exactly that digest. Presence and length
+                // are therefore checked here too, the same way the fallback
+                // below does it, so the two spellings of `--check-only` agree
+                // on a missing empty file.
+                let path = util::contained_join(game_dir, &f.rel).ok();
+                let actual_len = path.as_deref().and_then(util::file_len);
+                if actual_len != Some(f.size as u64) {
+                    bad += 1;
+                    tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
+                } else if v.file_md5.eq_ignore_ascii_case(&f.md5) {
                     // intact
                 } else {
                     bad += 1;

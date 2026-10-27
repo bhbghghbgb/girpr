@@ -36,8 +36,6 @@ use crate::util;
 pub struct Verdict {
     /// The whole-file MD5 of what was on disk.
     pub file_md5: String,
-    /// The on-disk length.
-    pub len: u64,
     /// Per chunk, in the plan's order: is it correct where it belongs?
     pub dest_ok: Vec<bool>,
     /// Per chunk, in the plan's order: is its reuse source intact?
@@ -161,7 +159,6 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
                 bytes: 0,
                 verdict: Verdict {
                     file_md5: util::EMPTY_MD5.to_string(),
-                    len: 0,
                     dest_ok: vec![false; n],
                     source_ok: vec![false; n],
                 },
@@ -204,7 +201,6 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
         bytes: scan.file_len,
         verdict: Verdict {
             file_md5: scan.file_md5,
-            len: scan.file_len,
             dest_ok: scan.dest_ok,
             source_ok: scan.source_ok,
         },
@@ -255,7 +251,6 @@ mod tests {
             "a.dat".to_string(),
             Verdict {
                 file_md5: "x".into(),
-                len: 128,
                 dest_ok: vec![false, false],
                 source_ok: vec![true, false],
             },
@@ -270,7 +265,6 @@ mod tests {
     fn the_damaged_chunk_count_is_the_wrong_chunks() {
         let v = Verdict {
             file_md5: "x".into(),
-            len: 128,
             dest_ok: vec![true, false, false, true],
             source_ok: vec![true; 4],
         };

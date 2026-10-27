@@ -192,6 +192,43 @@ async fn check_only_dirty_reports_damage_and_writes_nothing() {
 }
 
 #[tokio::test]
+async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
+    // The scan's verdict for an absent file carries the empty digest, and a
+    // legitimate empty file's manifest entry has exactly that digest. The
+    // md5 alone therefore cannot tell them apart, and `--check-only --scan`
+    // used to call the missing file clean while plain `--check-only` called
+    // it damage.
+    let spec = FixtureSpec::new(vec![FileSpec::new("game/empty.dat", vec![])]);
+    let mock = MockServer::start(build_fixture_spec(&spec), MockOpts::default()).await;
+    let dir = temp_dir("check_empty_absent");
+
+    for scan in [false, true] {
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+        ctx.check_only = true;
+        ctx.scan = scan;
+        let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+        assert_eq!(code, 4, "scan={scan}: an absent file is damage");
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            1,
+            "scan={scan}"
+        );
+    }
+
+    // The same manifest entry, with the file present and empty: clean.
+    write_game_file(&dir, "game/empty.dat", &[]);
+    for scan in [false, true] {
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+        ctx.check_only = true;
+        ctx.scan = scan;
+        let (_summary, code) = repair::run(ctx).await.expect("check-only runs");
+        assert_eq!(code, 0, "scan={scan}: an empty file that exists is clean");
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn dry_run_writes_nothing() {
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
