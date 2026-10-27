@@ -29,6 +29,7 @@ pub(super) fn file(size: u64, mtime: i64) -> SideEntry {
         mtime_ns: mtime,
         cached: DigestSet::default(),
         fresh: false,
+        is_link: false,
     }
 }
 
@@ -40,6 +41,7 @@ pub(super) fn dir() -> SideEntry {
         mtime_ns: 0,
         cached: DigestSet::default(),
         fresh: true,
+        is_link: false,
     }
 }
 
@@ -57,6 +59,7 @@ pub(super) fn cached_entry(cached: &[&str]) -> SideEntry {
             d
         },
         fresh: true,
+        is_link: false,
     }
 }
 

@@ -78,6 +78,111 @@ pub fn wfile(root: &Path, rel: &str, bytes: &[u8]) {
     std::fs::write(&p, bytes).unwrap();
 }
 
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+//
+// Tests that need a link call these; a platform that refuses the creation
+// (Windows without developer mode refuses `symlink_file` and `symlink_dir`) gets
+// an `Err` and the test skips with the OS message. A directory link has a
+// fallback that needs no privilege - a junction - because that is the shape a
+// game tree on Windows is most likely to contain anyway.
+
+/// Create a link to a file.
+pub fn file_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no link API",
+        ))
+    }
+}
+
+/// Create a link to a directory, falling back to a junction on Windows.
+///
+/// `cmd /c mklink /J` creates a directory reparse point without elevation, and
+/// the walk and the deletion guard treat it as a link either way
+/// (`girsync::link::is_link`). If both calls fail, the original error is
+/// returned so the caller can report why it skipped.
+pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let first = std::os::windows::fs::symlink_dir(target, link);
+        if first.is_ok() {
+            return first;
+        }
+        let created = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output();
+        match created {
+            Ok(out) if out.status.success() => Ok(()),
+            _ => first,
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no link API",
+        ))
+    }
+}
+
+/// Skip the calling test, with the reason, when the platform refused the link.
+///
+/// A macro rather than a helper so the `return` belongs to the test. A silent
+/// skip is not acceptable: the point of the link cases is to pin behaviour, and
+/// a run that quietly covered nothing would read as coverage.
+#[macro_export]
+macro_rules! skip_if_no_link {
+    ($what:expr, $res:expr) => {
+        match $res {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("skip: this platform refused a {} link: {e}", $what);
+                return;
+            }
+        }
+    };
+}
+
+/// True when `path` is itself a link or junction (the test-side mirror of
+/// `girsync::link::is_link`, which is not exported from the public surface).
+pub fn is_link(path: &Path) -> bool {
+    if path.is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        std::fs::symlink_metadata(path)
+            .map(|md| md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 pub fn rfile(root: &Path, rel: &str) -> Vec<u8> {
     std::fs::read(root.join(rel)).unwrap()
 }

@@ -133,7 +133,7 @@ pub fn scan_stat_only(
             continue;
         }
         if e.is_dir {
-            map.insert(e.rel.clone(), SideEntry::dir());
+            map.insert(e.rel.clone(), SideEntry::dir(e.is_link));
             if let Some(w) = batch.as_mut() {
                 put_dir_row(w, &e.rel)?;
             }
@@ -185,6 +185,7 @@ pub fn scan_stat_only(
                     _ => DigestSet::default(),
                 },
                 fresh,
+                is_link: e.is_link,
             },
         );
         // The two cases where phase A owes a write regardless of any plan: the

@@ -133,6 +133,7 @@ mod tests {
             size: 4,
             mtime_ns: 0,
             hashes: crate::hash::DigestSet::default(),
+            is_link: false,
         }
     }
 

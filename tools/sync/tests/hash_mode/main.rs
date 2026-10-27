@@ -77,6 +77,7 @@ fn file(size: u64, mtime_ns: i64, cached: &[&str]) -> SideEntry {
             d
         },
         fresh: true,
+        is_link: false,
     }
 }
 
@@ -148,6 +149,7 @@ fn eff(entries: Vec<(&str, &DigestSet)>) -> HashMap<String, EffRec> {
                     size: 10,
                     mtime_ns: 100,
                     hashes: hashes.clone(),
+                    is_link: false,
                 },
             )
         })

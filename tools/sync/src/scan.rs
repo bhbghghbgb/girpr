@@ -22,6 +22,14 @@ pub struct LiveEnt {
     /// 0 for dirs: dirs are compared by presence only.
     pub size: u64,
     pub mtime_ns: i64,
+    /// True when this entry is itself a link (a junction counts, though
+    /// `FileType::is_symlink` does not report one).
+    ///
+    /// The cmd point is deletion rather than comparison: the walk follows links,
+    /// so an entry *under* this one resolves through it, and removing that
+    /// descendant would remove a file in the target. The planner needs to know
+    /// which paths are links to stop that; see [`crate::link`].
+    pub is_link: bool,
 }
 
 /// Walk `root` up to `max_depth`, following symlinks.
@@ -72,6 +80,13 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     continue;
                 }
                 let ft = ent.file_type();
+                // `path_is_symlink` is true for a followed symlink even though
+                // `file_type()` is the target's type (walkdir remembers the
+                // original entry). A Windows junction is *not* a symlink by that
+                // test and is not followed through `walkdir`'s `follow` path, so
+                // directories get the extra reparse-point check; files would
+                // already have been caught by `path_is_symlink`.
+                let is_link = ent.path_is_symlink() || crate::link::is_reparse_dir(ent.path());
                 // Progress: trace every entry (file log), debug heartbeat every 2000.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
@@ -80,6 +95,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                         is_dir: true,
                         size: 0,
                         mtime_ns: 0,
+                        is_link,
                     });
                 } else if ft.is_file() {
                     let meta = std::fs::metadata(ent.path())
@@ -89,6 +105,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                         is_dir: false,
                         size: meta.len(),
                         mtime_ns: mtime_ns_of(&meta),
+                        is_link,
                     });
                 } else {
                     bail!("unsupported file type {}", ent.path().display());

@@ -117,15 +117,24 @@ pub struct EffRec {
     pub size: u64,
     pub mtime_ns: i64,
     pub hashes: DigestSet,
+    /// True when the live path is itself a link or junction. Always false for a
+    /// record side, which has no filesystem to ask.
+    ///
+    /// Comparison ignores it - the walk follows links, so the kind and stat are
+    /// the target's - but the deletion plan must not: a path *under* a link
+    /// resolves through it, and removing it removes a file in the target. See
+    /// [`crate::link`] and `Plan::delete_files`.
+    pub is_link: bool,
 }
 
 impl EffRec {
-    pub(super) fn dir() -> Self {
+    pub(super) fn dir(is_link: bool) -> Self {
         Self {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
             hashes: DigestSet::default(),
+            is_link,
         }
     }
 }
@@ -215,16 +224,21 @@ pub struct SideEntry {
     /// row and hand it to `merge_row`, so it is carried explicitly rather than
     /// inferred.
     pub fresh: bool,
+    /// True when the live path is itself a link or junction. Carried from the
+    /// walk ([`crate::scan::LiveEnt::is_link`]) so phase C can put it on the
+    /// resolved [`EffRec`]; a record side has no filesystem and leaves it false.
+    pub is_link: bool,
 }
 
 impl SideEntry {
-    pub(super) fn dir() -> Self {
+    pub(super) fn dir(is_link: bool) -> Self {
         Self {
             kind: "dir".into(),
             size: 0,
             mtime_ns: 0,
             cached: DigestSet::default(),
             fresh: true,
+            is_link,
         }
     }
 

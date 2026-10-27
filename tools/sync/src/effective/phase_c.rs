@@ -146,6 +146,7 @@ pub fn resolve_folder(
                     size: row.size,
                     mtime_ns: row.mtime_ns,
                     hashes: row.hashes,
+                    is_link: e.is_link,
                 },
             );
             sink.hashed += 1;
@@ -189,7 +190,7 @@ pub fn resolve_folder(
             continue;
         }
         if !e.is_file() {
-            map.insert(rel.clone(), EffRec::dir());
+            map.insert(rel.clone(), EffRec::dir(e.is_link));
             continue;
         }
         if e.cached.is_empty() {
@@ -206,6 +207,7 @@ pub fn resolve_folder(
                 size: e.size,
                 mtime_ns: e.mtime_ns,
                 hashes: e.cached.clone(),
+                is_link: e.is_link,
             },
         );
     }
@@ -264,6 +266,7 @@ pub fn resolve_record(phase_a: &SideScan<SideEntry>) -> SideScan<EffRec> {
                     size: e.size,
                     mtime_ns: e.mtime_ns,
                     hashes: e.cached.clone(),
+                    is_link: e.is_link,
                 },
             )
         })

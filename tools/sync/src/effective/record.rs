@@ -54,6 +54,9 @@ pub fn load_record_side_from(
                 mtime_ns: r.mtime_ns,
                 cached: r.hashes,
                 fresh: true,
+                // A cache row records stat and content, never link-ness; a
+                // record side has no live path to ask.
+                is_link: false,
             },
         );
     }
