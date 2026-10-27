@@ -1,11 +1,11 @@
-//! Links in the walk and in `copy`.
+//! Links in the walk, in `copy`, and in the deletion plan.
 //!
 //! The walk follows links, so a directory link is reported as the directory it
 //! points at. That is the documented comparison behaviour and it is what makes
 //! the *deletion* side dangerous: a relative path under the link resolves
 //! through it, so `DELETE`/`RMDIR` can reach a file that is not in `dst` at all.
-//! These cases pin the walk (F-3) and the copy-side type conflict (F-2); the
-//! deletion cases build on them.
+//! These cases pin the walk (F-3), the copy-side type conflict (F-2) and the
+//! no-reach-through guarantee (F-1).
 //!
 //! ## Skipping
 //!
@@ -17,9 +17,42 @@
 
 mod common;
 
-use common::{dir_link, file_link, is_link, log, rfile, sync_mem, temp_root, wfile};
+use std::path::Path;
+
+use common::{dir_link, file_link, is_link, log, parse_ndjson, rfile, sync_mem, temp_root, wfile};
 use girsync::cmd_sync;
 use girsync::scan::walk_live;
+use serde_json::Value;
+
+/// Run the real binary, returning its exit status and records.
+///
+/// The in-process `cmd_sync` cannot show what was *reported* - stdout belongs to
+/// the binary - and the F-1 case has to name the path a `DELETE` removed.
+fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(src)
+        .arg("--dst")
+        .arg(dst)
+        .arg("--output")
+        .arg("json")
+        .args(extra)
+        // The case asserts the tree and the records, not the cache file; an
+        // in-memory cache keeps the fixture off the disk entirely.
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    (out.status, parse_ndjson(&out.stdout))
+}
+
+/// The `path` of every record with `event` `name`, in order.
+fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
+    recs.iter()
+        .filter(|r| r["event"] == name)
+        .map(|r| r["path"].as_str().expect("a path record has a path"))
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // The walk (F-3)
@@ -127,5 +160,91 @@ fn sync_replaces_a_dst_directory_link_at_a_file_path() {
         rfile(&outside, "keep.txt"),
         b"outside content",
         "the link target was not touched"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-1: a dst directory link must never be deleted through
+// ---------------------------------------------------------------------------
+
+/// The link points into `dst` itself. `link/x` is extra, and removing it
+/// naively would remove `real/x`, a file `src` also has and whose copy plan is
+/// empty (the two compare equal). The link must be removed instead.
+#[test]
+fn sync_removes_a_dst_directory_link_without_deleting_its_inside_target() {
+    let t = temp_root("dst_link_inside");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "real/x.txt", b"shared content");
+    wfile(&dst, "real/x.txt", b"shared content");
+    common::sync_mtime(&src.join("real/x.txt"), &dst.join("real/x.txt"));
+    skip_if_no_link!("directory", dir_link(&dst.join("real"), &dst.join("link")));
+
+    let (status, recs) = sync_bin(&src, &dst, &[]);
+    assert!(status.success(), "sync failed: {recs:?}");
+
+    assert_eq!(
+        rfile(&dst, "real/x.txt"),
+        b"shared content",
+        "the target's file survives: it was deleted through the link before the fix"
+    );
+    assert!(!dst.join("link").exists(), "the link itself is gone");
+    let deleted = paths(&recs, "delete");
+    assert_eq!(
+        deleted,
+        ["link"],
+        "the DELETE names the link, never a path under it: {recs:?}"
+    );
+    assert!(
+        !deleted.iter().any(|p| p.starts_with("link/")),
+        "no descendant of the link is named: {deleted:?}"
+    );
+}
+
+/// The link points outside `dst`. Removing `link/x` would delete a file in a
+/// tree the mirror does not own at all.
+#[test]
+fn sync_removes_a_dst_directory_link_without_deleting_an_external_target() {
+    let t = temp_root("dst_link_external");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "a.txt", b"a");
+    wfile(&outside, "x.txt", b"external content");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let (status, recs) = sync_bin(&src, &dst, &[]);
+    assert!(status.success(), "sync failed: {recs:?}");
+
+    assert_eq!(
+        rfile(&outside, "x.txt"),
+        b"external content",
+        "the external target is untouched"
+    );
+    assert!(!dst.join("link").exists(), "the link is removed");
+    assert_eq!(paths(&recs, "delete"), ["link"]);
+}
+
+/// `--keep-extra` is the escape hatch, and it has to spare the link and its
+/// target alike. The flag already spares directories; a link is a directory in
+/// the dst map, so this pins that the new removal path did not bypass the flag.
+#[test]
+fn keep_extra_spares_a_dst_directory_link_and_its_target() {
+    let t = temp_root("dst_link_keep");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "a.txt", b"a");
+    wfile(&outside, "x.txt", b"external content");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
+
+    let (status, recs) = sync_bin(&src, &dst, &["--keep-extra"]);
+    assert!(status.success(), "sync failed: {recs:?}");
+
+    assert_eq!(rfile(&outside, "x.txt"), b"external content");
+    assert!(is_link(&dst.join("link")), "the link is kept");
+    assert!(
+        paths(&recs, "delete").is_empty(),
+        "keep-extra deletes nothing: {recs:?}"
     );
 }

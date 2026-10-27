@@ -13,25 +13,47 @@ use crate::report::Record;
 
 impl<'a> Applier<'a> {
     /// Delete dst-only files, returning how many paths were removed.
+    ///
+    /// **Never reaches through a link.** `Plan::delete_files` names the topmost
+    /// link rather than a path under it (see `build_plan`), and this pass
+    /// re-checks disk anyway: a planned path whose ancestor is now a link is
+    /// replaced by that link. That is the difference between removing the link
+    /// and removing a file in its target - possibly outside `dst`.
     pub(crate) fn delete_extras(&self, plan: &Plan) -> Result<usize> {
         let mut deleted = 0usize;
         info!(files = plan.delete_files.len(), "apply deletes");
         for (i, r) in plan.delete_files.iter().enumerate() {
-            let p = self.dst.join(r);
-            // the plan only holds files here; dirs are handled by the
-            // unknown-dirs pass
-            if let Some(rec) = self.dm.get(r)
+            // Belt and braces: the plan was computed before this run changed
+            // anything, so ask the filesystem once more. `None` means no
+            // component is a link (including when the path is already gone).
+            let rel = crate::link::topmost_link_ancestor(&self.dst, r).unwrap_or_else(|| r.clone());
+            if rel != *r {
+                tracing::warn!(
+                    planned = %r,
+                    removing = %rel,
+                    "planned delete is under a link; removing the link instead"
+                );
+            }
+            let p = self.dst.join(&rel);
+            // the plan only holds files and links here; a genuine dir is handled
+            // by the unknown-dirs pass
+            if let Some(rec) = self.dm.get(&rel)
                 && rec.kind == "dir"
+                && !rec.is_link
             {
                 continue;
             }
-            if p.is_file() || p.is_symlink() {
+            if crate::link::is_link(&p) {
+                crate::link::remove(&p).with_context(|| format!("unlink {}", p.display()))?;
+                self.report.emit(Record::path("DELETE", &rel));
+                deleted += 1;
+            } else if p.is_file() {
                 std::fs::remove_file(&p).with_context(|| format!("delete {}", p.display()))?;
-                self.report.emit(Record::path("DELETE", r));
+                self.report.emit(Record::path("DELETE", &rel));
                 deleted += 1;
             } else if p.is_dir() {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
-                self.report.emit(Record::path("RMDIR", r));
+                self.report.emit(Record::path("RMDIR", &rel));
                 deleted += 1;
             } else if p.exists() {
                 bail!("unsupported type {}", p.display());
@@ -191,8 +213,24 @@ impl<'a> Applier<'a> {
         info!(unknown = plan.rmdir.len(), "rmdir pass");
         let mut w = self.dst_db.begin_write()?;
         for (i, r) in plan.rmdir.iter().enumerate() {
-            let p = self.dst.join(r);
-            if p.is_dir() {
+            // The plan excludes links and everything under one; re-check disk as
+            // the belt-and-braces half, so a recursive removal can never run
+            // through a link component.
+            let rel = crate::link::topmost_link_ancestor(&self.dst, r).unwrap_or_else(|| r.clone());
+            let p = self.dst.join(&rel);
+            if crate::link::is_link(&p) {
+                if let Err(e) = crate::link::remove(&p)
+                    && p.exists()
+                {
+                    bail!("unlink {}: {:#}", p.display(), e);
+                }
+                w.remove(r)?;
+                if rel != *r {
+                    w.remove(&rel)?;
+                }
+                self.report.emit(Record::path("RMDIR", &rel));
+                removed_dirs += 1;
+            } else if p.is_dir() {
                 if let Err(e) = std::fs::remove_dir_all(&p)
                     && p.exists()
                 {

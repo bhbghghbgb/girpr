@@ -60,12 +60,20 @@ pub(super) struct Plan {
     /// carrying the bucket that put it there.
     pub copy: Vec<CopyItem>,
     /// Dst-only files to delete (empty when `keep_extra`).
+    ///
+    /// A path under a dst directory link is replaced by the **link** here: the
+    /// link is unlinked, and its target's files are never named. A link src also
+    /// has is not listed at all. See `link_ancestor`.
     pub delete_files: Vec<String>,
     /// Type-conflicts where src is a dir and dst is a file, so the file is
     /// removed and a directory put in its place.
     pub fix_dirs: Vec<String>,
     /// Dst directories src does not have, deepest first (empty when
     /// `keep_extra`).
+    ///
+    /// Never a link or a directory under one: those are `delete_files`' business
+    /// (or are left alone), because a recursive removal through a link would
+    /// delete in its target.
     ///
     /// Computed here rather than by walking dst during the apply phase, so that
     /// the number is the same before anything is written as it is after. That is
@@ -80,6 +88,32 @@ impl Plan {
     /// Total planned removals, for the `SUMMARY` record.
     pub fn deletes(&self) -> usize {
         self.delete_files.len() + self.fix_dirs.len()
+    }
+}
+
+/// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
+///
+/// The map is the dst walk's own answer, so this needs no filesystem access and
+/// the dry run's plan is computed from the same facts the real run has. A prefix
+/// missing from `dm` cannot be a link the walk saw; `delete_extras` re-checks on
+/// disk before it removes anything, which covers a difference between the walk
+/// and the apply phase.
+fn link_ancestor<'a>(rel: &str, dm: &'a HashMap<String, EffRec>) -> Option<&'a str> {
+    let mut end = 0;
+    loop {
+        let (prefix, next) = match rel[end..].find('/') {
+            Some(i) => (&rel[..end + i], Some(end + i + 1)),
+            None => (rel, None),
+        };
+        if let Some((key, rec)) = dm.get_key_value(prefix)
+            && rec.is_link
+        {
+            return Some(key.as_str());
+        }
+        match next {
+            Some(end_at) => end = end_at,
+            None => return None,
+        }
     }
 }
 
@@ -144,14 +178,32 @@ pub(super) fn build_plan(
     let mut delete_files: Vec<String> = Vec::new();
     if !keep_extra {
         for r in &diff.extra {
+            // A path *under* a dst link resolves through it: `remove_file` on
+            // `dst/link/x` removes the target's `x`, which may be outside `dst`
+            // and may be a file src also has. The plan therefore names the
+            // **topmost link** instead, and `delete_extras` unlinks that; the
+            // link's descendants go with it.
+            //
+            // A link src also has is left alone. Both sides agree that path
+            // exists, and removing dst's link would delete a directory src is
+            // mirroring into. Its extra descendants are the target's files, and
+            // deleting them is exactly the reach-through this guard exists to
+            // stop - so they stay, and stay reported by a later `compare`.
+            if let Some(link) = link_ancestor(r, dm) {
+                if !sm.contains_key(link) {
+                    delete_files.push(link.to_string());
+                }
+                continue;
+            }
             if dst_is_file(r) {
                 delete_files.push(r.clone());
             }
             // extra dirs are handled by `rmdir` below, not here
         }
+        // Two descendants of one link both name that link, so dedupe by path.
+        delete_files.sort();
+        delete_files.dedup();
     }
-    // `delete_files` and `fix_dirs` need no explicit sort: both are derived
-    // from a single pass over an already-sorted, duplicate-free diff bucket.
 
     let mut fix_dirs: Vec<String> = Vec::new();
     for r in &diff.type_conflict {
@@ -194,6 +246,12 @@ pub(super) fn build_plan(
             .collect();
         for (rel, rec) in dm {
             if rec.kind != "dir" || sm.contains_key(rel) {
+                continue;
+            }
+            // A link, or any directory under one, is removed (or deliberately
+            // kept) through `delete_files`: `remove_dir_all(dst/link/sub)` would
+            // delete in the link target. See the delete-files loop above.
+            if link_ancestor(rel, dm).is_some() {
                 continue;
             }
             if wiped.iter().any(|w| rel.starts_with(w.as_str())) {
