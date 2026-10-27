@@ -137,9 +137,21 @@ impl RepairPlan {
     /// `--max-download-bytes` refuses on, and the runtime hard stop is what
     /// actually enforces.
     pub fn est_download_bytes(&self, local_map: &LocalChunkMap) -> u64 {
-        self.files.iter().fold(0u64, |total, f| {
-            total.saturating_add(est_file_download_bytes(f, local_map.get(&f.rel)))
-        })
+        self.est_download_bytes_by_file(local_map)
+            .iter()
+            .fold(0u64, |total, n| total.saturating_add(*n))
+    }
+
+    /// The same estimate, per file, in `plan.files` order.
+    ///
+    /// One derivation, two consumers: the total on the `PLAN` line and the
+    /// per-file halves in the `--plan-out` document. Re-deriving the split
+    /// elsewhere is what let the two disagree under `--scan`.
+    pub fn est_download_bytes_by_file(&self, local_map: &LocalChunkMap) -> Vec<u64> {
+        self.files
+            .iter()
+            .map(|f| est_file_download_bytes(f, local_map.get(&f.rel)))
+            .collect()
     }
 }
 

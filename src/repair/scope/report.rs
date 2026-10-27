@@ -234,8 +234,8 @@ pub struct RepairEntry<'a> {
     pub rel: &'a str,
     pub size: i64,
     pub chunks_total: u64,
-    /// Chunks the local reuse map cannot supply, by compressed size — this
-    /// file's half of the plan's `est_download_bytes`.
+    /// Chunks this run will download for this file, by compressed size — this
+    /// file's share of the plan's `est_download_bytes`.
     pub est_download_bytes: u64,
     /// How this file would be written: `inplace` or `temp`.
     pub mode: &'static str,
@@ -251,41 +251,33 @@ pub struct PurgeEntry<'a> {
 }
 
 impl<'a> PlanDocument<'a> {
+    /// `est_by_file` is the **same** per-file split the `PLAN` line's total was
+    /// folded from, parallel to `plan.files`. It is not re-derived here: a
+    /// second derivation (Σ `compressed_size`) disagrees with the scan on every
+    /// chunk the scan proved reusable, and reconciling the two in one direction
+    /// only is what made the document lie.
+    ///
+    /// A caller whose slice is short (a bug, not server data) falls back to the
+    /// over-approximation for the missing file, never to zero.
     pub fn new(
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
-        est_download_bytes: u64,
+        est_by_file: &[u64],
         disk: &DiskPlan,
     ) -> Self {
-        // The per-file estimates must sum to the plan total, or the document
-        // would disagree with the `PLAN` line. `est` is the caller-computed plan
-        // total; the split is only trusted when it adds up, and the difference
-        // is folded into the first file so the two always agree.
-        //
-        // `compressed_size` is server data. Three chunks at `i64::MAX` do not
-        // fit in a `u64`, so both folds saturate: a corrupt manifest must not
-        // panic the plan phase in a debug build (or wrap in a release one).
-        let mut per_file: Vec<u64> = plan
-            .files
-            .iter()
-            .map(|f| {
-                f.chunks.iter().fold(0u64, |n, c| {
-                    n.saturating_add(c.compressed_size.max(0) as u64)
-                })
-            })
-            .collect();
-        let summed = per_file.iter().fold(0u64, |n, v| n.saturating_add(*v));
-        if summed != est_download_bytes
-            && let Some(first) = per_file.first_mut()
-        {
-            *first = first.saturating_add(est_download_bytes.saturating_sub(summed));
-        }
         Self {
             repair: plan
                 .files
                 .iter()
-                .zip(per_file)
-                .map(|(f, est)| {
+                .enumerate()
+                .map(|(i, f)| {
+                    let est = est_by_file.get(i).copied().unwrap_or_else(|| {
+                        // Server-controlled sizes: saturate, so a corrupt
+                        // manifest cannot overflow the fallback.
+                        f.chunks.iter().fold(0u64, |n, c| {
+                            n.saturating_add(c.compressed_size.max(0) as u64)
+                        })
+                    });
                     let d = disk.for_file(&f.rel);
                     RepairEntry {
                         rel: &f.rel,
@@ -509,7 +501,7 @@ mod tests {
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         let plan = plan();
         let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 1);
-        let doc = PlanDocument::new(&plan, None, 60, &disk);
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &disk);
         assert_eq!(doc.repair[0].mode, "inplace");
         assert_eq!(doc.repair[0].extra_bytes, 0);
         assert_eq!(doc.repair[1].mode, "inplace");
@@ -519,7 +511,7 @@ mod tests {
     #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -534,13 +526,21 @@ mod tests {
     }
 
     #[test]
-    fn a_mismatched_estimate_is_reconciled_into_the_document() {
-        // The document is written from the same estimate the `PLAN` line
-        // reports; if they ever disagreed, the file would be a lie.
+    fn the_document_takes_the_scanned_downward_estimate_not_the_naive_sum() {
+        // The `--scan` case: one of foo.dat's two chunks is already reusable,
+        // so the plan total is 10, not the naive Σ compressed_size (60). The
+        // document must carry the same split the total was folded from — the
+        // old reconciliation only handled `summed < est`, which is the
+        // direction that never occurs under `--scan`.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 100, &DiskPlan::default());
-        let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
-        assert_eq!(sum, 100);
+        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &DiskPlan::default());
+        assert_eq!(doc.repair[0].est_download_bytes, 10);
+        assert_eq!(doc.repair[1].est_download_bytes, 0);
+        let sum = doc
+            .repair
+            .iter()
+            .fold(0u64, |n, e| n.saturating_add(e.est_download_bytes));
+        assert_eq!(sum, 10, "the document agrees with the PLAN line");
     }
 
     #[test]
@@ -570,9 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn an_overflowing_document_estimate_saturates_instead_of_panicking() {
-        // Same hostile class, one layer down: three chunks at `i64::MAX`
-        // overflow the per-file and the document folds.
+    fn a_short_estimate_slice_falls_back_to_a_saturating_per_file_estimate() {
+        // The caller supplies the same split the total was folded from. A
+        // short slice is a caller bug; the fallback over-approximates and
+        // saturates, rather than inventing a zero or overflowing.
         let plan = RepairPlan {
             latest: "9.9".into(),
             files: vec![PlannedFile {
@@ -587,9 +588,9 @@ mod tests {
             }],
             url_prefix_by_file: HashMap::new(),
         };
-        let doc = PlanDocument::new(&plan, None, u64::MAX, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
         assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
-        let sum: u64 = doc
+        let sum = doc
             .repair
             .iter()
             .fold(0u64, |n, e| n.saturating_add(e.est_download_bytes));
@@ -599,7 +600,7 @@ mod tests {
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -613,7 +614,7 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");

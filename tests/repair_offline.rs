@@ -1170,9 +1170,12 @@ async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
         "est_download_bytes",
     );
 
-    // 2. the plan, scanned: the exact figure.
+    // 2. the plan, scanned: the exact figure, and the per-file document must
+    //    carry the same split the total was folded from.
+    let out = dir.join("plan.json");
+    let out_arg = out.to_string_lossy().into_owned();
     let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--print-plan"]);
+    args.extend_from_slice(&["--scan", "--print-plan", "--plan-out", &out_arg]);
     let (code, stdout, stderr) = run_binary(&args, &[]).await;
     assert_eq!(code, 0, "{stderr}");
     let plan_line = stdout
@@ -1187,6 +1190,15 @@ async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
     assert!(
         plan_line.contains(&format!("scan_bytes={}", 128 + 48)),
         "the scan reports the bytes it read: {plan_line}"
+    );
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
+    });
+    assert_eq!(
+        doc_sum, scanned,
+        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
     );
 
     // 3. the repair: what it really downloaded.

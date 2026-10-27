@@ -263,13 +263,20 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // source to copy from. The temp path's figure is the one above (it
     // writes every chunk of a file it repairs), so the two modes are
     // estimated by their own rules.
-    let est_download_bytes = match (&scan, ctx.repair_mode) {
+    //
+    // The split is computed once, per file, and both consumers fold it: the
+    // `PLAN` total below and the `--plan-out` document further down. A second
+    // derivation would be a second answer.
+    let est_download_by_file: Vec<u64> = match (&scan, ctx.repair_mode) {
         // The temp path writes every chunk of a file it repairs, so its
         // figure is the reuse map's one.
-        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes(&local_map),
-        (Some(s), _) => s.est_download_bytes(&plan),
-        (None, _) => plan.est_download_bytes(&local_map),
+        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes_by_file(&local_map),
+        (Some(s), _) => s.est_download_bytes_by_file(&plan),
+        (None, _) => plan.est_download_bytes_by_file(&local_map),
     };
+    let est_download_bytes = est_download_by_file
+        .iter()
+        .fold(0u64, |total, n| total.saturating_add(*n));
     if ctx.limits.download_bytes.is_some() {
         tracing::info!("estimated download: {est_download_bytes} bytes");
         summary.flags.plan_download_bytes = Some(est_download_bytes);
@@ -323,7 +330,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             let doc = scope::report::PlanDocument::new(
                 &plan,
                 purge_plan.as_ref(),
-                est_download_bytes,
+                &est_download_by_file,
                 &disk,
             );
             doc.write_to(std::path::Path::new(out))

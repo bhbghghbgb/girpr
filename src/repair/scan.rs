@@ -73,8 +73,19 @@ impl ScanReport {
     /// the reuse map cannot supply, even the ones that are already correct
     /// where they belong.
     pub fn est_download_bytes(&self, plan: &RepairPlan) -> u64 {
-        plan.files.iter().fold(0u64, |total, f| {
-            let per_file = match self.files.get(&f.rel) {
+        self.est_download_bytes_by_file(plan)
+            .iter()
+            .fold(0u64, |total, n| total.saturating_add(*n))
+    }
+
+    /// The same estimate, per file, in `plan.files` order.
+    ///
+    /// The `PLAN` total and the `--plan-out` document are fed from this one
+    /// vector, so the document cannot disagree with the line.
+    pub fn est_download_bytes_by_file(&self, plan: &RepairPlan) -> Vec<u64> {
+        plan.files
+            .iter()
+            .map(|f| match self.files.get(&f.rel) {
                 Some(v) => f
                     .chunks
                     .iter()
@@ -86,15 +97,15 @@ impl ScanReport {
                 // A file the scan did not reach: the whole thing is unknown,
                 // so the whole thing is estimated.
                 None => f.chunks.iter().fold(0u64, |n, c| {
+                    // Server-controlled sizes: three chunks at `i64::MAX` do
+                    // not fit in a `u64`, and a debug-build panic in the plan
+                    // phase is not an answer to a corrupt manifest. Saturating
+                    // keeps the estimate an over-approximation (which is the
+                    // safe direction for a ceiling).
                     n.saturating_add(c.compressed_size.max(0) as u64)
                 }),
-            };
-            // Server-controlled sizes: three chunks at `i64::MAX` do not fit
-            // in a `u64`, and a debug-build panic in the plan phase is not an
-            // answer to a corrupt manifest. Saturating keeps the estimate an
-            // over-approximation (which is the safe direction for a ceiling).
-            total.saturating_add(per_file)
-        })
+            })
+            .collect()
     }
 }
 
@@ -273,9 +284,15 @@ mod tests {
             },
         );
         assert_eq!(report.est_download_bytes(&plan), 20, "only c1 is fetched");
+        assert_eq!(
+            report.est_download_bytes_by_file(&plan),
+            vec![20],
+            "the document's per-file split comes from the same derivation"
+        );
         // And a file the scan never reached is estimated in full.
         let report = ScanReport::default();
         assert_eq!(report.est_download_bytes(&plan), 30);
+        assert_eq!(report.est_download_bytes_by_file(&plan), vec![30]);
     }
 
     #[test]
@@ -298,6 +315,7 @@ mod tests {
         };
         let unreached = ScanReport::default();
         assert_eq!(unreached.est_download_bytes(&plan), u64::MAX);
+        assert_eq!(unreached.est_download_bytes_by_file(&plan), vec![u64::MAX]);
 
         let mut all_wrong = ScanReport::default();
         all_wrong.files.insert(
