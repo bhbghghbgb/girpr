@@ -64,7 +64,7 @@ use crate::effective::{
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::report::verdict;
 use crate::rw::{RwRuntime, RwSide};
-use crate::util::{elapsed_s, is_record_path};
+use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
 use plan::{build_plan, ensure_link_safe};
@@ -396,5 +396,30 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     // One cache per run: two spellings of one folder would otherwise make the
     // mirror delete src out from under itself, on top of the handle clash.
     ensure_distinct_sides(&classify(src), &classify(dst))?;
+    // A mirror may not contain its own source. With `dst` inside `src` the walk
+    // of src sees dst as part of the source, and the copy plan writes a parent's
+    // namesake over the child's file; with `src` inside `dst` the delete pass
+    // removes the source files before the copy that needed them. Both used to
+    // exit 0 (or 3 after data loss). Canonical paths, so a link, a `..` or a
+    // case-only spelling cannot hide the overlap. Component-wise and
+    // case-insensitive on Windows, via `path_within`.
+    let src_canonical = canonical_or_raw(src);
+    let dst_canonical = canonical_or_raw(dst);
+    if path_within(&dst_canonical, &src_canonical) {
+        bail!(
+            "src and dst must be disjoint: dst `{}` is inside src `{}`; \
+             a mirror cannot write into its own source",
+            dst.display(),
+            src.display()
+        );
+    }
+    if path_within(&src_canonical, &dst_canonical) {
+        bail!(
+            "src and dst must be disjoint: src `{}` is inside dst `{}`; \
+             syncing would delete the source",
+            src.display(),
+            dst.display()
+        );
+    }
     Ok(())
 }

@@ -1,7 +1,7 @@
 //! Small path, time, and filesystem helpers with no girsync-specific state.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::cache::CACHE_PREFIX;
 
@@ -69,6 +69,61 @@ pub fn is_cache_rel(rel: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// The canonical form of an existing path, or the path itself when it cannot
+/// be resolved (a missing root still has to reach the caller's own error).
+///
+/// Used for *identity* checks: two spellings of one target must compare equal
+/// before either side is opened, and a canonical root joined with a cache name
+/// is a path that need not exist yet. Both sync roots must already be
+/// directories by the time this is called, so the final component exists; only
+/// the cache name joined afterwards may be absent.
+pub fn canonical_or_raw(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Whether two paths name the same location.
+///
+/// Component-wise, so `C:\A` does not match `C:\AB`; case-insensitive on
+/// Windows, where the filesystem is. Everywhere else this is exact.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    let mut ai = a.components();
+    let mut bi = b.components();
+    loop {
+        match (ai.next(), bi.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if component_eq(x, y) => {}
+            _ => return false,
+        }
+    }
+}
+
+/// Whether `child` is `parent` or lies beneath it.
+///
+/// Component-wise for the same reason as [`same_path`]: a textual prefix would
+/// treat `C:\AB` as inside `C:\A`. Case-insensitive on Windows.
+pub fn path_within(child: &Path, parent: &Path) -> bool {
+    let mut child = child.components();
+    for parent in parent.components() {
+        match child.next() {
+            Some(c) if component_eq(c, parent) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
+    #[cfg(windows)]
+    {
+        a.as_os_str().to_string_lossy().to_lowercase()
+            == b.as_os_str().to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
 /// Modification time as nanoseconds since the epoch (0 if unavailable).
 pub fn mtime_ns_of(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
@@ -76,4 +131,33 @@ pub fn mtime_ns_of(meta: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| (d.as_nanos().min(i64::MAX as u128)) as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Containment is component-wise, not a string prefix: `C:\AB` is not
+    /// inside `C:\A`, and the root itself counts as within itself.
+    #[test]
+    fn containment_is_component_wise() {
+        let a = Path::new("C:/A");
+        assert!(path_within(Path::new("C:/A"), a), "a path contains itself");
+        assert!(path_within(Path::new("C:/A/b"), a));
+        assert!(!path_within(Path::new("C:/AB"), a));
+        assert!(!path_within(Path::new("C:/"), a));
+    }
+
+    /// On Windows the same tree can be spelled with different case, so an
+    /// identity check that compared bytes would miss the collision.
+    #[cfg(windows)]
+    #[test]
+    fn path_identity_ignores_case_on_windows() {
+        assert!(same_path(
+            Path::new("C:/Users/ACER"),
+            Path::new("c:/users/acer")
+        ));
+        assert!(path_within(Path::new("C:/ROOT/Sub"), Path::new("c:/root")));
+        assert!(!path_within(Path::new("C:/ROOTER"), Path::new("c:/root")));
+    }
 }
