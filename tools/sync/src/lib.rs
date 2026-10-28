@@ -16,7 +16,7 @@
 //!   flight, and whether the two sides draw on one counter or two
 //! - [`diff`] — path-set diffing
 //! - [`commands`] — `update`, `compare`, `compare-self`, `sync`
-//! - [`filter`], [`link`], [`util`], [`logging`] - supporting primitives
+//! - [`filter`], [`link`], [`hardlink`], [`util`], [`logging`] - supporting primitives
 //! - [`hash`] — directory module whose `mod.rs` is a facade; see [`hash`] for
 //!   the submodule map
 //! - [`report`] — the stdout data plane: [`report::Record`] rendered as text
@@ -43,6 +43,7 @@ pub mod convert;
 pub mod diff;
 pub mod effective;
 pub mod filter;
+pub mod hardlink;
 pub mod hash;
 pub mod link;
 pub mod logging;

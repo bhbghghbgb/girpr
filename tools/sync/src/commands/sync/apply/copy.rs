@@ -161,6 +161,15 @@ fn test_no_fsync() -> bool {
 /// plan time; this is the per-copy re-check, so a plan and a disk that disagree
 /// still cannot reach the source.
 ///
+/// **A destination with more than one hard link is refused for the same reason.**
+/// The other name is the same file, so `File::create` would truncate it too, and
+/// the verify would read the changed inode back and agree with itself. The link
+/// count is the complete check: comparing `d`'s identity with this copy's source
+/// misses a dst hard link to a *different* src file, which is exactly the
+/// reported shape (`dst/a.txt` linked to `src/b.txt` while copying `src/a.txt`).
+/// Refusing every count above one is conservative — a shared inode is outside a
+/// mirror's write contract wherever it lives.
+///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
 /// dst is a faithful copy of a src that no longer exists, and the pair looks
@@ -239,6 +248,24 @@ pub(super) fn copy_one(
     }
     if let Some(parent) = d.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    // A hard link is a second name for this file, not a link this crate can
+    // classify: `try_is_link` is false and the walk reports it as ordinary
+    // content. `File::create` below truncates the shared inode, so writing here
+    // would change the other name too — which may be outside `dst`, and in the
+    // reported shape is a source file the run is reading. Refuse conservatively
+    // rather than silently break the mirror's "never touch src" promise; the
+    // user can remove the extra link and rerun.
+    match crate::hardlink::count(&d) {
+        Ok(1) => {}
+        Ok(links) => bail!(
+            "refusing to copy `{rel}`: dst `{}` has {links} hard links, so truncating \
+             it would change another path that shares the file (possibly one inside \
+             src); remove the extra link or replace the file, then rerun",
+            d.display()
+        ),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("hard-link count {}", d.display())),
     }
     let smeta = std::fs::metadata(&s).with_context(|| format!("stat {}", s.display()))?;
     let ssize = smeta.len();
