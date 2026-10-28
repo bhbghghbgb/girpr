@@ -665,7 +665,7 @@ mod tests {
                 endpoint: "getGameConfigs",
                 file: "getGameConfigs.json".into(),
                 seq: 0,
-                bytes: br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#.to_vec(),
+                bytes: br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK","audio_pkg_scan_dir":"GenshinImpact_Data/Persistent/audio_lang_14"}]}}"#.to_vec(),
             },
             branches: CapturedBody {
                 endpoint: "getGameBranches",
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn the_stored_bytes_are_the_response_not_a_reserialization() {
         let c = mock_captured();
-        let raw = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+        let raw = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK","audio_pkg_scan_dir":"GenshinImpact_Data/Persistent/audio_lang_14"}]}}"#;
         assert_eq!(c.configs.bytes, raw);
         // And a typed round-trip would *not* reproduce them: the whitespace is
         // the server's, and nothing here preserves it.
