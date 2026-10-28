@@ -40,6 +40,10 @@ mod phases;
 /// resolved side maps, and the resolved config.
 pub(super) struct Applier<'a> {
     pub src: &'a Path,
+    /// `src` as the input validation resolved it. The removal passes compare a
+    /// delete target's directory against this, so a delete can never reach a
+    /// file the run is copying even if a plan names one.
+    pub src_canonical: &'a Path,
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
     /// dst effective map, after the rename pass. Consulted for what dst actually

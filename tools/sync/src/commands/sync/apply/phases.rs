@@ -4,12 +4,14 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
+use std::path::Path;
 use tracing::{debug, info, trace};
 
 use super::super::plan::Plan;
 use super::Applier;
 use super::copy::copy_one;
 use crate::report::Record;
+use crate::util::path_within;
 
 impl<'a> Applier<'a> {
     /// Delete dst-only files, returning how many paths were removed.
@@ -36,6 +38,11 @@ impl<'a> Applier<'a> {
                     "planned delete is under a link; removing the link instead"
                 );
             }
+            // Last line of defence: whatever the plan says, never remove a path
+            // whose own directory resolves back into src. The primary check
+            // (`validate_src_links`) refuses a src-side link into dst before a
+            // plan exists; this is the filesystem's answer at removal time.
+            guard_removal_outside_src(self.src_canonical, self.dst, &rel)?;
             let p = self.dst.join(&rel);
             // the plan only holds files and links here; a genuine dir is handled
             // by the unknown-dirs pass
@@ -235,6 +242,9 @@ impl<'a> Applier<'a> {
             let rel = crate::link::topmost_link_ancestor(self.dst, r)
                 .with_context(|| format!("check link ancestors for {r}"))?
                 .unwrap_or_else(|| r.clone());
+            // The rmdir pass removes recursively, so it has the same
+            // "never delete inside src" duty as `delete_extras`.
+            guard_removal_outside_src(self.src_canonical, self.dst, &rel)?;
             let p = self.dst.join(&rel);
             if crate::link::try_is_link(&p)
                 .with_context(|| format!("check link {}", p.display()))?
@@ -368,6 +378,36 @@ impl<'a> Applier<'a> {
     }
 }
 
+/// Refuse a removal whose target's directory resolves inside `src`.
+///
+/// This is defence in depth, not the primary guard. `validate_src_links`
+/// refuses a run whose effective source reaches `dst` through a link, before a
+/// plan is even built. This re-asks the filesystem at the moment of removal so
+/// no plan — today's, or one a later change invents — can delete a file the
+/// run is also copying. The final component is deliberately not resolved: a
+/// link *at* the path is removed as a link, which leaves its target alone.
+///
+/// A missing parent means the target is already gone; there is nothing to
+/// remove, so it is left to the caller's own `NotFound` handling. Every other
+/// error is returned rather than read as "not inside src".
+fn guard_removal_outside_src(src_canonical: &Path, dst: &Path, rel: &str) -> Result<()> {
+    let target = dst.join(rel);
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    match parent.canonicalize() {
+        Ok(resolved) if path_within(&resolved, src_canonical) => bail!(
+            "refusing to remove `{rel}`: its directory resolves to `{}`, which is \
+             inside src `{}`; a mirror may not delete the files it is copying",
+            resolved.display(),
+            src_canonical.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("resolve parent of {}", target.display())),
+    }
+}
+
 /// Remove a link itself, treating "already gone" as success.
 ///
 /// A removal error used to be swallowed when the path no longer existed, which
@@ -400,5 +440,37 @@ fn remove_dir_all(p: &std::path::Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("rmdir {}", p.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The removal guard compares the target's **resolved** directory with the
+    /// canonical src, so a path that starts under dst but resolves elsewhere is
+    /// refused. A link ancestor is the way that happens in a real run; `..`
+    /// reaches the same shape without needing a link the platform may refuse.
+    ///
+    /// The allowed cases pin that the guard is not "refuse everything": a real
+    /// dst path passes, and a missing parent is left to the caller's own
+    /// `NotFound` handling rather than being read as "inside src".
+    #[test]
+    fn a_removal_whose_parent_resolves_inside_src_is_refused() {
+        let t = girpr_tempdir::TempDir::new("girsync_apply", "src_guard");
+        let src = t.subdir("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        let dst = t.subdir("dst");
+        let src_canonical = std::fs::canonicalize(&src).unwrap();
+
+        let err = guard_removal_outside_src(&src_canonical, &dst, "../src/sub/x")
+            .expect_err("a delete whose directory is inside src must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("inside src"), "names the overlap: {msg}");
+
+        guard_removal_outside_src(&src_canonical, &dst, "a.txt")
+            .expect("an ordinary dst path is not inside src");
+        guard_removal_outside_src(&src_canonical, &dst, "gone/x")
+            .expect("a missing parent is nothing to remove");
     }
 }
