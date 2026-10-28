@@ -533,6 +533,13 @@ pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<Stri
 
 /// Read blacklist file: JSON-lines {"fileName":"..."}.
 ///
+/// Entries are normalised once, here at the boundary, through
+/// [`clean_rel`]: the plan compares them against the cleaned manifest rel, so
+/// a `./`- or `//`-spelled entry must become the same string or it protects
+/// nothing. An entry that cannot be a contained rel is a broken explicit
+/// configuration and is refused with the entry in the error, not dropped
+/// (silently ignoring it is the fail-open this normalisation closes).
+///
 /// The absent/unreadable/parse split is the same as
 /// [`read_ignore_categories`]: a missing file is an empty blacklist; a file
 /// that cannot be read, or whose only text is unparseable, is an error.
@@ -540,12 +547,15 @@ pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
     let Some(text) = read_config_list(path, "blacklist")? else {
         return Ok(None);
     };
-    let set = parse_config_list(path, "blacklist", &text, |v| {
+    let raw = parse_config_list(path, "blacklist", &text, |v| {
         v.get("fileName")
             .and_then(|n| n.as_str())
-            .map(|n| n.replace('\\', "/"))
+            .map(str::to_string)
     })?;
-    Ok(Some(set))
+    raw.into_iter()
+        .map(|entry| clean_rel(&entry).with_context(|| format!("blacklist entry {entry:?}")))
+        .collect::<anyhow::Result<HashSet<_>>>()
+        .map(Some)
 }
 
 /// Parse one of the launcher's JSON-lines lists.
@@ -1260,6 +1270,40 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .contains("a/b.dat")
+        );
+    }
+
+    /// V-2: the plan compares the blacklist against the **cleaned** manifest
+    /// rel, so the reader must hand it cleaned entries too. A `./`- or
+    /// `//`-spelled entry from the launcher is the same file; normalising only
+    /// at the plan would make those spellings protect nothing (fail-open). An
+    /// entry that cannot be a contained rel is a broken explicit
+    /// configuration, not a line to drop silently: the error names it.
+    #[test]
+    fn blacklist_entries_are_cleaned_and_bad_ones_are_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "blacklist_clean");
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":\"./game/foo.dat\"}\n\
+             {\"fileName\":\"game//bar.dat\"}\n\
+             {\"fileName\":\"game\\\\baz.dat\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_blacklist(&dir.join("bl")).unwrap().unwrap(),
+            HashSet::from([
+                "game/foo.dat".to_string(),
+                "game/bar.dat".to_string(),
+                "game/baz.dat".to_string(),
+            ])
+        );
+
+        std::fs::write(dir.join("bl"), "{\"fileName\":\"../outside.dat\"}\n").unwrap();
+        let err = read_blacklist(&dir.join("bl")).expect_err("an escape must be refused");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("blacklist entry") && msg.contains("../outside.dat"),
+            "the refusal names the entry: {msg}"
         );
     }
 
