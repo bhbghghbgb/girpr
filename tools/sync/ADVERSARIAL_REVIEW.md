@@ -932,7 +932,120 @@ production takes the same `sync_all` call. T-6’s binary test is Windows-only.
 
 ---
 
+## 10. Fourth adversarial pass (F-1)
+
+A fourth review re-audited `2315990` with the debug binary in
+`E:\Symlinks\Temp\rev4-linkcontain` and the current source. Its finding is
+**valid** and fixed; the note is folded in here and deleted. No other finding
+survived: the third-pass fixes were re-checked at their sites and all still
+apply.
+
+| ID | Severity | Verdict | Resolution | Commits |
+|----|----------|---------|------------|---------|
+| F-1 | high | valid, fixed | A link inside the effective src that reaches dst (target inside dst, or containing it) is refused after the src walk and before planning; no removal may reach a path whose directory resolves inside src. | `8057f9a`, `d3c8f00`, `174ba52`, `49e7d49` |
+
+### F-1 — a src link hid the root overlap and the delete pass ate dst
+
+`validate_inputs` canonicalized the two **roots** and refused containment in
+either direction, but the walk follows links inside a root. A directory link
+`src/link -> dst` left the two roots looking like siblings while the walk
+reported every dst file twice: at its real path, which the diff called `EXTRA`,
+and under `link/`, which it called `MISSING`. The delete pass removed the real
+path first, then the copy of `link/...` failed — data loss reported only as a
+copy error. A link to a directory **containing** dst had the same shape from
+above, and a file link into dst is the same hazard for one file. The comment in
+`mod.rs` claiming canonical paths made a link unable to hide the overlap, and
+the README’s matching claim, were false for links inside src.
+
+Reproduction (Windows junction; no elevation needed):
+
+```powershell
+$b = "E:\Symlinks\Temp\rev4-linkcontain"
+New-Item -ItemType Directory -Path "$b\root","$b\outside" | Out-Null
+Set-Content "$b\outside\x.txt" "PRECIOUS"
+cmd /c mklink /J "$b\root\link" "$b\outside"
+target\debug\girsync.exe sync --src "$b\root" --dst "$b\outside" --output json
+```
+
+Observed: `{"event":"delete","path":"x.txt"}`, then exit 3 naming only a cache
+copy failure; `outside\x.txt` no longer existed. The pre-fix tree failed the
+three new directory-link cases and the nested-cache case when the source fix
+was stashed.
+
+**Resolution.** `validate_inputs` now returns both canonical roots.
+`validate_src_links` runs immediately after src phase A — so filters and
+`--max-depth` have already decided what this run’s source is — and canonicalizes
+every link the effective map kept, refusing a target inside dst or a target
+that contains dst. It checks file links too, since one file is enough. A link to
+anywhere else remains ordinary mirrored content, including a target back inside
+src. The error joins the `disjoint` family, names the link and both resolved
+paths, and exits 3 before dst is scanned, planned, renamed or applied.
+
+Defence in depth: `guard_removal_outside_src` in `apply/phases.rs` canonicalizes
+each delete target’s **parent** in both `delete_extras` and
+`remove_unknown_dirs` and refuses one inside src. The final component is not
+resolved, so a link at the target is still removed as a link and its target
+survives. A missing parent is left to the caller’s own `NotFound` handling; any
+other resolution error aborts rather than reading as “outside src”.
+
+**Cache pruning.** The same run exposed `is_cache_rel`’s first-component-only
+test: the dst cache reached through the link was planned as `link/girpr-cache`.
+A cache belongs to the root it sits in, so a nested root carries
+`<root>/sub/girpr-cache` and a followed link exposes its target’s. The predicate
+now reserves a `girpr-cache*` component at **any** depth, matching README’s
+“always excluded” and `util.rs`’s “never part of a mirror”; ordinary names that
+merely contain the prefix are untouched. This also keeps a linked nested root’s
+live database (and its backups) out of the mirror.
+
+**Tests.** `sync_refuses_a_src_directory_link_to_dst`,
+`..._inside_dst`, `..._containing_dst` and
+`sync_refuses_a_src_file_link_into_dst` assert exit 3, a message containing
+`disjoint` and `link`, unchanged destination bytes, and that nothing was created
+in dst; `a_src_link_does_not_mirror_a_nested_cache` pins the pruning rule.
+`cache_paths_are_reserved_at_any_depth` and the extended
+`cache_paths_are_pruned_along_with_their_contents` pin the predicate at unit
+level, and `a_removal_whose_parent_resolves_inside_src_is_refused` pins the
+removal guard’s allowed and refused shapes. The junction fallback now passes
+native separators to `mklink` (a forward slash is a switch) and reports the
+fallback error instead of the misleading `symlink_dir` one.
+
+**Final verification.** On Windows 11, on `fix-gaps/girsync` at the docs commit
+above (this section is a later docs commit):
+
+- `cargo build -p girsync` — Finished, no warnings.
+- `cargo test -p girsync` — 368 passed, 0 failed, 1 ignored (the pre-existing
+  `tests/sync.rs` created/removed-in-one-run case).
+- `cargo test -p girsync --test symlink -- --nocapture` — 22 passed, 0 failed;
+  every directory-link case ran through a junction. Five file-link cases print
+  the `os error 1314` skip line (developer mode is off), including the new
+  file-link regression, which therefore compiles and asserts but does not
+  execute here.
+- `cargo clippy -p girsync --all-targets` — clean, no warnings.
+- `cargo fmt -p girsync --check` — exit 0.
+
+Suite breakdown: lib 131, cli_dispatch 1, compare 13, compare_self 12, convert 4,
+hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15,
+stat_trust 19, symlink 22, sync 20 (+1 ignored), sync_plan 19, update 3, why 25.
+
+**Surviving decisions.** The mirror-src overlap rule is symmetric through
+links: a link’s *effective* target may not touch dst, but a link pointing
+elsewhere is content. Cache prefixes are reserved at every depth. A removal
+guard repeats the disjointness test at the filesystem, so a plan is never the
+last word on what may be deleted.
+
+**Not verified.** Linux/macOS link behavior; this host refuses file symlinks
+(os error 1314), so only directory junctions and plain directories ran. The
+file-link refusal is source-verified: the check iterates `is_link` entries
+without filtering by kind, and the test is present for a host that can create
+one. Non-link reparse points still have no available fixture.
+
+**Open for the maintainer.** The file-link regression needs a Windows host with
+developer mode (or a POSIX CI) to run; it is the only new case that self-skips
+here.
+
+---
+
 *End of review. Sections 1–6 describe the original source-only audit: no source,
 test, Cargo, README, or other project file was changed and no build, test, or
-binary run was performed for them. Sections 7–9 record the implementation and
-the second and third passes, which did build, test and run the binary.*
+binary run was performed for them. Sections 7–10 record the implementation and
+the second, third and fourth passes, which did build, test and run the binary.*
