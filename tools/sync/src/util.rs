@@ -55,18 +55,17 @@ pub fn is_record_path(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// True for any `girpr-cache*` relative path: the live DB, its backups, and its
-/// `old-*` snapshots. These are never part of a mirror.
+/// True for any relative path with a `girpr-cache*` component: the live DB,
+/// its backups, and its `old-*` snapshots. These are never part of a mirror.
+///
+/// Every component, not only the first. A cache belongs to the root it sits in,
+/// so a nested root carries one at `<root>/sub/girpr-cache`, and a followed
+/// link exposes its target's cache as `link/girpr-cache`. Both are tool state,
+/// not content; copying them would at best duplicate a database and at worst
+/// fail on its live lock. The prefix is reserved at every depth, exactly as
+/// [`is_record_path`] reserves it for a record's own name.
 pub fn is_cache_rel(rel: &str) -> bool {
-    // Covers girpr-cache, girpr-cache-backup-*, girpr-cache-old-* at root.
-    rel == CACHE_PREFIX
-        || rel.starts_with("girpr-cache/")
-        || rel.starts_with("girpr-cache-")
-        || rel
-            .split('/')
-            .next()
-            .map(|f| f.starts_with(CACHE_PREFIX))
-            .unwrap_or(false)
+    rel.split('/').any(|c| c.starts_with(CACHE_PREFIX))
 }
 
 /// The canonical form of an existing path, or the path itself when it cannot
@@ -146,6 +145,31 @@ mod tests {
         assert!(path_within(Path::new("C:/A/b"), a));
         assert!(!path_within(Path::new("C:/AB"), a));
         assert!(!path_within(Path::new("C:/"), a));
+    }
+
+    /// A cache belongs to the root it sits in, so the reservation is per
+    /// component rather than per path: a nested root's cache and a cache seen
+    /// through a followed link are just as much tool state as the top-level one.
+    #[test]
+    fn cache_paths_are_reserved_at_any_depth() {
+        for rel in [
+            "girpr-cache",
+            "girpr-cache/rows",
+            "girpr-cache-backup-1",
+            "girpr-cache-old-2/inner",
+            "sub/girpr-cache",
+            "sub/girpr-cache/rows",
+            "sub/deeper/girpr-cache-backup-3/x",
+            "link/girpr-cache",
+            "girpr-cache-notes/a.txt",
+        ] {
+            assert!(is_cache_rel(rel), "`{rel}` is tool state, not content");
+        }
+        for rel in ["a.txt", "sub/a.txt", "docs/my-girpr-cache.md", "girprcache"] {
+            // The prefix is reserved as the start of a *component*, so a name
+            // that merely contains it is ordinary content.
+            assert!(!is_cache_rel(rel), "`{rel}` is ordinary content");
+        }
     }
 
     /// On Windows the same tree can be spelled with different case, so an

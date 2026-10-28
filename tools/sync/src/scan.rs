@@ -175,12 +175,25 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("girsync_scan", "prune");
         // The live DB is a file; the backups and `old-*` snapshots are directories.
         // All three are named `girpr-cache*` and none of them is mirror content.
-        for f in ["a.txt", "keep/b.txt", "girpr-cache/rows"] {
+        for f in [
+            "a.txt",
+            "keep/b.txt",
+            "girpr-cache/rows",
+            // A nested root keeps its own cache; a followed link can expose
+            // one too. Both are tool state, not mirror content.
+            "nest/girpr-cache/rows",
+            "nest/keep.txt",
+            "link/girpr-cache",
+        ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(&p, b"x").unwrap();
         }
-        for d in ["girpr-cache-backup-1", "girpr-cache-old-2"] {
+        for d in [
+            "girpr-cache-backup-1",
+            "girpr-cache-old-2",
+            "nest/girpr-cache-backup-3",
+        ] {
             let p = root.join(d).join("inner.bin");
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, b"x").unwrap();
@@ -193,7 +206,17 @@ mod tests {
             .collect();
         rels.sort();
 
-        assert_eq!(rels, vec!["a.txt", "keep", "keep/b.txt"]);
+        assert_eq!(
+            rels,
+            vec![
+                "a.txt",
+                "keep",
+                "keep/b.txt",
+                "link",
+                "nest",
+                "nest/keep.txt"
+            ]
+        );
     }
 
     /// `max_depth` is the walk's own bound, and the cache prune must not consume
