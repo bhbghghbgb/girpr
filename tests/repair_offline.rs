@@ -1867,6 +1867,122 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
     mock.stop();
 }
 
+#[tokio::test]
+async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
+    // U-1: the server may spell the same file `./old/legacy.dll`. The scope
+    // matches the *cleaned* rel (`old/legacy.dll`), so an exclude that hides the
+    // plain spelling must hide this one too. The old code gated on the raw
+    // spelling and then cleaned only at the delete sink: the excluded file was
+    // deleted.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            deprecated_files: vec!["./old/legacy.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dot_scope_deprecated");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.path_scope = scope(&[], &["old/*"]);
+    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, "old/legacy.dll").unwrap(),
+        &[0x7Eu8; 50],
+        "the excluded `./`-spelled path must survive"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "nothing was deleted"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
+    // U-1, the fail-closed direction: the scan file's own rel path is the
+    // documented escape hatch for `--audio` under a scope. A `./` spelling is
+    // the same file, so the include that names the plain path must admit it;
+    // the old code compared the raw spelling and refused the run with exit 1.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "./Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_scope_dot_allowed");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
+    ctx.audio = HashSet::from(["ja-jp".to_string()]);
+    ctx.audio_explicit = true;
+    let (_, code) = repair::run(ctx)
+        .await
+        .expect("the cleaned scan rel is in scope");
+    assert_eq!(code, 0);
+    let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
+    assert!(scan.contains("Japanese"), "{scan}");
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_dot_spelled_audio_cache_hidden_by_the_scope_is_not_moved() {
+    // U-1's move sink: `./Audio/cache` and `Audio/cache` are one directory.
+    // An exclude that hides the cache must leave it where it is; the old code
+    // gated on the raw spelling, then cleaned at the rename/copy boundary, and
+    // relocated the excluded tree.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            cache_dir: "./Audio/cache".to_string(),
+            res_dir: "./Audio/res".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dot_scope_audio_move");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.path_scope = scope(&[], &["Audio/*"]);
+    let (_, code) = repair::run(ctx).await.expect("scoped audio run");
+    assert_eq!(code, 0);
+    assert_eq!(
+        read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
+        &[0x3Bu8; 128],
+        "the excluded cache file must not move"
+    );
+    assert!(
+        read_game_file(&dir, "Audio/res/track_1.pcm").is_none(),
+        "nothing may appear in the res dir"
+    );
+
+    mock.stop();
+}
+
 // ---------------------------------------------------------------------------
 // resource ceilings
 // ---------------------------------------------------------------------------

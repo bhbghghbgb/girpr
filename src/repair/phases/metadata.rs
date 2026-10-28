@@ -56,6 +56,28 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     }
 }
 
+/// Normalise one server/config directory spelling to the `/` form every gate
+/// and sink shares, and validate its containment at the boundary.
+///
+/// The path scope matches the cleaned form (`./Audio/scan.txt` and
+/// `Audio/scan.txt` are the same file), so the scope decision must not be made
+/// on the raw spelling while the filesystem sink cleans it. Empty stays empty:
+/// every caller treats an empty config value as "not configured".
+fn clean_config_dir(game_dir: &Path, name: &str, dir: &str) -> Result<String, RunFailure> {
+    if dir.is_empty() {
+        return Ok(String::new());
+    }
+    let rel = util::clean_rel(dir)
+        .with_context(|| name.to_string())
+        .map_err(RunFailure::metadata)?;
+    // The lexical cleaning above is what the gate uses; this also resolves the
+    // nearest existing ancestor, so a symlink escape is refused here too.
+    util::contained_join(game_dir, &rel)
+        .with_context(|| name.to_string())
+        .map_err(RunFailure::metadata)?;
+    Ok(rel)
+}
+
 /// Read local state, then fetch the server metadata that defines the target.
 pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // 1. local state. An absent `config.ini` is a fresh install; an unreadable
@@ -68,11 +90,21 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
 
     // 2. server metadata (up to 5 calls)
     let hyp = hyp_client_for(ctx).map_err(RunFailure::metadata)?;
-    let config = hyp
+    let mut config = hyp
         .game_config()
         .await
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)?;
+    // These three dirs feed both a path-scope gate and a filesystem sink. Clean
+    // each spelling once, here, so the gate and the sink compare the same
+    // string; cleaning only inside `contained_join` would let a `./`-spelled
+    // path pass a scope that hides its plain spelling.
+    config.audio_pkg_scan_dir =
+        clean_config_dir(game_dir, "audio_pkg_scan_dir", &config.audio_pkg_scan_dir)?;
+    config.audio_pkg_cache_dir =
+        clean_config_dir(game_dir, "audio_pkg_cache_dir", &config.audio_pkg_cache_dir)?;
+    config.audio_pkg_res_dir =
+        clean_config_dir(game_dir, "audio_pkg_res_dir", &config.audio_pkg_res_dir)?;
     tracing::info!(
         "game config: exe={} audio_scan={} audio_res={} audio_cache={} mode={}",
         config.exe_file_name,
@@ -143,32 +175,10 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     } else {
         HashSet::new()
     };
-    // The audio scan dir is server data too, and an explicit `--audio` writes
-    // it in the execution phase. Validate it with the other config dirs: a
-    // path out of the install is metadata, refused before the scan read and
-    // before anything can be written.
-    if !config.audio_pkg_scan_dir.is_empty() {
-        util::contained_join(game_dir, &config.audio_pkg_scan_dir)
-            .context("audio_pkg_scan_dir")
-            .map_err(RunFailure::metadata)?;
-    }
-    // The cache/res pair feeds the post-phase **move** sink. It is server data
-    // exactly like the scan dir above, so a bad value is metadata and refuses
-    // the run before any mutation. The post phase still contains both (defence
-    // in depth), but reaching it with a hostile value would bump `config.ini`
-    // and exit `0` after skipping the move, which says the install is healthy
-    // when the server data was not.
-    for (name, dir) in [
-        ("audio_pkg_cache_dir", &config.audio_pkg_cache_dir),
-        ("audio_pkg_res_dir", &config.audio_pkg_res_dir),
-    ] {
-        if !dir.is_empty() {
-            util::contained_join(game_dir, dir)
-                .with_context(|| name.to_string())
-                .map_err(RunFailure::metadata)?;
-        }
-    }
-
+    // The audio dirs were normalised and validated at the top of this function,
+    // where `getGameConfigs` enters the run. They feed a **move** sink and the
+    // `--audio` pre-flight below, so the gate there and the sink use the cleaned
+    // string rather than the raw server spelling.
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
     // and overwrites the scan file; omitted flag keeps the detected set. An
     // absent scan file falls back to `en-us`; an unreadable one fails the run
@@ -195,8 +205,8 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         && !ctx.print_plan
         && !config.audio_pkg_scan_dir.is_empty()
     {
-        let scan_rel = config.audio_pkg_scan_dir.replace('\\', "/");
-        if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(&scan_rel) {
+        let scan_rel = &config.audio_pkg_scan_dir;
+        if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(scan_rel) {
             return Err(RunFailure::usage(anyhow::anyhow!(
                 "--audio writes the scan file at '{scan_rel}', which is outside the active \
                  path scope (--include '{}' / --exclude '{}'); include it or drop one of the two flags",

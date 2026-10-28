@@ -378,6 +378,19 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
     Ok(clean)
 }
 
+/// Validate a server-controlled relative path and return the `/`-separated
+/// string every gate and sink shares.
+///
+/// This is the lexical half of [`contained_join`] with no filesystem step. It
+/// exists so a caller normalises a server or config spelling **once**, at the
+/// boundary where it enters the run, and then reuses that exact string for the
+/// path-scope decision and for the filesystem operation. Cleaning only at the
+/// sink (as `contained_join` does) leaves the gate comparing a different
+/// spelling, so `./a/b` can pass a scope that hides `a/b`.
+pub fn clean_rel(rel: &str) -> Result<String> {
+    Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
+}
+
 /// Is this component a name Windows reserves for a device in every directory?
 ///
 /// The comparison uses the part before the first `.` — `NUL.txt` is still the

@@ -131,6 +131,10 @@ pub enum PostOutcome {
 /// simply means there is nothing to do. A path outside the active scope does
 /// not exist, so it is not deleted either.
 ///
+/// The names were normalised to the `/` form in `repair::fetch_deprecated`, at
+/// the boundary where the server list enters the run, so this gate and the
+/// `contained_join` sink below see one spelling.
+///
 /// `dry_run` lists instead of deleting, and adds nothing to the byte counter.
 fn delete_deprecated(
     game_dir: &Path,
@@ -274,10 +278,12 @@ fn move_audio_cache(
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
         return;
     }
-    // Rel paths are `/`-separated everywhere except at the filesystem boundary.
-    let cache_rel = cache_dir.replace('\\', "/");
-    let res_rel = res_dir.replace('\\', "/");
-    if !scope.is_visible(&cache_rel) || !scope.is_visible(&res_rel) {
+    // `metadata::fetch` normalised both spellings to the `/` form the scope
+    // matches on, at the boundary where `getGameConfigs` enters the run, so the
+    // gate below and `contained_join` see one string.
+    let cache_rel = cache_dir.as_str();
+    let res_rel = res_dir.as_str();
+    if !scope.is_visible(cache_rel) || !scope.is_visible(res_rel) {
         tracing::debug!("audio cache->res out of scope, skipped");
         return;
     }
@@ -325,7 +331,7 @@ fn move_audio_cache(
             let Ok(rel) = src.strip_prefix(&cache) else {
                 continue;
             };
-            if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+            if !scope.is_visible(&join_rel(cache_rel, rel)) {
                 continue;
             }
             tracing::info!("would move audio cache {} -> res", rel.display());
@@ -338,7 +344,7 @@ fn move_audio_cache(
         let Ok(rel) = src.strip_prefix(&cache) else {
             continue;
         };
-        if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+        if !scope.is_visible(&join_rel(cache_rel, rel)) {
             continue;
         }
         let target = res.join(rel);

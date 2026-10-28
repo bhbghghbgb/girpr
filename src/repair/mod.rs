@@ -62,6 +62,7 @@ use anyhow::Context;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
+use crate::util;
 
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
@@ -551,9 +552,27 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
 /// The server's deprecated-file list, fetched with the rest of the plan.
 /// Best-effort: the list is advisory, so a failed call only warns and the run
 /// continues with nothing to delete.
+///
+/// Each name is normalised to the `/` form once, here, because the post-phase
+/// scope gate and the delete sink must compare the same string. A name that is
+/// not a plain relative path is dropped with a warning: it is a delete sink, so
+/// it is never followed.
 async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
     match hyp.deprecated_files().await {
-        Ok(l) => l,
+        Ok(list) => list
+            .into_iter()
+            .filter_map(|name| match util::clean_rel(&name) {
+                Ok(rel) => Some(rel),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %name,
+                        error = %format!("{e:#}"),
+                        "deprecated path is not a plain relative path; ignored"
+                    );
+                    None
+                }
+            })
+            .collect(),
         Err(e) => {
             tracing::warn!("deprecated list unavailable: {e:#}");
             Vec::new()

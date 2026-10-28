@@ -219,9 +219,8 @@ pub fn build_plan(
             // repair write, `_tmp` promote) joins it under `game_dir`. Refuse
             // an escape here, before any of them exists: a bad manifest is
             // metadata, exit `2`, not a file to repair.
-            let rel = util::contained_rel(&f.file)
-                .with_context(|| format!("manifest path {:?}", f.file))?;
-            let rel = rel.to_string_lossy().replace('\\', "/");
+            let rel =
+                util::clean_rel(&f.file).with_context(|| format!("manifest path {:?}", f.file))?;
             // Windows paths are case-insensitive, and the path scope is
             // matched case-insensitively too. Two manifest spellings that
             // differ only in case therefore name **one** file; planning both
