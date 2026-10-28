@@ -3,8 +3,18 @@
 - Branch: `fix-gaps/girpr` (reviewed in place; no worktree, no branch change)
 - Review HEAD: `8003226` (`docs(review): fold the eighth pass into the review`)
 - Scope: `src/**`, `tests/**`, `docs/**`, root `README.md`, root `Cargo.toml`
-- Result: **3 actionable findings** (2 bugs, 1 doc error). No source, test, or doc file
-  was changed; this note is the only file added by this pass.
+- Result: **3 actionable findings** (2 bugs, 1 doc error), all validated and fixed on
+  `fix-gaps/girpr`: U-1 `3123d96`, U-2 `d6bf9b3`, U-3 `1ff9e90`. The verification run is
+  recorded at the end of this note; the final fold is in `ADVERSARIAL_REVIEW.md` §8.10.
+
+## Resolution
+
+| ID | Verdict | Fix | Commit |
+|---|---|---|---|
+| U-1 | **Valid.** Reproduced with the public `PathScope`/`contained_rel` probe: `is_visible("./old/legacy.dll")` is `true` while the cleaned rel is hidden by `old/*`. All three gates (deprecated delete, audio cache move, `--audio` scan pre-flight) now consume the cleaned form. | `util::clean_rel` normalises the manifest, deprecated-list and audio-dir spellings once at their boundaries; `plan::build_plan` uses it too. Regression tests cover the excluded `./` deprecated path, the excluded `./` audio cache and the in-scope `./` scan file. | `3123d96` |
+| U-2 | **Valid.** Reproduced with the existing probe: a stale lock held open without `FILE_SHARE_DELETE` aborted with `EXIT=-1073741571`. | `Lock::acquire_with` attempts exactly one takeover. A failed removal is a contextual error naming the path and the I/O error; a successful removal is followed by one `create_new`, and a raced fresh lock is refused. The removal is injected so the undeletable arm is pinned on every host. After the fix the probe returns the contextual `Err` and the process exits normally. | `d6bf9b3` |
+| U-3 | **Valid.** Every cited path was absent from `git ls-files`. | README's entry-point table and remaining module references, docs/03's crate layout, and docs/04's module layout, prose and touch-point table now name `phases/…`, `purge.rs` and `file/mod.rs`; every path was checked against `git ls-files`. | `1ff9e90` |
+
 
 ## Verdict
 
@@ -290,14 +300,15 @@ All commands run in `E:\hoccode\hocrust\girpr` on `fix-gaps/girpr`, HEAD
 
 | Command | Result |
 |---|---|
-| `cargo build` | `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 1.80s` |
-| `cargo test -p girpr` | **338 passed, 0 failed, 7 ignored** |
-| `cargo clippy -p girpr --all-targets` | `Finished` — no warnings (re-check forced by touching `src/lib.rs`; no content change) |
+| `cargo build -p girpr` | `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 0.44s` |
+| `cargo test -p girpr` | **342 passed, 0 failed, 7 ignored** |
+| `cargo clippy -p girpr --all-targets` | `Finished` — no warnings |
 | `cargo fmt --check` | exit `0` |
 
-Per-binary test counts: lib 199 passed; `artifact_bridge` 0 run / 6 ignored;
+Per-binary test counts: lib 200 passed; `artifact_bridge` 0 run / 6 ignored;
 `artifact_server` 7; `cli_contract` 17; `peak_heap` 0 run / 1 ignored;
-`repair_machinery` 25; `repair_offline` 90; binary `girpr` 0; doc-tests 0.
+`repair_machinery` 25; `repair_offline` 93; binary `girpr` 0; doc-tests 0. The
+four new tests are the three U-1 integration cases and the U-2 unit case.
 
 The 7 ignored tests are the expensive real-bundle and heap suites documented at
 `tests/artifact_bridge.rs:27-53` and `tests/peak_heap.rs:19-24`. No test is
@@ -319,14 +330,20 @@ EXIT=0
 
 $ ...\girpr-scope-probe.exe lockshare
 holding a stale lock open without FILE_SHARE_DELETE
+returned: Err(take over the stale lock ...\girpr.lock (it cannot be removed)
 
-thread 'main' (3752) has overflowed its stack
-EXIT=-1073741571
+Caused by:
+    The process cannot access the file because it is being used by another process. (os error 32))
+EXIT=0
 ```
 
 The first probe compiles `PathScope::new(&[], &["old/*"])` and calls the public
 `is_visible` / `contained_rel`; the second ages a `girpr.lock`, holds it open
-without `FILE_SHARE_DELETE`, and calls `Lock::acquire`.
+without `FILE_SHARE_DELETE`, and calls `Lock::acquire`. Before the fix the second
+probe overflowed the stack (`EXIT=-1073741571`); after it, `acquire` returns the
+contextual error instead of recursing. The probe binary does not propagate the
+error, so its own exit is `0`; the caller in `repair::run` maps the error through
+`RunFailure::usage`, which is exit `1`.
 
 ## Checked and found sound this pass
 
@@ -356,14 +373,11 @@ without `FILE_SHARE_DELETE`, and calls `Lock::acquire`.
 ## Not verified
 
 - The live HoYoPlay API's actual spelling of `deprecated_file_configs[].name`
-  and `audio_pkg_{cache,res,scan}_dir`. U-1 needs a `.` component there; no live
-  response was inspected, and the probe exercises the functions directly rather
-  than a full run against a mock server.
-- U-1 end to end. The path from `:143`/`:280`/`:199` to the delete/move/write is
-  straight-line and was traced by reading, but no CLI run with a `./`-spelled
-  server value was executed.
-- U-2 on Unix. The probe is Windows-only; there the trigger would be a
-  delete-denied directory or file rather than an open handle.
+  and `audio_pkg_{cache,res,scan}_dir`. U-1 now has in-repo regression tests with
+  `./`-spelled mock values; no live response was inspected.
+- U-2 on Unix. The probe is Windows-only; the in-repo unit test injects the
+  failed removal, so the undeletable arm is pinned on every host, but only the
+  Windows sharing-violation shape was exercised end to end.
 - The 7 ignored suites (`artifact_bridge`, `peak_heap`) were not run; they need
   the real bundle and are excluded by design.
 - `read_blacklist` only replaces `\` and does not drop `.` components
