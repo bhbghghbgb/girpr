@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -171,6 +171,17 @@ struct LinkStorage {
 }
 
 impl LinkStorage {
+    /// Spare one path and every directory above it.
+    ///
+    /// Every entry that goes into `keep` must go through here: a spared
+    /// **intermediate** link is just as load-bearing as the terminal target,
+    /// and its ancestor directory can otherwise be in `plan.rmdir`, whose
+    /// `remove_dir_all` would take the link with it.
+    fn keep_path(&mut self, rel: &str) {
+        keep_ancestors(rel, &mut self.keep_dirs);
+        self.keep.insert(rel.to_string());
+    }
+
     /// Drop the spared paths from the diff and the plan.
     ///
     /// The diff is adjusted too, so a dry run does not print `EXTRA target` for
@@ -195,32 +206,187 @@ fn keep_ancestors(rel: &str, keep_dirs: &mut HashSet<String>) {
     }
 }
 
+#[cfg(windows)]
+fn without_verbatim(path: &Path) -> Cow<'_, Path> {
+    let Some(text) = path.to_str() else {
+        return Cow::Borrowed(path);
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        Cow::Owned(PathBuf::from(format!(r"\\{rest}")))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        Cow::Owned(PathBuf::from(rest))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
+#[cfg(not(windows))]
+fn without_verbatim(path: &Path) -> Cow<'_, Path> {
+    Cow::Borrowed(path)
+}
+
+/// The plan-relative spelling of an absolute link target under `canonical_dst`.
+///
+/// A junction's `read_link` target is absolute and keeps the spelling the
+/// junction was created with (`dst/link/x`), so it can name an alias the
+/// canonical spelling (`dst/real/x`) does not. Both are real paths in `dm` and
+/// the delete plan may name either. `None` when the target is outside the root
+/// or escapes it lexically.
+fn absolute_alias(
+    target: &Path,
+    canonical_dst: &Path,
+    on_disk: Option<&DiskSpelling>,
+) -> Option<String> {
+    // `canonicalize` and a junction's `read_link` need not agree on the
+    // verbatim prefix (`\\?\C:\...` vs `C:\...`); compare without it.
+    let target = without_verbatim(target);
+    let root = without_verbatim(canonical_dst);
+    let rel = target.strip_prefix(root.as_ref()).ok()?;
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in rel.components() {
+        match comp {
+            Component::Normal(name) => parts.push(name.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| plan_rel(on_disk, parts.join("/")))
+}
+
+/// The plan-relative spelling of a link target as the link text names it.
+///
+/// This is the **alias** spelling the walk reported (`link/x`), which can differ
+/// from the canonical spelling (`real/x`) that [`target_rel`] returns. Both are
+/// real paths in `dm` and the delete plan may name either; sparing only one
+/// leaves the other free to remove the storage.
+fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
+    let mut parts: Vec<&str> = cur_alias.split('/').filter(|s| !s.is_empty()).collect();
+    // The target is relative to the directory holding the current link.
+    parts.pop()?;
+    for comp in target.components() {
+        match comp {
+            Component::Normal(name) => parts.push(name.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// The dst-relative spelling of a link target, if the target is inside `dst`.
 ///
 /// The **final component** is deliberately not resolved: an intermediate link
 /// must stay in the chain so it can be spared as well, and a `read_link` target
 /// may be relative or contain `..`. Resolving the parent and keeping the name
 /// gives the entry the walk reported at that path.
-fn target_rel(target: &Path, canonical_dst: &Path) -> Option<String> {
-    let parent = target.parent()?.canonicalize().ok()?;
-    let resolved = parent.join(target.file_name()?);
-    let rel = resolved
-        .strip_prefix(canonical_dst)
-        .ok()?
-        .to_string_lossy()
-        .replace('\\', "/");
-    (!rel.is_empty()).then_some(rel)
+///
+/// Only `NotFound` is read as "not inside dst". Any other `canonicalize` error
+/// is returned: a permission or I/O failure must not silently disable the spare
+/// and leave the delete plan free to remove the link's content.
+fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<String>> {
+    let Some(parent) = target.parent() else {
+        return Ok(None);
+    };
+    let parent = match parent.canonicalize() {
+        Ok(parent) => parent,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e).with_context(|| format!("resolve {}", target.display()));
+        }
+    };
+    let Some(name) = target.file_name() else {
+        return Ok(None);
+    };
+    let resolved = parent.join(name);
+    let Ok(rel) = resolved.strip_prefix(canonical_dst) else {
+        return Ok(None);
+    };
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    Ok((!rel.is_empty()).then_some(rel))
+}
+
+/// Spare every link component the path `target` resolves through.
+///
+/// [`target_rel`] deliberately leaves the final component unresolved, but an
+/// intermediate **directory** link is also part of the chain a kept link needs:
+/// `dst/a -> link/x` with `link -> real` resolves through `link`. Canonicalizing
+/// the parent names only `real/x`, so the alias `link` the walk reported would
+/// stay in `delete_files` and the run would unlink it. Every strict prefix is
+/// therefore asked of the filesystem, in the spelling the resolution actually
+/// uses, and each link prefix is spared.
+fn spare_link_components(
+    target: &Path,
+    canonical_dst: &Path,
+    on_disk: Option<&DiskSpelling>,
+    storage: &mut LinkStorage,
+) -> Result<()> {
+    let comps: Vec<_> = target.components().collect();
+    let mut prefix = PathBuf::new();
+    for (i, comp) in comps.iter().enumerate() {
+        prefix.push(comp.as_os_str());
+        // The final component is the caller's decision: a link there is the
+        // next hop of the chain, a non-link there is the terminal storage.
+        if i + 1 == comps.len() || !matches!(comp, Component::Normal(_)) {
+            continue;
+        }
+        if !crate::link::try_is_link(&prefix)
+            .with_context(|| format!("check link {}", prefix.display()))?
+        {
+            continue;
+        }
+        if let Some(disk) = target_rel(&prefix, canonical_dst)? {
+            storage.keep_path(&plan_rel(on_disk, disk));
+        }
+    }
+    Ok(())
+}
+
+/// Spare `alias` and every link on its way to the root.
+///
+/// `alias` is the spelling the walk reported for the target (`link/x`), so the
+/// `dm` lookup can name a link the canonical parent resolved away. The alias
+/// itself is spared even when it is not a link: it is the same storage, and
+/// dropping it from `diff.extra` keeps the printed plan and the applied plan
+/// naming the same set.
+fn spare_alias_chain(alias: &str, dm: &HashMap<String, EffRec>, storage: &mut LinkStorage) {
+    let mut end = 0;
+    loop {
+        let (prefix, next) = match alias[end..].find('/') {
+            Some(i) => (&alias[..end + i], Some(end + i + 1)),
+            None => (alias, None),
+        };
+        if dm.get(prefix).is_some_and(|rec| rec.is_link) {
+            storage.keep_path(prefix);
+        }
+        match next {
+            Some(next) => end = next,
+            None => break,
+        }
+    }
+    storage.keep_path(alias);
 }
 
 /// Find the storage of every dst file link the plan keeps, and refuse a plan
-/// that asks the link and its target to hold two different contents.
+/// that asks one file to hold two different contents.
 ///
 /// A link **stays** when src has a file at its path; a src directory or an
 /// absent path means the plan replaces or removes it, and its target is then
 /// nobody's storage. For each kept link:
 ///
 /// - walk the `read_link` chain while the next entry is itself a link, sparing
-///   each one (deleting an intermediate link would dangle the one above it);
+///   each one with its ancestor directories (deleting an intermediate link
+///   would dangle the one above it, and an `rmdir` above it would take it);
+/// - spare every link **component** of the target path too: a target
+///   `link/x` where `link` is a directory link resolves through `link`, and
+///   canonicalizing the parent names only `real/x`;
+/// - keep both spellings the walk reported (the alias `link/x` and the
+///   canonical `real/x`), because the delete plan may name either;
 /// - a final target inside dst that src does **not** have is the link's content,
 ///   so it is spared with its ancestor directories;
 /// - a final target src **does** have is a second mirrored path on the same
@@ -230,8 +396,12 @@ fn target_rel(target: &Path, canonical_dst: &Path) -> Option<String> {
 ///   is refused for the same reason — the copy would write through a link whose
 ///   target is gone.
 ///
-/// A target outside dst is the documented write-through and is not this plan's
-/// business.
+/// A target outside dst is the documented write-through: its bytes are not this
+/// plan's business, but the links on the way still are, so they are spared.
+///
+/// Two kept links can resolve to the same storage even when neither's terminal
+/// target is mirrored by src. [`ensure_shared_storage_safe`] judges that set as
+/// a whole after every chain has been walked.
 pub(super) fn spare_link_storage(
     sm: &HashMap<String, EffRec>,
     dm: &HashMap<String, EffRec>,
@@ -244,7 +414,10 @@ pub(super) fn spare_link_storage(
     // Nothing to spare when no copy or delete could meet a link target.
     let mut rels: Vec<&String> = dm.keys().collect();
     rels.sort();
-    let mut canonical_dst: Option<std::path::PathBuf> = None;
+    let canonical_dst = std::fs::canonicalize(dst)
+        .with_context(|| format!("resolve dst root {}", dst.display()))?;
+    // Every kept link's terminal storage: (link, grouping key, display name).
+    let mut terminals: Vec<(String, String, String)> = Vec::new();
     for rel in rels {
         let rec = &dm[rel];
         if !rec.is_link || rec.kind != "file" {
@@ -256,81 +429,180 @@ pub(super) fn spare_link_storage(
         if sm.get(rel).is_none_or(|s| s.kind != "file") {
             continue;
         }
-        let mut cur = dst.join(disk_rel(on_disk, rel).as_ref());
+        // Resolve under the canonical root so every prefix can be compared with
+        // `canonical_dst`; the alias is carried separately, in plan spelling.
+        let mut cur = canonical_dst.join(disk_rel(on_disk, rel).as_ref());
+        let mut cur_alias = Some(rel.clone());
         // A chain longer than this is a loop the walk would already have
         // refused; the bound keeps a plan-time check from spinning.
-        for _ in 0..64 {
-            let target = match std::fs::read_link(&cur) {
+        for step in 0..64 {
+            if step == 63 {
+                bail!(
+                    "refusing to sync `{rel}`: its link chain does not terminate \
+                     (remove the link or exclude it with --exclude)"
+                );
+            }
+            let raw_target = match std::fs::read_link(&cur) {
                 Ok(t) => t,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => break,
                 Err(e) => {
                     return Err(e).with_context(|| format!("read link {}", cur.display()));
                 }
             };
-            let target = if target.is_absolute() {
-                target
+            let target = if raw_target.is_absolute() {
+                raw_target.clone()
             } else {
                 match cur.parent() {
-                    Some(parent) => parent.join(target),
-                    None => target,
+                    Some(parent) => parent.join(&raw_target),
+                    None => raw_target.clone(),
                 }
             };
-            if canonical_dst.is_none() {
-                canonical_dst = Some(
-                    std::fs::canonicalize(dst)
-                        .with_context(|| format!("resolve dst root {}", dst.display()))?,
-                );
-            }
-            let dst_root = canonical_dst.as_ref().expect("set above");
-            let Some(disk_target) = target_rel(&target, dst_root) else {
-                break;
+            let target_alias = if raw_target.is_absolute() {
+                // A junction target is absolute but still keeps the spelling it
+                // was created with, so `link/x` is an alias worth sparing.
+                absolute_alias(&target, &canonical_dst, on_disk)
+            } else {
+                cur_alias
+                    .as_deref()
+                    .and_then(|alias| alias_target(alias, &raw_target))
             };
-            let target_rel = plan_rel(on_disk, disk_target);
+            spare_link_components(&target, &canonical_dst, on_disk, &mut storage)?;
+            let canonical_rel =
+                target_rel(&target, &canonical_dst)?.map(|disk| plan_rel(on_disk, disk));
             let target_is_link = crate::link::try_is_link(&target)
                 .with_context(|| format!("check link {}", target.display()))?;
             if target_is_link {
                 // An intermediate link is part of the chain the kept link
-                // resolves through; removing it would break the kept link.
-                storage.keep.insert(target_rel);
+                // resolves through; removing it would break the kept link. Its
+                // ancestors must be spared too (R9-2).
+                if let Some(tr) = &canonical_rel {
+                    storage.keep_path(tr);
+                }
+                if let Some(alias) = &target_alias {
+                    spare_alias_chain(alias, dm, &mut storage);
+                }
                 cur = target;
+                cur_alias = target_alias;
                 continue;
             }
-            match sm.get(&target_rel) {
-                Some(trec) if trec.kind == "file" => {
-                    if plan
-                        .copy
-                        .iter()
-                        .any(|item| item.rel == *rel || item.rel == target_rel)
+            match canonical_rel.as_deref() {
+                Some(tr) => {
+                    if let Some(alias) = &target_alias
+                        && alias.as_str() != tr
                     {
-                        bail!(
-                            "refusing to sync `{rel}`: dst `{rel}` is a link to `{target_rel}`, \
-                             which src also has; copying either path would change the one file \
-                             they share (remove the link, or exclude it with --exclude)"
-                        );
+                        spare_alias_chain(alias, dm, &mut storage);
                     }
-                }
-                Some(_) => {
-                    if plan.fix_dirs.contains(&target_rel) {
-                        bail!(
-                            "refusing to sync `{rel}`: dst `{rel}` is a link to `{target_rel}`, \
-                             which this plan replaces with a directory; the copy would write \
-                             through a link whose target is gone (remove the link, or exclude \
-                             it with --exclude)"
-                        );
+                    match sm.get(tr) {
+                        Some(trec) if trec.kind == "file" => {
+                            if plan
+                                .copy
+                                .iter()
+                                .any(|item| item.rel == *rel || item.rel == tr)
+                            {
+                                bail!(
+                                    "refusing to sync `{rel}`: dst `{rel}` is a link to \
+                                     `{tr}`, which src also has; copying either path would \
+                                     change the one file they share (remove the link, or \
+                                     exclude it with --exclude)"
+                                );
+                            }
+                        }
+                        Some(_) => {
+                            if plan.fix_dirs.iter().any(|f| f == tr) {
+                                bail!(
+                                    "refusing to sync `{rel}`: dst `{rel}` is a link to \
+                                     `{tr}`, which this plan replaces with a directory; the \
+                                     copy would write through a link whose target is gone \
+                                     (remove the link, or exclude it with --exclude)"
+                                );
+                            }
+                        }
+                        None => {
+                            // The link's content, not an extra path: deleting it
+                            // (or a directory above it) is what turns the
+                            // write-through into a dangling link.
+                            storage.keep_path(tr);
+                        }
                     }
+                    terminals.push((rel.clone(), tr.to_string(), tr.to_string()));
                 }
                 None => {
-                    // The link's content, not an extra path: deleting it (or a
-                    // directory above it) is what turns the write-through into a
-                    // dangling link.
-                    keep_ancestors(&target_rel, &mut storage.keep_dirs);
-                    storage.keep.insert(target_rel);
+                    // Outside dst: the bytes are write-through, but the chain
+                    // above them is still storage the kept link needs.
+                    if let Some(alias) = &target_alias {
+                        spare_alias_chain(alias, dm, &mut storage);
+                    }
+                    // Record the external file too: two links to one outside
+                    // inode are the same shared-storage hazard as two inside.
+                    match std::fs::canonicalize(&target) {
+                        Ok(p) => terminals.push((
+                            rel.clone(),
+                            format!("external:{}", p.display()),
+                            p.display().to_string(),
+                        )),
+                        // Dangling: the walk would have refused it before this
+                        // plan existed, and there is no inode to share.
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => {
+                            return Err(e).with_context(|| {
+                                format!("resolve link target {}", target.display())
+                            });
+                        }
+                    }
                 }
             }
             break;
         }
     }
+    ensure_shared_storage_safe(&terminals, plan)?;
     storage.apply(diff, plan);
+    Ok(())
+}
+
+/// Refuse a plan in which two kept links resolve to one dst inode and either is
+/// copied.
+///
+/// [`spare_link_storage`] judges each link against its own terminal target; it
+/// cannot see that two links name the same file. `dst/a -> c` and `dst/b -> c`
+/// (or the chained `dst/a -> b -> c`) are one inode behind two mirrored paths:
+/// writing either changes the content the other resolves to, so one path ends
+/// wrong at exit 0 and later runs alternate. The rule is the single-link one —
+/// one file cannot be given two contents — applied to the whole set.
+///
+/// A group with no copy is left alone: nothing writes, so both paths keep
+/// resolving to the content they already agree on.
+fn ensure_shared_storage_safe(terminals: &[(String, String, String)], plan: &Plan) -> Result<()> {
+    let mut by_storage: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (rel, key, _) in terminals {
+        by_storage.entry(key.as_str()).or_default().push(rel);
+    }
+    let mut groups: Vec<_> = by_storage
+        .into_iter()
+        .filter(|(_, rels)| rels.len() > 1)
+        .collect();
+    // Deterministic message when several groups qualify.
+    groups.sort_by(|a, b| a.0.cmp(b.0));
+    for (key, rels) in groups {
+        if !plan
+            .copy
+            .iter()
+            .any(|item| rels.contains(&item.rel.as_str()))
+        {
+            continue;
+        }
+        let label = terminals
+            .iter()
+            .find(|(_, k, _)| k.as_str() == key)
+            .map(|(_, _, label)| label.as_str())
+            .unwrap_or(key);
+        bail!(
+            "refusing to sync: dst links `{}` and `{}` both resolve to the same file \
+             `{label}`; copying either would give one inode two contents (remove one \
+             link, or exclude it with --exclude)",
+            rels[0],
+            rels[1]
+        );
+    }
     Ok(())
 }
 
@@ -969,6 +1241,20 @@ mod tests {
         }
     }
 
+    fn link_file() -> EffRec {
+        EffRec {
+            is_link: true,
+            ..file()
+        }
+    }
+
+    fn link_dir() -> EffRec {
+        EffRec {
+            is_link: true,
+            ..dir()
+        }
+    }
+
     fn plan(mkdir: &[&str], copy: &[&str], fix_dirs: &[&str]) -> Plan {
         Plan {
             mkdir: mkdir.iter().map(|s| s.to_string()).collect(),
@@ -1259,6 +1545,10 @@ mod tests {
 
     #[cfg(windows)]
     fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        // `cmd` reads a `/` in an argument as a switch; `Path::join("a/b")`
+        // keeps the separator as written, so normalize before handing it over.
+        let link = link.to_string_lossy().replace('/', "\\");
+        let target = target.to_string_lossy().replace('/', "\\");
         let out = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(link)
@@ -1326,14 +1616,325 @@ mod tests {
         let root = std::fs::canonicalize(&dst).unwrap();
 
         assert_eq!(
-            target_rel(&dst.join("d").join("..").join("d").join("t.bin"), &root),
+            target_rel(&dst.join("d").join("..").join("d").join("t.bin"), &root).unwrap(),
             Some("d/t.bin".to_string()),
             "the resolved parent plus the final name, not the link text"
         );
         assert_eq!(
-            target_rel(&outside.join("x.bin"), &root),
+            target_rel(&outside.join("x.bin"), &root).unwrap(),
             None,
             "a target outside dst is the documented write-through, not storage"
         );
+    }
+
+    /// A relative target is named from the directory holding its link, so the
+    /// alias spelling survives a `..` that stays inside the root.
+    #[test]
+    fn a_relative_target_keeps_its_alias_spelling() {
+        assert_eq!(
+            alias_target("a.bin", Path::new("link/x.bin")).as_deref(),
+            Some("link/x.bin"),
+            "a target one level down keeps the walk's spelling"
+        );
+        assert_eq!(
+            alias_target("d/a.bin", Path::new("../x.bin")).as_deref(),
+            Some("x.bin"),
+            "`..` is resolved against the link's parent, not dst"
+        );
+        assert_eq!(
+            alias_target("a.bin", Path::new("../../x.bin")),
+            None,
+            "a target that escapes the root has no alias under it"
+        );
+    }
+
+    /// **R9-1.** `dst/a -> link/x.bin` with `link` a directory link. The parent
+    /// canonicalization names only `real/x.bin`, so the alias `link` the walk
+    /// reported used to stay in `delete_files`; the run unlinked it and left `a`
+    /// dangling. Both spellings, and every link prefix, are spared.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_kept_link_through_a_directory_link_spares_the_alias_and_the_target() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "link_component");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
+        if let Err(e) = make_dir_link(&dst.join("real"), &dst.join("link")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let root = std::fs::canonicalize(&dst).unwrap();
+        let target = dst.join("link/x.bin");
+
+        let mut storage = LinkStorage::default();
+        spare_link_components(&target, &root, None, &mut storage).unwrap();
+        assert!(
+            storage.keep.contains("link"),
+            "the walk's alias for the intermediate link is spared: {:?}",
+            storage.keep
+        );
+        assert_eq!(
+            target_rel(&target, &root).unwrap().as_deref(),
+            Some("real/x.bin"),
+            "the canonical spelling names the same content"
+        );
+
+        let mut dm = HashMap::new();
+        dm.insert("link".to_string(), link_dir());
+        dm.insert("link/x.bin".to_string(), link_file());
+        spare_alias_chain("link/x.bin", &dm, &mut storage);
+        storage.keep_path("real/x.bin");
+
+        let mut diff = Diff {
+            extra: vec![
+                "link".to_string(),
+                "link/x.bin".to_string(),
+                "real".to_string(),
+                "real/x.bin".to_string(),
+            ],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.delete_files = vec!["link".to_string(), "real/x.bin".to_string()];
+        p.rmdir = vec!["real".to_string()];
+        storage.apply(&mut diff, &mut p);
+
+        assert!(
+            p.delete_files.is_empty(),
+            "the delete plan cannot unlink the alias: {:?}",
+            p.delete_files
+        );
+        assert!(
+            p.rmdir.is_empty(),
+            "nor rmdir the target's directory: {:?}",
+            p.rmdir
+        );
+        assert!(
+            diff.extra.is_empty(),
+            "the record and the action name the same set: {:?}",
+            diff.extra
+        );
+    }
+
+    /// **R9-2.** A spared **intermediate** link used to skip `keep_ancestors`, so
+    /// its dst-only directory stayed in `plan.rmdir` and `remove_dir_all` took
+    /// the link with it. `keep_path` is the single insertion point now.
+    #[test]
+    fn a_spared_intermediate_link_keeps_its_ancestor_directories() {
+        let mut dm = HashMap::new();
+        dm.insert("extra/b".to_string(), link_file());
+        let mut storage = LinkStorage::default();
+        spare_alias_chain("extra/b", &dm, &mut storage);
+        assert!(storage.keep.contains("extra/b"), "{:?}", storage.keep);
+        assert!(
+            storage.keep_dirs.contains("extra"),
+            "the directory above the kept link is spared: {:?}",
+            storage.keep_dirs
+        );
+
+        let mut diff = Diff {
+            extra: vec!["extra".to_string(), "extra/b".to_string()],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.delete_files = vec!["extra/b".to_string()];
+        p.rmdir = vec!["extra".to_string()];
+        storage.apply(&mut diff, &mut p);
+
+        assert!(p.delete_files.is_empty(), "{:?}", p.delete_files);
+        assert!(
+            p.rmdir.is_empty(),
+            "rmdir cannot take the kept link's directory: {:?}",
+            p.rmdir
+        );
+        assert!(diff.extra.is_empty(), "{:?}", diff.extra);
+    }
+
+    /// The full spare pass over a chain that passes through a dst directory
+    /// link. This host refuses file symlinks, so the kept link is a directory
+    /// junction and `dm` describes it as a file link — which is exactly the
+    /// input the resolver reads; only `read_link` matters for the chain.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn the_spare_pass_walks_through_a_directory_link_component() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "spare_component");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real/x")).unwrap();
+        if let Err(e) = make_dir_link(&dst.join("real"), &dst.join("link")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if let Err(e) = make_dir_link(&dst.join("link/x"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), file());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("link".to_string(), link_dir());
+        dm.insert("link/x".to_string(), dir());
+        dm.insert("real".to_string(), dir());
+        dm.insert("real/x".to_string(), dir());
+
+        let mut diff = Diff {
+            extra: vec![
+                "link".to_string(),
+                "link/x".to_string(),
+                "real".to_string(),
+                "real/x".to_string(),
+            ],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.delete_files = vec!["link".to_string(), "real/x".to_string()];
+        p.rmdir = vec!["real".to_string()];
+
+        spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+
+        assert!(
+            p.delete_files.is_empty(),
+            "the intermediate link and its canonical target are spared: {:?}",
+            p.delete_files
+        );
+        assert!(p.rmdir.is_empty(), "{:?}", p.rmdir);
+        assert!(diff.extra.is_empty(), "{:?}", diff.extra);
+    }
+
+    /// The full spare pass over an intermediate link under a dst-only
+    /// directory. Junctions stand in for file links as above; the ancestor is
+    /// the point.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn the_spare_pass_keeps_an_intermediate_links_ancestors() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "spare_intermediate");
+        let dst = t.subdir("dst");
+        let outside = t.subdir("outside");
+        std::fs::create_dir_all(dst.join("extra")).unwrap();
+        if let Err(e) = make_dir_link(&outside, &dst.join("extra/b")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if let Err(e) = make_dir_link(&dst.join("extra/b"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), file());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("extra".to_string(), dir());
+        dm.insert("extra/b".to_string(), link_dir());
+
+        let mut diff = Diff {
+            extra: vec!["extra".to_string(), "extra/b".to_string()],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.delete_files = vec!["extra/b".to_string()];
+        p.rmdir = vec!["extra".to_string()];
+
+        spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+
+        assert!(p.delete_files.is_empty(), "{:?}", p.delete_files);
+        assert!(
+            p.rmdir.is_empty(),
+            "the directory above the intermediate link is spared: {:?}",
+            p.rmdir
+        );
+        assert!(diff.extra.is_empty(), "{:?}", diff.extra);
+    }
+
+    /// The full spare pass over two kept links sharing one dst-only storage,
+    /// including the chained shape. Junctions stand in for file links; both
+    /// links resolve through `read_link` exactly as the real shape would.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn the_spare_pass_refuses_two_links_on_one_storage() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "spare_shared");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("c")).unwrap();
+        if let Err(e) = make_dir_link(&dst.join("c"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if let Err(e) = make_dir_link(&dst.join("c"), &dst.join("b")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), file());
+        sm.insert("b".to_string(), file());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("b".to_string(), link_file());
+        dm.insert("c".to_string(), dir());
+
+        let mut p = plan(&[], &["a", "b"], &[]);
+        let mut diff = Diff::default();
+        let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+            .expect_err("two kept links on one inode cannot both be copied");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`a`") && msg.contains("`b`"),
+            "names both links: {msg}"
+        );
+
+        // Chained: `a -> b -> c`; the same terminal groups the two kept links.
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "spare_shared_chain");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("c")).unwrap();
+        if let Err(e) = make_dir_link(&dst.join("c"), &dst.join("b")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if let Err(e) = make_dir_link(&dst.join("b"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("b".to_string(), link_file());
+        dm.insert("c".to_string(), dir());
+        let mut p = plan(&[], &["a", "b"], &[]);
+        let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+            .expect_err("the chained pair shares the same terminal storage");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`a`") && msg.contains("`b`"),
+            "names both links: {msg}"
+        );
+    }
+
+    /// **R9-3.** Two kept links share one dst-only file. Neither terminal target
+    /// is mirrored by src, so the per-link check never fires; copying both wrote
+    /// two contents through one inode and one mirrored path ended wrong at exit
+    /// 0. The set is judged as a whole, including the chained shape.
+    #[test]
+    fn two_kept_links_on_one_storage_refuse_when_either_is_copied() {
+        let terminals = vec![
+            ("a".to_string(), "c".to_string(), "c".to_string()),
+            ("b".to_string(), "c".to_string(), "c".to_string()),
+        ];
+        let mut p = plan(&[], &["a", "b"], &[]);
+        let err = ensure_shared_storage_safe(&terminals, &p)
+            .expect_err("one inode cannot be given two contents");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`a`") && msg.contains("`b`"),
+            "names both links: {msg}"
+        );
+        assert!(msg.contains("`c`"), "names the shared file: {msg}");
+
+        // The chained `a -> b -> c` group is the same terminal; copying only
+        // `a` already changes what `b` resolves to.
+        p.copy.truncate(1);
+        assert!(
+            ensure_shared_storage_safe(&terminals, &p).is_err(),
+            "copying one end breaks the other"
+        );
+
+        // Nothing copied: both paths already agree with the one file.
+        ensure_shared_storage_safe(&terminals, &Plan::default()).expect("no write, no conflict");
     }
 }
