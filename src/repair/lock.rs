@@ -20,7 +20,9 @@
 //!   the run, and the lock file is at the game dir's root.
 //!
 //! A lock that outlives its run (the run was killed) is taken over after
-//! [`STALE_AFTER`]; a live one refuses the new run, by name and by pid.
+//! [`STALE_AFTER`]; a live one refuses the new run, by name and by pid. A stale
+//! lock that cannot be removed is also refused — naming the file and the I/O
+//! error — rather than retried, because no retry changes the state.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,44 +51,90 @@ impl Lock {
     /// The refusal names the file and the pid that holds it, because the
     /// person hitting it wants to know *which* run to look at.
     pub fn acquire(game_dir: &Path) -> Result<Lock> {
+        Self::acquire_with(game_dir, |path| std::fs::remove_file(path))
+    }
+
+    /// The implementation, with the stale-lock removal injected so the
+    /// undeletable arm is testable without a platform-specific filesystem
+    /// fixture.
+    ///
+    /// At most **one** takeover is attempted. A successful removal cannot
+    /// recur: the next `create_new` either wins or finds a lock created after
+    /// the removal, which is fresh by definition. A failed removal is the
+    /// run's refusal, not a reason to retry — a retry with no state change is
+    /// an unbounded loop.
+    fn acquire_with(
+        game_dir: &Path,
+        remove: impl Fn(&Path) -> std::io::Result<()>,
+    ) -> Result<Lock> {
         let path = game_dir.join(LOCK_FILE);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut f) => {
-                // The contents are for a human: which process holds it, and
-                // since when. A lock whose body cannot be written is still a
-                // lock — the file's existence is what excludes.
-                let body = format!(
-                    "pid={}\nstarted={}\n",
-                    std::process::id(),
-                    chrono::Utc::now().to_rfc3339()
-                );
-                let _ = f.write_all(body.as_bytes());
-                Ok(Lock { path })
-            }
+        let mut f = match create_lock(&path) {
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if is_stale(&path) {
-                    // Its run is gone: take it over.
-                    std::fs::remove_file(&path).ok();
-                    return Lock::acquire(game_dir);
+                if !is_stale(&path) {
+                    return Err(held(&path));
                 }
-                Err(anyhow::anyhow!(
-                    "another girpr run holds {} (pid {}); refusing to run",
-                    path.display(),
-                    holder_pid(&path)
-                ))
+                // Its run is gone: take it over. An undeletable lock (an open
+                // handle without `FILE_SHARE_DELETE`, a read-only file, a
+                // delete-denying ACL) fails here with the path and the I/O
+                // error instead of recursing until the process aborts.
+                remove(&path).with_context(|| {
+                    format!(
+                        "take over the stale lock {} (it cannot be removed)",
+                        path.display()
+                    )
+                })?;
+                match create_lock(&path) {
+                    Ok(f) => f,
+                    // Another run took the slot between the removal and the
+                    // create. It is fresh, so refuse it by name; retrying
+                    // would only race again.
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        return Err(held(&path));
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| format!("create {}", path.display()));
+                    }
+                }
             }
-            Err(e) => Err(e).with_context(|| format!("create {}", path.display())),
-        }
+            Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
+        };
+        // The contents are for a human: which process holds it, and
+        // since when. A lock whose body cannot be written is still a
+        // lock — the file's existence is what excludes.
+        let body = format!(
+            "pid={}\nstarted={}\n",
+            std::process::id(),
+            chrono::Utc::now().to_rfc3339()
+        );
+        let _ = f.write_all(body.as_bytes());
+        Ok(Lock { path })
     }
 
     /// The lock file's path.
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Create the lock file with `create_new`, so creation is the mutual exclusion.
+///
+/// Split out because the post-takeover attempt must use exactly the same
+/// operation as the first one.
+fn create_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+/// The refusal for a live lock (or one a raced run just created).
+fn held(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "another girpr run holds {} (pid {}); refusing to run",
+        path.display(),
+        holder_pid(path)
+    )
 }
 
 impl Drop for Lock {
@@ -172,6 +220,50 @@ mod tests {
 
         let lock = Lock::acquire(&dir).expect("a stale lock is taken over");
         assert!(lock.path().exists());
+    }
+
+    /// U-2: a stale lock whose removal fails (an open handle without
+    /// `FILE_SHARE_DELETE`, a read-only file, a delete-denying ACL) is refused
+    /// once, with the path and the I/O error. The old code discarded the error
+    /// and called `acquire` again with no state change, so this shape overflowed
+    /// the stack (`exit -1073741571`) instead of exiting `1`.
+    ///
+    /// The removal is injected: that pins the arm on every host without needing
+    /// a platform-specific undeletable file.
+    #[test]
+    fn an_undeletable_stale_lock_is_refused_once_not_retried() {
+        use std::cell::Cell;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "undeletable");
+        let path = dir.join(LOCK_FILE);
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("make the stale lock");
+        let old = SystemTime::now() - STALE_AFTER - Duration::from_secs(3600);
+        f.set_times(std::fs::FileTimes::new().set_modified(old))
+            .expect("age the lock");
+        drop(f);
+
+        let removals = Cell::new(0);
+        let err = Lock::acquire_with(&dir, |p| {
+            removals.set(removals.get() + 1);
+            assert_eq!(p, path.as_path());
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "held open without share-delete",
+            ))
+        })
+        .expect_err("an undeletable stale lock is a refusal");
+        assert_eq!(removals.get(), 1, "one takeover attempt, not a retry loop");
+        let msg = format!("{err:#}");
+        assert!(msg.contains(LOCK_FILE), "the refusal names the lock: {msg}");
+        assert!(
+            msg.contains("held open without share-delete"),
+            "the refusal keeps the I/O error: {msg}"
+        );
+        assert!(path.exists(), "the stale lock is left where it was");
     }
 
     #[test]
