@@ -1084,12 +1084,16 @@ pub struct Unreadable {
     pub reason: String,
 }
 
-/// Every bundle under `root`, deepest first.
+/// Every bundle under `root`, sorted by relative path.
 ///
 /// Recursive rather than a fixed depth, because the layout is
 /// `<biz>/<old>__<new>/<capture_id>/` today and a root that points at
 /// `artifacts/hk4e_global` and one that points at `artifacts/` should both work
-/// without the caller knowing which.
+/// without the caller knowing which. The order is **not** deepest first: the
+/// walk is depth-first, but both lists are re-sorted by relative-path string
+/// before they are returned, so a mixed-depth root is ordered by name at the
+/// top level first. The spec does not promise an order; this one is stable and
+/// decides the summary's `first` and `last`.
 ///
 /// **A bundle that fails to open is not an error, and it is not dropped.**
 /// `list` is an index, and a half-written capture next to a good one is
