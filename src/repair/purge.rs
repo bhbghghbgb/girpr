@@ -250,12 +250,24 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
 }
 
 /// Remove the directories the purge emptied, deepest first. The set comes from
-/// the walk ([`PurgePlan::dirs`]), so no second walk is needed; the `remove_dir`
-/// calls still fail harmlessly if something appeared since the plan was built.
-/// `game_dir` is never in the set.
+/// the walk ([`PurgePlan::dirs`]), so no second walk is needed. A `remove_dir`
+/// that fails — usually because something appeared since the plan was built,
+/// but also a sharing violation or an ACL — is best effort and logged with its
+/// reason; the plan's job here is only to shrink the tree. `game_dir` is never
+/// in the set.
 fn remove_emptied_dirs(dirs: &[PathBuf]) {
     for d in dirs {
-        let _ = std::fs::remove_dir(d);
+        // A re-appearing file is the expected failure, but a sharing
+        // violation, an ACL or a read-only parent is not — and after `let _`
+        // the two were indistinguishable. The directory the plan said it
+        // would remove is state: keep the reason it is still there.
+        if let Err(e) = std::fs::remove_dir(d) {
+            tracing::debug!(
+                dir = %d.display(),
+                error = %e,
+                "the emptied dir was not removed"
+            );
+        }
     }
 }
 
@@ -731,6 +743,28 @@ mod tests {
         assert_eq!(
             classify_purge_path("stray/orphan.dat", &expected, &server_keep, &scope),
             PurgeVerdict::Purge
+        );
+    }
+
+    /// The sweep's expected failure — something appeared after the plan was
+    /// built — used to be discarded with `let _`, indistinguishable from a
+    /// sharing violation or an ACL. The reason has to be recoverable.
+    #[test]
+    fn a_dir_the_sweep_could_not_remove_is_logged_with_the_reason() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_purge", "sweep");
+        let d = dir.join("emptied");
+        std::fs::create_dir_all(&d).unwrap();
+        // Non-empty: `remove_dir` fails, which is the failure the sweep meets.
+        std::fs::write(d.join("appeared.dat"), b"raced").unwrap();
+
+        let logs =
+            crate::repair::test_support::logs_of(|| remove_emptied_dirs(std::slice::from_ref(&d)));
+
+        assert!(d.is_dir(), "the sweep does not force what it cannot remove");
+        assert!(
+            logs.contains("the emptied dir was not removed")
+                && logs.contains(&d.display().to_string()),
+            "the directory and the reason are logged: {logs}"
         );
     }
 }

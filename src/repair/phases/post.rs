@@ -370,8 +370,7 @@ fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use crate::hyp::GameConfig;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
+    use crate::repair::test_support::logs_of;
 
     fn config(cache: &str, res: &str) -> GameConfig {
         serde_json::from_value(serde_json::json!({
@@ -379,35 +378,6 @@ mod tests {
             "audio_pkg_res_dir": res,
         }))
         .unwrap()
-    }
-
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Captured {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Run `f` with a debug-level subscriber whose lines are captured.
-    ///
-    /// `with_default` is thread-local, so this does not race the other tests
-    /// (nothing in the lib installs a global subscriber; only `main` does).
-    fn logs_of(f: impl FnOnce()) -> String {
-        let buf = Captured::default();
-        let writer = buf.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::with_default(subscriber, f);
-        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
     }
 
     /// N-3: the copy fallback used to remove the source **after** a failed
