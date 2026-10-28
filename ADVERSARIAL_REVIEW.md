@@ -1130,7 +1130,7 @@ surviving record.
 | # | Verdict | What changed | Commit |
 |---|---|---|---|
 | R-7 | **Valid** (Medium, partial mutation) | `metadata::fetch` no longer calls `write_scan_file`. It keeps the containment validation and the explicit-`--audio`/scope refusal (both plan-half validation), and `repair::run` writes the scan file in the execution phase — after `create_dir_all`, the single-writer lock, the ceilings, the empty-`--include` refusal, the plan build and the `--plan-out` write. The repair uses the in-memory `Meta::audio`, not the file. | `be6d83f` |
-| R-8 | **Valid** (Medium, data loss) | `read_scan_file` parses through `parse_scan_text`: one leading U+FEFF is stripped, and non-blank text that yields zero recognized languages is `Err` naming the file and the first unrecognized line (mapped to exit `1`). A recognized-plus-unrecognized file keeps the known set and warns per unknown line; a blank/empty file is still the game-only selection. | `a44c666` |
+| R-8 | **Valid** (Medium, data loss) | `read_scan_file` parses through `parse_scan_text`: one leading U+FEFF is stripped, and non-blank text that yields zero recognized languages is `Err` naming the file and the first unrecognized line (mapped to exit `1`). A file whose only content is a BOM is non-empty and is refused too; genuinely blank lines and an empty file stay the game-only selection. A recognized-plus-unrecognized file keeps the known set and warns per unknown line. | `a44c666`, `16e4573` |
 | R-9 | **Valid** (Low, doc/CLI) | The `--plan-out` help now lists `mode` and `extra_bytes` and says what they mean. `docs/04:417-419` already showed the full shape; only the CLI text was one shape behind. | `c9fb86f` |
 
 **R-7 reproduction.** `explicit_audio_is_not_written_before_a_refusal`
@@ -1147,8 +1147,9 @@ run exited `0` after fetching chunks. The new binary test
 `an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only` requires
 exit `1`, an error that names the file and the line, no chunk request, and the
 file left byte-identical. Unit tests cover the same error through
-`resolve_effective_audio`, a BOM-prefixed `Chinese` (now `zh-cn`), and a mixed
-file whose unknown line is identified. The purge consequence was established by
+`resolve_effective_audio`, a BOM-prefixed `Chinese` (now `zh-cn`), a BOM-only
+file (refused), and a mixed file whose unknown line is identified. The purge
+consequence was established by
 reading the chain (`select_manifests` drops audio manifests →
 `plan.expected_paths()` loses them → `classify_purge_path` returns `Purge`); it
 was not executed end to end because the mock fixture carries a single `game`
@@ -1168,8 +1169,10 @@ The new binary test `plan_out_help_documents_every_serialized_field`
    run leaves the install and `game_dir` untouched. `--print-plan`,
    `--dry-run` and `--check-only` still write nothing.
 2. **A non-empty scan file naming no known language is local config, exit
-   `1`.** It is not the game-only selection. An editor-added BOM is stripped
-   before parsing, so it is tolerated rather than refused.
+   `1`.** It is not the game-only selection. A leading BOM is stripped before
+   parsing, so `BOM + Chinese` is recognized; a file whose only content is a
+   BOM is non-empty and is refused, while genuinely blank lines and an empty
+   file remain game-only.
 3. **Mixed known/unknown lines stay tolerant**, with a warning per unknown
    line. The warning is a code-reading claim: tracing caches a callsite's
    interest globally, which makes a log capture order-dependent.
@@ -1181,11 +1184,11 @@ The new binary test `plan_out_help_documents_every_serialized_field`
 Full run on Windows, debug profile, final sixth-pass tree:
 
 - `cargo build` — ok.
-- `cargo test -p girpr` — **326 passed, 0 failed, 7 ignored** (188 lib + 7
+- `cargo test -p girpr` — **327 passed, 0 failed, 7 ignored** (189 lib + 7
   `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 89
   `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
-  `src/main.rs`, 0 doc-tests). The fifth-pass tree had 320; the six new tests
-  are the difference (two binary R-7/R-8, three audio unit, one CLI help).
+  `src/main.rs`, 0 doc-tests). The fifth-pass tree had 320; the seven new tests
+  are the difference (two binary R-7/R-8, four audio unit, one CLI help).
 - `cargo clippy -p girpr --all-targets` — clean, no warnings.
 - `cargo fmt --check` — clean (exit `0`).
 
