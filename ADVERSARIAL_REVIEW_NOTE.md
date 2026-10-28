@@ -11,6 +11,13 @@ discard a failure the review standard says must be visible.
 | T-1 | Low | omitted error / fail-open config | `src/util.rs:479-486`, `src/util.rs:506-511` | An unparseable JSON line in the launcher's ignore/blacklist file is dropped with no log; a wholly malformed file degrades to an empty set. |
 | T-2 | Low | stat failure read as absence | `src/util.rs:268-270` → `src/repair/file/temp.rs:35-39`, `src/repair/phases/check.rs:61-64`, `src/repair/phases/check.rs:90-93` | `file_len` maps every `metadata` error to `None`, so an unreadable file is logged as "missing" and reported as a size mismatch. |
 
+## Progress
+
+| ID | Verdict | Change | Commit |
+|---|---|---|---|
+| T-1 | **Valid, fixed.** Reproduced: a BOM-prefixed valid blacklist line plus a truncated second line returned `Ok(Some({}))`; an all-malformed ignore file returned `Ok(Some({}))`; both with no log. `src/util.rs` now strips one leading UTF-8 BOM, warns per unparseable line with the path and 1-based line, and refuses a file whose non-blank text produced no entry and had a parse failure (matching R-8's rule for the audio scan file). A valid entryless `{}` and a blank file stay empty. | `parse_config_list` shared by both readers; unit tests `config_lists_strip_a_bom_and_warn_per_unparseable_line`, `an_all_malformed_config_list_is_refused`; `test_support` is now `pub(crate)` so `util` tests can capture logs. | `ad0a09c` |
+| T-2 | Validating | — | — |
+
 ## T-1 — Low — an unparseable config line is discarded silently
 
 ### Code
