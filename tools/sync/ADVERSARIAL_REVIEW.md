@@ -7,6 +7,8 @@ the pre-fix tree. The reverted series (`f9352f7` for the document, `b68ca17` for
 code and tests) is treated here only as a list of claims to check — not as a starting
 point, and not as text to restore.
 
+Open items, trade-offs and unverified areas: [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).
+
 **One-line verdict.** The symlink *walk* is correct; the symlink *deletion* path is
 not. A directory symlink (or junction) inside `dst` makes `DELETE`/`RMDIR` reach
 through the link, which can delete files outside `dst` and can delete a file that
@@ -750,17 +752,6 @@ the same `read_link`/`try_is_link` path.
 - `cargo test -p girsync` — **420 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 421 functions, 420 run. Breakdown: lib 162; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
 - `cargo test -p girsync --test symlink -- --nocapture` — 32 passed, 0 failed. Thirteen file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
 - `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
-
-### Open for maintainers
-
-- **Hard links.** P6-2 closed the dst-hard-link write-through by refusing any destination with more than one link; P7-4 makes that decision at plan time, with a `(dev, ino)` / (volume serial, file index) identity, and credits names the plan removes first; P8-1 narrows it to regular-file destinations. Still open: no POSIX `nlink`/identity run (the pre-P8-1 over-refusal of directories is invisible on NTFS, where a directory reports one link), and no fixture for a hard link to a file outside both roots.
-- **P7-2 runtime and P8-2/P8-3/R9 end-to-end.** The dst-file-link-at-a-src-directory test and the link-target/chain spare and shared-storage refuse cases self-skip here (the host refuses file symlinks, `os error 1314`), as do the case-only parity cases (this filesystem pairs `CaseProbe` with `caseprobe`). Their unit-level halves run and pass, including junction-backed full spare passes for R9-1/R9-2/R9-3. Needs developer-mode Windows or POSIX CI to execute the end-to-end cases.
-- **File links.** The file-link cases self-skip here because the host refuses file symlinks; they need a Windows host with developer mode or a POSIX CI. Native POSIX symlinks and Unix link behaviour are unexercised; junctions stand in for directory links only.
-- **P7-1/P8-4 on POSIX and a crash between the renames.** The fixed short temporary was exercised on Windows only (including a 244-byte source name); a process killed between step 1 and step 2 was not produced (the next run steps over such a leftover by construction), and POSIX `NAME_MAX` was reasoned about rather than exercised. Whether a direct case-only `rename` is reliable enough to drop the two-step was not tested.
-- **The failure injectors.** The cleanup and rollback tests use the test-only `GIRSYNC_TEST_FAIL_RENAME{,_STEP1,_STEP2}` hooks, because a real `fs::rename` failure cannot be arranged portably. P8-5's cleanup-error wording is not forced: a failing `remove_file` on the tool's own placeholder could not be arranged here, so only the cleanup path (not its error text) runs.
-- **T-3** has no failing-first regression on a case-insensitive host (`fsutil file setCaseSensitiveInfo` is denied here); watch it on Linux CI. **T-4**’s non-link reparse classification is source-verified only: no OneDrive install, and tagging needs elevation.
-- **F-6**’s mtime-restore failure still has no injected test; the doc note is the practical fix. **P6-1**’s `--keep-extra`/`--missing-only` variants are unit-covered, not all run end-to-end.
-- **Other gaps.** `remove_dir_all` on a genuine directory containing a junction is not in the suite (an eighth-pass probe outside the repo removed such a directory and the junction's target outside the tree survived, closing the Windows half); T-2’s flush injector is test-only; T-6’s binary test is Windows-only.
 
 ---
 
