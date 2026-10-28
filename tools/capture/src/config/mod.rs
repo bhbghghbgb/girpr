@@ -1087,6 +1087,30 @@ mod tests {
         }
     }
 
+    /// A tag becomes `manifests/<tag>`, so a DOS device name is refused by the
+    /// same rule the path validator uses. Windows ignores the extension when it
+    /// resolves the name, so `NUL.txt` and `CONIN$.txt` are devices too.
+    #[test]
+    fn a_tag_cannot_name_a_windows_device() {
+        for bad in [
+            "CON",
+            "NUL",
+            "NUL.txt",
+            "COM1",
+            "COM1.bin",
+            "CONIN$",
+            "CONIN$.txt",
+        ] {
+            let problem = tag_shape_problem(bad)
+                .unwrap_or_else(|| panic!("{bad:?} names a device, not a directory"));
+            assert!(problem.contains("device"), "{bad:?}: {problem}");
+        }
+        // Names that merely start like one are ordinary tags.
+        for good in ["7.1.0", "CONSOLE", "console", "COM0", "LPT10"] {
+            assert_eq!(tag_shape_problem(good), None, "{good:?}");
+        }
+    }
+
     #[test]
     fn metadata_only_is_a_flag_value_not_an_implicit_rejection() {
         let p = plan(|a| a.no_chunk_blobs = true).unwrap();
