@@ -1022,7 +1022,101 @@ Full run on Windows, debug profile, final fourth-pass tree:
 `the_mode_is_part_of_the_file_stats` (Windows host); the 7 ignored tests; no
 release-profile run; no Linux/macOS host; no live CDN traffic.
 
+## 11. Fifth pass — R-1…R-6 validated
+
+The fifth-pass notes (reviewed tip `e88b62a`, delivered as another untracked
+document) were checked against the current source at every cited line. R-1 and
+R-2 were reproduced end to end before their fixes; R-3 and R-4 now have
+deterministic unit seams; R-5 and R-6 are the diagnostics/durability findings.
+All six were valid and are fixed. No shared crate was touched. The note was
+deleted; this section is the surviving record.
+
+### 11.1 Per-finding verdicts
+
+| # | Verdict | What changed | Commit |
+|---|---|---|---|
+| R-1 | **Valid** (Medium, bug) | The only `--plan-out` write site sat inside the `--print-plan` early return, so a standalone flag created no file. The disk table is now computed once when either consumer asks for it, and the document is written before the execution phase (a write failure is exit `3` with nothing mutated). | `867ed7f` |
+| R-2 | **Valid** (Medium, bug/data loss) | `read_scan_file` is three-valued: `Ok(Some(set))` for a successful read (empty = game-only), `Ok(None)` only for an unconfigured dir or `NotFound`, `Err` for any other read error (exit `1`, path in context). `resolve_effective_audio` therefore keeps a `--audio none` empty file instead of substituting `en-us`. `write_scan_file` publishes through a same-directory temp + rename. | `a812fce` |
+| R-3 | **Valid** (Low, swallowed error) | A failed rollback now attaches its error as context to the original chunk error instead of replacing it; the chunk stays the reported cause. | `86f1fe3` |
+| R-4 | **Valid** (Low, swallowed error) | `discard` mode's `remove_file(...).ok()` is `discard_target`: every error except `NotFound` propagates with `discard <path>` as context, so the delete is the named failing step. | `646b9c9` |
+| R-5 | **Valid** (Low, durability) | `config.ini`'s `sync_all().ok()` is `sync_all().with_context(...)?`; a failed sync no longer publishes the rename, and the temp is removed on the failed-write path. | `a812fce` |
+| R-6 | **Valid** (Low, swallowed error) | `read_game_version`, `read_ignore_categories` and `read_blacklist` return `Result<Option<T>>`: `NotFound` is the documented absent case (`None`), any other read error is `Err` with the path, mapped to exit `1` in `metadata`. The shared split lives in `read_config_list`. | `a812fce` |
+
+**R-1 reproduction.** The regression test
+`plan_out_without_print_plan_writes_the_document_of_the_run`
+(`tests/repair_offline.rs`) runs the real binary against the mock with
+`--plan-out` and no `--print-plan`. On the unfixed tree it failed at the file
+read with `Os { code: 3, kind: NotFound }`; after the fix it passes and the run
+still repairs the missing file.
+
+**R-2 reproduction and the purge consequence.** The real sequence is
+`write_scan_file(empty)` (what `--audio none` does) followed by
+`resolve_effective_audio(None)`: on the old tree the empty set was
+indistinguishable from absence and became `en-us`. That is not just extra work:
+`plan.expected_paths()` is the purge keep set (`src/repair/purge.rs:88`), and
+membership is the first keep rule (`:348`). Selecting `en-us` re-plans that
+language's manifests, so under `--purge-after` the audio packages of the real
+selection (e.g. `ja-jp`) are not expected and are deleted, while `en-us` is
+re-downloaded. The fix keeps the empty file as a real selection and refuses an
+unreadable one, so neither path substitutes a language. Tests:
+`an_empty_file_written_by_audio_none_stays_game_only`,
+`an_unreadable_scan_file_is_an_error_not_the_default`,
+`the_scan_file_is_published_atomically`, and the integration
+`an_unreadable_audio_scan_file_fails_before_any_repair` (exit `1`, no chunk
+requested).
+
+**R-3/R-4 test seams.** R-3 uses a read-only `_tmp` handle: truncation needs
+write access, so `rollback_tmp` really fails while the chunk error is in hand.
+R-4 uses a directory at the target (portable `remove_file` failure) plus the
+already-absent case. R-5 has no deterministic fault-injection seam for
+`sync_all` through a public entry point; its status is a code-reading claim, as
+recorded for N-20/F-6. R-6 is tested for both readers and the version reader
+with a directory at the path.
+
+### 11.2 Decisions that survive
+
+1. **Absent is `NotFound`, not every error.** The audio scan file and the
+   launcher's lists now agree: a missing file takes the documented default
+   (`en-us` / empty set); an unreadable one fails the run. A readable empty
+   audio file is a deliberate game-only selection and is never replaced.
+2. **A requested artifact is not subject to the read-only gate.** `--plan-out`
+   writes its file on a `--print-plan`, `--check-only` or executing run; it is
+   an output the user named, before any install mutation, not a repair write.
+   A failure is exit `3`.
+3. **The scan-file write is atomic.** Temp in the same directory, then rename;
+   a crash cannot leave a truncated file that reads as game-only.
+4. **Local-state read failures are exit `1`.** They are configuration, not
+   metadata/network (`2`) or write/verify (`3`); `metadata::fetch` maps them
+   with `RunFailure::usage`.
+
+### 11.3 Final verification
+
+Full run on Windows, debug profile, final fifth-pass tree:
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **320 passed, 0 failed, 7 ignored** (185 lib +
+  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
+  87 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
+  `src/main.rs`, 0 doc-tests). The fourth-pass tree had 311; the nine new
+  tests are the difference (four audio unit tests, two in-place, one temp,
+  one util-reader, one binary `--plan-out`, minus the rewritten audio tests
+  counted in the new total).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings.
+- `cargo fmt --check` — clean (exit `0`).
+
+**Not run:** the `#[cfg(unix)]` blocks of the containment tests (Windows
+host); the 7 ignored tests; no release-profile run; no Linux/macOS host; no
+live CDN traffic. R-5's fsync failure was not fault-injected (no seam); R-1's
+binary test and R-2's write/read and unreadable paths did run.
+
+**Open for maintainers:** the fourth-pass residuals are unchanged
+(`expected_paths()` / `classify_purge_path` case sensitivity on Windows, F-6
+being log-only, the dry-run `validate_chunk_ranges` skip). R-2's new strictness
+means a permissions problem on the audio scan file now fails the run instead of
+quietly using `en-us`; that is the intended trade, but it is a behaviour change
+for an install with an unreadable scan file.
+
 *End of review. The finding text above records the first pass; §8 records the
-second pass, §9 the third and §10 the fourth, each of which changed source,
-tests and docs and ran the full suite on the tree its final-verification
-subsection describes.*
+second pass, §9 the third, §10 the fourth and §11 the fifth, each of which
+changed source, tests and docs and ran the full suite on the tree its
+final-verification subsection describes.*
