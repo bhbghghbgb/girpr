@@ -711,6 +711,59 @@ tests ran. A probe outside the repository
 (`E:\Symlinks\Temp\opencode\pathprobe`) confirmed `game/a/b` and `game/a/b.`
 name one file; the new unit tests are the in-repository guard.
 
+### Fifth pass
+
+A reviewer re-derived every F1–F12, G1–G3 and H1–H4 verdict from source at
+`9b60455`, then re-ran the suite, and reported five findings I1–I5. All five were
+confirmed valid; none was dismissed as invalid or out of scope. I1 and I2 were
+reproduced at the real seam before the fix: a capture with two forced `added`
+paths produced six patchmaps instead of seven (`verify` rebuilt six), and a
+`2xx` body truncated mid-read recorded `bytes_in: 0` for 28 bytes sent, on both
+the memory and file destinations.
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| I1: two distinct forced paths of one primary class share a `capture_id` (**medium**) | valid, fixed | `afc08bd` | Phase 0 numbers forced admissions per class with a `BTreeMap<Class, usize>`, incrementing for every forced path whether admitted or refused, so the rejection record carries the id the path would have written. Two `added` paths become `added` and `added+1`. `emit::fixture::record` also refuses a duplicate `capture_id` before the first write, so a hand-built `Selection` cannot overwrite a patchmap. Tests: `two_forced_paths_of_one_class_get_distinct_ids` (unit; pre-fix ids `["added", "added"]`) and `two_forced_paths_of_one_class_keep_distinct_patchmaps` (end to end; pre-fix six files and `captures_rebuilt: 6`). |
+| I2: a failed `2xx` body is recorded with `bytes_in: 0` (**low**, accounting) | valid, fixed | `f631c5c` | `drain_capped` returns `Result<u64, (ApiError, u64)>`, so the running total travels with the failure. Both destination failure closures take `bytes_in`, and the probe's read-failure branch records `seen`. A declared over-ceiling response, or a failure before any byte, still reports `0`. Tests: `a_truncated_success_body_is_priced_at_what_arrived` and `..._for_a_file_too`, one per closure; both failed pre-fix with `0` against 28 sent. |
+| I3: duplicate patchmap ids are silently collapsed (**low**, omitted error) | valid, fixed | `34de040` | `read_patchmaps` propagates `read_dir` entry errors and keeps a `capture_id -> path` map, refusing a repeated id with both file names. It stays keyed by the declared id; a filename is still **not** required to equal it, and that trade-off is documented. Test: `two_patchmaps_declaring_one_capture_id_are_refused` copies a patchmap to `added+1.json` unchanged; pre-fix `Bundle::open` succeeded and rebuilt one capture. |
+| I4: `list` silently skips unreadable directories and failed entries (**low**, omitted error) | valid, fixed | `5d24494` | The walk moved into `verify::list_with`, which takes an injected reader; `child_dirs` returns `Err` naming the directory or entry when `read_dir` fails, an entry fails, or an entry cannot be stat'ed (the old `is_dir()` treated a failed stat as “not a directory”). `run::list` already maps the error to a usage failure, so the exit status is `1` and the detail names what could not be read. Tests: three `child_dirs` arms plus `a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering`. `docs/00-spec.md` now states the fail-fast rule. |
+| I5: `dump::write` validates the field but not the tag (**low**, latent) | valid, fixed | `f20ee4c` | `config::tag_shape_problem` is `pub(crate)` and `manifest::dump::write` calls it beside the field check, before the first `create_dir_all`/write, returning `InvalidInput` with `manifest tag {problem}`. The CLI already validates both resolved tags; this closes the writer's own defence for a hand-built `CapturedManifest`. Test: `a_tag_that_names_a_path_is_refused_before_anything_is_written`, mirroring the H2 field test and asserting no tree or escaped file was created. |
+
+**Fifth-pass choices a maintainer may want to revisit.** Forced paths are
+numbered per primary class rather than refused as a duplicate-class usage error,
+so a caller can still force two paths that answer one class. Phase 1's `taken`
+deliberately starts at zero, not at the forced count: starting it at the forced
+count would turn a class whose capture was refused by the budget into
+`Unavailable` and break `a_class_whose_capture_was_refused_is_over_budget_not_absent`.
+The matrix still resolves a class to its first admission, which is now the
+patchmap that describes that path. `list` fails fast rather than collecting a
+`skipped` list, so a transient stat failure aborts an audit; the alternative
+would have kept a partial answer. A patchmap's filename remains
+non-authoritative, so `added+1.json` may declare `added` only if no other
+document claims it; requiring stem equality was rejected because the field is
+the identity. The writer's tag check duplicates the CLI's earlier validation by
+design, as the field check already did.
+
+The fifth-pass working note (since folded into this section and deleted) said the
+offline HTTP tests could not inject a mid-body transport error. That was wrong:
+the existing `local_server` harness already supports it
+(`Answer { claim, omit_length }` promises more than is sent, then closes), and the
+two I2 tests use it.
+
+### Fifth-pass verification
+
+| Command | Fifth pass (`f20ee4c`) |
+|---|---|
+| `cargo build -p gircap` | finished in 18.89s, no warnings |
+| `cargo test -p gircap` | **668 passed, 0 failed** (526 lib + 142 integration) |
+| `cargo clippy -p gircap --all-targets` | finished in 38.73s, no diagnostics |
+| `cargo fmt -p gircap --check` | exit 0, no output |
+
+The fifth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 13 + 15;
+`lib` grew from 518 to 526, `matrix` from 9 to 10 and `offline_bundle` from 12
+to 13, for ten new tests over the fourth-pass 658. No test is `#[cfg(unix)]`, so
+none was skipped on this Windows host; the `#[cfg(windows)]` tests ran.
+
 ### Choices a maintainer may want to revisit
 
 - **F3 summary field.** `forced_unscored` / `forced_files_unscored` is a new
@@ -790,4 +843,9 @@ No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
   unit-tested; no live manifest was sampled.
 - H4: an actual `--no-chunk-blobs` bundle on disk. The doc now matches the
   constructor and the `props`/`fill` tests; no such bundle was inspected.
+- I4: an ACL-denied directory on a real share. The three arms are unit-tested
+  through the injected reader, and a file passed where a directory is expected
+  gives a real `read_dir` failure; no Windows ACL was set up.
+- I5: a hostile tag through the CLI, which validates both resolved tags earlier.
+  The writer's own refusal is unit-tested; the CLI precondition is not re-driven.
 
