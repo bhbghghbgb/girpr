@@ -50,6 +50,8 @@ The credit loop immediately above (`plan.rs:441-447`) filters records it is not 
 
 The repository's own write-through case, `tests/symlink.rs:197-221` (`sync_writes_through_a_dst_file_link`), is exactly this fixture: `src/a.bin`, `dst/a.bin -> dst/target.bin`, `target.bin` dst-only and differing. The documented rule (`README.md:1055-1057`) is that a dst link to a file is followed and the copy lands on the target unless the target resolves into src. `target.bin` is `diff.extra`, so `delete_files` holds it and `delete_extras` removes it before `copy_files` runs; `copy_one` then canonicalizes `a.bin` and gets `NotFound`. The test asserts exit 0 and the target's new content. It would fail where the fixture is not skipped; on this host it prints `skip` and returns.
 
+**Probe (hard-link stand-in).** File symlinks are refused on this host, so the same path shape was built with `dst/a.bin` a hard link to `dst/target.bin` and a differing `src/a.bin`. `sync --dry-run --output json` printed `{"event":"delete","path":"target.bin"}`, then `{"event":"copy","path":"a.bin"}`, and `"copied":1,"deleted":1`. The plan therefore holds both actions for this shape, and `Applier::apply` runs `delete_extras` before `copy_files` (`apply/mod.rs:93-97`). For a symlink at `a.bin`, that delete is what turns the planned copy into a dangling-link error, or leaves the link dangling when no copy is planned.
+
 **Failure scenarios.**
 
 1. **The documented write-through shape.** `src/a.bin` differs from `dst/a.bin -> dst/target.bin` (dst-only). The plan holds `a.bin` in `copy` and `target.bin` in `delete_files`. `delete_extras` removes the target (`apply/phases.rs:24-72`), then `copy_one`'s `canonicalize(dst/a.bin)` (`copy.rs:213-216`) returns `NotFound`: exit 3 after the delete. With equal content, no copy is planned, so the run deletes the target and exits 0 with `a.bin` dangling and the tree no longer mirroring src; the next run aborts in the walk (`scan.rs:51`), so recovery is manual.
@@ -137,12 +139,14 @@ Commands run in this tree on this Windows host; the test/clippy/fmt output is ca
 
 Per-target counts for the full suite: lib 149, cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 24, sync 27+1 ignored, sync_plan 19, update 3, why 25, plus the empty unit and doc-test targets.
 
+A scratch probe outside the repo (`E:\Symlinks\Temp\opencode\p82probe`) used a hard link as the stand-in for the file link of P8-2; `girsync sync --dry-run --output json` printed `delete target.bin`, `copy a.bin`, `"copied":1,"deleted":1`, exit 0.
+
 A scratch probe (outside the repo) confirmed that `std::fs::remove_dir_all` on a genuine directory containing a junction does not follow the junction on this host; the target outside the tree survived. This closes that listed open item for Windows.
 
 ## Not verified
 
 - **P8-1 on POSIX.** No Unix host was available. The failure follows from `nlink >= 2` for directories, but the refusal was not executed; three existing tests should fail on Linux.
-- **P8-2 at runtime.** Creating a file symlink on this host requires a privilege the host does not grant (`os error 1314`), so all five file-link cases, including `sync_writes_through_a_dst_file_link`, did not execute their bodies. P8-2 is derived from the walk, the write-through in `copy_one`, and the delete-before-copy order; no fixture was run. The write-through test is exactly the delete-before-copy shape and is the strongest unexecuted check in this pass: it should fail on a host that can create the link.
+- **P8-2's final step.** The plan order (DELETE `target.bin`, COPY `a.bin`, `deleted:1`/`copied:1`) was reproduced with a hard-link stand-in. The subsequent `canonicalize` failure for a dangling symlink is source-derived: creating a file symlink here requires a privilege the host does not grant (`os error 1314`), so `sync_writes_through_a_dst_file_link` and the four sibling file-link cases did not execute their bodies. The write-through test is exactly the delete-before-copy shape and is the strongest unexecuted check in this pass: it should fail on a host that can create the link.
 - **P8-3 on POSIX.** The divergence needs a case-sensitive filesystem and the default case-insensitive pairing; not reproducible on this host.
 - **P8-4.** A 238-byte name on a 255-byte `NAME_MAX` filesystem was not created; the conclusion is from the candidate construction and the platform's `NAME_MAX` rule.
 - **P8-5/P8-6.** No runtime probe of a failing placeholder cleanup or a step-2 rollback; neither is reachable through the current hook.
