@@ -8,7 +8,9 @@ byte-identical to the pre-fix baseline. The prior review/fix series
 `f9352f7:ADVERSARIAL_REVIEW.md` is historical input, not evidence.
 
 This document is a fresh source-level review of the current tree. It does not
-assume any sentence of the reverted review is true.
+assume any sentence of the reverted review is true. The fixes landed on
+`fix-gaps/girpr`; §7 is the first-pass implementation table and §8 is the pass
+log that carries every later finding to its final verdict.
 
 ---
 
@@ -691,9 +693,8 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 Landed on branch `fix-gaps/girpr` in the §6 order, one commit per finding
 (F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
 they pin, plus one test-only commit). This is the **first-pass** table: the
-second pass (§8), the third pass (§9) and the fourth pass (§10) re-validated
-the residual claims and fixed them; see §8.1, §9.1 and §10.1 for the final
-verdicts. No commit re-lands the reverted series
+pass log in §8 re-validated the residual claims, fixed them, and records the
+final verdict for every finding. No commit re-lands the reverted series
 verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
 `layout`'s dead `checked_add` is not reintroduced, `validate_rel` is replaced
 by `util::contained_rel` / `contained_join` applied to every server-path sink,
@@ -755,7 +756,7 @@ and all six `*_tmp` doc sites plus the `kept_bytes` comment are corrected.
 ### 7.2 Verification
 
 Run on the first-pass final tree on Windows (`cargo` 1.x, debug profile). The
-final second-pass numbers are in §8.3.
+latest full-suite numbers are in §8.7.
 
 - `cargo build` — ok.
 - `cargo test -p girpr` — **286 passed, 0 failed, 7 ignored** (156 lib + 7 binary + 16 + 25 + 82 integration). The 7 ignored are the 6 `artifact_bridge` tests and the 1 `peak_heap` measurement.
@@ -771,434 +772,102 @@ not run), and `--print-plan --audio` under an active path scope (the fix gates
 the write; the scope-refusal interaction is covered by the existing
 `explicit_audio_under_a_scope_...` test, not by a print-plan variant).
 
-## 8. Second pass — reviewer's notes validated
+## 8. Pass log
 
-The second-pass reviewer's notes (reviewed tip `48e7dd2`, delivered as a
-separate untracked document) were checked against this tree, one claim at a
-time, at the cited source site. Every finding below was reproduced or refuted
-by reading the code and, where a behaviour was testable, by a regression test
-that fails on the old shape. That document was then deleted; this section is
-the surviving record. The `§2` text above still describes the first-pass
-baseline, including `util::normalize_rel`, which no longer exists after N-9.
+Detailed evidence, failure scenarios and per-pass verification are in the git history — `git log --oneline main..HEAD`, `git show <commit>` — and the commit hashes in the tables are the index. §1–§7 above are the first-pass record; their line numbers are from `64dc69d` and have moved since. `util::normalize_rel` (F-2) no longer exists: N-9 replaced it with `contained_rel`/`contained_join`. This compaction changed no source, test or behaviour.
 
-### 8.1 Per-finding verdicts
+### 8.1 Second pass — N-1…N-14
 
-The F-findings the notes accepted (F-4, F-5, F-6, F-7) hold as written. The
-five residual claims were valid and are now closed:
-
-| # | Second-pass verdict | What changed | Commit |
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| F-1 / F-8 | **Valid** — the helper was tested, the wiring was not. | Added a `#[cfg(test)]` panic seam in `repair_one_file` and a test that calls **`repair_all`**, not `join_file_tasks`. Mutation check: restoring `let _ = h.await` makes it fail with `files_failed = 0`. | `d5ef6fa` |
-| F-2 (helper) | **Valid** — a non-`NotFound` `canonicalize` error fell through to a lexical compare. | `resolve_existing_prefix` walks up only on `NotFound`; every other error propagates. Windows junction test added; the `#[cfg(unix)]` symlink test remains. | `ddb4371` |
-| F-3 / N-2 | **Valid** — a settle could cross the limit and the run still exited `0`. | `settle_reservation` trips `StoppedBy::Download` as soon as the reconciled live figure is over the limit. The partial-body test now asserts exit `5` and `stopped=--max-download-bytes` instead of pinning the overrun. | `0bcd6a6` |
-| F-8 (remainder) | **Valid** — panic wiring was the last uncovered gap. | Pinned by the `repair_all` test above. | `d5ef6fa` |
-| F-9 / N-10 | **Valid** — the canonical field doc still described only in-place correctness. | `Summary::kept_bytes` and `ReportFlags::kept_bytes` now say a resumed `_tmp` prefix is counted though not yet verified, and that only the final MD5 gate proves it. | `ce45a2f` |
+| N-1 | A containment probe failing with anything but `NotFound` fell through to a lexical compare. | Fixed: `resolve_existing_prefix` propagates every other error. | `ddb4371` |
+| N-2 | A settled download could cross `--max-download-bytes` and the run still exited `0`. | Fixed: `settle_reservation` trips `StoppedBy::Download`. | `0bcd6a6` |
+| N-3 | The audio cache source was removed without a successful copy. | Fixed: source kept, refused moves/deletes warned, housekeeping best effort. | `dafed9b` |
+| N-4 | The audio cache/res dirs were validated only in the post phase. | Fixed: validated at metadata, exit `2`. | `c999b5f` |
+| N-5 | Plan dedup folded case on every host, merging distinct Unix files. | Fixed: case folding on Windows only. | `56a8a45` |
+| N-6 | `./game/foo.dat` was not cleaned, so the purge keep set missed it. | Fixed: stored as the cleaned component list. | `df52195` |
+| N-7 | Handles were awaited in spawn order, so a panic was seen late. | Fixed: `FuturesUnordered`, completion-order join. | `9d4e420` |
+| N-8 | A containment failure logged as a size mismatch; the disk estimator dropped a file silently. | Fixed: both check branches log "escapes the game dir"; the estimator names the omitted file. | `f9a6967` |
+| N-9 | `util::normalize_rel` was dead code with stale doc sites. | Removed; README, `lib.rs`, `docs/03`, `docs/04` and `filter.rs` name `contained_rel`/`contained_join`. | `2dfc1b5` |
+| N-10 | The `kept_bytes` field doc described only in-place correctness. | Fixed with F-9: a resumed `_tmp` prefix counts, unverified until the MD5 gate. | `ce45a2f` |
+| N-11 | Delete, copy and walk failures were swallowed. | Fixed: warned and counted where a counter exists. | `dafed9b` |
+| N-12 | The file semaphore `unwrap` relied on an unnamed invariant. | Fixed: named `expect`; the join loop still counts a panic. | `9d4e420` |
+| N-13 | Scan and plan estimates could wrap on server-controlled sizes. | Fixed: saturating adds, both branches unit-tested. | `682058e` |
+| N-14 | Windows naming rules were not applied to manifest rels. | Fixed: `contained_rel` refuses trailing separators, device names, trailing dot/space and ADS colons on every host. | `f7449f5` |
 
-| # | Second-pass verdict | What changed | Commit |
+Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `repair_all` (`d5ef6fa`); F-2's helper fails closed with N-1 (`ddb4371`); F-3/N-2 refuses the overrun (`0bcd6a6`); F-9/N-10 field docs (`ce45a2f`); Decision 7, `readonly()` is not the whole read-only gate (`d6e2d0c`).
+
+### 8.2 Third pass — N-15…N-20
+
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| N-1 | **Valid** (Medium, security) | Fail closed on non-`NotFound` containment probes, as above. | `ddb4371` |
-| N-2 | **Valid** (Medium, contract) | Settle-time stop, as above. | `0bcd6a6` |
-| N-3 | **Valid** (Medium, data loss) | The cache source is removed only after a successful copy; refused deletes/moves are logged and the source left in place. A unit test occupies the destination with a directory. The phase doc no longer claims every failure is fatal: `config.ini` and the delete ceiling still are; housekeeping is best-effort. | `dafed9b` |
-| N-4 | **Valid** (Medium, consistency) | `audio_pkg_cache_dir` / `audio_pkg_res_dir` are validated at metadata (exit `2`) alongside the scan dir; the post-phase check stays as defence in depth. | `c999b5f` |
-| N-5 | **Valid** (Medium, concurrency) | Plan dedup keys case-fold on Windows only; Unix keeps two distinct files. | `56a8a45` |
-| N-6 | **Valid** (Low, data loss) | `contained_rel` builds the cleaned component list, so `./game/foo.dat` is stored as `game/foo.dat`; the purge's expected set matches the walk. | `df52195` |
-| N-7 | **Valid** (Low, fail-fast) | Handles are drained through `FuturesUnordered`, observing a panic as it happens; a slower earlier task sees the abort flag already set. | `9d4e420` |
-| N-8 | **Valid** (Low, diagnostic) | Both check branches match the resolver error and log “escapes the game dir”; the disk estimator names a file it must omit instead of dropping it silently. Unreachable after `build_plan`, so no behavioural test. | `f9a6967` |
-| N-9 | **Valid** (Low, dead code/doc) | `util::normalize_rel` removed; README, `lib.rs`, `docs/03`, `docs/04` and `filter.rs` now name `contained_rel` / `contained_join`. | `2dfc1b5` |
-| N-10 | **Valid** (Low, doc) | Folded into F-9 above. | `ce45a2f` |
-| N-11 | **Valid** (Low, swallowed errors) | Delete/copy/walk failures are warned and counted where a counter exists; the delete-after-failed-copy case is N-3. Module docs match the behaviour. | `dafed9b` |
-| N-12 | **Valid** (Low, panic path) | `acquire_owned().expect("the file semaphore is never closed")`; the invariant is named and the join loop still counts a panic. | `9d4e420` |
-| N-13 | **Valid** (Low, overflow) | Scan and plan estimates saturate instead of wrapping; both branches are unit-tested. | `682058e` |
-| N-14 | **Valid** (Low, Windows names) | `contained_rel` now refuses a trailing separator, reserved device names (`NUL`, `con.dat`, `COM1`, `CONIN$`, …), components ending in `.` or space, and a `:` other than the drive prefix (NTFS ADS). The install is a Windows tree, so the rules apply on every host. | `f7449f5` |
-| Decision 7 | **Valid** — `readonly()` alone was a false invariant. | The doc now says `--print-plan` is read-only by construction and the audio-scan write must ask `!readonly() && !print_plan`, not `readonly()` alone. | `d6e2d0c` |
+| N-15 | The disk plan and document totals could wrap. | Fixed: `DiskPlan`, the short-vector fallback and the document totals saturate; `Val::UInt` renders unsigned. | `cbfaf4e` |
+| N-16 | The `--plan-out` document re-derived `Σ compressed_size` and reconciled only upward. | Fixed: `PlanDocument::new` takes the per-file vector `PLAN` folds. | `d88c76a` |
+| N-17 | The scanned estimate ignored the file's mode, under-counting a source the write overwrites. | Fixed: models discard/temp/in-place with `salvage_order`; a missing verdict still means the whole file. | `0b01501` |
+| N-18 | A chunk with no source was verified at offset 0, faking reuse. | Fixed: ranges only for `Some(source)`; no-source chunks are `source_ok = false`. | `d5f84b3` |
+| N-19 | A purge walk or candidate stat failure was dropped. | Fixed: non-`NotFound` errors warned and counted in `PurgePlan.errors`; a root `NotFound` stays the empty plan. | `408b239` |
+| N-20 | Temp resume/debug stats and `rollback_tmp` substituted length `0` on error. | Fixed: `File::metadata()` errors propagate with the temp path as context. | `c04da2e` |
 
-### 8.2 Decisions that survive
+### 8.3 Fourth pass — P-1…P-4
 
-1. **F-3 is a hard stop, not a soft budget.** The stop is tripped after a
-   settle, so the overrun bound is the body already in flight — the bytes that
-   actually crossed the wire — not a whole reservation. README, `docs/04` and
-   the ledger docs describe that order.
-2. **Containment stays strict.** A manifest entry outside the install is
-   metadata (exit `2`) even when a scope filter would have dropped it; the
-   Windows naming rules are part of that lexical gate.
-3. **`./` is cleaned, not refused** (N-6), because both spellings mean the same
-   path and the purge compares strings.
-4. **Case folding is Windows-only** (N-5). Linux permits `Foo` and `foo` side
-   by side; deduping them would drop a real file.
-5. **The post phase is best-effort housekeeping.** `config.ini` bump and the
-   delete ceiling remain fatal; a refused audio move or delete is warned and
-   left in place, and the doc says so (N-3/N-11).
-6. **`kept_bytes` counts a resumed `_tmp` prefix** (F-9). The counter is “bytes
-   not rewritten”; the docs state that this prefix is unverified until the
-   whole-file MD5 gate, while in-place kept ranges were verified as read.
-7. **Completion-order join** (N-7) is kept over a bare `JoinSet`: it is the
-   same observation semantics with one fewer abstraction, and the test pins the
-   fail-fast consequence.
-8. **`readonly()` is one of two read-only gates** (Decision 7). New write
-   sites must account for `--print-plan` separately.
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| P-1 | Under `--scan --repair-mode temp` the estimate took the pre-scan reuse rule and answered `0`. | Fixed: a scanned run always uses the scan's per-file vector. | `4d2b2d9` |
+| P-2 | Five stat failures were still read as zero (temp resume/promote, in-place trim/salvage order, deprecated size). | Fixed: propagate or count honestly; a failed deprecated stat warns, deletes, and omits the size. | `edb2eb4`, `63a53de` |
+| P-3 | `moved audio cache -> res` was logged unconditionally, claiming success for an empty or refused move. | Fixed: `info!(moved, kept, …)` only when a relocation was attempted. | `25ce46f` |
+| P-4 | The emptied-directory sweep dropped `remove_dir`'s error. | Fixed: debug log with the directory and the `io::Error`; still best effort. | `d331174` |
 
-### 8.3 Final verification
+### 8.4 Fifth pass — R-1…R-6
 
-Full run on Windows, debug profile, final second-pass tree:
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| R-1 | `--plan-out` without `--print-plan` wrote nothing; the only write site sat in the print-plan branch. | Fixed: the document is written before execution; a failure is exit `3` with nothing mutated. | `867ed7f` |
+| R-2 | Unreadable, absent and empty scan files were one state; `--audio none` fell back to `en-us` and, under `--purge-after`, deleted the real selection. | Fixed: `Ok(Some)`/`Ok(None)`/`Err`; an empty file means game-only; atomic write. | `a812fce` |
+| R-3 | A failed rollback replaced the chunk error instead of annotating it. | Fixed: the rollback error is context; the chunk stays the cause. | `86f1fe3` |
+| R-4 | `discard` mode's `remove_file(...).ok()` hid a refused delete. | Fixed: `discard_target` propagates every error except `NotFound`. | `646b9c9` |
+| R-5 | `config.ini`'s `sync_all().ok()` published a rename after a failed sync. | Fixed: a failed sync aborts, and the temp is removed on the failed-write path. | `a812fce` |
+| R-6 | The version/ignore-categories/blacklist readers treated every read error as absent. | Fixed: `Result<Option<T>>`; only `NotFound` is `None`, anything else is exit `1`. | `a812fce` |
+
+### 8.5 Sixth pass — R-7…R-9
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| R-7 | `metadata::fetch` wrote the explicit-`--audio` scan file before the run's refusals. | Fixed: the write moved to execution, after every refusal; the repair uses in-memory `Meta::audio`. | `be6d83f` |
+| R-8 | A scan file naming no recognized language was read as game-only, silently changing the purge keep set. | Fixed: one leading BOM is stripped, non-blank text with no known language is refused, a BOM-only file is refused; a mixed file keeps the known set and warns per unknown line. | `a44c666`, `16e4573` |
+| R-9 | `--plan-out` help omitted `mode` and `extra_bytes`. | Fixed: help lists both; `docs/04` already had the full shape. | `c9fb86f` |
+
+### 8.6 Decisions that still bind
+
+1. **Saturate, never wrap**, in every server-size estimate (N-13, N-15, N-19).
+2. **Containment is a strict lexical gate**: fail closed on an unresolvable probe (N-1); refuse drive/UNC, `..`, trailing separators, Windows device names, trailing dot/space and ADS colons on every host (N-14); clean `./` rather than refuse it (N-6); fold case for plan dedup on Windows only (N-5); an outside path is exit `2` even if a scope filter would drop it (F-2).
+3. **Downloads stop at settle time**: the overrun bound is the body already in flight; partial bodies charge `download_bytes_spent`, settled bodies charge `download_bytes` (F-3, N-2).
+4. **The scanned estimate models the write path** and the resolved mode; one per-file vector feeds both `PLAN` and `--plan-out` (N-17, N-16, P-1).
+5. **Absent is `NotFound` only**; unreadable local state is exit `1` (R-2, R-6). An empty audio scan file is game-only; non-blank text with no known language and a BOM-only file are refused; one leading BOM is stripped (R-8).
+6. **The deferred audio write keeps the plan half mutation-free**: the scan file is written only in execution, after every refusal, so `--print-plan`/`--dry-run`/`--check-only` write nothing (R-7); `--plan-out` is a requested artifact, written before mutation, failure exit `3` (R-1).
+7. **Publishing is crash-safe**: scan file via same-directory temp plus rename (R-2); `config.ini` syncs before its rename and removes the temp on a failed write (R-5).
+8. **The post phase is best-effort housekeeping**: only the `config.ini` bump and the delete ceiling are fatal; a refused move/delete, an unreadable deprecated size, an unremovable directory and an unreadable purge subtree are warned, counted where possible, and left in place (N-3, N-11, P-2, P-4, N-19).
+9. **A stat failure is never a zero**: repair paths fail the file with path context; the post-phase delete warns and omits the size (P-2, N-20).
+10. **Log lines derive from outcomes**: relocation logs only when a move was attempted, with `moved`/`kept`; a containment failure logs as an escape (P-3, N-8).
+11. **`kept_bytes` counts a resumed `_tmp` prefix**, unverified until the MD5 gate (F-9/N-10).
+12. **File tasks join in completion order**, and the file-semaphore invariant is a named `expect` (N-7, N-12).
+
+### 8.7 Latest verification
+
+Full run on Windows, debug profile, sixth-pass final tree:
 
 - `cargo build` — ok.
-- `cargo test -p girpr` — **296 passed, 0 failed, 7 ignored** (166 lib +
-  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
-  82 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`).
+- `cargo test -p girpr` — **327 passed, 0 failed, 7 ignored** (189 lib + 7 `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 89 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0 `src/main.rs`, 0 doc-tests).
 - `cargo clippy -p girpr --all-targets` — clean, no warnings.
 - `cargo fmt --check` — clean (exit `0`).
 
-**Not run:** the `#[cfg(unix)]` symlink escape test (Windows host); the
-Windows junction test **did** run and pass. No shared crate changed, so no
-workspace-wide run was needed.
+**Not run:** the `#[cfg(unix)]` blocks of the containment and mode tests (this host is Windows); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). R-8's purge-deletion consequence and the mixed-line warning capture remain code-reading claims: the mock fixture has a single `game` manifest and no per-language package to delete.
 
-### 8.4 Open for maintainers
+### 8.8 Open for maintainers
 
-- `expected_paths()` and `classify_purge_path` still compare case-sensitively
-  on Windows. N-5 closed duplicate **plan entries**; an existing on-disk file
-  whose case differs from the manifest could still be classified as an orphan
-  by `--purge-after`. Not a regression from this pass, but the same Windows
-  case rule argues for folding it there too.
-- F-6 remains log-only by nature: a `spawn_blocking` scan panic has no public
-  seam to inject it through, so its “fixed” status is a code-reading claim.
-- `--dry-run` / `--check-only` still skip `validate_chunk_ranges` (§7.1 item
-  6); a corrupt range is refused by the repair paths, not by the plan.
-- The live CDN and real transport drop timing are still not exercised; all
-  tests use the in-process mock.
+- `expected_paths()` and `classify_purge_path` still compare case-sensitively on Windows. N-5 closed duplicate plan entries, but an existing file whose case differs from the manifest can still be an orphan under `--purge-after`.
+- F-6's `spawn_blocking` panic, P-2's two in-place `File::metadata()` sites and `delete_deprecated`'s size stat (a post-`is_file()` race), and R-5's `sync_all` failure have no public injection seam; their status is a code-reading claim.
+- `--dry-run`/`--check-only` still skip `validate_chunk_ranges` (§7.1 item 6); a corrupt range is refused by the repair paths (exit `3`), not by the plan (exit `2`).
+- N-19's `errors` counter is diagnostic only; the delete ceilings still see the candidates the walk could reach, not the ones under an unreadable directory.
+- R-2's strictness is a behaviour change: an unreadable audio scan file now fails the run (exit `1`) instead of falling back to `en-us`.
 
-## 9. Third pass — N-15…N-20 validated
-
-The third-pass notes (reviewed tip `fa89641`, delivered as another untracked
-document) were checked at each cited site; the arithmetic findings were also
-executed through the same throwaway probe. All six claims were valid and are
-fixed. The note was deleted; this section is the surviving record. Its re-check
-of F-1…F-9 found no contradiction; the one wording caveat was the purge walk,
-which N-19 closes because the second pass's “walk failures are warned” covered
-only the audio walk.
-
-### 9.1 Per-finding verdicts
-
-| # | Verdict | What changed | Commit |
-|---|---|---|---|
-| N-15 | **Valid** (Medium, overflow) | `DiskPlan` and the document's totals saturate. The document's fold was later removed by N-16; its short-vector fallback still saturates. `Val::UInt` renders a saturated estimate as an unsigned figure instead of the `-1` a signed cast produced. | `cbfaf4e` |
-| N-16 | **Valid** (Medium, contract) | `PlanDocument::new` takes the per-file `Vec<u64>` the `PLAN` total also folds, instead of re-deriving `Σ compressed_size` and reconciling only the upward direction. `mod.rs` computes the vector once. | `d88c76a` |
-| N-17 | **Valid** (Medium, under-estimate) | The scanned estimate resolves the file's mode and models discard, temp and in-place with the writer's `salvage_order`, so a source the chosen direction overwrites is downloaded in the figure too. A missing verdict still means the whole file. | `0b01501` |
-| N-18 | **Valid** (Low, false reuse) | `scan_one` builds ranges only for `Some(source)` and maps the verdicts back to chunk indices; a chunk with no source is `source_ok = false` and is never verified against offset 0. | `d5f84b3` |
-| N-19 | **Valid** (Low, swallowed errors) | The purge walk matches its items: a non-`NotFound` error is warned and counted in `PurgePlan.errors`, as is a candidate `metadata()` failure; a root/subtree `NotFound` stays the documented empty plan. `total_bytes` saturates and the summary warns when errors were counted. | `408b239` |
-| N-20 | **Valid** (Low, swallowed errors) | The resume stat, the debug stat and `rollback_tmp` propagate `File::metadata()` with the temp path as context instead of substituting length 0. | `c04da2e` |
-
-Regression coverage: unit tests for both saturated totals, the downward
-per-file split, three tier/mode estimates, the no-source offset-0 seam, the
-counted walk error and the missing-root empty plan; binary-level tests with a
-hostile manifest (`--print-plan --plan-out`) and with swapped sources under
-`--max-ram-bytes 0`, asserting `PLAN est_download_bytes == SUMMARY
-download_bytes` and the actual chunks (`chunk_p`, `chunk_t`). N-20 has no
-deterministic seam: `metadata()` on the already-open `_tmp` handle cannot be
-made to fail through a public entry point on Windows, and on Unix an unlink does
-not affect `fstat`; its status is a code-reading claim.
-
-### 9.2 Decisions that survive
-
-1. **The scanned estimate models the write path, not the scan's could-reuse.**
-   In-place uses the ordered tier's figure, which is also the staged tier's
-   over-approximation; the RAM budget that picks the tier is a runtime decision,
-   so the larger figure is the honest pre-flight one.
-2. **An in-place open that falls back to temp is still unpredicted.** That file
-   then downloads its already-correct chunks; the runtime
-   `--max-download-bytes` stop bounds the spend. The pre-flight refusal is an
-   early warning, not a guarantee, with or without `--scan`.
-3. **An unreadable purge subtree is counted, warned and not fatal.** The plan
-   still deletes the candidates it can see; exit `0` with `PurgePlan.errors > 0`
-   is deliberate, matching the best-effort housekeeping policy. A maintainer
-   who prefers “refuse the purge when the walk cannot be trusted” changes that
-   one branch.
-4. **One vector feeds both the line and the document.** Any future change to the
-   estimate must change `est_download_bytes_by_file`, or the `PLAN` line and
-   `--plan-out` diverge again.
-
-### 9.3 Final verification
-
-Full run on Windows, debug profile, final third-pass tree:
-
-- `cargo build` — ok.
-- `cargo test -p girpr` — **306 passed, 0 failed, 7 ignored** (174 lib +
-  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
-  84 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`).
-- `cargo clippy -p girpr --all-targets` — clean, no warnings.
-- `cargo fmt --check` — clean (exit `0`).
-
-**Not run:** the `#[cfg(unix)]` blocks of
-`contained_join_resolves_a_symlink_and_refuses_the_escape`,
-`contained_join_fails_closed_when_a_component_cannot_be_resolved` and
-`the_mode_is_part_of_the_file_stats` (Windows host); the 7 ignored tests. The
-third pass still has no release-profile run (the wrap side of N-15 is arithmetic,
-not observed), no Linux/macOS run, and no live CDN traffic.
-
-### 9.4 Open for maintainers
-
-- N-19's `errors` counter is diagnostic only; the delete ceilings still see the
-  candidates the walk could reach, not the ones under an unreadable directory.
-- N-20 and F-6 remain code-reading claims for want of an injection seam.
-
-## 10. Fourth pass — P-1…P-4 validated
-
-The fourth-pass notes (reviewed tip `b99ddbb`, delivered as another untracked
-document) were checked against the current source at every cited line; the P-1
-under-estimate was also executed through the binary. All four findings were
-valid and are fixed. The note was deleted; this section is the surviving
-record. Nothing found was data-losing, and no shared crate was touched.
-
-### 10.1 Per-finding verdicts
-
-| # | Verdict | What changed | Commit |
-|---|---|---|---|
-| P-1 | **Valid** (Medium, under-estimate) | The `(Some(_), RepairMode::Temp)` arm in the estimate ignored the scan it was handed and answered with the pre-scan reuse-map rule. Since `resolve_mode` returns `Temp` for a requested `Temp`, `ScanReport::est_download_bytes_by_file`'s `Mode::Temp` branch was unreachable in exactly the spelling that names temp. The arm is gone: a scanned run always takes the scan's per-file vector, for every mode. | `4d2b2d9` |
-| P-2 | **Valid** (Low, swallowed errors) | All five remaining stat-failure-to-zero sites propagate or count honestly: `temp.rs`'s resume stat and `promote_tmp`, `inplace.rs`'s trim and salvage-order stats (all `with_context` naming the path), and `delete_deprecated`'s size, now an `Option<u64>` — a failed stat is warned, the delete still runs, and the total omits the unknown size instead of adding a false zero. | `edb2eb4`, `63a53de` |
-| P-3 | **Valid** (Low, misleading log) | The unconditional `moved audio cache -> res` is now `info!(moved, kept, ...)`, emitted only when a relocation was attempted; `moved` counts sources gone from the cache and `kept` counts refused moves and copies whose source could not be removed. An empty cache and a fully refused move no longer claim success. | `25ce46f` |
-| P-4 | **Valid** (Low, swallowed error) | The emptied-directory sweep logs `remove_dir`'s failure at debug with the directory and the `io::Error`; it stays best effort, so the expected "something appeared" failure is now distinguishable from a sharing violation or an ACL. | `d331174` |
-
-Regression coverage, all failing on the old shape:
-
-- P-1, end to end through the binary:
-  `the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads`
-  (`tests/repair_offline.rs:1293`) — installed-version `config.ini`, one of
-  foo's two chunks corrupted, `--scan --repair-mode temp --print-plan
-  --plan-out`, then the same mode for the repair. On the unfixed tree it failed
-  with `PLAN est_download_bytes=0 ... scan_bytes=176` while the repair fetched
-  `chunk_foo1`; it now asserts `est_download_bytes > 0`, the document's halves
-  summing to the total, `PLAN est_download_bytes == SUMMARY download_bytes`,
-  and that only `chunk_foo1` was fetched.
-- P-2: `a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure`
-  (`src/repair/file/temp.rs:544`) stats a `_tmp` under a regular file
-  (`ENOTDIR`) and requires the error chain to name the stat and the path; on
-  `util::file_len(...).unwrap_or(0)` it answered `tmp length 0 != expected 64`.
-- P-3: `a_failed_copy_keeps_the_audio_cache_source` (extended; `moved=0
-  kept=1`), `a_completed_audio_move_logs_the_count` (`moved=1 kept=0`) and
-  `an_empty_audio_cache_logs_no_relocation` (no relocation line). The log
-  capture helper lives in `src/repair/test_support.rs` and uses a thread-local
-  subscriber.
-- P-4: `a_dir_the_sweep_could_not_remove_is_logged_with_the_reason`
-  (`src/repair/purge.rs:753`) makes the failure real and asserts the log.
-
-The two `File::metadata()` sites have no deterministic seam (the handle is
-already open; `fstat` cannot be made to fail through a public entry point on
-Windows, and on Unix an unlink does not affect `fstat`), and the
-`delete_deprecated` stat needs a race after `is_file()`; those three fixes are
-code-reading claims, as §9.3 already recorded for N-20.
-
-### 10.2 Decisions that survive
-
-1. **One estimate rule under `--scan`.** The scanned figure resolves the
-   requested and the actual mode; there is no mode that falls back to the
-   pre-scan map rule. `PLAN` and `--plan-out` still fold the same vector
-   (§9.2 item 4).
-2. **A stat failure is never a zero.** In the repair paths it fails the file
-   (with the path in context); in the post phase's best-effort delete it is
-   warned and the counter omits the size. The one remaining conflation is the
-   documented `DiskPlan` "missing vs unreadable" over-approximation (§9.4).
-3. **Relocation logs are derived from outcomes.** A summary line must not be
-   reachable just because the function ran; the same standard the N-3/N-11
-   fixes applied to the per-file warnings.
-4. **Housekeeping stays best effort.** The sweep's failure is logged, not
-   fatal — matching the §8.2 item 5 policy for the audio move and the
-   deprecated deletes.
-
-### 10.3 Final verification
-
-Full run on Windows, debug profile, final fourth-pass tree:
-
-- `cargo build` — ok.
-- `cargo test -p girpr` — **311 passed, 0 failed, 7 ignored** (178 lib +
-  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
-  85 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
-  `src/main.rs`, 0 doc-tests). The third-pass tree had 306; the five new tests
-  are the difference.
-- `cargo clippy -p girpr --all-targets` — clean, no warnings.
-- `cargo fmt --check` — clean (exit `0`).
-
-**Not run:** the `#[cfg(unix)]` blocks of
-`contained_join_resolves_a_symlink_and_refuses_the_escape`,
-`contained_join_fails_closed_when_a_component_cannot_be_resolved` and
-`the_mode_is_part_of_the_file_stats` (Windows host); the 7 ignored tests; no
-release-profile run; no Linux/macOS host; no live CDN traffic.
-
-## 11. Fifth pass — R-1…R-6 validated
-
-The fifth-pass notes (reviewed tip `e88b62a`, delivered as another untracked
-document) were checked against the current source at every cited line. R-1 and
-R-2 were reproduced end to end before their fixes; R-3 and R-4 now have
-deterministic unit seams; R-5 and R-6 are the diagnostics/durability findings.
-All six were valid and are fixed. No shared crate was touched. The note was
-deleted; this section is the surviving record.
-
-### 11.1 Per-finding verdicts
-
-| # | Verdict | What changed | Commit |
-|---|---|---|---|
-| R-1 | **Valid** (Medium, bug) | The only `--plan-out` write site sat inside the `--print-plan` early return, so a standalone flag created no file. The disk table is now computed once when either consumer asks for it, and the document is written before the execution phase (a write failure is exit `3` with nothing mutated). | `867ed7f` |
-| R-2 | **Valid** (Medium, bug/data loss) | `read_scan_file` is three-valued: `Ok(Some(set))` for a successful read (empty = game-only), `Ok(None)` only for an unconfigured dir or `NotFound`, `Err` for any other read error (exit `1`, path in context). `resolve_effective_audio` therefore keeps a `--audio none` empty file instead of substituting `en-us`. `write_scan_file` publishes through a same-directory temp + rename. | `a812fce` |
-| R-3 | **Valid** (Low, swallowed error) | A failed rollback now attaches its error as context to the original chunk error instead of replacing it; the chunk stays the reported cause. | `86f1fe3` |
-| R-4 | **Valid** (Low, swallowed error) | `discard` mode's `remove_file(...).ok()` is `discard_target`: every error except `NotFound` propagates with `discard <path>` as context, so the delete is the named failing step. | `646b9c9` |
-| R-5 | **Valid** (Low, durability) | `config.ini`'s `sync_all().ok()` is `sync_all().with_context(...)?`; a failed sync no longer publishes the rename, and the temp is removed on the failed-write path. | `a812fce` |
-| R-6 | **Valid** (Low, swallowed error) | `read_game_version`, `read_ignore_categories` and `read_blacklist` return `Result<Option<T>>`: `NotFound` is the documented absent case (`None`), any other read error is `Err` with the path, mapped to exit `1` in `metadata`. The shared split lives in `read_config_list`. | `a812fce` |
-
-**R-1 reproduction.** The regression test
-`plan_out_without_print_plan_writes_the_document_of_the_run`
-(`tests/repair_offline.rs`) runs the real binary against the mock with
-`--plan-out` and no `--print-plan`. On the unfixed tree it failed at the file
-read with `Os { code: 3, kind: NotFound }`; after the fix it passes and the run
-still repairs the missing file.
-
-**R-2 reproduction and the purge consequence.** The real sequence is
-`write_scan_file(empty)` (what `--audio none` does) followed by
-`resolve_effective_audio(None)`: on the old tree the empty set was
-indistinguishable from absence and became `en-us`. That is not just extra work:
-`plan.expected_paths()` is the purge keep set (`src/repair/purge.rs:88`), and
-membership is the first keep rule (`:348`). Selecting `en-us` re-plans that
-language's manifests, so under `--purge-after` the audio packages of the real
-selection (e.g. `ja-jp`) are not expected and are deleted, while `en-us` is
-re-downloaded. The fix keeps the empty file as a real selection and refuses an
-unreadable one, so neither path substitutes a language. Tests:
-`an_empty_file_written_by_audio_none_stays_game_only`,
-`an_unreadable_scan_file_is_an_error_not_the_default`,
-`the_scan_file_is_published_atomically`, and the integration
-`an_unreadable_audio_scan_file_fails_before_any_repair` (exit `1`, no chunk
-requested).
-
-**R-3/R-4 test seams.** R-3 uses a read-only `_tmp` handle: truncation needs
-write access, so `rollback_tmp` really fails while the chunk error is in hand.
-R-4 uses a directory at the target (portable `remove_file` failure) plus the
-already-absent case. R-5 has no deterministic fault-injection seam for
-`sync_all` through a public entry point; its status is a code-reading claim, as
-recorded for N-20/F-6. R-6 is tested for both readers and the version reader
-with a directory at the path.
-
-### 11.2 Decisions that survive
-
-1. **Absent is `NotFound`, not every error.** The audio scan file and the
-   launcher's lists now agree: a missing file takes the documented default
-   (`en-us` / empty set); an unreadable one fails the run. A readable empty
-   audio file is a deliberate game-only selection and is never replaced.
-2. **A requested artifact is not subject to the read-only gate.** `--plan-out`
-   writes its file on a `--print-plan`, `--check-only` or executing run; it is
-   an output the user named, before any install mutation, not a repair write.
-   A failure is exit `3`.
-3. **The scan-file write is atomic.** Temp in the same directory, then rename;
-   a crash cannot leave a truncated file that reads as game-only.
-4. **Local-state read failures are exit `1`.** They are configuration, not
-   metadata/network (`2`) or write/verify (`3`); `metadata::fetch` maps them
-   with `RunFailure::usage`.
-
-### 11.3 Final verification
-
-Full run on Windows, debug profile, final fifth-pass tree:
-
-- `cargo build` — ok.
-- `cargo test -p girpr` — **320 passed, 0 failed, 7 ignored** (185 lib +
-  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
-  87 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
-  `src/main.rs`, 0 doc-tests). The fourth-pass tree had 311; the nine new
-  tests are the difference (four audio unit tests, two in-place, one temp,
-  one util-reader, one binary `--plan-out`, minus the rewritten audio tests
-  counted in the new total).
-- `cargo clippy -p girpr --all-targets` — clean, no warnings.
-- `cargo fmt --check` — clean (exit `0`).
-
-**Not run:** the `#[cfg(unix)]` blocks of the containment tests (Windows
-host); the 7 ignored tests; no release-profile run; no Linux/macOS host; no
-live CDN traffic. R-5's fsync failure was not fault-injected (no seam); R-1's
-binary test and R-2's write/read and unreadable paths did run.
-
-**Open for maintainers:** the fourth-pass residuals are unchanged
-(`expected_paths()` / `classify_purge_path` case sensitivity on Windows, F-6
-being log-only, the dry-run `validate_chunk_ranges` skip). R-2's new strictness
-means a permissions problem on the audio scan file now fails the run instead of
-quietly using `en-us`; that is the intended trade, but it is a behaviour change
-for an install with an unreadable scan file.
-
-## 12. Sixth pass — R-7…R-9 validated
-
-The sixth-pass notes (reviewed tip `1f00dbd`, delivered as another untracked
-document) were checked against the current source at every cited line. R-7 and
-R-8 were reproduced through the real binary against the in-process mock before
-their fixes; R-9 was read from `--help`. All three were valid and are fixed. No
-shared crate or tool was touched. The note was deleted; this section is the
-surviving record.
-
-### 12.1 Per-finding verdicts
-
-| # | Verdict | What changed | Commit |
-|---|---|---|---|
-| R-7 | **Valid** (Medium, partial mutation) | `metadata::fetch` no longer calls `write_scan_file`. It keeps the containment validation and the explicit-`--audio`/scope refusal (both plan-half validation), and `repair::run` writes the scan file in the execution phase — after `create_dir_all`, the single-writer lock, the ceilings, the empty-`--include` refusal, the plan build and the `--plan-out` write. The repair uses the in-memory `Meta::audio`, not the file. | `be6d83f` |
-| R-8 | **Valid** (Medium, data loss) | `read_scan_file` parses through `parse_scan_text`: one leading U+FEFF is stripped, and non-blank text that yields zero recognized languages is `Err` naming the file and the first unrecognized line (mapped to exit `1`). A file whose only content is a BOM is non-empty and is refused too; genuinely blank lines and an empty file stay the game-only selection. A recognized-plus-unrecognized file keeps the known set and warns per unknown line. | `a44c666`, `16e4573` |
-| R-9 | **Valid** (Low, doc/CLI) | The `--plan-out` help now lists `mode` and `extra_bytes` and says what they mean. `docs/04:417-419` already showed the full shape; only the CLI text was one shape behind. | `c9fb86f` |
-
-**R-7 reproduction.** `explicit_audio_is_not_written_before_a_refusal`
-(`tests/repair_offline.rs`) drives the binary with `--audio en-us` and, in
-turn, `--max-files 0` (exit `5`), an unwritable `--plan-out` directory (exit
-`3`) and an `--include` matching nothing (exit `1`), each against a missing
-game dir. On the unfixed tree it failed at the first case: exit `5` had already
-created `<game>/Audio/scan.txt`. With the write deferred it passes: no game
-dir, no scan dir, no chunk request.
-
-**R-8 reproduction.** On the unfixed tree an `Audio/scan.txt` containing only
-`English (US)` produced `keeping current audio langs: {}` (game-only) and the
-run exited `0` after fetching chunks. The new binary test
-`an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only` requires
-exit `1`, an error that names the file and the line, no chunk request, and the
-file left byte-identical. Unit tests cover the same error through
-`resolve_effective_audio`, a BOM-prefixed `Chinese` (now `zh-cn`), a BOM-only
-file (refused), and a mixed file whose unknown line is identified. The purge
-consequence was established by
-reading the chain (`select_manifests` drops audio manifests →
-`plan.expected_paths()` loses them → `classify_purge_path` returns `Purge`); it
-was not executed end to end because the mock fixture carries a single `game`
-manifest and no per-language package to delete. The new refusal removes the
-empty set that reached that chain.
-
-**R-9 reproduction.** `--help` showed
-`{repair:[{rel,size,chunks_total,est_download_bytes}],purge:[{rel,size}]}`.
-The new binary test `plan_out_help_documents_every_serialized_field`
-(`tests/cli_contract.rs`) fails on that text and passes on
-`…,mode,extra_bytes…`.
-
-### 12.2 Decisions that survive
-
-1. **The plan half is literally mutation-free.** An explicit `--audio` writes
-   the scan file only in the execution phase, after every refusal; a refused
-   run leaves the install and `game_dir` untouched. `--print-plan`,
-   `--dry-run` and `--check-only` still write nothing.
-2. **A non-empty scan file naming no known language is local config, exit
-   `1`.** It is not the game-only selection. A leading BOM is stripped before
-   parsing, so `BOM + Chinese` is recognized; a file whose only content is a
-   BOM is non-empty and is refused, while genuinely blank lines and an empty
-   file remain game-only.
-3. **Mixed known/unknown lines stay tolerant**, with a warning per unknown
-   line. The warning is a code-reading claim: tracing caches a callsite's
-   interest globally, which makes a log capture order-dependent.
-4. **The `--plan-out` document was already documented in full in `docs/04`.**
-   R-9 was a stale CLI help string, not a second stale spec.
-
-### 12.3 Final verification
-
-Full run on Windows, debug profile, final sixth-pass tree:
-
-- `cargo build` — ok.
-- `cargo test -p girpr` — **327 passed, 0 failed, 7 ignored** (189 lib + 7
-  `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 89
-  `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
-  `src/main.rs`, 0 doc-tests). The fifth-pass tree had 320; the seven new tests
-  are the difference (two binary R-7/R-8, four audio unit, one CLI help).
-- `cargo clippy -p girpr --all-targets` — clean, no warnings.
-- `cargo fmt --check` — clean (exit `0`).
-
-**Not run:** the `#[cfg(unix)]` blocks of the containment tests (Windows
-host); the 7 ignored tests; no release-profile run; no Linux/macOS host; no
-live CDN traffic. R-8's purge-deletion consequence and the mixed-line warning
-capture are the two sixth-pass behaviours with no executed test, for the
-reasons above.
-
-*End of review. The finding text above records the first pass; §8 records the
-second pass, §9 the third, §10 the fourth, §11 the fifth and §12 the sixth,
-each of which changed source, tests and docs and ran the full suite on the tree
-its final-verification subsection describes.*
+*End of review. §1–§7 record the first pass; §8 is the pass log, and the commits it cites are the source, test and doc changes.*
