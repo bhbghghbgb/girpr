@@ -396,6 +396,52 @@ fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
     );
 }
 
+/// **P6-2.** `dst/a.txt` is a hard link to `src/b.txt`, so truncating it writes
+/// through to a source file. Both hash modes must refuse before `File::create`,
+/// leaving the shared bytes and the link in place.
+#[test]
+fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
+    let t = temp_root("hardlink_guard");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"AAAA");
+    wfile(&src, "b.txt", b"BBBBBBBBBB");
+    std::fs::hard_link(src.join("b.txt"), dst.join("a.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [
+        &["--exclude", "b.txt"][..],
+        &["--exclude", "b.txt", "--hash-all-of", "none"][..],
+    ] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a shared destination inode must be refused: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the destination: {err}");
+        assert_eq!(
+            rfile(&src, "b.txt"),
+            b"BBBBBBBBBB",
+            "the source the hard link shares must be unchanged"
+        );
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"BBBBBBBBBB",
+            "the destination must not be truncated or replaced"
+        );
+    }
+    assert_eq!(
+        rfile(&src, "a.txt"),
+        b"AAAA",
+        "the copied source is untouched"
+    );
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");
