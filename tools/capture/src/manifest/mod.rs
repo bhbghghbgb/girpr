@@ -462,6 +462,15 @@ pub async fn capture(
         // exists on either sink, so refuse the document here, before the tree is
         // created or a chunk is fetched.
         validate_entry_paths(&url, &m.chuncks)?;
+        // The same boundary, for the numbers: `offset`, `compressed_size` and
+        // `uncompressed_size` are raw `int64`s on the wire. A negative cost or
+        // an offset that cannot be added is refused here, before a selection or
+        // an assembly can carry it into the artifact.
+        for entry in &m.chuncks {
+            entry
+                .validate_arithmetic()
+                .map_err(|why| ApiError::shape(&url, format!("{}: {why}", entry.file)))?;
+        }
         m.chuncks
     };
     let decoded = decode_counts(&entries);
