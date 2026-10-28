@@ -44,8 +44,14 @@ impl Range {
     }
 
     /// The range covering `len` bytes at `offset`.
+    ///
+    /// Saturating rather than `+`: an index or manifest can declare an offset
+    /// near `i64::MAX`, and a range algebra that panics on the document it
+    /// describes is the class `decode_counts` already refuses. [`Layout::of`]
+    /// records the overflow as an A11 violation; this method stays total for
+    /// every caller, including the public ones that never build a `Layout`.
     pub const fn at(offset: i64, len: i64) -> Range {
-        Range::new(offset, offset + len)
+        Range::new(offset, offset.saturating_add(len))
     }
 
     /// The empty range at `offset`.
@@ -54,8 +60,11 @@ impl Range {
     }
 
     /// How many bytes this covers. Negative when inverted.
+    ///
+    /// Saturating for the same reason as [`Range::at`]: the bounds are
+    /// untrusted, and the gap/overlap diagnostic must not abort on them.
     pub const fn len(&self) -> i64 {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Whether the range covers no bytes.
@@ -85,8 +94,10 @@ impl Range {
     /// The bytes between this range's end and `next`'s start, if they do not meet.
     ///
     /// Positive for a gap, negative for an overlap, zero when they are adjacent.
+    /// Saturating, so an `i64::MIN` start next to an `i64::MAX` end is a
+    /// diagnosable violation rather than an abort.
     pub const fn to(&self, next: Range) -> i64 {
-        next.start - self.end
+        next.start.saturating_sub(self.end)
     }
 
     /// The slice of `bytes` this range names, if it names a valid one.
@@ -132,9 +143,44 @@ impl Layout {
     /// into a `Vec<Range>` and drop the first one — two vectors where one would
     /// do, for every file assembled.
     pub fn of(parts: impl IntoIterator<Item = (i64, i64)>, declared_size: i64) -> Layout {
-        let ranges: Vec<Range> = parts.into_iter().map(|(o, l)| Range::at(o, l)).collect();
-        let total: i64 = ranges.iter().map(Range::len).sum();
         let mut violations = Vec::new();
+        let mut ranges: Vec<Range> = Vec::new();
+        // Each end is `checked_add`, because the offset and length come from a
+        // document. An overflow is a finding about that document, not a reason
+        // to abort the tool that records it — the same rule `decode_counts`
+        // applies to a manifest it is only measuring.
+        for (i, (offset, len)) in parts.into_iter().enumerate() {
+            let range = match offset.checked_add(len) {
+                Some(end) => Range::new(offset, end),
+                None => {
+                    violations.push(format!(
+                        "chunk {i}: offset {offset} + length {len} overflows i64"
+                    ));
+                    Range::new(offset, i64::MAX)
+                }
+            };
+            ranges.push(range);
+        }
+        // `Σ len` is what the file would weigh if the chunks were concatenated.
+        // A sum that does not fit `i64` is a violation, with the running total
+        // named, and one row is enough: every later term is not a byte count.
+        let mut total = 0_i64;
+        let mut total_overflowed = false;
+        for r in &ranges {
+            if total_overflowed {
+                break;
+            }
+            total = match total.checked_add(r.len()) {
+                Some(next) => next,
+                None => {
+                    violations.push(format!(
+                        "the chunk lengths sum overflows i64 at range {r} (running total {total} B)"
+                    ));
+                    total_overflowed = true;
+                    i64::MAX
+                }
+            };
+        }
 
         for (i, r) in ranges.iter().enumerate() {
             if r.is_inverted() {
@@ -169,7 +215,7 @@ impl Layout {
                     over => violations.push(format!(
                         "chunk {} starts {}(-overlap bytes) before chunk {} ends",
                         i,
-                        -over,
+                        over.saturating_neg(),
                         i - 1
                     )),
                 }
@@ -384,5 +430,52 @@ mod tests {
         assert_eq!(j["start"], 690719);
         assert_eq!(j["end"], 690719 + 1626019);
         assert!(j.get("len").is_none(), "length is derived, not stored");
+    }
+
+    /// **K1.** The crafted index's `offset: i64::MAX, size: 1` is a violation,
+    /// not an abort. This is the exact arithmetic that panicked in debug before
+    /// the fix, and wrapped into an inverted range in release.
+    #[test]
+    fn an_offset_that_overflows_is_a_violation_not_a_panic() {
+        let l = Layout::of([(i64::MAX, 1)], 1);
+        assert!(!l.is_clean());
+        assert!(
+            l.violations
+                .iter()
+                .any(|v| v.contains("overflow") && v.contains("9223372036854775807")),
+            "{:?}",
+            l.violations
+        );
+        assert_eq!(Range::at(i64::MAX, 1), Range::new(i64::MAX, i64::MAX));
+    }
+
+    /// **K1.** Two maximum-length ranges overflow `Σ len`; the sum is a named
+    /// violation rather than a debug abort or a release wrap.
+    #[test]
+    fn a_total_that_overflows_is_a_violation_not_a_panic() {
+        let l = Layout::of([(i64::MIN, i64::MAX), (i64::MIN, i64::MAX)], 0);
+        assert!(!l.is_clean());
+        assert!(
+            l.violations.iter().any(|v| v.contains("sum overflows i64")),
+            "{:?}",
+            l.violations
+        );
+    }
+
+    /// **K1.** The gap/overlap diagnostic reads `i64::MIN - i64::MAX` for this
+    /// pair. It saturates, so the layout still describes the defect.
+    #[test]
+    fn a_gap_between_extreme_bounds_saturates_instead_of_panicking() {
+        let l = Layout::of([(0, i64::MAX), (i64::MIN, 0)], 0);
+        assert!(!l.is_clean());
+        assert_eq!(
+            Range::new(0, i64::MAX).to(Range::new(i64::MIN, 0)),
+            i64::MIN
+        );
+        assert_eq!(
+            Range::new(i64::MIN, 0).len(),
+            i64::MAX,
+            "the length of an inverted extreme range saturates too"
+        );
     }
 }
