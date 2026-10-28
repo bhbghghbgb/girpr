@@ -258,21 +258,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // slice fails its MD5, so a file estimated at 0 bytes can still download its
     // whole body. That is why the runtime hard stop exists alongside this.
     //
-    // Under `--scan` the estimate is the **exact** figure for the in-place
-    // path: the chunks that are wrong where they belong and have no intact
-    // source to copy from. The temp path's figure is the one above (it
-    // writes every chunk of a file it repairs), so the two modes are
-    // estimated by their own rules.
+    // Under `--scan` the estimate is the **exact** figure for the write path
+    // each file takes: the chunks that are wrong where they belong and have no
+    // intact source the chosen direction keeps. It resolves the mode itself,
+    // including a requested `temp`, so this is one rule for every mode.
     //
     // The split is computed once, per file, and both consumers fold it: the
     // `PLAN` total below and the `--plan-out` document further down. A second
     // derivation would be a second answer.
-    let est_download_by_file: Vec<u64> = match (&scan, ctx.repair_mode) {
-        // The temp path writes every chunk of a file it repairs, so its
-        // figure is the reuse map's one.
-        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes_by_file(&local_map),
-        (Some(s), _) => s.est_download_bytes_by_file(&plan, &game_dir, ctx.repair_mode, &local_map),
-        (None, _) => plan.est_download_bytes_by_file(&local_map),
+    let est_download_by_file: Vec<u64> = match &scan {
+        Some(s) => s.est_download_bytes_by_file(&plan, &game_dir, ctx.repair_mode, &local_map),
+        None => plan.est_download_bytes_by_file(&local_map),
     };
     let est_download_bytes = est_download_by_file
         .iter()

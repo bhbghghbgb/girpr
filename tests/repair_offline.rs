@@ -1291,6 +1291,100 @@ async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
 }
 
 #[tokio::test]
+async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
+    // `--scan --repair-mode temp` used to ignore the scan it was handed and
+    // answer with the pre-scan rule ("a reuse candidate exists -> free"),
+    // which is exactly the question the scan answers. Both of foo's chunks
+    // have a candidate entry (config.ini names the installed build), but
+    // chunk 1 is corrupt on disk: the temp path re-hashes the candidate
+    // slice, refuses it and fetches `chunk_foo1`. The scanned plan must price
+    // that chunk, and the price must be what the repair really spends.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scan_exact_temp");
+    let fx2 = build_fixture();
+    std::fs::write(
+        dir.join("config.ini"),
+        "[General]\ngame_version=9.9.9-test\n",
+    )
+    .unwrap();
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let mut half_bad = fx2.files[0].data.clone();
+    for b in half_bad.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
+    let game = dir.to_string_lossy().into_owned();
+    let base: Vec<&str> = vec![
+        "--game-path",
+        &game,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+
+    // 1. the plan: the scan's own figure for the mode that was asked for.
+    let out = dir.join("plan.json");
+    let out_arg = out.to_string_lossy().into_owned();
+    let mut args = base.clone();
+    args.extend_from_slice(&[
+        "--scan",
+        "--repair-mode",
+        "temp",
+        "--print-plan",
+        "--plan-out",
+        &out_arg,
+    ]);
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let plan_line = stdout
+        .lines()
+        .find(|l| l.starts_with("PLAN "))
+        .expect("the PLAN line");
+    let scanned = field(plan_line, "est_download_bytes");
+    assert!(
+        scanned > 0,
+        "the corrupt candidate cannot be reused, so the chunk is a download: {plan_line}"
+    );
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
+    });
+    assert_eq!(
+        doc_sum, scanned,
+        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
+    );
+
+    // 2. the repair in the same mode: the same figure.
+    let mut args = base.clone();
+    args.extend_from_slice(&["--scan", "--repair-mode", "temp"]);
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "{stderr}");
+    let summary = stdout
+        .lines()
+        .find(|l| l.starts_with("SUMMARY "))
+        .expect("the SUMMARY line");
+    let downloaded = field(summary, "download_bytes");
+    assert_eq!(
+        scanned, downloaded,
+        "the scanned temp estimate is the real cost: {scanned} vs {downloaded}"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_foo1".to_string()],
+        "the corrupt candidate is fetched, the intact one is reused"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn an_interrupted_in_place_run_resumes_by_verification() {
     // The state an interrupted in-place run leaves behind: some chunks
     // correct where they belong, some not. There is no artefact to resume
