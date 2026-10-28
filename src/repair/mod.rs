@@ -308,32 +308,41 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     //
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
+    // Both consumers of the disk figures need the same table: the `PLAN` line
+    // and the `--plan-out` document. Compute it when either was asked for, so
+    // the document is written for a run that does the work as well as for
+    // `--print-plan`.
+    let disk = (ctx.print_plan || ctx.plan_out.is_some())
+        .then(|| scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs));
     if ctx.print_plan {
-        // The disk figures: one `stat` per planned file, and the same
-        // resolution table the repair uses — so the plan and the repair
-        // cannot disagree about which path a file takes.
-        let disk = scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs);
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
-            &disk,
+            disk.as_ref().expect("the print-plan branch asks for it"),
             scan.as_ref().map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
-        if let Some(out) = ctx.plan_out.as_deref() {
-            let doc = scope::report::PlanDocument::new(
-                &plan,
-                purge_plan.as_ref(),
-                &est_download_by_file,
-                &disk,
-            );
-            doc.write_to(std::path::Path::new(out))
-                .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
-        }
+    }
+    // A requested artifact is never silently omitted: the flag promises the
+    // plan of a run that does the work, and the same document is written for
+    // `--print-plan`. It lands before the execution phase, so a write failure
+    // is exit `3` with nothing mutated, the same class as the `--print-plan`
+    // write.
+    if let Some(out) = ctx.plan_out.as_deref() {
+        let doc = scope::report::PlanDocument::new(
+            &plan,
+            purge_plan.as_ref(),
+            &est_download_by_file,
+            disk.as_ref().expect("the plan-out branch asks for it"),
+        );
+        doc.write_to(std::path::Path::new(out))
+            .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
+    }
+    if ctx.print_plan {
         return Ok((summary, 0));
     }
 

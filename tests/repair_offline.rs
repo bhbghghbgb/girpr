@@ -2535,6 +2535,58 @@ async fn print_plan_out_writes_the_per_file_json_document() {
 }
 
 #[tokio::test]
+async fn plan_out_without_print_plan_writes_the_document_of_the_run() {
+    // R-1: the help says the flag works on its own, but the only write site
+    // used to be inside the `--print-plan` early return. Through the real
+    // binary, because the promise is about the flag.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_out_alone");
+    let fx2 = build_fixture();
+    // bar is intact and foo is missing, so this is a run that does work.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+
+    let out = dir.join("reports").join("plan.json");
+    let out_arg = out.to_string_lossy().into_owned();
+    let game = dir.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--plan-out",
+            &out_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("SUMMARY "), "the run executed: {stdout}");
+    let written = std::fs::read_to_string(&out)
+        .expect("--plan-out without --print-plan must create the documented file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    assert_eq!(
+        v["repair"].as_array().unwrap().len(),
+        2,
+        "the document describes the run: {written}"
+    );
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data,
+        "the run still did the work it planned"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_ceiling_trips_print_plan_like_any_other_mode() {
     let fx = build_fixture();
     let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();

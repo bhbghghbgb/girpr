@@ -415,13 +415,16 @@ PLAN files=8 est_download_bytes=2373385 est_write_bytes=… est_extra_bytes=… 
 ```
 
 `--plan-out <FILE>` writes the per-file detail as **JSON** —
-`{"repair": [{rel, size, chunks_total, est_download_bytes}], "purge": [{rel,
+`{"repair": [{rel, size, chunks_total, est_download_bytes, mode, extra_bytes}], "purge": [{rel,
 size}]}` — for the `--per-class`-sized cases where diffing eight lines beats
-eight `--include` flags. JSON because `girsync --output json` and the whole
-artifact side of this repo (`gircap`'s bundle, `patchmaps/<id>.json`) are JSON,
-and a parser that has to read `SUMMARY` *and* the plan wants one reader, not two
-vocabularies. The `key=value` plane stays single-purpose: one line per fact,
-greppable, no nesting.
+eight `--include` flags. It works with or without `--print-plan`: on its own it
+writes the plan of the run that then does the work, before the first mutation,
+so a write failure is exit `3` with nothing changed. JSON because
+`girsync --output json` and the whole artifact side of this repo (`gircap`'s
+bundle, `patchmaps/<id>.json`) are JSON, and a parser that has to read
+`SUMMARY` *and* the plan wants one reader, not two vocabularies. The
+`key=value` plane stays single-purpose: one line per fact, greppable, no
+nesting.
 
 The purge half needs the purge plan built unconditionally whenever a purge
 flag, `--print-plan` or `--purge-only` asks for it — which is why
