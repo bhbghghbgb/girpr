@@ -886,9 +886,10 @@ condition with a known fix) is named on stderr with the reason and counted in
 the summary's `bundles_unreadable`. An operator whose inventory quietly omits a
 bundle has an inventory that is wrong.
 
-A walk that cannot **see** a directory — `read_dir` fails, one of its entries
-fails, or an entry cannot be stat'ed — is not a shorter listing: `list` stops
-with a usage error naming the directory or entry it could not read. A subtree it
+A walk that cannot **see** a directory or a bundle manifest — `read_dir` fails,
+one of its entries fails, an entry cannot be stat'ed, or a `MANIFEST.json` that
+is there cannot be read — is not a shorter listing: `list` stops with a usage
+error naming the directory, entry or manifest it could not read. A subtree it
 never saw may hold a bundle, so `bundles_unreadable` alone cannot make the
 inventory honest.
 

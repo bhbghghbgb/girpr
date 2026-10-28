@@ -342,7 +342,23 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The schema version a bundle declares, read on its own.
+/// What a directory's `MANIFEST.json` says about whether it is a bundle.
+///
+/// Three outcomes, kept apart because conflating them loses a bundle:
+/// **absence** and **a document that is not a bundle** are both "step over",
+/// but a manifest the process **cannot read** is an entry the walk could not
+/// see, and [`list`] must fail rather than answer with a shorter inventory.
+enum ManifestProbe {
+    /// No `MANIFEST.json` here: not a bundle.
+    Missing,
+    /// A manifest exists but declares no schema version this build can read:
+    /// not a bundle.
+    NotABundle(String),
+    /// A readable manifest declaring this schema version.
+    Version(u32),
+}
+
+/// Probe a `MANIFEST.json`, distinguishing absence from a read failure.
 ///
 /// **Nothing but the version.** The document is read as a JSON value rather
 /// than as a [`Manifest`], because a bundle written by an older schema does
@@ -351,21 +367,64 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 /// cause. The version is the diagnosis.
 ///
 /// A document with no readable version is **not a bundle** — a half-written
-/// capture, or a directory that only looks like one — and says so.
-fn schema_version_of(path: &Path) -> Result<u32, String> {
-    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    value
+/// capture, or a directory that only looks like one — and says so. A document
+/// that could not be read at all is not the same fact: it is returned as
+/// `Err` naming the path and the I/O error, because a bundle may be behind it.
+///
+/// The reader is a parameter so [`list_with`] can inject a failing one; the
+/// only other caller passes [`std::fs::read`].
+fn probe_manifest(
+    path: &Path,
+    read: impl FnOnce(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<ManifestProbe, String> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => {
+            return Ok(ManifestProbe::NotABundle(format!(
+                "{}: not a file; this is not a bundle gircap wrote",
+                path.display()
+            )));
+        }
+        // Nothing there means no bundle. Anything else is a directory the walk
+        // could not see, which is not the same as an empty one.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ManifestProbe::Missing),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    }
+    let raw = read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let value: serde_json::Value = match serde_json::from_slice(&raw) {
+        Ok(value) => value,
+        Err(e) => {
+            return Ok(ManifestProbe::NotABundle(format!(
+                "{}: {e}",
+                path.display()
+            )));
+        }
+    };
+    match value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
-        .map(|v| v as u32)
-        .ok_or_else(|| {
-            format!(
-                "{}: no schema_version; this is not a bundle gircap wrote",
-                path.display()
-            )
-        })
+    {
+        Some(v) => Ok(ManifestProbe::Version(v as u32)),
+        None => Ok(ManifestProbe::NotABundle(format!(
+            "{}: no schema_version; this is not a bundle gircap wrote",
+            path.display()
+        ))),
+    }
+}
+
+/// The schema version a bundle declares, read on its own.
+///
+/// The single-caller wrapper around [`probe_manifest`] for [`Bundle::open`],
+/// which wants a version or a reason and has no "step over" arm.
+fn schema_version_of(path: &Path) -> Result<u32, String> {
+    match probe_manifest(path, |p| std::fs::read(p))? {
+        ManifestProbe::Version(v) => Ok(v),
+        ManifestProbe::Missing => Err(format!(
+            "{}: not found; a bundle root holds a MANIFEST.json",
+            path.display()
+        )),
+        ManifestProbe::NotABundle(why) => Err(why),
+    }
 }
 
 /// What re-verification found.
@@ -1040,24 +1099,31 @@ pub struct Unreadable {
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
 /// operator's inventory is complete.
 ///
-/// **A walk that cannot read a directory is an error, not a shorter inventory.**
-/// The `unreadable` list can name a bundle that does not open, but it cannot name
-/// what it never saw: an entry error or an ACL-denied directory used to be
-/// dropped, so `list` returned a confident, incomplete answer with exit `0`. An
-/// audit command fails fast instead and names the directory or entry it could not
-/// read.
+/// **A walk that cannot read a directory or a manifest is an error, not a
+/// shorter inventory.** The `unreadable` list can name a bundle that does not
+/// open, but it cannot name what it never saw: an entry error, an ACL-denied
+/// directory, or a `MANIFEST.json` that cannot be read used to be dropped, so
+/// `list` returned a confident, incomplete answer with exit `0`. An audit
+/// command fails fast instead and names the directory, entry or manifest it
+/// could not read.
 pub fn list(root: &Path) -> Result<Index, String> {
-    list_with(root, |d| {
-        let rd = std::fs::read_dir(d)?;
-        Ok(rd.map(|e| e.map(|e| e.path())).collect())
-    })
+    list_with(
+        root,
+        |d| {
+            let rd = std::fs::read_dir(d)?;
+            Ok(rd.map(|e| e.map(|e| e.path())).collect())
+        },
+        |p| std::fs::read(p),
+    )
 }
 
-/// [`list`] with the directory reader injected, so a test can make one read
-/// fail and see that the walk stops rather than shortening the inventory.
+/// [`list`] with the directory and manifest readers injected, so a test can
+/// make one read fail and see that the walk stops rather than shortening the
+/// inventory.
 fn list_with(
     root: &Path,
     mut read: impl FnMut(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+    mut read_manifest: impl FnMut(&Path) -> std::io::Result<Vec<u8>>,
 ) -> Result<Index, String> {
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
@@ -1066,13 +1132,15 @@ fn list_with(
     let mut unreadable = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if dir.join("MANIFEST.json").is_file() {
+        let manifest = dir.join("MANIFEST.json");
+        let probe = probe_manifest(&manifest, &mut read_manifest)?;
+        if !matches!(probe, ManifestProbe::Missing) {
             match Bundle::open(&dir) {
                 Ok(b) => found.push(listed_of(root, &b)),
                 Err(e) => {
                     // A directory that is not a bundle at all is stepped over;
                     // one that is a bundle this build refuses is named.
-                    if schema_version_of(&dir.join("MANIFEST.json")).is_ok() {
+                    if matches!(probe, ManifestProbe::Version(_)) {
                         unreadable.push(Unreadable {
                             path: crate::emit::index::rel(root, &dir),
                             reason: e.clone(),
@@ -1271,17 +1339,61 @@ mod tests {
     #[test]
     fn a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering() {
         let d = girpr_tempdir::TempDir::new("gircap-list-fails", "walk_fails");
-        let e = list_with(&d, |_| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "share offline",
-            ))
-        })
+        let e = list_with(
+            &d,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "share offline",
+                ))
+            },
+            |p| std::fs::read(p),
+        )
         .expect_err("the walk did not finish");
         assert!(e.contains("cannot read"), "{e}");
         assert!(
             e.contains(&d.display().to_string()),
             "the root is named: {e}"
+        );
+    }
+
+    /// A manifest the walk cannot **read** is a bundle it could not see, not a
+    /// directory that is not a bundle.
+    ///
+    /// A backup tool, an indexer or an editor can hold `MANIFEST.json` with an
+    /// exclusive share. The file is still there and still a file, so the old
+    /// `is_file()` probe passed and the failed read in `schema_version_of` was
+    /// flattened to "not a bundle": the bundle vanished from the inventory and
+    /// `list` exited `0`. The reader is injected because a share lock is
+    /// platform-specific; the failure it simulates is the same `fs::read` arm
+    /// the real lock takes.
+    #[test]
+    fn a_list_walk_that_cannot_read_a_manifest_fails_instead_of_dropping_the_bundle() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-manifest", "manifest_read");
+        let bundle = d.join("hk4e_global").join("7.0.0__7.1.0").join("cap");
+        std::fs::create_dir_all(&bundle).expect("makes the bundle directory");
+        std::fs::write(bundle.join("MANIFEST.json"), br#"{"schema_version": 2}"#)
+            .expect("writes a real manifest");
+
+        let e = list_with(
+            &d,
+            |p| {
+                let rd = std::fs::read_dir(p)?;
+                Ok(rd.map(|e| e.map(|e| e.path())).collect())
+            },
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "held by another process",
+                ))
+            },
+        )
+        .expect_err("a manifest that cannot be read is not a shorter inventory");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("MANIFEST.json"), "the manifest is named: {e}");
+        assert!(
+            e.contains("held by another process"),
+            "the cause is kept: {e}"
         );
     }
 
