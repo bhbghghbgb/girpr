@@ -47,7 +47,7 @@ pub mod reuse;
 pub mod scan;
 pub mod scope;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use phases::metadata::Meta;
 pub use phases::plan::{PlannedFile, RepairPlan};

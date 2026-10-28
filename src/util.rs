@@ -464,52 +464,102 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
 ///
 /// `Ok(None)` means the file is not there (the launcher did not configure
-/// it); `Err` means it is there but could not be read, which must not become
-/// an empty ignore set without a trace.
+/// it); `Err` means it is there but could not be read **or** its text could
+/// not be parsed into any entry, which must not become an empty ignore set
+/// without a trace. One leading UTF-8 BOM is stripped; a mixed file warns per
+/// unparseable line and keeps the well-formed entries (see
+/// [`parse_config_list`]).
 pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
-    let mut set = HashSet::new();
     let Some(text) = read_config_list(path, "ignore categories")? else {
         return Ok(None);
     };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && v.get("is_delete")
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false)
-            && let Some(c) = v.get("category").and_then(|c| c.as_str())
+    let set = parse_config_list(path, "ignore categories", &text, |v| {
+        if !v
+            .get("is_delete")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false)
         {
-            set.insert(c.to_string());
+            return None;
         }
-    }
+        v.get("category")
+            .and_then(|c| c.as_str())
+            .map(str::to_string)
+    })?;
     Ok(Some(set))
 }
 
 /// Read blacklist file: JSON-lines {"fileName":"..."}.
 ///
-/// The absent/unreadable split is the same as
+/// The absent/unreadable/parse split is the same as
 /// [`read_ignore_categories`]: a missing file is an empty blacklist; a file
-/// that cannot be read is an error.
+/// that cannot be read, or whose only text is unparseable, is an error.
 pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
-    let mut set = HashSet::new();
     let Some(text) = read_config_list(path, "blacklist")? else {
         return Ok(None);
     };
-    for line in text.lines() {
+    let set = parse_config_list(path, "blacklist", &text, |v| {
+        v.get("fileName")
+            .and_then(|n| n.as_str())
+            .map(|n| n.replace('\\', "/"))
+    })?;
+    Ok(Some(set))
+}
+
+/// Parse one of the launcher's JSON-lines lists.
+///
+/// One leading UTF-8 BOM is stripped first, as in
+/// [`crate::repair::audio::read_scan_file`]: the launcher may write one, and
+/// U+FEFF is not whitespace, so `trim` would leave it glued to the first `{`
+/// and make that line unparseable.
+///
+/// A line that is not JSON is warned with its 1-based line number and skipped.
+/// That keeps the well-formed entries usable when the launcher wrote a
+/// crash-truncated last line. But a file whose non-blank text produced no
+/// entry **and** had at least one unparseable line is refused: degrading an
+/// explicit configuration to "delete nothing" (ignore categories) or "no
+/// blacklist" would silently change what the run repairs and keeps, which is
+/// what R-6 fixed for the read errors. A valid but entryless line (`{}`) and a
+/// genuinely blank file stay empty selections.
+fn parse_config_list(
+    path: &Path,
+    what: &str,
+    text: &str,
+    mut entry: impl FnMut(&serde_json::Value) -> Option<String>,
+) -> anyhow::Result<HashSet<String>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut set = HashSet::new();
+    let mut first_failure: Option<(usize, String)> = None;
+    for (i, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && let Some(n) = v.get("fileName").and_then(|n| n.as_str())
-        {
-            set.insert(n.replace('\\', "/"));
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) => {
+                if let Some(entry) = entry(&v) {
+                    set.insert(entry);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    line = i + 1,
+                    error = %e,
+                    "unparseable line in the {what} list; ignored"
+                );
+                first_failure.get_or_insert((i + 1, e.to_string()));
+            }
         }
     }
-    Ok(Some(set))
+    if set.is_empty()
+        && let Some((line, e)) = first_failure
+    {
+        return Err(anyhow::anyhow!(
+            "{what} file {} has no usable entry: line {line} is not valid JSON ({e})",
+            path.display()
+        ));
+    }
+    Ok(set)
 }
 
 /// The shared absent/error split for the launcher's JSON-lines config files.
@@ -1192,6 +1242,108 @@ mod tests {
         assert!(read_game_version(&empty).unwrap().is_none());
         assert!(read_ignore_categories(&empty.join("rc")).unwrap().is_none());
         assert!(read_blacklist(&empty.join("bl")).unwrap().is_none());
+    }
+
+    /// T-1: a BOM is not whitespace, so the old `if let Ok(from_str(line))`
+    /// dropped a BOM-prefixed first line with no log, and an all-malformed
+    /// file silently became the empty selection. One leading BOM is stripped;
+    /// a mixed file warns with the path and line number and keeps the
+    /// well-formed entry.
+    #[test]
+    fn config_lists_strip_a_bom_and_warn_per_unparseable_line() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "bom_mixed");
+        std::fs::write(
+            dir.join("bl"),
+            "\u{feff}{\"fileName\":\"a/b.dat\"}\n{\"fileName\":\"c/d",
+        )
+        .unwrap();
+
+        let mut blacklist = HashSet::new();
+        let logs = crate::repair::test_support::logs_of(|| {
+            blacklist = read_blacklist(&dir.join("bl")).unwrap().unwrap();
+        });
+        assert_eq!(blacklist, HashSet::from(["a/b.dat".to_string()]));
+        assert!(
+            logs.contains("unparseable line in the blacklist list"),
+            "the dropped line must be logged: {logs}"
+        );
+        assert!(logs.contains("line=2"), "the log names the line: {logs}");
+        assert!(
+            logs.contains(&dir.join("bl").display().to_string()),
+            "the log names the file: {logs}"
+        );
+
+        std::fs::write(
+            dir.join("rc"),
+            "\u{feff}{\"category\":\"10302\",\"is_delete\":true}\n{\"category\":",
+        )
+        .unwrap();
+        let mut ignore = HashSet::new();
+        let logs = crate::repair::test_support::logs_of(|| {
+            ignore = read_ignore_categories(&dir.join("rc")).unwrap().unwrap();
+        });
+        assert_eq!(ignore, HashSet::from(["10302".to_string()]));
+        assert!(
+            logs.contains("unparseable line in the ignore categories list")
+                && logs.contains("line=2"),
+            "the dropped line must be logged with its line: {logs}"
+        );
+    }
+
+    /// T-1: a list whose only text is unparseable is an error naming the path
+    /// and line, not an empty set that silently disables the configuration.
+    /// A valid but entryless `{}` and a blank file keep their old meaning.
+    #[test]
+    fn an_all_malformed_config_list_is_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "all_malformed");
+        std::fs::write(dir.join("rc"), "not json\n{\"category\":\n").unwrap();
+        // Keep a subscriber installed while the warning callsite is hit: the
+        // mixed-file test asserts the log, and tracing's callsite interest is
+        // global, so a concurrent subjective hit from a thread without one
+        // must not cache the callsite as disabled.
+        let mut rc_err = None;
+        crate::repair::test_support::logs_of(|| {
+            rc_err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", rc_err.expect("the probe ran"));
+        assert!(
+            msg.contains("ignore categories")
+                && msg.contains(&dir.join("rc").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and first bad line: {msg}"
+        );
+
+        std::fs::write(dir.join("bl"), "{\"fileName\":\n").unwrap();
+        let mut bl_err = None;
+        crate::repair::test_support::logs_of(|| {
+            bl_err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", bl_err.expect("the probe ran"));
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and line: {msg}"
+        );
+
+        std::fs::write(dir.join("rc"), "{}\n\n").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a valid but entryless line stays an empty selection"
+        );
+        std::fs::write(dir.join("rc"), "\u{feff}").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a BOM-only file is blank after the BOM is stripped"
+        );
+        std::fs::write(dir.join("bl"), "").unwrap();
+        assert!(read_blacklist(&dir.join("bl")).unwrap().unwrap().is_empty());
     }
 
     #[test]
