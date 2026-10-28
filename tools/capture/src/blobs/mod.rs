@@ -524,23 +524,47 @@ impl Store {
 
         let path = final_path.clone();
         // `measure_file` answers `Ok` for a body that is not a zstd frame: that
-        // is a measured, unusable row, not a failed fetch. Only a real I/O error
-        // reaches here, and the blob is removed so the index's "not stored" row
-        // and the directory cannot disagree. A later source may then retry.
-        let props = match tokio::task::spawn_blocking(move || {
+        // is a measured, unusable row, not a failed fetch. Only a real I/O
+        // error or a task that never returned reaches the error arms, and the
+        // blob is removed in both so the index's "not stored" row and the
+        // directory cannot disagree. A later source may then retry.
+        let props = Self::measure_published(&final_path, &id, move || {
             BlobProps::measure_file(&path, &chunk, digests)
         })
-        .await
-        .map_err(|e| format!("{id}: measure task panicked: {e}"))?
-        {
-            Ok(props) => props,
-            Err(e) => {
-                Self::discard_published(&final_path);
-                return Err(e.to_string());
-            }
-        };
+        .await?;
 
         Ok((props, rel, seq))
+    }
+
+    /// Measure a published blob on the blocking pool, keeping the cause and the
+    /// disk/index agreement when the task does not return.
+    ///
+    /// The closure is a parameter rather than a call to
+    /// [`BlobProps::measure_file`] so the panic arm can be driven by a test:
+    /// no input makes the real measurement panic on demand. A panic or
+    /// cancellation is routed through [`crate::tasks::join_blocking`], so the
+    /// payload survives and the already-published blob is discarded just as an
+    /// I/O error discards it — the row will say `stored_path: null`, and the
+    /// directory must not still hold the bytes.
+    async fn measure_published<F>(
+        final_path: &Path,
+        id: &str,
+        measure: F,
+    ) -> Result<BlobProps, String>
+    where
+        F: FnOnce() -> Result<BlobProps, ApiError> + Send + 'static,
+    {
+        match crate::tasks::join_blocking("measure", measure).await {
+            Ok(Ok(props)) => Ok(props),
+            Ok(Err(e)) => {
+                Self::discard_published(final_path);
+                Err(e.to_string())
+            }
+            Err(e) => {
+                Self::discard_published(final_path);
+                Err(format!("{id}: {e}"))
+            }
+        }
     }
 
     /// Best-effort removal of a temp file this run will never publish.
@@ -566,10 +590,11 @@ impl Store {
     ///
     /// **Disk and index have to agree.** Once the rename has put the bytes at
     /// their final path, the index row must either carry them or the directory
-    /// must not. An I/O failure while measuring is the one case that is not
-    /// `Ok` and not a pre-rename failure, so the blob is removed before the
-    /// caller records the slot as unfilled. A removal failure is logged and
-    /// swallowed: the row's reason is still the measurement error.
+    /// must not. An I/O failure while measuring, or a measurement task that
+    /// panicked or was cancelled, is the case that is not `Ok` and not a
+    /// pre-rename failure, so the blob is removed before the caller records the
+    /// slot as unfilled. A removal failure is logged and swallowed: the row's
+    /// reason is still the measurement failure.
     fn discard_published(path: &Path) {
         match std::fs::remove_file(path) {
             Ok(()) => {}
@@ -1436,6 +1461,42 @@ mod tests {
         assert_eq!(
             on_disk, xml,
             "the published bytes are exactly what the CDN served"
+        );
+    }
+
+    /// **N1.** A measurement that does not return loses neither its cause nor
+    /// the disk/index agreement: the panic payload reaches the caller, and the
+    /// already-published blob is removed because the row will say
+    /// `stored_path: null`.
+    ///
+    /// The real [`BlobProps::measure_file`] cannot be made to panic on demand,
+    /// so this drives the same seam [`Store::stream_from`] uses with a closure
+    /// that panics deterministically.
+    #[tokio::test]
+    async fn a_panicking_measurement_discards_the_published_blob_and_keeps_the_cause() {
+        let dir = scratch("measure-panic");
+        let id = "00000000_00000000000000000000000000000000";
+        let final_path = dir.join(BlobProps::stored_path_for(id));
+        std::fs::create_dir_all(final_path.parent().expect("blob dir")).expect("create blob dir");
+        std::fs::write(&final_path, b"published but never measured").expect("seed the blob");
+
+        let why =
+            Store::measure_published(&final_path, id, || panic!("measure exploded at frame 7"))
+                .await
+                .expect_err("a panicking measurement is a failure");
+
+        assert!(why.starts_with(id), "the site's context survives: {why}");
+        assert!(
+            why.contains("the measure task panicked"),
+            "the shared rule names the site: {why}"
+        );
+        assert!(
+            why.contains("measure exploded at frame 7"),
+            "the payload is the part worth reporting: {why}"
+        );
+        assert!(
+            !final_path.exists(),
+            "an unmeasured blob must not outlive the row that says it is absent"
         );
     }
 }
