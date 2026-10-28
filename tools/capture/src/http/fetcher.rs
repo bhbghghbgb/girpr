@@ -133,15 +133,22 @@ fn declared_over_ceiling(resp: &reqwest::Response, cap: u64) -> Option<u64> {
 /// fact of a non-2xx response is its status, and replacing a `404` with a
 /// `Shape`/`Transport` about the body both misreports the cause and — for
 /// `Transport` — would retry a request that will answer `404` again.
+///
+/// **A failure carries the bytes that arrived.** The count is local while the
+/// body is read, and returning only the error discarded it: a `2xx` that closed
+/// after 10 KiB was recorded with `bytes_in: 0`, which says the attempt was
+/// free. The caller prices the request with the second half of the tuple, so a
+/// partial body costs what it actually cost.
 async fn drain_capped<W: std::io::Write>(
     mut resp: reqwest::Response,
     sink: &mut W,
     cap: u64,
     url: &str,
     attempts: u32,
-) -> Result<u64, ApiError> {
+) -> Result<u64, (ApiError, u64)> {
     if let Some(d) = declared_over_ceiling(&resp, cap) {
-        return Err(too_big(url, d, cap));
+        // Nothing has crossed the wire yet, so `0` is the honest count.
+        return Err((too_big(url, d, cap), 0));
     }
     let mut seen = 0_u64;
     loop {
@@ -152,13 +159,13 @@ async fn drain_capped<W: std::io::Write>(
                     // The bytes are already gone, so this cannot stop the
                     // transfer — the running total stops the *memory*, which is
                     // what the ceiling is for.
-                    return Err(too_big(url, seen, cap));
+                    return Err((too_big(url, seen, cap), seen));
                 }
                 std::io::Write::write_all(sink, &chunk)
-                    .map_err(|e| body_failure(url, attempts, false, e))?;
+                    .map_err(|e| (body_failure(url, attempts, false, e), seen))?;
             }
             Ok(None) => return Ok(seen),
-            Err(e) => return Err(body_failure(url, attempts, true, e)),
+            Err(e) => return Err((body_failure(url, attempts, true, e), seen)),
         }
     }
 }
@@ -527,7 +534,8 @@ impl Fetcher {
         let resp_headers = header_map(resp.headers());
         // A body that will not read is an empty body, not a failure: the status
         // and the content-type are the parts a consumer can rely on, and they
-        // have already been captured by this point.
+        // have already been captured by this point. The bytes that did arrive
+        // are still priced, for the same reason every other attempt's are.
         //
         // **But a body over the ceiling is a failure, and the two are different
         // things.** A probe is the one request an attacker can most cheaply
@@ -539,11 +547,11 @@ impl Fetcher {
         let mut body: Vec<u8> = Vec::new();
         let bytes_in = match drain_capped(resp, &mut body, self.max_response_bytes, url, 1).await {
             Ok(n) => n,
-            Err(e) if is_read_failure(&e) => {
+            Err((e, seen)) if is_read_failure(&e) => {
                 body = Vec::new();
-                0
+                seen
             }
-            Err(e) => return Err(e),
+            Err((e, _)) => return Err(e),
         };
         let record = self.record(
             seq,
@@ -849,8 +857,10 @@ impl Fetcher {
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
                 // One record for both outcomes, as before — the failure and the
-                // size are both about the same request.
-                let fail = |err: ApiError| {
+                // size are both about the same request. The count comes from the
+                // error, because a body that failed mid-read still crossed the
+                // wire and `bytes_in` prices what crossed it.
+                let fail = |err: ApiError, bytes_in: u64| {
                     let record = self.record(
                         seq,
                         kind,
@@ -860,7 +870,7 @@ impl Fetcher {
                         resp_headers.clone(),
                         &final_url,
                         redirected,
-                        0,
+                        bytes_in,
                         attempts,
                         started,
                     );
@@ -873,14 +883,14 @@ impl Fetcher {
                         bytes_in = n;
                         Some(buf)
                     }
-                    Err(e) => return Err(fail(e)),
+                    Err((e, seen)) => return Err(fail(e, seen)),
                 }
             }
             Destination::File(out) => {
                 // Discard whatever a failed attempt left before this one writes.
                 // Without this the digests cover both responses — see
                 // `HashingFile::restart`.
-                let fail = |err: ApiError| {
+                let fail = |err: ApiError, bytes_in: u64| {
                     let record = self.record(
                         seq,
                         kind,
@@ -890,7 +900,7 @@ impl Fetcher {
                         resp_headers.clone(),
                         &final_url,
                         redirected,
-                        0,
+                        bytes_in,
                         attempts,
                         started,
                     );
@@ -899,17 +909,21 @@ impl Fetcher {
 
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
-                    // not truncate is a disk that will not write either.
-                    return Err(fail(body_failure(
-                        url,
-                        attempts,
-                        false,
-                        format!("preparing the body file: {e}"),
-                    )));
+                    // not truncate is a disk that will not write either. No body
+                    // byte of this attempt has been read, so its cost is zero.
+                    return Err(fail(
+                        body_failure(
+                            url,
+                            attempts,
+                            false,
+                            format!("preparing the body file: {e}"),
+                        ),
+                        0,
+                    ));
                 }
                 match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
                     Ok(n) => bytes_in = n,
-                    Err(e) => return Err(fail(e)),
+                    Err((e, seen)) => return Err(fail(e, seen)),
                 }
                 None
             }

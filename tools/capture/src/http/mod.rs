@@ -1403,6 +1403,105 @@ mod tests {
         );
     }
 
+    /// A `2xx` body that fails after N bytes is priced at **N**, not zero.
+    ///
+    /// The 404 twin below has pinned this for an error body since F5; the
+    /// success branch had the same hole. `drain_capped` knew the running total
+    /// when the origin hung up, and `Fetcher::attempt` discarded it and recorded
+    /// `0`, so a retried 200 reported the first attempt as free in a log whose
+    /// contract is "every body received".
+    #[tokio::test]
+    async fn a_truncated_success_body_is_priced_at_what_arrived() {
+        let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
+        let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
+        let mock = spawn_answers(
+            vec![
+                Answer {
+                    status: 200,
+                    body: sent,
+                    // Promise more than is sent, then hang up: a mid-body close.
+                    claim: Some(sent.len() * 10),
+                    omit_length: false,
+                },
+                Answer {
+                    status: 200,
+                    body: full,
+                    claim: None,
+                    omit_length: false,
+                },
+            ],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let got = f
+            .get(&url(&mock, "/blob"), Kind::Chunk, None)
+            .await
+            .expect("a read failure is retried, and the retry succeeds");
+        assert_eq!(got.body, full, "the second attempt's body is returned");
+
+        let rows = f.log().records();
+        assert_eq!(rows.len(), 2, "the failed attempt is part of the log");
+        assert_eq!(rows[0].status, 200);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the bytes that arrived before the close are the attempt's cost"
+        );
+        assert_eq!(rows[1].bytes_in, full.len() as u64);
+    }
+
+    /// The same accounting on the destination that fetches chunk blobs.
+    ///
+    /// `Attempt` has two failure closures — one per destination — and the bug
+    /// was hard-coded in both. A test of one would not pin the other.
+    #[tokio::test]
+    async fn a_truncated_success_body_is_priced_at_what_arrived_for_a_file_too() {
+        let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
+        let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
+        let mock = spawn_answers(
+            vec![
+                Answer {
+                    status: 200,
+                    body: sent,
+                    claim: Some(sent.len() * 10),
+                    omit_length: false,
+                },
+                Answer {
+                    status: 200,
+                    body: full,
+                    claim: None,
+                    omit_length: false,
+                },
+            ],
+            "",
+        );
+        let dir = scratch("truncated-file");
+        let path = dir.join("blob.bin");
+        let mut out = crate::hash::HashingFile::create(&path).expect("create");
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let got = f
+            .get_to_file(&url(&mock, "/blob"), Kind::Chunk, &mut out)
+            .await
+            .expect("the retry succeeds and restarts the file");
+        assert_eq!(got.bytes_in, full.len() as u64);
+        assert_eq!(
+            std::fs::read(&path).expect("the stored file"),
+            full,
+            "the retry's body replaced the partial one"
+        );
+
+        let rows = f.log().records();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the file destination's failed attempt is priced the same way"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn a_truncated_error_body_keeps_its_status_and_is_not_retried() {
         // The regression the reverted `f9352f7` patch introduced: routing the

@@ -35,6 +35,19 @@ before the fix the ids were `["added", "added"]`) and
 `two_forced_paths_of_one_class_keep_distinct_patchmaps` (e2e; before the fix the
 bundle held six patchmaps and `verify` rebuilt six, not seven).
 
+### I2 - fixed
+
+`drain_capped` now returns `Result<u64, (ApiError, u64)>`, so the running total
+travels with the failure; a declared over-ceiling response (nothing read yet)
+and a failure before any byte still report `0`. Both success-destination failure
+closures in `Fetcher::attempt` take `bytes_in`, and the probe's read-failure
+branch records `seen` instead of zeroing. Tests:
+`http::tests::a_truncated_success_body_is_priced_at_what_arrived` and
+`..._for_a_file_too` (one per failure closure). Both failed before the fix with
+`bytes_in 0` where 28 was sent. The note's claim that the offline HTTP tests
+cannot inject a mid-body error was wrong: `Answer { claim, omit_length }` already
+promises more than is sent and hangs up.
+
 ---
 
 ### I1 - Forced paths of one primary class share a capture id
