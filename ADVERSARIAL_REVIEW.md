@@ -9,14 +9,14 @@ byte-identical to the pre-fix baseline. The prior review/fix series
 
 This document is the pass log of a fresh source-level review of the current
 tree. It does not assume any sentence of the reverted review is true. The fixes
-landed on `fix-gaps/girpr`; the first pass is §8.1 and every later pass carries
-its findings to a final verdict. Deliberate trade-offs, unverified areas and
-product decisions that remain open are listed in
+landed on `fix-gaps/girpr`; the pass log opens with the first pass, and every
+later pass carries its findings to a final verdict. Deliberate trade-offs,
+unverified areas and product decisions that remain open are listed in
 [`OPEN_FOR_MAINTAINERS.md`](OPEN_FOR_MAINTAINERS.md).
 
 ---
 
-## 8. Pass log
+## Pass log
 
 Detailed evidence, failure scenarios and per-pass verification are in the git
 history — `git log --oneline main..HEAD`, `git show <commit>` — and the commit
@@ -27,7 +27,7 @@ and have moved since. `util::normalize_rel` (F-2) no longer exists: N-9 replaced
 it with `contained_rel`/`contained_join`. This compaction changed no source,
 test or behaviour.
 
-### 8.1 First pass — F-1…F-9
+### First pass — F-1…F-9
 
 All nine findings were fixed on this branch; the detailed evidence, failure
 scenarios and corrections to the reverted series are in git history
@@ -74,7 +74,7 @@ scenarios and corrections to the reverted series are in git history
 - Real file failures already produced exit `3`; the panic path was the only
   hole (F-1).
 
-### 8.2 Second pass — N-1…N-14
+### Second pass — N-1…N-14
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -95,7 +95,7 @@ scenarios and corrections to the reverted series are in git history
 
 Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `repair_all` (`d5ef6fa`); F-2's helper fails closed with N-1 (`ddb4371`); F-3/N-2 refuses the overrun (`0bcd6a6`); F-9/N-10 field docs (`ce45a2f`); Decision 7, `readonly()` is not the whole read-only gate (`d6e2d0c`).
 
-### 8.3 Third pass — N-15…N-20
+### Third pass — N-15…N-20
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -106,7 +106,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | N-19 | A purge walk or candidate stat failure was dropped. | Fixed: non-`NotFound` errors warned and counted in `PurgePlan.errors`; a root `NotFound` stays the empty plan. | `408b239` |
 | N-20 | Temp resume/debug stats and `rollback_tmp` substituted length `0` on error. | Fixed: `File::metadata()` errors propagate with the temp path as context. | `c04da2e` |
 
-### 8.4 Fourth pass — P-1…P-4
+### Fourth pass — P-1…P-4
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -115,7 +115,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | P-3 | `moved audio cache -> res` was logged unconditionally, claiming success for an empty or refused move. | Fixed: `info!(moved, kept, …)` only when a relocation was attempted. | `25ce46f` |
 | P-4 | The emptied-directory sweep dropped `remove_dir`'s error. | Fixed: debug log with the directory and the `io::Error`; still best effort. | `d331174` |
 
-### 8.5 Fifth pass — R-1…R-6
+### Fifth pass — R-1…R-6
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -126,7 +126,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | R-5 | `config.ini`'s `sync_all().ok()` published a rename after a failed sync. | Fixed: a failed sync aborts, and the temp is removed on the failed-write path. | `a812fce` |
 | R-6 | The version/ignore-categories/blacklist readers treated every read error as absent. | Fixed: `Result<Option<T>>`; only `NotFound` is `None`, anything else is exit `1`. | `a812fce` |
 
-### 8.6 Sixth pass — R-7…R-9
+### Sixth pass — R-7…R-9
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -134,7 +134,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | R-8 | A scan file naming no recognized language was read as game-only, silently changing the purge keep set. | Fixed: one leading BOM is stripped, non-blank text with no known language is refused, a BOM-only file is refused; a mixed file keeps the known set and warns per unknown line. | `a44c666`, `16e4573` |
 | R-9 | `--plan-out` help omitted `mode` and `extra_bytes`. | Fixed: help lists both; `docs/04` already had the full shape. | `c9fb86f` |
 
-### 8.7 Seventh pass — S-1…S-3
+### Seventh pass — S-1…S-3
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -142,14 +142,14 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | S-2 | The staged-tier RAM payload used a non-saturating `.sum()` over server `uncompressed_size`. | Valid, fixed: `staged_payload` folds with `saturating_add`; three chunks at `i64::MAX` reach `u64::MAX` instead of wrapping to the stage-nothing sentinel (release) or panicking (debug). | `96b7ca9` |
 | S-3 | `delete_deprecated`'s `is_file()` read every stat error as "not a file" and skipped the entry silently. | Valid, fixed: one `metadata` call is classified file / not-a-file / already-gone / failed; a failed stat warns with the path and deletes without counting an unknown size. | `e2040cd` |
 
-### 8.8 Eighth pass — T-1…T-2
+### Eighth pass — T-1…T-2
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
 | T-1 | An unparseable line in the launcher's `res_category`/blacklist JSON-lines was dropped by an `if let Ok`, so a BOM-prefixed or crash-truncated line silently ignored an explicit configuration; an all-malformed file degraded to the empty set. | Valid, fixed: one leading UTF-8 BOM is stripped; a mixed file warns per unparseable line with the path and 1-based line and keeps the well-formed entries; a file whose non-blank text produced no entry **and** had a parse failure is refused (exit `1`), matching R-8's rule for the audio scan file. A valid entryless `{}` and a blank file stay empty. Both readers share `parse_config_list`. Reproduced before the fix (BOM plus truncated line → `Ok(Some({}))`, all-malformed → `Ok(Some({}))`, no log) and pinned by two unit tests. | `ad0a09c` |
 | T-2 | `util::file_len` mapped every `metadata` error to `None`, so an unreadable file was logged as missing by the temp path and reported as `CHECK fail: size` by `--check-only`. | Valid, fixed: `file_len` returns a three-state `FileLen` through `classify_len`; only `NotFound` is `Absent`, every other error is `Unreadable`. `check.rs` logs `CHECK fail: unreadable` with the file and the `io::Error` and still counts the file damaged; `temp.rs` warns with the path and error and still repairs. Pinned by an injected `PermissionDenied`, a real NUL path, and (Unix) a file-as-parent `NotADirectory`; Windows maps file-as-parent to `NotFound`, so that shape is not used for the unreadable arm there. | `baf6498` |
 
-### 8.9 Ninth pass — U-1…U-3
+### Ninth pass — U-1…U-3
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -157,7 +157,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | U-2 | A stale lock that could not be removed (an open handle without `FILE_SHARE_DELETE`, a read-only file, a delete-denying ACL) recursed in `Lock::acquire` until the stack overflowed: exit `-1073741571`, no `SUMMARY`. | Valid, fixed: one bounded takeover attempt. A failed removal is a contextual error naming the path and the I/O error; a successful removal is followed by one `create_new`, and a raced fresh lock is refused by name. The removal is injected so the arm is pinned on every host; the Windows sharing-violation probe now returns that error instead of aborting. | `d6bf9b3` |
 | U-3 | README's module map and remaining module references, docs/03's crate layout and docs/04's module/touch-point tables still named the pre-split `src/repair/{metadata,manifest,check,post}.rs`, `src/repair/plan/...` and `src/repair/file.rs`. | Valid, fixed: `phases/…`, `purge.rs` and `file/mod.rs`; every written path was checked against `git ls-files`. | `1ff9e90` |
 
-### 8.10 Decisions that still bind
+### Decisions that still bind
 
 1. **Saturate, never wrap**, in every server-size estimate (N-13, N-15, N-19, S-2).
 2. **Containment is a strict lexical gate**: fail closed on an unresolvable probe (N-1); refuse drive/UNC, `..`, trailing separators, Windows device names, trailing dot/space and ADS colons on every host (N-14); clean `./` rather than refuse it (N-6); fold case for plan dedup on Windows only (N-5); an outside path is exit `2` even if a scope filter would drop it (F-2).
@@ -174,7 +174,7 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 13. **The path scope bounds every deletion site, including the directory sweep**: a directory the scope hides is kept out of `PurgePlan::dirs` and counted in `hidden`, so an empty out-of-scope placeholder is not removed (S-1).
 14. **A server/config spelling is normalised once, at its boundary**: `util::clean_rel` returns the `/`-separated string the gate and the sink share, so `./a/b` cannot pass a scope that hides `a/b` (U-1). A stale lock that cannot be removed is refused with the path and the I/O error, never retried; a successful takeover is one bounded attempt (U-2).
 
-### 8.11 Latest verification
+### Latest verification
 
 Full run on Windows, debug profile, ninth-pass final tree:
 
@@ -187,4 +187,4 @@ The four ninth-pass tests are the three `./`-spelling cases and the undeletable-
 
 **Not run:** the `#[cfg(unix)]` blocks of the containment, mode, `file_len` and file-as-parent tests (this host is Windows; the three new path-spelling tests are host-independent); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). U-2's real undeletable-file shape was exercised only with the Windows sharing-violation probe; the in-repo test injects the failed removal, so the arm is pinned on every host. S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
 
-*End of review. §8 is the pass log — §8.1 is the first pass, §8.10 the decisions that still bind, §8.11 the latest verification — and the commits it cites are the source, test and doc changes. The open items are in [`OPEN_FOR_MAINTAINERS.md`](OPEN_FOR_MAINTAINERS.md).*
+*End of review. The pass log records the first pass, the decisions that still bind and the latest verification, and the commits it cites are the source, test and doc changes. The open items are in [`OPEN_FOR_MAINTAINERS.md`](OPEN_FOR_MAINTAINERS.md).*
