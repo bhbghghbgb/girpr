@@ -210,11 +210,7 @@ async fn attempt_inplace_inner(
     // The budget picks the tier; it never refuses the file. A file that
     // cannot get its reservation is written in the ordered direction, which
     // produces the same file with less reuse.
-    let payload: u64 = bad
-        .iter()
-        .filter(|&&i| sources[i].is_some() && scan.source_ok[i])
-        .map(|&i| file.chunks[i].uncompressed_size.max(0) as u64)
-        .sum();
+    let payload = staged_payload(&file.chunks, &sources, &scan.source_ok, &bad);
     let (tier, _reservation) = match ctx.summary.max_ram_bytes() {
         // "stage nothing at all" is a mode, not a shortage.
         Some(0) => (Tier::Ordered, None),
@@ -433,6 +429,29 @@ pub(super) fn trim_is_free(
     })
 }
 
+/// The bytes the staged tier would have to hold in RAM: the sum of the
+/// server-declared uncompressed sizes of the bad chunks that still have an
+/// intact salvage source.
+///
+/// `uncompressed_size` is server-controlled and only clamped at zero, not
+/// bounded. Three chunks at `i64::MAX` do not fit a `u64`: a plain `.sum()`
+/// wraps to `0` in release — the "stage nothing" sentinel with no RAM
+/// reservation at all — and panics in debug. Saturate like every other
+/// server-size estimate, so a corrupt manifest fails the reservation and
+/// falls back to the ordered tier instead of bypassing the budget.
+fn staged_payload(
+    chunks: &[SophonChunk],
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+) -> u64 {
+    bad.iter()
+        .filter(|&&i| sources[i].is_some() && source_ok[i])
+        .fold(0u64, |total, &i| {
+            total.saturating_add(chunks[i].uncompressed_size.max(0) as u64)
+        })
+}
+
 /// Delete the target for `--repair-mode discard`.
 ///
 /// `NotFound` is success: the file is already gone, which is what the mode
@@ -502,5 +521,74 @@ mod tests {
     fn an_already_absent_discard_target_is_not_an_error() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_absent");
         discard_target(&dir.join("gone.dat")).expect("absent is the desired state");
+    }
+
+    fn chunk(id: &str, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: format!("md5-{id}"),
+            offset: 0,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    /// S-2: the payload is the one server-size sum that did not saturate. Three
+    /// chunks at `i64::MAX` overflow a `u64` (`2*MAX = u64::MAX - 1`), so the
+    /// old `.sum()` panicked here in debug and wrapped to `0` in release —
+    /// selecting the staged tier with no RAM reservation.
+    #[test]
+    fn an_overflowing_staged_payload_saturates() {
+        let chunks = vec![
+            chunk("a", i64::MAX),
+            chunk("b", i64::MAX),
+            chunk("c", i64::MAX),
+        ];
+        let sources = vec![Some(0), Some(0), Some(0)];
+        let ok = vec![true, true, true];
+        let bad = vec![0, 1, 2];
+        assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), u64::MAX);
+    }
+
+    /// The exact boundary: `2 * i64::MAX + 1 == u64::MAX`, and one more byte
+    /// saturates rather than wrapping or panicking.
+    #[test]
+    fn the_staged_payload_boundary_saturates() {
+        let mut chunks = vec![chunk("a", i64::MAX), chunk("b", i64::MAX)];
+        let mut sources = vec![Some(0), Some(0)];
+        let mut ok = vec![true, true];
+
+        chunks.push(chunk("c", 1));
+        sources.push(Some(0));
+        ok.push(true);
+        let bad = vec![0, 1, 2];
+        assert_eq!(
+            staged_payload(&chunks, &sources, &ok, &bad),
+            u64::MAX,
+            "the sum reaches the u64 ceiling exactly"
+        );
+
+        chunks.push(chunk("d", 1));
+        sources.push(Some(0));
+        ok.push(true);
+        let bad = vec![0, 1, 2, 3];
+        assert_eq!(
+            staged_payload(&chunks, &sources, &ok, &bad),
+            u64::MAX,
+            "anything past the ceiling saturates"
+        );
+    }
+
+    /// A chunk without a salvage source is downloaded, so it is not staged and
+    /// must not be in the reservation.
+    #[test]
+    fn the_staged_payload_counts_only_salvageable_chunks() {
+        let chunks = vec![chunk("a", 10), chunk("b", 20), chunk("c", 40)];
+        let sources = vec![Some(0), None, Some(0)];
+        let ok = vec![true, true, false];
+        let bad = vec![0, 1, 2];
+        assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
     }
 }
