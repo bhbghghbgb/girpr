@@ -574,7 +574,7 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
 
 ## 7. Pass log
 
-Implementation plus the seven review passes after it, one subsection each. Evidence,
+Implementation plus the eight review passes after it, one subsection each. Evidence,
 failure scenarios and per-pass verification are in the git history:
 `git log --oneline main..HEAD` and `git show <commit>`; the hashes below are the
 index. §1–§6 remain the source-only original audit.
@@ -688,25 +688,60 @@ The fourth pass reused the ID `F-1` for a different finding; the original high f
 - A link ancestor that is itself a planned `fix_dirs` entry does not block descendants: `fix_dirs` unlinks it before `mkdir`/`copy`. A link above the fixed one still blocks.
 - The hard-link decision is plan-time and identical in both modes. A same-inode name removed by `delete_files` or `fix_dirs` before the copy is credited; unlinking a link itself is not credited. `copy_one` keeps its runtime check.
 
-### Latest verification (seventh pass)
+### Verification (seventh pass)
 
 - `cargo test -p girsync` — **395 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 396 functions, 395 run. Breakdown: lib 149; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 24, sync 27 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0. `--test symlink -- --nocapture`: 24 passed, file-link cases self-skip (`os error 1314`), every junction case runs.
 - `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
 
+### 7.8 Eighth pass — P8-1…P8-6
+
+All six findings were confirmed against `374453d` and fixed at the root cause;
+none was rejected. Two were Medium, four Low.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| P8-1 | The hard-link preflight stat'ed every copy destination, so on POSIX a directory's `nlink` (always ≥ 2) refused every file-over-directory type conflict with a bogus message; `LinkInfo` now says whether the destination is a regular file, and only those are judged | fixed | `4dfb046` |
+| P8-2 | A kept dst file link's dst-internal target looked `EXTRA`, so the delete phase removed the content the write-through needed: changed content exited 3 after the delete, equal content exited 0 with a dangling link, and a target src also mirrors was overwritten through the link; `spare_link_storage` resolves the chain at plan time and spares or refuses | fixed | `0385eee` |
+| P8-3 | Both plan-time guards stat'ed the post-rename spelling, so on a case-sensitive filesystem a case-only dst link or hard link was invisible to a dry run (exit 0) while the real run renamed and then refused; a dry run now stats the spelling actually on disk | fixed | `1543725` |
+| P8-4 | The case-fix temporary appended a suffix to the full source name, so a name within ~18 bytes of `NAME_MAX` failed `ENAMETOOLONG` and a legal case-only rename exited 3; the temporary is now a fixed short `.girsync_case_tmp.<n>` sibling | fixed | `e5df3d4` |
+| P8-5 | A failed step-1 placeholder cleanup was discarded with `let _ =`, leaving tool residue in dst with no mention of the failure; the cleanup error is now attached to the primary error with the temporary's path | fixed | `0459a68` |
+| P8-6 | The failure hook fired before the temporary was claimed, so neither the placeholder-cleanup nor the step-2 rollback path had a test; `..._STEP1`/`..._STEP2` hooks now exercise both and assert exit 3, no `RENAME`, no residue | tests | `0459a68` |
+
+P8-2's plan order was reproduced pre-fix with a hard-link stand-in, because this
+host refuses file symlinks: `sync --dry-run --output json` printed `delete
+target.bin` then `copy a.bin`, with `"copied":1,"deleted":1`. P8-4 was reproduced
+with a 244-byte source name: the old suffix built a 266-byte candidate, and the
+run exited 3 on `stat ...girsync_case_tmp.0` (`os error 123`); the same fixture
+passes now.
+
+**Decisions still in force:**
+- The hard-link preflight judges **regular-file** destinations only. A directory or directory link at a copy path is a type conflict, removed by `fix_dirs`/`copy_one` before the write, not a hard-link hazard.
+- A kept dst file link's dst-internal target is that link's **content**, not an extra: it is spared from `delete_files`, from `diff.extra` (so the printed record and the action name the same set) and from `rmdir` together with every directory above it. Intermediate links on the chain are spared too.
+- A target `src` also mirrors is one inode carrying two mirrored paths. A plan that would copy either end, or replace the target with a directory, is refused before any change: one file cannot be given two contents.
+- The plan-time link and hard-link guards stat the spelling still on disk in a dry run and the post-rename path in a real run. `DiskSpelling` is that map, in both directions.
+- The case-fix temporary is a fixed short sibling, claimed with `create_new`/`create_dir`; no part of its name derives from the source, so no source name can push it past the component limit.
+- A failed step 1 removes its file placeholder and reports a cleanup failure beside the primary error; a failed step 2 rolls back and reports a rollback failure the same way.
+
+### Latest verification (eighth pass)
+
+- `cargo test -p girsync` — **409 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 410 functions, 409 run. Breakdown: lib 155; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 28, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+- `cargo test -p girsync --test symlink -- --nocapture` — 28 passed, 0 failed. Nine file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
+- `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
+
 ### Open for maintainers
 
-- **Hard links.** P6-2 closed the dst-hard-link write-through by refusing any destination with more than one link; P7-4 makes that decision at plan time, with a `(dev, ino)` / (volume serial, file index) identity, and credits names the plan removes first. Still open: no POSIX `nlink`/identity run, and no fixture for a hard link to a file outside both roots.
-- **P7-2 runtime.** The dst-file-link-at-a-src-directory end-to-end test self-skips here (the host refuses file symlinks, `os error 1314`); the unit case runs with a junction and covers the guard. Needs developer-mode Windows or POSIX CI to run the end-to-end case.
-- **File links.** The file-link cases (`sync_refuses_a_dst_file_link_into_src` among them) self-skip here because the host refuses file symlinks; they need a Windows host with developer mode or a POSIX CI. Native POSIX symlinks and Unix link behaviour are unexercised; junctions stand in for directory links only.
-- **P7-1 on POSIX and a crash between the renames.** The unique temporary was exercised on Windows only; a process killed between step 1 and step 2 was not produced (the next run steps over such a leftover by construction). Whether a direct case-only `rename` is reliable enough to drop the two-step was not tested.
-- **P7-3's injector.** The failed-rename test uses the test-only `GIRSYNC_TEST_FAIL_RENAME` hook, because a real `fs::rename` failure cannot be arranged portably.
+- **Hard links.** P6-2 closed the dst-hard-link write-through by refusing any destination with more than one link; P7-4 makes that decision at plan time, with a `(dev, ino)` / (volume serial, file index) identity, and credits names the plan removes first; P8-1 narrows it to regular-file destinations. Still open: no POSIX `nlink`/identity run (the pre-P8-1 over-refusal of directories is invisible on NTFS, where a directory reports one link), and no fixture for a hard link to a file outside both roots.
+- **P7-2 runtime and P8-2/P8-3 end-to-end.** The dst-file-link-at-a-src-directory test and the new link-target spare/refuse cases self-skip here (the host refuses file symlinks, `os error 1314`), as do the case-only parity cases (this filesystem pairs `CaseProbe` with `caseprobe`). Their unit-level halves run and pass. Needs developer-mode Windows or POSIX CI to execute the end-to-end cases.
+- **File links.** The file-link cases self-skip here because the host refuses file symlinks; they need a Windows host with developer mode or a POSIX CI. Native POSIX symlinks and Unix link behaviour are unexercised; junctions stand in for directory links only.
+- **P7-1/P8-4 on POSIX and a crash between the renames.** The fixed short temporary was exercised on Windows only (including a 244-byte source name); a process killed between step 1 and step 2 was not produced (the next run steps over such a leftover by construction), and POSIX `NAME_MAX` was reasoned about rather than exercised. Whether a direct case-only `rename` is reliable enough to drop the two-step was not tested.
+- **The failure injectors.** The cleanup and rollback tests use the test-only `GIRSYNC_TEST_FAIL_RENAME{,_STEP1,_STEP2}` hooks, because a real `fs::rename` failure cannot be arranged portably. P8-5's cleanup-error wording is not forced: a failing `remove_file` on the tool's own placeholder could not be arranged here, so only the cleanup path (not its error text) runs.
 - **T-3** has no failing-first regression on a case-insensitive host (`fsutil file setCaseSensitiveInfo` is denied here); watch it on Linux CI. **T-4**’s non-link reparse classification is source-verified only: no OneDrive install, and tagging needs elevation.
 - **F-6**’s mtime-restore failure still has no injected test; the doc note is the practical fix. **P6-1**’s `--keep-extra`/`--missing-only` variants are unit-covered, not all run end-to-end.
-- **Other gaps.** `remove_dir_all` on a genuine directory containing a junction is not in the suite (a third-pass probe removed only the junction); T-2’s flush injector is test-only; T-6’s binary test is Windows-only.
+- **Other gaps.** `remove_dir_all` on a genuine directory containing a junction is not in the suite (an eighth-pass probe outside the repo removed such a directory and the junction's target outside the tree survived, closing the Windows half); T-2’s flush injector is test-only; T-6’s binary test is Windows-only.
 
 ---
 
 *End of review. §1–§6 are the source-only original audit: no project file changed,
 nothing built, tested or run. §7 records the implementation and the second through
-seventh passes, which did build, test and run the binary; per-pass detail is in the
+eighth passes, which did build, test and run the binary; per-pass detail is in the
 commits it cites.*
