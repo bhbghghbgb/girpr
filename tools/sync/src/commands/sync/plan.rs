@@ -416,6 +416,14 @@ pub(super) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// counterpart, reading the same disk state both modes read, so the two agree
 /// before either prints an action.
 ///
+/// **Only a regular file is judged.** A directory at a copy destination is a
+/// type conflict that the copy phase removes before writing, so its inode is
+/// not truncated; on Unix its `nlink` is `2 + subdirectories`, and reading that
+/// as a shared file would refuse every file-over-directory conflict with a
+/// diagnostic about a hard link that does not exist. A file link is still
+/// judged through its target: `metadata` follows the final component, which is
+/// exactly the inode the write-through would truncate.
+///
 /// A destination is allowed when names the plan removes **before** the copy
 /// phase account for every extra one. `delete_files` and `fix_dirs` both run
 /// first and both remove an ordinary file name, which reduces the inode's count.
@@ -464,7 +472,10 @@ pub(super) fn ensure_hard_linked_targets_safe(
                 return Err(e).with_context(|| format!("hard-link count {}", d.display()));
             }
         };
-        if info.links <= 1 {
+        // A directory here is a planned type conflict, not a shared file. On
+        // Unix its link count is at least 2 by construction, so this test is
+        // what keeps that from becoming a bogus refusal.
+        if !info.regular_file || info.links <= 1 {
             continue;
         }
         let credited = removed.get(&info.id).copied().unwrap_or(0);
@@ -871,6 +882,23 @@ mod tests {
 
         ensure_mkdir_targets_free(&sm, &dm, &dst, false)
             .expect("fix-dirs replaces `a` before the nested mkdir");
+    }
+
+    /// **P8-1.** A directory at a copy destination is a planned type conflict:
+    /// the copy phase removes it, so its inode is never truncated. On Unix its
+    /// `nlink` is `2 + subdirectories` (the fixture here makes it 2), which the
+    /// old guard read as a hard link and refused with a bogus message.
+    #[test]
+    fn a_directory_copy_destination_is_not_a_hard_link_hazard() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_dir");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("node/inner")).unwrap();
+        let mut dm = HashMap::new();
+        dm.insert("node".to_string(), dir());
+        let p = plan(&[], &["node"], &[]);
+
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect("a directory at the copy destination is removed, not truncated");
     }
 
     /// Two dst names for one file, and neither is planned for removal: the copy

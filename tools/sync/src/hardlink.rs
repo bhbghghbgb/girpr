@@ -22,9 +22,20 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkInfo {
     /// The number of names the file at the path has, following links.
+    ///
+    /// Only meaningful when [`regular_file`](Self::regular_file) is true. On
+    /// Unix a directory's `nlink` is at least 2 (`2 + its subdirectories`) and
+    /// counts subdirectory names, not names of one shared file, so a caller
+    /// asking whether a copy would truncate another name must not read it.
     pub links: u64,
     /// The file those names share.
     pub id: Identity,
+    /// Whether the path names a regular file, following links.
+    ///
+    /// A copy truncates only a regular file. A directory at the destination is
+    /// removed by the copy phase first, and its link count says nothing about
+    /// a shared inode.
+    pub regular_file: bool,
 }
 
 /// The identity of a file, for comparing two paths.
@@ -47,10 +58,12 @@ impl Identity {
 /// The link count and identity of the file at `path`, following links.
 ///
 /// A missing path is `NotFound`, which the copy guard treats as "nothing to
-/// truncate" and the preflight as "no name to protect". A directory is not
-/// expected here: the caller has already resolved a blocking directory, and the
-/// platform results below are meaningful only for files. Every error is
-/// returned rather than read as a count.
+/// truncate" and the preflight as "no name to protect". Every error is returned
+/// rather than read as a count.
+///
+/// The result covers a directory too, but callers that are about to truncate
+/// must test [`LinkInfo::regular_file`] first: a directory's `nlink` counts
+/// subdirectories, not additional names for one file.
 #[cfg(unix)]
 pub fn info(path: &Path) -> io::Result<LinkInfo> {
     use std::os::unix::fs::MetadataExt;
@@ -59,6 +72,7 @@ pub fn info(path: &Path) -> io::Result<LinkInfo> {
     Ok(LinkInfo {
         links: md.nlink(),
         id: Identity::new(md.dev(), md.ino()),
+        regular_file: md.is_file(),
     })
 }
 
@@ -73,9 +87,9 @@ pub fn info(path: &Path) -> io::Result<LinkInfo> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle,
-        OPEN_EXISTING,
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING,
     };
 
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -115,6 +129,9 @@ pub fn info(path: &Path) -> io::Result<LinkInfo> {
                 info.dwVolumeSerialNumber as u64,
                 ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
             ),
+            // `FILE_FLAG_BACKUP_SEMANTICS` lets the handle name a directory,
+            // so ask the attributes rather than assuming a file.
+            regular_file: info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0,
         }),
     }
 }
@@ -125,6 +142,7 @@ pub fn info(_path: &Path) -> io::Result<LinkInfo> {
     Ok(LinkInfo {
         links: 1,
         id: Identity::new(0, 0),
+        regular_file: true,
     })
 }
 
@@ -147,6 +165,21 @@ mod tests {
         let p = t.join("a.txt");
         std::fs::write(&p, b"x").unwrap();
         assert_eq!(count(&p).unwrap(), 1);
+        assert!(info(&p).unwrap().regular_file);
+    }
+
+    /// A directory is not a truncated file, whatever its `nlink` says. On Unix
+    /// a directory's count is `2 + subdirectories`, so reading it as a hard
+    /// link would refuse every file-over-directory type conflict; on Windows it
+    /// is 1, which is why the plan-time guard must ask this flag rather than
+    /// the count alone.
+    #[test]
+    fn a_directory_is_not_a_regular_file() {
+        let t = girpr_tempdir::TempDir::new("girsync_hardlink", "dir");
+        let d = t.subdir("d");
+        std::fs::create_dir_all(d.join("child")).unwrap();
+        let info = info(&d).unwrap();
+        assert!(!info.regular_file, "a directory is not a copy target");
     }
 
     /// The case `copy_one` refuses. `std::fs::hard_link` needs no privilege on
