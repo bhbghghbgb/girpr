@@ -77,6 +77,16 @@ pub fn write(
 ) -> std::io::Result<Vec<StoredAs>> {
     let tag = captured.tag.clone();
     let field = captured.matching_field.clone();
+    // The field is interpolated raw into four artifact-relative names below.
+    // Validate before the first `create_dir_all`: a field this rule refuses must
+    // not leave a single document, and a caller that built a `CapturedManifest`
+    // itself gets the same refusal the capture path does.
+    if let Some(problem) = crate::paths::field_component_problem(&field) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("manifest field {problem}"),
+        ));
+    }
     let mut out = Vec::with_capacity(4);
 
     // 1. The archive, byte-exact.
@@ -364,6 +374,31 @@ mod tests {
         assert_eq!(meta["verified"]["id_prefix_verified"], false);
         assert_eq!(meta["category_name"], "\u{6e38}\u{620f}\u{672c}\u{4f53}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A `matching_field` from any source is a file-name component. The dump is
+    /// the last place it becomes a path, so the refusal happens before the first
+    /// document is created rather than after three of four have landed.
+    #[test]
+    fn a_field_that_names_a_path_is_refused_before_anything_is_written() {
+        let root = tmp("field-escape");
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        let outside = root
+            .parent()
+            .unwrap()
+            .join(format!("{name}-escape.manifest.zst"));
+        let mut c = captured();
+        c.matching_field = format!("../../../{name}-escape");
+
+        let e = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(e.to_string().contains("manifest field"), "{e}");
+        assert!(!root.exists(), "the dump created a tree it refused");
+        assert!(
+            !outside.exists(),
+            "the field escaped the dump root: {}",
+            outside.display()
+        );
     }
 
     /// The archive is the bytes the CDN sent, so its MD5 is the CDN's

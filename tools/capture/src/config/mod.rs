@@ -451,6 +451,14 @@ fn validate_audio(raw: &[String]) -> Result<AudioSelection> {
 
     let mut seen: Vec<&String> = Vec::new();
     for code in &normalised {
+        // The code is the `matching_field`, and the dump interpolates it raw into
+        // `manifests/<tag>/<field>.manifest…`. It is a file-name component, not
+        // free text: `..`, a separator or a Windows alias would name a file
+        // outside the manifest directory. The same rule guards the manifest
+        // entries, so an audio code is held to it too.
+        if let Some(problem) = crate::paths::field_component_problem(code) {
+            return Err(UsageError::new(format!("--audio {problem}")));
+        }
         if seen.contains(&code) {
             return Err(UsageError::new(format!(
                 "--audio {code} was given twice; a repeated language adds no manifest \
@@ -853,6 +861,29 @@ mod tests {
     fn a_repeated_audio_code_is_refused_rather_than_deduped() {
         let e = plan(|a| a.audio = vec!["en-us".into(), "en_us".into()]).unwrap_err();
         assert!(e.message().contains("twice"), "{}", e.message());
+    }
+
+    #[test]
+    fn an_audio_code_that_is_not_one_file_name_component_is_refused() {
+        // The code is the `matching_field`, which the dump interpolates into
+        // `manifests/<tag>/<field>.manifest…`. A separator or a traversal makes
+        // the capture write outside `--out`; the same shape rule now covers it.
+        for bad in ["../../../../evil", "en/us", r"en\us", "..", ""] {
+            let e = plan(|a| a.audio = vec![bad.to_string()]).unwrap_err();
+            assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage, "{bad:?}");
+            assert!(
+                e.message().contains("--audio"),
+                "{bad:?} -> {}",
+                e.message()
+            );
+        }
+        // And the measured codes still pass.
+        for good in ["en-us", "zh-cn", "ja-jp", "ko-kr"] {
+            assert!(
+                plan(|a| a.audio = vec![good.to_string()]).is_ok(),
+                "{good:?}"
+            );
+        }
     }
 
     #[test]

@@ -373,6 +373,16 @@ pub async fn capture(
     tag: &str,
     matching_field: &str,
 ) -> Result<CapturedManifest, ApiError> {
+    // `matching_field` becomes `manifests/<tag>/<field>.manifest…` and travels
+    // into the meta document, so it has to be one file-name component. The flag
+    // validates its own values; this is the check every other caller (and a
+    // future one) passes through.
+    if let Some(problem) = crate::paths::field_component_problem(matching_field) {
+        return Err(ApiError::shape(
+            "matching_field",
+            format!("manifest field {problem}"),
+        ));
+    }
     let declared = build.manifest_for(matching_field)?;
     // Storage is asserted before a byte is fetched, not after: `zstd::decode` on
     // an unencrypted raw blob does not reliably fail, it returns garbage.

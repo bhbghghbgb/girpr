@@ -128,6 +128,19 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_field_is_one_file_name_component() {
+        for good in ["game", "en-us", "zh-cn", "ko-kr"] {
+            assert_eq!(field_component_problem(good), None, "{good:?}");
+        }
+        for bad in ["a/b", "/abs", "a\\b", "../x", "..", ""] {
+            assert!(
+                field_component_problem(bad).is_some(),
+                "{bad:?} must be refused as a field"
+            );
+        }
+    }
+
+    #[test]
     fn every_way_out_of_the_bundle_is_named() {
         for (value, want) in [
             ("", "empty"),
