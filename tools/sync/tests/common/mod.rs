@@ -177,6 +177,37 @@ macro_rules! skip_if_no_link {
     };
 }
 
+/// True when `dir`'s filesystem tells `CaseProbe` and `caseprobe` apart.
+///
+/// The probe is created and removed, so the answer describes the scratch tree
+/// the caller is about to use rather than the platform in the abstract: a
+/// Windows host may be case-sensitive per directory, and a mounted volume may
+/// differ from the system drive.
+pub fn is_case_sensitive(dir: &Path) -> bool {
+    let probe = dir.join("CaseProbe");
+    std::fs::write(&probe, b"x").unwrap();
+    let insensitive = dir.join("caseprobe").exists();
+    std::fs::remove_file(&probe).unwrap();
+    !insensitive
+}
+
+/// Skip the calling test when the filesystem pairs `CaseProbe` with
+/// `caseprobe`.
+///
+/// A case-only rename is a different question on an insensitive filesystem: the
+/// old spelling still resolves after the rename was planned, so the parity this
+/// pins cannot be observed. Like `skip_if_no_link!`, the skip says why, because
+/// a silent pass would read as coverage it never had.
+#[macro_export]
+macro_rules! skip_if_case_insensitive {
+    ($dir:expr) => {
+        if !$crate::common::is_case_sensitive($dir) {
+            eprintln!("skip: this filesystem pairs `CaseProbe` with `caseprobe`");
+            return;
+        }
+    };
+}
+
 /// True when `path` is itself a link or junction: the test-side mirror of
 /// `girsync::link::try_is_link`. The reparse attribute alone is not enough on
 /// Windows (cloud placeholders and other non-redirecting tags carry it), so the

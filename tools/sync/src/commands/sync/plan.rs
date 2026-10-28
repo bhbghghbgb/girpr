@@ -4,6 +4,7 @@
 //! what makes `--dry-run` trustworthy: the plan it prints is byte-for-byte the
 //! plan a real run would execute.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
@@ -11,6 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::apply::Applied;
+use super::rename::DiskSpelling;
 use crate::diff::Diff;
 use crate::effective::EffRec;
 use crate::report::Record;
@@ -123,6 +125,20 @@ fn link_ancestor<'a>(rel: &str, dm: &'a HashMap<String, EffRec>) -> Option<&'a s
             return Some(key.as_str());
         }
         end = next?;
+    }
+}
+
+/// The spelling `rel` has on disk now.
+///
+/// A real run has already renamed the entries the plan names, so `rel` is the
+/// disk spelling. A dry run only re-keyed the map: its guards must stat the
+/// pre-rename spelling, or a case-only link (or hard link) is invisible and the
+/// preview answers differently from the run it previews. See
+/// [`DiskSpelling`] and [`rename_to_src_casing`](super::rename).
+fn disk_rel<'a>(on_disk: Option<&'a DiskSpelling>, rel: &'a str) -> Cow<'a, str> {
+    match on_disk {
+        Some(spelling) => spelling.disk_rel(rel),
+        None => Cow::Borrowed(rel),
     }
 }
 
@@ -319,8 +335,16 @@ pub(super) fn ensure_link_safe(
     dst: &Path,
     missing_only: bool,
     keep_extra: bool,
+    on_disk: Option<&DiskSpelling>,
 ) -> Result<()> {
     let fixed: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
+    // A dry run names the link with its pre-rename spelling while `fix_dirs`
+    // is keyed by src's casing, so the P7-2 carve-out has to compare cases too.
+    let fixed_lower: HashSet<String> = if on_disk.is_some() {
+        plan.fix_dirs.iter().map(|f| f.to_lowercase()).collect()
+    } else {
+        HashSet::new()
+    };
     let actions = plan
         .mkdir
         .iter()
@@ -329,7 +353,8 @@ pub(super) fn ensure_link_safe(
         .chain(plan.delete_files.iter())
         .chain(plan.rmdir.iter());
     for rel in actions {
-        if let Some(link) = crate::link::link_ancestor_above(dst, rel)? {
+        let disk = disk_rel(on_disk, rel);
+        if let Some(link) = crate::link::link_ancestor_above(dst, disk.as_ref())? {
             // A strict link ancestor that is itself a planned `fix_dirs` entry is
             // removed *before* the nested action runs (`fix_dirs` precedes
             // `mkdir`/`copy`), so the write resolves an ordinary directory. This
@@ -339,7 +364,9 @@ pub(super) fn ensure_link_safe(
             // write-through. `link_ancestor_above` returns the topmost link, so a
             // link above the fixed one would have been returned first and is
             // still refused.
-            if fixed.contains(link.as_str()) {
+            if fixed.contains(link.as_str())
+                || (!fixed_lower.is_empty() && fixed_lower.contains(&link.to_lowercase()))
+            {
                 continue;
             }
             bail!(
@@ -442,6 +469,7 @@ pub(super) fn ensure_hard_linked_targets_safe(
     plan: &Plan,
     dm: &HashMap<String, EffRec>,
     dst: &Path,
+    on_disk: Option<&DiskSpelling>,
 ) -> Result<()> {
     // Ordinary-file names this run removes before copying, by the inode they
     // name. A link is skipped: its removal leaves the target's count unchanged.
@@ -453,7 +481,7 @@ pub(super) fn ensure_hard_linked_targets_safe(
         {
             continue;
         }
-        let p = dst.join(rel);
+        let p = dst.join(disk_rel(on_disk, rel).as_ref());
         match crate::hardlink::info(&p) {
             Ok(info) => *removed.entry(info.id).or_default() += 1,
             // Gone already, so this plan entry removes no name at copy time.
@@ -464,7 +492,7 @@ pub(super) fn ensure_hard_linked_targets_safe(
         }
     }
     for item in &plan.copy {
-        let d = dst.join(&item.rel);
+        let d = dst.join(disk_rel(on_disk, &item.rel).as_ref());
         let info = match crate::hardlink::info(&d) {
             Ok(info) => info,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
@@ -897,7 +925,7 @@ mod tests {
         dm.insert("node".to_string(), dir());
         let p = plan(&[], &["node"], &[]);
 
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect("a directory at the copy destination is removed, not truncated");
     }
 
@@ -915,7 +943,7 @@ mod tests {
         dm.insert("shared.txt".to_string(), file());
         let p = plan(&[], &["a.txt"], &[]);
 
-        let err = ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect_err("a name the run keeps makes the truncation unsafe");
         let msg = err.to_string();
         assert!(msg.contains("hard links"), "names the hazard: {msg}");
@@ -937,7 +965,7 @@ mod tests {
         let mut p = plan(&[], &["a.txt"], &[]);
         p.delete_files.push("shared.txt".to_string());
 
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect("the delete phase runs before the copy and removes the other name");
     }
 
@@ -957,7 +985,7 @@ mod tests {
         let mut p = plan(&[], &["a.txt"], &[]);
         p.delete_files.push("other.txt".to_string());
 
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect_err("deleting a different file leaves both names of this inode");
     }
 
@@ -974,7 +1002,7 @@ mod tests {
         dm.insert("repl".to_string(), file());
         let p = plan(&[], &["a.txt"], &["repl"]);
 
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect("fix-dirs removes the second name before the copy");
     }
 
@@ -995,11 +1023,11 @@ mod tests {
         p.delete_files.push("b.txt".to_string());
         p.delete_files.push("c.txt".to_string());
 
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect("both other names are removed before the copy");
 
         p.delete_files.pop();
-        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+        ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
             .expect_err("one surviving name still shares the inode");
     }
 
@@ -1019,11 +1047,11 @@ mod tests {
         }
 
         let fixed = plan(&["a/b"], &[], &["a"]);
-        ensure_link_safe(&fixed, &dst, false, false)
+        ensure_link_safe(&fixed, &dst, false, false, None)
             .expect("fix-dirs unlinks `a` before `a/b` is created");
 
         let unfixed = plan(&["a/b"], &[], &[]);
-        let err = ensure_link_safe(&unfixed, &dst, false, false)
+        let err = ensure_link_safe(&unfixed, &dst, false, false, None)
             .expect_err("a link that survives the plan is still a write-through");
         let msg = err.to_string();
         assert!(msg.contains("a/b"), "names the action: {msg}");

@@ -5,6 +5,7 @@
 //! exact keys. After this pass the diff can be taken case-sensitively.
 
 use anyhow::{Context, Result, bail};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -222,14 +223,69 @@ fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
     bail!("no free case-fix temporary beside {}", from.display())
 }
 
+/// What the pass did, and — in a dry run — where the entries still are.
+#[derive(Debug, Default)]
+pub(super) struct RenameOutcome {
+    /// Renames performed, or that a dry run would perform.
+    pub renamed: usize,
+    /// `Some` in a dry run — empty when no rename would happen: a real run
+    /// moves the filesystem entries onto src's casing, so afterwards the
+    /// post-rename spelling *is* the disk spelling. The plan-time guards run
+    /// after this pass, and a dry run has re-keyed only the map; they must stat
+    /// the old spelling or they answer a different question than the real run.
+    pub on_disk: Option<DiskSpelling>,
+}
+
+/// Maps a post-rename relative path to the spelling still on disk after a dry
+/// run. Longest prefix wins, so a nested directory move rewrites its whole
+/// subtree and a component boundary is respected.
+#[derive(Debug, Default)]
+pub(super) struct DiskSpelling {
+    /// `(post-rename, on-disk)` moves. The same path can carry two entries when
+    /// a directory move and its own rename both name it; the longest prefix is
+    /// identical, so either answer is right.
+    moves: Vec<(String, String)>,
+}
+
+impl DiskSpelling {
+    fn new(renames: &[(String, String)], dir_moves: &[(String, String)]) -> Self {
+        let mut moves = Vec::with_capacity(renames.len() + dir_moves.len());
+        for (old, new) in renames {
+            moves.push((new.clone(), old.clone()));
+        }
+        for (old, new) in dir_moves {
+            moves.push((new.clone(), old.clone()));
+        }
+        Self { moves }
+    }
+
+    /// The on-disk spelling of `rel`, which the pass reports under `rel`.
+    pub(super) fn disk_rel<'a>(&'a self, rel: &'a str) -> Cow<'a, str> {
+        let mut best: Option<&(String, String)> = None;
+        for mov in &self.moves {
+            let boundary = rel == mov.0
+                || rel
+                    .strip_prefix(&mov.0)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            if boundary && best.is_none_or(|b| mov.0.len() > b.0.len()) {
+                best = Some(mov);
+            }
+        }
+        match best {
+            Some((new, old)) => Cow::Owned(format!("{old}{}", &rel[new.len()..])),
+            None => Cow::Borrowed(rel),
+        }
+    }
+}
+
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
 ///
-/// Returns the number of renames performed (or that a dry run would perform).
-///
-/// `dm` is always re-keyed to src's casing, including under `dry_run` — the plan
-/// computed after this pass reads `dm`, so a map left on dst's own casing would
-/// make a dry run report a case-only difference as both a copy and a delete.
-/// `dry_run` therefore suppresses only the filesystem and cache writes.
+/// Returns what the pass did. `dm` is always re-keyed to src's casing, including
+/// under `dry_run` — the plan computed after this pass reads `dm`, so a map left
+/// on dst's own casing would make a dry run report a case-only difference as
+/// both a copy and a delete. `dry_run` therefore suppresses only the filesystem
+/// and cache writes; [`RenameOutcome::on_disk`] carries the spelling the guards
+/// must stat when those writes were suppressed.
 pub(super) fn rename_to_src_casing(
     src: &HashMap<String, crate::effective::EffRec>,
     dst_root: &Path,
@@ -237,7 +293,7 @@ pub(super) fn rename_to_src_casing(
     dm: &mut HashMap<String, crate::effective::EffRec>,
     dry_run: bool,
     report: &Report,
-) -> Result<usize> {
+) -> Result<RenameOutcome> {
     let renames: Vec<(String, String)> = case_renames(src, dm)
         .into_iter()
         .map(|(drel, srel)| (drel.clone(), srel.clone()))
@@ -358,7 +414,8 @@ pub(super) fn rename_to_src_casing(
             w.commit()?;
         }
     }
-    Ok(renamed)
+    let on_disk = dry_run.then(|| DiskSpelling::new(&renames, &dir_moves));
+    Ok(RenameOutcome { renamed, on_disk })
 }
 
 #[cfg(test)]
@@ -501,8 +558,16 @@ mod tests {
         let db = crate::cache::CacheDb::open_temp(false).unwrap();
 
         let report = Report::new(OutputFormat::Text);
-        let renamed = rename_to_src_casing(&sm, &dst, &db, &mut dm, true, &report).unwrap();
-        assert_eq!(renamed, 1);
+        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, true, &report).unwrap();
+        assert_eq!(out.renamed, 1);
+        assert_eq!(
+            out.on_disk
+                .as_ref()
+                .expect("a dry run leaves the files where they were")
+                .disk_rel("Data.txt"),
+            "data.txt",
+            "the guards must stat the spelling still on disk"
+        );
         assert!(
             dm.contains_key("Data.txt"),
             "dst map follows src casing after a dry run"
@@ -515,6 +580,60 @@ mod tests {
             dst.join("data.txt").is_file(),
             "a dry run still renames nothing on disk"
         );
+    }
+
+    /// The dry-run spelling map must follow the same longest-prefix rule as the
+    /// rename plan: a nested directory move rewrites its subtree, an exact file
+    /// rename wins over an ancestor, and a textual prefix is not a boundary.
+    #[test]
+    fn the_dry_run_spelling_map_undoes_the_planned_renames() {
+        let renames = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/sub".to_string(), "Dir/Sub".to_string()),
+            ("dir/sub/f.txt".to_string(), "Dir/Sub/f.txt".to_string()),
+            ("other.txt".to_string(), "Other.txt".to_string()),
+        ];
+        let dir_moves = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/sub".to_string(), "Dir/Sub".to_string()),
+        ];
+        let spelling = DiskSpelling::new(&renames, &dir_moves);
+
+        assert_eq!(spelling.disk_rel("Dir"), "dir");
+        assert_eq!(spelling.disk_rel("Dir/Sub/f.txt"), "dir/sub/f.txt");
+        assert_eq!(
+            spelling.disk_rel("Dir/orphan.txt"),
+            "dir/orphan.txt",
+            "a dst-only descendant follows its renamed parent"
+        );
+        assert_eq!(spelling.disk_rel("Other.txt"), "other.txt");
+        assert_eq!(
+            spelling.disk_rel("Dir2/f.txt"),
+            "Dir2/f.txt",
+            "a prefix match must end at a component boundary"
+        );
+    }
+
+    /// A real run moved the files, so there is nothing to undo and the guards
+    /// stat the post-rename spelling directly.
+    #[test]
+    fn a_real_run_has_no_disk_spelling_map() {
+        let root = girpr_tempdir::TempDir::new("girsync_rename_real", "no_map");
+        let dst = root.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("data.txt"), b"data").unwrap();
+
+        let mut sm = HashMap::new();
+        sm.insert("Data.txt".to_string(), file_rec());
+        let mut dm = HashMap::new();
+        dm.insert("data.txt".to_string(), file_rec());
+        let db = crate::cache::CacheDb::open_temp(false).unwrap();
+
+        let report = Report::new(OutputFormat::Text);
+        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, false, &report).unwrap();
+        assert_eq!(out.renamed, 1);
+        assert!(out.on_disk.is_none());
+        assert!(dst.join("Data.txt").is_file(), "the real rename happened");
     }
 
     /// A directory rename moves its whole subtree, so a child that differed only

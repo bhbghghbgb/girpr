@@ -73,7 +73,7 @@ use plan::{
     build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
     ensure_mkdir_targets_free,
 };
-use rename::rename_to_src_casing;
+use rename::{RenameOutcome, rename_to_src_casing};
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
@@ -295,8 +295,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive)?;
 
     // 6. Align casing before diffing, so the diff can be case-sensitive.
-    let renamed = if common.case_sensitive {
-        0
+    let RenameOutcome { renamed, on_disk } = if common.case_sensitive {
+        RenameOutcome::default()
     } else {
         rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
@@ -343,7 +343,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // Before the dry-run branch: a plan that cannot be applied is not a plan a
     // dry run should print as if it could be. The apply passes re-check the
     // paths they touch; this is the one place that fails before *any* of them.
-    ensure_link_safe(&plan, &dst, missing_only, keep_extra)?;
+    ensure_link_safe(&plan, &dst, missing_only, keep_extra, on_disk.as_ref())?;
     // The phase order makes a file ancestor creatable only when `fix_dirs`
     // replaces it first. Today's planner always does; a future one that stops
     // must fail here, at plan time, rather than midway through apply.
@@ -353,7 +353,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // a tree the real run refuses would answer a different question. A planned
     // delete of the other name (the default run) is credited; one left in place
     // (`--keep-extra`, or outside `dst`) is refused here.
-    ensure_hard_linked_targets_safe(&plan, &dm, &dst)?;
+    ensure_hard_linked_targets_safe(&plan, &dm, &dst, on_disk.as_ref())?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),

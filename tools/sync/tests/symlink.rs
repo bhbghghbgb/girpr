@@ -674,6 +674,61 @@ fn sync_refuses_to_rename_through_a_shared_dst_link() {
 }
 
 // ---------------------------------------------------------------------------
+// P8-3: a case-only rename is not a way past the plan-time link guard
+// ---------------------------------------------------------------------------
+
+/// **P8-3.** A dst directory link at a case-only spelling is refused in both
+/// modes. The rename pass only re-keys `dm` in a dry run, so the plan guard used
+/// to stat `l`, which does not exist on disk yet: the dry run printed the
+/// `RENAME` and `COPY` and exited 0, while the real run renamed `L` -> `l` and
+/// then refused. The guard now stats the pre-rename spelling in a dry run.
+///
+/// Runs only where the filesystem keeps `L` and `l` apart; on an insensitive one
+/// the two names are the same entry and the divergence cannot be observed.
+#[test]
+fn a_case_only_dst_link_is_refused_in_both_modes() {
+    let t = temp_root("case_only_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    skip_if_case_insensitive!(&dst);
+    wfile(&src, "l/x.txt", b"NEW");
+    wfile(&outside, "x.txt", b"OLD");
+    skip_if_no_link!("directory", dir_link(&outside, &dst.join("L")));
+
+    for extra in [&["--dry-run"][..], &[][..]] {
+        let out = sync_bin_raw(&src, &dst, extra);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "the shared dst link must be refused in both modes: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("refusing") && stderr.contains("link"),
+            "the error names the refusal and the link: {stderr}"
+        );
+        let recs = parse_ndjson(&out.stdout);
+        assert!(
+            !recs.iter().any(|r| r["event"] == "copy"),
+            "no COPY is reported for a write through the link: {recs:?}"
+        );
+    }
+
+    // The dry run touched nothing. The real run performed the (legitimate)
+    // case-only rename before the plan guard refused, which is the mutation
+    // order this case pins rather than claims away.
+    assert_eq!(rfile(&outside, "x.txt"), b"OLD", "the target is untouched");
+    assert_eq!(
+        entry_names(&dst),
+        ["l"],
+        "the real run renamed the link to src's casing"
+    );
+    assert!(is_link(&dst.join("l")), "the link itself still survives");
+}
+
+// ---------------------------------------------------------------------------
 // N-2: a successful sync leaves the cache in step
 // ---------------------------------------------------------------------------
 

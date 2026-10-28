@@ -500,6 +500,57 @@ fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
+/// **P8-3.** A case-only dst hard link is judged at plan time in both modes.
+///
+/// The rename pass re-keys `dm` in a dry run but moves nothing on disk, so the
+/// hard-link preflight used to stat the src-cased name the rename would create
+/// and find nothing: the dry run planned a `COPY` and exited 0, while the real
+/// run renamed first and then refused with exit 3. Both modes now stat the
+/// spelling still on disk. `--keep-extra` makes the second name survive, which
+/// is what leaves the inode with two names at copy time.
+#[test]
+fn a_case_only_hard_link_is_the_same_decision_in_both_modes() {
+    let t = temp_root("hardlink_case_parity");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    skip_if_case_insensitive!(&dst);
+    wfile(&src, "a.txt", b"NEW");
+    wfile(&dst, "A.txt", b"OLD");
+    std::fs::hard_link(dst.join("A.txt"), dst.join("shared.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a case-only hard link must be refused in both modes: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the copy: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        assert!(
+            !recs.iter().any(|r| r["event"] == "copy"),
+            "no COPY is reported for a copy that cannot run: {recs:?}"
+        );
+    }
+
+    assert_eq!(
+        entry_names(&dst),
+        ["a.txt", "shared.txt"],
+        "the real run renamed A.txt to src's casing before the refusal"
+    );
+    assert_eq!(
+        rfile(&dst, "a.txt"),
+        b"OLD",
+        "the shared inode is untouched"
+    );
+    assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");
