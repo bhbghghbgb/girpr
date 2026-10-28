@@ -1192,6 +1192,30 @@ mod tests {
         assert!(reconcile(&d, Some(&stats)).is_empty());
     }
 
+    /// A manifest entry is data from the wire, and the guard runs before `--out`
+    /// is created. `a/b.` and `a/b` are one file on Windows — and `a/./b` is a
+    /// third spelling of it — so accepting the shapes would make the last write
+    /// win wherever the tree is materialised. This pins that `manifest::capture`
+    /// consults the shared rule, not only `--files`.
+    #[test]
+    fn a_manifest_entry_windows_folds_onto_another_is_a_shape_error() {
+        for bad in ["a/b.", "a/b ", "a/./b"] {
+            let entries = vec![file(bad, vec![], 10)];
+            let err = validate_entry_paths("https://example.test/manifest", &entries)
+                .expect_err("a folded name must stop the run");
+            let ApiError::Shape { subject, detail } = err else {
+                panic!("{bad:?} must be a shape error");
+            };
+            assert_eq!(subject, "https://example.test/manifest");
+            assert!(detail.contains("manifest entry"), "{bad:?}: {detail}");
+        }
+        // An ordinary dotted name is still legal.
+        assert!(
+            validate_entry_paths("u", &[file("a/b.c", vec![], 10)]).is_ok(),
+            "a dot inside a name is not a folded trailing dot"
+        );
+    }
+
     // ------------------------------------------------------------ A4
 
     #[test]

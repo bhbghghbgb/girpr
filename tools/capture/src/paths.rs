@@ -13,9 +13,11 @@
 //! whether or not `a/b` is published. Manifest paths are `/`-separated and
 //! rooted at the game directory, so a backslash, an absolute path, a drive
 //! prefix, an empty component or a `..` component is a document that cannot
-//! describe a file in the bundle. The caller decides how to report the refusal:
-//! a flag is a [`crate::cli::UsageError`], a document is an
-//! [`crate::http::ApiError::shape`].
+//! describe a file in the bundle. So is a `.` component and a component ending
+//! in `.` or a space: Windows folds `a/b.` and `a/b ` onto `a/b`, so three
+//! distinct entries would name one file and the last write would win. The
+//! caller decides how to report the refusal: a flag is a
+//! [`crate::cli::UsageError`], a document is an [`crate::http::ApiError::shape`].
 //!
 //! **A chunk id is stricter still.** It is interpolated into a CDN URL
 //! ([`crate::manifest::CapturedManifest::chunk_url`]) and into
@@ -54,6 +56,21 @@ pub fn relative_path_problem(value: &str) -> Option<String> {
     }
     if value.split('/').any(|c| c == "..") {
         return Some(format!("{value:?} escapes the bundle root"));
+    }
+    if value.split('/').any(|c| c == ".") {
+        return Some(format!(
+            "{value:?} has a `.` component; a bundle path names something in the \
+             bundle, and `.` names the directory it is in"
+        ));
+    }
+    if value
+        .split('/')
+        .any(|c| c.ends_with('.') || c.ends_with(' '))
+    {
+        return Some(format!(
+            "{value:?} has a component ending in `.` or a space; Windows folds such \
+             a name onto the one without it, so two paths could name one file"
+        ));
     }
     if value.split('/').any(|c| c.is_empty()) {
         return Some(format!(
@@ -151,6 +168,12 @@ mod tests {
             ("/etc/passwd", "absolute"),
             ("C:/Windows", "drive-qualified"),
             ("C:evil", "drive-qualified"),
+            ("./x", "`.` component"),
+            ("a/./b", "`.` component"),
+            ("a/b.", "folds"),
+            ("a/b ", "folds"),
+            ("a./b", "folds"),
+            ("a /b", "folds"),
             ("a//b", "empty component"),
             ("a/", "empty component"),
             ("a\u{0}b", "control character"),
@@ -162,6 +185,29 @@ mod tests {
                 problem.contains(want),
                 "{value:?}: {problem:?} should mention {want:?}"
             );
+        }
+    }
+
+    /// Windows strips a trailing `.` or space from every component, so `a/b`,
+    /// `a/b.` and `a/b ` are three manifest entries that create one file — and
+    /// the last write wins. On a host that does not fold them, the capture would
+    /// instead produce three files, so a bundle captured here would not
+    /// materialise the same way elsewhere. The rule is host-independent: refuse
+    /// the shape on every platform, as the tag validator already does for `7.1.0.`.
+    #[test]
+    fn path_components_windows_folds_onto_one_file_are_refused() {
+        for bad in [
+            "a/b.", "a/b ", "a/b...", "a/b   ", "a./b", "a /b", "a/./b", "./a", "a/.",
+        ] {
+            assert!(
+                relative_path_problem(bad).is_some(),
+                "{bad:?} names a file Windows spells without the dot or space"
+            );
+        }
+        // The rule is about *trailing* dots and spaces; a dot inside a name is
+        // ordinary (`archive.tar.zst`, `7.1.0`) and must stay legal.
+        for good in ["a/b.c", "a/7.1.0", "a/.hidden", "a/b c", "a/b c/d"] {
+            assert_eq!(relative_path_problem(good), None, "{good:?}");
         }
     }
 
