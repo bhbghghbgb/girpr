@@ -619,7 +619,9 @@ the compression the build declared. **The blob is still written and still listed
 A truncated or mis-served response is the evidence this tool exists to keep, so it
 is recorded with its bytes and a truthful `decode_error` rather than discarded and
 backfilled with a "the fetch failed" story — with the two decode-dependent
-`verified` keys `false` and the two that need no decode still decided.
+`verified` keys `false` and the two that need no decode still decided. Because the
+fetch itself succeeded, the store does not ask a second source for that chunk: the
+bytes that arrived are not replaced, and the row's `stored_path` points at them.
 
 It is `Option<String>`, so a reader must treat it as optional: a blob that was
 never fetched at all has a null `stored_path`, a null-ish row body and no

@@ -484,6 +484,15 @@ real reason and the two decode-dependent `verified` keys false, instead of being
 discarded. A truncated or mis-served response is the evidence this tool exists
 to keep.
 
+**That row is the outcome of a successful fetch, so it is not retried from
+another source.** The first body's bytes are already the evidence; asking the
+next source and renaming a good body over them would silently destroy what
+actually arrived. The store therefore stops at that source and records the
+undecodable row, rather than treating it as a failed fetch and falling through.
+Only a real error — a refused connection, a failed write, or an I/O error while
+measuring — moves on to the next source, and then the published blob is removed
+so disk and index agree.
+
 **A chunk that never arrived is a row too, and it says why.** A refused source, a
 failed write or a panicked task leaves `stored_path` null and carries the fetch
 failure in `decode_error`; the run counts that chunk **once** among the failed
