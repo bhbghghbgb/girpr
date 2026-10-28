@@ -624,6 +624,34 @@ fn a_bundle_whose_stored_path_leaves_the_root_is_refused() {
     assert!(failure.detail.contains("stored_path"), "{failure}");
 }
 
+/// **K1.** A crafted index whose offset cannot be added to its blob's size is
+/// refused when the bundle is opened, before any command reaches the layout
+/// arithmetic that would have aborted on it in debug.
+#[test]
+fn a_bundle_whose_index_offset_overflows_is_refused() {
+    let b = Bundle::build("overflowing-index-offset");
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    let blob = &mut index.blobs[0];
+    let id = blob.props.chunk_id.clone();
+    blob.referenced_by[0].offset = i64::MAX;
+    write_json(&index_path, &index);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains(&id), "names the blob: {e}");
+    assert!(
+        e.contains(&i64::MAX.to_string()) && e.contains("overflows i64"),
+        "names the value and the arithmetic: {e}"
+    );
+
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("overflows i64"), "{failure}");
+}
+
 /// `materialize` on a crafted patchmap path writes nothing outside `--out`.
 ///
 /// The index's `referenced_by[].path` is moved with the patchmap so the blob
