@@ -691,8 +691,9 @@ reverted fix commit `474f3f9`. The “actual” column is the current tree.
 Landed on branch `fix-gaps/girpr` in the §6 order, one commit per finding
 (F-7 and F-9 are separate commits; F-8's tests live in the commits whose fixes
 they pin, plus one test-only commit). This is the **first-pass** table: the
-second pass (§8) and the third pass (§9) re-validated the residual claims and
-fixed them; see §8.1 and §9.1 for the final verdicts. No commit re-lands the reverted series
+second pass (§8), the third pass (§9) and the fourth pass (§10) re-validated
+the residual claims and fixed them; see §8.1, §9.1 and §10.1 for the final
+verdicts. No commit re-lands the reverted series
 verbatim: the join-error arm counts panics (there is no `is_panic => {}`),
 `layout`'s dead `checked_add` is not reintroduced, `validate_rel` is replaced
 by `util::contained_rel` / `contained_join` applied to every server-path sink,
@@ -939,6 +940,89 @@ not observed), no Linux/macOS run, and no live CDN traffic.
   candidates the walk could reach, not the ones under an unreadable directory.
 - N-20 and F-6 remain code-reading claims for want of an injection seam.
 
+## 10. Fourth pass — P-1…P-4 validated
+
+The fourth-pass notes (reviewed tip `b99ddbb`, delivered as another untracked
+document) were checked against the current source at every cited line; the P-1
+under-estimate was also executed through the binary. All four findings were
+valid and are fixed. The note was deleted; this section is the surviving
+record. Nothing found was data-losing, and no shared crate was touched.
+
+### 10.1 Per-finding verdicts
+
+| # | Verdict | What changed | Commit |
+|---|---|---|---|
+| P-1 | **Valid** (Medium, under-estimate) | The `(Some(_), RepairMode::Temp)` arm in the estimate ignored the scan it was handed and answered with the pre-scan reuse-map rule. Since `resolve_mode` returns `Temp` for a requested `Temp`, `ScanReport::est_download_bytes_by_file`'s `Mode::Temp` branch was unreachable in exactly the spelling that names temp. The arm is gone: a scanned run always takes the scan's per-file vector, for every mode. | `4d2b2d9` |
+| P-2 | **Valid** (Low, swallowed errors) | All five remaining stat-failure-to-zero sites propagate or count honestly: `temp.rs`'s resume stat and `promote_tmp`, `inplace.rs`'s trim and salvage-order stats (all `with_context` naming the path), and `delete_deprecated`'s size, now an `Option<u64>` — a failed stat is warned, the delete still runs, and the total omits the unknown size instead of adding a false zero. | `edb2eb4`, `63a53de` |
+| P-3 | **Valid** (Low, misleading log) | The unconditional `moved audio cache -> res` is now `info!(moved, kept, ...)`, emitted only when a relocation was attempted; `moved` counts sources gone from the cache and `kept` counts refused moves and copies whose source could not be removed. An empty cache and a fully refused move no longer claim success. | `25ce46f` |
+| P-4 | **Valid** (Low, swallowed error) | The emptied-directory sweep logs `remove_dir`'s failure at debug with the directory and the `io::Error`; it stays best effort, so the expected "something appeared" failure is now distinguishable from a sharing violation or an ACL. | `d331174` |
+
+Regression coverage, all failing on the old shape:
+
+- P-1, end to end through the binary:
+  `the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads`
+  (`tests/repair_offline.rs:1293`) — installed-version `config.ini`, one of
+  foo's two chunks corrupted, `--scan --repair-mode temp --print-plan
+  --plan-out`, then the same mode for the repair. On the unfixed tree it failed
+  with `PLAN est_download_bytes=0 ... scan_bytes=176` while the repair fetched
+  `chunk_foo1`; it now asserts `est_download_bytes > 0`, the document's halves
+  summing to the total, `PLAN est_download_bytes == SUMMARY download_bytes`,
+  and that only `chunk_foo1` was fetched.
+- P-2: `a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure`
+  (`src/repair/file/temp.rs:544`) stats a `_tmp` under a regular file
+  (`ENOTDIR`) and requires the error chain to name the stat and the path; on
+  `util::file_len(...).unwrap_or(0)` it answered `tmp length 0 != expected 64`.
+- P-3: `a_failed_copy_keeps_the_audio_cache_source` (extended; `moved=0
+  kept=1`), `a_completed_audio_move_logs_the_count` (`moved=1 kept=0`) and
+  `an_empty_audio_cache_logs_no_relocation` (no relocation line). The log
+  capture helper lives in `src/repair/test_support.rs` and uses a thread-local
+  subscriber.
+- P-4: `a_dir_the_sweep_could_not_remove_is_logged_with_the_reason`
+  (`src/repair/purge.rs:753`) makes the failure real and asserts the log.
+
+The two `File::metadata()` sites have no deterministic seam (the handle is
+already open; `fstat` cannot be made to fail through a public entry point on
+Windows, and on Unix an unlink does not affect `fstat`), and the
+`delete_deprecated` stat needs a race after `is_file()`; those three fixes are
+code-reading claims, as §9.3 already recorded for N-20.
+
+### 10.2 Decisions that survive
+
+1. **One estimate rule under `--scan`.** The scanned figure resolves the
+   requested and the actual mode; there is no mode that falls back to the
+   pre-scan map rule. `PLAN` and `--plan-out` still fold the same vector
+   (§9.2 item 4).
+2. **A stat failure is never a zero.** In the repair paths it fails the file
+   (with the path in context); in the post phase's best-effort delete it is
+   warned and the counter omits the size. The one remaining conflation is the
+   documented `DiskPlan` "missing vs unreadable" over-approximation (§9.4).
+3. **Relocation logs are derived from outcomes.** A summary line must not be
+   reachable just because the function ran; the same standard the N-3/N-11
+   fixes applied to the per-file warnings.
+4. **Housekeeping stays best effort.** The sweep's failure is logged, not
+   fatal — matching the §8.2 item 5 policy for the audio move and the
+   deprecated deletes.
+
+### 10.3 Final verification
+
+Full run on Windows, debug profile, final fourth-pass tree:
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **311 passed, 0 failed, 7 ignored** (178 lib +
+  7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` +
+  85 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
+  `src/main.rs`, 0 doc-tests). The third-pass tree had 306; the five new tests
+  are the difference.
+- `cargo clippy -p girpr --all-targets` — clean, no warnings.
+- `cargo fmt --check` — clean (exit `0`).
+
+**Not run:** the `#[cfg(unix)]` blocks of
+`contained_join_resolves_a_symlink_and_refuses_the_escape`,
+`contained_join_fails_closed_when_a_component_cannot_be_resolved` and
+`the_mode_is_part_of_the_file_stats` (Windows host); the 7 ignored tests; no
+release-profile run; no Linux/macOS host; no live CDN traffic.
+
 *End of review. The finding text above records the first pass; §8 records the
-second pass and §9 the third, each of which changed source, tests and docs and
-ran the full suite on the tree its final-verification subsection describes.*
+second pass, §9 the third and §10 the fourth, each of which changed source,
+tests and docs and ran the full suite on the tree its final-verification
+subsection describes.*
