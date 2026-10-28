@@ -198,18 +198,43 @@ pub fn rebuild(
             "{tag} {path} ({role}): the index references no chunks for it"
         ));
     }
-    let parts: Vec<(i64, i64)> = chunks
-        .iter()
-        .map(|(id, o)| (*o, by_file.size(id)))
-        .collect();
-    let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
-    // `parts` is still needed for `declared_size`; `Layout::of` takes it by
-    // value so the one-vector-holds-both property holds at the call site too.
+    // Every offset and length here came out of `chunks/index.json`. `rebuild` is
+    // public and some callers (tests, the offline commands' own seams) do not go
+    // through `Bundle::open`'s validation, so the arithmetic is checked here as
+    // well: a crafted `offset: i64::MAX` must be a typed error naming the values,
+    // never an abort in the layout check.
+    let label = format!("{tag} {path} ({role})");
+    let mut parts: Vec<(i64, i64)> = Vec::with_capacity(chunks.len());
+    let mut declared_size: i64 = 0;
+    for (id, offset) in &chunks {
+        let len = by_file.size(id);
+        if *offset < 0 {
+            return Err(format!(
+                "{label}: chunk {id} declares offset {offset}, which is negative"
+            ));
+        }
+        if len < 0 {
+            return Err(format!(
+                "{label}: chunk {id} declares length {len}, which does not fit i64"
+            ));
+        }
+        if offset.checked_add(len).is_none() {
+            return Err(format!(
+                "{label}: chunk {id} at offset {offset} + length {len} overflows i64"
+            ));
+        }
+        declared_size = declared_size.checked_add(len).ok_or_else(|| {
+            format!(
+                "{label}: the chunk lengths overflow i64 at chunk {id} \
+                 (length {len}, running total {declared_size} B)"
+            )
+        })?;
+        parts.push((*offset, len));
+    }
     let layout = Layout::of(parts.iter().copied(), declared_size);
     // The label is the only thing that distinguishes this rebuild from the
     // capture's own: the tiling, and every message it can produce, is one
     // function. See `assemble::tile`.
-    let label = format!("{tag} {path} ({role})");
     let ids: Vec<&str> = chunks.iter().map(|(id, _)| *id).collect();
     let bytes = crate::assemble::tile(&label, &layout, declared_size, &ids, |id| src.decoded(id))?;
     Ok(Rebuilt {
@@ -882,5 +907,47 @@ mod tests {
         }
         assert_eq!(f.index.blobs.len(), 4);
         let _ = Store::plan_only(&[]);
+    }
+
+    /// **K1.** `rebuild` is public and not every caller has been through
+    /// `Bundle::open`'s index validation, so it checks the offsets it was handed.
+    /// A crafted `offset: i64::MAX` is a typed error naming the chunk and the
+    /// arithmetic, not an abort in `Layout::of`.
+    #[test]
+    fn a_crafted_index_offset_is_a_typed_error_not_a_layout_panic() {
+        let mut f = Fixture::build("crafted-offset");
+        for b in &mut f.index.blobs {
+            for r in &mut b.referenced_by {
+                if r.role == Set::MaterializeNew {
+                    r.offset = i64::MAX;
+                }
+            }
+        }
+        let src = f.source();
+        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        assert!(
+            e.contains("overflows i64") && e.contains(&i64::MAX.to_string()),
+            "names the arithmetic and the value: {e}"
+        );
+        assert!(e.contains("dll"), "names the file: {e}");
+    }
+
+    /// **K1.** A decompressed size above `i64::MAX` becomes negative when the
+    /// index's `u64` is cast for the layout; the rebuild names it rather than
+    /// handing a negative length to the tiling check.
+    #[test]
+    fn a_crafted_index_size_that_does_not_fit_i64_is_a_typed_error() {
+        let mut f = Fixture::build("crafted-size");
+        for b in &mut f.index.blobs {
+            if b.sets.contains(&Set::MaterializeNew) {
+                b.props.uncompressed_size = u64::MAX;
+            }
+        }
+        let src = f.source();
+        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        assert!(
+            e.contains("length -1") && e.contains("does not fit i64"),
+            "names the cast and the value: {e}"
+        );
     }
 }

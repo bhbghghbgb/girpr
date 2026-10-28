@@ -171,6 +171,10 @@ impl Bundle {
         }
         let manifest: Manifest = read_json(&manifest_path)?;
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
+        // Arithmetic on the index's offsets and sizes is checked before any
+        // command assembles a byte: a crafted `offset` must not reach
+        // `Layout::of` as a panic. See `ChunkIndex::validate_arithmetic`.
+        index.validate_arithmetic()?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
         let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
@@ -902,7 +906,45 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
         .iter()
         .filter(|e| e.decision == crate::assemble::Decision::Reuse)
         .collect();
-    let bytes: i64 = fetch.iter().map(|e| e.compressed_size).sum();
+    // **The cost is a sum over untrusted documents.** A plain `.sum::<i64>()`
+    // aborted on two `i64::MAX` entries in debug and wrapped to a negative
+    // number in release — which a negative `expectations.download_bytes` then
+    // matched, turning "costs -2 bytes" into a pass. One unrepresentable cost is
+    // enough: the remaining arithmetic would only be arithmetic on a number that
+    // is not a byte count.
+    let mut bytes: i64 = 0;
+    for e in &fetch {
+        if e.compressed_size < 0 {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{subject} (download_bytes)"),
+                "every FETCH compressed_size to be a non-negative byte count",
+                &format!(
+                    "chunk {} declares compressed_size {}",
+                    e.chunk_id, e.compressed_size
+                ),
+            ));
+            return rows;
+        }
+        match bytes.checked_add(e.compressed_size) {
+            Some(next) => bytes = next,
+            None => {
+                rows.push(Assertion::fail(
+                    A20_ID,
+                    A20,
+                    &format!("{subject} (download_bytes)"),
+                    "the FETCH compressed sizes to fit i64",
+                    &format!(
+                        "the sum overflows i64 at chunk {} (compressed_size {}, running \
+                         total {bytes} B)",
+                        e.chunk_id, e.compressed_size
+                    ),
+                ));
+                return rows;
+            }
+        }
+    }
     let moved = plan
         .iter()
         .filter(|e| {
@@ -1487,6 +1529,82 @@ mod tests {
         assert!(DERIVED_UNRECORDED.contains(&A20_ID));
         assert_eq!(A20_ID, "A20");
         assert!(!A20.is_empty());
+    }
+
+    /// A patchmap whose plan is exactly these FETCH costs, with totals and
+    /// expectations carrying an honest (or deliberately wrong) sum.
+    fn arithmetic_map(costs: &[i64]) -> crate::assemble::PatchMap {
+        use crate::assemble::ranges::Range;
+        use crate::assemble::{Decision, Expectations, PatchMap, PlanEntry, Totals};
+        let plan: Vec<PlanEntry> = costs
+            .iter()
+            .enumerate()
+            .map(|(i, &cost)| PlanEntry {
+                i,
+                decision: Decision::Fetch,
+                target_range: Range::at(i as i64, 1),
+                source_range: None,
+                chunk_id: format!("chunk-{i}"),
+                url: None,
+                compressed_size: cost,
+                uncompressed_size: 1,
+                uncompressed_md5: "00".repeat(16),
+                note: None,
+            })
+            .collect();
+        let download_bytes = costs.iter().fold(0_i64, |t, c| t.saturating_add(*c));
+        PatchMap {
+            schema_version: crate::SCHEMA_VERSION,
+            capture_id: "a20".into(),
+            path: "dll".into(),
+            matching_field: "game".into(),
+            classes: Vec::new(),
+            old: None,
+            new: None,
+            totals: Some(Totals {
+                chunks: plan.len(),
+                reuse: 0,
+                fetch: plan.len(),
+                moved: 0,
+                download_bytes,
+                materialize_old_bytes: 0,
+                materialize_new_bytes: 0,
+            }),
+            plan: Some(plan),
+            expectations: Expectations {
+                result_path: None,
+                result_md5: None,
+                absent_after: false,
+                download_bytes,
+                must_not_fetch: Vec::new(),
+            },
+        }
+    }
+
+    /// **K1.** A negative `compressed_size` is not a small download: A20 must
+    /// fail with the chunk and value rather than let a negative expectation
+    /// agree with a negative sum.
+    #[test]
+    fn a_negative_fetch_cost_fails_a20_with_the_chunk_and_value() {
+        let rows = check_patchmap_arithmetic(&arithmetic_map(&[-1]));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok);
+        assert!(rows[0].actual.contains("chunk-0"), "{}", rows[0].actual);
+        assert!(rows[0].actual.contains("-1"), "{}", rows[0].actual);
+    }
+
+    /// **K1.** Two `i64::MAX` costs do not fit; A20 names the term and the
+    /// running total instead of aborting in debug or wrapping in release.
+    #[test]
+    fn an_overflowing_fetch_cost_fails_a20_instead_of_aborting() {
+        let rows = check_patchmap_arithmetic(&arithmetic_map(&[i64::MAX, i64::MAX]));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok);
+        assert!(
+            rows[0].actual.contains("chunk-1") && rows[0].actual.contains("overflows i64"),
+            "{}",
+            rows[0].actual
+        );
     }
 
     /// The set is deliberately smaller than the seventeen.
