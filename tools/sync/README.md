@@ -737,7 +737,9 @@ Mirrors `src` → `dst`:
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
    Windows) - after the pair plan and the mkdir preflight, before the diff, so
-   both sides are on exact keys.
+   both sides are on exact keys. The two-step's temporary is a unique sibling
+   (`<full name>.girsync_case_tmp.<n>`) claimed before use, so a user file that
+   happens to look like tool residue is stepped over, never replaced.
 4. `FIX-DIR` type-conflicts toward src kind, then `MKDIR` missing dirs, then
    `DELETE` extra files (skipped when `--keep-extra`, which spares directories as
    well as files), then `COPY` missing + changed files (skipped when
@@ -759,6 +761,11 @@ Mirrors `src` → `dst`:
    The other name is the same inode, so writing through it would change that file
    too — and the verify would read the changed inode back and agree with itself.
    This is what stops a `dst` hard link to a src file from destroying the source.
+   The decision is made at plan time in **both** modes: a dry run refuses the same
+   tree instead of reporting a `COPY` the real run will not perform. A same-inode
+   name the plan removes first reduces the count and is allowed — the default
+   run's delete of an extra, or a file `fix_dirs` replaces — so this is not a
+   blanket refusal of every shared inode. `copy_one` keeps its own runtime check.
    **No resume**, in two senses: a failed mtime restore aborts the run although the
    bytes are already correct (a rerun recopies that file), and cache rows written
    since the last periodic commit are discarded when a run aborts (copies that
@@ -802,10 +809,11 @@ and depends on none of those. Do not treat a *missing* row as a crash signal,
 though: a scan may legitimately record stat without a digest, so absence proves
 nothing.
 
-`--dry-run` reports `FIX-DIR`/`MKDIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in
-apply order and writes nothing (no backups, no cache updates, no FS changes). Its
-records are the same ones a real run reports, with `dry_run=true` on the
-`SUMMARY`; see the `--dry-run` section below.
+`--dry-run` reports the `RENAME` steps it would perform, then
+`FIX-DIR`/`MKDIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in apply order, and writes
+nothing (no backups, no cache updates, no FS changes). Its records are the same
+ones a real run reports, with `dry_run=true` on the `SUMMARY`; see the
+`--dry-run` section below.
 
 ### `--dry-run`
 
@@ -1066,9 +1074,12 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   on a tree it did not converge; `--keep-extra` and `--missing-only` accept that
   non-convergence. **Hard links are not symlinks** and are not reported by
   `try_is_link`. A destination with more than one hard link is refused before
-  truncation (see `copy`), because the other name shares the inode and would be
-  changed too; otherwise a hard link is compared and copied as an ordinary file.
-  Unix reads the count from `nlink`, Windows from `GetFileInformationByHandle`.
+  truncation (see `copy`), in both `--dry-run` and a real run because the
+  decision is a plan-time preflight; a same-inode name the plan deletes first (or
+  a file `fix_dirs` replaces) is accounted for, so a default run that removes the
+  extra succeeds. Otherwise a hard link is compared and copied as an ordinary
+  file. Unix reads the count and identity from `nlink`/`dev`/`ino`, Windows from
+  `GetFileInformationByHandle` (volume serial + file index).
   Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
@@ -1115,7 +1126,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 384 test functions, one of them #[ignore]d (383 run by default)
+cargo nextest run -p girsync   # 396 test functions, one of them #[ignore]d (395 run by default)
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's
