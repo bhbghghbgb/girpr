@@ -265,8 +265,38 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
     Ok(format!("{:x}", ctx.compute()))
 }
 
-pub fn file_len(path: &Path) -> Option<u64> {
-    std::fs::metadata(path).ok().map(|m| m.len())
+/// What a file-length probe found.
+///
+/// `Absent` is exactly `NotFound`. Every other `metadata` error — a denied
+/// attribute read, a sharing violation, an invalid component — is
+/// `Unreadable`, not "absent" and not "zero": collapsing the two makes a
+/// present file look missing and a check report a size mismatch for a file it
+/// never managed to stat.
+#[derive(Debug)]
+pub enum FileLen {
+    /// The file exists; this is its length.
+    Present(u64),
+    /// The path is not there.
+    Absent,
+    /// The path could not be statted.
+    Unreadable(std::io::Error),
+}
+
+/// Classify one `metadata` result.
+///
+/// Split from [`file_len`] so the absent/unreadable split can be pinned with
+/// an injected `io::Error`, the way `post::classify_deprecated` is.
+fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> FileLen {
+    match stat {
+        Ok(m) => FileLen::Present(m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileLen::Absent,
+        Err(e) => FileLen::Unreadable(e),
+    }
+}
+
+/// Length of a path with absence and an unreadable stat kept distinct.
+pub fn file_len(path: &Path) -> FileLen {
+    classify_len(std::fs::metadata(path))
 }
 
 /// Validate a **server-controlled relative path** and return it in `/` form.
@@ -1242,6 +1272,45 @@ mod tests {
         assert!(read_game_version(&empty).unwrap().is_none());
         assert!(read_ignore_categories(&empty.join("rc")).unwrap().is_none());
         assert!(read_blacklist(&empty.join("bl")).unwrap().is_none());
+    }
+
+    /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.
+    /// The classifier is split out so an injected ACL-style error is pinned
+    /// without a permission fixture (S-3's shape), and a NUL path covers the
+    /// real syscall boundary on both platforms.
+    #[test]
+    fn file_len_separates_present_absent_and_unreadable() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_len", "states");
+        std::fs::write(dir.join("f"), b"12345").unwrap();
+        assert!(matches!(file_len(&dir.join("f")), FileLen::Present(5)));
+        assert!(matches!(file_len(&dir.join("missing")), FileLen::Absent));
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(matches!(classify_len(Err(denied)), FileLen::Unreadable(_)));
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert!(matches!(classify_len(Err(gone)), FileLen::Absent));
+
+        // A NUL cannot be statted (`InvalidInput` on Unix and Windows), so it
+        // reaches the unreadable arm without a deny ACL.
+        let err = match file_len(Path::new("bad\0name")) {
+            FileLen::Unreadable(e) => e,
+            other => panic!("a NUL path is not absent: {other:?}"),
+        };
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+
+        #[cfg(unix)]
+        {
+            // Unix: a regular file used as a parent is `ENOTDIR`, which is
+            // unreadable, not missing. Windows reports `NotFound` for the
+            // same shape, so this arm is platform-specific.
+            std::fs::write(dir.join("blocker"), b"x").unwrap();
+            match file_len(&dir.join("blocker/child.dat")) {
+                FileLen::Unreadable(e) => {
+                    assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);
+                }
+                other => panic!("ENOTDIR is unreadable, not absent: {other:?}"),
+            }
+        }
     }
 
     /// T-1: a BOM is not whitespace, so the old `if let Ok(from_str(line))`

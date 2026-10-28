@@ -33,11 +33,18 @@ pub(super) async fn attempt_temp(
     writes: &mut FileWrites,
 ) -> Result<Inplace> {
     match util::file_len(final_path) {
-        None => tracing::debug!("check: missing local file"),
-        Some(n) if n != file.size as u64 => {
+        util::FileLen::Absent => {
+            tracing::debug!(path = %final_path.display(), "check: missing local file");
+        }
+        util::FileLen::Unreadable(e) => tracing::warn!(
+            path = %final_path.display(),
+            error = %e,
+            "check: cannot stat the local file -> needs repair"
+        ),
+        util::FileLen::Present(n) if n != file.size as u64 => {
             tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
         }
-        Some(_) => match util::md5_file(final_path) {
+        util::FileLen::Present(_) => match util::md5_file(final_path) {
             Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
                 tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
                 return Ok(Inplace::Skipped);
