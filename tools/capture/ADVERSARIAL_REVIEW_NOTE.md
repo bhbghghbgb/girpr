@@ -20,6 +20,11 @@ documentation errors.
 J1 is the only behavioural finding. J2 and J3 are documentation-only, but
 both state a contract a reader can rely on and get the opposite behaviour.
 
+**Status (end of this pass):** all three validated and fixed — J1 in `0706984`,
+`43d5977` and `3f042a1`, J2 in `28c3c18` plus `d74e40b`, J3 in `73d0cb5`. See
+[Resolution](#resolution) for the evidence and [Resolution
+verification](#resolution-verification) for the final numbers.
+
 ---
 
 ## J1 — an unreadable manifest is silently dropped from the `list` inventory
@@ -279,6 +284,52 @@ The record-shape rationale (no `BUNDLE` record for a non-bundle) can stay.
 
 ---
 
+## Resolution
+
+Validated at `ecc81c5` (this note's commit) and fixed on the same branch. Every
+finding was confirmed against the current source and the real binary; none was
+dismissed.
+
+| ID | Verdict | Commit(s) | Resolution |
+|---|---|---|---|
+| J1 | valid, fixed | `0706984`, `43d5977`, `3f042a1` | `list_with` probes `MANIFEST.json` through the new fallible `probe_manifest`, which returns `Missing`, `NotABundle(reason)` or `Version(u32)`, plus `Err` naming the path and the I/O error when the stat or read fails. `Missing` and `NotABundle` keep the documented step-over; `Err` fails the walk, so `run::list` maps it to a usage error. `schema_version_of` is now the `Bundle::open` wrapper over the same probe and keeps its existing error texts for a refused schema. The manifest reader is injected in `list_with` like the directory reader, and `a_list_walk_that_cannot_read_a_manifest_fails_instead_of_dropping_the_bundle` fails against the pre-fix code (which silently returned `Ok` with no bundle). `3f042a1` adds the stat-arm probe test. `docs/00-spec.md:889-893` now names an unreadable manifest. `43d5977` keeps the old `is_file() == false` behaviour for a `MANIFEST.json` that is not a file (keep descending) so the fix changes only the failure arm. |
+| J2 | valid, fixed (doc) | `28c3c18`, `d74e40b` | The doc now says both lists are sorted by relative path and that the order is **not** deepest-first; the spec promises no order and the summary's `first`/`last` read the sorted list, so changing the walk was the larger, unnecessary change. `list_orders_bundles_by_relative_path_not_by_depth` builds two real fixture bundles, nests one under `z_region/`, and asserts the shallower `hk4e_global/...` sorts first. |
+| J3 | valid, fixed (doc) | `73d0cb5` | `run::list` now names the three arms: a non-bundle is stepped over, a bundle this build refuses is named on stderr and counted as `bundles_unreadable`, and anything the walk cannot read (directory, entry or manifest) stops the command with a usage error (exit `1`). The record-shape rationale for not emitting a `BUNDLE` record for a non-bundle stays. |
+
+### J1 reproduction, before and after
+
+Reference bundle `artifacts/hk4e_global/7.0.0__7.1.0/20261021T141336Z`, its
+`MANIFEST.json` held by `[System.IO.File]::Open($m, 'Open', 'Read', 'None')`:
+
+- before (`ecc81c5`): `WARN ... looks like a bundle but does not open; skipped`,
+  `SUMMARY ... result=ok ... bundles=0 bundles_passing=0 bundles_unreadable=0
+  ... exit_code=0`, process exit `0`;
+- after (`43d5977`): `SUMMARY ... result=error exit_code=1 exit_code_slug=usage
+  ... detail=cannot%20read%20...MANIFEST.json:%20The%20process%20cannot%20access
+  %20the%20file...%20(os%20error%2032)`, process exit `1`;
+- unlocked after the fix: `result=ok bundles=1 bundles_passing=1
+  bundles_unreadable=0`, exit `0`.
+
+The corrupt-JSON fixture still steps over (`a_directory_that_is_not_a_bundle_is_not_named_by_list`)
+and the v1 fixture is still counted (`a_v1_bundle_is_named_by_list_rather_than_dropped`),
+so the three arms are separated rather than collapsed into "fail on anything".
+
+## Resolution verification
+
+Run on this Windows host at `3f042a1` after all three fixes landed:
+
+| Command | Result |
+|---|---|
+| `cargo build -p gircap` | `Finished dev profile ... in 0.46s`, exit `0`, no warnings |
+| `cargo test -p gircap` | **671 passed, 0 failed, 0 ignored** (528 lib + 143 integration: 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15; doc-tests 0) |
+| `cargo clippy -p gircap --all-targets` | `Finished dev profile ... in 7.02s`, exit `0`, no diagnostics |
+| `cargo fmt -p gircap --check` | exit `0`, clean |
+
+Three tests are new over the fifth-pass 668: the J1 injected-reader regression
+and the J1 stat-arm probe (lib 526 → 528), and the J2 mixed-depth ordering test
+(`offline_bundle` 13 → 14). No test is `#[cfg(unix)]`; the two `#[cfg(windows)]`
+tests ran, so nothing was skipped on this host.
+
 ## Fifth-pass fixes re-checked
 
 The following were re-read at the current tree and still hold; they are not
@@ -295,10 +346,10 @@ findings:
   `src/verify/mod.rs:237-277`.
 - tag validation before the dump writes: `src/manifest/dump.rs:84-99`.
 
-## Verification
+## Verification before this pass (at `ecc81c5`)
 
 Run on this Windows host at the tree above, after the fifth-pass commits and
-before this note was created (this note changes no code):
+before any sixth-pass fix (the note itself changed no code):
 
 | Command | Result |
 |---|---|
