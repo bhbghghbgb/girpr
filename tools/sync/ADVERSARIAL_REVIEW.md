@@ -1171,14 +1171,138 @@ only Windows was run. Neither finding was run under `--missing-only` or
 `--keep-extra`.
 
 **Open for the maintainer.** A policy for hard links (or a documented
-non-guarantee) is the remaining way a dst entry can write into src. The dst
-file-link regression needs a Windows host with developer mode or a POSIX CI to
-execute.
+non-guarantee) was the remaining way a dst entry could write into src; P6-2
+(§12) closes it by refusing a destination with more than one hard link. The dst
+file-link regression still needs a Windows host with developer mode or a POSIX
+CI to execute.
+
+## 12. Sixth adversarial pass (P6-1, P6-2, P6-3)
+
+The pass read the current tree, re-ran the earlier reproductions, and probed
+filter/plan/apply parity with new fixtures. Verdicts:
+
+| ID | Severity | Area | Verdict |
+| --- | --- | --- | --- |
+| P6-1 | medium | plan/apply parity, filters | **Fixed** (`af5116b`, `08897e4`) |
+| P6-2 | high (data loss) | hard links | **Fixed** (`b2b1445`, `2a99fa3`) |
+| P6-3 | low | docs | **Fixed** (this docs commit) |
+
+P5-1 (`fix_dirs` before `mkdirs`) and P5-2 (`validate_dst_links` plus the
+final-component recheck in `copy_one`) hold for the cases they cover; no
+regression was found in the new link, rename, apply, or cache-pruning code
+beyond the hard-link class.
+
+### P6-1 — a filtered dst blocker at an ancestor was invisible to the plan guard
+
+`build_plan` plans `mkdir` for every src directory absent from the effective dst
+map (`dm`). With `--include "*.txt"`, an ancestor such as `foo` is absent from
+`dm` but retained in `sm` as a directory ancestor, while a regular file named
+`foo` is filtered out of the dst map. `ensure_dirs_applicable` consults `dm`,
+so it saw no blocker; the dry run printed `MKDIR foo` + `COPY foo/bar.txt` and
+the real run failed in `create_dir_all` with `AlreadyExists` after earlier
+phases had already changed dst.
+
+Widening `dm` to retain non-directory ancestors was rejected: the planner would
+then see a type conflict and delete an entry the filter promised to leave alone.
+
+**Resolution.** `plan::ensure_mkdir_targets_free` (`plan.rs`) runs from
+`cmd_sync` after both resolved maps exist and **before** `rename_to_src_casing`,
+which is the first filesystem change. It derives the mkdir candidates
+`build_plan` will see after the rename (src directories absent from `dm`,
+lowercase-paired in insensitive mode), then stats each candidate and every strict
+prefix on disk (`symlink_metadata`, then `metadata`, so a link is judged as
+`create_dir_all` judges it). An existing directory is accepted; a non-directory
+is refused unless it is a planned `fix_dirs` entry. The refusal therefore comes
+from the same disk state in dry and real runs, names the blocker, and no
+case-only rename can precede it. `ensure_dirs_applicable` stays as the
+post-plan, map-based assertion for the unfiltered type-conflict shape.
+
+**Tests.** Five `plan.rs` unit cases (filtered file, existing directory, case
+pair, strict prefix, planned fix) and
+`tests/sync.rs::a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename`,
+which runs dry and real, asserts exit 3 with the same message, asserts no
+`mkdir`/`copy`/`rename`/`fix-dir` record, and leaves a would-be case-only rename
+(`other.txt` -> `Other.txt`) untouched. Against the built binary, both modes
+exit 3 with `cannot create \`foo\`: dst holds \`foo\` as a file ...`, and
+`dst/foo` still contains `blocker`.
+
+### P6-2 — a dst hard link was written through, destroying the shared inode
+
+With `src/a.txt = "AAAA"`, `src/b.txt = "BBBBBBBBBB"`, and
+`dst/a.txt` hard-linked to `src/b.txt`, a sync reported success while
+truncating the shared inode, changing `src/b.txt` to `AAAA`. A hard link is not
+a reparse point, so `try_is_link` and both `validate_*_links` walks miss it, and
+`ensure_link_safe` only checks link ancestors. Verification then read the
+changed inode back, so size and digest agreed with themselves; under
+`--hash-all-of none` the size+mtime arm passed too.
+
+**Resolution.** New `src/hardlink.rs::count(path)` reads the link count (Unix
+`MetadataExt::nlink`; Windows `CreateFileW` with `FILE_READ_ATTRIBUTES` and all
+share flags, then `GetFileInformationByHandle`'s `nNumberOfLinks`).
+`copy_one` calls it after the blocking-directory removal and parent creation,
+before `File::create`, and refuses any count above one; a missing path is fine.
+The link count, not an identity comparison with the copied source, is the check
+that covers the reported shape: `dst/a.txt` can be hard-linked to `src/b.txt`
+while the copy reads `src/a.txt`. The refusal is conservative by design — any
+shared inode is outside a mirror's write contract, wherever it lives. Temp file
++ rename was rejected because it would change the documented truncate-in-place
+behaviour and break the sanctioned dst **symlink** write-through; a symlink is a
+different directory entry, not a second name for the truncated inode.
+
+This adds a Windows-only `windows-sys 0.61` dependency (`Win32_Foundation`,
+`Win32_Security`, `Win32_Storage_FileSystem`) in `tools/sync/Cargo.toml`, and
+`Cargo.lock` gains `windows-sys 0.61.2` in `girsync`'s dependency list (the
+package was already in the lock through other crates). That is the only change
+outside the listed `tools/sync` files.
+
+**Tests.** Three `hardlink::tests` count cases and
+`tests/sync.rs::a_dst_hard_link_is_refused_without_touching_the_shared_inode`,
+which runs `--exclude b.txt` and the same under `--hash-all-of none`, asserts
+exit 3, and checks both `src/b.txt` and `dst/a.txt` still contain
+`BBBBBBBBBB`. Against the built binary: exit 3 with `has 2 hard links`, both
+names unchanged, and `fsutil hardlink list` still lists both.
+
+### P6-3 — README test count was stale
+
+`README.md` said 352 test functions (351 run); the number dated from an earlier
+commit and had not tracked later additions. It now states **384 test functions,
+383 run by default** (one `#[ignore = "..."]`), matching
+`cargo test -p girsync` (383 passed, 1 ignored) and the `#[test]`/`#[ignore]`
+attribute count.
+
+### Final verification
+
+Run on Windows 11, branch `fix-gaps/girsync`, after the fixes:
+
+- `cargo build -p girsync` — Finished, exit 0.
+- `cargo test -p girsync` — **383 passed, 0 failed, 1 ignored**. Lib 141;
+  cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers
+  12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19,
+  symlink 24, sync 23 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+- `cargo test -p girsync --test symlink -- --nocapture` — **24 passed, 0
+  failed**; six file-link cases skip with `os error 1314`, every junction case
+  runs.
+- `cargo clippy -p girsync --all-targets` — clean, exit 0.
+- `cargo fmt -p girsync --check` — exit 0.
+
+**Surviving decisions.** `--max-depth` still skips silently; it is the accepted
+F-4 decision and remains the one place a successful run can omit content by
+design. An excluded dst directory at an ancestor still reports `MKDIR` although
+`create_dir_all` is a no-op there; dry and real agree and the run converges, so
+only the claim that the directory was created is inaccurate. That was left as an
+observation rather than folded into P6-1. The hard-link refusal is deliberately
+blanket rather than limited to links into src.
+
+**Not verified.** P6-2 was exercised on Windows only; no POSIX `nlink` run, no
+hard link to a file outside both roots. Native POSIX symlinks and the file-link
+paths remain unrunnable here (`os error 1314`); junction cases stand in for
+directory links only. `--keep-extra` and `--missing-only` variants of P6-1 were
+reasoned about and covered by unit cases, not all run end-to-end.
 
 ---
 
 *End of review. Sections 1–6 describe the original source-only audit: no source,
 test, Cargo, README, or other project file was changed and no build, test, or
-binary run was performed for them. Sections 7–11 record the implementation and
-the second, third, fourth and fifth passes, which did build, test and run the
+binary run was performed for them. Sections 7–12 record the implementation and
+the second through sixth passes, which did build, test and run the
 binary.*
