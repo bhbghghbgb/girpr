@@ -154,7 +154,7 @@ async fn attempt_inplace_inner(
     // check, so an intact file is never deleted.
     if ctx.repair_mode == RepairMode::Discard {
         drop(handle);
-        std::fs::remove_file(final_path).ok();
+        discard_target(final_path)?;
         handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
         // The file is gone: every chunk has to be written, and there is
         // nothing left to reuse from.
@@ -433,6 +433,22 @@ pub(super) fn trim_is_free(
     })
 }
 
+/// Delete the target for `--repair-mode discard`.
+///
+/// `NotFound` is success: the file is already gone, which is what the mode
+/// wanted. Every other error is fatal. Ignoring it used to turn a refused
+/// delete (read-only attribute, ACL, sharing violation) into a later
+/// `create <path>: access denied` — the wrong syscall — or, when the open
+/// succeeded, silently kept the old bytes while every chunk was treated as
+/// missing.
+fn discard_target(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("discard {}", path.display())),
+    }
+}
+
 /// A RAM reservation that gives itself back when it is dropped.
 struct RamReservation<'a> {
     summary: &'a crate::report::Summary,
@@ -457,4 +473,34 @@ enum Tier {
     /// written, and the write order is the one that keeps the most of them
     /// alive.
     Ordered,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R-4: a failed delete in discard mode must be reported as the delete,
+    /// not ignored and then blamed on the re-open. A directory at the target
+    /// is the portable way to make `remove_file` fail while the path exists.
+    #[test]
+    fn a_refused_discard_names_the_delete() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_refused");
+        let target = dir.join("foo.dat");
+        std::fs::create_dir_all(&target).unwrap();
+        let err = discard_target(&target).expect_err("a directory cannot be removed as a file");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("discard") && chain.contains(&target.display().to_string()),
+            "the delete is the failing step and must be named: {chain}"
+        );
+        assert!(target.exists(), "a refused delete leaves the path alone");
+    }
+
+    /// A target that disappeared between the open and the delete still gives
+    /// discard mode what it asked for.
+    #[test]
+    fn an_already_absent_discard_target_is_not_an_error() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_absent");
+        discard_target(&dir.join("gone.dat")).expect("absent is the desired state");
+    }
 }
