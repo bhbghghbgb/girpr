@@ -756,7 +756,7 @@ and all six `*_tmp` doc sites plus the `kept_bytes` comment are corrected.
 ### 7.2 Verification
 
 Run on the first-pass final tree on Windows (`cargo` 1.x, debug profile). The
-latest full-suite numbers are in §8.7.
+latest full-suite numbers are in §8.10.
 
 - `cargo build` — ok.
 - `cargo test -p girpr` — **286 passed, 0 failed, 7 ignored** (156 lib + 7 binary + 16 + 25 + 82 integration). The 7 ignored are the 6 `artifact_bridge` tests and the 1 `peak_heap` measurement.
@@ -851,7 +851,15 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | T-1 | An unparseable line in the launcher's `res_category`/blacklist JSON-lines was dropped by an `if let Ok`, so a BOM-prefixed or crash-truncated line silently ignored an explicit configuration; an all-malformed file degraded to the empty set. | Valid, fixed: one leading UTF-8 BOM is stripped; a mixed file warns per unparseable line with the path and 1-based line and keeps the well-formed entries; a file whose non-blank text produced no entry **and** had a parse failure is refused (exit `1`), matching R-8's rule for the audio scan file. A valid entryless `{}` and a blank file stay empty. Both readers share `parse_config_list`. Reproduced before the fix (BOM plus truncated line → `Ok(Some({}))`, all-malformed → `Ok(Some({}))`, no log) and pinned by two unit tests. | `ad0a09c` |
 | T-2 | `util::file_len` mapped every `metadata` error to `None`, so an unreadable file was logged as missing by the temp path and reported as `CHECK fail: size` by `--check-only`. | Valid, fixed: `file_len` returns a three-state `FileLen` through `classify_len`; only `NotFound` is `Absent`, every other error is `Unreadable`. `check.rs` logs `CHECK fail: unreadable` with the file and the `io::Error` and still counts the file damaged; `temp.rs` warns with the path and error and still repairs. Pinned by an injected `PermissionDenied`, a real NUL path, and (Unix) a file-as-parent `NotADirectory`; Windows maps file-as-parent to `NotFound`, so that shape is not used for the unreadable arm there. | `baf6498` |
 
-### 8.8 Decisions that still bind
+### 8.8 Ninth pass — U-1…U-3
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| U-1 | The delete/move/`--audio` gates scoped the raw server/config spelling while the filesystem sink cleaned it, so a `./`-spelled path was deleted or moved through an `--exclude`, and an in-scope `./`-spelled scan dir was refused with exit `1`. | Valid, fixed: `util::clean_rel` normalises the manifest rel, the deprecated list and the audio dirs once at their boundary; every gate and sink uses that string. Tests pin the excluded deprecated path, the excluded audio cache and the in-scope scan file. | `3123d96` |
+| U-2 | A stale lock that could not be removed (an open handle without `FILE_SHARE_DELETE`, a read-only file, a delete-denying ACL) recursed in `Lock::acquire` until the stack overflowed: exit `-1073741571`, no `SUMMARY`. | Valid, fixed: one bounded takeover attempt. A failed removal is a contextual error naming the path and the I/O error; a successful removal is followed by one `create_new`, and a raced fresh lock is refused by name. The removal is injected so the arm is pinned on every host; the Windows sharing-violation probe now returns that error instead of aborting. | `d6bf9b3` |
+| U-3 | README's module map and remaining module references, docs/03's crate layout and docs/04's module/touch-point tables still named the pre-split `src/repair/{metadata,manifest,check,post}.rs`, `src/repair/plan/...` and `src/repair/file.rs`. | Valid, fixed: `phases/…`, `purge.rs` and `file/mod.rs`; every written path was checked against `git ls-files`. | `1ff9e90` |
+
+### 8.9 Decisions that still bind
 
 1. **Saturate, never wrap**, in every server-size estimate (N-13, N-15, N-19, S-2).
 2. **Containment is a strict lexical gate**: fail closed on an unresolvable probe (N-1); refuse drive/UNC, `..`, trailing separators, Windows device names, trailing dot/space and ADS colons on every host (N-14); clean `./` rather than refuse it (N-6); fold case for plan dedup on Windows only (N-5); an outside path is exit `2` even if a scope filter would drop it (F-2).
@@ -866,19 +874,22 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 11. **`kept_bytes` counts a resumed `_tmp` prefix**, unverified until the MD5 gate (F-9/N-10).
 12. **File tasks join in completion order**, and the file-semaphore invariant is a named `expect` (N-7, N-12).
 13. **The path scope bounds every deletion site, including the directory sweep**: a directory the scope hides is kept out of `PurgePlan::dirs` and counted in `hidden`, so an empty out-of-scope placeholder is not removed (S-1).
+14. **A server/config spelling is normalised once, at its boundary**: `util::clean_rel` returns the `/`-separated string the gate and the sink share, so `./a/b` cannot pass a scope that hides `a/b` (U-1). A stale lock that cannot be removed is refused with the path and the I/O error, never retried; a successful takeover is one bounded attempt (U-2).
 
-### 8.9 Latest verification
+### 8.10 Latest verification
 
-Full run on Windows, debug profile, eighth-pass final tree:
+Full run on Windows, debug profile, ninth-pass final tree:
 
-- `cargo build` — ok (14.34s).
-- `cargo test -p girpr` — **338 passed, 0 failed, 7 ignored** (199 lib + 7 `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 90 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0 `src/main.rs`, 0 doc-tests).
-- `cargo clippy -p girpr --all-targets` — clean, no warnings (17.10s).
+- `cargo build -p girpr` — ok (0.44s, warm).
+- `cargo test -p girpr` — **342 passed, 0 failed, 7 ignored** (200 lib + 7 `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 93 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0 `src/main.rs`, 0 doc-tests).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings (6.61s).
 - `cargo fmt --check` — clean (exit `0`).
 
-**Not run:** the `#[cfg(unix)]` blocks of the containment, mode and new `file_len` tests (this host is Windows); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
+The four ninth-pass tests are the three `./`-spelling cases and the undeletable-lock unit case.
 
-### 8.10 Open for maintainers
+**Not run:** the `#[cfg(unix)]` blocks of the containment, mode, `file_len` and file-as-parent tests (this host is Windows; the three new path-spelling tests are host-independent); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). U-2's real undeletable-file shape was exercised only with the Windows sharing-violation probe; the in-repo test injects the failed removal, so the arm is pinned on every host. S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
+
+### 8.11 Open for maintainers
 
 - `expected_paths()` and `classify_purge_path` still compare case-sensitively on Windows. N-5 closed duplicate plan entries, but an existing file whose case differs from the manifest can still be an orphan under `--purge-after`.
 - F-6's `spawn_blocking` panic, P-2's two in-place `File::metadata()` sites, S-3's deprecated-stat failure arm, and R-5's `sync_all` failure have no public injection seam; S-3's arm is pinned at its classifier, the rest remain code-reading claims.
@@ -888,5 +899,6 @@ Full run on Windows, debug profile, eighth-pass final tree:
 - R-2's strictness is a behaviour change: an unreadable audio scan file now fails the run (exit `1`) instead of falling back to `en-us`.
 - T-1 keeps a mixed ignore/blacklist file usable by warning per bad line; only a file with no usable entry and at least one parse failure is refused. A maintainer who prefers any malformed line to fail the run changes the final condition in `parse_config_list`, not the two readers.
 - T-2 treats a directory at a planned file path as `Present(dir_len)`, so it is reported as a size mismatch, not as unreadable; that is safe but is a separate state from a failed stat. A deny-ACL fixture was not available on this host.
+- U-1 normalises the manifest rel, the deprecated list and the three audio dirs at their boundary. `res_category_dir` and `blacklist_dir` are read-only inputs with no scope gate and still validate at their `contained_join` sink; if a future gate matches them against the scope, they need the same `util::clean_rel` treatment.
 
 *End of review. §1–§7 record the first pass; §8 is the pass log, and the commits it cites are the source, test and doc changes.*
