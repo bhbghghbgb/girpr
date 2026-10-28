@@ -725,8 +725,11 @@ Mirrors `src` → `dst`:
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
    path, if one root contains the other (a mirror may not contain its own source;
    compared by canonical path and component-wise, so `A`/`AB` is not nesting and
-   `ROOT`/`root` is one tree on Windows), or on any IO error
-   (dangling symlink, walk loop, locked file — first error aborts the run).
+   `ROOT`/`root` is one tree on Windows), if a link inside `src` resolves to `dst`,
+   to something inside it, or to a directory that contains it (checked after the
+   src walk, before any mirror change; a link pointing anywhere else is ordinary
+   content), or on any IO error (dangling symlink, walk loop, locked file — first
+   error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
@@ -898,7 +901,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   relative path (UTF-8; case preserved as stored). Value = binary
   `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
   `entries` table + `meta{version, case_sensitive}` in the `meta` table.
-  `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
+  `girpr-cache*` (DB file, backups, olds) is always excluded from scans — at
+  **any depth**, since a nested root or a followed link can bring its own cache
+  into the walk, and it is tool state rather than content.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
@@ -1029,7 +1034,12 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   link where `src` has a file is unlinked, and the file is written in its place.
   Deleting an extra directory link removes **the link**, never its target: a path
   under a `dst` link is never deleted through it, and the link is removed when
-  `src` does not have that path. A link `src` **also** has is not a write-through
+  `src` does not have that path. A **src** link that reaches `dst` (its target is
+  `dst`, inside it, or is a directory containing it) makes the trees overlap
+  through the walk and is refused before any mirror change; a src link pointing
+  anywhere else is ordinary content and is materialized. Independently of the
+  plan, no removal may target a path whose directory resolves inside `src`, so a
+  mirror cannot delete the files it is copying. A link `src` **also** has is not a write-through
   path: a run that would create, fix, copy or rename through it fails before
   touching the filesystem, naming the link (remove it, or `--exclude` it). Its
   extra descendants are left in place, so a default run fails rather than exit 0

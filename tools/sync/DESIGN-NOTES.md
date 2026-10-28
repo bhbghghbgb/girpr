@@ -16,7 +16,7 @@ and not here.
 ## Load-bearing invariants, and what enforces them
 
 The dangerous edits in this crate are the ones that break an invariant nothing
-fails loudly about. Six of them.
+fails loudly about. Seven of them.
 
 ### The verify needs two independent reads
 
@@ -133,6 +133,36 @@ one place the rule has to be visible to `merge`; and
 `a_digest_set_is_seventy_two_bytes_and_allocates_nothing`, which fails if a later
 edit puts a map back — a map passes every other test here and costs five
 allocations per row.
+
+### The effective source is checked against dst before a plan exists
+
+Two roots can be siblings and still overlap through the walk. `walk_live`
+follows links, so if `src/link` resolves to `dst` (or to a directory containing
+`dst`), one physical file appears both at its real dst path and under `link/`.
+The real path then looks `EXTRA`, the delete pass removes it, and the copy that
+needed it fails afterwards: data loss reported as a copy error. The root check
+in `validate_inputs` cannot see this, because it canonicalizes only the roots.
+
+`validate_src_links` therefore canonicalizes every link the **effective** src
+map kept and refuses an intersection with dst in either direction. It runs after
+src's phase A — so `--include`/`--exclude` and `--max-depth` have already
+decided what this run's source is — and before dst is scanned, planned, renamed
+or applied. A link to anywhere else is ordinary mirrored content, including one
+that points back inside `src`.
+
+The removal passes do not rely on that check alone. `guard_removal_outside_src`
+canonicalizes each delete target's **parent** and refuses one that resolves
+inside src; the final component is deliberately not resolved, so a link at the
+target is removed as a link and its target survives. That is the second line
+because a plan is data: a later phase that invents a delete must not be able to
+remove the file the run is copying.
+
+**Enforced by:** `sync_refuses_a_src_directory_link_to_dst`,
+`sync_refuses_a_src_directory_link_inside_dst`,
+`sync_refuses_a_src_directory_link_containing_dst`,
+`sync_refuses_a_src_file_link_into_dst` (all but the last run on a Windows host
+through a junction; the file-link case may skip) and
+`a_removal_whose_parent_resolves_inside_src_is_refused`.
 
 ### A digest is looked up by name, not by slot
 
