@@ -832,6 +832,17 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
     let old_tag = pair.old.as_ref().map(|o| o.tag.clone()).unwrap_or_default();
     let new_tag = pair.new.as_ref().map(|n| n.tag.clone()).unwrap_or_default();
 
+    // **The numbers are validated before the layout.** `assemble_side` builds a
+    // `Layout::of` from the declaration, and a captured manifest has already
+    // been through this at its decode boundary; a hand-built `FilePair` (tests,
+    // a future replay path) has not. One error naming the chunk and the value is
+    // better than an A11 row that only says the tiling is wrong.
+    for entry in [old_entry, new_entry].into_iter().flatten() {
+        entry
+            .validate_arithmetic()
+            .map_err(|why| format!("{}: {why}", entry.file))?;
+    }
+
     let old = old_entry
         .map(|e| assemble_side(e, &old_tag, input.chunks))
         .transpose()?;
@@ -1095,6 +1106,61 @@ fn fetch_all_plan(
         .collect())
 }
 
+/// The four plan counts and the FETCH cost, from one walk.
+///
+/// **The cost is checked.** `compressed_size` is a manifest number, and a plan
+/// that costs a negative number of bytes is a wrong plan, not a small one; an
+/// accumulated sum that does not fit `i64` is a typed error naming the chunk and
+/// the values. Both used to be a plain `+=`, which is how a single
+/// `compressed_size: -1` reached `Totals` and passed A20.
+fn totals_for(
+    plan: &[PlanEntry],
+    old: Option<&FileResult>,
+    new: Option<&FileResult>,
+) -> Result<Totals, String> {
+    let mut reuse = 0_usize;
+    let mut fetch = 0_usize;
+    let mut moved = 0_usize;
+    let mut download_bytes = 0_i64;
+    for e in plan {
+        match e.decision {
+            Decision::Reuse => reuse += 1,
+            Decision::Fetch => {
+                fetch += 1;
+                if e.compressed_size < 0 {
+                    return Err(format!(
+                        "chunk {}: compressed_size {} is negative; a plan cost cannot be \
+                         negative",
+                        e.chunk_id, e.compressed_size
+                    ));
+                }
+                download_bytes =
+                    download_bytes
+                        .checked_add(e.compressed_size)
+                        .ok_or_else(|| {
+                            format!(
+                                "chunk {}: compressed_size {} overflows the plan's download_bytes \
+                         (running total {download_bytes} B)",
+                                e.chunk_id, e.compressed_size
+                            )
+                        })?;
+            }
+        }
+        if e.is_moved() {
+            moved += 1;
+        }
+    }
+    Ok(Totals {
+        chunks: plan.len(),
+        reuse,
+        fetch,
+        moved,
+        download_bytes,
+        materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
+        materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
+    })
+}
+
 fn build_map(
     input: &AssemblyInput<'_, '_>,
     old: Option<&FileResult>,
@@ -1107,36 +1173,7 @@ fn build_map(
         md5: r.declared_md5.clone(),
         nchunks: r.nchunks,
     };
-    let totals = // One pass for all four numbers. Five passes, each re-walking the
-        // plan and each calling `is_moved()` or comparing `decision` again, is
-        // five times the work for five numbers that a single walk produces.
-        plan.as_ref().map(|p| {
-            let mut reuse = 0_usize;
-            let mut fetch = 0_usize;
-            let mut moved = 0_usize;
-            let mut download_bytes = 0_i64;
-            for e in p {
-                match e.decision {
-                    Decision::Reuse => reuse += 1,
-                    Decision::Fetch => {
-                        fetch += 1;
-                        download_bytes += e.compressed_size;
-                    }
-                }
-                if e.is_moved() {
-                    moved += 1;
-                }
-            }
-            Totals {
-                chunks: p.len(),
-                reuse,
-                fetch,
-                moved,
-                download_bytes,
-                materialize_old_bytes: old.map(|o| o.bytes.len() as i64).unwrap_or(0),
-                materialize_new_bytes: new.map(|n| n.bytes.len() as i64).unwrap_or(0),
-            }
-        });
+    let totals = plan.as_ref().map(|p| totals_for(p, old, new)).transpose()?;
     // `plan` is `Some` for every capture that has a new side, so `totals` is too.
     // Checked rather than defaulted: a `download_bytes` of `0` on a capture that
     // does have a plan would be a false claim, and one with no plan would be
@@ -2367,5 +2404,76 @@ mod tests {
         );
         assert_eq!(v["plan"][0]["target_range"]["start"], 0);
         assert_eq!(v["plan"][0]["target_range"]["end"], 64);
+    }
+
+    /// **K1.** A plan cost is an address-free total, but it still has to be a
+    /// count: a negative `compressed_size` is refused with the chunk and value
+    /// rather than recorded as a negative download.
+    #[test]
+    fn a_negative_compressed_size_is_a_typed_error_not_a_negative_total() {
+        let entry = PlanEntry {
+            i: 0,
+            decision: Decision::Fetch,
+            target_range: Range::at(0, 8),
+            source_range: None,
+            chunk_id: "chunk-a".into(),
+            url: Some("https://cdn/chunk-a".into()),
+            compressed_size: -1,
+            uncompressed_size: 8,
+            uncompressed_md5: "00".repeat(16),
+            note: None,
+        };
+        let e = totals_for(&[entry], None, None).unwrap_err();
+        assert!(e.contains("chunk-a"), "names the chunk: {e}");
+        assert!(e.contains("-1"), "names the value: {e}");
+        assert!(e.contains("negative"), "{e}");
+    }
+
+    /// **K1.** `Σ compressed_size` over a hostile plan saturates into a typed
+    /// error naming the running total, not a debug abort or a release wrap.
+    #[test]
+    fn a_plan_cost_that_overflows_is_a_typed_error() {
+        let entry = |i: usize, id: &str| PlanEntry {
+            i,
+            decision: Decision::Fetch,
+            target_range: Range::at(0, 8),
+            source_range: None,
+            chunk_id: id.into(),
+            url: None,
+            compressed_size: i64::MAX,
+            uncompressed_size: 8,
+            uncompressed_md5: "00".repeat(16),
+            note: None,
+        };
+        let e = totals_for(&[entry(0, "first"), entry(1, "second")], None, None).unwrap_err();
+        assert!(e.contains("second"), "names the term that overflowed: {e}");
+        assert!(
+            e.contains("overflows") && e.contains(&i64::MAX.to_string()),
+            "names the arithmetic and the value: {e}"
+        );
+    }
+
+    /// **K1.** `assemble` revalidates a hand-built manifest, so the same crafted
+    /// `compressed_size` cannot bypass the capture's decode-boundary check.
+    #[test]
+    fn assemble_refuses_a_manifest_with_a_negative_cost() {
+        let mut bad = chunk(1, 0, 8);
+        bad.compressed_size = -1;
+        let pair = FilePair {
+            capture_id: "negative_cost".into(),
+            path: "dll".into(),
+            old: None,
+            new: Some(NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: file("dll", vec![bad]),
+            }),
+        };
+        let e = assemble_pair(&pair).unwrap_err();
+        assert!(e.contains("dll"), "names the entry: {e}");
+        assert!(
+            e.contains("compressed_size -1") && e.contains("negative"),
+            "names the field and the value: {e}"
+        );
     }
 }
