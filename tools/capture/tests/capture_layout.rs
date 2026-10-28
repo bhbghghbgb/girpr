@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{File, Mock, World};
 use girpr_tempdir::TempDir;
 
 /// The binary under test, beside this test's own executable.
@@ -1488,6 +1488,97 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
     assert!(
         detail.contains("published"),
         "and what is published: {detail}"
+    );
+}
+
+/// A manifest path is document-supplied. It becomes
+/// `<artifact>/game/<file>` and `expected/<file>`, so an escaping value must be
+/// refused at decode rather than written four directories above `--out`.
+///
+/// The hostile file is the only game file in this world, so an ordinary
+/// selection reaches it: without the decode check the capture would assemble it
+/// and write `game/../../../../../gircap-escape`.
+#[test]
+fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
+    let hostile = "../../../../../gircap-escape";
+    let mut world = World::game_only();
+    for (build, seed) in [(&mut world.old, 501_u64), (&mut world.new, 502_u64)] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        *game = vec![File::new(hostile, &[seed], 32)];
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("manifest-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("manifest entry"), "{text}");
+    assert!(text.contains("escapes the bundle root"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-escape").exists(),
+        "nothing may be written outside --out"
+    );
+    assert!(
+        !scratch.out().exists(),
+        "the refusal happens before the artifact directory exists"
+    );
+}
+
+/// A chunk id is both a CDN path segment and `chunks/blobs/<id>.zst`. The
+/// documented `<16 hex>_<32 hex>` shape is checked where the manifest is
+/// decoded, before the id can reach either sink.
+#[test]
+fn a_manifest_chunk_id_outside_the_documented_shape_is_refused() {
+    let hostile = "../../../../gircap-chunk";
+    let mut world = World::game_only();
+    for build in [&mut world.old, &mut world.new] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        game[0].chunks[0].id = hostile.to_string();
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("chunk-id-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("not a chunk id"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-chunk").exists(),
+        "nothing may be written outside --out"
+    );
+}
+
+/// `getGameConfigs.audio_pkg_scan_dir` is joined under `game/`. A proxy or a
+/// compromised API can supply it, so it is checked before the tree is created.
+#[test]
+fn an_audio_scan_dir_that_escapes_the_bundle_is_refused() {
+    let mut world = World::all_shapes();
+    world.audio_pkg_scan_dir = "../../../../../gircap-scan".into();
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("scan-dir-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 3, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("audio_pkg_scan_dir"), "{text}");
+    assert!(text.contains("escapes the bundle root"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-scan").exists(),
+        "nothing may be written outside --out"
+    );
+    assert!(
+        !scratch.out().exists(),
+        "the refusal happens before the artifact directory exists"
     );
 }
 

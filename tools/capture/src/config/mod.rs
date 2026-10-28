@@ -471,7 +471,10 @@ fn normalize_audio(raw: &str) -> String {
 ///
 /// Manifest paths are `/`-separated and rooted at the game directory, so an
 /// absolute path, a drive letter, a parent hop or a backslash cannot name a file
-/// in a manifest and would otherwise be silently admitted and then missed.
+/// in a manifest and would otherwise be silently admitted and then missed. The
+/// shape rule itself lives in [`crate::paths`], because the same rule has to
+/// cover the manifest, the bundle index and the launcher's scan directory — not
+/// only this flag.
 ///
 /// **Repeats are a usage error**, for the same reason `--audio` rejects them: a
 /// second identical `--files` entry finds the same candidate and is admitted
@@ -481,34 +484,8 @@ fn normalize_audio(raw: &str) -> String {
 fn validate_paths(paths: &[String], flag: &str) -> Result<()> {
     let mut seen: Vec<&str> = Vec::with_capacity(paths.len());
     for p in paths {
-        if p.is_empty() {
-            return Err(UsageError::new(format!("{flag} was given an empty path")));
-        }
-        if p.contains('\\') {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} uses backslashes; manifest paths are /-separated"
-            )));
-        }
-        if p.starts_with('/') {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} is absolute; paths are relative to the game directory"
-            )));
-        }
-        if p.contains(':') {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} looks like a drive-qualified path; paths are relative to \
-                 the game directory"
-            )));
-        }
-        if p.split('/').any(|c| c == "..") {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} escapes the game directory"
-            )));
-        }
-        if p.split('/').any(|c| c.is_empty()) {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} has an empty component (a doubled or trailing separator)"
-            )));
+        if let Some(problem) = crate::paths::relative_path_problem(p) {
+            return Err(UsageError::new(format!("{flag} {problem}")));
         }
         if seen.contains(&p.as_str()) {
             return Err(UsageError::new(format!(

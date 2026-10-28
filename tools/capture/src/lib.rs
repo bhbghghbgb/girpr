@@ -22,6 +22,7 @@
 //! | [`http`] | [`http::Fetcher`]: retries, timeout, headers, request log |
 //! | [`hyp`] | the four HoYoPlay endpoints + Sophon `getBuild` |
 //! | [`manifest`] | fetch → zstd → verify → decode → dump → diff |
+//! | [`paths`] | the shape rule for values that name something inside a bundle |
 //! | [`select`] | scoring, variant classes, budget admission |
 //! | [`blobs`] | the content-addressed chunk store and the three sets |
 //! | [`assemble`] | building a file from chunks: old, new, and patch flow |
@@ -60,6 +61,7 @@ pub mod http;
 pub mod hyp;
 pub mod logging;
 pub mod manifest;
+pub mod paths;
 pub mod report;
 pub mod run;
 pub mod select;

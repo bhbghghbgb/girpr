@@ -444,6 +444,14 @@ pub async fn capture(
         // enters the crate — makes every later comparison agree with the tool
         // by construction. See `proto::SophonChunk::normalise`.
         m.normalise();
+        // **The one boundary every manifest path crosses.** `chuncks[].file`
+        // becomes `<artifact>/game/<file>` and `expected/<file>`, and
+        // `chunks[].id` becomes both a CDN URL segment and
+        // `chunks/blobs/<id>.zst`. A decode that admitted `..\..\x` would let a
+        // hostile or compromised CDN write outside `--out`; no later check
+        // exists on either sink, so refuse the document here, before the tree is
+        // created or a chunk is fetched.
+        validate_entry_paths(&url, &m.chuncks)?;
         m.chuncks
     };
     let decoded = decode_counts(&entries);
@@ -510,6 +518,32 @@ pub async fn capture(
         entries,
         meta,
     })
+}
+
+/// Refuse a decoded manifest entry whose path or chunk id cannot be joined onto
+/// the bundle without leaving it.
+///
+/// **This is not one of §3.6's structural counters.** A non-gapless chunk list
+/// is a fact worth recording and still captureable; a path that escapes `--out`
+/// is an arbitrary write, so it is a shape error and stops the run before the
+/// artifact directory exists. The rule and its rationale live in
+/// [`crate::paths`], shared with `--files`, the bundle reader and the launcher's
+/// scan directory.
+fn validate_entry_paths(url: &str, entries: &[SophonChunkFile]) -> Result<(), ApiError> {
+    for entry in entries {
+        if let Some(problem) = crate::paths::relative_path_problem(&entry.file) {
+            return Err(ApiError::shape(url, format!("manifest entry {problem}")));
+        }
+        for chunk in &entry.chunks {
+            if let Some(problem) = crate::paths::chunk_id_problem(&chunk.id) {
+                return Err(ApiError::shape(
+                    url,
+                    format!("manifest entry {:?} chunk {problem}", entry.file),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn fetch_archive(fetcher: &Fetcher, url: &str) -> Result<Fetched, ApiError> {

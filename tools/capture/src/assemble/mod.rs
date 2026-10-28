@@ -601,6 +601,17 @@ impl<'i> ChunkSource<'i> {
                     .stored_path
                     .as_deref()
                     .ok_or_else(|| format!("chunk {chunk_id} has no stored blob"))?;
+                // **The read-side twin of the manifest check.** `stored_path` is
+                // a document field inside a bundle someone may have edited, and
+                // this is the join that turns it into a file handle. The shape
+                // rule stops a bundle from making `verify` or `materialize`
+                // read outside its own root, whatever the capture that wrote the
+                // index did.
+                if let Some(problem) = crate::paths::relative_path_problem(rel) {
+                    return Err(format!(
+                        "chunk {chunk_id}: the index's stored_path {problem}"
+                    ));
+                }
                 let path = root.join(rel);
                 // **Decoded from the file, not from a `Vec` of it.** Reading the
                 // whole blob first would keep the compressed bytes alive for the
@@ -1216,6 +1227,42 @@ mod tests {
     use crate::blobs::chunks::{NewFile, OldFile};
     use crate::hash;
     use crate::manifest::proto::{SophonChunk, SophonChunkFile};
+
+    /// `stored_path` comes out of `chunks/index.json`, which is a document in a
+    /// bundle someone may have edited. It is joined onto the bundle root, so an
+    /// escaping value must not turn into a read outside it.
+    #[test]
+    fn an_index_stored_path_that_escapes_the_bundle_is_refused() {
+        use crate::blobs::props::BlobProps;
+        use crate::blobs::{ChunkIndex, IndexedBlob};
+
+        let index = ChunkIndex {
+            schema_version: crate::SCHEMA_VERSION,
+            blobs: vec![IndexedBlob {
+                props: BlobProps {
+                    chunk_id: "x".into(),
+                    stored_path: Some("../../escape.zst".into()),
+                    bytes: 0,
+                    container: "zstd".into(),
+                    md5_compressed: String::new(),
+                    md5_decompressed: String::new(),
+                    sha256_compressed: String::new(),
+                    uncompressed_size: 0,
+                    unknown_field6: 0,
+                    verified: None,
+                    decode_error: None,
+                },
+                referenced_by: Vec::new(),
+                sets: Vec::new(),
+            }],
+            sets: std::collections::BTreeMap::new(),
+        };
+        let e = ChunkSource::from_index(std::path::Path::new("artifact"), &index)
+            .decoded("x")
+            .unwrap_err();
+        assert!(e.contains("escapes the bundle root"), "{e}");
+        assert!(e.contains("stored_path"), "and names the field: {e}");
+    }
 
     /// The three ways a rebuild can fail, in one wording.
     ///

@@ -209,6 +209,9 @@ pub struct World {
     pub other_tags: Vec<String>,
     /// Whether `diff_tags` lists the old tag.
     pub old_in_diff_tags: bool,
+    /// `getGameConfigs → audio_pkg_scan_dir`, which the fixture writes under
+    /// `game/`. A test can make it hostile to exercise the API-path boundary.
+    pub audio_pkg_scan_dir: String,
 }
 
 impl World {
@@ -351,6 +354,7 @@ impl World {
             old,
             other_tags: vec!["6.7.0".into()],
             old_in_diff_tags: true,
+            audio_pkg_scan_dir: "GenshinImpact_Data/Persistent".into(),
         }
     }
 
@@ -807,7 +811,7 @@ fn build_table(world: &World, base: &str) -> Table {
                         ("installation_dir".into(), J::s("Genshin Impact")),
                         (
                             "audio_pkg_scan_dir".into(),
-                            J::s("GenshinImpact_Data/Persistent"),
+                            J::s(world.audio_pkg_scan_dir.clone()),
                         ),
                         (
                             "audio_pkg_res_dir".into(),
