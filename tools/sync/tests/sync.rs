@@ -636,6 +636,38 @@ fn a_failed_case_rename_leaves_no_record() {
     assert_eq!(rfile(&dst, "data.txt"), b"payload");
 }
 
+/// **P7-2.** A dst **file link** standing where src has a directory is a type
+/// conflict: `fix_dirs` unlinks it and creates the directory before the nested
+/// `mkdir`/`copy`, so the link guard must not refuse the descendants the plan
+/// already made applicable. This needs a file link, which Windows without
+/// developer mode refuses; the case reports the skip rather than passing.
+#[test]
+fn a_dst_file_link_at_a_src_directory_is_replaced_not_refused() {
+    let t = temp_root("file_link_fixdir");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&outside, "target.txt", b"not ours");
+    wfile(&src, "a/b/c.txt", b"under the fixed link");
+    skip_if_no_link!(
+        "file",
+        common::file_link(&outside.join("target.txt"), &dst.join("a"))
+    );
+
+    let recs = run_binary(&src, &dst, &[], &[]);
+
+    assert_eq!(paths(&recs, "fix-dir"), ["a"], "{recs:?}");
+    assert_eq!(paths(&recs, "mkdir"), ["a/b"], "{recs:?}");
+    assert_eq!(paths(&recs, "copy"), ["a/b/c.txt"], "{recs:?}");
+    assert!(dst.join("a").is_dir(), "the link became a directory");
+    assert_eq!(rfile(&dst, "a/b/c.txt"), b"under the fixed link");
+    assert_eq!(
+        rfile(&outside, "target.txt"),
+        b"not ours",
+        "unlinking the link left its target alone"
+    );
+}
+
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
 ///
 /// This is the one gate that catches a wrong planner case-flag, and it exists

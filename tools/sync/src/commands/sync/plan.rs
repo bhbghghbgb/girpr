@@ -320,6 +320,7 @@ pub(super) fn ensure_link_safe(
     missing_only: bool,
     keep_extra: bool,
 ) -> Result<()> {
+    let fixed: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
     let actions = plan
         .mkdir
         .iter()
@@ -329,6 +330,18 @@ pub(super) fn ensure_link_safe(
         .chain(plan.rmdir.iter());
     for rel in actions {
         if let Some(link) = crate::link::link_ancestor_above(dst, rel)? {
+            // A strict link ancestor that is itself a planned `fix_dirs` entry is
+            // removed *before* the nested action runs (`fix_dirs` precedes
+            // `mkdir`/`copy`), so the write resolves an ordinary directory. This
+            // is the same carve-out `ensure_mkdir_targets_free` and
+            // `ensure_dirs_applicable` grant a blocking file: the guards must
+            // describe the same plan, and only a link that survives the fix is a
+            // write-through. `link_ancestor_above` returns the topmost link, so a
+            // link above the fixed one would have been returned first and is
+            // still refused.
+            if fixed.contains(link.as_str()) {
+                continue;
+            }
             bail!(
                 "refusing to change `{rel}` through dst link `{link}`: \
                  remove the link, or exclude it with --exclude"
@@ -781,5 +794,63 @@ mod tests {
 
         ensure_mkdir_targets_free(&sm, &dm, &dst, false)
             .expect("fix-dirs replaces `a` before the nested mkdir");
+    }
+
+    /// **P7-2.** A strict link ancestor that is itself a planned `fix_dirs`
+    /// entry is removed before the nested action, so the link guard must skip it
+    /// exactly as the two mkdir guards skip a blocking file. The same link
+    /// without the fix is still a write-through and is refused.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_planned_fix_link_ancestor_is_not_a_write_through() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "fixed_link");
+        let dst = t.subdir("dst");
+        let outside = t.subdir("outside");
+        if let Err(e) = make_dir_link(&outside, &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+
+        let fixed = plan(&["a/b"], &[], &["a"]);
+        ensure_link_safe(&fixed, &dst, false, false)
+            .expect("fix-dirs unlinks `a` before `a/b` is created");
+
+        let unfixed = plan(&["a/b"], &[], &[]);
+        let err = ensure_link_safe(&unfixed, &dst, false, false)
+            .expect_err("a link that survives the plan is still a write-through");
+        let msg = err.to_string();
+        assert!(msg.contains("a/b"), "names the action: {msg}");
+        assert!(msg.contains("`a`"), "names the link: {msg}");
+    }
+
+    /// A directory link for the test above: `symlink_dir` on Unix, and a
+    /// junction on Windows because creating a symlink needs developer mode.
+    #[cfg(unix)]
+    fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn make_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(
+                String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+            ))
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn make_dir_link(_target: &Path, _link: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no link API",
+        ))
     }
 }
