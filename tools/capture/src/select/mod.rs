@@ -31,6 +31,8 @@ pub mod require;
 
 use serde::Serialize;
 
+use std::collections::BTreeMap;
+
 use crate::manifest::diff::{FieldDiff, State, by_cost, field_rank};
 
 pub use budget::{Budget, Fate};
@@ -512,6 +514,15 @@ pub fn select(
     let mut forced_skipped: Vec<String> = Vec::new();
     let mut forced_unscored: Vec<String> = Vec::new();
     let mut forced_rejected: Vec<Rejection> = Vec::new();
+    // **How many forced paths of each class have already taken an id.**
+    //
+    // A forced path is admitted with ordinal zero only when it is the *first*
+    // forced path of its primary class. Two distinct paths that both answer
+    // `added` used to share the id `added`, so the second `patchmaps/added.json`
+    // replaced the first while the run still reported two captures. The ordinal
+    // is assigned here rather than at admission so the rejection record carries
+    // the same id the path would have written.
+    let mut forced_ordinals: BTreeMap<Class, usize> = BTreeMap::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
@@ -530,6 +541,8 @@ pub fn select(
             forced_unscored.push(want.clone());
             continue;
         };
+        let nth = forced_ordinals.get(&primary).copied().unwrap_or(0);
+        forced_ordinals.insert(primary, nth + 1);
         let cost = c.budget_cost();
         if !budget.admits(cost) {
             // **Record and continue.** This used to `break`, which silently
@@ -537,7 +550,7 @@ pub fn select(
             // cheaper one that would have fitted. A refusal is a finding about
             // one path, not a reason to stop reading the caller's list.
             forced_rejected.push(Rejection {
-                capture_id: c.candidate.capture_id(primary, 0),
+                capture_id: c.candidate.capture_id(primary, nth),
                 primary_class: primary,
                 path: c.candidate.path.clone(),
                 matching_field: c.candidate.field.clone(),
@@ -549,7 +562,7 @@ pub fn select(
         }
         budget.charge(cost);
         admitted.push(Admission {
-            capture_id: c.candidate.capture_id(primary, 0),
+            capture_id: c.candidate.capture_id(primary, nth),
             primary_class: primary,
             path: c.candidate.path.clone(),
             matching_field: c.candidate.field.clone(),
@@ -1267,6 +1280,45 @@ mod tests {
             Some(MatrixStatus::CoveredBy),
             "the class is answered by the admitted forced path"
         );
+    }
+
+    /// Two **distinct** forced paths that answer the same primary class must not
+    /// share an id.
+    ///
+    /// `capture_id` is `<class>` or `<class>+<n>`, and phase 0 used to pass `0`
+    /// for every forced path. Two new-only paths were therefore both `added`,
+    /// both wrote `patchmaps/added.json`, and the second write replaced the
+    /// first while `captures_admitted` still said two. Numbering per class is
+    /// what keeps the identity of a forced path distinct.
+    #[test]
+    fn two_forced_paths_of_one_class_get_distinct_ids() {
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row("x/a", State::Added, None, 10),
+                row("x/b", State::Added, None, 20),
+            ],
+        )]);
+        let s = select(&pool, 1, Budget::unlimited(), &["x/a".into(), "x/b".into()]);
+
+        assert_eq!(s.paths(), vec!["x/a", "x/b"], "both are captured");
+        assert_eq!(
+            s.admitted
+                .iter()
+                .map(|a| a.capture_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["added", "added+1"],
+            "the second forced path of a class is numbered, not a duplicate"
+        );
+        let mut ids: Vec<&str> = s.admitted.iter().map(|a| a.capture_id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), s.admitted.len(), "ids are unique");
+        // The matrix still resolves the class to the first admission, which is
+        // now the same patchmap that describes the first path.
+        let added = s.matrix.iter().find(|r| r.class == Class::Added).unwrap();
+        assert_eq!(added.capture_id.as_deref(), Some("added"));
+        assert_eq!(added.path.as_deref(), Some("x/a"));
     }
 
     /// A forced path the pool carries but which answers **no** class is

@@ -692,6 +692,83 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
     }
 }
 
+/// Two distinct forced paths that answer one primary class get two patchmaps.
+///
+/// This is the end-to-end half of the identity rule: before phase 0 numbered
+/// forced admissions per class, both paths were `added`, the run wrote
+/// `patchmaps/added.json` twice, and `verify` rebuilt one capture from a bundle
+/// whose `totals.files_captured` said two. The assertions are on the files,
+/// because that is the artifact the caller paid for.
+#[test]
+fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
+    let first = "GenshinImpact_Data/Plugins/libNew.dll";
+    let second = World::SECOND_ADDED;
+    let c = captured(
+        "explicit-same-class",
+        World::with_two_added_files(),
+        &["--files", first, "--files", second],
+    );
+    assert_eq!(
+        c.summary["exit_code"], "0",
+        "two paths of one class are not an error"
+    );
+
+    let mut ids: Vec<String> = std::fs::read_dir(c.bundle.join("patchmaps"))
+        .expect("patchmaps/")
+        .flatten()
+        .map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "added",
+            "added+1",
+            "identical",
+            "no_reuse",
+            "removed",
+            "reuse_in_place",
+            "reuse_moved",
+        ],
+        "the second forced path is numbered instead of replacing the first"
+    );
+    // Each file describes the path its id was minted for, so the matrix row and
+    // the patchmap cannot disagree about which capture `added` is.
+    assert_eq!(json(&c.bundle.join("patchmaps/added.json"))["path"], first);
+    assert_eq!(
+        json(&c.bundle.join("patchmaps/added+1.json"))["path"],
+        second
+    );
+
+    // The three documents agree on how many captures exist.
+    assert_eq!(c.summary["captures_admitted"], "7");
+    assert_eq!(c.summary["patchmaps_written"], "7");
+    assert_eq!(
+        c.manifest()["totals"]["files_captured"],
+        7,
+        "MANIFEST totals count admitted captures"
+    );
+
+    // And the bundle's own verify rebuilds every one of them, which is the
+    // check the overwritten patchmap used to make impossible: it saw six.
+    let (code, stdout, stderr) = run(&["verify", "--artifact", &c.bundle.to_string_lossy()]);
+    assert_eq!(code, 0, "verify failed:\n{stdout}\n{stderr}");
+    let summary = stdout
+        .lines()
+        .find(|l| l.starts_with("SUMMARY "))
+        .map(parse_summary)
+        .expect("verify prints a summary");
+    assert_eq!(
+        summary["captures_rebuilt"], "7",
+        "every admitted capture has its own patchmap to rebuild"
+    );
+}
+
 /// A path neither manifest carries is skipped, recorded, and **not** fatal.
 ///
 /// The caller may be naming a file for a future version, so refusing the run

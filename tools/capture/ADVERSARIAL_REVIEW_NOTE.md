@@ -15,6 +15,26 @@ fifth pass. No source, test, Cargo or documentation file was changed.
 | I4 | low | omitted error | `src/verify/mod.rs:1050`-`:1056` | `list` silently skips an unreadable directory and drops failed directory entries, so `Index::unreadable` is not the complete inventory it claims to be. |
 | I5 | low | latent bug | `src/manifest/dump.rs:78`, `:84`, `:93` | `dump::write` validates `matching_field` before using it as a path component but interpolates `tag` raw into four output paths. |
 
+## Fix log
+
+Each entry names the source change, its regression test and the commit that
+carries them. The findings above are left as written so the fixes can be read
+against the report.
+
+### I1 - fixed
+
+`forced_ordinals: BTreeMap<Class, usize>` in phase 0 numbers every forced path
+per primary class, admitted or rejected, so two `added` paths become `added` and
+`added+1` (`src/select/mod.rs`). Phase 1's `taken` is deliberately unchanged:
+starting it at the forced count would turn a budget-refused class into
+`Unavailable` and break `a_class_whose_capture_was_refused_is_over_budget_not_absent`.
+`emit/fixture.rs::record` additionally refuses a duplicate `capture_id` before
+the first write, so a hand-built `Selection` cannot overwrite a patchmap either.
+Tests: `select::tests::two_forced_paths_of_one_class_get_distinct_ids` (unit;
+before the fix the ids were `["added", "added"]`) and
+`two_forced_paths_of_one_class_keep_distinct_patchmaps` (e2e; before the fix the
+bundle held six patchmaps and `verify` rebuilt six, not seven).
+
 ---
 
 ### I1 - Forced paths of one primary class share a capture id

@@ -223,6 +223,25 @@ fn record(
     got: assemble::Assembled,
     out: &mut BuiltFixture,
 ) -> Result<(), Failure> {
+    // **No artifact may be replaced by a later one.** `patchmaps/<id>.json` is
+    // named from the capture id, so two admissions with one id would silently
+    // lose the first capture while the counts still said two. Selection now
+    // numbers forced paths per class; this is the writer's own refusal, so a
+    // caller that built a `Selection` itself gets the same failure instead of a
+    // bundle whose documents disagree. It runs before the first write.
+    if out.assembled_ids.contains(&a.capture_id) {
+        return Err(assertion(
+            &format!("assemble {}", a.path),
+            &ApiError::shape(
+                "capture ids",
+                format!(
+                    "capture id {:?} was already assembled; a second write would \
+                     replace the first capture's patchmap",
+                    a.capture_id
+                ),
+            ),
+        ));
+    }
     let p = got.patch.as_ref();
     tracing::info!(
         capture_id = %a.capture_id,

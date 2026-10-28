@@ -391,6 +391,27 @@ impl World {
         w
     }
 
+    /// A second path that is new-only, so two forced paths share `added`.
+    pub const SECOND_ADDED: &str = "GenshinImpact_Data/Plugins/libSecond.dll";
+
+    /// [`World::all_shapes`] with a **second** file that is new-only.
+    ///
+    /// Two distinct `--files` paths then share one primary class (`added`), which
+    /// is the case that used to give both the id `added`: the second patchmap
+    /// replaced the first while the run still reported two captures. Nothing else
+    /// in the world changes, so every other class keeps its ordinary candidate.
+    pub fn with_two_added_files() -> World {
+        let mut w = World::all_shapes();
+        w.new
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the all-shapes world publishes game")
+            .1
+            .push(File::new(Self::SECOND_ADDED, &[92], 256));
+        w
+    }
+
     fn by_tag(&self, tag: &str) -> Option<&Build> {
         if self.new.tag == tag {
             Some(&self.new)
