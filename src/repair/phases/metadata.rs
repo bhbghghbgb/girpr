@@ -144,8 +144,9 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         HashSet::new()
     };
     // The audio scan dir is server data too, and an explicit `--audio` writes
-    // it. Validate it with the other config dirs: a path out of the install is
-    // metadata, refused before the scan read and the write.
+    // it in the execution phase. Validate it with the other config dirs: a
+    // path out of the install is metadata, refused before the scan read and
+    // before anything can be written.
     if !config.audio_pkg_scan_dir.is_empty() {
         util::contained_join(game_dir, &config.audio_pkg_scan_dir)
             .context("audio_pkg_scan_dir")
@@ -176,21 +177,24 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit)
         .context("resolve audio selection")
         .map_err(RunFailure::usage)?;
+    // The write itself is deferred to the execution phase. An explicit
+    // `--audio` used to write the scan file here, so a run that then refused
+    // (a tripped ceiling, an empty `--include`, a hostile manifest rel, an
+    // unwritable `--plan-out`) had already changed the install — and on a
+    // missing one, created `game_dir` through the scan file's parent. The
+    // repair reads the in-memory `audio` above, never the file.
+    //
+    // An explicit `--audio` under an active path scope is a contradiction, not
+    // a merge — the flag would mutate a path the scope may not have admitted.
+    // The escape hatch is to include the scan file's own rel path; it is never
+    // hardcoded, it comes from `getGameConfigs`, and it is in scope like
+    // anything else. This stays here because it is validation, and a refusal
+    // must happen before the execution phase.
     if ctx.audio_explicit
         && !ctx.readonly()
         && !ctx.print_plan
         && !config.audio_pkg_scan_dir.is_empty()
     {
-        // `--print-plan` leaves through its early return *after*
-        // `create_dir_all` would have happened, and it is documented as
-        // read-only by construction. Resolving `audio` above still names the
-        // requested languages in the report; only the write (and the scope
-        // refusal that exists for the write) is gated.
-        // An explicit `--audio` under an active path scope is a
-        // contradiction, not a merge — the flag would mutate a path the scope
-        // may not have admitted. The escape hatch is to include the scan
-        // file's own rel path; it is never hardcoded, it comes from
-        // `getGameConfigs`, and it is in scope like anything else.
         let scan_rel = config.audio_pkg_scan_dir.replace('\\', "/");
         if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(&scan_rel) {
             return Err(RunFailure::usage(anyhow::anyhow!(
@@ -200,9 +204,6 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
                 ctx.path_scope.describe_excludes(),
             )));
         }
-        audio::write_scan_file(game_dir, &config.audio_pkg_scan_dir, &audio)
-            .context("write audio scan file")
-            .map_err(RunFailure::write)?;
     }
 
     Ok(Meta {

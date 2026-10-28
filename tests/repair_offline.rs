@@ -1887,6 +1887,92 @@ async fn max_files_refuses_before_touching_anything() {
     mock.stop();
 }
 
+/// Run the binary with an explicit `--audio` and one extra refusing flag.
+///
+/// R-7's reproducer: the scan write lives in the plan half, so a run that then
+/// refuses may already have rewritten the user's audio selection.
+async fn run_audio_refusal(
+    mock: &MockServer,
+    game: &std::path::Path,
+    extra: &[&str],
+) -> (i32, String, String) {
+    let game_arg = game.to_string_lossy().into_owned();
+    let mut args: Vec<&str> = vec![
+        "--game-path",
+        &game_arg,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--audio",
+        "en-us",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+    args.extend_from_slice(extra);
+    run_binary(&args, &[]).await
+}
+
+/// R-7: with an explicit `--audio`, every refusal used to leave the scan file
+/// (and, on a missing install, `game_dir`) behind because `metadata::fetch`
+/// wrote it before the plan was even finished. A refusal must touch nothing.
+#[tokio::test]
+async fn explicit_audio_is_not_written_before_a_refusal() {
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let parent = temp_dir("audio_refusal");
+
+    // (a) a tripped ceiling: exit `5`.
+    let game = absent_game_dir(&parent);
+    let (code, _, stderr) = run_audio_refusal(&mock, &game, &["--max-files", "0"]).await;
+    assert_eq!(code, 5, "a ceiling is exit 5: {stderr}");
+    assert!(
+        !game.exists(),
+        "a refused run must not create game_dir (nor the scan file inside it): {stderr}"
+    );
+    assert!(
+        !game.join("Audio").exists(),
+        "a refused run must not create the scan dir: {stderr}"
+    );
+
+    // (b) an unwritable `--plan-out`: exit `3`, still before the first mutation.
+    let game = absent_game_dir(&parent);
+    let out_dir = parent.join("plan-out-is-a-directory");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let out_arg = out_dir.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_audio_refusal(&mock, &game, &["--plan-out", &out_arg]).await;
+    assert_eq!(code, 3, "an unwritable --plan-out is exit 3: {stderr}");
+    assert!(
+        !game.exists(),
+        "the plan-out failure must not create game_dir: {stderr}"
+    );
+
+    // (c) an `--include` that selected nothing: exit `1`.
+    let game = absent_game_dir(&parent);
+    let (code, _, stderr) =
+        run_audio_refusal(&mock, &game, &["--include", "does/not/exist/*"]).await;
+    assert_eq!(code, 1, "an empty --include is exit 1: {stderr}");
+    assert!(
+        !game.exists(),
+        "the include refusal must not create game_dir: {stderr}"
+    );
+
+    assert!(
+        mock.chunk_hits().is_empty(),
+        "no refusal may reach the download phase"
+    );
+    mock.stop();
+}
+
 /// R-8: a non-empty scan file whose lines are all unrecognized used to read as
 /// an empty set, i.e. the game-only selection. With `--purge-after` that
 /// selection drops the real language's manifests from the keep set and deletes

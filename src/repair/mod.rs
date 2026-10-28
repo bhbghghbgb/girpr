@@ -374,6 +374,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             None
         };
 
+    // 5.1 the explicit `--audio` selection, written now rather than in
+    // `metadata`: the plan half is documented to leave the install untouched,
+    // and this write creates the scan file and its parent. Every refusal is
+    // already behind us, and the repair reads the in-memory `meta.audio`, so
+    // the timing changes nothing else. The path itself was validated
+    // (containment and scope) in `metadata`.
+    if ctx.audio_explicit && !readonly && !meta.config.audio_pkg_scan_dir.is_empty() {
+        audio::write_scan_file(&game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
+            .context("write audio scan file")
+            .map_err(RunFailure::write)?;
+    }
+
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`
     // (verification reports damage; it must not delete). In `--dry-run` it runs
