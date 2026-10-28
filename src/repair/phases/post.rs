@@ -157,20 +157,31 @@ fn delete_deprecated(
                 continue;
             }
         };
-        if !p.is_file() {
-            continue;
-        }
-        // A stat failure is not "0 bytes". `p.is_file()` already succeeded, so
-        // this is a race or an ACL, not a missing file: the delete still runs,
-        // but the figure is left out of the counter instead of under-reported,
-        // and the dry-run line says the size is unknown rather than 0.
-        let sz = match std::fs::metadata(&p) {
-            Ok(m) => Some(m.len()),
-            Err(e) => {
+        // One stat, three answers. The old `if !p.is_file()` collapsed "not a
+        // file" with every stat failure: an ACL or a sharing violation took
+        // the same silent `continue` as a directory, so the deprecated file was
+        // left in place with no log and no counter, while the comment below
+        // claimed the stat had succeeded.
+        let sz = match stat_deprecated(&p) {
+            DeprecatedStat::File(len) => Some(len),
+            DeprecatedStat::AlreadyGone => {
+                tracing::debug!(path = %n, "deprecated file is already gone");
+                continue;
+            }
+            DeprecatedStat::NotAFile => {
+                tracing::debug!(path = %n, "deprecated path is not a file; kept");
+                continue;
+            }
+            DeprecatedStat::Failed(e) => {
+                // A stat failure is not "0 bytes" and not "not a file": the
+                // delete still runs (the entry is server-named and contained),
+                // but the figure is left out of the counter instead of being
+                // under-reported, and the dry-run line says the size is
+                // unknown rather than 0.
                 tracing::warn!(
                     path = %n,
                     error = %e,
-                    "deprecated file size unavailable; the deleted-bytes total will omit it"
+                    "deprecated file could not be stat'd; deleting without its size"
                 );
                 None
             }
@@ -201,6 +212,38 @@ fn delete_deprecated(
             }
         }
     }
+}
+
+/// What a deprecated entry's one `metadata` call said.
+///
+/// Keeping the four states apart is the point: `Path::is_file()` is
+/// `metadata().map(|m| m.is_file()).unwrap_or(false)`, which reads a stat
+/// failure as "not a file" and loses the reason.
+#[derive(Debug)]
+enum DeprecatedStat {
+    /// A regular file, with the size the delete can report.
+    File(u64),
+    /// A directory or other non-file: never a delete candidate.
+    NotAFile,
+    /// The path is already absent, which is the delete's desired end state.
+    AlreadyGone,
+    /// The path exists but could not be stat'd (ACL, sharing violation, …).
+    Failed(std::io::Error),
+}
+
+/// Classify the entry's stat result. Split from [`stat_deprecated`] so the
+/// error-vs-not-a-file distinction is unit-testable without an injection seam.
+fn classify_deprecated(stat: std::io::Result<std::fs::Metadata>) -> DeprecatedStat {
+    match stat {
+        Ok(m) if m.is_file() => DeprecatedStat::File(m.len()),
+        Ok(_) => DeprecatedStat::NotAFile,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DeprecatedStat::AlreadyGone,
+        Err(e) => DeprecatedStat::Failed(e),
+    }
+}
+
+fn stat_deprecated(path: &Path) -> DeprecatedStat {
+    classify_deprecated(std::fs::metadata(path))
 }
 
 /// Move `audio_pkg_cache_dir/**/*` into `audio_pkg_res_dir`, Starward parity
@@ -478,5 +521,43 @@ mod tests {
             !logs.contains("audio cache -> res"),
             "nothing moved, so no move is claimed: {logs}"
         );
+    }
+
+    /// S-3: `Path::is_file()` folded "not a file" and every stat error into
+    /// `false`, so an ACL or sharing violation skipped the deprecated delete
+    /// silently. The classifier keeps the error a separate state.
+    #[test]
+    fn a_failed_deprecated_stat_is_not_a_non_file() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(
+            matches!(classify_deprecated(Err(denied)), DeprecatedStat::Failed(_)),
+            "an ACL failure is a stat failure, not a non-file"
+        );
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert!(matches!(
+            classify_deprecated(Err(gone)),
+            DeprecatedStat::AlreadyGone
+        ));
+    }
+
+    /// The three real filesystem answers the delete turns on.
+    #[test]
+    fn stat_deprecated_separates_file_non_file_and_absent() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_deprecated", "stat");
+        std::fs::write(dir.join("old.dll"), b"12345").unwrap();
+        std::fs::create_dir_all(dir.join("old_dir")).unwrap();
+
+        assert!(matches!(
+            stat_deprecated(&dir.join("old.dll")),
+            DeprecatedStat::File(5)
+        ));
+        assert!(matches!(
+            stat_deprecated(&dir.join("old_dir")),
+            DeprecatedStat::NotAFile
+        ));
+        assert!(matches!(
+            stat_deprecated(&dir.join("gone.dll")),
+            DeprecatedStat::AlreadyGone
+        ));
     }
 }
