@@ -467,6 +467,83 @@ fn a_src_link_does_not_mirror_a_nested_cache() {
 }
 
 // ---------------------------------------------------------------------------
+// Fifth pass: a dst link into src is the same self-overlap
+// ---------------------------------------------------------------------------
+
+/// A `dst` file link whose target is a *different* source file. `File::create`
+/// follows the final component, so the copy used to truncate `src/b.bin`, verify
+/// against the truncated target through the same link, and exit 0 when `b.bin`
+/// was excluded from the copy set. The run must refuse before touching either
+/// tree. This host refuses `symlink_file` without developer mode, so the case
+/// may skip; the junction case below runs here.
+#[test]
+fn sync_refuses_a_dst_file_link_into_src() {
+    let t = temp_root("dst_file_link_to_src");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"AAAA");
+    wfile(&src, "b.bin", b"BBBBBBBBBB");
+    skip_if_no_link!("file", file_link(&src.join("b.bin"), &dst.join("a.bin")));
+
+    // Excluding b.bin makes the pre-fix shape deterministic: only a.bin is
+    // copied, through the link, and the run exited 0 with the source truncated.
+    let out = sync_bin_raw(&src, &dst, &["--exclude", "b.bin"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a dst link into src is a fatal configuration; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disjoint") && stderr.contains("link"),
+        "the error names the overlap and the link: {stderr}"
+    );
+    assert_eq!(
+        rfile(&src, "b.bin"),
+        b"BBBBBBBBBB",
+        "the source file the link reached must survive"
+    );
+    assert!(
+        is_link(&dst.join("a.bin")),
+        "the link is left in place, not replaced"
+    );
+}
+
+/// The same overlap through a directory link, which this host can create as a
+/// junction without elevation. `dst/a.bin` resolves to `src`, so the dst walk
+/// sees a directory where src has a file; the run used to unlink the link and
+/// write the file (safe for the target, but still a write through a path that
+/// belongs to the source tree). The pre-flight refuses it before any change.
+#[test]
+fn sync_refuses_a_dst_directory_link_into_src() {
+    let t = temp_root("dst_dir_link_to_src");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"SOURCE");
+    skip_if_no_link!("directory", dir_link(&src, &dst.join("a.bin")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a dst link into src is a fatal configuration; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disjoint") && stderr.contains("link"),
+        "the error names the overlap and the link: {stderr}"
+    );
+    assert_eq!(rfile(&src, "a.bin"), b"SOURCE", "the source is untouched");
+    assert!(is_link(&dst.join("a.bin")), "the link is left in place");
+    assert!(
+        dst.join("a.bin").is_dir(),
+        "and still resolves to the source directory"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // N-1: a shared link is never a write-through path
 // ---------------------------------------------------------------------------
 
