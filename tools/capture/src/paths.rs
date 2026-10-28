@@ -63,6 +63,26 @@ pub fn relative_path_problem(value: &str) -> Option<String> {
     None
 }
 
+/// Why `value` cannot be a manifest field name, or `None` when it can.
+///
+/// A `matching_field` is `game` or an audio language code, and it is
+/// interpolated into `manifests/<tag>/<field>.manifest…`. The path rule already
+/// refuses separators of the Windows flavour, traversal, absolute paths and the
+/// aliases Windows folds; this adds the one shape the path rule deliberately
+/// allows but a field cannot have: `/`. A field names one file-name component,
+/// not a subdirectory.
+pub fn field_component_problem(value: &str) -> Option<String> {
+    if let Some(problem) = relative_path_problem(value) {
+        return Some(problem);
+    }
+    if value.contains('/') {
+        return Some(format!(
+            "{value:?} contains a `/`; a manifest field is one file-name component"
+        ));
+    }
+    None
+}
+
 /// Why `value` cannot be a chunk id, or `None` when it can.
 ///
 /// The documented shape is exactly sixteen hexadecimal digits, an underscore and

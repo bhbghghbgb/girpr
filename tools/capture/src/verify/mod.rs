@@ -175,6 +175,14 @@ impl Bundle {
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
         let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
         let patchmaps = read_patchmaps(root)?;
+        // **The shape of every document-supplied path is checked at the door.**
+        // `verify` is the command an operator runs on a bundle they may not have
+        // produced, and every join below this point is `root.join(document
+        // field)`. Checking at the individual joins caught only the sinks that
+        // happened to remember; a field read by A6, by A18 or by `materialize`
+        // through the patchmap was still a way out. One pass here names the file
+        // and the field before any command reads a byte.
+        validate_document_paths(&manifest, &index, &patchmaps)?;
         Ok(Bundle {
             root: root.to_path_buf(),
             manifest,
@@ -244,6 +252,62 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
         out.insert(map.capture_id.clone(), map);
     }
     Ok(out)
+}
+
+/// Refuse a bundle whose own documents name a path that leaves it.
+///
+/// Three fields become filesystem joins inside the offline commands:
+///
+/// - `chunks/index.json`'s `stored_path` is read by A6 and by every chunk
+///   decode;
+/// - `chunks/index.json`'s `references[].path` and `patchmaps/*.json`'s `path`
+///   key the rebuild, and `materialize` turns the rebuilt path back into
+///   `--out/<tree>/<path>`;
+/// - `MANIFEST.json`'s `capture.id` names the default `materialize` output when
+///   the artifact itself is a filesystem root.
+///
+/// A bundle is a document someone may have edited, so this is the read-side
+/// twin of the check `manifest::capture` applies before writing a path under
+/// `--out`. The rule is the shared one in [`crate::paths`]: no `\`, absolute
+/// path, drive prefix, `..`, empty component or Windows alias can name a file
+/// inside the bundle.
+///
+/// **Refused, not repaired.** A field that fails the rule is an error naming the
+/// document, the field and the value; silently skipping it would let a tampered
+/// bundle verify clean while omitting the one blob or capture that made it
+/// interesting.
+fn validate_document_paths(
+    manifest: &Manifest,
+    index: &ChunkIndex,
+    patchmaps: &BTreeMap<String, PatchMap>,
+) -> Result<(), String> {
+    if let Some(problem) = crate::paths::field_component_problem(&manifest.capture.id) {
+        return Err(format!("MANIFEST.json capture.id {problem}"));
+    }
+    for blob in &index.blobs {
+        if let Some(rel) = blob.props.stored_path.as_deref()
+            && let Some(problem) = crate::paths::relative_path_problem(rel)
+        {
+            return Err(format!(
+                "chunks/index.json blob {} stored_path {problem}",
+                blob.props.chunk_id
+            ));
+        }
+        for reference in &blob.referenced_by {
+            if let Some(problem) = crate::paths::relative_path_problem(&reference.path) {
+                return Err(format!(
+                    "chunks/index.json blob {} referenced_by path {problem}",
+                    blob.props.chunk_id
+                ));
+            }
+        }
+    }
+    for map in patchmaps.values() {
+        if let Some(problem) = crate::paths::relative_path_problem(&map.path) {
+            return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
+        }
+    }
+    Ok(())
 }
 
 /// Read one JSON document, naming the file and the reason on failure.
@@ -539,6 +603,19 @@ fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
             ));
             continue;
         };
+        // Defence in depth: `Bundle::open` refuses this shape before a reader
+        // gets here, but A6 is also callable through `reverify` on an index a
+        // caller built itself. The join must never be the first check.
+        if let Some(problem) = crate::paths::relative_path_problem(rel) {
+            rows.push(Assertion::fail(
+                "A6",
+                crate::emit::selfcheck::wording("A6"),
+                rel,
+                "a stored blob at a path inside the bundle",
+                &format!("unsafe path: {problem}"),
+            ));
+            continue;
+        }
         let path = root.join(rel);
         match std::fs::read(&path) {
             Err(e) => rows.push(Assertion::fail(
@@ -615,6 +692,18 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
             continue;
         };
         let rel = format!("{tree}/{}", r.path);
+        // Same defence as A6: the patchmap path was checked when the bundle was
+        // opened, and this is the join that would read it.
+        if let Some(problem) = crate::paths::relative_path_problem(&rel) {
+            rows.push(Assertion::fail(
+                A18_ID,
+                A18,
+                &rel,
+                "a path inside the bundle",
+                &format!("unsafe path: {problem}"),
+            ));
+            continue;
+        }
 
         // A11: `rebuild` refuses to place a byte into a layout that violates it,
         // so a rebuilt side reaching here has already passed. The row says so

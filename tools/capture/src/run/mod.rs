@@ -645,6 +645,16 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
         for (side, tree) in [(&pair.old, "game"), (&pair.new, "expected")] {
             let Some(s) = side else { continue };
             let rel = format!("{tree}/{}", s.path);
+            // `Bundle::open` refuses a patchmap path that leaves the bundle, so
+            // this is defence in depth for a caller that builds a report itself.
+            // The check belongs at the join: `out.join("game/../../x")` is the
+            // write, and `out.starts_with(&plan.artifact)` above tests the chosen
+            // directory, not this destination.
+            if let Some(problem) = crate::paths::relative_path_problem(&rel) {
+                return Err(Failure::usage(format!(
+                    "materialize: the rebuilt path {problem}"
+                )));
+            }
             let dest = out.join(&rel);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| write_err(&plan.artifact, e))?;

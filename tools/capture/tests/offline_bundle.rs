@@ -595,6 +595,94 @@ fn materialize_defaults_beside_the_bundle() {
     );
 }
 
+/// A crafted index whose `stored_path` leaves the root is refused when the
+/// bundle is opened, not measured as an A6 fact.
+///
+/// Without the check in `Bundle::open`, `check_blobs` joins the field and
+/// publishes the length, md5 and sha-256 of any file the operator can read. The
+/// assertion is on the open, because that is the boundary an operator reaches
+/// before a byte is read.
+#[test]
+fn a_bundle_whose_stored_path_leaves_the_root_is_refused() {
+    let b = Bundle::build("escaping-stored-path");
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    index.blobs[0].props.stored_path = Some("../../../outside.zst".into());
+    write_json(&index_path, &index);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("stored_path"), "{e}");
+    assert!(e.contains("outside.zst"), "{e}");
+
+    // And the command refuses at exit `1`, rather than reporting a measured
+    // escape as an assertion failure.
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("stored_path"), "{failure}");
+}
+
+/// `materialize` on a crafted patchmap path writes nothing outside `--out`.
+///
+/// The index's `referenced_by[].path` is moved with the patchmap so the blob
+/// closure still resolves; otherwise the rebuild would fail for an unrelated
+/// reason and the destination join would never run. The `out` tree is nested so
+/// `../../../escaped.dll` lands in the scratch root the test owns rather than in
+/// the machine's temp directory.
+#[test]
+fn materialize_refuses_a_patchmap_path_that_leaves_the_output() {
+    let b = Bundle::build("escaping-patchmap");
+    let escape = "../../../escaped.dll";
+
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    for blob in &mut index.blobs {
+        for reference in &mut blob.referenced_by {
+            reference.path = escape.into();
+        }
+    }
+    write_json(&index_path, &index);
+
+    let map_path = b.root.join(format!("patchmaps/{CAPTURE}.json"));
+    let mut map: PatchMap = read_json(&map_path);
+    map.path = escape.into();
+    write_json(&map_path, &map);
+
+    let out = b.scratch.join("nested/out");
+    let plan = gircap::config::MaterializePlan {
+        artifact: b.root.clone(),
+        out: Some(out.clone()),
+    };
+    let failure =
+        block_on(gircap::run::materialize(plan)).expect_err("materialize refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("path"), "{failure}");
+
+    let escaped = b.scratch.join("escaped.dll");
+    assert!(
+        !escaped.exists(),
+        "the rebuild escaped --out: {}",
+        escaped.display()
+    );
+}
+
+/// `MANIFEST.json`'s `capture.id` names the default output when the artifact is
+/// a filesystem root, so it is a file-name component and not free text.
+#[test]
+fn a_bundle_whose_capture_id_is_not_one_file_name_component_is_refused() {
+    let b = Bundle::build("escaping-capture-id");
+    let manifest_path = b.root.join("MANIFEST.json");
+    let mut manifest: Manifest = read_json(&manifest_path);
+    manifest.capture.id = "../../escape".into();
+    write_json(&manifest_path, &manifest);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("capture.id"), "{e}");
+    assert!(e.contains("escape"), "{e}");
+}
+
 /// `list` finds a bundle by walking, not by knowing the layout.
 ///
 /// The walk is rooted at **the tree the test owns** — `<scratch>/artifacts` —
