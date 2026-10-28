@@ -218,10 +218,13 @@ impl BlobProps {
     /// So the peak cost of measuring a blob is the cost of the network chunk that
     /// produced it.
     ///
-    /// The one refusal `measure` makes — "not a zstd frame" — is made here too,
-    /// from the file's first four bytes, and with the same message. Everything
-    /// else that can go wrong is a decode failure, which is recorded rather than
-    /// raised.
+    /// The one refusal `measure` makes — "not a zstd frame" — is **recorded**
+    /// here rather than raised, because this is the path a fetched body takes.
+    /// The bytes are already on disk and the compressed digests were computed by
+    /// the write, so a mis-served response becomes a measured row with
+    /// `decode_error` and the two decode-dependent checks false. Everything else
+    /// that can go wrong is a decode failure (recorded by [`BlobProps::assemble`])
+    /// or an I/O error that still has to be reported.
     pub fn measure_file(
         path: &std::path::Path,
         chunk: &SophonChunk,
@@ -241,7 +244,12 @@ impl BlobProps {
             .read(&mut head)
             .map_err(|e| ApiError::shape("chunk", format!("{what}: reading the magic: {e}")))?;
         if !hash::is_zstd(&head[..n]) {
-            return Err(Self::not_a_frame(&what, &head[..n]));
+            // **A fetched body, not a failed fetch.** The rename has already
+            // published the bytes; refusing here would leave the file on disk
+            // while the index said "not stored". The row carries the digests the
+            // write computed and the real reason.
+            let why = Self::not_a_frame(&what, &head[..n]).to_string();
+            return Ok(Self::undecodable_from_digests(compressed, chunk, why));
         }
         // Rewind rather than chain the head back: `zstd_measure_from` reads its
         // own four bytes to sniff with, so the file must start at zero.
@@ -284,25 +292,46 @@ impl BlobProps {
     /// a reader gets the exact bytes, their digests, and the reason they will
     /// not decode — rather than a hole and a sentence saying nothing arrived.
     ///
-    /// `verified` is `None` rather than a set of `false`s: nothing was measured
-    /// against the manifest, and `verify` reports `null` as "not measured", which is
-    /// the honest reading. The two digest-dependent checks genuinely cannot be
-    /// answered; a row of `false`s would claim they were answered and failed.
+    /// `verified` keeps the four A6 checks: the two that need no decode are
+    /// decided from the compressed bytes, and the two decode-dependent keys are
+    /// `false` because the decode was attempted and did not produce a file. This
+    /// is the spec's row shape (`docs/00-spec.md` §4.2 and
+    /// `docs/01-artifact-schema.md`), and the same shape a framed blob whose
+    /// decode fails gets from [`BlobProps::assemble`].
     pub fn undecodable(raw: &[u8], chunk: &SophonChunk, why: String) -> BlobProps {
-        let compressed = hash::md5_sha256(raw);
+        Self::undecodable_from_digests(hash::md5_sha256(raw), chunk, why)
+    }
+
+    /// [`BlobProps::undecodable`] for a body already written and digested.
+    ///
+    /// The capture path computes `compressed` while streaming to disk, so it must
+    /// not hash the file again just to build this row.
+    fn undecodable_from_digests(
+        compressed: hash::Digests,
+        chunk: &SophonChunk,
+        why: String,
+    ) -> BlobProps {
         BlobProps {
             chunk_id: chunk.id.clone(),
             stored_path: None,
-            bytes: raw.len() as u64,
+            bytes: compressed.bytes,
             container: "zstd".to_string(),
             sha256_compressed: compressed.sha256,
-            md5_compressed: compressed.md5,
+            md5_compressed: compressed.md5.clone(),
             // The declared digest, not a computed one: the body cannot be
             // decoded, so there is no decompressed body to compare against.
             md5_decompressed: chunk.uncompressed_md5.clone(),
             uncompressed_size: chunk.uncompressed_size.max(0) as u64,
             unknown_field6: chunk.unknown_field6,
-            verified: None,
+            verified: Some(Verified {
+                raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
+                md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
+                // The two decode-dependent checks were asked and could not be
+                // satisfied: the bytes are not a frame, so there is no decoded
+                // body to compare. `false`, not `null` — the spec's row shape.
+                md5_decompressed_matches: false,
+                decoded_size_matches: false,
+            }),
             decode_error: Some(why),
         }
     }
@@ -498,10 +527,13 @@ mod tests {
             "the row says why it will not decode: {:?}",
             p.decode_error
         );
+        let v = p
+            .verified
+            .expect("the bytes were measured, so the row is not 'not measured'");
         assert!(
-            p.verified.is_none(),
-            "`verified: null` is 'not measured'; a row of `false`s would claim the \
-             checks were answered and failed"
+            !v.md5_decompressed_matches && !v.decoded_size_matches,
+            "the decode was attempted and could not be satisfied, so both \
+             decode-dependent checks are `false`, not `null`"
         );
     }
 

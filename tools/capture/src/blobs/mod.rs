@@ -149,6 +149,44 @@ impl ChunkIndex {
             .filter(|b| b.props.any_failure() || b.props.decode_error.is_some())
             .collect()
     }
+
+    /// Refuse an index whose offsets or decompressed sizes cannot be added.
+    ///
+    /// **The index is a document an operator does not have to have produced.**
+    /// `Bundle::open` calls this before any command reads a blob, so a crafted
+    /// `offset: i64::MAX` with a one-byte blob is a typed error naming the chunk
+    /// and the values, not a debug abort or a release wrap inside the layout
+    /// arithmetic. `uncompressed_size` is stored as `u64`; a value above
+    /// `i64::MAX` would become negative when the rebuild casts it, so it is
+    /// refused here as well.
+    pub fn validate_arithmetic(&self) -> Result<(), String> {
+        for blob in &self.blobs {
+            let id = &blob.props.chunk_id;
+            let size = blob.props.uncompressed_size;
+            if size > i64::MAX as u64 {
+                return Err(format!(
+                    "chunks/index.json blob {id}: uncompressed_size {size} does not fit i64"
+                ));
+            }
+            let size = size as i64;
+            for reference in &blob.referenced_by {
+                if reference.offset < 0 {
+                    return Err(format!(
+                        "chunks/index.json blob {id} referenced_by {}: offset {} is negative",
+                        reference.path, reference.offset
+                    ));
+                }
+                if reference.offset.checked_add(size).is_none() {
+                    return Err(format!(
+                        "chunks/index.json blob {id} referenced_by {}: offset {} + \
+                         uncompressed_size {size} overflows i64",
+                        reference.path, reference.offset
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where a tag's chunks are served from.
@@ -484,12 +522,23 @@ impl Store {
             ));
         }
 
-        let path = final_path;
-        let props =
-            tokio::task::spawn_blocking(move || BlobProps::measure_file(&path, &chunk, digests))
-                .await
-                .map_err(|e| format!("{id}: measure task panicked: {e}"))?
-                .map_err(|e| e.to_string())?;
+        let path = final_path.clone();
+        // `measure_file` answers `Ok` for a body that is not a zstd frame: that
+        // is a measured, unusable row, not a failed fetch. Only a real I/O error
+        // reaches here, and the blob is removed so the index's "not stored" row
+        // and the directory cannot disagree. A later source may then retry.
+        let props = match tokio::task::spawn_blocking(move || {
+            BlobProps::measure_file(&path, &chunk, digests)
+        })
+        .await
+        .map_err(|e| format!("{id}: measure task panicked: {e}"))?
+        {
+            Ok(props) => props,
+            Err(e) => {
+                Self::discard_published(&final_path);
+                return Err(e.to_string());
+            }
+        };
 
         Ok((props, rel, seq))
     }
@@ -509,6 +558,26 @@ impl Store {
                 tmp = %path.display(),
                 error = %e,
                 "a failed blob left its temp file behind"
+            ),
+        }
+    }
+
+    /// Best-effort removal of a published blob that could not be measured.
+    ///
+    /// **Disk and index have to agree.** Once the rename has put the bytes at
+    /// their final path, the index row must either carry them or the directory
+    /// must not. An I/O failure while measuring is the one case that is not
+    /// `Ok` and not a pre-rename failure, so the blob is removed before the
+    /// caller records the slot as unfilled. A removal failure is logged and
+    /// swallowed: the row's reason is still the measurement error.
+    fn discard_published(path: &Path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                blob = %path.display(),
+                error = %e,
+                "a blob whose measurement failed could not be removed"
             ),
         }
     }
@@ -681,11 +750,15 @@ pub fn file_pairs(
 /// `Σ compressed_size` over the distinct wants, which is the *transfer* cost and
 /// not the fixture size — the figure `--max-download-bytes` is checked against
 /// lives in M5 and is the other one.
+///
+/// **Saturating, because this is an estimate.** A hostile manifest can declare
+/// `compressed_size: i64::MAX` on several chunks; the answer is "more than this
+/// tool can count", not a debug abort or a release wrap. The capture-side plan
+/// is a total to display and compare, not an address.
 pub fn projected_download(wants: &[Want]) -> u64 {
-    wants
-        .iter()
-        .map(|w| w.chunk.compressed_size.max(0) as u64)
-        .sum()
+    wants.iter().fold(0_u64, |total, w| {
+        total.saturating_add(w.chunk.compressed_size.max(0) as u64)
+    })
 }
 
 /// A one-line summary for the run log.
@@ -1102,6 +1175,58 @@ mod tests {
         assert_eq!(w.len(), 5, "three old ids plus two new-only ones");
     }
 
+    /// **K1.** The projection is a *total*, not an address: a manifest that
+    /// declares `i64::MAX` on several chunks saturates instead of aborting the
+    /// run or wrapping to a small, plausible cost.
+    #[test]
+    fn a_hostile_projected_download_saturates() {
+        let mut w = chunks::wants(&[pair()]);
+        for want in &mut w {
+            want.chunk.compressed_size = i64::MAX;
+        }
+        assert_eq!(
+            projected_download(&w),
+            u64::MAX,
+            "five maxima cannot be represented, so the answer is 'more than this'"
+        );
+    }
+
+    /// **K1.** The index is a document someone may have edited. A reference at
+    /// `i64::MAX` is refused with the blob, path and arithmetic named, before
+    /// `Bundle::open` lets any command add it to a length.
+    #[test]
+    fn a_crafted_index_reference_offset_is_refused_with_its_values() {
+        let w = chunks::wants(&[pair()]);
+        let mut entries = Store::plan_only(&w);
+        let blob = &mut entries[0].0;
+        let id = blob.props.chunk_id.clone();
+        blob.referenced_by[0].offset = i64::MAX;
+        let idx = ChunkIndex::build(entries);
+        let e = idx.validate_arithmetic().expect_err("overflowing offset");
+        assert!(e.contains(&id), "names the blob: {e}");
+        assert!(
+            e.contains(&i64::MAX.to_string()) && e.contains("overflows i64"),
+            "names the value and the arithmetic: {e}"
+        );
+    }
+
+    /// **K1.** An `uncompressed_size` above `i64::MAX` cannot be a length; the
+    /// index refuses it rather than letting a `u64 as i64` cast turn it negative.
+    #[test]
+    fn an_index_size_that_does_not_fit_i64_is_refused() {
+        let w = chunks::wants(&[pair()]);
+        let mut entries = Store::plan_only(&w);
+        let id = entries[0].0.props.chunk_id.clone();
+        entries[0].0.props.uncompressed_size = u64::MAX;
+        let idx = ChunkIndex::build(entries);
+        let e = idx.validate_arithmetic().expect_err("unrepresentable size");
+        assert!(e.contains(&id), "names the blob: {e}");
+        assert!(
+            e.contains(&u64::MAX.to_string()) && e.contains("does not fit i64"),
+            "names the value and the bound: {e}"
+        );
+    }
+
     #[test]
     fn a_description_names_the_numbers_a_reader_wants_first() {
         let w = chunks::wants(&[pair()]);
@@ -1226,6 +1351,113 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "a failed fetch must leave nothing behind: {leftovers:?}"
+        );
+    }
+
+    /// **K2.** A fetched body that is not a zstd frame is evidence, not a failed
+    /// fetch: the row and the disk agree, and the run reports no error.
+    ///
+    /// The body is served over loopback through the real [`Store::fill`] path so
+    /// this covers the rename, the measure-from-file step and the index entry,
+    /// not just [`BlobProps::measure_file`]. Before the fix the file stayed on
+    /// disk while the row said `bytes: 0`, `stored_path: null` and the run counted
+    /// a failed fetch — three contradictory accounts of one body.
+    #[tokio::test]
+    async fn an_undecodable_body_is_stored_and_measured_rather_than_a_failed_fetch() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let xml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
+                    <Code>NoSuchKey</Code>\n  <Message>The specified key does not \
+                    exist.</Message>\n</Error>\n"
+            .to_vec();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let served = xml.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("one request");
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).ok();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                    break;
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                served.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&served).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let c = chunk(b"a chunk the CDN will not serve", 0, 0x5a5a);
+        let p = FilePair {
+            capture_id: "undecodable".into(),
+            path: "dll".into(),
+            old: None,
+            new: Some(chunks::NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry("dll", vec![c.clone()]),
+            }),
+        };
+        let w = chunks::wants(&[p]);
+        assert_eq!(w.len(), 1, "the fixture asks for exactly one chunk");
+
+        let root = girpr_tempdir::TempDir::new("gircap-k2", "undecodable_kept");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        server.join().expect("the mock served the body");
+
+        assert!(
+            errors.is_empty(),
+            "an unframed body is a measured row, not a failed fetch: {errors:?}"
+        );
+        assert_eq!(entries.len(), 1);
+        let props = &entries[0].0.props;
+        assert_eq!(
+            props.bytes,
+            xml.len() as u64,
+            "the row counts the bytes that arrived, not zero"
+        );
+        assert_eq!(
+            props.stored_path.as_deref(),
+            Some(BlobProps::stored_path_for(&c.id).as_str()),
+            "the row names the file the store published"
+        );
+        assert_eq!(props.md5_compressed, hash::md5_hex(&xml));
+        assert_eq!(props.sha256_compressed, hash::sha256_hex(&xml));
+        assert!(
+            props
+                .decode_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("not a zstd frame"),
+            "the row says why it will not decode: {:?}",
+            props.decode_error
+        );
+        let v = props.verified.expect("the body was measured");
+        assert!(!v.md5_decompressed_matches && !v.decoded_size_matches);
+
+        let on_disk = std::fs::read(root.join(BlobProps::stored_path_for(&c.id)))
+            .expect("the indexed path exists on disk");
+        assert_eq!(
+            on_disk, xml,
+            "the published bytes are exactly what the CDN served"
         );
     }
 }
