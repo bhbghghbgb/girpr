@@ -157,6 +157,14 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 | U-2 | A stale lock that could not be removed (an open handle without `FILE_SHARE_DELETE`, a read-only file, a delete-denying ACL) recursed in `Lock::acquire` until the stack overflowed: exit `-1073741571`, no `SUMMARY`. | Valid, fixed: one bounded takeover attempt. A failed removal is a contextual error naming the path and the I/O error; a successful removal is followed by one `create_new`, and a raced fresh lock is refused by name. The removal is injected so the arm is pinned on every host; the Windows sharing-violation probe now returns that error instead of aborting. | `d6bf9b3` |
 | U-3 | README's module map and remaining module references, docs/03's crate layout and docs/04's module/touch-point tables still named the pre-split `src/repair/{metadata,manifest,check,post}.rs`, `src/repair/plan/...` and `src/repair/file.rs`. | Valid, fixed: `phases/…`, `purge.rs` and `file/mod.rs`; every written path was checked against `git ls-files`. | `1ff9e90` |
 
+### Tenth pass — V-1…V-3
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| V-1 | A correctly spelled blacklist entry dropped the file from the work list **and** from `expected_paths()`, so `--purge-before`/`--purge-after`/`--purge-only` deleted a file docs/01 says is never deleted. | Valid, fixed: the cleaned blacklist is a separate `plan_purge` keep input, so a blacklisted path survives every purge timing even after it has left the manifest. Reproduced with the fixture before the fix (the `--purge-after` case failed; the other two share the same `plan_purge`); unit and integration tests now pin all three flags while a stale file still purges. | `fe0934f` |
+| V-2 | Blacklist entries were compared raw against the cleaned plan rel, so `./`- or `//`-spelled entries protected nothing (fail-open, decision 14). | Valid, fixed: `read_blacklist` cleans each entry through `util::clean_rel` at the reader; an entry that cannot be a contained rel is refused with the entry in the error rather than dropped. Unit test failed pre-fix. | `ec0a79d` |
+| V-3 | The local reuse map was keyed on the raw local-manifest spelling while every consumer looked up the cleaned `PlannedFile::rel`, losing all reuse for a non-canonical manifest (and risking a false `--max-download-bytes` exit `5`). | Valid, fixed: the map key goes through `util::clean_rel`; an uncleannable entry is warned and skipped, matching the local-reuse map's best-effort contract. Unit test failed pre-fix. | `3ce91a3` |
+
 ### Decisions that still bind
 
 1. **Saturate, never wrap**, in every server-size estimate (N-13, N-15, N-19, S-2).
@@ -172,19 +180,20 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 11. **`kept_bytes` counts a resumed `_tmp` prefix**, unverified until the MD5 gate (F-9/N-10).
 12. **File tasks join in completion order**, and the file-semaphore invariant is a named `expect` (N-7, N-12).
 13. **The path scope bounds every deletion site, including the directory sweep**: a directory the scope hides is kept out of `PurgePlan::dirs` and counted in `hidden`, so an empty out-of-scope placeholder is not removed (S-1).
-14. **A server/config spelling is normalised once, at its boundary**: `util::clean_rel` returns the `/`-separated string the gate and the sink share, so `./a/b` cannot pass a scope that hides `a/b` (U-1). A stale lock that cannot be removed is refused with the path and the I/O error, never retried; a successful takeover is one bounded attempt (U-2).
+14. **A server/config spelling is normalised once, at its boundary**: `util::clean_rel` returns the `/`-separated string the gate and the sink share, so `./a/b` cannot pass a scope that hides `a/b` (U-1). The `blacklist` reader and the local reuse-map key go through the same clean (V-2, V-3); an uncleannable blacklist entry is refused by name, while the best-effort reuse map warns and skips it. A stale lock that cannot be removed is refused with the path and the I/O error, never retried; a successful takeover is one bounded attempt (U-2).
+15. **The purge keep set is not the filtered repair plan alone**: the cleaned blacklist is a separate `plan_purge` keep input (V-1), so `--purge-before`/`--purge-after`/`--purge-only` never delete a path the blacklist excluded from repair, even after it has left the manifest (docs/01 "never deleted"). The scope remains rule 0, so it can still narrow both the plan and the cleanup deliberately.
 
 ### Latest verification
 
-Full run on Windows, debug profile, ninth-pass final tree:
+Full run on Windows, debug profile, tenth-pass final tree:
 
-- `cargo build -p girpr` — ok (0.44s, warm).
-- `cargo test -p girpr` — **342 passed, 0 failed, 7 ignored** (200 lib + 7 `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 93 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0 `src/main.rs`, 0 doc-tests).
-- `cargo clippy -p girpr --all-targets` — clean, no warnings (6.61s).
+- `cargo build` — ok (9.19s).
+- `cargo test -p girpr` — **346 passed, 0 failed, 7 ignored** (203 lib + 7 `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 94 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0 `src/main.rs`, 0 doc-tests).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings (8.36s).
 - `cargo fmt --check` — clean (exit `0`).
 
-The four ninth-pass tests are the three `./`-spelling cases and the undeletable-lock unit case.
+The tenth-pass tests are the blacklist survival integration case (all three purge flags), the blacklist-reader cleaning/refusal unit case and the reuse-map key unit case; the first failed on the pre-fix tree and the last two failed before their fixes, so all three findings were executed rather than only source-read. The four ninth-pass tests are the three `./`-spelling cases and the undeletable-lock unit case.
 
-**Not run:** the `#[cfg(unix)]` blocks of the containment, mode, `file_len` and file-as-parent tests (this host is Windows; the three new path-spelling tests are host-independent); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). U-2's real undeletable-file shape was exercised only with the Windows sharing-violation probe; the in-repo test injects the failed removal, so the arm is pinned on every host. S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
+**Not run:** the `#[cfg(unix)]` blocks of the containment, mode, `file_len` and file-as-parent tests (this host is Windows; the three path-spelling tests are host-independent); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). V-3's reuse *hit* is unit-tested at the map key, not end-to-end (the mock serves one manifest spelling per build). U-2's real undeletable-file shape was exercised only with the Windows sharing-violation probe; the in-repo test injects the failed removal, so the arm is pinned on every host. S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
 
 *End of review. The pass log records the first pass, the decisions that still bind and the latest verification, and the commits it cites are the source, test and doc changes. The open items are in [`OPEN_FOR_MAINTAINERS.md`](OPEN_FOR_MAINTAINERS.md).*
