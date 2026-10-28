@@ -219,7 +219,15 @@ impl Bundle {
 ///
 /// Keyed by `capture_id` rather than by filename: the filename is a convenience
 /// and the field is the identity, so trusting it would let a renamed file
-/// masquerade as a second capture.
+/// masquerade as a second capture. The filename is therefore **not** required to
+/// equal the id, but two documents may not claim the same id: that is one capture
+/// with two irreconcilable descriptions, and `BTreeMap::insert` used to drop the
+/// second silently.
+///
+/// A directory entry that cannot be read, and two documents declaring one id, are
+/// both errors naming the file(s). `verify` is the last place a bundle can be
+/// told it is structurally wrong; a capture that vanished between two patchmaps
+/// is exactly the defect it must not step over.
 ///
 /// **A missing directory is an empty set, not an error.** `MANIFEST.json` is what
 /// makes a directory a bundle; `patchmaps/` is where its captures live, and a
@@ -241,15 +249,29 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
             return Err(format!("cannot read {}: {e}", dir.display()));
         }
     };
-    let mut paths: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            paths.push(path);
+        }
+    }
     paths.sort();
     let mut out = BTreeMap::new();
+    let mut from: BTreeMap<String, PathBuf> = BTreeMap::new();
     for p in paths {
         let map: PatchMap = read_json(&p)?;
-        out.insert(map.capture_id.clone(), map);
+        let id = map.capture_id.clone();
+        if let Some(first) = from.get(&id) {
+            return Err(format!(
+                "two patchmaps declare capture_id {id:?}: {} and {}",
+                first.display(),
+                p.display()
+            ));
+        }
+        from.insert(id.clone(), p);
+        out.insert(id, map);
     }
     Ok(out)
 }

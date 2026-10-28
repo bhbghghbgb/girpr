@@ -683,6 +683,37 @@ fn a_bundle_whose_capture_id_is_not_one_file_name_component_is_refused() {
     assert!(e.contains("escape"), "{e}");
 }
 
+/// Two `patchmaps/*.json` that declare one `capture_id` are refused, not
+/// silently collapsed.
+///
+/// The map is keyed by the id the document declares, so the second `insert` used
+/// to replace the first: `verify` rebuilt one capture, never examined the other
+/// capture's blobs, and exited `0` on a bundle that had already lost a capture.
+/// The filenames are deliberately different, because the identity is the field.
+#[test]
+fn two_patchmaps_declaring_one_capture_id_are_refused() {
+    let b = Bundle::build("duplicate-patchmap-id");
+    let original = b.root.join(format!("patchmaps/{CAPTURE}.json"));
+    let map: PatchMap = read_json(&original);
+    write_json(&b.root.join("patchmaps/added+1.json"), &map);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("two patchmaps"), "{e}");
+    assert!(e.contains("declare capture_id"), "{e}");
+    assert!(e.contains(CAPTURE), "the repeated id is named: {e}");
+    assert!(
+        e.contains(&format!("{CAPTURE}.json")) && e.contains("added+1.json"),
+        "both files are named, so a reader can find them: {e}"
+    );
+
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("two patchmaps"), "{failure}");
+}
+
 /// `list` finds a bundle by walking, not by knowing the layout.
 ///
 /// The walk is rooted at **the tree the test owns** — `<scratch>/artifacts` —

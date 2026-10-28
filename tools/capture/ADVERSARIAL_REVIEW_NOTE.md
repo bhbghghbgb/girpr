@@ -48,6 +48,17 @@ branch records `seen` instead of zeroing. Tests:
 cannot inject a mid-body error was wrong: `Answer { claim, omit_length }` already
 promises more than is sent and hangs up.
 
+### I3 - fixed
+
+`read_patchmaps` now propagates each `read_dir` entry error, and keys a second
+map of `capture_id -> path` so a repeated id is refused with both file names
+(`src/verify/mod.rs`). It stays keyed by the declared id, and a filename is still
+**not** required to equal it: the file name remains a convenience, the field is
+the identity, and that trade-off is now documented. Test:
+`offline_bundle::two_patchmaps_declaring_one_capture_id_are_refused` copies a
+patchmap to `added+1.json` unchanged; before the fix `Bundle::open` succeeded and
+rebuilt one capture.
+
 ---
 
 ### I1 - Forced paths of one primary class share a capture id
