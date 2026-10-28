@@ -6,9 +6,11 @@
 //! `expected/`, `MANIFEST.json`, `checksums.json`, `README.md` — in the
 //! submodules below.
 //!
-//! Everything temporary goes to `tmp/` and is moved into place, so an interrupted
-//! run never leaves a half-written document that reads as a complete one.
-//! `verify/checksums.json` is what proves nothing is missing.
+//! **Atomicity is not uniform.** Only chunk blobs are written through a
+//! temporary file and renamed into place ([`crate::blobs::Store`]); every
+//! document written here is a plain create-and-write, so an interrupted run can
+//! leave a truncated metadata document. `verify/checksums.json` is what proves
+//! nothing is missing.
 
 pub mod closeout;
 pub mod fixture;
@@ -282,8 +284,8 @@ fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::
 ///
 /// The small metadata documents written here are **not** written atomically: a
 /// half-written one is a small, reproducible failure. Chunk blobs are the only
-/// thing written through `tmp/`-and-move, and that is
-/// [`crate::blobs::Store`]'s own `write`.
+/// artifact written through a temporary file and renamed into place, and that is
+/// [`crate::blobs::Store`]'s own concern.
 pub fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     write_parts(root, rel, &[bytes])
 }

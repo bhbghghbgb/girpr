@@ -182,9 +182,10 @@ Two consequences:
    directory gets slower" is not the explanation and a fix aimed at it would
    achieve nothing.
 2. The file operations are **not obviously removable**, because the
-   `tmp/`-and-rename step is what lets `verify` trust a blob: without it a crash
-   mid-write leaves a truncated file at the final path that nothing can tell from
-   a good one. No change is proposed, and nothing measured suggests one would pay.
+   temporary-file-and-rename step is what lets `verify` trust a blob: without it
+   a crash mid-write leaves a truncated file at the final path that nothing can
+   tell from a good one. No change is proposed, and nothing measured suggests one
+   would pay.
 
 This is a localised finding, not an open ticket. It is written down so the next
 person does not spend a day concluding that concurrency is broken.
@@ -196,7 +197,7 @@ person does not spend a day concluding that concurrency is broken.
 | | |
 |---|---|
 | `fs::rename` overwriting an existing destination | works. On Windows it is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, and it is pinned by a test. It is worth knowing because the opposite is a common belief, and acting on it here would mean deleting an atomic step the code needs. |
-| a blob whose `stored_path` is `null` | has three causes that cannot all be described the same way — a source that refused, a write that failed, a task that panicked mid-measure. The row says which. |
+| a blob whose `stored_path` is `null` | has four causes: three failures (a source that refused, a write that failed, a task that panicked mid-measure), which say which in `decode_error`, and a `--no-chunk-blobs` row, which is null there and means "not measured". |
 | `verify` reporting a blob as red under `--no-chunk-blobs` | correct. The index lists a blob with no path, which is exactly "this bundle cannot be materialized". Red, not skipped. |
 | a `probe` row with `attempts: 1` on every healthy capture | correct, and not evidence that nothing was ever retried. A `getBuild?tag=` probe *is* retried when the status calls for it; the negative probes behind `error_shapes.json` never are. |
 | `identical` appearing in both `game/` and `expected/` with equal bytes | that is the class. `diff -r game/ expected/` shows it as unchanged, on purpose. |

@@ -79,15 +79,18 @@ was never a blob, and the slot in its name means a later run would not
 necessarily reuse the path.
 
 **Atomicity is not uniform, and this is deliberate.** Chunk blobs are the only
-artifacts written through a `tmp/` file that is then renamed into place, and a
-blob's `stored_path` points at a name that does not exist until the rename
-happens. That step is what lets `verify` trust a blob: a crash mid-write would
-otherwise leave a truncated file at the final path, which nothing could tell from
-a good one. The metadata documents, the assembled `game/` and `expected/` files
-and `manifests/*` are written with a plain create-and-write: each is small enough
+artifacts written through a temporary file — `.<file name>.<slot>.tmp`, beside
+the blob's final path — that is then renamed into place, and a blob's
+`stored_path` points at a name that does not exist until the rename happens.
+That step is what lets `verify` trust a blob: a crash mid-write would otherwise
+leave a truncated file at the final path, which nothing could tell from a good
+one. The metadata documents, the assembled `game/` and `expected/` files and
+`manifests/*` are written with a plain create-and-write: each is small enough
 that a torn write is a small, reproducible failure, and routing them through the
 same dance would only hide *which* step failed. A reader must therefore not
-assume any document in a bundle was renamed into position.
+assume any document in a bundle was renamed into position. An interrupted run
+can leave a truncated metadata document; `verify/checksums.json`, written last,
+is the completion proof.
 
 ---
 
@@ -622,11 +625,17 @@ It is `Option<String>`, so a reader must treat it as optional: a blob that was
 never fetched at all has a null `stored_path`, a null-ish row body and no
 `verified` verdict.
 
-A `stored_path` that is `null` has three causes that cannot all be described the
-same way — a source that refused, a write that failed, and a fetch task that
-panicked mid-measure — and the row records which, in `decode_error`. The message
-is the same one the run's error list carries, and the chunk is counted once
-among the failed fetches.
+A `stored_path` that is `null` has four causes, split by whether a fetch was
+attempted:
+
+- **A fetch was attempted and failed** — a source that refused, a write that
+  failed, or a fetch task that panicked mid-measure — and the row records which
+  in `decode_error`. The message is the same one the run's error list carries,
+  and the chunk is counted once among the failed fetches.
+- **No fetch was attempted** — a `--no-chunk-blobs` row. It has
+  `decode_error: null`, `verified: null` and empty digest strings, and it means
+  "not measured", not "failed"; the flag also skips A6–A12, A19 and A21–A23
+  (see §16).
 
 ### `build_id` — part of the chunk's address
 
