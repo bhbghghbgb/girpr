@@ -44,9 +44,9 @@ pub struct PurgePlan {
     pub dirs: Vec<PathBuf>,
     /// `files` summed — the number a delete-bytes ceiling is checked against.
     pub total_bytes: u64,
-    /// On-disk files kept **only** because the path scope hides them. Zero on
-    /// an unflagged run; the "scope and a purge flag agree" warn is driven off
-    /// this.
+    /// On-disk paths (files **and** directories) kept **only** because the
+    /// path scope hides them. Zero on an unflagged run; the "scope and a purge
+    /// flag agree" warn is driven off this.
     pub hidden: u64,
     /// Walk or metadata failures that made the candidate list incomplete.
     ///
@@ -119,7 +119,22 @@ pub fn plan_purge(
             }
         };
         if e.file_type().is_dir() {
-            all_dirs.push(e.path().to_path_buf());
+            let path = e.path();
+            // `game_dir` itself is never swept, and it is not an
+            // out-of-scope path either.
+            if path == game_dir {
+                continue;
+            }
+            // A directory is a path like any other. The scope hides it, so the
+            // sweep must not take it: without this, an empty directory has no
+            // kept file to mark its ancestors (`mark_kept_ancestors` walks up
+            // from *files*) and the sweep would delete an out-of-scope path.
+            let rel = rel_path(path, game_dir);
+            if !scope.is_visible(&rel) {
+                hidden += 1;
+                continue;
+            }
+            all_dirs.push(path.to_path_buf());
             continue;
         }
         if !e.file_type().is_file() {
@@ -634,7 +649,10 @@ mod tests {
             &scoped,
         );
         assert_eq!(pp.total_bytes, 0, "nothing is a delete candidate");
-        assert_eq!(pp.hidden, 3, "bar.dat + stray.dat + login.dat hidden");
+        assert_eq!(
+            pp.hidden, 5,
+            "bar.dat + stray.dat + login.dat and the game/ + adopted/ dirs hidden"
+        );
         apply_purge(&pp, false).unwrap();
 
         assert_eq!(std::fs::read(dir.join("game/foo.dat")).unwrap(), b"f");
@@ -649,6 +667,54 @@ mod tests {
         );
         assert_eq!(std::fs::read(dir.join("adopted/stray.dat")).unwrap(), b"y");
         assert_eq!(std::fs::read(dir.join("login.dat")).unwrap(), b"z");
+    }
+
+    #[test]
+    fn a_scope_keeps_an_empty_out_of_scope_directory_out_of_the_sweep() {
+        // S-1: `mark_kept_ancestors` only protects directories reached from a
+        // kept *file*. An empty directory has no file to mark it, so the sweep
+        // used to remove an out-of-scope placeholder even though `--include`
+        // hides it.
+        let dir = TempDir::new("girpr_test_purge", "scope_empty_dir");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::create_dir_all(dir.join("mods/nested")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"f").unwrap();
+
+        let scoped = scope(&["game/foo.dat"], &[]);
+        let pp = plan_purge(&dir, &plan_of("game/foo.dat"), &keep_set(), &scoped);
+        assert!(
+            pp.dirs.is_empty(),
+            "no directory is inside the scope: {:?}",
+            pp.dirs
+        );
+        assert_eq!(
+            pp.hidden, 3,
+            "game/, mods/ and mods/nested/ are hidden paths"
+        );
+        apply_purge(&pp, false).unwrap();
+
+        assert!(dir.join("mods").is_dir(), "the hidden dir survives");
+        assert!(dir.join("mods/nested").is_dir());
+        assert!(dir.join("game/foo.dat").is_file());
+    }
+
+    #[test]
+    fn a_scope_still_sweeps_a_directory_it_admits() {
+        // The control: a directory the scope admits is still swept when the
+        // purge empties it. Only hidden paths are protected.
+        let dir = TempDir::new("girpr_test_purge", "scope_visible_dir");
+        std::fs::create_dir_all(dir.join("game/emptied")).unwrap();
+        std::fs::write(dir.join("game/emptied/orphan.dat"), b"x").unwrap();
+
+        let scoped = scope(&["*"], &[]);
+        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &scoped);
+        assert_eq!(pp.hidden, 0);
+        assert_eq!(pp.total_bytes, 1);
+        apply_purge(&pp, false).unwrap();
+        assert!(
+            !dir.join("game/emptied").exists(),
+            "an admitted emptied dir is swept"
+        );
     }
 
     #[test]

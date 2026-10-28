@@ -1674,6 +1674,41 @@ async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
 }
 
 #[tokio::test]
+async fn a_scoped_purge_keeps_an_empty_out_of_scope_directory() {
+    // S-1: the emptied-dir sweep used to delete every directory with no kept
+    // file under it, even one `--include` hides. An empty placeholder has no
+    // file to mark its ancestors, which is why the file-level keep-set missed
+    // it. `--purge-only` is the shortest path to the sweep.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("scope_purge_empty_dir");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    std::fs::create_dir_all(dir.join("mods/nested")).unwrap();
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.path_scope = scope(&["game/foo.dat"], &[]);
+    ctx.purge_only = true;
+    let (summary, code) = repair::run(ctx).await.expect("scoped purge-only run");
+    assert_eq!(code, 0);
+
+    assert!(
+        dir.join("mods/nested").is_dir(),
+        "an out-of-scope empty dir must survive the sweep"
+    );
+    assert!(dir.join("mods").is_dir());
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "nothing in scope was deleted"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn an_unscoped_purge_still_deletes_orphans() {
     // The control: with no scope, the cleanup is unchanged.
     let fx = build_fixture();
