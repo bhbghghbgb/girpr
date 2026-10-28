@@ -3,7 +3,7 @@
 //! `test_no_fsync` hook, plus their unit tests.
 
 use anyhow::{Context, Result, bail};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use tracing::{error, trace};
 
@@ -82,6 +82,37 @@ fn test_fail_copy(rel: &str) -> bool {
         == Some(rel)
 }
 
+/// Whether the test-only `GIRSYNC_TEST_FAIL_FLUSH` hook names `rel`, i.e. the
+/// flush after this copy must fail.
+///
+/// Default **off**, and read once per process like [`test_fail_copy`]. A test
+/// needs it because a real `sync_all` failure (disk full, quota, a network
+/// volume that went away) cannot be arranged portably; naming one relative path
+/// exercises the same error path the production call takes.
+fn test_fail_flush(rel: &str) -> bool {
+    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAIL_REL
+        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_FLUSH").ok())
+        .as_deref()
+        == Some(rel)
+}
+
+/// Flush one copied file, or return the injected test failure.
+///
+/// The result is **not** discarded: a failed flush must not be allowed to pass
+/// the verify below (which would re-read the same OS cache), cache a digest, and
+/// let the run exit 0 claiming durability. The caller turns this into the run
+/// error (exit 3), and the pre-drop has already removed the row, so a rerun
+/// recopies.
+fn flush_file(fout: &std::fs::File, rel: &str) -> io::Result<()> {
+    if test_fail_flush(rel) {
+        return Err(io::Error::other(format!(
+            "test: injected flush failure for {rel}"
+        )));
+    }
+    fout.sync_all()
+}
+
 /// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
 ///
 /// Default **off**: an unset variable, or any value other than an unambiguous
@@ -116,6 +147,11 @@ fn test_no_fsync() -> bool {
 /// `sync_all()` (or, under the test-only hook above, after the write is
 /// dropped), it also hashes the bytes that actually reached the disk, which is
 /// the only way this catches silent corruption on the way down.
+///
+/// **A failed flush is a failed copy.** `sync_all` is propagated, not ignored:
+/// otherwise the verify below could re-read the same page cache the flush never
+/// wrote through, cache the digest, and let the run exit 0 claiming durability
+/// it did not obtain.
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
@@ -185,7 +221,7 @@ pub(super) fn copy_one(
     let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     if !test_no_fsync() {
-        fout.sync_all().ok();
+        flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
     }
     drop(fout);
     // preserve mtime
