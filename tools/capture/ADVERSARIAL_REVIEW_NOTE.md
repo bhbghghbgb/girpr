@@ -1,8 +1,8 @@
 # ADVERSARIAL REVIEW NOTE — fourth pass
 
 **Branch:** `fix-gaps/gircap` at `1cbf2f1` (`docs(review): drop the third-pass
-working note`), baseline `main`. Working tree was clean before this note was
-written. Reviewed 2026-10-28 on a Windows host.
+working note`), baseline `main`; this pass added `0a21ebe`, `0b55a40`, `c9caa02`,
+`b6aeb6d` and `c9bf161` on top. Reviewed and fixed 2026-10-28 on a Windows host.
 
 **Scope:** `tools/capture` only — `src/**`, `tests/**`, `docs/**`, `README.md`,
 `Cargo.toml`. Root `girpr`, `tools/sync`, `crates/log` and `crates/tempdir` were
@@ -17,22 +17,30 @@ stage that a different reader may bypass. `let _ =`, `unwrap_or_default`, a bare
 **Method:** every F1–F12, G1–G3 and residual claim in `ADVERSARIAL_REVIEW.md` was
 re-derived from the current tree; then the three read/write boundaries the third
 pass added (`manifest::capture`, `GameConfigs::audio_pkg_scan_dir`,
-`ChunkSource::decoded`) were traced to every other sink for the same value. No
-source, test, Cargo or documentation file was modified; only this note was
-created. `ADVERSARIAL_REVIEW.md` is untouched.
+`ChunkSource::decoded`) were traced to every other sink for the same value. The
+four findings are then fixed at the shared boundary rather than at each sink,
+with regression tests; this note records each verdict, evidence and commit. It is
+deleted once the same material is folded into `ADVERSARIAL_REVIEW.md`.
 
 ## Verdict
 
-The branch is **not sound**, because the third pass fixed each document path at
-one sink but not at the other sinks that consume the same document fields. Four
-findings are actionable.
+All four findings were re-checked against the current tree and all four are
+valid; none is dismissed as invalid or out of scope. They are fixed on this
+branch — H1–H3 in code with regression tests, H4 as a doc correction.
 
-| ID | Severity | Class | Location | One-line summary |
-|---|---|---|---|---|
-| H1 | High | bug | `src/verify/mod.rs:542`, `:617`, `:650`; `src/run/mod.rs:647-652` | `verify` and `materialize` still join document-supplied `stored_path` and patchmap `path` without `paths::relative_path_problem`, so a crafted bundle reads outside its root and writes outside `--out`. |
-| H2 | Medium | bug | `src/config/mod.rs:436-468`; sink `src/manifest/dump.rs:32-48` (writes `:83`, `:119`, `:131`, `:145`) | `--audio` is free text that becomes `matching_field` and is interpolated raw into manifest filenames, so a build document that publishes the field makes the capture write outside `--out`. |
-| H3 | Low | bug | `src/paths.rs:30-64`; sink `src/emit/gamedir.rs:192-201` | The shared rule accepts `.` components and trailing dots/spaces, which Windows folds onto another name; two distinct manifest paths overwrite each other and the bundle claims files it does not hold. |
-| H4 | Low | doc error | `docs/01-artifact-schema.md:635-636` | The `--no-chunk-blobs` row is documented as having "empty digest strings", but `BlobProps::unmeasured` fills `md5_decompressed` from the manifest. |
+| ID | Verdict | Commit | Resolution |
+|---|---|---|---|
+| H1 | valid, fixed | `0a21ebe` | `Bundle::open` now runs `verify::validate_document_paths` over the manifest's `capture.id`, every index `stored_path` and `referenced_by[].path`, and every patchmap `path`, naming the field and value on refusal. The A6/A18 joins and the materialize destination join keep their own checks as defence in depth. Three new `tests/offline_bundle.rs` tests build a hostile bundle and assert `verify` and `materialize` refuse it without writing outside the root; they failed before the fix. |
+| H2 | valid, fixed | `0b55a40` | `paths::field_component_problem` (the path rule plus "no `/`") is now applied in `config::validate_audio`, in `manifest::capture` for a field chosen from the build document, and in `manifest::dump::write` before any file is created. Tests cover `a/b`, `/abs`, `a\b`, `../x`, `..` and the empty field at both the flag and the dump. |
+| H3 | valid, fixed | `c9caa02`, `b6aeb6d` | `paths::relative_path_problem` now refuses a `.` component and any component ending in `.` or a space, on every host; `a/b`, `a/b.` and `a/b ` no longer name one file on Windows. The same rule refuses a reserved DOS device name (`CON`, `NUL`, `COM1`, `CONIN$`, and the same with any extension), which Windows resolves to a device instead of creating a file. New unit tests pin both refusals and keep `a/b.c`, `a/7.1.0`, `a/.hidden`, `a/CONSOLE` and `a/COM0` legal; a `validate_entry_paths` test pins that a manifest entry is refused before any tree write. |
+| H4 | valid, fixed | `c9bf161` | The schema now says what an unmeasured row carries: null `stored_path`/`verified`/`decode_error`, `bytes: 0`, empty compressed digests, and the manifest's **declared** `md5_decompressed` and `uncompressed_size`. The `BlobProps::unmeasured` and field comments say the same. |
+
+**Pre-fix state.** Before these commits the branch was not sound: the third pass
+fixed each document path at one sink but not at the other sinks that consume the
+same document fields. H1 was reproduced end to end — `Bundle::open` accepted a
+`stored_path` of `../../../outside.zst`, and `materialize` wrote
+`expected/../../../escaped.dll` and `game/../../../escaped.dll` (exit `3`). H3's
+alias behaviour was reproduced on this host (see H3).
 
 ## H1 — `verify` / `materialize` still join document paths unvalidated
 
@@ -150,6 +158,12 @@ end-to-end test that opens a bundle whose index `stored_path` is `../outside`
 and asserts `verify` exits non-zero without reading the file (and that
 `materialize` writes nothing outside `--out`).
 
+**Resolution.** Fixed in `0a21ebe`. `verify::validate_document_paths` runs over
+the manifest's `capture.id`, every index `stored_path` and `referenced_by[].path`,
+and every patchmap `path`; the A6/A18 joins and the materialize destination join
+keep their checks as defence in depth. The three new `offline_bundle` tests
+failed before the commit and pass after it.
+
 ## H2 — `--audio` becomes `matching_field` and reaches manifest filenames raw
 
 **Severity: medium. Class: bug.**
@@ -250,6 +264,12 @@ unit test for audio values containing `/`, `\` or `..`, and an end-to-end test
 with a mock build publishing such a field that asserts nothing lands outside
 `--out`.
 
+**Resolution.** Fixed in `0b55a40`. `paths::field_component_problem` — the path
+rule plus "no `/`" — is applied in `config::validate_audio`, in
+`manifest::capture` for a field selected from the build document, and in
+`manifest::dump::write` before the first write. Unit tests cover `a/b`, `/abs`,
+`a\b`, `../x`, `..` and the empty field at both ends.
+
 ## H3 — The path rule accepts names Windows folds together
 
 **Severity: low. Class: bug.**
@@ -310,6 +330,12 @@ space, and (for portability) Windows-reserved device names, in
 same choice already made for tags. Add a test that two entries differing only
 by a trailing dot are refused before any tree is written.
 
+**Resolution.** Fixed in `c9caa02` (`.` and trailing `.`/space) and `b6aeb6d`
+(device names). The rule is host-independent and shared by `--files`, manifest
+entries, index paths and the scan directory. Unit tests pin both refusals, keep
+`a/b.c`, `a/7.1.0`, `a/.hidden`, `a/CONSOLE` and `a/COM0` legal, and a
+`manifest::tests` case pins that an entry is refused before a tree write.
+
 ## H4 — The `--no-chunk-blobs` schema row contradicts `unmeasured`
 
 **Severity: low. Class: doc error.**
@@ -362,55 +388,56 @@ point of this paragraph, so the sentence currently erases it. The G3 fold
 `decode_error` is null. Correct the G3 row in `ADVERSARIAL_REVIEW.md` when that
 file is next edited; this note does not modify it.
 
+**Resolution.** Fixed in `c9bf161`: the schema paragraph, the
+`BlobProps::unmeasured` comment and the `md5_decompressed`/`uncompressed_size`
+field docs now say declared-not-measured. The G3 row in `ADVERSARIAL_REVIEW.md`
+was corrected in the same fold that added the fourth-pass subsection.
+
 ## Verification
 
-Run in `E:\hoccode\hocrust\girpr` on the branch above, in this order.
+Run in `E:\hoccode\hocrust\girpr` on the branch above after the fixes, in this
+order.
 
 | Command | Result |
 |---|---|
-| `cargo build -p gircap` | `Finished dev profile ... in 0.54s`, no warnings. |
-| `cargo test -p gircap` | **649 passed, 0 failed, 0 ignored** — 512 lib + 137 integration (3 + 8 + 32 + 2 + 30 + 9 + 29 + 9 + 15); `main.rs` 0 tests; doc-tests 0. |
-| `cargo clippy -p gircap --all-targets` | `Finished dev profile ... in 0.53s`, no warnings. |
+| `cargo build -p gircap` | `Finished dev profile ... in 0.50s`, no warnings. |
+| `cargo test -p gircap` | **658 passed, 0 failed, 0 ignored** — 518 lib + 140 integration (3 + 8 + 32 + 2 + 30 + 9 + 29 + 12 + 15); `main.rs` 0 tests; doc-tests 0. Baseline was 649, so the pass added nine tests. |
+| `cargo clippy -p gircap --all-targets` | `Finished dev profile ... in 19.86s`, no warnings. |
 | `cargo fmt -p gircap --check` | Exit `0`, no output. |
 
-The suite is green and none of it covers H1–H3: no test constructs a bundle with
-an escaping `stored_path` or patchmap `path` and runs `verify`/`materialize`, no
-test passes an `--audio` value containing a separator, and no test pairs two
-manifest paths that differ only by a trailing dot. The only empirical evidence
-in this pass beyond the suite is the Windows alias probe quoted under H3, built
-and run in `E:\Symlinks\Temp\opencode\pathprobe` (outside the repository, not
-committed):
+**New coverage.** `tests/offline_bundle.rs` gained three crafted-bundle tests:
+an index `stored_path` of `../../../outside.zst` is refused by `Bundle::open`
+and by `verify` (exit `1`), a patchmap and index reference of
+`../../../escaped.dll` makes `materialize` exit `1` with nothing written outside
+`--out`, and a `capture.id` of `../../escape` is refused. All three failed
+before `0a21ebe`. `paths::tests` pins the `-shell`/`-audio`/entry rule and the
+new `.`/trailing-dot/trailing-space/device-name refusals;
+`manifest::tests` pins that an entry is refused before a tree write;
+`config` and `manifest::dump` tests pin the field rule on both the flag and the
+document side. The rows that already pinned the `unmeasured` values
+(`props::an_unmeasured_blob_is_not_usable_and_says_so`,
+`fill::the_plan_path_records_the_sizes_the_manifest_declared`) keep H4's
+documented behaviour honest.
 
-```
-game/a/b: Ok("game/a/b.")
-game/a/b.: Ok("game/a/b.")
-game/a./c: Ok("game/a/c")
-game/a/c: Ok("game/a/c")
-walk: ["game\\a\\b", "game\\a\\c"]
-```
+**Pre-fix reproduction.** `Bundle::open` accepted
+`stored_path: "../../../outside.zst"` and returned `Ok`; `materialize` wrote
+`expected/../../../escaped.dll` and `game/../../../escaped.dll` (exit `3`).
+The Windows alias probe quoted under H3 is unchanged and still outside the
+repository (`E:\Symlinks\Temp\opencode\pathprobe`, not committed).
 
 No `#[cfg(unix)]` test exists in this crate, so nothing was skipped on this
 Windows host; the `#[cfg(windows)]` tests ran.
 
 ## Not verified
 
-- **H1 end to end.** No tampered bundle was built and handed to `gircap verify`
-  or `gircap materialize`. The finding is source-verified at the four join sites;
-  the filesystem behavior of `root.join("..")` is not in doubt. Building a
-  minimal fixture large enough to have a patchmap and a stored blob was not done
-  without modifying the repository.
 - **H2 with a real server.** `--audio ../../../../evil` was not sent through a
-  mock or proxied build document. The flag-to-`dump.rs` chain is source-verified;
-  whether the API publishes the field is the precondition, and only a hostile or
-  proxied `--hyp-base`/`--sophon-base` can satisfy it. No live capture was run.
+  mock or proxied build document. The flag-to-`dump.rs` chain is covered by unit
+  tests at both ends; whether the API publishes the field is the precondition,
+  and only a hostile or proxied `--hyp-base`/`--sophon-base` can satisfy it. No
+  live capture was run.
 - **H3 against a real manifest.** No live manifest containing `a/b` and `a/b.`
-  was sampled; the alias itself is proven by the probe, and the validator's
-  acceptance of both spellings is source-verified.
+  was sampled; the alias itself is proven by the probe, and the refusal is
+  pinned by unit tests and by `validate_entry_paths`.
 - **H4 on disk.** No `--no-chunk-blobs` bundle was inspected to read the actual
-  `md5_decompressed` value; the contradiction is between the doc and the
-  constructor (and the `fill.rs` test that pins the size).
-- **The `capture.id` default-output lead** in H1 (root artifact, tampered id) was
-  traced to `src/run/mod.rs:622-630` but not exercised.
-
-Only this note was added. No commit was made for the findings themselves; the
-note is committed alone with `docs(review): record the fourth adversarial pass`.
+  `md5_decompressed` value; the doc now matches the constructor and the
+  `fill.rs`/`props.rs` tests that pin it.
