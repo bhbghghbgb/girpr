@@ -8,7 +8,7 @@ Open items, trade-offs and unverified areas: [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_
 
 ## Pass log
 
-Implementation plus the nine review passes after it, one subsection each. Evidence,
+Implementation plus the ten review passes after it, one subsection each. Evidence,
 failure scenarios and per-pass verification are in the git history:
 `git log --oneline main..HEAD` and `git show <commit>`; the hashes below are the
 index. The first pass's original text is at
@@ -186,12 +186,33 @@ the same `read_link`/`try_is_link` path.
 - Two or more kept links may resolve to one terminal only when none of them is copied. If any member is in `plan.copy`, the run is refused before the plan print and before any mutation; the chained `a -> b -> c` shape and external terminals are judged the same way.
 - A resolution error other than `NotFound` is returned rather than read as “outside dst”: a failed spare must not silently leave the link's storage in the delete plan.
 
+### Tenth pass — R10-1, R10-2
+
+Both findings were confirmed against `fa008e8` and fixed at the root cause; neither
+was rejected. One Medium, one Low.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| R10-1 | The link target's final component kept the link text's spelling, so on a case-insensitive filesystem a case-differing target missed the walk's key in `sm`/`dm`, the `delete_files`/`rmdir` spare and the R9-3 grouping: a kept dst file link's content was deleted or a write-through reached a mirrored path at exit 0, and a dry run disagreed with the real run. The final component is now named from its parent's listing (case-insensitive on Windows only), and an alias from link text asks the map's spelling | fixed | `7e11e12`, `7aca7e2` |
+| R10-2 | The ninth pass's component/alias spare and whole-set terminal refusal were absent from `DESIGN-NOTES.md`'s kept-link section and the README symlink bullet, the two documents that enumerate the link-storage invariants; `DESIGN-NOTES.md:235-292` and `README.md:1056-1068` now state them and name the enforcing cases | fixed | `760ac5a` |
+
+R10-1 was reproduced here as three failing unit tests before the fix: `target_rel`
+answered `real/X.BIN` for the walk's `real/x.bin`, a link component was spared as
+`LINK` rather than `link`, and a full spare pass left `real` in `rmdir`. The
+resolver, the spare, the mirrored-target refusal and the alias lookup run on this
+host, with directory junctions standing in for the file links it refuses.
+
+**Decisions still in force:**
+- A link target's final component is named in the directory listing's spelling: the exact entry, else the unique case-insensitive match on Windows, and never resolved, so a chain hop stays visible. POSIX spellings stay exact.
+- An alias derived from link text is matched to the map's spelling through a lowercase index (empty on POSIX, where two spellings are two paths), so the spare names the key the walk reported.
+- The rest of the ninth pass's decisions are unchanged; the tenth pass adds no refusal or failure mode.
+
 ### Latest verification
 
-- `cargo test -p girsync` — **420 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 421 functions, 420 run. Breakdown: lib 162; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+- `cargo test -p girsync` — **426 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 427 functions, 426 run. Breakdown: lib 168; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
 - `cargo test -p girsync --test symlink -- --nocapture` — 32 passed, 0 failed. Thirteen file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
 - `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
 
 ---
 
-*End of review. The first pass was a source-only audit: no project file changed, nothing built, tested or run; its uncompacted text is at `git show 94f1c3a:tools/sync/ADVERSARIAL_REVIEW.md`. The pass log records the implementation and the second through ninth passes, which did build, test and run the binary; per-pass detail is in the commits it cites. Open items are in [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).*
+*End of review. The first pass was a source-only audit: no project file changed, nothing built, tested or run; its uncompacted text is at `git show 94f1c3a:tools/sync/ADVERSARIAL_REVIEW.md`. The pass log records the implementation and the second through tenth passes, which did build, test and run the binary; per-pass detail is in the commits it cites. Open items are in [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).*
