@@ -379,12 +379,10 @@ fn probe_manifest(
 ) -> Result<ManifestProbe, String> {
     match std::fs::metadata(path) {
         Ok(m) if m.is_file() => {}
-        Ok(_) => {
-            return Ok(ManifestProbe::NotABundle(format!(
-                "{}: not a file; this is not a bundle gircap wrote",
-                path.display()
-            )));
-        }
+        // A `MANIFEST.json` that is not a file is not a manifest: the directory
+        // is not a bundle, and the walk keeps descending as `is_file() == false`
+        // used to make it.
+        Ok(_) => return Ok(ManifestProbe::Missing),
         // Nothing there means no bundle. Anything else is a directory the walk
         // could not see, which is not the same as an empty one.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ManifestProbe::Missing),
