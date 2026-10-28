@@ -48,16 +48,16 @@ machine rather than the code.
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
 | `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
-| `src/repair/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
-| `src/repair/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/plan/mod.rs` | work list (4) + the plan module root | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
-| `src/repair/plan/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
-| `src/repair/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
-| `src/repair/file.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
+| `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
+| `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
+| `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
+| `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
+| `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
+| `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
 | `src/repair/lock.rs` | the single-writer lock | `Lock::acquire`, `LOCK_FILE` |
-| `src/repair/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
+| `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
 | `src/repair/scope/limits.rs` | the pre-flight ceiling predicates (pure) | `Limits::check_preflight`, `Preflight`, `LimitHit::describe` |
@@ -82,9 +82,9 @@ flowchart TD
     B -->|FILE mode| X1["exit 1 (usage)"]
     B -->|retcode/http fail| X2["exit 2 (metadata)"]
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
-    C --> D["manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
+    C --> D["phases::manifest::fetch_latest<br/>drop ignores + unselected audio<br/>fetch + zstd + MD5 + protobuf<br/>+ local_reuse_map"]
     D -->|manifest bad| X2
-    D --> E["plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
+    D --> E["phases::plan::build_plan: sort, dedup, blacklist-filter, scope-filter<br/>+ purge plan + deprecated list"]
     E --> E2{"any ceiling requested?"}
     E2 --> F{"purge-before?"}
     E2 -->|over a ceiling| X4["exit 5 — nothing written<br/>SUMMARY limited=1"]
@@ -230,7 +230,7 @@ flowchart TD
   the run returns at the plan either way, so the combination is just
   `--print-plan`. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
-  calls — `plan::purge::plan_purge` decides, `plan::purge::apply_purge` acts —
+  calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + the single-writer lock
   + `audio_lang_*`/`Audio_*_pkg_version` patterns; **everything else purges**,
   incl. temps, exe, logs, `ScreenShot/`). The whole plan is built before the
@@ -245,9 +245,9 @@ flowchart TD
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/manifest.rs`) · S2 same-file-only chunk reuse
-(`repair/file.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
-single-writer lock (`plan::purge::keep_set`). Version parse is last-match-wins
+S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
+(`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
+single-writer lock (`purge::keep_set`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
 **Resume.** The two write modes resume differently, and each in the way that suits it:
@@ -382,7 +382,7 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
 
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
-  `sophon_base_override` (`src/config.rs`; resolved in `src/repair/metadata.rs`;
+  `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;
   `HypClient::new_with_bases` in `src/hyp.rs`).
 - **One scratch-directory policy, three projects.** A test that needs a tree of
   its own gets it from `crates/tempdir/` — a dev-dependency of `girpr`,

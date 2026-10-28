@@ -21,7 +21,7 @@ bundle's own integrity (`gircap verify`). The fourth does not: **run `girpr
 
 Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 
-- `plan::build_plan` builds the work list from the **whole live `game` manifest**
+- `repair::phases::plan::build_plan` builds the work list from the **whole live `game` manifest**
   — 2 662 common paths measured for 7.0.0→7.1.0, several thousand more across
   the audio fields;
 - `file::repair_all` spawns one task per planned file and downloads whatever is
@@ -90,15 +90,15 @@ touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
+| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
-| `repair::check::verify_plan` | already narrowed |
-| `repair::plan::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
-| `repair::plan::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
-| `repair::post::delete_deprecated` | skip any hidden path |
-| `repair::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
-| `util::write_config_ini` (from `repair::post::run`) | **not bumped** — see below |
-| `repair::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
+| `repair::phases::check::verify_plan` | already narrowed |
+| `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
+| `repair::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
+| `repair::phases::post::delete_deprecated` | skip any hidden path |
+| `repair::phases::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
+| `util::write_config_ini` (from `repair::phases::post::run`) | **not bumped** — see below |
+| `repair::phases::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
 
 There are two ways to make a path invisible to the purge: filter inside the
 purge walk (`classify_purge_path` gains a scope argument and returns `Keep`
@@ -189,7 +189,7 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
-the same string `plan::build_plan` stores; `util::contained_rel` validates it
+the same string `phases::plan::build_plan` stores; `util::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The semantics are `girsync`'s, including
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
@@ -258,7 +258,7 @@ est_download_bytes(rel) = Σ c.compressed_size
 
 That is character-for-character the capture's `patch_fetch` definition and
 therefore its `totals.download_bytes`. Because capture invariant **A6** asserts
-`len(raw blob) == compressed_size` while `file.rs` counts
+`len(raw blob) == compressed_size` while `file/mod.rs` counts
 `stats.download_bytes += blob.len()`, the estimate and the runner's counter are
 the same quantity by construction. This is the figure without `--scan`, and
 there it is an upper bound: the map describes the local *old* build, so a chunk
@@ -698,9 +698,10 @@ log (§1.2).
 ## 7. Module layout
 
 ```
-src/repair/plan/
-  mod.rs        RepairPlan, PlannedFile, est_download_bytes, build_plan
-  purge.rs      PurgePlan, PurgeCandidate, plan_purge, apply_purge
+src/repair/phases/plan.rs
+                RepairPlan, PlannedFile, est_download_bytes, build_plan
+src/repair/purge.rs
+                PurgePlan, PurgeCandidate, plan_purge, apply_purge
 src/repair/scope/
   mod.rs      re-exports; the assertion that turns a plan into pass/refuse
   filter.rs   PathScope, is_visible, compile_patterns     (pure)
@@ -724,8 +725,8 @@ scope hides is not added to the sweep set at all (it has no file to mark its
 ancestors), and is counted in `PurgePlan::hidden` so the scope warning names it.
 
 The pure modules unit-test without a filesystem, exactly like
-`plan::purge::classify_purge_path` and `plan::build_plan` do. The impure part is
-the ledger and the gate calls in `file.rs`.
+`purge::classify_purge_path` and `phases::plan::build_plan` do. The impure part is
+the ledger and the gate calls in `file/mod.rs`.
 
 Touch points outside the two directories, all one-line insertions at an existing
 branch:
@@ -735,8 +736,8 @@ branch:
 | `src/cli.rs` | flags + `into_ctx` |
 | `src/config.rs` | `PathScope` + `Limits` on `RunCtx` |
 | `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
-| `src/repair/post.rs` | scope gate on deprecated deletes and audio move |
-| `src/repair/file.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
+| `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move |
+| `src/repair/file/mod.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
 | `src/report.rs` | the conditional `SUMMARY` keys |
 | `README.md` | flag table, machine-contract table, exit-code table |
 
