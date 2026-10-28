@@ -26,12 +26,13 @@ use girsync::scan::walk_live;
 use girsync::{cmd_compare_self, cmd_sync};
 use serde_json::Value;
 
-/// Run the real binary, returning its exit status and records.
+/// Run the real binary and hand back its whole output.
 ///
 /// The in-process `cmd_sync` cannot show what was *reported* - stdout belongs to
-/// the binary - and the F-1 case has to name the path a `DELETE` removed.
-fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+/// the binary - and the F-1 case has to name the path a `DELETE` removed. The
+/// refusal cases also need stderr, because that is where the error goes.
+fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
         .arg("--src")
         .arg(src)
@@ -44,7 +45,12 @@ fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (std::process::ExitStatus
         // in-memory cache keeps the fixture off the disk entirely.
         .env("GIRSYNC_TEST_CACHE", "memory")
         .output()
-        .expect("spawn girsync");
+        .expect("spawn girsync")
+}
+
+/// Run the real binary, returning its exit status and records.
+fn sync_bin(src: &Path, dst: &Path, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>) {
+    let out = sync_bin_raw(src, dst, extra);
     (out.status, parse_ndjson(&out.stdout))
 }
 
@@ -330,6 +336,133 @@ fn keep_extra_spares_a_dst_directory_link_and_its_target() {
     assert!(
         paths(&recs, "delete").is_empty(),
         "keep-extra deletes nothing: {recs:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fourth pass: a link inside src that reaches dst is the same self-overlap
+// ---------------------------------------------------------------------------
+
+/// Assert a run refused the src-link/dst overlap before changing the mirror,
+/// and that the destination file is still there with its bytes.
+fn assert_refused_src_link_into_dst(out: &std::process::Output, dst: &Path, rel: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a src link into dst is a fatal configuration; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disjoint") && stderr.contains("link"),
+        "the error names the overlap and the link: {stderr}"
+    );
+    assert_eq!(
+        rfile(dst, rel),
+        b"PRECIOUS",
+        "the destination file the link reached must survive"
+    );
+}
+
+/// `src/link` resolves to `dst` itself. The walk exposes every dst file under
+/// `link/...`; they used to plan as extras and be deleted before the copy that
+/// needed them failed. The run must refuse before touching the mirror.
+#[test]
+fn sync_refuses_a_src_directory_link_to_dst() {
+    let t = temp_root("src_link_to_dst");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&dst, "x.txt", b"PRECIOUS");
+    skip_if_no_link!("directory", dir_link(&dst, &src.join("link")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert!(!dst.join("link").exists(), "nothing was created in dst");
+    assert!(is_link(&src.join("link")), "the source link is left alone");
+}
+
+/// The same overlap one level down: `src/link` resolves to `dst/sub`, so
+/// `sub/x.txt` looks extra at its real path while `link/x.txt` looks missing.
+/// The delete pass would remove the only copy before the copy ran.
+#[test]
+fn sync_refuses_a_src_directory_link_inside_dst() {
+    let t = temp_root("src_link_inside_dst");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let dst_sub = t.subdir("dst/sub");
+    wfile(&dst, "sub/x.txt", b"PRECIOUS");
+    skip_if_no_link!("directory", dir_link(&dst_sub, &src.join("link")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_refused_src_link_into_dst(&out, &dst, "sub/x.txt");
+    assert!(!dst.join("link").exists(), "nothing was created in dst");
+}
+
+/// The other direction: `src/link` resolves to a directory that **contains**
+/// dst, so walking the link reaches dst from above.
+#[test]
+fn sync_refuses_a_src_directory_link_containing_dst() {
+    let t = temp_root("src_link_contains_dst");
+    let src = t.subdir("src");
+    let outer = t.subdir("outer");
+    let dst = t.subdir("outer/dst");
+    wfile(&dst, "x.txt", b"PRECIOUS");
+    wfile(&outer, "sibling.txt", b"SIBLING");
+    skip_if_no_link!("directory", dir_link(&outer, &src.join("link")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert_eq!(
+        rfile(&outer, "sibling.txt"),
+        b"SIBLING",
+        "the target's other content is untouched too"
+    );
+}
+
+/// A file link is the same hazard: `src/link.txt` -> `dst/x.txt` makes `x.txt`
+/// look extra while `link.txt` looks missing, so the delete runs first. This
+/// host refuses `symlink_file` without developer mode, so the case may skip;
+/// the directory cases above run here through a junction.
+#[test]
+fn sync_refuses_a_src_file_link_into_dst() {
+    let t = temp_root("src_file_link_to_dst");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&dst, "x.txt", b"PRECIOUS");
+    skip_if_no_link!("file", file_link(&dst.join("x.txt"), &src.join("link.txt")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert!(
+        is_link(&src.join("link.txt")),
+        "the source link is left alone"
+    );
+}
+
+/// A src link outside dst is ordinary mirrored content, but a cache inside its
+/// target is still tool state: a nested root keeps its own `girpr-cache`, and
+/// copying it would duplicate a database or fail on its live lock.
+#[test]
+fn a_src_link_does_not_mirror_a_nested_cache() {
+    let t = temp_root("src_link_nested_cache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&outside, "x.txt", b"x");
+    wfile(&outside, "girpr-cache", b"tool state");
+    wfile(&outside, "sub/girpr-cache-backup-1/rows", b"tool state");
+    skip_if_no_link!("directory", dir_link(&outside, &src.join("link")));
+
+    let (status, recs) = sync_bin(&src, &dst, &[]);
+    assert!(status.success(), "sync failed: {recs:?}");
+    assert_eq!(rfile(&dst, "link/x.txt"), b"x");
+    assert!(
+        !dst.join("link/girpr-cache").exists(),
+        "the target's live cache is not mirror content"
+    );
+    assert!(
+        !dst.join("link/sub/girpr-cache-backup-1").exists(),
+        "nor are its backups"
     );
 }
 

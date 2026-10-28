@@ -121,18 +121,32 @@ pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let first = std::os::windows::fs::symlink_dir(target, link);
-        if first.is_ok() {
-            return first;
-        }
+        let first = match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
+        // a target like `dst/sub` would fail with "Invalid switch". std accepts
+        // either separator on Windows, so hand the command native ones.
+        let native = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
         let created = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg(native(link))
+            .arg(native(target))
             .output();
         match created {
             Ok(out) if out.status.success() => Ok(()),
-            _ => first,
+            Ok(out) => Err(std::io::Error::new(
+                first.kind(),
+                format!(
+                    "{first}; junction fallback failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            )),
+            Err(e) => Err(std::io::Error::new(
+                first.kind(),
+                format!("{first}; junction fallback failed: {e}"),
+            )),
         }
     }
     #[cfg(not(any(unix, windows)))]
