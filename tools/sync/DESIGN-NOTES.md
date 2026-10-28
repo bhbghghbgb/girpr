@@ -31,7 +31,9 @@ fire. It would read as a guarantee while asserting `x == x`.
 Two independent reads are what make the message mean anything, and because the
 second happens after `sync_all()`, it is a digest of the bytes that actually
 reached the disk — which is the only way a copy catches silent corruption on the
-way down. `--hash none` takes a different arm and keeps `std::io::copy`'s fast
+way down. A failed `sync_all` therefore aborts the copy: ignoring it would make
+the second read come from the same page cache the flush never wrote through.
+`--hash none` takes a different arm and keeps `std::io::copy`'s fast
 path, since there is no digest to justify giving it up.
 
 **Enforced by:** `verify_digests` takes two maps and is unreachable with one;

@@ -316,6 +316,11 @@ comparison is the verify. src's own digest is taken from the copy's read rather
 than from a third pass over the file, so the cost is **2 reads + 1 write** per
 copied file rather than 3 + 1.
 
+**A failed flush is a failed copy.** A `sync_all` error aborts the copy, so the
+run exits `3` and writes no cache row for that file. Ignoring it would let the
+verify re-read the same page cache the flush never wrote through, cache the
+digest, and report success without the durability the flush was there to obtain.
+
 The re-read is not a belt-and-braces extra and must not be "optimised" away into
 a single pass. Hashing both sides from the same chunks going out would compare a
 value with itself: equal by construction, so a mismatch could never be reported
@@ -718,7 +723,9 @@ own summary is dropped: two differently-shaped summaries in one stream would mak
 Mirrors `src` → `dst`:
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
-   path, or on any IO error
+   path, if one root contains the other (a mirror may not contain its own source;
+   compared by canonical path and component-wise, so `A`/`AB` is not nesting and
+   `ROOT`/`root` is one tree on Windows), or on any IO error
    (dangling symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
@@ -911,7 +918,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   `--src`/`--dst` pair that resolves to one cache file — the same folder twice,
   the same record twice, or a folder paired with the record inside it.
   Resolution is by *canonical* path, so two spellings of one target (`F/sub/..`
-  vs `F`) collide too. Exit `3`.
+  vs `F`, or `ROOT` vs `root` on a case-insensitive filesystem) collide too, even
+  on a fresh tree where the cache file does not exist yet. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
   requested algos. `compare` and `sync` decide **per pair**, by
   `planner::plan_pairs`: a path needs a digest only when it is a file on both
@@ -1013,7 +1021,10 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   follows the case mode.
 - **Symlinks** are followed (`--max-depth`, default 10, applies to the whole walk —
   raise for deep trees). Dangling links abort. Link targets outside the root are
-  followed and materialized as plain files/dirs. A `dst` link to a **file** is
+  followed and materialized as plain files/dirs. On Windows only the redirecting
+  reparse tags (symbolic link, junction) are links; other reparse points (cloud
+  placeholders, dedup, AppExecLink) are ordinary entries and are copied and
+  removed as such. A `dst` link to a **file** is
   followed and written through: the copy lands on the target. A `dst` directory
   link where `src` has a file is unlinked, and the file is written in its place.
   Deleting an extra directory link removes **the link**, never its target: a path
