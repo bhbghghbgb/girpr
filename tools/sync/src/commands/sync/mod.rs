@@ -185,6 +185,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     validate_src_links(&src, &src_a.map, &roots.dst)?;
     info!("loading dst side");
     let dst_a = scan_stat_only(&dst, &dst_db, &common, dst_mode)?;
+    // The mirror image of `validate_src_links`: a link inside dst that resolves
+    // to src (or to a directory containing it) makes the two trees overlap
+    // through the walk, and a copy through a final-component file link would
+    // truncate a source file. Caught after the dst walk and before the plan, the
+    // rename and every apply phase, so nothing in either tree has changed yet.
+    validate_dst_links(&dst, &dst_a.map, &roots.src)?;
     info!(
         src_entries = src_a.map.len(),
         dst_entries = dst_a.map.len(),
@@ -426,8 +432,8 @@ fn validate_inputs(src: &Path, dst: &Path) -> Result<CanonicalRoots> {
     // Windows, via `path_within`.
     //
     // A link *inside* a root is not visible to this check; `validate_src_links`
-    // covers that half once the walk has said which links the effective source
-    // actually contains.
+    // and `validate_dst_links` cover both directions once the walks have said
+    // which links each effective tree actually contains.
     let src_canonical = canonical_or_raw(src);
     let dst_canonical = canonical_or_raw(dst);
     if path_within(&dst_canonical, &src_canonical) {
@@ -500,6 +506,60 @@ fn validate_src_links(
                  through a link (remove the link, or exclude it with --exclude)",
                 target.display(),
                 dst_canonical.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an effective destination tree that reaches `src` through a link.
+///
+/// The mirror of [`validate_src_links`], and the same invariant: the two trees
+/// must stay disjoint. The root check canonicalizes only the two roots, and the
+/// walk follows links inside a root, so a `dst` link into `src` can make a copy
+/// land on a source file. A **file** link at the copy path is the dangerous
+/// shape: `File::create` follows the final component, truncates the source, and
+/// the verify then reads the same file through the link, so the run can exit 0
+/// having destroyed source data. A directory link is unlinked rather than
+/// traversed, but refusing it here keeps one rule for the whole dst side.
+///
+/// Refused when the resolved target is `src` or inside it, or when it contains
+/// `src` (a write through the link would land above the source root). A link to
+/// anywhere else is ordinary dst content: `sync_writes_through_a_dst_file_link`
+/// depends on write-through to a target inside `dst` staying legal. A dst-only
+/// link into src is refused even when this run would only unlink it — the check
+/// is about where the link resolves, not about what today's plan does with it.
+///
+/// Runs immediately after dst's phase A, so `--include`/`--exclude` and
+/// `--max-depth` have already decided what this run's destination is, and before
+/// the plan, the rename and every apply phase, so neither tree has changed yet.
+fn validate_dst_links(
+    dst: &Path,
+    entries: &HashMap<String, SideEntry>,
+    src_canonical: &Path,
+) -> Result<()> {
+    for (rel, ent) in entries {
+        if !ent.is_link {
+            continue;
+        }
+        let target = std::fs::canonicalize(dst.join(rel))
+            .with_context(|| format!("resolve dst link `{rel}`"))?;
+        if path_within(&target, src_canonical) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which is inside src `{}`; a mirror may not write into its own source \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+        if path_within(src_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which contains src `{}`; a mirror may not reach its own source \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
             );
         }
     }

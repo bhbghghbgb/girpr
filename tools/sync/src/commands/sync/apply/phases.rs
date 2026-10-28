@@ -162,7 +162,13 @@ impl<'a> Applier<'a> {
                     let r = {
                         let _rw = self.rw.acquire_copy();
                         debug!(rel = %item.rel, "copy start");
-                        copy_one(self.src, self.dst, &item.rel, &self.common.algos)
+                        copy_one(
+                            self.src,
+                            self.src_canonical,
+                            self.dst,
+                            &item.rel,
+                            &self.common.algos,
+                        )
                     };
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                     if n.is_multiple_of(25) || n == copy_total {

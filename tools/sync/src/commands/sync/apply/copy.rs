@@ -9,7 +9,7 @@ use tracing::{error, trace};
 
 use crate::cache::FileRec;
 use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, HashAlg, hash_file};
-use crate::util::mtime_ns_of;
+use crate::util::{mtime_ns_of, path_within};
 
 /// Copy `src` over `dst`, digesting the bytes as they pass, and return the
 /// digest of what was **read**.
@@ -153,6 +153,14 @@ fn test_no_fsync() -> bool {
 /// wrote through, cache the digest, and let the run exit 0 claiming durability
 /// it did not obtain.
 ///
+/// **A destination link into `src` is refused before anything is unlinked or
+/// created.** `src_canonical` is the resolved source root; a link at the final
+/// component that resolves inside it (or contains it) would otherwise be written
+/// through by `File::create`, truncating a source file while the verify read the
+/// same file back through the link. `validate_dst_links` refuses that shape at
+/// plan time; this is the per-copy re-check, so a plan and a disk that disagree
+/// still cannot reach the source.
+///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
 /// dst is a faithful copy of a src that no longer exists, and the pair looks
@@ -161,6 +169,7 @@ fn test_no_fsync() -> bool {
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 pub(super) fn copy_one(
     src_root: &Path,
+    src_canonical: &Path,
     dst_root: &Path,
     rel: &str,
     algos: &[HashAlg],
@@ -184,6 +193,36 @@ pub(super) fn copy_one(
     }
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
+    // Belt and braces for the final component, symmetric with the ancestor check
+    // above and with `validate_dst_links` at plan time. A link *at* this path is
+    // normally replaceable (a directory link) or written through (a file link),
+    // but not when it resolves into src: a file link there would make
+    // `File::create` truncate a source file. Ask the disk again, because the
+    // plan was computed before this run changed anything. A missing path is not
+    // a link, and a dangling one fails to resolve rather than being written
+    // through.
+    if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
+        let target =
+            std::fs::canonicalize(&d).with_context(|| format!("resolve dst link `{rel}`"))?;
+        if path_within(&target, src_canonical) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which is inside src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+        if path_within(src_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which contains src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+    }
     // dst dir that is in the way of a file copy: remove first.
     //
     // A link to a directory is *not* a directory to recurse into. Unlinking the
