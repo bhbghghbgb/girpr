@@ -159,14 +159,19 @@ fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, Stri
 
 /// A unique sibling path for the two-step rename, claimed before it is used.
 ///
-/// The candidate is the **full** source file name plus `.girsync_case_tmp.<n>`,
-/// not `from.with_extension(...)`: replacing the extension turned `data.txt`
-/// into `data.girsync_case_tmp`, a predictable name that a user file could
-/// occupy, and `fs::rename` replaces an existing file without asking. The suffix
-/// is only a disambiguator; `create_new`/`create_dir` is what actually claims the
-/// name, so two runs over the same tree cannot pick the same temporary. A
-/// leftover from an interrupted run occupies one number and the next run steps
-/// over it instead of clobbering it.
+/// The candidate is a **fixed short** name, `.girsync_case_tmp.<n>`, in the
+/// source's parent. It is deliberately not derived from the source name: the
+/// first version replaced the extension (`data.girsync_case_tmp`, silently
+/// overwriting a user file) and P7-1's full-name suffix
+/// (`<name>.girsync_case_tmp.<n>`) grew past `NAME_MAX` for a source whose own
+/// name was already close to the limit, so a legal case-only rename failed with
+/// `ENAMETOOLONG`. A fixed name cannot do that, whatever the source is called.
+///
+/// The name is still in the user's namespace, so `create_new`/`create_dir` is
+/// what claims it: an occupied candidate is stepped over and left exactly as it
+/// was, and a leftover from an interrupted run occupies one number and is
+/// skipped by the next run. Two runs over the same tree therefore cannot pick
+/// the same temporary.
 ///
 /// The placeholder is removed for a directory because Windows cannot rename a
 /// directory onto an existing entry; a file placeholder is left in place and the
@@ -174,11 +179,8 @@ fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, Stri
 /// step1 removes the file placeholder again.
 fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
     let parent = from.parent().context("case-fix path has no parent")?;
-    let name = from.file_name().context("case-fix path has no file name")?;
     for n in 0..1000 {
-        let mut cand_name = name.to_os_string();
-        cand_name.push(format!(".girsync_case_tmp.{n}"));
-        let cand = parent.join(cand_name);
+        let cand = parent.join(format!(".girsync_case_tmp.{n}"));
         // Ask first whether the name is taken: `create_new` on an existing
         // *directory* reports `Access is denied` rather than `AlreadyExists`, so
         // the error kind alone cannot distinguish "occupied" from "cannot write
