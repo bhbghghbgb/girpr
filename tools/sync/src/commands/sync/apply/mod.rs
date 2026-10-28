@@ -4,7 +4,8 @@
 //! of steps. The phase *order* is a correctness invariant, so it lives in one
 //! place ([`Applier::apply`]) rather than being spread across the coordinator:
 //!
-//! 1. mkdir + fix-dirs (create the shapes src expects),
+//! 1. fix-dirs, then mkdir (create the shapes src expects; a fix replaces the
+//!    blocking file a nested directory needs),
 //! 2. pre-drop the cache entries for every path about to change,
 //! 3. delete extras, copy src files, remove unknown dirs,
 //! 4. prune leftover cache rows.
@@ -80,8 +81,14 @@ pub(super) struct Applied {
 impl Applier<'_> {
     /// Run every apply phase in the order documented on this module.
     pub(super) fn apply(&self, plan: &Plan) -> Result<Applied> {
-        self.mkdirs(plan)?;
+        // `fix_dirs` before `mkdirs`: a src directory can be nested under a dst
+        // *file*, in which case the plan holds the file in `fix_dirs` and its
+        // descendants in `mkdir`. `fix_dirs` removes the blocker and creates the
+        // replacement directory with `create_dir_all`, so the nested `mkdir` only
+        // succeeds after it. The other order aborted a valid plan with
+        // `AlreadyExists` (os error 183) after the dry run had promised success.
         self.fix_dirs(plan)?;
+        self.mkdirs(plan)?;
         self.predrop_cache_entries(plan)?;
         // Field order is the phase order: deletes, then copies, then rmdirs.
         let applied = Applied {
@@ -94,6 +101,9 @@ impl Applier<'_> {
     }
 
     /// Create every src directory that dst lacks.
+    ///
+    /// Runs after [`Applier::fix_dirs`], so a directory nested under a path dst
+    /// held as a file has its parent in place by the time this runs.
     ///
     /// Each one is reported, like every other action in the plan. The apply
     /// phases record what they do and `--dry-run` records what it would do, and

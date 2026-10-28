@@ -4,7 +4,7 @@
 //! what makes `--dry-run` trustworthy: the plan it prints is byte-for-byte the
 //! plan a real run would execute.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Result, bail};
@@ -352,6 +352,47 @@ pub(super) fn ensure_link_safe(
     Ok(())
 }
 
+/// Refuse a plan whose paths cannot be created after `fix_dirs` has run.
+///
+/// The apply order puts `fix_dirs` first, so a strict ancestor that dst holds as
+/// a **file** is fine exactly when that ancestor is itself a planned `fix_dirs`
+/// entry: the fix removes the file and puts a directory there, and the nested
+/// `mkdir`/`copy` then has a parent. A file ancestor that is *not* in
+/// `fix_dirs` would make the action fail with `AlreadyExists` after earlier
+/// actions had already landed.
+///
+/// Today's planner cannot produce that shape: a file ancestor of a src path is
+/// by construction a type conflict (src has the directory, dst has the file), so
+/// it is in `fix_dirs`. This is a plan-time assertion rather than a second
+/// derivation of the plan: if a later planner change stops holding that
+/// property, the run must fail before the first filesystem change instead of
+/// halfway through.
+///
+/// Pure, like [`build_plan`]: it reads only the plan and dst's effective map, so
+/// a dry run refuses the same plan a real run would.
+pub(super) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) -> Result<()> {
+    let fixed: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
+    let actions = plan
+        .mkdir
+        .iter()
+        .chain(plan.copy.iter().map(|item| &item.rel))
+        .chain(plan.fix_dirs.iter());
+    for rel in actions {
+        let mut end = 0;
+        while let Some(i) = rel[end..].find('/') {
+            let prefix = &rel[..end + i];
+            if dm.get(prefix).is_some_and(|rec| rec.kind == "file") && !fixed.contains(prefix) {
+                bail!(
+                    "plan cannot create `{rel}`: dst holds `{prefix}` as a file and it is \
+                     not a planned type-conflict fix"
+                );
+            }
+            end += i + 1;
+        }
+    }
+    Ok(())
+}
+
 /// The `SUMMARY` record's fields, in both modes.
 ///
 /// One struct, one field list, one [`Record`] constructor — so a dry run and a
@@ -407,7 +448,7 @@ impl Summary {
 /// instead of walking dst, so the count is the same before anything is written as
 /// it is after.
 ///
-/// The records are in **apply order** — mkdirs, fix-dirs, deletes, copies,
+/// The records are in **apply order** — fix-dirs, mkdirs, deletes, copies,
 /// rmdir — rather than grouped by plan category, so the sequence a dry run
 /// reports is the sequence a real run will perform, and the two report the same
 /// document. The action labels are shared verbatim too, including `FIX-DIR` for
@@ -420,11 +461,11 @@ pub(super) fn dry_run_records(
     keep_extra: bool,
 ) -> Vec<Record> {
     let mut out = Vec::new();
-    for r in &plan.mkdir {
-        out.push(Record::path("MKDIR", r));
-    }
     for r in &plan.fix_dirs {
         out.push(Record::path("FIX-DIR", r));
+    }
+    for r in &plan.mkdir {
+        out.push(Record::path("MKDIR", r));
     }
     for r in &plan.delete_files {
         out.push(Record::path("DELETE", r));
@@ -472,4 +513,63 @@ pub(super) fn summary_record(
         dry_run: false,
     }
     .record()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::DigestSet;
+
+    fn file() -> EffRec {
+        EffRec {
+            kind: "file".into(),
+            size: 1,
+            mtime_ns: 0,
+            hashes: DigestSet::default(),
+            is_link: false,
+        }
+    }
+
+    fn plan(mkdir: &[&str], copy: &[&str], fix_dirs: &[&str]) -> Plan {
+        Plan {
+            mkdir: mkdir.iter().map(|s| s.to_string()).collect(),
+            copy: copy
+                .iter()
+                .map(|s| CopyItem {
+                    rel: s.to_string(),
+                    because: CopyBecause::Missing,
+                })
+                .collect(),
+            fix_dirs: fix_dirs.iter().map(|s| s.to_string()).collect(),
+            ..Plan::default()
+        }
+    }
+
+    /// The check exists for a planner regression, so it has to be able to fail:
+    /// a file ancestor that no `fix_dirs` entry replaces makes every action
+    /// below it unexecutable in apply order.
+    #[test]
+    fn a_file_ancestor_that_is_not_a_planned_fix_refuses_the_plan() {
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), file());
+        let p = plan(&["a/b"], &["a/b/x.txt"], &[]);
+
+        let err = ensure_dirs_applicable(&p, &dm)
+            .expect_err("a blocking file ancestor with no fix is not applicable");
+        let msg = err.to_string();
+        assert!(msg.contains("a/b"), "names the action path: {msg}");
+        assert!(msg.contains("`a`"), "names the blocking ancestor: {msg}");
+    }
+
+    /// The shape today's planner produces: the file ancestor is the type
+    /// conflict, `fix_dirs` replaces it first, and the nested mkdir/copy then
+    /// has a parent. Refusing this would break every nested type conflict.
+    #[test]
+    fn a_file_ancestor_that_fix_dirs_replaces_is_applicable() {
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), file());
+        let p = plan(&["a/b"], &["a/b/x.txt"], &["a"]);
+
+        ensure_dirs_applicable(&p, &dm).expect("fix-dirs runs before mkdir and copy");
+    }
 }

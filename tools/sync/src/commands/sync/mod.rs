@@ -69,7 +69,7 @@ use crate::rw::{RwRuntime, RwSide};
 use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
-use plan::{build_plan, ensure_link_safe};
+use plan::{build_plan, ensure_dirs_applicable, ensure_link_safe};
 use rename::rename_to_src_casing;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
@@ -329,6 +329,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // dry run should print as if it could be. The apply passes re-check the
     // paths they touch; this is the one place that fails before *any* of them.
     ensure_link_safe(&plan, &dst, missing_only, keep_extra)?;
+    // The phase order makes a file ancestor creatable only when `fix_dirs`
+    // replaces it first. Today's planner always does; a future one that stops
+    // must fail here, at plan time, rather than midway through apply.
+    ensure_dirs_applicable(&plan, &dm)?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),
