@@ -12,20 +12,38 @@ use tracing::info;
 
 use crate::report::{Record, Report};
 
-/// Whether the test-only `GIRSYNC_TEST_FAIL_RENAME` hook names `rel`, i.e. this
-/// rename must fail before it touches the filesystem.
+/// The point of a case-fix step a test hook asks to fail at.
+///
+/// `GIRSYNC_TEST_FAIL_RENAME` keeps its P7-3 meaning: fail before the temporary
+/// is claimed. `GIRSYNC_TEST_FAIL_RENAME_STEP1` fails after the claim (so the
+/// file placeholder exists) and `GIRSYNC_TEST_FAIL_RENAME_STEP2` after step 1
+/// (so the entry is in the temporary). The three are separately named because
+/// they exercise three different cleanup paths: nothing to clean, placeholder
+/// removal, and rollback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    BeforeClaim,
+    Step1,
+    Step2,
+}
+
+/// Whether the test-only hook for `stage` names `rel`.
 ///
 /// Default **off**: an unset variable matches nothing. A test needs the failure
 /// because a real failed `fs::rename` (a lock, a permission, a volume that went
 /// away) cannot be arranged portably; naming one relative path exercises the
 /// same error path the production call takes, including the rule that a failed
 /// rename publishes no `RENAME` record.
-fn test_fail_rename(rel: &str) -> bool {
-    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    FAIL_REL
-        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_RENAME").ok())
-        .as_deref()
-        == Some(rel)
+fn test_fail_rename(rel: &str, stage: Stage) -> bool {
+    static BEFORE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static STEP1: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    static STEP2: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let (var, slot) = match stage {
+        Stage::BeforeClaim => ("GIRSYNC_TEST_FAIL_RENAME", &BEFORE),
+        Stage::Step1 => ("GIRSYNC_TEST_FAIL_RENAME_STEP1", &STEP1),
+        Stage::Step2 => ("GIRSYNC_TEST_FAIL_RENAME_STEP2", &STEP2),
+    };
+    slot.get_or_init(|| std::env::var(var).ok()).as_deref() == Some(rel)
 }
 
 /// The dst paths that must move to src's casing, as `(dst rel, src rel)` pairs.
@@ -225,6 +243,46 @@ fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
     bail!("no free case-fix temporary beside {}", from.display())
 }
 
+/// The error a failed step 1 leaves behind, after removing the file placeholder.
+///
+/// A file claim leaves an empty file that step 1 replaces only on success. It is
+/// the tool's own residue inside dst, so it must not outlive the failure — and a
+/// cleanup that fails is part of the failure the user needs to see, not a result
+/// to drop. (The step-2 rollback reports its own secondary failure beside the
+/// primary one in the same way.) A directory claim has no placeholder left:
+/// Windows cannot rename a directory onto an existing entry, so it is removed
+/// before it is returned.
+fn fail_step1(step1: std::io::Error, from: &Path, tmp: &Path, is_dir: bool) -> anyhow::Error {
+    let primary = || format!("rename {} (case fix step1)", from.display());
+    if is_dir {
+        return anyhow::Error::new(step1).context(primary());
+    }
+    match std::fs::remove_file(tmp) {
+        Ok(()) => anyhow::Error::new(step1).context(primary()),
+        Err(cleanup) => anyhow::Error::new(step1).context(format!(
+            "{}; removing the placeholder {} also failed: {cleanup}",
+            primary(),
+            tmp.display()
+        )),
+    }
+}
+
+/// The error a failed step 2 leaves behind, after putting the entry back.
+///
+/// The first error is the reason; a rollback's own error is reported beside it
+/// rather than replacing it.
+fn fail_step2(step2: std::io::Error, from: &Path, tmp: &Path, to: &Path) -> anyhow::Error {
+    match std::fs::rename(tmp, from) {
+        Ok(()) => anyhow::Error::new(step2)
+            .context(format!("rename to {} (case fix step2)", to.display())),
+        Err(rollback) => anyhow::Error::new(step2).context(format!(
+            "rename to {} (case fix step2); rolling back to {} also failed: {rollback}",
+            to.display(),
+            from.display()
+        )),
+    }
+}
+
 /// What the pass did, and — in a dry run — where the entries still are.
 #[derive(Debug, Default)]
 pub(super) struct RenameOutcome {
@@ -357,7 +415,7 @@ pub(super) fn rename_to_src_casing(
             renamed += 1;
             continue;
         }
-        if test_fail_rename(&step.from) {
+        if test_fail_rename(&step.from, Stage::BeforeClaim) {
             bail!("test: injected rename failure for {}", step.from);
         }
 
@@ -373,31 +431,33 @@ pub(super) fn rename_to_src_casing(
         // (silent loss) and a directory made step1 fail after the record had
         // already been published.
         let tmp = claim_case_tmp(&from, step.is_dir)?;
+        if test_fail_rename(&step.from, Stage::Step1) {
+            return Err(fail_step1(
+                std::io::Error::other(format!(
+                    "test: injected rename failure at step1 for {}",
+                    step.from
+                )),
+                &from,
+                &tmp,
+                step.is_dir,
+            ));
+        }
         if let Err(step1) = std::fs::rename(&from, &tmp) {
-            // A file claim leaves an empty placeholder; step1 replaces it only on
-            // success. Do not leave tool residue behind a failed rename.
-            if !step.is_dir {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            return Err(step1)
-                .with_context(|| format!("rename {} (case fix step1)", from.display()));
+            return Err(fail_step1(step1, &from, &tmp, step.is_dir));
+        }
+        if test_fail_rename(&step.from, Stage::Step2) {
+            return Err(fail_step2(
+                std::io::Error::other(format!(
+                    "test: injected rename failure at step2 for {}",
+                    step.from
+                )),
+                &from,
+                &tmp,
+                &to,
+            ));
         }
         if let Err(step2) = std::fs::rename(&tmp, &to) {
-            // Put the path back where it was, so a failed step does not leave dst
-            // half-renamed. The first error is the reason; a rollback's own error
-            // is reported beside it rather than replacing it.
-            return match std::fs::rename(&tmp, &from) {
-                Ok(()) => Err(step2)
-                    .with_context(|| format!("rename to {} (case fix step2)", to.display())),
-                Err(rollback) => Err(step2).with_context(|| {
-                    format!(
-                        "rename to {} (case fix step2); rolling back to {} also failed: \
-                         {rollback}",
-                        to.display(),
-                        from.display()
-                    )
-                }),
-            };
+            return Err(fail_step2(step2, &from, &tmp, &to));
         }
         // **After** both renames: a record describes an action that happened. A
         // failed step1/step2 above leaves no record and no count.

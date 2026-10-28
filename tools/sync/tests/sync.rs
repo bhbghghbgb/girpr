@@ -777,9 +777,114 @@ fn a_failed_case_rename_leaves_no_record() {
     assert_eq!(
         entry_names(&dst),
         vec!["data.txt".to_string()],
-        "dst is left exactly as it was"
+        "dst is left exactly as it was, with no tool temporary"
     );
     assert_eq!(rfile(&dst, "data.txt"), b"payload");
+}
+
+/// **P8-5, P8-6.** A step-1 failure happens after the temporary was claimed.
+///
+/// The file claim creates an empty placeholder that step 1 replaces only on
+/// success, so this is the branch that must remove the tool's own residue. The
+/// failure is injected between the claim and the rename because a real one (a
+/// lock, a volume that went away) cannot be arranged portably; the cleanup is
+/// the production code's.
+#[test]
+fn a_failed_case_rename_step1_removes_the_placeholder() {
+    let t = temp_root("case_rename_fail_step1");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME_STEP1", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected step-1 failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected"),
+        "the error names the failure: {err}"
+    );
+    assert!(
+        err.contains("case fix step1"),
+        "and the step it failed at: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "the claimed placeholder is removed again"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload");
+}
+
+/// **P8-6.** A step-2 failure happens after step 1 moved the entry into the
+/// temporary, so the pass has to put it back where it was.
+///
+/// The rename is injected between the two real moves, which is the only way to
+/// reach the rollback portably. Without it a failed second rename would leave
+/// dst holding `.girsync_case_tmp.<n>` under the wrong name.
+#[test]
+fn a_failed_case_rename_step2_rolls_back() {
+    let t = temp_root("case_rename_fail_step2");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME_STEP2", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected step-2 failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected"),
+        "the error names the failure: {err}"
+    );
+    assert!(
+        err.contains("case fix step2"),
+        "and the step it failed at: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "the entry is rolled back to its old name, leaving no temporary"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload", "and its content");
 }
 
 /// **P7-2.** A dst **file link** standing where src has a directory is a type

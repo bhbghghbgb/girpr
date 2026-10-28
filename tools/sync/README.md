@@ -738,8 +738,9 @@ Mirrors `src` → `dst`:
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
    Windows) - after the pair plan and the mkdir preflight, before the diff, so
    both sides are on exact keys. The two-step's temporary is a unique sibling
-   (`<full name>.girsync_case_tmp.<n>`) claimed before use, so a user file that
-   happens to look like tool residue is stepped over, never replaced.
+   (`.girsync_case_tmp.<n>`, a fixed short name so a source near `NAME_MAX` stays
+   renameable) claimed before use, so a user file that happens to look like tool
+   residue is stepped over, never replaced.
 4. `FIX-DIR` type-conflicts toward src kind, then `MKDIR` missing dirs, then
    `DELETE` extra files (skipped when `--keep-extra`, which spares directories as
    well as files), then `COPY` missing + changed files (skipped when
