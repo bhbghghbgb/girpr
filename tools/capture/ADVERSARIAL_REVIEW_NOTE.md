@@ -25,6 +25,12 @@ already stated and implemented once, applied at one site but not its sibling.
 Neither finding was rejected. M1 is the L2 class at the one remaining untrusted
 total; M2 is the F4 panic rule at the other `JoinSet` loop.
 
+**Closing work (2026-10-29, branch `fix-gaps/gircap`):** both findings were
+re-validated against the current source, reproduced where a fixture was
+possible, fixed and pinned — M1 `88407c0`, M2 `47b0dc2`. Each section below
+carries the evidence and the precise status; the note is folded into
+`ADVERSARIAL_REVIEW.md` and deleted at the end of this pass.
+
 ---
 
 ### M1 — A crafted `checksums.json` makes A16 panic on a plain sum
@@ -162,11 +168,22 @@ where the wrap currently hides). If the project prefers a saturating fold for
 consistency with K1, that also removes the panic, but then the comparison must
 not treat `u64::MAX` as agreement.
 
-**Status: open — valid, not rejected.** Not executed: creating the crafted
-bundle would require writing files, which this pass forbids; reachability is
-source-verified (`Bundle::open` → `reverify` → `findings`) and the overflow is
-the standard `Sum for u64` impl, the same one that panicked at
-`core/src/iter/traits/accum.rs:206:1` in the reproduced L2 finding.
+**Status: fixed — `88407c0` (`fix(verify): saturate the untrusted checksums total`).**
+Reproduced first: with the pre-fix `.sum()`, the new unit test
+`emit::index::tests::a_crafted_checksums_total_cannot_overflow_or_certify_an_impossible_sum`
+panicked in debug at `core/src/iter/traits/accum.rs:206:1` (`attempt to add with
+overflow`), and the release run of the same test reported a wrapped sum instead
+of the overflow. The fix folds with `checked_add`, keeps the L2 *saturating*
+figure for reporting, and turns the overflow into its own finding
+(`entries' bytes overflow u64; the total saturates at u64::MAX`). Because the
+overflow branch is taken before the equality test, a crafted
+`total_bytes: u64::MAX` cannot certify an overflowing sum; an exact `u64::MAX`
+sum with no overflow remains legal, and `u64::MAX - 1` is still a disagreement.
+The test covers the review's two-`u64::MAX` wrapping pair, the two
+`u64::MAX - 1` pair, the saturated boundary, the exact boundary, and one byte
+below it, and passes in both profiles. No change was needed at
+`src/verify/mod.rs:178`: `reverify` now reports the crafted document as an A16
+finding rather than failing to open it, which is its stated contract.
 
 ---
 
@@ -310,11 +327,22 @@ job through `map_concurrently` and asserts the cause is visible (the sibling of
 `a_panicking_chunk_task_reports_its_panic_message`); a cancellation case should
 not say "panicked".
 
-**Status: open — valid, not rejected.** Not executed: injecting a panic would
-require a source or test change, which this pass forbids. Reachability is
-source-verified for all five call sites; the behavior is the documented
-`JoinError` API (`Display` omits the payload, `into_panic` exposes it), which
-the project already exercises in the `blobs` test.
+**Status: fixed — `47b0dc2` (`fix(http): keep the cause and index of a failing
+request task`).** The `JoinSet` loop now joins with the task id
+(`join_next_with_id`, `src/http/fetcher.rs:433`), maps the id back to the spawn's
+item index (`:431`, `:467`) before the error is consumed, and records
+`item {i} did not return: {cause}` in that slot; the log line carries both the
+index and the cause. `join_failure` moved to `src/tasks.rs:18` with a label
+argument, so `blobs::Store::fill` (`src/blobs/mod.rs:325`, "chunk fetch") and
+`map_concurrently` ("request") share one rule; a cancellation is named as a
+cancellation, not a panic. Pinned by
+`http::tests::a_panicking_request_task_keeps_its_index_and_cause` (real
+`map_concurrently`, panic in the middle job, asserts index, payload and that the
+other jobs still run) and by the helper's own tests in `src/tasks.rs`
+(payload downcast; an aborted task is reported as cancelled and not as
+panicked). Coverage limit: cancellation is exercised on the helper, not through
+`map_concurrently` itself, because the loop has no cancellation source — every
+spawned task is awaited and the `JoinSet` is never aborted.
 
 ---
 
@@ -344,33 +372,45 @@ document fields; `emit/index.rs:863` is a test.
 
 ## Verification
 
-Run on this tree (`6561044`, clean before the note; no source change):
+Run on this closing tree (`47b0dc2` plus the doc commit; both fixes in place):
 
 | Command | Result |
 |---|---|
-| `cargo build -p gircap` | `Finished \`dev\` profile ... in 0.50s`; no warnings; exit `0` |
-| `cargo test -p gircap` | **693 passed, 0 failed, 0 ignored** (549 lib + 144 integration; 12 suites; doc-tests 0); exit `0` |
-| `cargo clippy -p gircap --all-targets` | `Finished \`dev\` profile ... in 0.47s`; no diagnostics; exit `0` |
+| `cargo build -p gircap` | `Finished \`dev\` profile ... in 18.27s`; no warnings; exit `0` |
+| `cargo test -p gircap` | **696 passed, 0 failed, 0 ignored** (552 lib + 144 integration; main and doc-tests 0); exit `0` |
+| `cargo clippy -p gircap --all-targets` | `Finished \`dev\` profile ... in 0.72s`; no diagnostics; exit `0` |
 | `cargo fmt -p gircap --check` | no output; exit `0` |
 
 Integration total: 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15 = 144.
 
+Release-only checks: `cargo test -p gircap --release --lib
+a_crafted_checksums_total` (1 passed), `... --lib tasks::tests` (2 passed), and
+`... --lib a_panicking_request_task` (1 passed). The pre-fix reproduction was
+also run: debug `cargo test -p gircap --lib a_crafted_checksums_total` panicked
+at `accum.rs:206:1`, and the release run reported a wrapped total.
+
 ## Not verified
 
-- **M1 reproduction.** The crafted bundle was not written or run through
-  `gircap verify`: the pass permits only this note to be created, so no files
-  could be placed under a temporary bundle. Reachability and the arithmetic are
-  source-verified; the panic itself is the `Sum for u64` behavior reproduced for
-  L2 at `core/src/iter/traits/accum.rs:206:1`.
-- **M1 release wrap.** The wrapping sum and the crafted `total_bytes` equality
-  were reasoned from two's-complement wrapping, not executed.
+- **M1 bundle through the command.** The crafted document is exercised directly
+  through `Checksums::findings` in the unit test above, not written into a
+  temporary bundle and run through `gircap verify`. The `Bundle::open` →
+  `reverify` → `findings` path is unchanged and is a straight call
+  (`src/verify/mod.rs:178`, `:538`).
+- **M1 release certification pair.** The pre-fix debug panic was observed
+  directly. The pre-fix release run observed a wrapped sum
+  (two `u64::MAX - 1` entries produced `u64::MAX - 3`, not the crafted total),
+  which confirms the wrap but is not the exact two-`u64::MAX` pair that wraps to
+  the crafted `u64::MAX - 1`; that pair's arithmetic is two's-complement
+  wrapping and its post-fix behavior is executed in both profiles.
 - **M1 other consumers.** `Checksums::a16` also calls `findings`, but on the
-  capture's own measured document; only the `verify` path was reasoned through.
-- **M2 panic injection.** No job was made to panic through `map_concurrently`
-  (that needs a test/source change). The loss is read from the `JoinError` API
-  and the `blobs` sibling, not observed in a running `map_concurrently`.
+  capture's own measured document; only the `verify` path was exercised. The
+  fold is shared, so both now saturate.
+- **M2 cancellation through `map_concurrently`.** The helper's cancellation arm
+  is executed directly; the loop has no way to cancel a task, so the slot text
+  for a cancelled metadata job was not driven end to end.
 - **M2 operator output.** Which of the five callers writes the slot string into
-  a document versus only into the summary was not traced to the last sink; the
-  log omission is independent of that.
+  a document versus only into the summary was not traced to the last sink; all
+  five wrap the `Err` with their own context, and the slot now carries the
+  failing item index and cause.
 - **Live inputs.** No live tag, manifest, metadata response or bundle was
   sampled; both findings are about locally accepted crafted values.
