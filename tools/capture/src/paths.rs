@@ -15,8 +15,10 @@
 //! prefix, an empty component or a `..` component is a document that cannot
 //! describe a file in the bundle. So is a `.` component and a component ending
 //! in `.` or a space: Windows folds `a/b.` and `a/b ` onto `a/b`, so three
-//! distinct entries would name one file and the last write would win. The
-//! caller decides how to report the refusal: a flag is a
+//! distinct entries would name one file and the last write would win. A
+//! reserved DOS device name (`CON`, `NUL`, `COM1`…) is refused for the same
+//! portability reason: Windows opens the device, not a file, whatever the
+//! extension. The caller decides how to report the refusal: a flag is a
 //! [`crate::cli::UsageError`], a document is an [`crate::http::ApiError::shape`].
 //!
 //! **A chunk id is stricter still.** It is interpolated into a CDN URL
@@ -72,12 +74,37 @@ pub fn relative_path_problem(value: &str) -> Option<String> {
              a name onto the one without it, so two paths could name one file"
         ));
     }
+    if value.split('/').any(is_windows_device_name) {
+        return Some(format!(
+            "{value:?} names a Windows device; such a component opens the device \
+             instead of a file, so the bundle would not hold the bytes it lists"
+        ));
+    }
     if value.split('/').any(|c| c.is_empty()) {
         return Some(format!(
             "{value:?} has an empty component (a doubled or trailing separator)"
         ));
     }
     None
+}
+
+/// Whether one path component is a reserved DOS device name.
+///
+/// Windows resolves these names whatever the extension, so `CON.txt` opens the
+/// console and a write to it creates no file — the bundle would list bytes it
+/// does not hold. The list is Microsoft's (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–
+/// `COM9`, `LPT1`–`LPT9`, and the `$` console aliases). `COM0`/`LPT0` are not
+/// reserved, so only 1–9 count. A leading dot makes a different stem, and
+/// `.con` is an ordinary (if odd) file name.
+fn is_windows_device_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    let stem = stem.to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 /// Why `value` cannot be a manifest field name, or `None` when it can.
@@ -176,6 +203,8 @@ mod tests {
             ("a /b", "folds"),
             ("a//b", "empty component"),
             ("a/", "empty component"),
+            ("CON", "device"),
+            ("a/aux.txt", "device"),
             ("a\u{0}b", "control character"),
         ] {
             let problem = relative_path_problem(value).unwrap_or_else(|| {
@@ -207,6 +236,34 @@ mod tests {
         // The rule is about *trailing* dots and spaces; a dot inside a name is
         // ordinary (`archive.tar.zst`, `7.1.0`) and must stay legal.
         for good in ["a/b.c", "a/7.1.0", "a/.hidden", "a/b c", "a/b c/d"] {
+            assert_eq!(relative_path_problem(good), None, "{good:?}");
+        }
+    }
+
+    /// Windows resolves a reserved DOS device name whatever the extension, so
+    /// `game/NUL` or `game/aux.txt` opens a device rather than creating a file.
+    /// The write can "succeed" while the bundle holds nothing to hash, which is
+    /// the same silent-corruption class as a folded name.
+    #[test]
+    fn a_windows_device_name_is_not_a_file_name() {
+        for bad in [
+            "CON",
+            "con",
+            "a/NUL",
+            "a/aux.txt",
+            "a/Prn.log",
+            "a/COM1",
+            "a/com9.bin",
+            "a/LPT3",
+            "a/CONIN$",
+            "a/conout$.txt",
+        ] {
+            let problem = relative_path_problem(bad)
+                .unwrap_or_else(|| panic!("{bad:?} names a device, not a file"));
+            assert!(problem.contains("device"), "{bad:?}: {problem}");
+        }
+        // Names that merely start like one are ordinary files.
+        for good in ["CONSOLE", "a/conifer", "a/COM0", "a/LPT10", "a/.con"] {
             assert_eq!(relative_path_problem(good), None, "{good:?}");
         }
     }
