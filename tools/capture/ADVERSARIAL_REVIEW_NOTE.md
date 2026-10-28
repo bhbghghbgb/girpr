@@ -59,6 +59,22 @@ the identity, and that trade-off is now documented. Test:
 patchmap to `added+1.json` unchanged; before the fix `Bundle::open` succeeded and
 rebuilt one capture.
 
+### I4 - fixed
+
+`list` no longer drops an unreadable directory or a failed entry. The walk moved
+into `verify::list_with`, which takes an injected reader, and `child_dirs` returns
+`Err` naming the directory or entry for all three silent paths: `read_dir` failed,
+an entry failed, or an entry could not be stat'ed (the old `is_dir()` returned
+`false` on a failed stat). `verify::list` keeps its signature; `run::list` already
+maps the `Err` to `Failure::usage`, so the exit status becomes `1` with the name
+in the detail. Tests: `a_walk_that_cannot_read_a_directory_names_it`,
+`a_walk_that_loses_one_entry_names_the_directory`,
+`a_walk_that_cannot_stat_one_entry_names_it`,
+`a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering`. The list
+paragraph in `docs/00-spec.md` now says an unreadable walk is a usage error rather
+than a shorter inventory. The trade-off is deliberate: a transient stat failure
+now aborts the audit instead of omitting a possible bundle.
+
 ---
 
 ### I1 - Forced paths of one primary class share a capture id

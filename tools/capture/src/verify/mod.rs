@@ -1039,7 +1039,26 @@ pub struct Unreadable {
 /// build refuses — an older schema, which is a permanent condition with a
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
 /// operator's inventory is complete.
+///
+/// **A walk that cannot read a directory is an error, not a shorter inventory.**
+/// The `unreadable` list can name a bundle that does not open, but it cannot name
+/// what it never saw: an entry error or an ACL-denied directory used to be
+/// dropped, so `list` returned a confident, incomplete answer with exit `0`. An
+/// audit command fails fast instead and names the directory or entry it could not
+/// read.
 pub fn list(root: &Path) -> Result<Index, String> {
+    list_with(root, |d| {
+        let rd = std::fs::read_dir(d)?;
+        Ok(rd.map(|e| e.map(|e| e.path())).collect())
+    })
+}
+
+/// [`list`] with the directory reader injected, so a test can make one read
+/// fail and see that the walk stops rather than shortening the inventory.
+fn list_with(
+    root: &Path,
+    mut read: impl FnMut(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+) -> Result<Index, String> {
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
@@ -1069,16 +1088,9 @@ pub fn list(root: &Path) -> Result<Index, String> {
             // A bundle does not contain another bundle.
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut subs: Vec<PathBuf> = rd
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        // Sorted so the walk is the same on every filesystem.
-        subs.sort();
-        // Reversed, because the stack pops from the back.
+        // Sorted so the walk is the same on every filesystem; reversed because
+        // the stack pops from the back.
+        let subs = child_dirs(&dir, |d| read(d))?;
         stack.extend(subs.into_iter().rev());
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1087,6 +1099,34 @@ pub fn list(root: &Path) -> Result<Index, String> {
         bundles: found,
         unreadable,
     })
+}
+
+/// The child directories of `dir`, sorted, or the first reason the walk could
+/// not see all of them.
+///
+/// The reader is injected so the entry-error arm can be exercised without
+/// platform-specific permissions: a test hands over a synthetic `Err` for one
+/// entry, which is otherwise only reachable when a share disconnects between
+/// `read_dir` and the stat. `metadata` follows symlinks, as the `is_dir` it
+/// replaces did, and an entry that cannot be stat'ed is an error rather than a
+/// file: losing it would be the same silent omission this walk is fixing.
+fn child_dirs(
+    dir: &Path,
+    read: impl FnOnce(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+) -> Result<Vec<PathBuf>, String> {
+    let entries = read(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let mut subs = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
+        let is_dir = std::fs::metadata(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+            .is_dir();
+        if is_dir {
+            subs.push(path);
+        }
+    }
+    subs.sort();
+    Ok(subs)
 }
 
 /// One `Listed` row from an opened bundle.
@@ -1204,6 +1244,69 @@ mod tests {
             index.unreadable.is_empty(),
             "a manifest that is not JSON is not a bundle this build refuses: {index:?}"
         );
+    }
+
+    /// A directory the walk cannot read is **named**, not skipped.
+    ///
+    /// `list` is the operator's inventory; dropping a subtree makes a confident
+    /// answer that is short. The reader is real here — a file passed where a
+    /// directory is expected is the cheapest read failure a test can make.
+    #[test]
+    fn a_walk_that_cannot_read_a_directory_names_it() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-unreadable", "unreadable");
+        let file = d.join("not_a_directory");
+        std::fs::write(&file, b"x").expect("writes a file");
+
+        let e = child_dirs(&file, |p| {
+            let rd = std::fs::read_dir(p)?;
+            Ok(rd.map(|e| e.map(|e| e.path())).collect())
+        })
+        .expect_err("a file cannot be read as a directory");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("not_a_directory"), "the path is named: {e}");
+    }
+
+    /// And the walk propagates it: `list` fails rather than returning the
+    /// directories it managed to see before the unreadable one.
+    #[test]
+    fn a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-fails", "walk_fails");
+        let e = list_with(&d, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "share offline",
+            ))
+        })
+        .expect_err("the walk did not finish");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(
+            e.contains(&d.display().to_string()),
+            "the root is named: {e}"
+        );
+    }
+
+    /// One failed entry is the whole walk's failure: a child that vanished
+    /// between `read_dir` and the stat may be a bundle, so it cannot be dropped.
+    #[test]
+    fn a_walk_that_loses_one_entry_names_the_directory() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-entry", "entry_error");
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let e = child_dirs(&d, move |_| Ok(vec![Err(denied)]))
+            .expect_err("an entry error is not a shorter listing");
+        assert!(e.contains("cannot read an entry"), "{e}");
+        assert!(e.contains("denied"), "the cause is kept: {e}");
+    }
+
+    /// An entry whose metadata cannot be read is an error too; `is_dir`'s
+    /// `false` on a failed stat is the same silent omission one level down.
+    #[test]
+    fn a_walk_that_cannot_stat_one_entry_names_it() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-stat", "stat_error");
+        let vanished = d.join("vanished");
+        let e = child_dirs(&d, move |_| Ok(vec![Ok(vanished)]))
+            .expect_err("a missing entry is not a file");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("vanished"), "the path is named: {e}");
     }
 
     /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"
