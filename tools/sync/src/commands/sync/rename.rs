@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::info;
 
 use crate::report::{Record, Report};
@@ -54,6 +54,92 @@ fn case_renames<'a>(
     out
 }
 
+/// One rename the pass will perform.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenameStep {
+    /// Where the entry is when this step runs, after ancestor renames.
+    from: String,
+    /// The path src gives it.
+    to: String,
+    /// The dst path before the pass, which is the cache row's key.
+    original_from: String,
+    /// Whether this step moves a directory, so later paths under it move too.
+    is_dir: bool,
+    /// False when an ancestor's rename already put this path on src's casing;
+    /// the step then has no filesystem or record work.
+    perform: bool,
+}
+
+/// Turn the rename pairs into steps in a parent-first order, rewriting each
+/// `from` through the directory renames already planned.
+///
+/// `case_renames` sorts by lowercase src key, so a directory always precedes
+/// everything beneath it. Renaming the parent moves its whole subtree, so a
+/// child whose only difference was the parent's casing is already correct when
+/// its turn comes: it is kept as a no-op step so its cache row and map key can
+/// still follow, but it must not emit a `RENAME` or call `fs::rename` on a path
+/// that no longer exists. A child whose own leaf casing also differs is renamed
+/// at its new parent path.
+fn plan_steps(
+    renames: &[(String, String)],
+    dm: &HashMap<String, crate::effective::EffRec>,
+) -> Vec<RenameStep> {
+    let mut dir_moves: Vec<(String, String)> = Vec::new();
+    let mut steps = Vec::with_capacity(renames.len());
+    for (from, to) in renames {
+        let effective_from = rewritten_from(from, &dir_moves);
+        let is_dir = dm.get(from).is_some_and(|r| r.kind == "dir");
+        let perform = effective_from != *to;
+        steps.push(RenameStep {
+            from: effective_from,
+            to: to.clone(),
+            original_from: from.clone(),
+            is_dir,
+            perform,
+        });
+        if perform && is_dir {
+            // Keyed by the original path: later `from`s are still spelled the
+            // way the walk found them.
+            dir_moves.push((from.clone(), to.clone()));
+        }
+    }
+    steps
+}
+
+/// Rewrite `from` through the directory renames already performed, choosing the
+/// longest matching prefix.
+///
+/// The longest prefix matters for nested renames: with `dir` -> `Dir` and
+/// `dir/sub` -> `Dir/Sub`, a path `dir/sub/f` must become `Dir/Sub/f`, not
+/// `Dir/sub/f`. A mapping matches only on a component boundary, so `dir` does
+/// not rewrite `dir2/f`.
+fn rewritten_from(from: &str, dir_moves: &[(String, String)]) -> String {
+    let mut best: Option<&(String, String)> = None;
+    for mv in dir_moves {
+        let old = &mv.0;
+        let boundary = from == old
+            || from
+                .strip_prefix(old)
+                .is_some_and(|rest| rest.starts_with('/'));
+        if boundary && best.is_none_or(|b| old.len() > b.0.len()) {
+            best = Some(mv);
+        }
+    }
+    match best {
+        Some((old, new)) => format!("{new}{}", &from[old.len()..]),
+        None => from.to_string(),
+    }
+}
+
+/// The key a dst map/cache entry has after the pass: an exact rename wins,
+/// otherwise the path follows its renamed ancestor directories.
+fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, String)]) -> String {
+    match renames.iter().find(|(from, _)| from == key) {
+        Some((_, to)) => to.clone(),
+        None => rewritten_from(key, dir_moves),
+    }
+}
+
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
 ///
 /// Returns the number of renames performed (or that a dry run would perform).
@@ -70,21 +156,16 @@ pub(super) fn rename_to_src_casing(
     dry_run: bool,
     report: &Report,
 ) -> Result<usize> {
-    let mut renames: Vec<(PathBuf, PathBuf, String, String)> = Vec::new();
-    for (drel, srel) in case_renames(src, dm) {
-        renames.push((
-            dst_root.join(drel),
-            dst_root.join(srel),
-            drel.clone(),
-            srel.clone(),
-        ));
-    }
+    let renames: Vec<(String, String)> = case_renames(src, dm)
+        .into_iter()
+        .map(|(drel, srel)| (drel.clone(), srel.clone()))
+        .collect();
     info!(pending = renames.len(), "rename pass");
     // Validate the whole pass before the first filesystem call: a rename under a
     // dst link resolves the link as an intermediate component and moves a file
     // in its target. A partial pass would leave dst half-renamed, so this is a
     // pre-loop check rather than a guard inside the loop.
-    for (_, _, drel, srel) in &renames {
+    for (drel, srel) in &renames {
         if let Some(link) = crate::link::link_ancestor_above(dst_root, drel)? {
             bail!(
                 "refusing to rename `{drel}` -> `{srel}` through dst link `{link}`: \
@@ -92,26 +173,29 @@ pub(super) fn rename_to_src_casing(
             );
         }
     }
+    let steps = plan_steps(&renames, dm);
     let mut renamed = 0usize;
-    for (from, to, drel, srel) in renames {
+    for step in &steps {
+        if !step.perform {
+            // An ancestor rename already moved this path to src's casing. The
+            // map and cache row still have to follow; the record must not claim
+            // a rename that did not happen.
+            continue;
+        }
         // One record, one log event. `Report::emit` does both, so there is no
         // second hand-written `info!` stating the same rename — the count above and
         // the `SUMMARY` cover the narration, and the record covers the detail.
-        report.emit(Record::pair("RENAME", "->", "from", &drel, "to", &srel));
+        report.emit(Record::pair(
+            "RENAME", "->", "from", &step.from, "to", &step.to,
+        ));
         renamed += 1;
-
-        // Re-key the in-memory map *before* the dry-run bail-out: the plan
-        // computed after this pass reads `dm`, so a dry run that left it on the
-        // old casing would report a case-only difference as both a copy and a
-        // delete. This cannot fail, so doing it first is safe either way.
-        if let Some(v) = dm.remove(&drel) {
-            dm.insert(srel.clone(), v);
-        }
 
         if dry_run {
             continue;
         }
 
+        let from = dst_root.join(&step.from);
+        let to = dst_root.join(&step.to);
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
@@ -122,11 +206,41 @@ pub(super) fn rename_to_src_casing(
             .with_context(|| format!("rename {} (case fix step1)", from.display()))?;
         std::fs::rename(&tmp, &to)
             .with_context(|| format!("rename to {} (case fix step2)", to.display()))?;
-        // move the DB entry to match
-        if let Some(rec) = dst_db.get(&drel)? {
+    }
+    // The directory moves actually performed, for descendants that were not
+    // themselves renamed (dst-only paths under a renamed parent included).
+    let dir_moves: Vec<(String, String)> = steps
+        .iter()
+        .filter(|s| s.perform && s.is_dir)
+        .map(|s| (s.original_from.clone(), s.to.clone()))
+        .collect();
+    // Re-key the in-memory map, including under `dry_run`: the plan computed
+    // after this pass reads `dm`. `final_key` handles both exact file renames
+    // and dst-only descendants of a renamed directory.
+    let old = std::mem::take(dm);
+    for (key, rec) in old {
+        dm.insert(final_key(&key, &renames, &dir_moves), rec);
+    }
+    if !dry_run {
+        // Move the cache rows with the files. A row under a renamed directory
+        // moves even when that path is dst-only, or `compare-self` would report
+        // the path it just moved as missing.
+        let keys = dst_db.load_keys()?;
+        let mut moves = Vec::new();
+        for key in keys {
+            let to = final_key(&key, &renames, &dir_moves);
+            if to != key
+                && let Some(rec) = dst_db.get(&key)?
+            {
+                moves.push((key, to, rec));
+            }
+        }
+        if !moves.is_empty() {
             let mut w = dst_db.begin_write()?;
-            w.remove(&drel)?;
-            w.put(&srel, &rec)?;
+            for (from, to, rec) in &moves {
+                w.remove(from)?;
+                w.put(to, rec)?;
+            }
             w.commit()?;
         }
     }
@@ -143,6 +257,16 @@ mod tests {
         EffRec {
             kind: "file".into(),
             size: 4,
+            mtime_ns: 0,
+            hashes: crate::hash::DigestSet::default(),
+            is_link: false,
+        }
+    }
+
+    fn dir_rec() -> EffRec {
+        EffRec {
+            kind: "dir".into(),
+            size: 0,
             mtime_ns: 0,
             hashes: crate::hash::DigestSet::default(),
             is_link: false,
@@ -276,6 +400,85 @@ mod tests {
         assert!(
             dst.join("data.txt").is_file(),
             "a dry run still renames nothing on disk"
+        );
+    }
+
+    /// A directory rename moves its whole subtree, so a child that differed only
+    /// by the parent's casing must not be renamed again at the old path. On a
+    /// case-sensitive host that path no longer exists; the step is a no-op that
+    /// still lets the map and cache row follow.
+    #[test]
+    fn a_child_covered_by_its_parents_rename_is_a_no_op() {
+        let mut dm = HashMap::new();
+        dm.insert("dir".to_string(), dir_rec());
+        dm.insert("dir/file.txt".to_string(), file_rec());
+        let renames = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/file.txt".to_string(), "Dir/file.txt".to_string()),
+        ];
+
+        let steps = plan_steps(&renames, &dm);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].from, "dir");
+        assert!(steps[0].perform, "the directory itself moves");
+        assert_eq!(steps[1].from, "Dir/file.txt");
+        assert!(
+            !steps[1].perform,
+            "the parent move already put the child on src's casing"
+        );
+    }
+
+    /// A nested directory whose own leaf casing differs is renamed at the path
+    /// its parent's move left it on, and the longest prefix wins for its
+    /// children. A textual prefix is not a component boundary.
+    #[test]
+    fn nested_directory_renames_rewrite_through_the_longest_prefix() {
+        let mut dm = HashMap::new();
+        dm.insert("dir".to_string(), dir_rec());
+        dm.insert("dir/sub".to_string(), dir_rec());
+        dm.insert("dir/sub/f.txt".to_string(), file_rec());
+        let renames = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/sub".to_string(), "Dir/Sub".to_string()),
+            ("dir/sub/f.txt".to_string(), "Dir/Sub/f.txt".to_string()),
+        ];
+
+        let steps = plan_steps(&renames, &dm);
+        assert_eq!(steps[1].from, "Dir/sub");
+        assert!(steps[1].perform, "the child directory still moves");
+        assert_eq!(steps[2].from, "Dir/Sub/f.txt");
+        assert!(
+            !steps[2].perform,
+            "the parent directory's move covered the file"
+        );
+
+        let moves = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/sub".to_string(), "Dir/Sub".to_string()),
+        ];
+        assert_eq!(rewritten_from("dir/sub/f.txt", &moves), "Dir/Sub/f.txt");
+        assert_eq!(
+            rewritten_from("dir2/f.txt", &moves),
+            "dir2/f.txt",
+            "a prefix match must end at a component boundary"
+        );
+    }
+
+    /// A dst-only path under a renamed directory follows the directory in the
+    /// map and the cache, even though it has no rename pair of its own.
+    #[test]
+    fn a_dst_only_descendant_follows_its_renamed_parent() {
+        let renames = vec![("dir".to_string(), "Dir".to_string())];
+        let dir_moves = vec![("dir".to_string(), "Dir".to_string())];
+
+        assert_eq!(final_key("dir", &renames, &dir_moves), "Dir");
+        assert_eq!(
+            final_key("dir/orphan.txt", &renames, &dir_moves),
+            "Dir/orphan.txt"
+        );
+        assert_eq!(
+            final_key("other/x.txt", &renames, &dir_moves),
+            "other/x.txt"
         );
     }
 }
