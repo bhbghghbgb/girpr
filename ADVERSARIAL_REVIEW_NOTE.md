@@ -17,12 +17,12 @@ Nothing found is data-losing or corrupting; the severities reflect that.
 
 ## 1. Verdict table
 
-| ID | Severity | Class | Site |
-|---|---|---|---|
-| P-1 | **Medium** | bug — estimate/contract (under-estimate), test gap | `src/repair/mod.rs:273` (with `src/repair/scan.rs:156-165`) |
-| P-2 | **Low** | bug — swallowed errors (residual N-20 class) | `src/repair/file/temp.rs:220`, `src/repair/file/temp.rs:488`, `src/repair/file/inplace.rs:182`, `src/repair/file/inplace.rs:271`, `src/repair/phases/post.rs:163` |
-| P-3 | **Low** | bug — log claims an outcome that did not happen | `src/repair/phases/post.rs:318` |
-| P-4 | **Low** | bug — swallowed error in a delete sink | `src/repair/purge.rs:258` |
+| ID | Severity | Class | Site | Status |
+|---|---|---|---|---|
+| P-1 | **Medium** | bug — estimate/contract (under-estimate), test gap | `src/repair/mod.rs:273` (with `src/repair/scan.rs:156-165`) | **Fixed** `4d2b2d9` |
+| P-2 | **Low** | bug — swallowed errors (residual N-20 class) | `src/repair/file/temp.rs:220`, `src/repair/file/temp.rs:488`, `src/repair/file/inplace.rs:182`, `src/repair/file/inplace.rs:271`, `src/repair/phases/post.rs:163` | **Fixed** `edb2eb4`, `63a53de` |
+| P-3 | **Low** | bug — log claims an outcome that did not happen | `src/repair/phases/post.rs:318` | **Fixed** `25ce46f` |
+| P-4 | **Low** | bug — swallowed error in a delete sink | `src/repair/purge.rs:258` | **Fixed** `d331174` |
 
 ## 2. Findings
 
@@ -259,5 +259,91 @@ succeed).
   `contained_join_fails_closed_when_a_component_cannot_be_resolved` and
   `the_mode_is_part_of_the_file_stats`; the 7 ignored tests; no release-profile
   run; no Linux/macOS run; no live CDN traffic.
+
+## 5. Progress — validation and fixes (this tree)
+
+Tree `fix-gaps/girpr`, started at `b99ddbb`, closed at `d331174`. Every finding
+was re-read at the cited lines and, where a real seam exists, executed.
+
+### 5.1 P-1 — **Valid, reachable; fixed `4d2b2d9`**
+
+- Re-read: `src/repair/mod.rs:270-276` took the `(Some(_), RepairMode::Temp)`
+  arm whenever `--scan` and a requested temp met, so the scan was ignored.
+  `resolve_mode` (`src/repair/file/mod.rs:548-551`) returns `Mode::Temp` for a
+  requested `Temp`, which made `scan.rs:159-165` (`Mode::Temp`) unreachable in
+  the one spelling that names temp.
+- **Executed on the unfixed tree**: the new binary-level test failed with
+  `PLAN files=2 est_download_bytes=0 ... scan_bytes=176`, and the same
+  fixture's repair fetched `chunk_foo1` — exactly the note's scenario.
+- Fix: the temp arm is gone; `mod.rs:268-272` now branches on `scan` alone, so
+  a scanned run always asks `ScanReport::est_download_bytes_by_file`, which
+  resolves the requested mode. The comment at `mod.rs:261-266` no longer
+  restates the pre-N-17 temp rule.
+- Regression test: `tests/repair_offline.rs:1293-1385`
+  `the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads`
+  (installed-version `config.ini`, chunk 1 corrupted, `--scan --repair-mode
+  temp --print-plan --plan-out`, then the same mode for the repair). Asserts
+  `est_download_bytes > 0`, that the document's per-file halves sum to the
+  total, `PLAN est_download_bytes == SUMMARY download_bytes`, and that only
+  `chunk_foo1` was fetched. Fails on the old arm at the first assertion.
+
+### 5.2 P-2 — **Valid at all five sites; fixed `edb2eb4` / `63a53de`**
+
+- `temp.rs:221` (resume stat) and `temp.rs:492` (`promote_tmp`) propagate
+  `metadata(...)` with the `_tmp` path as context; `try_reuse_slice` takes the
+  path so the message can name it.
+- `inplace.rs:184` (eager trim) and `inplace.rs:276` (salvage order) propagate
+  with the target path. The second is the sharp one: a zero marked no source
+  live, downloading every bad chunk with no explanation.
+- `post.rs:167-181` keeps the size as `Option<u64>`: a stat failure is warned
+  with its `io::Error`, the delete still runs, the counter omits the unknown
+  size instead of adding a false zero, and the dry-run line says "size
+  unavailable" rather than "0 bytes".
+- Regression test: `src/repair/file/temp.rs:544`
+  `a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure` stats a `_tmp`
+  under a regular file (`ENOTDIR`) and requires the error chain to name the
+  stat and the path. On the old `util::file_len(...).unwrap_or(0)` it fails
+  with `tmp length 0 != expected 64`.
+- **No test** for the two `File::metadata()` sites (`temp.rs:221`,
+  `inplace.rs:184`/`:276`): the handle is already open, so an `fstat` failure
+  has no public seam on this host — the same limitation §9.3 records for
+  N-20. The `post.rs` site needs `metadata` to fail after `is_file()`
+  succeeded (a race on a static tree), so it has none either.
+- **No shared crate changed.**
+
+### 5.3 P-3 — **Valid; fixed `25ce46f`**
+
+- `post.rs:354-356`: the summary is now
+  `tracing::info!(moved, kept, "audio cache -> res")`, emitted only when a
+  relocation was attempted. `moved` counts sources gone from the cache;
+  `kept` counts refused moves and copies whose source could not be removed.
+  An empty cache and every-refused move no longer claim success.
+- Tests (`post.rs:391`, `:430`, `:463`, using the shared capture helper in
+  `src/repair/test_support.rs`): the refused copy asserts `moved=0 kept=1`,
+  the completed move `moved=1 kept=0`, and an empty cache emits no relocation
+  line. The refused-copy assertion fails on the old bare line.
+
+### 5.4 P-4 — **Valid; fixed `d331174`**
+
+- `purge.rs:258-270`: `remove_dir`'s error is a `debug!` naming the directory
+  and the `io::Error`; the sweep stays best effort (nothing escalated). The
+  doc comment now says the reason is logged.
+- Test `src/repair/purge.rs:753`
+  `a_dir_the_sweep_could_not_remove_is_logged_with_the_reason` makes the
+  failure real (a file appears in the directory after the plan) and asserts
+  the captured log names both. It sees nothing on the old `let _ =`.
+
+### 5.5 Verification after the fixes
+
+| Command | Result |
+|---|---|
+| `cargo build` | ok, debug profile |
+| `cargo test -p girpr` | **311 passed, 0 failed, 7 ignored** — 178 lib + 0 `src/main.rs` + 7 `artifact_server` + 16 `cli_contract` + 25 `repair_machinery` + 85 `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap` |
+| `cargo clippy -p girpr --all-targets` | clean, 0 warnings |
+| `cargo fmt --check` | clean, exit `0` |
+
+The §4 table records the pre-fix baseline (306 passed); the five new tests are
+the difference. Not run, unchanged from §4: the `#[cfg(unix)]` blocks, the 7
+ignored tests, no release profile, no Linux/macOS host, no live CDN.
 
 *End of fourth-pass note.*
