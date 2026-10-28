@@ -175,7 +175,9 @@ pub struct Args {
     pub print_plan: bool,
 
     /// Also write the per-file plan detail to this file as JSON
-    /// `{repair:[{rel,size,chunks_total,est_download_bytes}],purge:[{rel,size}]}`.
+    /// `{repair:[{rel,size,chunks_total,est_download_bytes,mode,extra_bytes}],purge:[{rel,size}]}`.
+    /// `mode` is `inplace` or `temp`; `extra_bytes` is the extra disk the file
+    /// needs beyond the install.
     /// Implies nothing: use it with `--print-plan`, or on its own to dump the
     /// plan of a run that does the work.
     #[arg(long, value_name = "FILE")]
