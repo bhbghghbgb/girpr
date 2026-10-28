@@ -157,7 +157,7 @@ fn delete_deprecated(
                 continue;
             }
         };
-        // One stat, three answers. The old `if !p.is_file()` collapsed "not a
+        // One stat, four answers. The old `if !p.is_file()` collapsed "not a
         // file" with every stat failure: an ACL or a sharing violation took
         // the same silent `continue` as a directory, so the deprecated file was
         // left in place with no log and no counter, while the comment below
