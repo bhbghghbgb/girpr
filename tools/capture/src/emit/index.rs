@@ -434,7 +434,32 @@ impl Checksums {
                 self.entries.len()
             ));
         }
-        if self.total_bytes != self.entries.iter().map(|e| e.bytes).sum::<u64>() {
+        // **This total is folded from the document, not from the tool's own
+        // measurement.** `verify` runs on a bundle someone else may have
+        // written, and a plain `.sum()` panics in debug and wraps in release —
+        // where the wrapped figure can equal a crafted `total_bytes` and the
+        // disagreement is never named. The fold therefore saturates, as every
+        // measurement total does (K1/L2), and `checked_add` records the one
+        // thing saturation alone would hide: that the true sum does not fit.
+        // Without the second half, a crafted `total_bytes: u64::MAX` would
+        // compare equal to a saturated overflowing sum.
+        let mut total = 0u64;
+        let mut overflowed = false;
+        for e in &self.entries {
+            match total.checked_add(e.bytes) {
+                Some(t) => total = t,
+                None => {
+                    overflowed = true;
+                    total = u64::MAX;
+                    break;
+                }
+            }
+        }
+        if overflowed {
+            out.push(format!(
+                "entries' bytes overflow u64; the total saturates at {total}"
+            ));
+        } else if self.total_bytes != total {
             out.push("total_bytes disagrees with the entries".into());
         }
         // Only re-hash a file that still exists: a ghost above already named it,
@@ -683,6 +708,84 @@ mod tests {
         assert!(detail.contains("total_bytes"), "{detail}");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&root2);
+    }
+
+    /// A16's `total_bytes` is a sum over a document the operator may not have
+    /// written, so it must not be a plain `.sum()`.
+    ///
+    /// `verify` runs on a bundle someone may have edited, and `reverify` calls
+    /// this before any digest is checked. A plain `Sum for u64` panics in debug
+    /// and wraps in release; the wrap is the dangerous half, because the crafted
+    /// `total_bytes` can then equal the wrapped figure and the disagreement is
+    /// never reported.
+    #[test]
+    fn a_crafted_checksums_total_cannot_overflow_or_certify_an_impossible_sum() {
+        let root = scratch("a16overflow");
+        let entry = |path: &str, bytes: u64| FileEntry {
+            path: path.into(),
+            bytes,
+            md5: hash::md5_hex(b"x"),
+            sha256: hash::sha256_hex(b"x"),
+            encoding: crate::hash::Encoding::Identity,
+        };
+        let doc = |entries: Vec<FileEntry>, total_bytes: u64| Checksums {
+            schema_version: crate::SCHEMA_VERSION,
+            algorithm: "sha256".into(),
+            file_count: entries.len() as u64,
+            total_bytes,
+            entries,
+        };
+
+        // The review's exact scenario: two `u64::MAX` entries wrap to
+        // `u64::MAX - 1` in release, which is the crafted `total_bytes` below,
+        // so the disagreement is certified instead of named. In debug the plain
+        // sum panics first.
+        let wrapped = doc(
+            vec![entry("a", u64::MAX), entry("b", u64::MAX)],
+            u64::MAX - 1,
+        );
+        let found = wrapped.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "the overflow must be a finding, not a panic or a wrap: {found:?}"
+        );
+
+        // Two near-maximum entries: the true total is still too large. In debug
+        // this is the same panic; in release it disagrees by wrapping.
+        let overflow = doc(
+            vec![entry("a", u64::MAX - 1), entry("b", u64::MAX - 1)],
+            u64::MAX - 1,
+        );
+        let found = overflow.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "the overflow must be a finding, not a panic or a wrap: {found:?}"
+        );
+
+        // A crafted `total_bytes` equal to the saturated value must not turn an
+        // overflowing sum into agreement either.
+        let saturated = doc(vec![entry("a", u64::MAX), entry("b", u64::MAX)], u64::MAX);
+        let found = saturated.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "u64::MAX must not certify an overflowing sum: {found:?}"
+        );
+
+        // The boundary itself is legal: an exact `u64::MAX` total, no overflow.
+        let exact = doc(vec![entry("a", u64::MAX - 1), entry("b", 1)], u64::MAX);
+        let found = exact.findings(&root);
+        assert!(
+            !found
+                .iter()
+                .any(|f| f.contains("total_bytes") || f.contains("overflow")),
+            "an exact u64::MAX total is arithmetically valid: {found:?}"
+        );
+
+        // And one byte below that same total is still a disagreement.
+        let off = doc(vec![entry("a", u64::MAX - 1), entry("b", 1)], u64::MAX - 1);
+        let found = off.findings(&root);
+        assert!(found.iter().any(|f| f.contains("total_bytes")), "{found:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
