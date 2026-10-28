@@ -205,24 +205,32 @@ delete an entry the filter promised to leave alone.
 `a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename` (which also
 pins that no case-only rename precedes the refusal).
 
-### A hard-linked destination is refused, not written through
+### A hard-linked destination is refused at plan time, not written through
 
 `try_is_link` answers only for reparse points, so a dst file that is another
 name for a src file is ordinary content to the walk. `File::create` truncates
 the inode, not the name, so a run would report success after destroying the
 other name; the verify then reads the changed inode back and agrees with
-itself. `copy_one` therefore takes the destination's link count before
-truncating and refuses any count above one.
+itself. The decision is taken at plan time, in both modes, by
+`ensure_hard_linked_targets_safe`, so a dry run refuses the same tree instead
+of reporting a `COPY` the real run will not perform. `copy_one` keeps its own
+runtime check.
 
 The count, not an identity comparison with the copied source, is the check that
 covers the reported shape: `dst/a.txt` can be a hard link to `src/b.txt` while
-the copy is reading `src/a.txt`. The refusal is conservative by design — any
-shared inode is outside a mirror's write contract, wherever it lives — and the
-documented dst **symlink** write-through is unchanged, because a symlink is a
-different directory entry rather than a second name for the truncated inode.
+the copy is reading `src/a.txt`. A name the plan removes before the copy — a
+`delete_files` extra, or a file `fix_dirs` replaces — is credited, because the
+copy then truncates the only remaining name. Unlinking a dst **link** is not
+credited: it removes the link, not a name for the inode. Otherwise the refusal
+is conservative by design — a surviving shared inode is outside a mirror's
+write contract, wherever it lives — and the documented dst **symlink**
+write-through is unchanged, because a symlink is a different directory entry
+rather than a second name for the truncated inode.
 
 **Enforced by:** `a_dst_hard_link_is_refused_without_touching_the_shared_inode`
-(also under `--hash-all-of none`) and the `hardlink::tests` count cases.
+(also under `--hash-all-of none`), `the_hard_link_refusal_is_the_same_decision_in_both_modes`,
+the plan-time preflight cases in `plan::tests`, and the `hardlink::tests`
+count and identity cases.
 
 ### A digest is looked up by name, not by slot
 
