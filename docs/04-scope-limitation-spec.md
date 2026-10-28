@@ -222,8 +222,8 @@ misused:
    explicit `--audio` — in the execution phase, after every plan-half refusal,
    so a refused run leaves the install untouched. Under a scope that write is a
    mutation of a path the scope may not have admitted, so the combination is
-   refused outright. Two flags
-   asking for opposite scopes is a contradiction, not a merge. The escape hatch
+   refused outright. Two flags asking for opposite scopes is a contradiction,
+   not a merge. The escape hatch
    is to include the scan file's own rel path (`GenshinImpact_Data/Persistent/
    audio_lang_14` for a global install) — it comes from `getGameConfigs`, so it
    is never hardcoded.
