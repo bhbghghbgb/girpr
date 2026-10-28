@@ -51,6 +51,31 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> 
     parse_ndjson(&out.stdout)
 }
 
+/// Run the real binary and return its records, without asserting success.
+///
+/// `run_binary` above is the happy-path form; a case whose point is the exit
+/// code needs the raw output, because the assertion is on stderr and on what was
+/// *not* written.
+fn run_binary_raw(
+    src: &Path,
+    dst: &Path,
+    extra: &[&str],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(src)
+        .arg("--dst")
+        .arg(dst)
+        .arg("--output")
+        .arg("json")
+        .args(extra)
+        .envs(envs.iter().copied())
+        .output()
+        .expect("spawn girsync")
+}
+
 /// The `path` of every record with `event` `name`, in order.
 fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
     recs.iter()
@@ -827,5 +852,191 @@ fn a_failed_copy_discards_only_the_uncommitted_cache_tail() {
         cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap(),
         0,
         "the rerun produces a clean mirror"
+    );
+}
+
+/// A mirror may not contain its own source, in either direction.
+///
+/// With `dst` inside `src`, the walk of src includes dst, so the copy plan
+/// writes a parent's namesake over the child's file and creates a nested copy;
+/// with `src` inside `dst`, the delete pass removes the source files before the
+/// copy that needed them. Both are refused before the first mutation, in dry
+/// run too. A sibling that merely shares a textual prefix is not nested.
+#[test]
+fn run_sync_refuses_nested_roots_before_touching_anything() {
+    let t = temp_root("nested_roots");
+    let root = t.subdir("root");
+    let sub = t.subdir("root/sub");
+    wfile(&root, "y.txt", b"SRC-Y");
+    wfile(&sub, "y.txt", b"SRC-SUB-Y");
+    wfile(&sub, "x.txt", b"SRC-SUB-X");
+
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let out = run_binary_raw(&root, &sub, extra, &[]);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "dst inside src must be refused; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("disjoint"),
+            "the error names the overlap: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let out = run_binary_raw(&sub, &root, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "src inside dst must be refused; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("disjoint"),
+        "the error names the overlap: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Neither direction changed a byte, made a nested copy, or opened a cache.
+    // Neither direction changed a byte, made a nested copy, or opened a cache.
+    assert_eq!(rfile(&root, "y.txt"), b"SRC-Y");
+    assert_eq!(rfile(&sub, "y.txt"), b"SRC-SUB-Y");
+    assert_eq!(rfile(&sub, "x.txt"), b"SRC-SUB-X");
+    assert!(!sub.join("sub").exists(), "no nested copy was made");
+    assert!(!root.join(CACHE_PREFIX).exists(), "no src cache was made");
+    assert!(!sub.join(CACHE_PREFIX).exists(), "no dst cache was made");
+
+    // Component-wise containment, not a string prefix: `root2` is a sibling.
+    let sibling = t.subdir("root2");
+    let out = run_binary_raw(&root, &sibling, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a shared prefix is not nesting; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&sibling, "y.txt"), b"SRC-Y");
+}
+
+/// A failed flush is a failed copy: the run exits 3 and caches no row for the
+/// file.
+///
+/// `sync_all` used to be `.ok()`, so the verify re-read the same page cache the
+/// flush never wrote through, cached the digest, and the run exited 0 claiming
+/// durability it did not obtain. The injector is the only portable way to make
+/// the flush fail; the row is what a rerun would otherwise trust.
+#[test]
+fn a_failed_flush_aborts_before_the_copy_is_cached() {
+    let t = temp_root("flush_fail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"payload");
+
+    // `GIRSYNC_TEST_NO_FSYNC=0` because the workspace's nextest setup turns the
+    // flush off for speed; this case is about the flush itself.
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_FAIL_FLUSH", "a.bin"),
+            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an injected flush failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("injected flush failure"),
+        "the error names the flush: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !recs(&dst).contains_key("a.bin"),
+        "a cache row must not claim a copy whose flush failed"
+    );
+
+    // No resume: the rerun copies it and caches it.
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", "0")]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the rerun converges; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&dst, "a.bin"), b"payload");
+    assert!(recs(&dst).contains_key("a.bin"));
+}
+
+/// A case-only rename of a directory must move the subtree once, not try to
+/// rename its children at the old path.
+///
+/// The old pass renamed the parent and then called `fs::rename` on
+/// `dir/file.txt`; on a case-sensitive host that path no longer exists, so the
+/// run exited 3 after printing renames it did not perform. Here the child's
+/// leaf casing is already src's, so the parent move is the whole job.
+#[test]
+fn run_sync_renames_a_case_only_directory_before_its_children() {
+    let t = temp_root("casedir_rename");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Dir/file.txt", b"payload");
+    wfile(&dst, "dir/file.txt", b"payload");
+    sync_mtime(&src.join("Dir/file.txt"), &dst.join("dir/file.txt"));
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    o.common.case_sensitive = false;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(entry_names(&dst), vec!["Dir".to_string()]);
+    assert_eq!(rfile(&dst, "Dir/file.txt"), b"payload");
+    // The subtree was moved, not duplicated under the new parent.
+    assert!(!dst.join("Dir/Dir").exists());
+
+    let mut same = compare_mem(src, dst);
+    same.common.case_sensitive = false;
+    assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
+}
+
+/// Two spellings of one root that differ only by case are the same cache.
+///
+/// The pre-open identity check used to canonicalize the cache *file*, which does
+/// not exist on a fresh tree, and then fall back to the raw path: `root` and
+/// `ROOT` compared unequal, the src side created the cache, and the dst open
+/// failed with "Database already open … use --ignore-cache". The advice was
+/// wrong and `--ignore-cache` would delete the cache the src side just made.
+#[cfg(windows)]
+#[test]
+fn run_sync_refuses_case_only_spellings_of_one_root() {
+    let t = temp_root("case_roots");
+    let root = t.subdir("root");
+    wfile(&root, "a.txt", b"payload");
+    let upper = t.subdir("ROOT");
+
+    let out = run_binary_raw(&root, &upper, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "case-only roots are one folder; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("resolve to the same cache"),
+        "the error names the collision: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--ignore-cache"),
+        "a lock is not corruption: {stderr}"
+    );
+    assert!(
+        !root.join(CACHE_PREFIX).exists(),
+        "the refusal happens before either cache is opened"
     );
 }
