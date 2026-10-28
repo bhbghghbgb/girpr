@@ -800,11 +800,11 @@ command and the spec both implement.
 
 #### Sixth-pass verification
 
-| Command | Sixth pass (`3f042a1`) |
+| Command | Sixth pass (`8032442`) |
 |---|---|
-| `cargo build -p gircap` | finished in 0.46s, no warnings |
+| `cargo build -p gircap` | finished in 0.48s, no warnings |
 | `cargo test -p gircap` | **671 passed, 0 failed** (528 lib + 143 integration) |
-| `cargo clippy -p gircap --all-targets` | finished in 7.02s, no diagnostics |
+| `cargo clippy -p gircap --all-targets` | finished in 14.00s, no diagnostics |
 | `cargo fmt -p gircap --check` | clean |
 
 The sixth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15;
