@@ -303,6 +303,47 @@ fn run_sync_rejects_bad_inputs() {
     // through the real binary.
 }
 
+/// `FIX-DIR` must run before `MKDIR`: a src directory nested under a path where
+/// dst holds a blocking file cannot be created until the file is replaced. The
+/// dry run used to print this valid plan while the real run aborted on
+/// `AlreadyExists` (os error 183), so the two modes disagreed about a plan that
+/// `fix_dirs` could satisfy.
+#[test]
+fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
+    let t = temp_root("nestedfix");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a/b/x.txt", b"x");
+    wfile(&dst, "a", b"blocking file");
+
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let order: Vec<&str> = dry
+        .iter()
+        .filter_map(|r| r["event"].as_str())
+        .filter(|e| matches!(*e, "fix-dir" | "mkdir"))
+        .collect();
+    assert_eq!(
+        order,
+        ["fix-dir", "mkdir"],
+        "the dry run reports the phases in apply order: {dry:?}"
+    );
+    assert_eq!(paths(&dry, "fix-dir"), ["a"], "{dry:?}");
+    assert_eq!(paths(&dry, "mkdir"), ["a/b"], "{dry:?}");
+    assert!(
+        dst.join("a").is_file(),
+        "the dry run changes nothing: {dry:?}"
+    );
+
+    let real = run_binary(&src, &dst, &[], &[]);
+    assert!(
+        dst.join("a").is_dir(),
+        "the blocking file became a directory: {real:?}"
+    );
+    assert_eq!(rfile(&dst, "a/b/x.txt"), b"x");
+    assert_eq!(common::summary_of(&real)["mkdir"], 1, "{real:?}");
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");

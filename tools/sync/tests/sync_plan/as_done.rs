@@ -30,6 +30,7 @@ fn actions_are_reported_as_they_complete_under_a_parallel_rw_limit() {
         ("conflict.txt", "type-conflict"),
         ("differs.txt", "changed"),
         ("fixdir/inner.txt", "missing"),
+        ("fixdir/sub/x.txt", "missing"),
         ("newdir/nested.txt", "missing"),
         ("onlysrc.txt", "missing"),
     ]
@@ -117,6 +118,7 @@ fn parallel_copies_actually_land_on_disk() {
         "Case.txt",
         "conflict.txt",
         "fixdir/inner.txt",
+        "fixdir/sub/x.txt",
         "newdir/nested.txt",
     ] {
         assert!(
