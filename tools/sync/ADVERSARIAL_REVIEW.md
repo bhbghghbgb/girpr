@@ -574,7 +574,7 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
 
 ## 7. Pass log
 
-Implementation plus the eight review passes after it, one subsection each. Evidence,
+Implementation plus the nine review passes after it, one subsection each. Evidence,
 failure scenarios and per-pass verification are in the git history:
 `git log --oneline main..HEAD` and `git show <commit>`; the hashes below are the
 index. §1–§6 remain the source-only original audit.
@@ -722,16 +722,39 @@ passes now.
 - The case-fix temporary is a fixed short sibling, claimed with `create_new`/`create_dir`; no part of its name derives from the source, so no source name can push it past the component limit.
 - A failed step 1 removes its file placeholder and reports a cleanup failure beside the primary error; a failed step 2 rolls back and reports a rollback failure the same way.
 
-### Latest verification (eighth pass)
+### 7.9 Ninth pass — R9-1…R9-3
 
-- `cargo test -p girsync` — **409 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 410 functions, 409 run. Breakdown: lib 155; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 28, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
-- `cargo test -p girsync --test symlink -- --nocapture` — 28 passed, 0 failed. Nine file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
+All three findings were confirmed against `65c1ce8` and fixed at the root cause;
+none was rejected. All three were Medium.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| R9-1 | A kept link whose target passed through a dst **directory** link was resolved to the canonical spelling, so the link component the walk named stayed in `delete_files`; every link component, alias spelling and ancestor on the chain is now spared, and resolution errors other than `NotFound` propagate | fixed | `e93b17f` |
+| R9-2 | A spared **intermediate** link did not keep its ancestor directories, so the later `rmdir` could remove the directory recursively with the link inside; every kept chain entry now goes through `keep_path`, which spares its ancestors | fixed | `e93b17f` |
+| R9-3 | Storage shared by two kept links was judged one link at a time, so copying both wrote two contents through one inode and one mirrored path ended wrong at exit 0; the whole terminal-storage set is grouped and a plan that copies any member is refused before mutation | fixed | `e93b17f`, `d9aa88e` |
+
+R9-1's canonicalization premise was probed outside the repo: with `dst/link` a
+junction to `dst/real`, `target_rel` named `real/x` for both `link/x` and
+`real/x`, which is why the walk's alias had to be carried separately. The
+end-to-end cases need file symlinks and self-skip on this host (`os error 1314`);
+the resolver and the full spare pass run against directory junctions, which take
+the same `read_link`/`try_is_link` path.
+
+**Decisions still in force:**
+- A kept dst file link keeps every load-bearing path on its chain: each link component, both the walk's alias and the canonical spelling, and every ancestor directory. All inserts go through `LinkStorage::keep_path`, so no later `delete_files`/`rmdir` entry can remove them.
+- Two or more kept links may resolve to one terminal only when none of them is copied. If any member is in `plan.copy`, the run is refused before the plan print and before any mutation; the chained `a -> b -> c` shape and external terminals are judged the same way.
+- A resolution error other than `NotFound` is returned rather than read as “outside dst”: a failed spare must not silently leave the link's storage in the delete plan.
+
+### Latest verification (ninth pass)
+
+- `cargo test -p girsync` — **420 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 421 functions, 420 run. Breakdown: lib 162; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+- `cargo test -p girsync --test symlink -- --nocapture` — 32 passed, 0 failed. Thirteen file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
 - `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
 
 ### Open for maintainers
 
 - **Hard links.** P6-2 closed the dst-hard-link write-through by refusing any destination with more than one link; P7-4 makes that decision at plan time, with a `(dev, ino)` / (volume serial, file index) identity, and credits names the plan removes first; P8-1 narrows it to regular-file destinations. Still open: no POSIX `nlink`/identity run (the pre-P8-1 over-refusal of directories is invisible on NTFS, where a directory reports one link), and no fixture for a hard link to a file outside both roots.
-- **P7-2 runtime and P8-2/P8-3 end-to-end.** The dst-file-link-at-a-src-directory test and the new link-target spare/refuse cases self-skip here (the host refuses file symlinks, `os error 1314`), as do the case-only parity cases (this filesystem pairs `CaseProbe` with `caseprobe`). Their unit-level halves run and pass. Needs developer-mode Windows or POSIX CI to execute the end-to-end cases.
+- **P7-2 runtime and P8-2/P8-3/R9 end-to-end.** The dst-file-link-at-a-src-directory test and the link-target/chain spare and shared-storage refuse cases self-skip here (the host refuses file symlinks, `os error 1314`), as do the case-only parity cases (this filesystem pairs `CaseProbe` with `caseprobe`). Their unit-level halves run and pass, including junction-backed full spare passes for R9-1/R9-2/R9-3. Needs developer-mode Windows or POSIX CI to execute the end-to-end cases.
 - **File links.** The file-link cases self-skip here because the host refuses file symlinks; they need a Windows host with developer mode or a POSIX CI. Native POSIX symlinks and Unix link behaviour are unexercised; junctions stand in for directory links only.
 - **P7-1/P8-4 on POSIX and a crash between the renames.** The fixed short temporary was exercised on Windows only (including a 244-byte source name); a process killed between step 1 and step 2 was not produced (the next run steps over such a leftover by construction), and POSIX `NAME_MAX` was reasoned about rather than exercised. Whether a direct case-only `rename` is reliable enough to drop the two-step was not tested.
 - **The failure injectors.** The cleanup and rollback tests use the test-only `GIRSYNC_TEST_FAIL_RENAME{,_STEP1,_STEP2}` hooks, because a real `fs::rename` failure cannot be arranged portably. P8-5's cleanup-error wording is not forced: a failing `remove_file` on the tool's own placeholder could not be arranged here, so only the cleanup path (not its error text) runs.
@@ -743,5 +766,5 @@ passes now.
 
 *End of review. §1–§6 are the source-only original audit: no project file changed,
 nothing built, tested or run. §7 records the implementation and the second through
-eighth passes, which did build, test and run the binary; per-pass detail is in the
+ninth passes, which did build, test and run the binary; per-pass detail is in the
 commits it cites.*
