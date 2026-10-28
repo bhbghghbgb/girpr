@@ -636,7 +636,7 @@ dismissed as invalid or out of scope.
 |---|---|---|---|
 | G1: document-supplied paths reach filesystem joins unvalidated (**blocking**) | valid, fixed | `88d5413` | One shared validator now guards every document-supplied artifact path. A new `src/paths.rs` owns `relative_path_problem` (empty, `\`, absolute, `:`, `..`, empty component, control characters) and `chunk_id_problem` (the documented `<16 hex>_<32 hex>` shape, case-insensitive hex). `manifest::capture` runs both over the decoded manifest, `GameConfigs::audio_pkg_scan_dir` and `Captured::validate` reject an escaping scan directory, and `ChunkSource::decoded` refuses an escaping `stored_path` on read. Three end-to-end hostile-input tests plus unit tests. |
 | G2: `tmp/` staging and universal-atomicity claims | valid, fixed | `b1b035b` | The `emit` module comment, the schema's "through a `tmp/` file" phrase and the design-note shorthand now say what the code does: only chunk blobs use a dot-prefixed temp file beside their final path; metadata, `game/`, `expected/` and `manifests/*` are plain create-and-write, and `checksums.json` is the completion proof. |
-| G3: the "three causes" of a null `stored_path` omit `--no-chunk-blobs` | valid, fixed | `b1b035b` | The schema now names four causes, split by whether a fetch was attempted: the three failure causes carry `decode_error`; a metadata-only row carries null `stored_path`, `decode_error` and `verified`, empty digests, and means "not measured". It cross-references the A6–A12 skip note. |
+| G3: the "three causes" of a null `stored_path` omit `--no-chunk-blobs` | valid, fixed | `b1b035b` | The schema now names four causes, split by whether a fetch was attempted: the three failure causes carry `decode_error`; a metadata-only row carries null `stored_path`, `decode_error` and `verified`, empty **compressed** digests, and the manifest's declared `md5_decompressed` and `uncompressed_size`, and means "not measured" (H4 below corrected the original "empty digests" wording). It cross-references the A6–A12 skip note. |
 
 Two test-harness defects surfaced while verifying the fix and are recorded
 separately, because they are not product findings:
@@ -668,6 +668,48 @@ test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
 `#[cfg(windows)]` tests ran. `capture_layout` was run six more times after the
 keep-alive fix, 32/32 each time, to confirm the retry test is no longer
 timing-dependent.
+
+### Fourth pass
+
+A reviewer re-derived every F1–F12 and G1–G3 verdict from source at `1cbf2f1`,
+then traced each of the three guarded values to every other sink that consumes
+it, and reported four findings H1–H4. All four were confirmed valid; none was
+dismissed as invalid or out of scope. H1 was reproduced end to end before the
+fix: `Bundle::open` accepted `stored_path: "../../../outside.zst"` and
+`materialize` wrote `expected/../../../escaped.dll` and
+`game/../../../escaped.dll` (exit `3`).
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| H1: `verify`/`materialize` still join document paths unvalidated (**high**) | valid, fixed | `0a21ebe` | `Bundle::open` runs `validate_document_paths` over the manifest's `capture.id`, every index `stored_path` and `referenced_by[].path`, and every patchmap `path`, naming the field and value. The A6/A18 joins and the materialize destination join keep their checks as defence in depth. Three crafted-bundle tests in `tests/offline_bundle.rs` failed before the fix and pass after: an escaping `stored_path` is refused by `open` and by `verify`, an escaping patchmap/reference path makes `materialize` exit `1` with nothing outside `--out`, and `capture.id: "../../escape"` is refused. |
+| H2: `--audio` becomes `matching_field` and reaches manifest filenames raw (**medium**) | valid, fixed | `0b55a40` | `paths::field_component_problem` — the path rule plus "no `/`" — is applied in `config::validate_audio`, in `manifest::capture` for a field selected from the build document, and in `manifest::dump::write` before the first write. Unit tests cover `a/b`, `/abs`, `a\b`, `../x`, `..` and the empty field at the flag and the dump. |
+| H3: the path rule accepts names Windows folds together (**low**) | valid, fixed | `c9caa02`, `b6aeb6d` | `relative_path_problem` now refuses a `.` component and any component ending in `.` or a space on every host, so `a/b`, `a/b.` and `a/b ` no longer name one file on Windows. The same rule refuses a reserved DOS device name (`CON`, `NUL`, `COM1`, `CONIN$`, with or without an extension), which Windows resolves to a device instead of creating a file. Unit tests pin both refusals, keep `a/b.c`, `a/7.1.0`, `a/.hidden`, `a/CONSOLE` and `a/COM0` legal, and a `manifest::tests` case pins that an entry is refused before any tree write. |
+| H4: the `--no-chunk-blobs` schema row contradicts `unmeasured` (**low**, doc) | valid, fixed | `c9bf161` | The schema now says what an unmeasured row carries: null `stored_path`/`verified`/`decode_error`, `bytes: 0`, empty compressed digests, and the manifest's **declared** `md5_decompressed` and `uncompressed_size`. The `BlobProps::unmeasured` and field comments say the same. |
+
+**Fourth-pass choices a maintainer may want to revisit.** The validator now
+rejects `.`, trailing dots and spaces, and DOS device names on every host, not
+only Windows: a live manifest path ending in a space, or a Unix-legitimate file
+named `aux`/`con.txt`, would be refused rather than captured. `--audio` is now
+one file-name component, so a value containing `/` is a usage error even though
+the API might never publish it. H1 validates once at `Bundle::open` instead of
+at each read; the older sink checks remain, so a future document field needs the
+same single addition to `validate_document_paths`.
+
+### Fourth-pass verification
+
+| Command | Fourth pass (`c9bf161`) |
+|---|---|
+| `cargo build -p gircap` | finished in 0.50s, no warnings |
+| `cargo test -p gircap` | 658 passed, 0 failed (518 lib + 140 integration) |
+| `cargo clippy -p gircap --all-targets` | finished in 19.86s, no warnings |
+| `cargo fmt -p gircap --check` | clean |
+
+The fourth-pass integration total is 3 + 8 + 32 + 2 + 30 + 9 + 29 + 12 + 15;
+`offline_bundle` grew from 9 to 12 tests and `lib` from 512 to 518. No test is
+`#[cfg(unix)]`, so none was skipped on this Windows host; the `#[cfg(windows)]`
+tests ran. A probe outside the repository
+(`E:\Symlinks\Temp\opencode\pathprobe`) confirmed `game/a/b` and `game/a/b.`
+name one file; the new unit tests are the in-repository guard.
 
 ### Choices a maintainer may want to revisit
 
@@ -740,4 +782,12 @@ No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
 - F1: behaviour on a real corpus where `blobs::plan`'s projected check might
   also fire. The selection-level test is the guarantee; the plan number is a
   separate, documented guard.
+- H2: whether a live `getBuild` can be induced to publish a `matching_field`
+  containing `/`, `\` or `..`. The flag and document sinks are unit-tested end
+  to end; the network precondition is the one F6/G1 already accept.
+- H3: whether a live manifest contains two entries that differ only by a
+  trailing dot or space. The alias is proven by the probe and the refusal is
+  unit-tested; no live manifest was sampled.
+- H4: an actual `--no-chunk-blobs` bundle on disk. The doc now matches the
+  constructor and the `props`/`fill` tests; no such bundle was inspected.
 
