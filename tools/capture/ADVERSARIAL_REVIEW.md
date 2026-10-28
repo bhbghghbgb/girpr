@@ -619,11 +619,55 @@ tree, and all were accepted; none was dismissed as invalid or out of scope.
 | `matrix.json` reports `bytes_admitted`, not the charged ledger | valid, fixed | `998649c` | The document now reports `budget.spent()`, and a debug assertion plus a matrix test tie it to `bytes_admitted`. |
 | Test gap: nonzero `forced_files_unscored` end to end | valid, fixed | `d8514c7` | `World::with_degenerate_file` / `DEGENERATE_PATH` drive a capture whose forced path answers no class; the matrix test asserts `1` in the summary and JSON. |
 | F12: expectation derived from the constant under test | valid, fixed | `d538d4d` | The test now compares `skipped()` filtered by the constant against an independent eleven-id literal, which is also asserted equal to the constant. |
-| F11: doc overstates the cleanup guarantee | valid, fixed | `7c64557` | “Never orphaned” became the exact rule: removed best-effort on every handled error after the handle is dropped; a panic unwinds past it. The stale `tmp/` staging claim is gone. |
+| F11: doc overstates the cleanup guarantee | valid, fixed | `7c64557` | “Never orphaned” became the exact rule: removed best-effort on every handled error after the handle is dropped; a panic unwinds past it. The module's stale `tmp/` staging claim is gone; the remaining `tmp/` phrases in the schema and design notes were removed by G2 (`b1b035b`). |
 
 F1, F2, F7, F8, F9 and F10 were re-checked against source and their tests and
 needed no change. With `de85df2` landed, the blocking F6 residual is closed: the
 flag path and the API path now reach `pair_dir` through the same validator.
+
+### Third pass
+
+A reviewer re-derived every F1–F12 verdict from source at `577c399`, then
+re-ran the suite, and reported three new findings in G1–G3. All twelve earlier
+fixes were present, and all three new findings were confirmed valid. None was
+dismissed as invalid or out of scope.
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| G1: document-supplied paths reach filesystem joins unvalidated (**blocking**) | valid, fixed | `88d5413` | One shared validator now guards every document-supplied artifact path. A new `src/paths.rs` owns `relative_path_problem` (empty, `\`, absolute, `:`, `..`, empty component, control characters) and `chunk_id_problem` (the documented `<16 hex>_<32 hex>` shape, case-insensitive hex). `manifest::capture` runs both over the decoded manifest, `GameConfigs::audio_pkg_scan_dir` and `Captured::validate` reject an escaping scan directory, and `ChunkSource::decoded` refuses an escaping `stored_path` on read. Three end-to-end hostile-input tests plus unit tests. |
+| G2: `tmp/` staging and universal-atomicity claims | valid, fixed | `b1b035b` | The `emit` module comment, the schema's "through a `tmp/` file" phrase and the design-note shorthand now say what the code does: only chunk blobs use a dot-prefixed temp file beside their final path; metadata, `game/`, `expected/` and `manifests/*` are plain create-and-write, and `checksums.json` is the completion proof. |
+| G3: the "three causes" of a null `stored_path` omit `--no-chunk-blobs` | valid, fixed | `b1b035b` | The schema now names four causes, split by whether a fetch was attempted: the three failure causes carry `decode_error`; a metadata-only row carries null `stored_path`, `decode_error` and `verified`, empty digests, and means "not measured". It cross-references the A6–A12 skip note. |
+
+Two test-harness defects surfaced while verifying the fix and are recorded
+separately, because they are not product findings:
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| The `hyp` config fixture omitted `audio_pkg_scan_dir`, now required by `Captured::validate` | valid, fixed | `6003958` | The mock `getGameConfigs` body carries a realistic scan directory. |
+| The mock answered an armed `503` with `Connection: keep-alive` and then closed the socket | valid, fixed | `66bc6f0` | The armed branch now honours the header it sent: it continues a reusable connection and closes only when asked. This removed a pre-existing retry-count flake where the pool sometimes reused the closed socket, turning the retry into a status-`0` transport error plus a second log row. |
+
+**Third-pass choices a maintainer may want to revisit.** The shared validator
+rejects `\`, absolute paths, `:`, `..`, empty components and control characters
+on every host, not only Windows. A chunk id must match the documented
+`<16 hex>_<32 hex>` shape rather than merely being a single component, so a live
+build with an unusual spelling would now be refused rather than fetched. Both
+rules are deliberately stricter than the minimum needed to stop traversal, and
+both fail at the boundary instead of sanitising a hostile value.
+
+### Third-pass verification
+
+| Command | Second pass (`d8514c7`) | Third pass (`66bc6f0`) |
+|---|---|---|
+| `cargo build -p gircap` | finished, no warnings | finished, no warnings |
+| `cargo test -p gircap` | 640 passed, 0 failed (506 lib + 134 integration) | 649 passed, 0 failed (512 lib + 137 integration) |
+| `cargo clippy -p gircap --all-targets` | finished, no warnings | finished, no warnings |
+| `cargo fmt -p gircap --check` | clean | clean |
+
+The third-pass integration total is 3 + 8 + 32 + 2 + 30 + 9 + 29 + 9 + 15. No
+test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
+`#[cfg(windows)]` tests ran. `capture_layout` was run six more times after the
+keep-alive fix, 32/32 each time, to confirm the retry test is no longer
+timing-dependent.
 
 ### Choices a maintainer may want to revisit
 
@@ -653,7 +697,7 @@ flag path and the API path now reach `pair_dir` through the same validator.
   rather than corrected. Orphans left by older binaries are still not swept;
   a store-creation sweep with an age guard remains a possible follow-up.
 
-### Verification
+### Second-pass verification
 
 Run at `d8514c7` (the last code/test commit; the documents below and this
 section change no code):
@@ -670,6 +714,18 @@ No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
 
 ### Still unverified
 
+- G1: whether a live `getBuild`/`getGameConfigs` can be induced to serve the
+  hostile values. The local sinks and rejection paths are now tested end to
+  end; the network precondition is the same one F6 already accepts.
+- G1: the full set of live chunk-id spellings. The exact documented
+  `<16 hex>_<32 hex>` shape is enforced; an unusual but legitimate spelling
+  would be refused.
+- G1: whether a live API returns an `audio_pkg_scan_dir` the path rule rejects,
+  for example a Windows-separated value. The run fails fast naming the field;
+  no live corpus was sampled.
+- G2: whether a metadata document can be left torn in a way `checksums.json`
+  fails to detect at closeout. The writer is not atomic; a crash between the
+  last document and the checksum pass was not stress-tested.
 - F6: whether a live `getBuild`/`getGameBranches` would echo a tag containing
   `\`, `:`, or `..`. The local sink and both rejection paths (flags and
   API-resolved tags) are tested; the network precondition is not.
