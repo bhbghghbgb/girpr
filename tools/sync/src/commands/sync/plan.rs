@@ -290,9 +290,10 @@ fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 /// unique case-insensitive match is the one the OS would open.
 ///
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
-/// no lookup is needed (N-5: case folding is Windows-only). `None` means the
-/// directory holds no entry the OS would match; the caller keeps the lexical
-/// spelling, as it did before this lookup existed.
+/// no lookup is needed; case folding stays Windows-only, as in
+/// [`util::same_path`](crate::util::same_path). `None` means the directory holds
+/// no entry the OS would match; the caller keeps the lexical spelling, as it did
+/// before this lookup existed.
 #[cfg(windows)]
 fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
     let mut folded = None;
@@ -396,29 +397,71 @@ fn spare_link_components(
     Ok(())
 }
 
+/// Lowercase key → the map's spelling, for a Windows filesystem that matches
+/// names case-insensitively.
+///
+/// Two `dm` keys cannot differ only by case (the walk's mixed-case check is
+/// fatal and the rename pass collapses them), so the mapping is unambiguous.
+/// On POSIX two spellings are two paths and folding would join them, so the
+/// index is empty there.
+fn folded_keys(dm: &HashMap<String, EffRec>) -> HashMap<String, String> {
+    #[cfg(windows)]
+    {
+        dm.keys().map(|k| (k.to_lowercase(), k.clone())).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dm;
+        HashMap::new()
+    }
+}
+
+/// The map's spelling of `rel`: exact, else — on Windows — its case-insensitive
+/// twin. `None` when the map holds no such path under any spelling.
+fn map_spelling<'a>(
+    rel: &str,
+    dm: &'a HashMap<String, EffRec>,
+    folded: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    if let Some((key, _)) = dm.get_key_value(rel) {
+        return Some(key.as_str());
+    }
+    folded.get(&rel.to_lowercase()).map(String::as_str)
+}
+
 /// Spare `alias` and every link on its way to the root.
 ///
 /// `alias` is the spelling the walk reported for the target (`link/x`), so the
-/// `dm` lookup can name a link the canonical parent resolved away. The alias
-/// itself is spared even when it is not a link: it is the same storage, and
-/// dropping it from `diff.extra` keeps the printed plan and the applied plan
-/// naming the same set.
-fn spare_alias_chain(alias: &str, dm: &HashMap<String, EffRec>, storage: &mut LinkStorage) {
+/// `dm` lookup can name a link the canonical parent resolved away. It comes from
+/// a link text, which need not share the walk's casing (`LINK/x` on a
+/// case-insensitive filesystem), so each lookup answers with the map's own
+/// spelling; sparing the link text's spelling instead would leave the walk's key
+/// in `diff.extra`. The alias itself is spared even when it is not a link: it is
+/// the same storage, and dropping it from `diff.extra` keeps the printed plan
+/// and the applied plan naming the same set.
+fn spare_alias_chain(
+    alias: &str,
+    dm: &HashMap<String, EffRec>,
+    folded: &HashMap<String, String>,
+    storage: &mut LinkStorage,
+) {
     let mut end = 0;
     loop {
         let (prefix, next) = match alias[end..].find('/') {
             Some(i) => (&alias[..end + i], Some(end + i + 1)),
             None => (alias, None),
         };
-        if dm.get(prefix).is_some_and(|rec| rec.is_link) {
-            storage.keep_path(prefix);
+        if let Some(key) = map_spelling(prefix, dm, folded)
+            && dm[key].is_link
+        {
+            storage.keep_path(key);
         }
         match next {
             Some(next) => end = next,
             None => break,
         }
     }
-    storage.keep_path(alias);
+    storage.keep_path(map_spelling(alias, dm, folded).unwrap_or(alias));
 }
 
 /// Find the storage of every dst file link the plan keeps, and refuse a plan
@@ -467,6 +510,7 @@ pub(super) fn spare_link_storage(
         .with_context(|| format!("resolve dst root {}", dst.display()))?;
     // Every kept link's terminal storage: (link, grouping key, display name).
     let mut terminals: Vec<(String, String, String)> = Vec::new();
+    let folded = folded_keys(dm);
     for rel in rels {
         let rec = &dm[rel];
         if !rec.is_link || rec.kind != "file" {
@@ -528,7 +572,7 @@ pub(super) fn spare_link_storage(
                     storage.keep_path(tr);
                 }
                 if let Some(alias) = &target_alias {
-                    spare_alias_chain(alias, dm, &mut storage);
+                    spare_alias_chain(alias, dm, &folded, &mut storage);
                 }
                 cur = target;
                 cur_alias = target_alias;
@@ -539,7 +583,7 @@ pub(super) fn spare_link_storage(
                     if let Some(alias) = &target_alias
                         && alias.as_str() != tr
                     {
-                        spare_alias_chain(alias, dm, &mut storage);
+                        spare_alias_chain(alias, dm, &folded, &mut storage);
                     }
                     match sm.get(tr) {
                         Some(trec) if trec.kind == "file" => {
@@ -579,7 +623,7 @@ pub(super) fn spare_link_storage(
                     // Outside dst: the bytes are write-through, but the chain
                     // above them is still storage the kept link needs.
                     if let Some(alias) = &target_alias {
-                        spare_alias_chain(alias, dm, &mut storage);
+                        spare_alias_chain(alias, dm, &folded, &mut storage);
                     }
                     // Record the external file too: two links to one outside
                     // inode are the same shared-storage hazard as two inside.
@@ -1731,7 +1775,7 @@ mod tests {
         let mut dm = HashMap::new();
         dm.insert("link".to_string(), link_dir());
         dm.insert("link/x.bin".to_string(), link_file());
-        spare_alias_chain("link/x.bin", &dm, &mut storage);
+        spare_alias_chain("link/x.bin", &dm, &folded_keys(&dm), &mut storage);
         storage.keep_path("real/x.bin");
 
         let mut diff = Diff {
@@ -1773,7 +1817,7 @@ mod tests {
         let mut dm = HashMap::new();
         dm.insert("extra/b".to_string(), link_file());
         let mut storage = LinkStorage::default();
-        spare_alias_chain("extra/b", &dm, &mut storage);
+        spare_alias_chain("extra/b", &dm, &folded_keys(&dm), &mut storage);
         assert!(storage.keep.contains("extra/b"), "{:?}", storage.keep);
         assert!(
             storage.keep_dirs.contains("extra"),
@@ -2085,6 +2129,33 @@ mod tests {
             .expect_err("a mirrored target cannot also be given a new content");
         let msg = err.to_string();
         assert!(msg.contains("`real`"), "names the target's walk key: {msg}");
+    }
+
+    /// **R10-1, the alias half.** A link text can spell a chain component with
+    /// another case. The alias spare must then name the walk's key, not the link
+    /// text's spelling, or `diff.extra` keeps a path the plan deliberately keeps.
+    #[cfg(windows)]
+    #[test]
+    fn a_case_differing_alias_is_spared_under_the_walk_key() {
+        let mut dm = HashMap::new();
+        dm.insert("link".to_string(), link_dir());
+        dm.insert("link/x.bin".to_string(), file());
+        let folded = folded_keys(&dm);
+        let mut storage = LinkStorage::default();
+
+        spare_alias_chain("LINK/x.bin", &dm, &folded, &mut storage);
+
+        assert!(storage.keep.contains("link"), "{:?}", storage.keep);
+        assert!(
+            storage.keep.contains("link/x.bin"),
+            "the walk's key is spared: {:?}",
+            storage.keep
+        );
+        assert!(
+            !storage.keep.contains("LINK/x.bin"),
+            "the link text's spelling is no record's key: {:?}",
+            storage.keep
+        );
     }
 
     /// **R10-1 through the full spare pass.** A junction's `read_link` target

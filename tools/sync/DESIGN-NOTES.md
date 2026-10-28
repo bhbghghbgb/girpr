@@ -287,7 +287,8 @@ self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
 `a_case_differing_final_component_names_the_walk_entry`,
 `a_case_differing_link_component_is_spared_under_the_walk_spelling`,
 `a_case_differing_mirrored_target_is_refused`,
-`a_case_differing_terminal_is_spared_by_the_full_pass` and
+`a_case_differing_terminal_is_spared_by_the_full_pass`,
+`a_case_differing_alias_is_spared_under_the_walk_key` and
 `a_case_only_rename_of_the_target_is_one_spare_in_both_modes`.
 
 ### A digest is looked up by name, not by slot
