@@ -669,6 +669,36 @@ Re-derived at `b9c1682`; both confirmed valid and both reproduced before the fix
 
 L1 makes `paths::is_windows_device_name` `pub(crate)` and calls it from `tag_shape_problem`, so the flag path, the API-resolved tags and the manifest writer share one rule; the extension is ignored, and `7.1.0`/`CONSOLE`/`COM0`/`LPT10` stay legal. L2 folds both totals with `saturating_add`, so the summary and `diff/matrix.json` report the same saturated number; a `select` fixture with two `u64::MAX - 1` costs pins it in debug and release.
 
+### Ninth pass — M1–M2
+
+Re-derived at `6561044`; both confirmed valid. M1 was reproduced before the fix:
+its new `Checksums::findings` test panicked in debug at `accum.rs:206:1`
+(`attempt to add with overflow`), and the release run reported a wrapped total.
+M2's panic path was then exercised through a real `map_concurrently` call.
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| M1 | `Checksums::findings` summed untrusted `entries[].bytes` with a plain `.sum()`, so a crafted `verify/checksums.json` panicked `gircap verify` in debug and wrapped in release, where the wrapped figure could equal the crafted `total_bytes` and suppress the disagreement. | fixed | `88407c0` |
+| M2 | `map_concurrently` discarded the `JoinError` payload and reported every non-returning task as `"a request task panicked"`, losing the cause at all five metadata call sites and conflating cancellation with panic. | fixed | `47b0dc2` |
+
+M1 is the L2 rule at the one total folded from a document rather than from the
+tool's own measurement. The fold now uses `checked_add`, keeps the K1/L2
+saturating figure, and turns an overflow into its own finding *before* the
+equality test, so a crafted `u64::MAX` cannot certify an overflowing sum; an
+exact `u64::MAX` sum stays legal and `u64::MAX - 1` is still a disagreement.
+The test covers the review's two-`u64::MAX` wrapping pair, two
+`u64::MAX - 1` entries, the saturated and exact boundaries, and one byte below
+the boundary, in debug and release.
+
+M2 uses `join_next_with_id` and records each spawn's task id against its item
+index, so a panic keeps both index and cause: the slot becomes
+`item {i} did not return: the request task panicked: <payload>`, and the log
+line carries the same cause. The `JoinError` rule moved to `src/tasks.rs` with
+a label, shared by `map_concurrently` ("request") and `Store::fill` ("chunk
+fetch"); a cancellation is named as a cancellation. Pinned by a real
+`map_concurrently` panic test and by helper tests for payload recovery and
+cancellation.
+
 ### Decisions that still constrain current behaviour
 
 - **F1/F2/F9.** Forced paths share one cumulative budget; a refusal is recorded and the loop continues; duplicate `--files` paths are a usage error.
@@ -677,6 +707,8 @@ L1 makes `paths::is_windows_device_name` `pub(crate)` and calls it from `tag_sha
 - **F6/G1.** One shared validator covers every document-supplied path: no `\`, absolute path, `:`, `..`, empty component or control character on any host; tags also refuse Windows-reserved characters and leading/trailing dots. A chunk id must match `<16 hex>_<32 hex>` (case-insensitive), not merely be one component.
 - **L1.** A tag also refuses DOS device names through the same `paths::is_windows_device_name` helper the path rule uses, extension ignored (`CON`, `NUL.txt`, `COM1`, `CONIN$`), on the flag path, the API-resolved tags and the manifest writer.
 - **L2.** `Selection::bytes_admitted` and `budget::total_admitted` saturate with the charged ledger, so a crafted maximum cost cannot panic in debug or wrap in release.
+- **M1.** The checksums total is folded from an untrusted document: it saturates for reporting, and an overflow is its own finding before the equality test, so `u64::MAX` is agreement only when the entries really sum to it.
+- **M2.** A failing task keeps its item index and its `JoinError` payload; cancellation is named as cancellation, not as a panic; both `JoinSet` loops use one helper (`src/tasks.rs`).
 - **F3.** A classless forced path is reported in `forced_unscored`/`forced_files_unscored`, not overloaded onto `forced_skipped`.
 - **F4.** The fetch reason goes in `decode_error`; a dedicated `fetch_error` remains open.
 - **F7.** A metadata-only run does not enforce a chunk wire-byte ceiling it pays nothing towards.
@@ -693,16 +725,16 @@ L1 makes `paths::is_windows_device_name` `pub(crate)` and calls it from `tag_sha
 - **K1.** Measurement totals saturate; address-like sums and plan costs use `checked_add` with an error naming the offending chunk and values. No negative `offset`, `compressed_size` or `uncompressed_size` is accepted at a decode boundary, and no `uncompressed_size` above `i64::MAX` survives index validation.
 - **K2.** An unframed fetched body is a successful fetch and an `undecodable` row, not a failed fetch; it is not retried from another source, because replacing it would destroy the evidence. A post-rename I/O error removes the published blob.
 
-### Verification (latest: eighth pass, `f049c12`)
+### Verification (latest: ninth pass, `47b0dc2`)
 
 | Command | Result |
 |---|---|
 | `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | **693 passed, 0 failed** (549 lib + 144 integration) |
+| `cargo test -p gircap` | **696 passed, 0 failed** (552 lib + 144 integration) |
 | `cargo clippy -p gircap --all-targets` | finished, no diagnostics |
 | `cargo fmt -p gircap --check` | clean |
 
-Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. The eighth-pass reproductions are now in-tree unit/fixture tests; `cargo test -p gircap --release --lib maximum_costs` also passes (2 passed).
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. Targeted release runs pass: `cargo test -p gircap --release --lib a_crafted_checksums_total` (1), `... --lib tasks::tests` (2), `... --lib a_panicking_request_task` (1). The ninth-pass reproductions are now in-tree tests; M2's pre-fix loss is the `if let Ok` arm the fix replaced.
 
 ## Open for maintainers
 
@@ -713,6 +745,8 @@ Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(uni
 - **F6/G1 live inputs.** Whether a live API echoes a hostile tag, serves a hostile document or audio path, or uses an unusual but legitimate chunk-id spelling is unverified; the local sinks and rejection paths are tested.
 - **L1 end to end / cross-host.** No capture was run with a device-name tag — it is now refused at argument resolution, before any request — and a Linux-produced `manifests/CON/` bundle was not replayed through `verify` on Windows; A16's missing-file consequence is reasoned, not executed.
 - **L2 through the command.** The near-`u64::MAX` cost is driven through `select` with a `PathScore` fixture, not through a hand-edited manifest read from disk; no live manifest declaring extreme sizes was sampled.
+- **M1 through the command.** The crafted `checksums.json` is driven through `Checksums::findings`, not written into a bundle and run through `gircap verify`; `Bundle::open` → `reverify` → `findings` is an unchanged direct call.
+- **M2 cancellation.** Cancellation is exercised on the `join_failure` helper, not through `map_concurrently`, which never aborts a spawned task; the slot text for a cancelled metadata job was not driven end to end.
 - **G2 crash tear.** Whether a metadata document can be left torn in a way `checksums.json` misses was not stress-tested.
 - **H3 live manifests.** Whether a live manifest contains names differing only by a trailing dot or space was not sampled.
 - **H4 on-disk bundle.** No real `--no-chunk-blobs` bundle was inspected; the doc matches the constructor and the tests.
