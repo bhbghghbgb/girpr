@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
 use crate::config::{CommonOpts, ScanMode};
-use crate::util::is_record_path;
+use crate::util::{canonical_or_raw, is_record_path, same_path};
 
 use super::entry::{SideCapability, SideEntry, SideScan};
 use super::phase_a::scan_stat_only;
@@ -216,18 +216,24 @@ pub fn classify(p: &Path) -> Side {
 pub fn ensure_distinct_sides(src: &Side, dst: &Side) -> Result<()> {
     let a = cache_identity(src);
     let b = cache_identity(dst);
-    if a == b {
+    if same_path(&a, &b) {
         bail!("src and dst resolve to the same cache {}", display_path(&a));
     }
     Ok(())
 }
 
-/// Canonical cache path of a side. A path that does not exist yet cannot
-/// collide with anything but an identically-spelled one, so the raw path is a
-/// good enough identity.
+/// Canonical cache path of a side.
+///
+/// The **root** is canonicalized and the cache file name joined afterwards,
+/// rather than canonicalizing the cache file itself: on a fresh tree the file
+/// does not exist yet, and a raw-path fallback would then miss two spellings of
+/// one root (`root` vs `ROOT` on Windows) that differ only by case. A record
+/// side *is* its cache, so it is canonicalized directly.
 fn cache_identity(side: &Side) -> PathBuf {
-    let raw = side.cache_path();
-    raw.canonicalize().unwrap_or(raw)
+    match side {
+        Side::Record(p) => canonical_or_raw(p),
+        Side::Folder(root) => canonical_or_raw(root).join(CACHE_PREFIX),
+    }
 }
 
 /// Render a path for humans, dropping the `\\?\` verbatim prefix that

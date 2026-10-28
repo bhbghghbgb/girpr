@@ -2,7 +2,7 @@
 //! methods.
 
 use anyhow::{Context, Result, bail};
-use redb::{Database, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
+use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -114,12 +114,24 @@ impl CacheDb {
                 db_path.display()
             );
         }
-        redb_builder().create(db_path).with_context(|| {
-            format!(
+        match redb_builder().create(db_path) {
+            Ok(db) => Ok(db),
+            // A lock is not corruption, and `--ignore-cache` would *delete* the
+            // file another handle holds. Name the likely cause instead: two
+            // spellings of one root that the pre-open check did not catch, or
+            // another girsync process on the same cache.
+            Err(e @ DatabaseError::DatabaseAlreadyOpen) => {
+                Err(anyhow::Error::new(e).context(format!(
+                    "open redb cache {}: the cache is already open by another handle; \
+                     is src or dst the same folder, or another girsync run active?",
+                    db_path.display()
+                )))
+            }
+            Err(e) => Err(anyhow::Error::new(e).context(format!(
                 "open redb cache {} (corrupt? use --ignore-cache)",
                 db_path.display()
-            )
-        })
+            ))),
+        }
     }
 
     /// In-memory cache for `--dry-run` fallbacks and unit tests. Never
