@@ -318,11 +318,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     {
         let for_the_pool = log.clone();
         let dir_for_the_pool = dir.clone();
-        tokio::task::spawn_blocking(move || {
+        write_requests_log_on_the_pool(move || {
             emit::write_requests_log(&dir_for_the_pool, &for_the_pool)
         })
         .await
-        .map_err(|e| write_err(&dir, std::io::Error::other(format!("{e}"))))?
+        .map_err(|e| write_err(&dir, std::io::Error::other(e)))?
         .map_err(|e| write_err(&dir, e))?;
     }
 
@@ -821,6 +821,20 @@ fn selfcheck_slug(s: &Selfcheck) -> String {
         .to_string()
 }
 
+/// Write the request log on the blocking pool, keeping the cause if it fails.
+///
+/// The closure is a parameter rather than the write itself so a test can drive
+/// the panic arm; the rule is [`crate::tasks::join_blocking`], shared with the
+/// blob measurement. A cancellation is named as a cancellation, and a panic
+/// keeps the message the writer gave — the failure the operator needs instead
+/// of `task <id> panicked`.
+async fn write_requests_log_on_the_pool<F>(work: F) -> Result<std::io::Result<usize>, String>
+where
+    F: FnOnce() -> std::io::Result<usize> + Send + 'static,
+{
+    crate::tasks::join_blocking("request log write", work).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,5 +906,33 @@ mod tests {
             "a spaced detail would break tokenisation: {line}"
         );
         assert!(line.contains("retcode%20-202"), "{line}");
+    }
+
+    /// **N1.** A panic inside the request-log write keeps its payload and is
+    /// routed through the shared `JoinError` rule, not formatted with `Display`.
+    #[tokio::test]
+    async fn a_panicking_request_log_task_reports_its_payload() {
+        let why = write_requests_log_on_the_pool(|| panic!("request log exploded"))
+            .await
+            .expect_err("the blocking task panicked");
+        assert!(
+            why.contains("the request log write task panicked"),
+            "the site keeps its label: {why}"
+        );
+        assert!(
+            why.contains("request log exploded"),
+            "the payload is the part worth reporting: {why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_request_log_task_still_returns_the_write_count() {
+        assert_eq!(
+            write_requests_log_on_the_pool(|| Ok(7))
+                .await
+                .expect("the task returned")
+                .expect("the write succeeded"),
+            7
+        );
     }
 }
