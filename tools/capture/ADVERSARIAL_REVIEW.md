@@ -1,4 +1,4 @@
-# ADVERSARIAL REVIEW — `gircap` (`tools/capture`)
+# ADVERSARIAL REVIEW ΓÇö `gircap` (`tools/capture`)
 
 **Baseline:** HEAD `64dc69d` (`revert: drop the adversarial review series`), tree
 `66985753edf618610a3df629bacdf2b6b70609fa`, identical to the tree of `7f2d69c`
@@ -7,6 +7,8 @@
 This is a review of **HEAD**, not of the reverted `f9352f7` fix series. The old
 review describes `f9352f7`; several of its claims do not hold at HEAD. Where the
 old series matters, the difference is called out explicitly.
+
+Open items moved to [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).
 
 ## Scope & method
 
@@ -19,7 +21,7 @@ and fixes.
 **Method:** `git show`, `git grep`/`rg`, and file reads. No `cargo build`, no
 `cargo test`, no binary run, no network. **No tests were run.** Every claim below
 is **source-verified** unless it is explicitly marked **not verified**. Line
-numbers are current-tree (`64dc69d`). The old review's “all tests pass, ≈622”
+numbers are current-tree (`64dc69d`). The old review's ΓÇ£all tests pass, Γëê622ΓÇ¥
 result is not treated as evidence for HEAD.
 
 No source, test, Cargo, or documentation file was modified. Only this file was
@@ -31,22 +33,22 @@ created.
 |----|----------|-------|----------|------------------|
 | F1 | **high** | bug | `src/select/mod.rs:511` | Forced `--files` costs are checked one-by-one against the unspent caller budget, so the sum can exceed `--max-download-bytes`. |
 | F2 | medium | bug | `src/select/mod.rs:512` | A budget-refused forced path `break`s the loop; later forced paths are silently dropped and recorded nowhere. |
-| F3 | medium | bug | `src/select/mod.rs:507` | A forced path whose candidate answers no matrix class is silently skipped, contradicting “still scored and still recorded”. |
-| F4 | medium | bug | `src/blobs/mod.rs:272` | A failed chunk fetch loses its task index, is counted twice in `fetches_failed`, and its index row says only “not stored”. |
+| F3 | medium | bug | `src/select/mod.rs:507` | A forced path whose candidate answers no matrix class is silently skipped, contradicting ΓÇ£still scored and still recordedΓÇ¥. |
+| F4 | medium | bug | `src/blobs/mod.rs:272` | A failed chunk fetch loses its task index, is counted twice in `fetches_failed`, and its index row says only ΓÇ£not storedΓÇ¥. |
 | F5 | medium | bug | `src/http/fetcher.rs:739` | Non-2xx bodies are drained with no `max_response_bytes` cap, contradicting the `drain_capped` and `Transport` docs. |
 | F6 | medium | bug | `src/config/mod.rs:535` | Tag validation allows `\`, `:`, and backslash-separated `..` components that are interpolated raw into bundle paths. |
 | F7 | low | bug | `src/run/mod.rs:222` | `--no-chunk-blobs` still fails the chunk-byte ceiling even though it fetches no chunk bytes. |
 | F8 | low | bug | `src/main.rs:58` | A non-Unicode `--out`/`--log-file` reaches `std::env::args()` and panics instead of printing a summary. |
 | F9 | low | bug | `src/select/mod.rs:498` | Duplicate `--files` entries are admitted twice with the same `capture_id`, producing duplicate rows and one overwritten patchmap. |
-| F10 | low | doc error | `src/cli/mod.rs:161`, `:187` | `--require-class` says “Default: all” and `--no-chunk-blobs` says “A7-A10”; both contradict code and spec. |
-| F11 | low | intentional-but-uncovered | `src/blobs/mod.rs:432` | A failed fetch leaves `.<id>.<slot>.tmp`; “the next run truncates it” holds only for the same id **and** slot. |
-| F12 | low | test gap | `src/emit/closeout.rs:637` | The closeout test checks 8 of the 11 skipped ids and uses containment, so A21–A23 can regress silently. |
+| F10 | low | doc error | `src/cli/mod.rs:161`, `:187` | `--require-class` says ΓÇ£Default: allΓÇ¥ and `--no-chunk-blobs` says ΓÇ£A7-A10ΓÇ¥; both contradict code and spec. |
+| F11 | low | intentional-but-uncovered | `src/blobs/mod.rs:432` | A failed fetch leaves `.<id>.<slot>.tmp`; ΓÇ£the next run truncates itΓÇ¥ holds only for the same id **and** slot. |
+| F12 | low | test gap | `src/emit/closeout.rs:637` | The closeout test checks 8 of the 11 skipped ids and uses containment, so A21ΓÇôA23 can regress silently. |
 
 All twelve findings were fixed on `fix-gaps/gircap`; the Pass log records the commits.
 
 ---
 
-### F1 — Forced `--files` admissions bypass the cumulative budget
+### F1 ΓÇö Forced `--files` admissions bypass the cumulative budget
 
 **Severity: high. Class: bug. Location:** `src/select/mod.rs:511`, `:514`,
 `:526`, `:652`, `:749`.
@@ -78,8 +80,8 @@ the sum of all admitted costs and can exceed the limit. Nothing turns that into 
 red row: `emit/mod.rs:235-238` writes `spent` and `limit` but no selfcheck
 compares them.
 
-`blobs::plan`’s `check_byte_ceiling` (`src/blobs/plan.rs:115-117`) is a second,
-different number (`Σ compressed_size` over chunk wants, `plan.rs:24-35`), so it
+`blobs::plan`ΓÇÖs `check_byte_ceiling` (`src/blobs/plan.rs:115-117`) is a second,
+different number (`╬ú compressed_size` over chunk wants, `plan.rs:24-35`), so it
 may catch some cases but is not a guarantee.
 
 **Concrete fix.** Use one ledger. Either make the parameter `mut` and charge it
@@ -87,13 +89,13 @@ in phase 0 (`if budget.admits(cost) { budget.charge(cost); ... }`) while droppin
 the separate `spent`, or make the local ledger carry `budget.limit()` and check
 it. Pass the
 resulting total to phase 2. Add a test with two forced paths of 60 B under a
-100 B cap: exactly one is admitted and `bytes_admitted <= 100`; with F2’s
+100 B cap: exactly one is admitted and `bytes_admitted <= 100`; with F2ΓÇÖs
 `continue`, the other is in `rejected`. Consider a debug assertion or selfcheck
 row for `bytes_admitted <= limit`.
 
 ---
 
-### F2 — `break` silently drops later forced paths
+### F2 ΓÇö `break` silently drops later forced paths
 
 **Severity: medium. Class: bug. Location:** `src/select/mod.rs:512`.
 
@@ -113,12 +115,12 @@ still stops at the first refusal instead of letting a later, cheaper path fit.
 `f9352f7` attempted, **but** use the fixed cumulative ledger from F1. Add the
 test `--files a --files b` under a 200 B cap with `a = 500 B` and `b = 100 B`:
 `a` is in `rejected`, `b` is admitted, and neither is silently dropped. Add the
-cumulative case from F1 separately; the old fix’s test only covered the first
+cumulative case from F1 separately; the old fixΓÇÖs test only covered the first
 case.
 
 ---
 
-### F3 — A forced path with an empty class set is silently dropped
+### F3 ΓÇö A forced path with an empty class set is silently dropped
 
 **Severity: medium. Class: bug. Location:** `src/select/mod.rs:507-509`;
 supporting: `src/select/classes.rs:398`, `tests/measured_fixture.rs:855`.
@@ -140,20 +142,20 @@ The frozen corpus has a real path with that shape:
 `tests/measured_fixture.rs:855-857`.
 
 For such a path, `--files` produces neither an admission nor a
-`forced_skipped` entry. The CLI help says `--files` paths are “Still scored and
-still recorded” (`src/cli/mod.rs:165-166`). `forced_files_requested` counts the
-path; `forced_files_skipped` does not. That is the same “requested but invisible”
+`forced_skipped` entry. The CLI help says `--files` paths are ΓÇ£Still scored and
+still recordedΓÇ¥ (`src/cli/mod.rs:165-166`). `forced_files_requested` counts the
+path; `forced_files_skipped` does not. That is the same ΓÇ£requested but invisibleΓÇ¥
 failure F2 describes, reached through a different branch.
 
 **Concrete fix.** Record it. Either push the path to `forced_skipped` with a
-reason (“answers no matrix class”), or introduce a `forced_unscored` list with
+reason (ΓÇ£answers no matrix classΓÇ¥), or introduce a `forced_unscored` list with
 that reason and surface it in the summary. Do not invent a synthetic primary
 class: a capture with no class would make the matrix claim something false. Add a
 test using the degenerate corpus path.
 
 ---
 
-### F4 — A failed chunk fetch loses its index, is double-counted, and hides its cause
+### F4 ΓÇö A failed chunk fetch loses its index, is double-counted, and hides its cause
 
 **Severity: medium. Class: bug. Location:** `src/blobs/mod.rs:272`; supporting:
 `:293-298`, `:306`, `:331`, `src/blobs/fill.rs:25-32`, `src/run/mod.rs:413`.
@@ -173,7 +175,7 @@ match joined {
 `[errors, missing].concat()`. One failed chunk therefore appears twice in the
 same `Vec<String>`: once as the real error text, once as its bare chunk id.
 `run/mod.rs:413` sets `fetches_failed = fetch_errors.len()`, so one failure is
-reported as two. The `Filled.errors` doc says “Fetches that failed”
+reported as two. The `Filled.errors` doc says ΓÇ£Fetches that failedΓÇ¥
 (`fill.rs:25-32`), but the vector now also contains missing ids.
 
 The index row is also weakened: `unfilled` sets
@@ -191,7 +193,7 @@ index row carries the fetch reason.
 
 ---
 
-### F5 — Non-2xx bodies are drained without the response ceiling
+### F5 ΓÇö Non-2xx bodies are drained without the response ceiling
 
 **Severity: medium. Class: bug. Location:** `src/http/fetcher.rs:739-747`;
 contradicted docs: `fetcher.rs:106-121`, `src/http/transport.rs:145-157`.
@@ -213,11 +215,11 @@ loop {
 
 There is no `Content-Length` precheck and no running-total check against
 `max_response_bytes`. The `drain_capped` doc at `fetcher.rs:106-121` says it is
-“The one place a body is read, for every destination — the buffered path, the
-file path, `observe`, and the drain of an *error* body.” That is false at HEAD:
+ΓÇ£The one place a body is read, for every destination ΓÇö the buffered path, the
+file path, `observe`, and the drain of an *error* body.ΓÇ¥ That is false at HEAD:
 the error body does not go through `drain_capped`. `Transport::max_response_bytes`
 at `transport.rs:145-157` likewise says the ceiling is checked in two places and
-is “the only bound on the path between a socket and this tool’s buffers”; the
+is ΓÇ£the only bound on the path between a socket and this toolΓÇÖs buffersΓÇ¥; the
 error-body path is outside it.
 
 Memory is bounded because only the count is kept, but time and bandwidth are not:
@@ -237,7 +239,7 @@ not retried; partial `bytes_in` is preserved.
 
 ---
 
-### F6 — Tag validation does not reject Windows separators or path prefixes
+### F6 ΓÇö Tag validation does not reject Windows separators or path prefixes
 
 **Severity: medium. Class: bug. Location:** `src/config/mod.rs:535`; sinks:
 `:585-588`, `:600-607`, `src/run/mod.rs:239`; tests: `:880-886`.
@@ -267,8 +269,8 @@ pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf 
 `artifact_dir` (`:600-607`) appends the capture id and `run/mod.rs:239` uses it.
 On Windows, `\` is a separator; `C:` is a path prefix (`Path::join` replaces the
 base when the joined path has a prefix but no root); and `..\..` is traversal.
-`--files` already has the right checks at `config/mod.rs:457-490` — backslash,
-colon, absolute, `..` component, empty component — but tags do not. The resolved
+`--files` already has the right checks at `config/mod.rs:457-490` ΓÇö backslash,
+colon, absolute, `..` component, empty component ΓÇö but tags do not. The resolved
 `main.tag`/`diff_tags[0]` values are not re-validated either, so a hostile API or
 local proxy can supply the same string even when the flags are clean.
 
@@ -286,7 +288,7 @@ test or proxy server.
 
 ---
 
-### F7 — `--no-chunk-blobs` still enforces the chunk-byte ceiling
+### F7 ΓÇö `--no-chunk-blobs` still enforces the chunk-byte ceiling
 
 **Severity: low. Class: bug. Location:** `src/run/mod.rs:222-229`;
 `src/blobs/plan.rs:115-117`; `src/blobs/fill.rs:48-57`.
@@ -299,9 +301,9 @@ fetching anything (`fill.rs:48-57`).
 
 So a metadata-only run is refused when the **would-be** chunk store exceeds the
 cap, even though no chunk bytes will cross the wire. The flag is documented as
-“Capture metadata only” (`src/cli/mod.rs:187`), and the spec’s
-`--max-download-bytes` is a ceiling on `Σ total_cost` over admitted captures
-(`docs/00-spec.md:572`); the plan’s check is a second wire-byte ceiling
+ΓÇ£Capture metadata onlyΓÇ¥ (`src/cli/mod.rs:187`), and the specΓÇÖs
+`--max-download-bytes` is a ceiling on `╬ú total_cost` over admitted captures
+(`docs/00-spec.md:572`); the planΓÇÖs check is a second wire-byte ceiling
 (`plan.rs:24-35`). With no chunk wire bytes, the second ceiling is vacuous.
 
 **Concrete fix.** Pass `None` to `plan` when `plan.no_chunk_blobs` is true, or
@@ -314,7 +316,7 @@ the wire.
 
 ---
 
-### F8 — Non-Unicode `--out`/`--log-file` panics in `main`
+### F8 ΓÇö Non-Unicode `--out`/`--log-file` panics in `main`
 
 **Severity: low. Class: bug. Location:** `src/main.rs:58`; `:15`;
 `src/cli/mod.rs:95`, `:140`.
@@ -330,14 +332,14 @@ Cmd::Capture(a) => match capture_plan(a, std::env::args().collect()) {
 `std::env::args()` panics on any argument that is not valid Unicode. The
 realistic carriers are `PathBuf`-typed values: `--out` (`cli/mod.rs:140`) and
 the global `--log-file` (`cli/mod.rs:95`). `String`-typed values are rejected by
-clap’s value parser first; `argv[0]` itself is the other theoretical carrier if
+clapΓÇÖs value parser first; `argv[0]` itself is the other theoretical carrier if
 the executable path is non-Unicode. The panic exits 101 and
-prints no `SUMMARY`, violating the “every run prints exactly one” promise at
+prints no `SUMMARY`, violating the ΓÇ£every run prints exactly oneΓÇ¥ promise at
 `main.rs:34-36`.
 
 This is a real but narrow bug: it needs an unpaired surrogate or otherwise
-non-Unicode path on Windows. It is **not** “any argument”, and the old review’s
-“same as `girpr` and `girsync`” justification is false: the root `girpr` and
+non-Unicode path on Windows. It is **not** ΓÇ£any argumentΓÇ¥, and the old reviewΓÇÖs
+ΓÇ£same as `girpr` and `girsync`ΓÇ¥ justification is false: the root `girpr` and
 `girsync` binaries do not call `std::env::args()` (only test scripts and
 `tools/sync/src/bin/sled2redb.rs` do).
 
@@ -350,7 +352,7 @@ run.
 
 ---
 
-### F9 — Duplicate `--files` entries produce duplicate ids and rows
+### F9 ΓÇö Duplicate `--files` entries produce duplicate ids and rows
 
 **Severity: low. Class: bug. Location:** `src/select/mod.rs:498-525`;
 `src/emit/fixture.rs:248`, `:259`; `src/emit/index.rs:165`.
@@ -375,32 +377,32 @@ the summary say how many were dropped.
 
 ---
 
-### F10 — CLI help contradicts the code and the spec
+### F10 ΓÇö CLI help contradicts the code and the spec
 
 **Severity: low. Class: doc error. Location:** `src/cli/mod.rs:161`, `:187`;
 `src/emit/selfcheck.rs:707-709`; `docs/00-spec.md:730-759`, `:766-767`.
 
 Two clap doc comments are stale:
 
-1. `--require-class`: “Fail with exit 4 unless these matrix classes are
-   satisfied. Default: all.” (`cli/mod.rs:161`). The implementation returns
+1. `--require-class`: ΓÇ£Fail with exit 4 unless these matrix classes are
+   satisfied. Default: all.ΓÇ¥ (`cli/mod.rs:161`). The implementation returns
    `Ok(())` for an empty list (`src/select/require.rs:84-86`), and the spec says
-   “defaults to **nothing**” (`docs/00-spec.md:730-739`).
-2. `--no-chunk-blobs`: “Breaks assertions A7-A10 by design.”
+   ΓÇ£defaults to **nothing**ΓÇ¥ (`docs/00-spec.md:730-739`).
+2. `--no-chunk-blobs`: ΓÇ£Breaks assertions A7-A10 by design.ΓÇ¥
    (`cli/mod.rs:187`). The actual skip set is
    `["A6","A7","A8","A9","A10","A11","A12","A19","A21","A22","A23"]`
-   (`selfcheck.rs:707-709`), and the spec says “A6–A12, A19 and A21–A23”
+   (`selfcheck.rs:707-709`), and the spec says ΓÇ£A6ΓÇôA12, A19 and A21ΓÇôA23ΓÇ¥
    (`docs/00-spec.md:766-767`).
 
-**Concrete fix.** Change the first to “Default: none (nothing is required unless
-named)” and the second to “Breaks assertions A6–A12, A19, A21–A23 by design.”
+**Concrete fix.** Change the first to ΓÇ£Default: none (nothing is required unless
+named)ΓÇ¥ and the second to ΓÇ£Breaks assertions A6ΓÇôA12, A19, A21ΓÇôA23 by design.ΓÇ¥
 Add a help-text assertion if the CLI contract tests have a place for it; none of
 the current tests pin these strings. The closeout test that should pin the
 second is itself incomplete (F12).
 
 ---
 
-### F11 — Failed fetches can orphan `.tmp` files; the comment overstates cleanup
+### F11 ΓÇö Failed fetches can orphan `.tmp` files; the comment overstates cleanup
 
 **Severity: low. Class: intentional-but-uncovered. Location:**
 `src/blobs/mod.rs:432-436`, `:484-491`.
@@ -425,14 +427,14 @@ is not self-healing in general.
 **Concrete fix.** Either remove the temp file on the error path (best-effort
 `let _ = std::fs::remove_file(&tmp_path);`, after logging the original error), or
 sweep `.*.tmp` at store creation with an age guard. Correct the comment to state
-the exact invariant (“same id and slot”). Add a test: a failed fetch leaves no
+the exact invariant (ΓÇ£same id and slotΓÇ¥). Add a test: a failed fetch leaves no
 `.tmp` if removing; or a later run with a different slot leaves the old file if
 documenting. The current comment is **source-verified** as incomplete; the
 real-world accumulation rate is **not verified**.
 
 ---
 
-### F12 — The closeout skip-set test checks only 8 of 11 ids
+### F12 ΓÇö The closeout skip-set test checks only 8 of 11 ids
 
 **Severity: low. Class: test gap. Location:** `src/emit/closeout.rs:637`;
 `src/emit/selfcheck.rs:707-709`.
@@ -448,10 +450,10 @@ for id in ["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"] {
 
 `SKIPPED_WITHOUT_CHUNK_BLOBS` has eleven ids, adding `A21`, `A22`, `A23`
 (`selfcheck.rs:707-709`). The test does not assert equality or length, so a
-regression that drops A21–A23 from the skip set is not directly detected; the
+regression that drops A21ΓÇôA23 from the skip set is not directly detected; the
 separate `failing.is_empty()` assertion may or may not catch it depending on
 which rows the close-out generates. This is the test the old review described as
-asserting “exactly those eight ids”; it does not.
+asserting ΓÇ£exactly those eight idsΓÇ¥; it does not.
 
 **Concrete fix.** Assert set equality against `SKIPPED_WITHOUT_CHUNK_BLOBS`
 (sort both if order is not meaningful), and add a negative case that an extra id
@@ -479,25 +481,25 @@ not test-run.
   `docs/00-spec.md:730-739`. F10 is only the help-text drift.
 - **A9 is byte-compared internally, digest-recorded in the artifact, and
   intentionally uncovered.** `assemble/mod.rs:856-881` compares
-  `patch_bytes == new.bytes` for `equals_new`; the artifact’s A9 row at
+  `patch_bytes == new.bytes` for `equals_new`; the artifactΓÇÖs A9 row at
   `:395-401` compares `p.md5` and `n.md5`. The comment at `:872-875` states that
   replacing the byte comparison with `true` passes the suite (mutation-tested
-  twice). This is **intentional-but-uncovered**, not “well-covered”; the
+  twice). This is **intentional-but-uncovered**, not ΓÇ£well-coveredΓÇ¥; the
   observable digest row is covered, the internal byte comparison is not.
-- **The crate’s dependency independence holds.** `Cargo.toml:24-58` has only
+- **The crateΓÇÖs dependency independence holds.** `Cargo.toml:24-58` has only
   `girpr-log` and `girpr-tempdir` as path dependencies; there is no `girpr`
   dependency. `std::process::Command` appears in tests (e.g.
   `tests/case_coverage.rs:62`, `:102`, `:145`) but not in `src/`, and none of
-  those invocations is `girpr`. The old review’s “no `Command` anywhere in the
-  tree” is overstated, but the independence conclusion is correct.
+  those invocations is `girpr`. The old reviewΓÇÖs ΓÇ£no `Command` anywhere in the
+  treeΓÇ¥ is overstated, but the independence conclusion is correct.
 - **The manifest-id prefix is recorded, never asserted.** Every construction
   site sets `id_prefix_verified: false` (e.g. `src/manifest/mod.rs:323`, `:435`),
-  and `Verified::all_green` ignores it (`:94-98`). This matches spec §3.7.
+  and `Verified::all_green` ignores it (`:94-98`). This matches spec ┬º3.7.
 - **A missing `--files` path is recorded, not fatal.** `forced_skipped` is
   populated at `src/select/mod.rs:499-505`; the integration test at
   `tests/matrix.rs:695-707` asserts requested 1 / skipped 1. F2 and F3 are the
-  two other “requested but invisible” branches.
-- **Phase 2’s want admission is smallest-first and charges only admitted
+  two other ΓÇ£requested but invisibleΓÇ¥ branches.
+- **Phase 2ΓÇÖs want admission is smallest-first and charges only admitted
   costs.** `budget::admit_in_order` checks before charging and leaves rejected
   candidates uncharged (`src/select/budget.rs:114-128`); `select` sorts by cost
   before reading fates (`src/select/mod.rs:648-652`). This is correct for wants;
@@ -521,39 +523,39 @@ resurrecting the old text.
 
 | # | Old claim (in `f9352f7` review) | Actual truth at HEAD `64dc69d` | Consequence |
 |---|--------------------------------|--------------------------------|-------------|
-| C1 | F1: non-Unicode argv crashes; **medium**; “any argument”; “let it panic, same as `girpr` and `girsync`.” | Only `Cmd::Capture` calls `std::env::args()` (`main.rs:58`); the realistic carriers are `PathBuf`-typed values (`--out`, `--log-file`), plus `argv[0]` in principle. The root `girpr`/`girsync` binaries do not call `std::env::args()`; only test scripts and `tools/sync/src/bin/sled2redb.rs` do. A panic exits 101, not “abort.” | Downgrade to **low** (F8); the consistency justification is false; use `args_os` + lossy rather than “let it panic.” |
-| C2 | F2: change `break` to `continue`, record the refused path as `over_budget`; test `a=500, b=100, cap=200`. | `f9352f7` kept `budget.admits(cost)` on the **unspent** caller budget, so two forced paths each ≤ cap but summing > cap are both admitted. Its test only covers one path that is individually over the cap. | The fix does not close over-admission; HEAD still has F1 and F2. Add a cumulative test, not just the single-over-cap test. |
-| C3 | F6: drain the error body through `drain_capped`; split `max_response_bytes` / `max_success_response_bytes`; severity low. | At `f9352f7:tools/capture/src/http/fetcher.rs:760-785`, a mid-read failure becomes `ApiError::Transport` (retried) and records `bytes_in: 0`; a 404 with a truncated body is retried, and a too-big error body becomes `Shape` instead of `Status`. | Do not resurrect that patch. F5’s fix must preserve the status and the partial byte count, and must not turn a non-retryable 4xx into a retry. |
-| C4 | F4: “the closeout test at `:637` asserts exactly those eight ids are declared skipped.” | The test loops over 8 ids with `contains`; it does not assert length or equality and omits A21–A23. The constant has 11 (`selfcheck.rs:707-709`). | The test does not pin the full skip set; F12 adds the equality assertion. The old sentence is misleading. |
-| C5 | F5: “clarify the docs — leaving the `.tmp` behind is intentional; the next run truncates it.” | Docs cannot fix the leak. `paths_for` includes the slot (`blobs/mod.rs:484-491`); “next run truncates it” is true only for the same id **and** slot. | The recommendation is a no-op for the leak; either remove the temp on failure or state the exact invariant and add a test (F11). |
-| C6 | F7: A9 is intentional and “well-covered”; a disagreement always turns the row red. | The observable digest row is covered, but the internal byte comparison is not: the code comment at `assemble/mod.rs:872-875` says replacing it with `true` passes the entire suite (mutation-tested twice). | Label A9 **intentional-but-uncovered**, not well-covered; do not cite it as a fully pinned behavior. |
-| C7 | F10: “no `Command` anywhere in the tree.” | `std::process::Command` is used in tests (e.g. `tests/case_coverage.rs:62`, `:102`, `:145`); there is none in `src/`, and none invokes `girpr`. | The independence conclusion still holds, but the evidence sentence is false as written. Say “no `Command` in `src/` and no `girpr` invocation.” |
-| C8 | “`cargo build -p gircap` — clean; `cargo test -p gircap` — all tests pass (≈622).” | **Not verified** at HEAD. HEAD is a revert of the reviewed series; no build or test was run for this review. | Do not cite the old pass count as evidence for HEAD. This review is source-level only. |
-| C9 | F3/F4: the `--require-class` and `--no-chunk-blobs` help-text fixes were applied. | HEAD is pre-fix: `cli/mod.rs:161` still says “Default: all” and `:187` still says “A7-A10.” | Re-report as F10; do not assume the help text is fixed at HEAD. |
+| C1 | F1: non-Unicode argv crashes; **medium**; ΓÇ£any argumentΓÇ¥; ΓÇ£let it panic, same as `girpr` and `girsync`.ΓÇ¥ | Only `Cmd::Capture` calls `std::env::args()` (`main.rs:58`); the realistic carriers are `PathBuf`-typed values (`--out`, `--log-file`), plus `argv[0]` in principle. The root `girpr`/`girsync` binaries do not call `std::env::args()`; only test scripts and `tools/sync/src/bin/sled2redb.rs` do. A panic exits 101, not ΓÇ£abort.ΓÇ¥ | Downgrade to **low** (F8); the consistency justification is false; use `args_os` + lossy rather than ΓÇ£let it panic.ΓÇ¥ |
+| C2 | F2: change `break` to `continue`, record the refused path as `over_budget`; test `a=500, b=100, cap=200`. | `f9352f7` kept `budget.admits(cost)` on the **unspent** caller budget, so two forced paths each Γëñ cap but summing > cap are both admitted. Its test only covers one path that is individually over the cap. | The fix does not close over-admission; HEAD still has F1 and F2. Add a cumulative test, not just the single-over-cap test. |
+| C3 | F6: drain the error body through `drain_capped`; split `max_response_bytes` / `max_success_response_bytes`; severity low. | At `f9352f7:tools/capture/src/http/fetcher.rs:760-785`, a mid-read failure becomes `ApiError::Transport` (retried) and records `bytes_in: 0`; a 404 with a truncated body is retried, and a too-big error body becomes `Shape` instead of `Status`. | Do not resurrect that patch. F5ΓÇÖs fix must preserve the status and the partial byte count, and must not turn a non-retryable 4xx into a retry. |
+| C4 | F4: ΓÇ£the closeout test at `:637` asserts exactly those eight ids are declared skipped.ΓÇ¥ | The test loops over 8 ids with `contains`; it does not assert length or equality and omits A21ΓÇôA23. The constant has 11 (`selfcheck.rs:707-709`). | The test does not pin the full skip set; F12 adds the equality assertion. The old sentence is misleading. |
+| C5 | F5: ΓÇ£clarify the docs ΓÇö leaving the `.tmp` behind is intentional; the next run truncates it.ΓÇ¥ | Docs cannot fix the leak. `paths_for` includes the slot (`blobs/mod.rs:484-491`); ΓÇ£next run truncates itΓÇ¥ is true only for the same id **and** slot. | The recommendation is a no-op for the leak; either remove the temp on failure or state the exact invariant and add a test (F11). |
+| C6 | F7: A9 is intentional and ΓÇ£well-coveredΓÇ¥; a disagreement always turns the row red. | The observable digest row is covered, but the internal byte comparison is not: the code comment at `assemble/mod.rs:872-875` says replacing it with `true` passes the entire suite (mutation-tested twice). | Label A9 **intentional-but-uncovered**, not well-covered; do not cite it as a fully pinned behavior. |
+| C7 | F10: ΓÇ£no `Command` anywhere in the tree.ΓÇ¥ | `std::process::Command` is used in tests (e.g. `tests/case_coverage.rs:62`, `:102`, `:145`); there is none in `src/`, and none invokes `girpr`. | The independence conclusion still holds, but the evidence sentence is false as written. Say ΓÇ£no `Command` in `src/` and no `girpr` invocation.ΓÇ¥ |
+| C8 | ΓÇ£`cargo build -p gircap` ΓÇö clean; `cargo test -p gircap` ΓÇö all tests pass (Γëê622).ΓÇ¥ | **Not verified** at HEAD. HEAD is a revert of the reviewed series; no build or test was run for this review. | Do not cite the old pass count as evidence for HEAD. This review is source-level only. |
+| C9 | F3/F4: the `--require-class` and `--no-chunk-blobs` help-text fixes were applied. | HEAD is pre-fix: `cli/mod.rs:161` still says ΓÇ£Default: allΓÇ¥ and `:187` still says ΓÇ£A7-A10.ΓÇ¥ | Re-report as F10; do not assume the help text is fixed at HEAD. |
 
 ## Recommended landing order
 
 All nine steps landed on `fix-gaps/gircap`; the Pass log records the commits.
 
-1. **F1 + F2 + F9** — one selection/budget change. F1 is the high-severity
+1. **F1 + F2 + F9** ΓÇö one selection/budget change. F1 is the high-severity
    ceiling violation; F2 and F9 are the same forced-loop code. Add the
    cumulative-forced test, the break/continue test, and the duplicate-`--files`
    test in the same change.
-2. **F6** — tag/path validation. Small and isolated; land before any release
+2. **F6** ΓÇö tag/path validation. Small and isolated; land before any release
    where `--old-tag`/`--new-tag` can come from an untrusted wrapper or a local
    mock.
-3. **F3** — record the empty-class forced path. Small, but it needs a decision
+3. **F3** ΓÇö record the empty-class forced path. Small, but it needs a decision
    on the summary field (`forced_skipped` vs a new `forced_unscored`).
-4. **F5** — cap the error body without the `f9352f7` regression. Add the
+4. **F5** ΓÇö cap the error body without the `f9352f7` regression. Add the
    truncated-404 and huge-503 tests first.
-5. **F4** — preserve the task index and the real fetch error. This touches
+5. **F4** ΓÇö preserve the task index and the real fetch error. This touches
    `Store::one` and `fill`, so keep it separate from the selection change.
-6. **F10 + F12** — fix the two help strings and make the closeout test assert the
+6. **F10 + F12** ΓÇö fix the two help strings and make the closeout test assert the
    full 11-id set. Low risk; can land with the docs.
-7. **F7** — decide the `--no-chunk-blobs` semantics, then either skip the
+7. **F7** ΓÇö decide the `--no-chunk-blobs` semantics, then either skip the
    ceiling or document it. Do not change it silently.
-8. **F8** — replace `args()` with `args_os` + lossy recording. Low risk.
-9. **F11** — choose cleanup or a precise comment, and add the corresponding
+8. **F8** ΓÇö replace `args()` with `args_os` + lossy recording. Low risk.
+9. **F11** ΓÇö choose cleanup or a precise comment, and add the corresponding
    test. Lowest priority because the leak is bounded.
 
 ---
@@ -565,7 +567,7 @@ All nine steps landed on `fix-gaps/gircap`; the Pass log records the commits.
 > in the tables are the index. No item in any pass was rejected as invalid or out
 > of scope.
 
-### First pass — F1–F12 (all fixed)
+### First pass ΓÇö F1ΓÇôF12 (all fixed)
 
 | ID | Finding | Status | Commit |
 |---|---|---|---|
@@ -582,7 +584,7 @@ All nine steps landed on `fix-gaps/gircap`; the Pass log records the commits.
 | F11 | A failed fetch can orphan `.tmp` files; the comment overstates cleanup. | fixed | `882a53b`, `7c64557` |
 | F12 | The closeout skip-set test checks only 8 of 11 ids. | fixed | `4dd1c05`, `d538d4d` |
 
-### Second pass — residuals against F1–F12
+### Second pass ΓÇö residuals against F1ΓÇôF12
 
 Re-derived at `b726054`; all items accepted, and F1, F2, F7, F8, F9 and F10 needed no change.
 
@@ -600,7 +602,7 @@ Re-derived at `b726054`; all items accepted, and F1, F2, F7, F8, F9 and F10 need
 | F12 test | The expectation is derived from the constant under test. | fixed (test) | `d538d4d` |
 | F11 doc | The doc overstates the cleanup guarantee. | fixed (doc) | `7c64557` |
 
-### Third pass — G1–G3
+### Third pass ΓÇö G1ΓÇôG3
 
 Re-derived at `577c399`; all three confirmed valid.
 
@@ -612,7 +614,7 @@ Re-derived at `577c399`; all three confirmed valid.
 
 Two test-harness defects were fixed alongside: the `hyp` fixture lacked the now-required `audio_pkg_scan_dir` (`6003958`), and the mock's armed `503` sent `keep-alive` then closed (`66bc6f0`).
 
-### Fourth pass — H1–H4
+### Fourth pass ΓÇö H1ΓÇôH4
 
 Re-derived at `1cbf2f1`; all four confirmed valid; H1 was reproduced end to end before the fix.
 
@@ -623,7 +625,7 @@ Re-derived at `1cbf2f1`; all four confirmed valid; H1 was reproduced end to end 
 | H3 | The path rule accepts names Windows folds together. | fixed | `c9caa02`, `b6aeb6d` |
 | H4 | The `--no-chunk-blobs` schema row contradicts `unmeasured`. | fixed (doc) | `c9bf161` |
 
-### Fifth pass — I1–I5
+### Fifth pass ΓÇö I1ΓÇôI5
 
 Re-derived at `9b60455`; all five confirmed valid; I1 and I2 were reproduced at the real seam before the fix.
 
@@ -635,7 +637,7 @@ Re-derived at `9b60455`; all five confirmed valid; I1 and I2 were reproduced at 
 | I4 | `list` silently skips unreadable directories and failed entries. | fixed | `5d24494` |
 | I5 | `dump::write` validates the field but not the tag. | fixed | `f20ee4c` |
 
-### Sixth pass — J1–J3
+### Sixth pass ΓÇö J1ΓÇôJ3
 
 Re-derived at `ecc81c5`; all three confirmed valid; J1 was reproduced with a share-locked reference manifest (exit `0` before, usage error after).
 
@@ -645,7 +647,7 @@ Re-derived at `ecc81c5`; all three confirmed valid; J1 was reproduced with a sha
 | J2 | The `list` doc promises "deepest first"; the code sorts by relative-path string. | fixed (doc) | `28c3c18`, `d74e40b` |
 | J3 | The `list` command doc calls a refused bundle "a skip" and omits I4's fail-fast usage error. | fixed (doc) | `73d0cb5` |
 
-### Seventh pass — K1–K2
+### Seventh pass ΓÇö K1ΓÇôK2
 
 Re-derived at `8d25b06`; both confirmed valid and both reproduced outside the repository before the fix. K1's `Layout::of([(i64::MAX, 1)], 1)` aborted at `ranges.rs:48`, a manifest with `compressed_size: -1` produced `download_bytes: -1`, and three maximum `projected_download` wants aborted. K2's `Store::fill` left an unframed 58-byte XML body on disk while the row said `bytes: 0`, `stored_path: null` and the error list said "not a zstd frame".
 
@@ -658,7 +660,7 @@ K1 follows `decode_counts`: *measurements* saturate, while address-like sums use
 
 K2 takes the spec-supported row: an unframed body is a successful fetch with `stored_path`, `bytes`, both compressed digests, `decode_error`, and `verified` carrying the two decode-independent answers and two `false` decode-dependent keys. Because the fetch succeeded, the store stops rather than asking a second source and renaming a good body over the evidence; a real I/O error after the rename removes the published blob so disk and index agree. Both docs now state this. A loopback `Store::fill` test drives the real store path.
 
-### Eighth pass — L1–L2
+### Eighth pass ΓÇö L1ΓÇôL2
 
 Re-derived at `b9c1682`; both confirmed valid and both reproduced before the fix. L1 failed as `--old-tag "CON" must be refused`; L2's `select` fixture panicked in debug at `accum.rs:206:1` (`attempt to add with overflow`) and the release budget test reported `18446744073709551612` against the ledger's `u64::MAX`.
 
@@ -669,7 +671,7 @@ Re-derived at `b9c1682`; both confirmed valid and both reproduced before the fix
 
 L1 makes `paths::is_windows_device_name` `pub(crate)` and calls it from `tag_shape_problem`, so the flag path, the API-resolved tags and the manifest writer share one rule; the extension is ignored, and `7.1.0`/`CONSOLE`/`COM0`/`LPT10` stay legal. L2 folds both totals with `saturating_add`, so the summary and `diff/matrix.json` report the same saturated number; a `select` fixture with two `u64::MAX - 1` costs pins it in debug and release.
 
-### Ninth pass — M1–M2
+### Ninth pass ΓÇö M1ΓÇôM2
 
 Re-derived at `6561044`; both confirmed valid. M1 was reproduced before the fix:
 its new `Checksums::findings` test panicked in debug at `accum.rs:206:1`
@@ -735,26 +737,3 @@ cancellation.
 | `cargo fmt -p gircap --check` | clean |
 
 Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. Targeted release runs pass: `cargo test -p gircap --release --lib a_crafted_checksums_total` (1), `... --lib tasks::tests` (2), `... --lib a_panicking_request_task` (1). The ninth-pass reproductions are now in-tree tests; M2's pre-fix loss is the `if let Ok` arm the fix replaced.
-
-## Open for maintainers
-
-- **F4 dedicated field.** A `fetch_error` field would describe a failed fetch more precisely but needs an artifact-schema change; a panicking chunk still gets the stable generic row text.
-- **F7 ceiling intent.** If `--max-download-bytes` was meant as an input-independent policy check, the metadata-only skip should be reverted and the help changed instead.
-- **F8 replay.** The recorded argv is lossy; replaying a bundle would need a raw-bytes companion.
-- **F11 older orphans.** Cleanup covers handled errors only; a panic unwinds past it, orphans from older binaries are not swept, and the historical accumulation rate is unmeasured.
-- **F6/G1 live inputs.** Whether a live API echoes a hostile tag, serves a hostile document or audio path, or uses an unusual but legitimate chunk-id spelling is unverified; the local sinks and rejection paths are tested.
-- **L1 end to end / cross-host.** No capture was run with a device-name tag — it is now refused at argument resolution, before any request — and a Linux-produced `manifests/CON/` bundle was not replayed through `verify` on Windows; A16's missing-file consequence is reasoned, not executed.
-- **L2 through the command.** The near-`u64::MAX` cost is driven through `select` with a `PathScore` fixture, not through a hand-edited manifest read from disk; no live manifest declaring extreme sizes was sampled.
-- **M1 through the command.** The crafted `checksums.json` is driven through `Checksums::findings`, not written into a bundle and run through `gircap verify`; `Bundle::open` → `reverify` → `findings` is an unchanged direct call.
-- **M2 cancellation.** Cancellation is exercised on the `join_failure` helper, not through `map_concurrently`, which never aborts a spawned task; the slot text for a cancelled metadata job was not driven end to end.
-- **G2 crash tear.** Whether a metadata document can be left torn in a way `checksums.json` misses was not stress-tested.
-- **H3 live manifests.** Whether a live manifest contains names differing only by a trailing dot or space was not sampled.
-- **H4 on-disk bundle.** No real `--no-chunk-blobs` bundle was inspected; the doc matches the constructor and the tests.
-- **I4/J1 ACLs.** No real Windows ACL-denied directory or `MANIFEST.json` was set up; the read arms are injected, the J1 share lock was reproduced end to end, and the stat/read race was reasoned, not timed.
-- **I5 CLI precondition.** A hostile tag reaches the writer only through a hand-built manifest; the CLI's earlier validation is not re-driven, though the writer's refusal is unit-tested.
-- **F5 production bodies.** Real non-2xx body sizes are unknown, so the practical effect of the cap is unverified.
-- **F1 real corpus.** Whether `blobs::plan`'s projected check also fires on a real corpus is unverified; the selection-level test is the guarantee.
-- **F8 clap typing.** Which non-`PathBuf` argument types clap accepts non-Unicode values for is unverified; only `--out` is exercised end to end.
-- **K1 A20 through the command.** A20's negative and overflowing cases are unit-tested against a crafted `PatchMap`, but no full bundle with a hand-edited patchmap was run through `gircap verify`.
-- **K2 removal arm.** The published blob is removed on a post-rename measurement I/O error, but no test forces that I/O failure; the undecodable path is the tested post-rename path and deliberately keeps the blob.
-- **K1/K2 live inputs.** Whether a live CDN serves a non-frame chunk, or a live manifest declares extreme or negative numbers, remains unmeasured.
