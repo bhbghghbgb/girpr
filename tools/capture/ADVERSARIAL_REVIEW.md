@@ -162,6 +162,26 @@ fetch"); a cancellation is named as a cancellation. Pinned by a real
 `map_concurrently` panic test and by helper tests for payload recovery and
 cancellation.
 
+### Tenth pass — N1
+
+Re-derived at `385c4af`; N1 confirmed valid. Both direct `spawn_blocking`
+joins formatted the `JoinError` with `Display`, dropping a panic's payload and
+naming a cancellation a panic, and the measurement arm skipped
+`discard_published`, so a published blob could outlive a `stored_path: null`
+row.
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| N1 | The two direct `spawn_blocking` joins discard a panic's payload, call a cancellation a panic, and leave an unmeasurable published blob without a `stored_path` row. | fixed | `1300931`, `a84d3c5` |
+
+N1 moved both joins onto `tasks::join_blocking`, the blocking-pool application
+of `join_failure`. The measurement keeps `<chunk id>: ` and now calls
+`discard_published` on both failure arms, so disk and index agree; the
+request-log write keeps `write <bundle>: ` and the writer's message. Each seam
+has a panicking-closure test (`src/tasks.rs:81`, `src/blobs/mod.rs:1476`,
+`src/run/mod.rs:914`); no portable input makes the real decoder or writer
+panic, so that instruction remains unexercised.
+
 ### Decisions that still constrain current behaviour
 
 - **F1/F2/F9.** Forced paths share one cumulative budget; a refusal is recorded and the loop continues; duplicate `--files` paths are a usage error.
@@ -172,6 +192,7 @@ cancellation.
 - **L2.** `Selection::bytes_admitted` and `budget::total_admitted` saturate with the charged ledger, so a crafted maximum cost cannot panic in debug or wrap in release.
 - **M1.** The checksums total is folded from an untrusted document: it saturates for reporting, and an overflow is its own finding before the equality test, so `u64::MAX` is agreement only when the entries really sum to it.
 - **M2.** A failing task keeps its item index and its `JoinError` payload; cancellation is named as cancellation, not as a panic; both `JoinSet` loops use one helper (`src/tasks.rs`).
+- **N1.** A blocking task that does not return goes through `tasks::join_blocking`, so its payload survives; a panicking measurement removes the already-published blob rather than leaving it without an index row.
 - **F3.** A classless forced path is reported in `forced_unscored`/`forced_files_unscored`, not overloaded onto `forced_skipped`.
 - **F4.** The fetch reason goes in `decode_error`; a dedicated `fetch_error` remains open.
 - **F7.** A metadata-only run does not enforce a chunk wire-byte ceiling it pays nothing towards.
@@ -188,13 +209,13 @@ cancellation.
 - **K1.** Measurement totals saturate; address-like sums and plan costs use `checked_add` with an error naming the offending chunk and values. No negative `offset`, `compressed_size` or `uncompressed_size` is accepted at a decode boundary, and no `uncompressed_size` above `i64::MAX` survives index validation.
 - **K2.** An unframed fetched body is a successful fetch and an `undecodable` row, not a failed fetch; it is not retried from another source, because replacing it would destroy the evidence. A post-rename I/O error removes the published blob.
 
-### Verification (latest: ninth pass, `47b0dc2`)
+### Verification (latest: tenth pass, `a84d3c5`)
 
 | Command | Result |
 |---|---|
-| `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | **696 passed, 0 failed** (552 lib + 144 integration) |
-| `cargo clippy -p gircap --all-targets` | finished, no diagnostics |
+| `cargo build -p gircap` | finished, no warnings (23.78s) |
+| `cargo test -p gircap` | **701 passed, 0 failed** (557 lib + 144 integration) |
+| `cargo clippy -p gircap --all-targets` | finished, no diagnostics (9.51s) |
 | `cargo fmt -p gircap --check` | clean |
 
-Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. Targeted release runs pass: `cargo test -p gircap --release --lib a_crafted_checksums_total` (1), `... --lib tasks::tests` (2), `... --lib a_panicking_request_task` (1). The ninth-pass reproductions are now in-tree tests; M2's pre-fix loss is the `if let Ok` arm the fix replaced.
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. The five new tests are the two `join_blocking` tests, the measurement panic-and-discard test through its closure seam, and the request-log panic and return-value tests. No release build was repeated this pass; the ninth-pass targeted release runs are recorded in its commit.
