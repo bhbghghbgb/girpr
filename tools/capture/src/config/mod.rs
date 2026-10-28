@@ -554,6 +554,11 @@ pub fn validate_new_tag(tag: &str) -> Result<()> {
 /// directory component, and the directory is named before the network work is
 /// useful, so a late `create_dir_all` failure would waste the whole run.
 ///
+/// A reserved DOS device name is refused by the same rule the path validator
+/// uses ([`crate::paths`]): the tag becomes `manifests/<tag>`, so `CON` names a
+/// device whatever the extension on Windows, and a bundle built where it is
+/// accepted would carry a directory a Windows reader cannot open.
+///
 /// Split on both separators even though both are rejected above: the rules are
 /// then stated independently, which is what stops a future relaxation of one
 /// from silently reopening the other.
@@ -608,6 +613,12 @@ pub(crate) fn tag_shape_problem(tag: &str) -> Option<String> {
         return Some(format!(
             "{tag:?} starts or ends with `.`; Windows strips a trailing dot from a \
              directory name, so two tags could name one directory"
+        ));
+    }
+    if crate::paths::is_windows_device_name(tag) {
+        return Some(format!(
+            "{tag:?} names a Windows device; a tag is a bare version string and \
+             becomes a directory name"
         ));
     }
     if tag.split(['/', '\\']).any(|c| c == "..") {
@@ -1032,6 +1043,19 @@ mod tests {
             // Windows strips a trailing dot, so this and `7.1.0` would collide.
             "7.1.0.",
             ".7.1.0",
+            // A tag is `manifests/<tag>`, and Windows resolves a DOS device
+            // name whatever the extension: `create_dir_all` then fails late, or
+            // the bundle names a directory a Windows reader cannot open.
+            "CON",
+            "con",
+            "NUL",
+            "NUL.txt",
+            "aux.txt",
+            "COM1",
+            "COM1.bin",
+            "LPT9",
+            "CONIN$",
+            "CONIN$.txt",
         ] {
             assert!(
                 validate_tag(bad, "--old-tag").is_err(),
@@ -1046,8 +1070,18 @@ mod tests {
                 "--probe-tags {bad:?} must be refused"
             );
         }
-        // And the shape rule did not become a ban on ordinary tags.
-        for good in ["7.1.0", "6.7.0", "5.5.0-nightly", "v7.1"] {
+        // And the shape rule did not become a ban on ordinary tags, including
+        // names that merely start like a device one.
+        for good in [
+            "7.1.0",
+            "6.7.0",
+            "5.5.0-nightly",
+            "v7.1",
+            "CONSOLE",
+            "console",
+            "COM0",
+            "LPT10",
+        ] {
             assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
             assert!(validate_new_tag(good).is_ok(), "{good:?}");
         }
@@ -1245,6 +1279,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("--new-tag"), "{e}");
+
+        // A device name is the same class of sink: `manifests/<tag>` cannot be
+        // created on Windows, and a bundle built where it can would not contain
+        // the directory a Windows reader opens.
+        let mut b = branch();
+        b.tag = "CON".into();
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(
+            e.contains("main.tag") && e.contains("device"),
+            "the resolved tag is refused with the API field: {e}"
+        );
     }
 
     /// Swapping them would attach a build id to the wrong tag, and every chunk

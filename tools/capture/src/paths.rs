@@ -96,7 +96,11 @@ pub fn relative_path_problem(value: &str) -> Option<String> {
 /// `COM9`, `LPT1`–`LPT9`, and the `$` console aliases). `COM0`/`LPT0` are not
 /// reserved, so only 1–9 count. A leading dot makes a different stem, and
 /// `.con` is an ordinary (if odd) file name.
-fn is_windows_device_name(component: &str) -> bool {
+///
+/// Shared with the tag rule ([`crate::config`]): a tag is the component
+/// `manifests/<tag>`, so a device name there is the same failure one directory
+/// up.
+pub(crate) fn is_windows_device_name(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component);
     let stem = stem.to_ascii_uppercase();
     matches!(
