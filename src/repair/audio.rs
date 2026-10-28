@@ -87,16 +87,24 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<
         }
     };
     let (set, unrecognized) = parse_scan_text(&text);
-    if set.is_empty() && !unrecognized.is_empty() {
+    // The raw text, not the BOM-stripped view: U+FEFF is not whitespace, so a
+    // file that contains only a BOM is not a blank file and must not become
+    // the game-only selection. Genuinely blank lines and an empty file stay
+    // game-only, which is what `--audio none` writes.
+    let has_non_blank_text = !text.trim().is_empty();
+    if set.is_empty() && has_non_blank_text {
         // Non-empty text with no recognized language is a malformed selection,
         // not `--audio none`. The empty set would make `select_manifests` drop
         // every audio manifest and hide the selected language from the purge
         // keep set, so `--purge-after` would delete its packages.
+        let detail = match unrecognized.first() {
+            Some(line) => format!("first unrecognized line: {line:?}"),
+            None => "the file contains only a byte-order mark".to_string(),
+        };
         return Err(anyhow::anyhow!(
-            "audio scan file {} contains no recognized language (first unrecognized line: {:?}); \
+            "audio scan file {} contains no recognized language ({detail}); \
              expected one of Chinese, English(US), Japanese, Korean, or an empty file for game-only",
             p.display(),
-            unrecognized[0]
         ));
     }
     for line in unrecognized {
@@ -297,6 +305,27 @@ mod tests {
         assert!(
             resolve_effective_audio(&d, "scan.txt", None).is_err(),
             "a malformed file must never resolve to game-only"
+        );
+    }
+
+    /// R-8: a BOM is not whitespace. A file whose only content is a BOM is
+    /// non-empty and names no language, so it must be refused too — only a
+    /// genuinely blank file is the game-only selection.
+    #[test]
+    fn a_bom_only_file_is_refused_not_read_as_game_only() {
+        let d = dir("bom_only");
+        std::fs::write(d.join("scan.txt"), "\u{feff}").unwrap();
+        let err = read_scan_file(&d, "scan.txt").expect_err("a BOM is not a selection");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("scan.txt") && chain.contains("byte-order mark"),
+            "the error names the file and the only content: {chain}"
+        );
+        // Blank lines are still the game-only selection.
+        std::fs::write(d.join("blank.txt"), "\n  \n\r\n").unwrap();
+        assert_eq!(
+            read_scan_file(&d, "blank.txt").unwrap(),
+            Some(HashSet::new())
         );
     }
 

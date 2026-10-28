@@ -67,7 +67,9 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    whose lines name none of the four display names is also an error (exit 1) naming
    the file and the first unrecognized line — an empty result would read as game-only
    and hide the selected language from the purge keep set. An unrecognized line beside
-   a recognized one is warned and ignored; a leading UTF-8 BOM is stripped.
+   a recognized one is warned and ignored; a leading UTF-8 BOM is stripped before
+   parsing. A file whose only content is a BOM is non-empty and is refused; genuinely
+   blank lines are game-only.
    Write the scan file back when an explicit selection was given (including `none`),
    except in `--dry-run` / `--check-only` / `--print-plan` (no writes) or when the scan
    dir is unconfigured. The write happens in the execution phase, after every refusal
