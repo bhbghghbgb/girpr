@@ -1185,7 +1185,7 @@ filter/plan/apply parity with new fixtures. Verdicts:
 | --- | --- | --- | --- |
 | P6-1 | medium | plan/apply parity, filters | **Fixed** (`af5116b`, `08897e4`) |
 | P6-2 | high (data loss) | hard links | **Fixed** (`b2b1445`, `2a99fa3`) |
-| P6-3 | low | docs | **Fixed** (this docs commit) |
+| P6-3 | low | docs | **Fixed** (`8d52de6`) |
 
 P5-1 (`fix_dirs` before `mkdirs`) and P5-2 (`validate_dst_links` plus the
 final-component recheck in `copy_one`) hold for the cases they cover; no
