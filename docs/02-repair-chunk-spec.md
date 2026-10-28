@@ -133,7 +133,9 @@ For each latest file `F{path,size,md5,chunks[]}`:
   → record `(reuse_path=game_dir/local_F.path, reuse_offset)`, else `reuse=null`.
   (Cross-file dedup by md5 is allowed but optional; same-file covers ~all Genshin wins.)
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
-  drop listed paths from the work list.
+  drop listed paths from the work list. They stay part of the expected install:
+  the files-cleanup keeps them (Step 7), so a blacklist entry excludes repair,
+  never the file itself.
 
 ### Step 5 — Files-cleanup before (reclaim space before repairing)
 Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
@@ -342,8 +344,8 @@ optimization).
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
-1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}`.
-   `config.ini` is the ONLY metadata keep: it lives inside `game_dir` but never
+1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
+   `{blacklisted paths}`. `config.ini` is the ONLY metadata keep: it lives inside `game_dir` but never
    appears in chunk manifests. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse

@@ -306,6 +306,67 @@ async fn purge_before_deletes_orphans_then_repairs() {
 }
 
 #[tokio::test]
+async fn blacklisted_files_survive_every_purge_spelling() {
+    // V-1: the blacklist excludes a file from the *work list*; it does not
+    // remove it from the expected install. The plan therefore used to drop a
+    // blacklisted manifest path from `expected_paths()` and the files-cleanup
+    // deleted it. docs/01 says blacklisted entries are "never deleted" and
+    // docs/02 defines the cleanup's expected set from the manifest, so the
+    // blacklist must also be a keep input.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            blacklist_dir: "blacklist.txt".to_string(),
+            enable_resource_blacklist: true,
+            ..Default::default()
+        },
+    )
+    .await;
+
+    for (name, apply) in [
+        (
+            "after",
+            (|c: &mut RunCtx| c.purge_after = true) as fn(&mut RunCtx),
+        ),
+        ("before", |c: &mut RunCtx| c.purge_before = true),
+        ("only", |c: &mut RunCtx| c.purge_only = true),
+    ] {
+        let dir = temp_dir(&format!("purge_blacklist_{name}"));
+        let fx2 = build_fixture();
+        for f in &fx2.files {
+            write_game_file(&dir, &f.rel, &f.data);
+        }
+        // The blacklisted file is a manifest path (so it is part of the
+        // expected install) and stays on disk unchanged.
+        write_game_file(&dir, "blacklist.txt", br#"{"fileName":"game/foo.dat"}"#);
+        // A genuinely stale file still has to be deleted.
+        write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 32]);
+
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+        apply(&mut ctx);
+        let (summary, code) = repair::run(ctx)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: run failed: {e:#}"));
+        assert_eq!(code, 0, "{name}: exit");
+        assert!(
+            read_game_file(&dir, "game/foo.dat").is_some(),
+            "{name}: a blacklisted manifest file must never be deleted"
+        );
+        assert!(
+            read_game_file(&dir, "stray/orphan.dat").is_none(),
+            "{name}: the stale file is still purged"
+        );
+        assert!(
+            summary.deleted_extra_bytes.load(Ordering::Relaxed) >= 32,
+            "{name}: the stale file's bytes are counted"
+        );
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn deprecated_files_deleted_in_post_phase() {
     let fx = build_fixture();
     let mock = MockServer::start(

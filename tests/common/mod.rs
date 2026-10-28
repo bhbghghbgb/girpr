@@ -539,6 +539,12 @@ pub struct MockOpts {
     pub scan_dir: String,
     pub res_dir: String,
     pub cache_dir: String,
+    /// `getGameConfigs.res_category_dir` (a path under `game_dir`).
+    pub res_category_dir: String,
+    /// `getGameConfigs.blacklist_dir` (a path under `game_dir`).
+    pub blacklist_dir: String,
+    /// `getGameConfigs.enable_resource_blacklist`.
+    pub enable_resource_blacklist: bool,
     /// `getGameConfigs.default_download_mode`. `None` serves the live
     /// `DOWNLOAD_MODE_CHUNK`; `Some(s)` serves `s` verbatim, so a test can send
     /// `Some("")` to model the API omitting the field.
@@ -732,9 +738,9 @@ fn build_responses(
                     .download_mode
                     .clone()
                     .unwrap_or_else(|| "DOWNLOAD_MODE_CHUNK".to_string()),
-                "res_category_dir": "",
-                "blacklist_dir": "",
-                "enable_resource_blacklist": false
+                "res_category_dir": opts.res_category_dir,
+                "blacklist_dir": opts.blacklist_dir,
+                "enable_resource_blacklist": opts.enable_resource_blacklist
             }]
         }
     });

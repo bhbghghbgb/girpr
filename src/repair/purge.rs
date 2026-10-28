@@ -77,12 +77,19 @@ pub struct PurgePlan {
 /// `server_keep` comes from [`keep_set`]: files that live inside `game_dir` but
 /// NEVER appear in chunk manifests.
 ///
+/// `blacklist` is the launcher's `blacklist_dir` set (already cleaned at its
+/// reader). A blacklisted path is excluded from the *repair work list*, not
+/// from the install: it is still an expected file and is **never** deleted
+/// (docs/01). It is a separate input from `server_keep` so the two keep rules
+/// keep their distinct provenance.
+///
 /// Pure with respect to the walk's contents: it reads the filesystem and
 /// decides, but deletes nothing.
 pub fn plan_purge(
     game_dir: &Path,
     plan: &RepairPlan,
     server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
     scope: &PathScope,
 ) -> PurgePlan {
     let expected = plan.expected_paths();
@@ -143,7 +150,7 @@ pub fn plan_purge(
         let path = e.path();
         let rel = rel_path(path, game_dir);
         let outside = !scope.is_visible(&rel);
-        match classify_purge_path(&rel, &expected, server_keep, scope) {
+        match classify_purge_path(&rel, &expected, server_keep, blacklist, scope) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
                 debug_assert!(!outside, "a hidden path must classify Keep");
@@ -342,7 +349,10 @@ pub enum PurgeVerdict {
 ///    unfiltered run, and the fixture `gircap` hands us would be eaten.
 /// 1. Manifest membership (Collapse expected set).
 /// 2. `config.ini` ([`keep_set`] — the only metadata keep).
-/// 3. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
+/// 3. Blacklist membership (the launcher's `blacklist_dir`): a blacklisted
+///    path is excluded from the work list but is still part of the expected
+///    install, so the cleanup must never delete it (docs/01).
+/// 4. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
 ///    `Audio_*_pkg_version`, `GenshinInstall.cs:232-241`). v1 matches broadly
 ///    by pattern rather than per-`audio_lang_14`-line exact regexes.
 ///
@@ -353,6 +363,7 @@ pub fn classify_purge_path(
     rel: &str,
     expected: &HashSet<String>,
     server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
     scope: &PathScope,
 ) -> PurgeVerdict {
     // 0. Out of scope → does not exist.
@@ -367,7 +378,11 @@ pub fn classify_purge_path(
     if server_keep.contains(rel) {
         return PurgeVerdict::Keep;
     }
-    // 3. Collapse audio pkg-version parity → keep.
+    // 3. Blacklisted → excluded from repair, still part of the install.
+    if blacklist.contains(rel) {
+        return PurgeVerdict::Keep;
+    }
+    // 4. Collapse audio pkg-version parity → keep.
     if is_audio_version_file(file_name(rel)) {
         return PurgeVerdict::Keep;
     }
@@ -400,6 +415,11 @@ mod tests {
         (expected, server_keep)
     }
 
+    /// No blacklist, for the tests that predate it.
+    fn no_blacklist() -> HashSet<String> {
+        HashSet::new()
+    }
+
     fn plan_of(rel: &str) -> RepairPlan {
         plan_of_all(&[rel])
     }
@@ -422,7 +442,13 @@ mod tests {
 
     fn purge_now(dir: &Path, plan: &RepairPlan, dry_run: bool) -> u64 {
         apply_purge(
-            &plan_purge(dir, plan, &keep_set(), &PathScope::default()),
+            &plan_purge(
+                dir,
+                plan,
+                &keep_set(),
+                &no_blacklist(),
+                &PathScope::default(),
+            ),
             dry_run,
         )
         .unwrap()
@@ -441,7 +467,7 @@ mod tests {
         let open = PathScope::default();
         for rel in ["game.dat", "config.ini"] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Keep,
                 "{rel} must be kept"
             );
@@ -458,11 +484,46 @@ mod tests {
             "login.dat",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Purge,
                 "{rel} must be purged"
             );
         }
+    }
+
+    /// V-1: a blacklisted path is dropped from the **repair** plan but is
+    /// still part of the expected install. The cleanup must keep it even when
+    /// the manifest no longer lists it (the "never deleted" claim in docs/01).
+    #[test]
+    fn a_blacklisted_path_is_kept_by_the_cleanup() {
+        let (expected, keep) = purge_fixture();
+        let blacklist: HashSet<String> = ["game/foo.dat".to_string()].into_iter().collect();
+        let open = PathScope::default();
+        assert_eq!(
+            classify_purge_path("game/foo.dat", &expected, &keep, &blacklist, &open),
+            PurgeVerdict::Keep
+        );
+
+        let dir = TempDir::new("girpr_test_purge", "blacklist");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"keep").unwrap();
+        std::fs::write(dir.join("stale.dat"), b"drop").unwrap();
+        // The file is not in this plan: the blacklist is the only keep rule
+        // that names it, which is exactly the shape the plan's blacklist test
+        // (`build_plan`) produces.
+        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &blacklist, &open);
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        assert_eq!(
+            rels,
+            vec!["stale.dat"],
+            "only the stale file is a candidate"
+        );
+        apply_purge(&pp, false).unwrap();
+        assert!(
+            dir.join("game/foo.dat").exists(),
+            "blacklisted file survives"
+        );
+        assert!(!dir.join("stale.dat").exists(), "the stale file is deleted");
     }
 
     #[test]
@@ -477,7 +538,7 @@ mod tests {
             "AUDIO_JAPANESE_PKG_VERSION",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Keep,
                 "{rel} must be kept"
             );
@@ -501,7 +562,7 @@ mod tests {
             "patch.deletefiles.txt",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Purge,
                 "{rel} must be purged"
             );
@@ -524,14 +585,14 @@ mod tests {
             "YuanShen.exe",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &scoped),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &scoped),
                 PurgeVerdict::Keep,
                 "{rel} is outside the scope and must not be touched"
             );
         }
         // ...and the one admitted path is classified exactly as unfiltered.
         assert_eq!(
-            classify_purge_path("game/foo.dat", &expected, &keep, &scoped),
+            classify_purge_path("game/foo.dat", &expected, &keep, &no_blacklist(), &scoped),
             PurgeVerdict::Purge
         );
     }
@@ -541,11 +602,17 @@ mod tests {
         let (expected, keep) = purge_fixture();
         let scoped = scope(&[], &["ScreenShot/*"]);
         assert_eq!(
-            classify_purge_path("ScreenShot/s.png", &expected, &keep, &scoped),
+            classify_purge_path(
+                "ScreenShot/s.png",
+                &expected,
+                &keep,
+                &no_blacklist(),
+                &scoped
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("login.dat", &expected, &keep, &scoped),
+            classify_purge_path("login.dat", &expected, &keep, &no_blacklist(), &scoped),
             PurgeVerdict::Purge
         );
     }
@@ -590,7 +657,13 @@ mod tests {
         std::fs::write(dir.join("deep/nested/game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
         let plan = plan_of("deep/nested/game.dat");
-        let pp = plan_purge(&dir, &plan, &keep_set(), &PathScope::default());
+        let pp = plan_purge(
+            &dir,
+            &plan,
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
         // `deep` has a kept descendant, so neither it nor `deep/nested` may be
         // swept, even though every sibling of the kept file is being purged.
         assert!(
@@ -614,6 +687,7 @@ mod tests {
             &dir,
             &plan_of("game.dat"),
             &keep_set(),
+            &no_blacklist(),
             &PathScope::default(),
         );
         let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
@@ -646,6 +720,7 @@ mod tests {
             &dir,
             &plan_of_all(&["game/foo.dat", "game/bar.dat"]),
             &keep_set(),
+            &no_blacklist(),
             &scoped,
         );
         assert_eq!(pp.total_bytes, 0, "nothing is a delete candidate");
@@ -681,7 +756,13 @@ mod tests {
         std::fs::write(dir.join("game/foo.dat"), b"f").unwrap();
 
         let scoped = scope(&["game/foo.dat"], &[]);
-        let pp = plan_purge(&dir, &plan_of("game/foo.dat"), &keep_set(), &scoped);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game/foo.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
         assert!(
             pp.dirs.is_empty(),
             "no directory is inside the scope: {:?}",
@@ -707,7 +788,13 @@ mod tests {
         std::fs::write(dir.join("game/emptied/orphan.dat"), b"x").unwrap();
 
         let scoped = scope(&["*"], &[]);
-        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &scoped);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
         assert_eq!(pp.hidden, 0);
         assert_eq!(pp.total_bytes, 1);
         apply_purge(&pp, false).unwrap();
@@ -729,6 +816,7 @@ mod tests {
             &dir.join("bad\0name"),
             &plan_of("game.dat"),
             &keep_set(),
+            &no_blacklist(),
             &PathScope::default(),
         );
         assert!(pp.files.is_empty(), "{:?}", pp.files);
@@ -745,6 +833,7 @@ mod tests {
             &dir.join("not_there_yet"),
             &plan_of("game.dat"),
             &keep_set(),
+            &no_blacklist(),
             &PathScope::default(),
         );
         assert!(pp.files.is_empty());
@@ -760,7 +849,13 @@ mod tests {
         // `--include "*.dat"` admits the orphan; it is still not in the
         // manifest, so it purges.
         let scoped = scope(&["*.dat"], &[]);
-        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &scoped);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
         assert_eq!(pp.total_bytes, 4);
         assert_eq!(pp.hidden, 0);
         assert_eq!(apply_purge(&pp, false).unwrap(), 4);
@@ -799,15 +894,33 @@ mod tests {
         let (expected, server_keep) = purge_fixture();
         let scope = PathScope::default();
         assert_eq!(
-            classify_purge_path("girpr.lock", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "girpr.lock",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("config.ini", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "config.ini",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("stray/orphan.dat", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "stray/orphan.dat",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Purge
         );
     }

@@ -174,7 +174,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
     let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), scope));
+        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), &meta.blacklist, scope));
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature

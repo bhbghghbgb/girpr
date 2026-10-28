@@ -57,7 +57,13 @@ pub async fn run(
     delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
     move_audio_cache(game_dir, &meta.config, &ctx.path_scope, dry);
     if ctx.purge_after || ctx.purge_only {
-        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set(), &ctx.path_scope);
+        let purge_plan = purge::plan_purge(
+            game_dir,
+            plan,
+            &purge::keep_set(),
+            &meta.blacklist,
+            &ctx.path_scope,
+        );
         // The post-repair re-plan is the only purge pass whose candidates were
         // not computed at assert time, so `--max-delete-bytes` is checked
         // against it again here. It can only be *smaller* than the

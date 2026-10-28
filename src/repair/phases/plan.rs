@@ -196,6 +196,11 @@ fn dedup_key(rel: &str) -> String {
 /// Build sorted, deduped, blacklist-filtered, scope-filtered plan.
 /// `per_manifest`: (chunk_url_prefix, files).
 ///
+/// A blacklisted path leaves the **work list** here but does not leave the
+/// expected install: [`crate::repair::purge::plan_purge`] receives the same
+/// blacklist as a keep input, so a correctly spelled entry can never be
+/// deleted by `--purge-*` (docs/01: blacklisted entries are never deleted).
+///
 /// A path outside `scope` is dropped **here**, before the plan exists, so
 /// `files_total`, the repair loop and `expected_paths()` all see the same
 /// narrowed world. Dropping it later instead would leave the purge with a
