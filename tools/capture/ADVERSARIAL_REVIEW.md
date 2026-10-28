@@ -645,6 +645,20 @@ Re-derived at `ecc81c5`; all three confirmed valid; J1 was reproduced with a sha
 | J2 | The `list` doc promises "deepest first"; the code sorts by relative-path string. | fixed (doc) | `28c3c18`, `d74e40b` |
 | J3 | The `list` command doc calls a refused bundle "a skip" and omits I4's fail-fast usage error. | fixed (doc) | `73d0cb5` |
 
+### Seventh pass — K1–K2
+
+Re-derived at `8d25b06`; both confirmed valid and both reproduced outside the repository before the fix. K1's `Layout::of([(i64::MAX, 1)], 1)` aborted at `ranges.rs:48`, a manifest with `compressed_size: -1` produced `download_bytes: -1`, and three maximum `projected_download` wants aborted. K2's `Store::fill` left an unframed 58-byte XML body on disk while the row said `bytes: 0`, `stored_path: null` and the error list said "not a zstd frame".
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| K1 | Arithmetic on untrusted offsets, lengths and costs is unchecked across the range algebra, plan totals, index decode, manifest decode, A20 and the diff totals. | fixed | `06bd550`, `e371ee9`, `37b7b2a`, `fc71387`, `ab560d8` |
+| K2 | An undecodable fetched body is published on disk but recorded as an unfilled fetch, losing the evidence the spec says to keep. | fixed | `f7a8da2`, `41fdef9` |
+
+K1 follows `decode_counts`: *measurements* saturate, while address-like sums use `checked_add` and return a typed error naming the chunk and values. `Range::at`/`len`/`to` are total; `Layout::of` records an overflowing end or total as a violation; `materialize::rebuild` checks offsets, lengths and `declared_size`; `ChunkIndex::validate_arithmetic` runs in `Bundle::open`; `SophonChunkFile::validate_arithmetic` runs at manifest decode and again in `assemble`; `totals_for` rejects a negative `compressed_size` and checks the sum; A20 rejects a negative cost and folds with `checked_add`; `projected_download` and `diff.rs` saturate. Every fixed site has a regression test, including a crafted index refused at `Bundle::open`.
+
+K2 takes the spec-supported row: an unframed body is a successful fetch with `stored_path`, `bytes`, both compressed digests, `decode_error`, and `verified` carrying the two decode-independent answers and two `false` decode-dependent keys. Because the fetch succeeded, the store stops rather than asking a second source and renaming a good body over the evidence; a real I/O error after the rename removes the published blob so disk and index agree. Both docs now state this. A loopback `Store::fill` test drives the real store path.
+
+
 ### Decisions that still constrain current behaviour
 
 - **F1/F2/F9.** Forced paths share one cumulative budget; a refusal is recorded and the loop continues; duplicate `--files` paths are a usage error.
@@ -664,17 +678,19 @@ Re-derived at `ecc81c5`; all three confirmed valid; J1 was reproduced with a sha
 - **I4/J1.** `list` fails fast on an unreadable directory, entry or manifest; a non-bundle is stepped over and a refused bundle is named and counted.
 - **I5.** The manifest writer repeats the CLI's tag validation by design.
 - **J2.** `list` orders by relative path, not deepest-first; deepest-first would be a new contract.
+- **K1.** Measurement totals saturate; address-like sums and plan costs use `checked_add` with an error naming the offending chunk and values. No negative `offset`, `compressed_size` or `uncompressed_size` is accepted at a decode boundary, and no `uncompressed_size` above `i64::MAX` survives index validation.
+- **K2.** An unframed fetched body is a successful fetch and an `undecodable` row, not a failed fetch; it is not retried from another source, because replacing it would destroy the evidence. A post-rename I/O error removes the published blob.
 
-### Verification (latest: sixth pass, `8032442`)
+### Verification (latest: seventh pass, `41fdef9`)
 
 | Command | Result |
 |---|---|
 | `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | **671 passed, 0 failed** (528 lib + 143 integration) |
+| `cargo test -p gircap` | **690 passed, 0 failed** (546 lib + 144 integration) |
 | `cargo clippy -p gircap --all-targets` | finished, no diagnostics |
 | `cargo fmt -p gircap --check` | clean |
 
-Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran.
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran.
 
 ## Open for maintainers
 
@@ -691,3 +707,6 @@ Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15; no test is `#[cfg(uni
 - **F5 production bodies.** Real non-2xx body sizes are unknown, so the practical effect of the cap is unverified.
 - **F1 real corpus.** Whether `blobs::plan`'s projected check also fires on a real corpus is unverified; the selection-level test is the guarantee.
 - **F8 clap typing.** Which non-`PathBuf` argument types clap accepts non-Unicode values for is unverified; only `--out` is exercised end to end.
+- **K1 A20 through the command.** A20's negative and overflowing cases are unit-tested against a crafted `PatchMap`, but no full bundle with a hand-edited patchmap was run through `gircap verify`.
+- **K2 removal arm.** The published blob is removed on a post-rename measurement I/O error, but no test forces that I/O failure; the undecodable path is the tested post-rename path and deliberately keeps the blob.
+- **K1/K2 live inputs.** Whether a live CDN serves a non-frame chunk, or a live manifest declares extreme or negative numbers, remains unmeasured.
