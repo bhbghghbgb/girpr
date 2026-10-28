@@ -160,13 +160,32 @@ fn delete_deprecated(
         if !p.is_file() {
             continue;
         }
-        let sz = util::file_len(&p).unwrap_or(0);
+        // A stat failure is not "0 bytes". `p.is_file()` already succeeded, so
+        // this is a race or an ACL, not a missing file: the delete still runs,
+        // but the figure is left out of the counter instead of under-reported,
+        // and the dry-run line says the size is unknown rather than 0.
+        let sz = match std::fs::metadata(&p) {
+            Ok(m) => Some(m.len()),
+            Err(e) => {
+                tracing::warn!(
+                    path = %n,
+                    error = %e,
+                    "deprecated file size unavailable; the deleted-bytes total will omit it"
+                );
+                None
+            }
+        };
         if dry_run {
-            tracing::info!("would delete deprecated {n} ({sz} bytes)");
+            match sz {
+                Some(sz) => tracing::info!("would delete deprecated {n} ({sz} bytes)"),
+                None => tracing::info!("would delete deprecated {n} (size unavailable)"),
+            }
         } else {
             match std::fs::remove_file(&p) {
                 Ok(()) => {
-                    summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+                    if let Some(sz) = sz {
+                        summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+                    }
                     tracing::info!("deleted deprecated {n}");
                 }
                 Err(e) => {
