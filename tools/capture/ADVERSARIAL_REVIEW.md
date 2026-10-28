@@ -764,6 +764,55 @@ The fifth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 13 + 15;
 to 13, for ten new tests over the fourth-pass 658. No test is `#[cfg(unix)]`, so
 none was skipped on this Windows host; the `#[cfg(windows)]` tests ran.
 
+### Sixth pass
+
+A reviewer re-derived every F1–F12, G1–G3, H1–H4 and I1–I5 verdict from source
+at `ecc81c5`, re-ran the suite, and reported three findings J1–J3. All three were
+confirmed valid; none was dismissed as invalid or out of scope. J1, the only
+behavioural one, was reproduced with the real binary against the reference
+bundle before and after the fix.
+
+| Item | Verdict | Commit | Resolution |
+|---|---|---|---|
+| J1: `list` treats a `MANIFEST.json` it cannot **read** as "not a bundle", so a real bundle vanishes with exit `0` (**medium**, omitted error) | valid, fixed | `0706984`, `43d5977`, `3f042a1` | The walk's `is_file()` probe passed while a share lock was held, and `schema_version_of(...).is_ok()` flattened the read failure to "no version": `bundles=0`, `bundles_unreadable=0`, `result=ok`, exit `0`, one WARN. It now probes through `probe_manifest`, which returns `Missing`, `NotABundle(reason)` or `Version(u32)`, plus `Err` naming the path and the I/O error when the stat or read fails. `Missing`/`NotABundle` keep the documented step-over; `Err` fails the walk and reaches the existing `Failure::usage` mapping. `schema_version_of` is the `Bundle::open` wrapper over the same probe, so open's texts are unchanged. The manifest reader is injected into `list_with` like the directory reader. Tests: the injected-reader regression (fails against the pre-fix code, which returned `Ok` with no bundle) and a stat-arm probe. `43d5977` keeps the old "a `MANIFEST.json` that is not a file is no manifest, keep descending" behaviour so only a failure that could hide a bundle aborts. |
+| J2: the `list` doc promises "deepest first"; the code sorts by relative-path string (**low**, doc) | valid, fixed | `28c3c18`, `d74e40b` | The doc now says both lists are sorted by relative path and that the order is **not** deepest-first. The spec promises no order and the summary's `first`/`last` read the sorted list, so changing the worked-over walk was the larger, unnecessary change; `list_orders_bundles_by_relative_path_not_by_depth` builds two real fixture bundles, nests one under `z_region/`, and asserts the shallower `hk4e_global/...` sorts first. |
+| J3: the `list` command doc still calls a refused bundle "a skip" and omits I4's fail-fast usage error (**low**, doc) | valid, fixed | `73d0cb5` | `run::list` now names the three arms: a non-bundle is stepped over, a bundle this build refuses is named on stderr and counted as `bundles_unreadable`, and a directory, entry or manifest the walk cannot read stops the command with a usage error (exit `1`, `result=error`). The record-shape rationale for not writing a `BUNDLE` record for a non-bundle stays. `docs/00-spec.md:889-893` now names an unreadable manifest too. |
+
+**J1 reproduction.** With `artifacts/hk4e_global/7.0.0__7.1.0/20261021T141336Z`'s
+`MANIFEST.json` held by `[System.IO.File]::Open($m, 'Open', 'Read', 'None')`:
+before (`ecc81c5`) `result=ok bundles=0 bundles_unreadable=0`, exit `0`, one
+`WARN ... skipped`; after (`3f042a1`) `result=error exit_code=1
+exit_code_slug=usage`, with `detail=cannot read ...MANIFEST.json: The process
+cannot access the file ... (os error 32)`. Unlocked after the fix:
+`bundles=1 bundles_passing=1 bundles_unreadable=0`, exit `0`. The corrupt-JSON
+fixture still steps over and the v1 fixture is still named, so the three arms
+remain distinct.
+
+**Sixth-pass choices a maintainer may want to revisit.** J1 fails fast for any
+stat or read failure other than `NotFound`, including a manifest that disappears
+between the stat and the read; that is deliberate, because the walk cannot prove
+it was not a bundle. A manifest path that is not a regular file is still treated
+as absent, so the walk keeps descending there, as `is_file() == false` did. The
+ordering question in J2 is answered by the doc rather than the walk: if a
+consumer needs deepest-first, that is a new contract and needs its own walk
+change and test. J3 is documentation only, but it is now the contract the
+command and the spec both implement.
+
+#### Sixth-pass verification
+
+| Command | Sixth pass (`3f042a1`) |
+|---|---|
+| `cargo build -p gircap` | finished in 0.46s, no warnings |
+| `cargo test -p gircap` | **671 passed, 0 failed** (528 lib + 143 integration) |
+| `cargo clippy -p gircap --all-targets` | finished in 7.02s, no diagnostics |
+| `cargo fmt -p gircap --check` | clean |
+
+The sixth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15;
+`lib` grew from 526 to 528 for the two J1 tests and `offline_bundle` from 13 to
+14 for the J2 ordering test, three new over the fifth-pass 668. No test is
+`#[cfg(unix)]`, so none was skipped on this Windows host; the `#[cfg(windows)]`
+tests ran.
+
 ### Choices a maintainer may want to revisit
 
 - **F3 summary field.** `forced_unscored` / `forced_files_unscored` is a new
@@ -848,4 +897,8 @@ No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
   gives a real `read_dir` failure; no Windows ACL was set up.
 - I5: a hostile tag through the CLI, which validates both resolved tags earlier.
   The writer's own refusal is unit-tested; the CLI precondition is not re-driven.
+- J1: a real ACL-denied `MANIFEST.json`. The read arm is injected
+  deterministically and the exclusive share lock was reproduced end to end; the
+  stat arm uses a path that cannot be stat'ed. No Windows ACL was set up, and
+  the "manifest vanished between stat and read" race was reasoned, not timed.
 
