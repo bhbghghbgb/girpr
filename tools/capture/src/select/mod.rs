@@ -802,12 +802,16 @@ pub fn select(
         matrix.push(row);
     }
 
-    let bytes_admitted: u64 = admitted.iter().map(|a| a.budget_cost).sum();
-    // The ledger and the sum describe one fact. A future admission path could
-    // charge one without adding an `Admission` (or the reverse), and the matrix
-    // would then report a different spent total from the summary; keep the two
-    // tied in debug builds so that change is caught here rather than in a
-    // bundle.
+    let bytes_admitted: u64 = admitted
+        .iter()
+        .fold(0, |total, a| total.saturating_add(a.budget_cost));
+    // The ledger and the sum describe one fact, and both saturate: a crafted
+    // manifest can make two admitted costs sum past `u64::MAX`, and the summary
+    // must report the ledger's number rather than panic (debug) or wrap
+    // (release). A future admission path could still charge one without adding
+    // an `Admission` (or the reverse), and the matrix would then report a
+    // different spent total from the summary; keep the two tied in debug builds
+    // so that change is caught here rather than in a bundle.
     debug_assert_eq!(
         bytes_admitted,
         final_budget.spent(),
@@ -1465,6 +1469,41 @@ mod tests {
         assert!(
             s.admitted.iter().any(|a| a.capture_id.contains('+')),
             "the second is `class+n`"
+        );
+    }
+
+    /// A crafted manifest may declare `compressed_size: i64::MAX`, and the
+    /// scoring add saturates each `old_bytes + new_bytes` to `u64::MAX - 1`.
+    /// Two admitted paths are then more than a `u64` holds. The summary total
+    /// is a measurement next to the saturating ledger, so it must report the
+    /// saturated number rather than panic (debug) or wrap (release).
+    #[test]
+    fn two_maximum_costs_report_the_saturated_ledger_not_an_overflow() {
+        let cost = u64::MAX - 1;
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row(
+                    "a/one",
+                    State::Identical,
+                    Some(scored("a/one", cost, (1, 1), (1, 1, 0), true)),
+                    1,
+                ),
+                row(
+                    "a/two",
+                    State::Identical,
+                    Some(scored("a/two", cost, (1, 1), (1, 1, 0), true)),
+                    1,
+                ),
+            ],
+        )]);
+        let s = select(&pool, 2, Budget::unlimited(), &[]);
+        assert_eq!(s.admitted.len(), 2, "an unlimited budget admits both");
+        assert_eq!(s.budget.spent(), u64::MAX, "the ledger saturates");
+        assert_eq!(
+            s.bytes_admitted,
+            u64::MAX,
+            "the reported total is the same saturated number"
         );
     }
 
