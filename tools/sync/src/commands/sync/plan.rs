@@ -407,6 +407,83 @@ pub(super) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
     Ok(())
 }
 
+/// Refuse, in both modes, a planned copy whose destination would still be
+/// hard-linked when the copy phase truncates it.
+///
+/// [`copy_one`](super::apply) refuses a destination with more than one name, but
+/// that check lives in the apply phase: a dry run used to report `COPY` and exit
+/// 0 for a tree the real run refused with exit 3. This is the plan-time
+/// counterpart, reading the same disk state both modes read, so the two agree
+/// before either prints an action.
+///
+/// A destination is allowed when names the plan removes **before** the copy
+/// phase account for every extra one. `delete_files` and `fix_dirs` both run
+/// first and both remove an ordinary file name, which reduces the inode's count.
+/// A `delete_files` entry that is a **link** does not count: unlinking a link
+/// removes the link, not the inode it points at. `rmdir` runs after the copy and
+/// cannot help.
+///
+/// The default-run shape is exactly this: a dst file hard-linked to a dst-only
+/// file is refused only when `--keep-extra` leaves that second name in place;
+/// without it, the delete phase removes the other name first and the copy is
+/// safe.
+///
+/// Conservative where it cannot tell: a stat error other than `NotFound` is
+/// returned, and `NotFound` means there is no inode to truncate.
+pub(super) fn ensure_hard_linked_targets_safe(
+    plan: &Plan,
+    dm: &HashMap<String, EffRec>,
+    dst: &Path,
+) -> Result<()> {
+    // Ordinary-file names this run removes before copying, by the inode they
+    // name. A link is skipped: its removal leaves the target's count unchanged.
+    let mut removed: HashMap<crate::hardlink::Identity, u64> = HashMap::new();
+    for rel in plan.delete_files.iter().chain(plan.fix_dirs.iter()) {
+        if dm
+            .get(rel)
+            .is_none_or(|rec| rec.kind != "file" || rec.is_link)
+        {
+            continue;
+        }
+        let p = dst.join(rel);
+        match crate::hardlink::info(&p) {
+            Ok(info) => *removed.entry(info.id).or_default() += 1,
+            // Gone already, so this plan entry removes no name at copy time.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("hard-link count {}", p.display()));
+            }
+        }
+    }
+    for item in &plan.copy {
+        let d = dst.join(&item.rel);
+        let info = match crate::hardlink::info(&d) {
+            Ok(info) => info,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(e).with_context(|| format!("hard-link count {}", d.display()));
+            }
+        };
+        if info.links <= 1 {
+            continue;
+        }
+        let credited = removed.get(&info.id).copied().unwrap_or(0);
+        if credited >= info.links - 1 {
+            continue;
+        }
+        bail!(
+            "refusing to copy `{}`: dst `{}` has {} hard links and the plan removes only \
+             {credited} of the other names before copying; truncating it would change \
+             another path that shares the file (possibly one inside src); remove the \
+             extra link or replace the file, then rerun",
+            item.rel,
+            d.display(),
+            info.links
+        );
+    }
+    Ok(())
+}
+
 /// Refuse, before the rename pass, a src directory that dst holds on disk as
 /// something other than a directory.
 ///
@@ -794,6 +871,108 @@ mod tests {
 
         ensure_mkdir_targets_free(&sm, &dm, &dst, false)
             .expect("fix-dirs replaces `a` before the nested mkdir");
+    }
+
+    /// Two dst names for one file, and neither is planned for removal: the copy
+    /// would truncate both. `copy_one` refuses this in a real run; the preflight
+    /// must refuse it in a dry run too, or the two modes answer differently.
+    #[test]
+    fn a_hard_linked_copy_target_with_no_planned_removal_is_refused() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_refused");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt")).unwrap();
+        let mut dm = HashMap::new();
+        dm.insert("a.txt".to_string(), file());
+        dm.insert("shared.txt".to_string(), file());
+        let p = plan(&[], &["a.txt"], &[]);
+
+        let err = ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect_err("a name the run keeps makes the truncation unsafe");
+        let msg = err.to_string();
+        assert!(msg.contains("hard links"), "names the hazard: {msg}");
+        assert!(msg.contains("a.txt"), "names the copy: {msg}");
+    }
+
+    /// The default-run shape, and the reason the preflight cannot refuse every
+    /// count above one: `shared.txt` is dst-only, the delete phase removes it,
+    /// and the copy then truncates the only remaining name.
+    #[test]
+    fn deleting_the_other_name_makes_the_hard_linked_copy_safe() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_deleted");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt")).unwrap();
+        let mut dm = HashMap::new();
+        dm.insert("a.txt".to_string(), file());
+        dm.insert("shared.txt".to_string(), file());
+        let mut p = plan(&[], &["a.txt"], &[]);
+        p.delete_files.push("shared.txt".to_string());
+
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect("the delete phase runs before the copy and removes the other name");
+    }
+
+    /// A delete of an unrelated inode is no credit: identity, not the number of
+    /// planned removals, is what makes the other name go away.
+    #[test]
+    fn deleting_an_unrelated_file_does_not_make_the_copy_safe() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_unrelated");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt")).unwrap();
+        std::fs::write(dst.join("other.txt"), b"other").unwrap();
+        let mut dm = HashMap::new();
+        dm.insert("a.txt".to_string(), file());
+        dm.insert("shared.txt".to_string(), file());
+        dm.insert("other.txt".to_string(), file());
+        let mut p = plan(&[], &["a.txt"], &[]);
+        p.delete_files.push("other.txt".to_string());
+
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect_err("deleting a different file leaves both names of this inode");
+    }
+
+    /// `fix_dirs` runs before the copy phase too, so a blocking file it replaces
+    /// reduces the shared count just as a delete does.
+    #[test]
+    fn a_file_replaced_by_fix_dirs_makes_the_hard_linked_copy_safe() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_fixdir");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("repl")).unwrap();
+        let mut dm = HashMap::new();
+        dm.insert("a.txt".to_string(), file());
+        dm.insert("repl".to_string(), file());
+        let p = plan(&[], &["a.txt"], &["repl"]);
+
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect("fix-dirs removes the second name before the copy");
+    }
+
+    /// Removing both other names leaves one: the arithmetic that keeps the
+    /// preflight from refusing a default run that deletes two extras first.
+    #[test]
+    fn removing_both_other_names_makes_a_three_way_share_safe() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_three");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("b.txt")).unwrap();
+        std::fs::hard_link(dst.join("a.txt"), dst.join("c.txt")).unwrap();
+        let mut dm = HashMap::new();
+        for rel in ["a.txt", "b.txt", "c.txt"] {
+            dm.insert(rel.to_string(), file());
+        }
+        let mut p = plan(&[], &["a.txt"], &[]);
+        p.delete_files.push("b.txt".to_string());
+        p.delete_files.push("c.txt".to_string());
+
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect("both other names are removed before the copy");
+
+        p.delete_files.pop();
+        ensure_hard_linked_targets_safe(&p, &dm, &dst)
+            .expect_err("one surviving name still shares the inode");
     }
 
     /// **P7-2.** A strict link ancestor that is itself a planned `fix_dirs`

@@ -69,7 +69,10 @@ use crate::rw::{RwRuntime, RwSide};
 use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
-use plan::{build_plan, ensure_dirs_applicable, ensure_link_safe, ensure_mkdir_targets_free};
+use plan::{
+    build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
+    ensure_mkdir_targets_free,
+};
 use rename::rename_to_src_casing;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
@@ -345,6 +348,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // replaces it first. Today's planner always does; a future one that stops
     // must fail here, at plan time, rather than midway through apply.
     ensure_dirs_applicable(&plan, &dm)?;
+    // The copy guard's hard-link refusal must be a decision both modes take:
+    // `copy_one` runs only in a real run, and a dry run that reported `COPY` for
+    // a tree the real run refuses would answer a different question. A planned
+    // delete of the other name (the default run) is credited; one left in place
+    // (`--keep-extra`, or outside `dst`) is refused here.
+    ensure_hard_linked_targets_safe(&plan, &dm, &dst)?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),

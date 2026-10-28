@@ -442,6 +442,64 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
     );
 }
 
+/// **P7-4.** The hard-link refusal is a plan-time decision both modes take.
+///
+/// `copy_one` runs only in a real run, so a dry run used to report `COPY` and
+/// exit 0 for this tree while the real run exited 3. With `--keep-extra` the
+/// second name survives, so both modes refuse before any action record.
+/// Without it, the delete phase removes the second name first and both modes
+/// succeed — the preflight credits the planned delete instead of refusing every
+/// count above one.
+#[test]
+fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
+    let t = temp_root("hardlink_parity");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"NEW");
+    wfile(&dst, "a.txt", b"OLD");
+    std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "the kept second name makes the copy unsafe: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the copy: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        assert!(
+            !recs.iter().any(|r| r["event"] == "copy"),
+            "no COPY is reported for a copy that cannot run: {recs:?}"
+        );
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"OLD",
+            "the shared inode is untouched"
+        );
+        assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+    }
+
+    // The default plan deletes the extra name before the copy, which reduces the
+    // count to one. The dry run must reach that decision too.
+    let dry = run_binary(&src, &dst, &["--dry-run"], &envs);
+    assert_eq!(paths(&dry, "delete"), ["shared.txt"], "{dry:?}");
+    assert_eq!(paths(&dry, "copy"), ["a.txt"], "{dry:?}");
+    assert_eq!(rfile(&dst, "a.txt"), b"OLD", "the dry run changed nothing");
+
+    let real = run_binary(&src, &dst, &[], &envs);
+    assert_eq!(paths(&real, "delete"), ["shared.txt"], "{real:?}");
+    assert_eq!(paths(&real, "copy"), ["a.txt"], "{real:?}");
+    assert_eq!(rfile(&dst, "a.txt"), b"NEW");
+    assert!(!dst.join("shared.txt").exists());
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");
