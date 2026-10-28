@@ -344,6 +344,58 @@ fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
+/// **P6-1.** A dst file hidden by `--include` still blocks the `MKDIR` the plan
+/// derives from src's retained ancestor directory. Both modes must refuse it
+/// before the first filesystem change — including the case-only rename.
+#[test]
+fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
+    let t = temp_root("filtered_blocker");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "foo/bar.txt", b"new");
+    wfile(&dst, "foo", b"blocker");
+    // A case-only pair the insensitive rename pass would move first if the
+    // refusal were still taken after it. Same bytes and mtime, so casing is the
+    // only difference.
+    wfile(&src, "Other.txt", b"same");
+    wfile(&dst, "other.txt", b"same");
+    sync_mtime(&src.join("Other.txt"), &dst.join("other.txt"));
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [
+        &["--include", "*.txt", "--dry-run"][..],
+        &["--include", "*.txt"][..],
+    ] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a mkdir blocked by a filtered dst file must be a plan-time refusal: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("`foo`"), "names the blocker: {err}");
+        assert!(
+            err.contains("cannot create `foo`"),
+            "names the mkdir: {err}"
+        );
+        assert!(err.contains("as a file"), "says what is in the way: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        for action in ["mkdir", "copy", "rename", "fix-dir"] {
+            assert!(
+                !recs.iter().any(|r| r["event"] == action),
+                "no `{action}` runs before the refusal: {recs:?}"
+            );
+        }
+    }
+    assert_eq!(rfile(&dst, "foo"), b"blocker", "the blocker is untouched");
+    assert_eq!(
+        entry_names(&dst),
+        vec!["foo".to_string(), "other.txt".to_string()],
+        "the refusal precedes the case-only rename"
+    );
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");
