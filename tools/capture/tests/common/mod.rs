@@ -1091,13 +1091,22 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
         // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
         // request succeeds on the second attempt and the row must say `2`.
         if table.take_flaky_failure(&path).is_some() {
-            return write_response(
+            // The response is complete either way, so honour its `Connection:`
+            // header: returning here would close a connection the reply just
+            // advertised as reusable. The pool would then hand the retry a dead
+            // socket, which turns the armed `503` into a transport error and
+            // makes the retry count depend on whether the socket was reused.
+            write_response(
                 &mut stream,
                 503,
                 "text/plain",
                 b"armed to fail once",
                 keep_alive,
-            );
+            )?;
+            if !keep_alive {
+                return Ok(());
+            }
+            continue;
         }
 
         let outcome = match respond(table, &path, &query, tag.as_deref()) {
