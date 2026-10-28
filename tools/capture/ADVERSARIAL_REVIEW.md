@@ -42,6 +42,8 @@ created.
 | F11 | low | intentional-but-uncovered | `src/blobs/mod.rs:432` | A failed fetch leaves `.<id>.<slot>.tmp`; “the next run truncates it” holds only for the same id **and** slot. |
 | F12 | low | test gap | `src/emit/closeout.rs:637` | The closeout test checks 8 of the 11 skipped ids and uses containment, so A21–A23 can regress silently. |
 
+All twelve findings were fixed on `fix-gaps/gircap`; the Pass log records the commits.
+
 ---
 
 ### F1 — Forced `--files` admissions bypass the cumulative budget
@@ -529,32 +531,9 @@ resurrecting the old text.
 | C8 | “`cargo build -p gircap` — clean; `cargo test -p gircap` — all tests pass (≈622).” | **Not verified** at HEAD. HEAD is a revert of the reviewed series; no build or test was run for this review. | Do not cite the old pass count as evidence for HEAD. This review is source-level only. |
 | C9 | F3/F4: the `--require-class` and `--no-chunk-blobs` help-text fixes were applied. | HEAD is pre-fix: `cli/mod.rs:161` still says “Default: all” and `:187` still says “A7-A10.” | Re-report as F10; do not assume the help text is fixed at HEAD. |
 
-## Open questions / not verified
-
-- **F6 exploitability:** whether a live `getBuild`/`getGameBranches` endpoint
-  would echo a tag containing `\`, `:`, or `..`. The local path sink is real;
-  the network precondition is **not verified**. A local mock or proxy
-  (`--hyp-base`, `--sophon-base`) makes it reachable in tests.
-- **F8 exact runtime behavior:** which non-Unicode arguments clap accepts as
-  `PathBuf` versus rejects as `String`, and whether the panic is 101 on every
-  Windows host. Reasoned from the source, **not run**.
-- **F7 intent:** whether refusing a metadata-only run on the hypothetical chunk
-  ceiling is deliberate. The help and spec do not say so; treat as a bug until
-  documented.
-- **F5 real-world impact:** whether production CDNs return large non-2xx bodies.
-  The code path is real; the frequency is **not verified**.
-- **F11 accumulation:** how often a failed chunk moves to a different slot on the
-  next run. The orphan is real; the rate is **not verified**.
-- **F1 practical coverage:** whether `blobs::plan`’s `projected` check catches
-  the over-admission in a given corpus. It is a different number and cannot be
-  relied on as a guarantee.
-- **F4 consumer expectations:** whether any harness depends on the exact
-  `fetches_failed` count. The double-count is source-verified; downstream impact
-  is **not verified**.
-- **Old review’s test count:** the “≈622 pass” figure is from `f9352f7` and is
-  **not verified** at HEAD.
-
 ## Recommended landing order
+
+All nine steps landed on `fix-gaps/gircap`; the Pass log records the commits.
 
 1. **F1 + F2 + F9** — one selection/budget change. F1 is the high-severity
    ceiling violation; F2 and F9 are the same forced-loop code. Add the
@@ -579,326 +558,136 @@ resurrecting the old text.
 
 ---
 
-## Implementation progress
+## Pass log
 
-Landed on `fix-gaps/gircap` in the order above. Every finding is addressed; the
-notes below name the choices where the review offered more than one, so a
-maintainer can overrule one without re-reading the diff.
+> Detailed evidence, failure scenarios and per-pass verification are in the git
+> history: `git log --oneline main..HEAD`, `git show <commit>`. The commit hashes
+> in the tables are the index. No item in any pass was rejected as invalid or out
+> of scope.
 
-| Finding | Status | Commit | What landed |
+### First pass — F1–F12 (all fixed)
+
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| F1 | fixed | `39304be`, `abe7bdc`, `998649c` | Phase 0 charges the caller's `budget` in place (the separate `spent` ledger is gone) and passes it to phase 2, so forced admissions share one cumulative limit. Test: two 60 B forced paths under a 100 B cap admit exactly one. Second pass removed the now-dead, unclamped `Budget::with_spent` and made `matrix.json` report the charged ledger, with a debug assertion tying it to `bytes_admitted`. |
-| F2 | fixed | `39304be` | A refused forced path is recorded in `rejected` and the loop `continue`s instead of `break`ing; later forced paths are still considered. Duplicate refused ids are deduped. |
-| F3 | fixed | `83eac6d`, `d8514c7` | A forced path whose candidate answers no matrix class is recorded in the new `Selection::forced_unscored` and summarised as `forced_files_unscored`; `decide` warns. Measured-fixture and matrix integration assertions added. Second pass added an end-to-end capture with a nonzero value. Field choice flagged below. |
-| F4 | fixed | `f31850b`, `583aa79` | `Store::one` returns the slot with the error, so `fill` records the row and the failure together: one `fetches_failed` entry per failed chunk, no hole, and the real reason in `decode_error`. Dead-port test asserts the count and the reason. Second pass logs the downcast `JoinError` payload and corrects `fill.rs`'s error-order doc. |
-| F5 | fixed | `71a1321`, `0259220` | Error bodies are drained through a counting `drain_error_body` with the declared-length precheck and a running-total stop. The status is always preserved (never `Transport`), partial bytes are recorded, and a 404 is still never retried. Three HTTP tests. Second pass logs a mid-read failure and documents what a zero count means. |
-| F6 | fixed | `efc5322`, `de85df2` | Tag validation refuses `\`, `:`, path prefixes, and backslash-separated traversal before interpolation. Second pass closes the API hole: `VersionPair::select` validates the resolved `main.tag`/`diff_tags[0]` before `pair_dir` sees them, and rejects Windows-reserved characters and leading/trailing dots. |
-| F7 | fixed | `801d91d` | `blobs::plan::plan` takes `no_chunk_blobs` and skips `check_byte_ceiling` on a metadata-only run; the plan ceiling is documented as a guard (`projected <= bytes_admitted <= cap`), not a second budget. |
-| F8 | fixed | `df366ee` | `recorded_argv` builds the recorded argv from `args_os` lossily; `main` uses it. Unit test for an unpaired surrogate and an end-to-end test that a non-Unicode `--out` still exits with its normal code and prints `SUMMARY`. |
-| F9 | fixed | `39304be` | Repeated `--files` paths are a usage error in `validate_paths`, so no duplicate ids or rows and no overwritten patchmap. |
-| F10 | fixed | `4dd1c05` | Both help strings corrected. A CLI-contract test pins them; it compares whitespace-normalised output because clap strips the trailing period and wraps the line. |
-| F11 | fixed | `882a53b`, `7c64557` | The temp file is removed best-effort on every error between creating and renaming it, after the handle is dropped (Windows). Removal failure is logged, never substituted for the fetch error. Test: the dead-port fetch leaves `chunks/blobs/` empty. Second pass corrected the doc: a panic still unwinds past the cleanup, and the module no longer claims a `tmp/` staging directory it does not use. |
-| F12 | fixed | `4dd1c05`, `d538d4d` | The closeout test compares the whole `SKIPPED_WITHOUT_CHUNK_BLOBS` constant as the declared subset instead of eight contained ids. Second pass replaced the self-referential expectation with an independent eleven-id literal and pins the constant to it. |
+| F1 | Forced `--files` admissions bypass the cumulative budget. | fixed | `39304be`, `abe7bdc`, `998649c` |
+| F2 | A budget-refused forced path `break`s and silently drops later paths. | fixed | `39304be` |
+| F3 | A forced path that answers no matrix class is silently dropped. | fixed | `83eac6d`, `d8514c7` |
+| F4 | A failed chunk fetch loses its index, is double-counted and hides its cause. | fixed | `f31850b`, `583aa79` |
+| F5 | Non-2xx bodies are drained without the response ceiling. | fixed | `71a1321`, `0259220` |
+| F6 | Tag validation accepts Windows separators and path prefixes. | fixed | `efc5322`, `de85df2` |
+| F7 | `--no-chunk-blobs` still enforces the chunk-byte ceiling. | fixed | `801d91d` |
+| F8 | Non-Unicode `--out`/`--log-file` panics in `main`. | fixed | `df366ee` |
+| F9 | Duplicate `--files` entries produce duplicate ids and rows. | fixed | `39304be` |
+| F10 | CLI help contradicts the code and the spec. | fixed | `4dd1c05` |
+| F11 | A failed fetch can orphan `.tmp` files; the comment overstates cleanup. | fixed | `882a53b`, `7c64557` |
+| F12 | The closeout skip-set test checks only 8 of 11 ids. | fixed | `4dd1c05`, `d538d4d` |
 
-### Second pass
+### Second pass — residuals against F1–F12
 
-A reviewer re-derived every finding from source at `b726054`, then re-ran the
-suite. All twelve were confirmed fixed or partly fixed, and the review named one
-blocking residual plus eight smaller ones. Each was verified again against the
-tree, and all were accepted; none was dismissed as invalid or out of scope.
+Re-derived at `b726054`; all items accepted, and F1, F2, F7, F8, F9 and F10 needed no change.
 
-| Item | Verdict | Commit | Resolution |
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| F6 residual: API-resolved tags reach `pair_dir` unvalidated (**blocking**) | valid, fixed | `de85df2` | `VersionPair::select` now runs the shape validator on the resolved `main.tag` and `diff_tags[0]` before the pair is named, prefixed with the source (`main.tag`, `diff_tags[0]`). The hostile-`BranchParams` test asserts `..\..\escape` is rejected before any directory is reachable. |
-| Windows-reserved `* ? " < > \|` accepted in tags | valid, fixed | `de85df2` | Rejected by the same validator, so the run fails at selection instead of at `create_dir_all` after the network work. |
-| Trailing/leading `.` collides on Windows | valid, fixed | `de85df2` | A leading or trailing `.` is rejected. Trailing dots are stripped by Windows, so `7.1.0.` and `7.1.0` would otherwise share one pair directory; the rationale is in the validator and `docs/01-artifact-schema.md`. |
-| F4: `fill.rs` says errors are in `wants` order | valid, fixed | `583aa79` | The doc now says completion order (`JoinSet::join_next`). No consumer zips the two lists, so this is documentation only. |
-| F4: panic payload discarded | valid, fixed | `583aa79` | The `JoinError` is downcast and its message logged before the hole-fill records the stable generic row text. Test: a panicking chunk task reports its message. |
-| F5: mid-read error-body failure is silent | valid, fixed | `0259220` | Logged at debug with the URL and error; the status is still preserved and the partial count kept. The `bytes_in = 0` meaning on a declared-over-cap body is now stated in the schema doc: bytes of body read, not header bytes. |
-| `Budget::with_spent` dead and unclamped | valid, fixed | `abe7bdc` | Removed; no caller remained after phase 0 started charging in place. |
-| `matrix.json` reports `bytes_admitted`, not the charged ledger | valid, fixed | `998649c` | The document now reports `budget.spent()`, and a debug assertion plus a matrix test tie it to `bytes_admitted`. |
-| Test gap: nonzero `forced_files_unscored` end to end | valid, fixed | `d8514c7` | `World::with_degenerate_file` / `DEGENERATE_PATH` drive a capture whose forced path answers no class; the matrix test asserts `1` in the summary and JSON. |
-| F12: expectation derived from the constant under test | valid, fixed | `d538d4d` | The test now compares `skipped()` filtered by the constant against an independent eleven-id literal, which is also asserted equal to the constant. |
-| F11: doc overstates the cleanup guarantee | valid, fixed | `7c64557` | “Never orphaned” became the exact rule: removed best-effort on every handled error after the handle is dropped; a panic unwinds past it. The module's stale `tmp/` staging claim is gone; the remaining `tmp/` phrases in the schema and design notes were removed by G2 (`b1b035b`). |
+| F6 residual | API-resolved tags reach `pair_dir` unvalidated (blocking). | fixed | `de85df2` |
+| F6 reserved | Windows-reserved `* ? " < > \|` accepted in tags. | fixed | `de85df2` |
+| F6 dots | A leading or trailing `.` collides on Windows. | fixed | `de85df2` |
+| F4 order | `fill.rs` says errors are in `wants` order. | fixed (doc) | `583aa79` |
+| F4 panic | A panicking chunk's `JoinError` payload is discarded. | fixed | `583aa79` |
+| F5 log | A mid-read error-body failure is silent. | fixed | `0259220` |
+| F1 budget | `Budget::with_spent` is dead and unclamped. | fixed | `abe7bdc` |
+| F1 matrix | `matrix.json` reports `bytes_admitted`, not the charged ledger. | fixed | `998649c` |
+| F3 test | Missing end-to-end test for a nonzero `forced_files_unscored`. | fixed (test) | `d8514c7` |
+| F12 test | The expectation is derived from the constant under test. | fixed (test) | `d538d4d` |
+| F11 doc | The doc overstates the cleanup guarantee. | fixed (doc) | `7c64557` |
 
-F1, F2, F7, F8, F9 and F10 were re-checked against source and their tests and
-needed no change. With `de85df2` landed, the blocking F6 residual is closed: the
-flag path and the API path now reach `pair_dir` through the same validator.
+### Third pass — G1–G3
 
-### Third pass
+Re-derived at `577c399`; all three confirmed valid.
 
-A reviewer re-derived every F1–F12 verdict from source at `577c399`, then
-re-ran the suite, and reported three new findings in G1–G3. All twelve earlier
-fixes were present, and all three new findings were confirmed valid. None was
-dismissed as invalid or out of scope.
-
-| Item | Verdict | Commit | Resolution |
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| G1: document-supplied paths reach filesystem joins unvalidated (**blocking**) | valid, fixed | `88d5413` | One shared validator now guards every document-supplied artifact path. A new `src/paths.rs` owns `relative_path_problem` (empty, `\`, absolute, `:`, `..`, empty component, control characters) and `chunk_id_problem` (the documented `<16 hex>_<32 hex>` shape, case-insensitive hex). `manifest::capture` runs both over the decoded manifest, `GameConfigs::audio_pkg_scan_dir` and `Captured::validate` reject an escaping scan directory, and `ChunkSource::decoded` refuses an escaping `stored_path` on read. Three end-to-end hostile-input tests plus unit tests. |
-| G2: `tmp/` staging and universal-atomicity claims | valid, fixed | `b1b035b` | The `emit` module comment, the schema's "through a `tmp/` file" phrase and the design-note shorthand now say what the code does: only chunk blobs use a dot-prefixed temp file beside their final path; metadata, `game/`, `expected/` and `manifests/*` are plain create-and-write, and `checksums.json` is the completion proof. |
-| G3: the "three causes" of a null `stored_path` omit `--no-chunk-blobs` | valid, fixed | `b1b035b` | The schema now names four causes, split by whether a fetch was attempted: the three failure causes carry `decode_error`; a metadata-only row carries null `stored_path`, `decode_error` and `verified`, empty **compressed** digests, and the manifest's declared `md5_decompressed` and `uncompressed_size`, and means "not measured" (H4 below corrected the original "empty digests" wording). It cross-references the A6–A12 skip note. |
+| G1 | Document-supplied paths reach filesystem joins unvalidated (blocking). | fixed | `88d5413` |
+| G2 | `tmp/` staging and universal-atomicity claims. | fixed | `b1b035b` |
+| G3 | The "three causes" of a null `stored_path` omit `--no-chunk-blobs`. | fixed | `b1b035b` |
 
-Two test-harness defects surfaced while verifying the fix and are recorded
-separately, because they are not product findings:
+Two test-harness defects were fixed alongside: the `hyp` fixture lacked the now-required `audio_pkg_scan_dir` (`6003958`), and the mock's armed `503` sent `keep-alive` then closed (`66bc6f0`).
 
-| Item | Verdict | Commit | Resolution |
+### Fourth pass — H1–H4
+
+Re-derived at `1cbf2f1`; all four confirmed valid; H1 was reproduced end to end before the fix.
+
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| The `hyp` config fixture omitted `audio_pkg_scan_dir`, now required by `Captured::validate` | valid, fixed | `6003958` | The mock `getGameConfigs` body carries a realistic scan directory. |
-| The mock answered an armed `503` with `Connection: keep-alive` and then closed the socket | valid, fixed | `66bc6f0` | The armed branch now honours the header it sent: it continues a reusable connection and closes only when asked. This removed a pre-existing retry-count flake where the pool sometimes reused the closed socket, turning the retry into a status-`0` transport error plus a second log row. |
+| H1 | `verify`/`materialize` still join document paths unvalidated (**high**). | fixed | `0a21ebe` |
+| H2 | `--audio` becomes `matching_field` and reaches manifest filenames raw. | fixed | `0b55a40` |
+| H3 | The path rule accepts names Windows folds together. | fixed | `c9caa02`, `b6aeb6d` |
+| H4 | The `--no-chunk-blobs` schema row contradicts `unmeasured`. | fixed (doc) | `c9bf161` |
 
-**Third-pass choices a maintainer may want to revisit.** The shared validator
-rejects `\`, absolute paths, `:`, `..`, empty components and control characters
-on every host, not only Windows. A chunk id must match the documented
-`<16 hex>_<32 hex>` shape rather than merely being a single component, so a live
-build with an unusual spelling would now be refused rather than fetched. Both
-rules are deliberately stricter than the minimum needed to stop traversal, and
-both fail at the boundary instead of sanitising a hostile value.
+### Fifth pass — I1–I5
 
-### Third-pass verification
+Re-derived at `9b60455`; all five confirmed valid; I1 and I2 were reproduced at the real seam before the fix.
 
-| Command | Second pass (`d8514c7`) | Third pass (`66bc6f0`) |
-|---|---|---|
-| `cargo build -p gircap` | finished, no warnings | finished, no warnings |
-| `cargo test -p gircap` | 640 passed, 0 failed (506 lib + 134 integration) | 649 passed, 0 failed (512 lib + 137 integration) |
-| `cargo clippy -p gircap --all-targets` | finished, no warnings | finished, no warnings |
-| `cargo fmt -p gircap --check` | clean | clean |
-
-The third-pass integration total is 3 + 8 + 32 + 2 + 30 + 9 + 29 + 9 + 15. No
-test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
-`#[cfg(windows)]` tests ran. `capture_layout` was run six more times after the
-keep-alive fix, 32/32 each time, to confirm the retry test is no longer
-timing-dependent.
-
-### Fourth pass
-
-A reviewer re-derived every F1–F12 and G1–G3 verdict from source at `1cbf2f1`,
-then traced each of the three guarded values to every other sink that consumes
-it, and reported four findings H1–H4. All four were confirmed valid; none was
-dismissed as invalid or out of scope. H1 was reproduced end to end before the
-fix: `Bundle::open` accepted `stored_path: "../../../outside.zst"` and
-`materialize` wrote `expected/../../../escaped.dll` and
-`game/../../../escaped.dll` (exit `3`).
-
-| Item | Verdict | Commit | Resolution |
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| H1: `verify`/`materialize` still join document paths unvalidated (**high**) | valid, fixed | `0a21ebe` | `Bundle::open` runs `validate_document_paths` over the manifest's `capture.id`, every index `stored_path` and `referenced_by[].path`, and every patchmap `path`, naming the field and value. The A6/A18 joins and the materialize destination join keep their checks as defence in depth. Three crafted-bundle tests in `tests/offline_bundle.rs` failed before the fix and pass after: an escaping `stored_path` is refused by `open` and by `verify`, an escaping patchmap/reference path makes `materialize` exit `1` with nothing outside `--out`, and `capture.id: "../../escape"` is refused. |
-| H2: `--audio` becomes `matching_field` and reaches manifest filenames raw (**medium**) | valid, fixed | `0b55a40` | `paths::field_component_problem` — the path rule plus "no `/`" — is applied in `config::validate_audio`, in `manifest::capture` for a field selected from the build document, and in `manifest::dump::write` before the first write. Unit tests cover `a/b`, `/abs`, `a\b`, `../x`, `..` and the empty field at the flag and the dump. |
-| H3: the path rule accepts names Windows folds together (**low**) | valid, fixed | `c9caa02`, `b6aeb6d` | `relative_path_problem` now refuses a `.` component and any component ending in `.` or a space on every host, so `a/b`, `a/b.` and `a/b ` no longer name one file on Windows. The same rule refuses a reserved DOS device name (`CON`, `NUL`, `COM1`, `CONIN$`, with or without an extension), which Windows resolves to a device instead of creating a file. Unit tests pin both refusals, keep `a/b.c`, `a/7.1.0`, `a/.hidden`, `a/CONSOLE` and `a/COM0` legal, and a `manifest::tests` case pins that an entry is refused before any tree write. |
-| H4: the `--no-chunk-blobs` schema row contradicts `unmeasured` (**low**, doc) | valid, fixed | `c9bf161` | The schema now says what an unmeasured row carries: null `stored_path`/`verified`/`decode_error`, `bytes: 0`, empty compressed digests, and the manifest's **declared** `md5_decompressed` and `uncompressed_size`. The `BlobProps::unmeasured` and field comments say the same. |
+| I1 | Two distinct forced paths of one primary class share a `capture_id`. | fixed | `afc08bd` |
+| I2 | A failed `2xx` body is recorded with `bytes_in: 0`. | fixed | `f631c5c` |
+| I3 | Duplicate patchmap ids are silently collapsed. | fixed | `34de040` |
+| I4 | `list` silently skips unreadable directories and failed entries. | fixed | `5d24494` |
+| I5 | `dump::write` validates the field but not the tag. | fixed | `f20ee4c` |
 
-**Fourth-pass choices a maintainer may want to revisit.** The validator now
-rejects `.`, trailing dots and spaces, and DOS device names on every host, not
-only Windows: a live manifest path ending in a space, or a Unix-legitimate file
-named `aux`/`con.txt`, would be refused rather than captured. `--audio` is now
-one file-name component, so a value containing `/` is a usage error even though
-the API might never publish it. H1 validates once at `Bundle::open` instead of
-at each read; the older sink checks remain, so a future document field needs the
-same single addition to `validate_document_paths`.
+### Sixth pass — J1–J3
 
-### Fourth-pass verification
+Re-derived at `ecc81c5`; all three confirmed valid; J1 was reproduced with a share-locked reference manifest (exit `0` before, usage error after).
 
-| Command | Fourth pass (`c9bf161`) |
-|---|---|
-| `cargo build -p gircap` | finished in 0.50s, no warnings |
-| `cargo test -p gircap` | 658 passed, 0 failed (518 lib + 140 integration) |
-| `cargo clippy -p gircap --all-targets` | finished in 19.86s, no warnings |
-| `cargo fmt -p gircap --check` | clean |
-
-The fourth-pass integration total is 3 + 8 + 32 + 2 + 30 + 9 + 29 + 12 + 15;
-`offline_bundle` grew from 9 to 12 tests and `lib` from 512 to 518. No test is
-`#[cfg(unix)]`, so none was skipped on this Windows host; the `#[cfg(windows)]`
-tests ran. A probe outside the repository
-(`E:\Symlinks\Temp\opencode\pathprobe`) confirmed `game/a/b` and `game/a/b.`
-name one file; the new unit tests are the in-repository guard.
-
-### Fifth pass
-
-A reviewer re-derived every F1–F12, G1–G3 and H1–H4 verdict from source at
-`9b60455`, then re-ran the suite, and reported five findings I1–I5. All five were
-confirmed valid; none was dismissed as invalid or out of scope. I1 and I2 were
-reproduced at the real seam before the fix: a capture with two forced `added`
-paths produced six patchmaps instead of seven (`verify` rebuilt six), and a
-`2xx` body truncated mid-read recorded `bytes_in: 0` for 28 bytes sent, on both
-the memory and file destinations.
-
-| Item | Verdict | Commit | Resolution |
+| ID | Finding | Status | Commit |
 |---|---|---|---|
-| I1: two distinct forced paths of one primary class share a `capture_id` (**medium**) | valid, fixed | `afc08bd` | Phase 0 numbers forced admissions per class with a `BTreeMap<Class, usize>`, incrementing for every forced path whether admitted or refused, so the rejection record carries the id the path would have written. Two `added` paths become `added` and `added+1`. `emit::fixture::record` also refuses a duplicate `capture_id` before the first write, so a hand-built `Selection` cannot overwrite a patchmap. Tests: `two_forced_paths_of_one_class_get_distinct_ids` (unit; pre-fix ids `["added", "added"]`) and `two_forced_paths_of_one_class_keep_distinct_patchmaps` (end to end; pre-fix six files and `captures_rebuilt: 6`). |
-| I2: a failed `2xx` body is recorded with `bytes_in: 0` (**low**, accounting) | valid, fixed | `f631c5c` | `drain_capped` returns `Result<u64, (ApiError, u64)>`, so the running total travels with the failure. Both destination failure closures take `bytes_in`, and the probe's read-failure branch records `seen`. A declared over-ceiling response, or a failure before any byte, still reports `0`. Tests: `a_truncated_success_body_is_priced_at_what_arrived` and `..._for_a_file_too`, one per closure; both failed pre-fix with `0` against 28 sent. |
-| I3: duplicate patchmap ids are silently collapsed (**low**, omitted error) | valid, fixed | `34de040` | `read_patchmaps` propagates `read_dir` entry errors and keeps a `capture_id -> path` map, refusing a repeated id with both file names. It stays keyed by the declared id; a filename is still **not** required to equal it, and that trade-off is documented. Test: `two_patchmaps_declaring_one_capture_id_are_refused` copies a patchmap to `added+1.json` unchanged; pre-fix `Bundle::open` succeeded and rebuilt one capture. |
-| I4: `list` silently skips unreadable directories and failed entries (**low**, omitted error) | valid, fixed | `5d24494` | The walk moved into `verify::list_with`, which takes an injected reader; `child_dirs` returns `Err` naming the directory or entry when `read_dir` fails, an entry fails, or an entry cannot be stat'ed (the old `is_dir()` treated a failed stat as “not a directory”). `run::list` already maps the error to a usage failure, so the exit status is `1` and the detail names what could not be read. Tests: three `child_dirs` arms plus `a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering`. `docs/00-spec.md` now states the fail-fast rule. |
-| I5: `dump::write` validates the field but not the tag (**low**, latent) | valid, fixed | `f20ee4c` | `config::tag_shape_problem` is `pub(crate)` and `manifest::dump::write` calls it beside the field check, before the first `create_dir_all`/write, returning `InvalidInput` with `manifest tag {problem}`. The CLI already validates both resolved tags; this closes the writer's own defence for a hand-built `CapturedManifest`. Test: `a_tag_that_names_a_path_is_refused_before_anything_is_written`, mirroring the H2 field test and asserting no tree or escaped file was created. |
+| J1 | `list` treats a `MANIFEST.json` it cannot read as "not a bundle", so a real bundle vanishes with exit `0`. | fixed | `0706984`, `43d5977`, `3f042a1` |
+| J2 | The `list` doc promises "deepest first"; the code sorts by relative-path string. | fixed (doc) | `28c3c18`, `d74e40b` |
+| J3 | The `list` command doc calls a refused bundle "a skip" and omits I4's fail-fast usage error. | fixed (doc) | `73d0cb5` |
 
-**Fifth-pass choices a maintainer may want to revisit.** Forced paths are
-numbered per primary class rather than refused as a duplicate-class usage error,
-so a caller can still force two paths that answer one class. Phase 1's `taken`
-deliberately starts at zero, not at the forced count: starting it at the forced
-count would turn a class whose capture was refused by the budget into
-`Unavailable` and break `a_class_whose_capture_was_refused_is_over_budget_not_absent`.
-The matrix still resolves a class to its first admission, which is now the
-patchmap that describes that path. `list` fails fast rather than collecting a
-`skipped` list, so a transient stat failure aborts an audit; the alternative
-would have kept a partial answer. A patchmap's filename remains
-non-authoritative, so `added+1.json` may declare `added` only if no other
-document claims it; requiring stem equality was rejected because the field is
-the identity. The writer's tag check duplicates the CLI's earlier validation by
-design, as the field check already did.
+### Decisions that still constrain current behaviour
 
-The fifth-pass working note (since folded into this section and deleted) said the
-offline HTTP tests could not inject a mid-body transport error. That was wrong:
-the existing `local_server` harness already supports it
-(`Answer { claim, omit_length }` promises more than is sent, then closes), and the
-two I2 tests use it.
+- **F1/F2/F9.** Forced paths share one cumulative budget; a refusal is recorded and the loop continues; duplicate `--files` paths are a usage error.
+- **F1 matrix.** `matrix.json` reports the charged ledger, with a debug assertion tying it to `bytes_admitted`.
+- **F5.** An error body is drained through a counting cap, but the status is always preserved, partial bytes are recorded, and a 404 is never retried.
+- **F6/G1.** One shared validator covers every document-supplied path: no `\`, absolute path, `:`, `..`, empty component or control character on any host; tags also refuse Windows-reserved characters and leading/trailing dots. A chunk id must match `<16 hex>_<32 hex>` (case-insensitive), not merely be one component.
+- **F3.** A classless forced path is reported in `forced_unscored`/`forced_files_unscored`, not overloaded onto `forced_skipped`.
+- **F4.** The fetch reason goes in `decode_error`; a dedicated `fetch_error` remains open.
+- **F7.** A metadata-only run does not enforce a chunk wire-byte ceiling it pays nothing towards.
+- **F8.** Recorded argv is lossy, not byte-exact; replay would need a raw-bytes companion.
+- **F11.** A handled fetch error removes the temp file best-effort after the handle is dropped; a panic unwinds past cleanup.
+- **F12.** The closeout test pins an independent eleven-id literal and asserts it equals the constant.
+- **H1.** `Bundle::open` validates document paths once; the older sink checks remain as defence in depth.
+- **H2/H3.** `--audio` is one file-name component; names Windows folds together (trailing dot/space) and DOS device names are refused on every host.
+- **I1.** Forced admissions are numbered per primary class; phase 1's `taken` still starts at zero so a budget-refused class stays over-budget, not absent; the matrix resolves a class to its first admission.
+- **I3.** A patchmap is keyed by its declared `capture_id`; its filename is not authoritative.
+- **I4/J1.** `list` fails fast on an unreadable directory, entry or manifest; a non-bundle is stepped over and a refused bundle is named and counted.
+- **I5.** The manifest writer repeats the CLI's tag validation by design.
+- **J2.** `list` orders by relative path, not deepest-first; deepest-first would be a new contract.
 
-### Fifth-pass verification
-
-| Command | Fifth pass (`f20ee4c`) |
-|---|---|
-| `cargo build -p gircap` | finished in 18.89s, no warnings |
-| `cargo test -p gircap` | **668 passed, 0 failed** (526 lib + 142 integration) |
-| `cargo clippy -p gircap --all-targets` | finished in 38.73s, no diagnostics |
-| `cargo fmt -p gircap --check` | exit 0, no output |
-
-The fifth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 13 + 15;
-`lib` grew from 518 to 526, `matrix` from 9 to 10 and `offline_bundle` from 12
-to 13, for ten new tests over the fourth-pass 658. No test is `#[cfg(unix)]`, so
-none was skipped on this Windows host; the `#[cfg(windows)]` tests ran.
-
-### Sixth pass
-
-A reviewer re-derived every F1–F12, G1–G3, H1–H4 and I1–I5 verdict from source
-at `ecc81c5`, re-ran the suite, and reported three findings J1–J3. All three were
-confirmed valid; none was dismissed as invalid or out of scope. J1, the only
-behavioural one, was reproduced with the real binary against the reference
-bundle before and after the fix.
-
-| Item | Verdict | Commit | Resolution |
-|---|---|---|---|
-| J1: `list` treats a `MANIFEST.json` it cannot **read** as "not a bundle", so a real bundle vanishes with exit `0` (**medium**, omitted error) | valid, fixed | `0706984`, `43d5977`, `3f042a1` | The walk's `is_file()` probe passed while a share lock was held, and `schema_version_of(...).is_ok()` flattened the read failure to "no version": `bundles=0`, `bundles_unreadable=0`, `result=ok`, exit `0`, one WARN. It now probes through `probe_manifest`, which returns `Missing`, `NotABundle(reason)` or `Version(u32)`, plus `Err` naming the path and the I/O error when the stat or read fails. `Missing`/`NotABundle` keep the documented step-over; `Err` fails the walk and reaches the existing `Failure::usage` mapping. `schema_version_of` is the `Bundle::open` wrapper over the same probe, so open's texts are unchanged. The manifest reader is injected into `list_with` like the directory reader. Tests: the injected-reader regression (verified to fail with the reader ignored, which is the pre-fix `fs::read` behaviour) and a stat-arm probe. `43d5977` keeps the old "a `MANIFEST.json` that is not a file is no manifest, keep descending" behaviour so only a failure that could hide a bundle aborts. |
-| J2: the `list` doc promises "deepest first"; the code sorts by relative-path string (**low**, doc) | valid, fixed | `28c3c18`, `d74e40b` | The doc now says both lists are sorted by relative path and that the order is **not** deepest-first. The spec promises no order and the summary's `first`/`last` read the sorted list, so changing the worked-over walk was the larger, unnecessary change; `list_orders_bundles_by_relative_path_not_by_depth` builds two real fixture bundles, nests one under `z_region/`, and asserts the shallower `hk4e_global/...` sorts first. |
-| J3: the `list` command doc still calls a refused bundle "a skip" and omits I4's fail-fast usage error (**low**, doc) | valid, fixed | `73d0cb5` | `run::list` now names the three arms: a non-bundle is stepped over, a bundle this build refuses is named on stderr and counted as `bundles_unreadable`, and a directory, entry or manifest the walk cannot read stops the command with a usage error (exit `1`, `result=error`). The record-shape rationale for not writing a `BUNDLE` record for a non-bundle stays. `docs/00-spec.md:889-893` now names an unreadable manifest too. |
-
-**J1 reproduction.** With `artifacts/hk4e_global/7.0.0__7.1.0/20261021T141336Z`'s
-`MANIFEST.json` held by `[System.IO.File]::Open($m, 'Open', 'Read', 'None')`:
-before (`ecc81c5`) `result=ok bundles=0 bundles_unreadable=0`, exit `0`, one
-`WARN ... skipped`; after (`3f042a1`) `result=error exit_code=1
-exit_code_slug=usage`, with `detail=cannot read ...MANIFEST.json: The process
-cannot access the file ... (os error 32)`. Unlocked after the fix:
-`bundles=1 bundles_passing=1 bundles_unreadable=0`, exit `0`. The corrupt-JSON
-fixture still steps over and the v1 fixture is still named, so the three arms
-remain distinct.
-
-**Sixth-pass choices a maintainer may want to revisit.** J1 fails fast for any
-stat or read failure other than `NotFound`, including a manifest that disappears
-between the stat and the read; that is deliberate, because the walk cannot prove
-it was not a bundle. A manifest path that is not a regular file is still treated
-as absent, so the walk keeps descending there, as `is_file() == false` did. The
-ordering question in J2 is answered by the doc rather than the walk: if a
-consumer needs deepest-first, that is a new contract and needs its own walk
-change and test. J3 is documentation only, but it is now the contract the
-command and the spec both implement.
-
-#### Sixth-pass verification
-
-| Command | Sixth pass (`8032442`) |
-|---|---|
-| `cargo build -p gircap` | finished in 0.48s, no warnings |
-| `cargo test -p gircap` | **671 passed, 0 failed** (528 lib + 143 integration) |
-| `cargo clippy -p gircap --all-targets` | finished in 14.00s, no diagnostics |
-| `cargo fmt -p gircap --check` | clean |
-
-The sixth-pass integration total is 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15;
-`lib` grew from 526 to 528 for the two J1 tests and `offline_bundle` from 13 to
-14 for the J2 ordering test, three new over the fifth-pass 668. No test is
-`#[cfg(unix)]`, so none was skipped on this Windows host; the `#[cfg(windows)]`
-tests ran.
-
-### Choices a maintainer may want to revisit
-
-- **F3 summary field.** `forced_unscored` / `forced_files_unscored` is a new
-  field rather than an overload of `forced_skipped`. The latter already means
-  "forced path refused before selection" (budget, missing, duplicate), and the
-  empty-class case is "selected but classless"; merging them would make the
-  summary key unable to distinguish the two.
-- **F4 reason field.** The fetch reason goes in `decode_error`, the field A6
-  already reads to ask why a blob is unusable. A dedicated `fetch_error` would
-  describe the case more precisely but needs an artifact-schema change; that
-  remains open. A panicking chunk now logs its `JoinError` payload, but the
-  index row still carries the stable generic text, not the panic message.
-- **F6 tag policy.** The validator rejects characters that are legal on Unix but
-  reserved on Windows (`* ? " < > |`), and leading/trailing dots. This is
-  deliberately stricter than the API contract needs on Unix; it keeps one tag
-  set usable on every host and keeps pair directories injective. A leading dot
-  is rejected too, although only the trailing one is known to collide.
-- **F7 semantics.** The behaviour now matches the help and the spec: a
-  metadata-only run does not enforce a wire-byte ceiling it pays nothing
-  towards. If the ceiling was meant as an input-independent policy check, the
-  skip should be reverted and the help changed instead.
-- **F8 recorded argv.** The lossy string is not byte-exact on Unix either. If a
-  bundle is ever replayed, it needs a raw-bytes companion; that is schema work,
-  not a fix.
-- **F11 cleanup vs comment.** Cleanup was chosen, so the old comment is gone
-  rather than corrected. Orphans left by older binaries are still not swept;
-  a store-creation sweep with an age guard remains a possible follow-up.
-
-### Second-pass verification
-
-Run at `d8514c7` (the last code/test commit; the documents below and this
-section change no code):
+### Verification (latest: sixth pass, `8032442`)
 
 | Command | Result |
 |---|---|
 | `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | 640 passed, 0 failed (506 lib + 134 integration) |
-| `cargo clippy -p gircap --all-targets` | finished, no warnings |
+| `cargo test -p gircap` | **671 passed, 0 failed** (528 lib + 143 integration) |
+| `cargo clippy -p gircap --all-targets` | finished, no diagnostics |
 | `cargo fmt -p gircap --check` | clean |
 
-No test is `#[cfg(unix)]`, so none was skipped on this Windows host; the
-`#[cfg(windows)]` tests ran.
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 14 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran.
 
-### Still unverified
+## Open for maintainers
 
-- G1: whether a live `getBuild`/`getGameConfigs` can be induced to serve the
-  hostile values. The local sinks and rejection paths are now tested end to
-  end; the network precondition is the same one F6 already accepts.
-- G1: the full set of live chunk-id spellings. The exact documented
-  `<16 hex>_<32 hex>` shape is enforced; an unusual but legitimate spelling
-  would be refused.
-- G1: whether a live API returns an `audio_pkg_scan_dir` the path rule rejects,
-  for example a Windows-separated value. The run fails fast naming the field;
-  no live corpus was sampled.
-- G2: whether a metadata document can be left torn in a way `checksums.json`
-  fails to detect at closeout. The writer is not atomic; a crash between the
-  last document and the checksum pass was not stress-tested.
-- F6: whether a live `getBuild`/`getGameBranches` would echo a tag containing
-  `\`, `:`, or `..`. The local sink and both rejection paths (flags and
-  API-resolved tags) are tested; the network precondition is not.
-- F5: real production error-body sizes, so the practical effect of the cap is
-  unknown; the code path and the 404/truncation tests are real.
-- F11: how often a failed chunk moves to a different slot on the next run. The
-  leak is removed per run; the historical accumulation rate is not measured,
-  and a panic still unwinds past the cleanup.
-- F8: which non-`PathBuf` argument types clap accepts non-Unicode values for.
-  Only `--out` is exercised end to end; the helper itself is exercised
-  directly.
-- F1: behaviour on a real corpus where `blobs::plan`'s projected check might
-  also fire. The selection-level test is the guarantee; the plan number is a
-  separate, documented guard.
-- H2: whether a live `getBuild` can be induced to publish a `matching_field`
-  containing `/`, `\` or `..`. The flag and document sinks are unit-tested end
-  to end; the network precondition is the one F6/G1 already accept.
-- H3: whether a live manifest contains two entries that differ only by a
-  trailing dot or space. The alias is proven by the probe and the refusal is
-  unit-tested; no live manifest was sampled.
-- H4: an actual `--no-chunk-blobs` bundle on disk. The doc now matches the
-  constructor and the `props`/`fill` tests; no such bundle was inspected.
-- I4: an ACL-denied directory on a real share. The three arms are unit-tested
-  through the injected reader, and a file passed where a directory is expected
-  gives a real `read_dir` failure; no Windows ACL was set up.
-- I5: a hostile tag through the CLI, which validates both resolved tags earlier.
-  The writer's own refusal is unit-tested; the CLI precondition is not re-driven.
-- J1: a real ACL-denied `MANIFEST.json`. The read arm is injected
-  deterministically and the exclusive share lock was reproduced end to end; the
-  stat arm uses a path that cannot be stat'ed. No Windows ACL was set up, and
-  the "manifest vanished between stat and read" race was reasoned, not timed.
-
+- **F4 dedicated field.** A `fetch_error` field would describe a failed fetch more precisely but needs an artifact-schema change; a panicking chunk still gets the stable generic row text.
+- **F7 ceiling intent.** If `--max-download-bytes` was meant as an input-independent policy check, the metadata-only skip should be reverted and the help changed instead.
+- **F8 replay.** The recorded argv is lossy; replaying a bundle would need a raw-bytes companion.
+- **F11 older orphans.** Cleanup covers handled errors only; a panic unwinds past it, orphans from older binaries are not swept, and the historical accumulation rate is unmeasured.
+- **F6/G1 live inputs.** Whether a live API echoes a hostile tag, serves a hostile document or audio path, or uses an unusual but legitimate chunk-id spelling is unverified; the local sinks and rejection paths are tested.
+- **G2 crash tear.** Whether a metadata document can be left torn in a way `checksums.json` misses was not stress-tested.
+- **H3 live manifests.** Whether a live manifest contains names differing only by a trailing dot or space was not sampled.
+- **H4 on-disk bundle.** No real `--no-chunk-blobs` bundle was inspected; the doc matches the constructor and the tests.
+- **I4/J1 ACLs.** No real Windows ACL-denied directory or `MANIFEST.json` was set up; the read arms are injected, the J1 share lock was reproduced end to end, and the stat/read race was reasoned, not timed.
+- **I5 CLI precondition.** A hostile tag reaches the writer only through a hand-built manifest; the CLI's earlier validation is not re-driven, though the writer's refusal is unit-tested.
+- **F5 production bodies.** Real non-2xx body sizes are unknown, so the practical effect of the cap is unverified.
+- **F1 real corpus.** Whether `blobs::plan`'s projected check also fires on a real corpus is unverified; the selection-level test is the guarantee.
+- **F8 clap typing.** Which non-`PathBuf` argument types clap accepts non-Unicode values for is unverified; only `--out` is exercised end to end.
