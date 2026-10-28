@@ -10,7 +10,7 @@ for the trade-offs already listed in
 
 | ID | Severity | Class | Location | Summary |
 | --- | --- | --- | --- | --- |
-| N1 | Low | bug (omitted error cause) / test gap | `src/blobs/mod.rs:530-534`, `src/run/mod.rs:321-325` | The two direct `spawn_blocking` joins format `JoinError` with `Display`, so a panic's payload is discarded and a cancellation is reported as a panic. The M2 rule reached the two `JoinSet` loops but not these two joins. |
+| N1 | Low | bug (omitted error cause) / test gap | `src/blobs/mod.rs:530-534`, `src/run/mod.rs:321-325` | The two direct `spawn_blocking` joins format `JoinError` with `Display`, so a panic's payload is discarded and a cancellation is reported as a panic. The M2 rule reached the two `JoinSet` loops but not these two joins. **Fixed** in `1300931` (measurement) and `a84d3c5` (request log). |
 
 ## N1 — A panicking `spawn_blocking` task loses its payload
 
@@ -138,30 +138,64 @@ would give the next `spawn_blocking` site the rule for free. Add one test per
 site that spawns a closure which panics with a known message and asserts that
 message reaches the returned error.
 
+### Resolution
+
+Validated against current source: both joins did bypass `join_failure`, and the
+measurement `Err` arm did skip `discard_published`. Fixed at the root:
+
+- `src/tasks.rs:40` adds `join_blocking`, which spawns blocking work and maps a
+  `JoinError` through `join_failure` with the site's label.
+- `src/blobs/mod.rs:531-568` replaces the direct join with `measure_published`.
+  Both non-returning and I/O-error arms call `discard_published`, so a
+  published blob cannot outlive a `stored_path: null` row; the panic arm keeps
+  `<chunk id>: ` context. `discard_published`'s doc (`:598`) now states the
+  panic/cancellation case. Commit `1300931`.
+- `src/run/mod.rs:321-326` routes the request-log write through
+  `write_requests_log_on_the_pool` (`:831`), which uses `join_blocking` with the
+  `"request log write"` label; `write_err` still names the bundle. Commit
+  `a84d3c5`.
+- Tests: `tasks::tests::a_panicking_blocking_task_reports_its_payload` and
+  `a_returning_blocking_task_keeps_its_value` (`src/tasks.rs:81`),
+  `blobs::tests::a_panicking_measurement_discards_the_published_blob_and_keeps_the_cause`
+  (`src/blobs/mod.rs:1476`, asserts the payload, the blob id and that the
+  seeded published file is gone), and
+  `run::tests::a_panicking_request_log_task_reports_its_payload`
+  (`src/run/mod.rs:914`). The test seams are the closures the production call
+  sites pass; `BlobProps::measure_file` and `emit::write_requests_log` still
+  have no input that panics on demand.
+
 ## Verification
 
-At `385c4af`, Windows (`win32`), with the note not yet written:
+After the fixes (`a84d3c5`), Windows (`win32`):
 
-- `cargo build -p gircap` — `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 48.40s`
-  (a later no-op rebuild: `0.43s`); no warnings.
-- `cargo test -p gircap` — 696 passed, 0 failed, 0 ignored, 0 filtered out:
-  552 lib + 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15, plus 0 doc-tests. No
+- `cargo build -p gircap` — `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 23.78s`;
+  no warnings.
+- `cargo test -p gircap` — 701 passed, 0 failed, 0 ignored, 0 filtered out:
+  557 lib + 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15, plus 0 doc-tests. No
   `#[cfg(unix)]` test was skipped; the `#[cfg(windows)]` tests ran.
-- `cargo clippy -p gircap --all-targets` — `Finished \`dev\` profile ... in 16.95s`;
+- `cargo clippy -p gircap --all-targets` — `Finished \`dev\` profile ... in 9.51s`;
   no warnings or errors (exit 0).
 - `cargo fmt -p gircap --check` — no diff (exit 0).
+
+The pre-fix review numbers were 696 passed (552 lib + 144 integration) at
+`385c4af`; the five new tests are the two blocking-join helper tests, the
+measurement seam test, the request-log seam test and the request-log value test.
 
 ## Not verified
 
 - No real panic was injected into `BlobProps::measure_file` or
-  `emit::write_requests_log`; the review may not add tests. The loss is
-  established from tokio's documented `JoinError` `Display` and the crate's own
-  note at `src/tasks.rs:12-14`, not from an executed failing run.
-- The orphaned-blob consequence of a measure-task panic was not reproduced on
-  disk; the path is read from the code, and F11 already accepts panic orphans
-  generally.
-- `spawn_blocking` cancellation was not driven; it is called out because the
-  fixed text names it a panic.
+  `emit::write_requests_log`; neither has a portable input that panics on
+  demand. The tests drive the exact closures the production call sites use,
+  with a panicking body, so the mapping and the discard branch are exercised,
+  but the panicking instruction itself is not the real decoder or writer.
+- `spawn_blocking` cancellation at these two sites was not driven; the helper's
+  cancellation text is covered by
+  `tasks::tests::a_cancelled_task_is_not_reported_as_a_panic`, and
+  `join_blocking` routes through the same `join_failure`. A cancelled
+  measurement is reasoned to remove the published blob, not observed.
+- The orphaned-blob consequence of a measure-task panic was reproduced as a
+  seeded published file at the seam, not through a full `Store::fill` run whose
+  decoder panicked.
 
 ## Considered and dismissed
 
