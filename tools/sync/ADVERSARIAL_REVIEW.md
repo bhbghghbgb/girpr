@@ -1045,7 +1045,140 @@ here.
 
 ---
 
+## 11. Fifth adversarial pass (P5-1, P5-2)
+
+A fifth review re-audited `1604ced` against the current source and live runs of
+`target\debug\girsync.exe`. Its two findings are **valid** and fixed; the note is
+folded in here and deleted. No other finding survived: the fourth-pass fixes were
+re-checked at their sites and still apply.
+
+| ID | Severity | Verdict | Resolution | Commits |
+|----|----------|---------|------------|---------|
+| P5-1 | medium | valid, fixed | `fix_dirs` now runs before `mkdirs`; a plan-time check also refuses a mkdir/copy/fix-dir path whose strict dst ancestor is a file that no `fix_dirs` entry replaces. | `2e165e6`, `59f1127` |
+| P5-2 | high | valid, fixed | A dst link resolving into src, or containing it, is refused after the dst walk and before planning; `copy_one` re-checks the final component before unlinking or creating anything. | `82e5617`, `93ab01c` |
+
+### P5-1 — `mkdirs` before `fix_dirs` made a valid plan unexecutable
+
+`src/a/b/x.txt` with a regular file at `dst/a` produced a plan that
+`fix_dirs` could satisfy: the dry run exited 0 printing `missing a/b`,
+`missing a/b/x.txt`, `type-conflict a`, `mkdir a/b`, `fix-dir a`, then the copy
+of `a/b/x.txt`. The real run exited 3 before any planned change landed:
+
+```text
+ERROR girsync: fatal error="mkdir ...\dst\a/b: Cannot create a file when that file already exists. (os error 183)"
+```
+
+`dst\a` was still the blocking file. `build_plan` put `a` in `fix_dirs` and
+`a/b` in `mkdir`; `Applier::apply` ran `mkdirs` first, so `create_dir_all` hit
+the file. The dry-run branch prints records and never executes either phase, so
+it could not expose the order. This contradicted the module doc's claim that the
+phase order is a correctness invariant and the README's dry-run/apply parity
+contract.
+
+**Resolution.** `Applier::apply` runs `fix_dirs` before `mkdirs`
+(`src/commands/sync/apply/mod.rs:90-91`); `fix_dirs` already creates the
+replacement directory with `create_dir_all`, and two `fix_dirs` entries cannot
+be nested because dst cannot hold a file at both `a` and `a/b`. The dry-run
+record order follows apply (`plan.rs:457`), and `README.md:740-749`, `:795`,
+`:849` plus `APPLY_ORDER` (`tests/sync_plan/main.rs:194`) state the same order.
+
+Defence in depth: `ensure_dirs_applicable` (`plan.rs:373`, called at
+`mod.rs:341`) is a pure plan-time check that refuses a `mkdir`, `copy` or
+`fix-dir` path when a strict dst ancestor is a regular file with no `fix_dirs`
+entry, naming the blocking path. A future reordering therefore cannot
+rediscover an unresolvable shape only after mutation.
+
+**Tests.** `a_type_conflict_nested_directory_is_planned_and_applied_in_order`
+(`tests/sync.rs:306-312`)
+asserts the dry run prints `fix-dir` before `mkdir` and the real run converges
+with `dst/a` a directory and `dst/a/b/x.txt` present. The `sync_plan` fixture
+nests `fixdir/sub` and `fixdir/sub/x.txt` under its dst file
+(`tests/sync_plan/main.rs:442-457`, `as_done.rs:33,121`), so the table check
+fails if `mkdir` ever precedes `fix-dir`; two unit tests pin
+`ensure_dirs_applicable`'s refusal and its allowed shape (`plan.rs:557,573`).
+
+### P5-2 — a dst file link into src was written through
+
+The clean shape is `src/a.txt = "AAAA"`, `src/b.txt = "BBBBBBBBBB"`, and
+`dst/a.txt -> src/b.txt`. The dst walk follows the link and reports a file with
+the target's size and mtime, the differing size makes the pair `changed`, and
+`ensure_link_safe` deliberately excludes the final component. `copy_one` checked
+only ancestors; `d.is_dir()` is false for a file link, so the directory-link
+unlink was skipped and `File::create(&d)` truncated `src/b.txt`. The copy then
+verified against the same file through the link, so size and digest both passed;
+with `--exclude b.txt` the run exited 0 and the source was silently destroyed.
+
+This host refuses file symlinks (`os error 1314`), so the data path was
+reproduced with a hard link instead: `mklink /H dst\a.txt src\b.txt` followed by
+`sync --exclude b.txt` exited 0 and changed `src/b.txt` from `BBBBBBBBBB` to
+`AAAA`. That reproduction is **not** P5-2's fix target: the scanner cannot see a
+hard link as a link, so the new checks do not apply to it (see open observations).
+P5-2 itself remains source-verified here, and its regression compiles and
+self-skips like the existing write-through test.
+
+**Resolution.** `validate_dst_links` (`mod.rs:536`) runs immediately after dst
+phase A (`mod.rs:193`), so filters and `--max-depth` have already decided this
+run's destination. It canonicalizes every dst entry flagged `is_link` and refuses
+a target inside src or one that contains src, using the same `canonicalize` +
+`path_within` helpers and `disjoint` message family as `validate_src_links`
+(`mod.rs:482`). It runs before the plan, the rename and every apply phase.
+Because §10's "symmetric through links" claim was only true on the src side,
+the dst direction now has its own check rather than an inferred one.
+
+Belt and braces: `copy_one` re-checks the final component on disk before any
+unlink or create (`copy.rs:204-225`), with `src_canonical` threaded through
+`phases.rs`. A link that resolves into src is refused there too, so a plan and
+a disk that disagree still cannot reach the source. A missing path is not a
+link; a dangling link fails to resolve rather than being written through.
+
+**Tests.** `sync_refuses_a_dst_file_link_into_src` (`tests/symlink.rs:480`)
+asserts exit 3, a message containing `disjoint` and the link, unchanged source
+bytes, and the link left in place; it self-skips on this host. A junction cannot
+exercise the exact file-link write-through — `copy_one` unlinks a directory link
+safely — so `sync_refuses_a_dst_directory_link_into_src` (`tests/symlink.rs:519`)
+pins the new preflight policy for a directory link at a file path and runs here.
+The sanctioned `sync_writes_through_a_dst_file_link` (target inside dst) still
+passes, as do F-1's `dst/link -> dst/real` and shared-link/external-target cases.
+
+**Final verification.** On Windows 11, on `fix-gaps/girsync` after `f15c90c`
+(this section is a later docs commit):
+
+- `cargo build -p girsync` — Finished, no warnings.
+- `cargo test -p girsync` — 373 passed, 0 failed, 1 ignored.
+- `cargo test -p girsync --test symlink -- --nocapture` — 24 passed, 0 failed;
+  six file-link cases print the `os error 1314` skip line (the previous five
+  plus the new dst file-link regression), and every junction case runs.
+- `cargo clippy -p girsync --all-targets` — clean, no warnings.
+- `cargo fmt -p girsync --check` — exit 0.
+
+Suite breakdown: lib 133, cli_dispatch 1, compare 13, compare_self 12, convert 4,
+hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15,
+stat_trust 19, symlink 24, sync 21 (+1 ignored), sync_plan 19, update 3, why 25.
+
+**Surviving decisions.** A dst-only link into src is refused even when today's
+plan would merely unlink it: the check is about where the link resolves, not
+about what this run does with it, and the same rule already held on the src
+side. Write-through to a dst-internal target remains sanctioned. Hard links are
+not detectable as links by the scanner, so a hard link inside dst to a file
+inside src is still written through; that is a separate, pre-existing hazard,
+not covered by P5-2's link class and not changed here.
+
+**Not verified.** P5-2's file-link path (host refuses file symlinks; the hard-link
+reproduction above is a different mechanism). Native POSIX symlinks, non-link
+reparse points, and the `set_modified` failure path (F-6) still have no runnable
+fixture. P5-1 on POSIX: the ordering is platform-independent by inspection but
+only Windows was run. Neither finding was run under `--missing-only` or
+`--keep-extra`.
+
+**Open for the maintainer.** A policy for hard links (or a documented
+non-guarantee) is the remaining way a dst entry can write into src. The dst
+file-link regression needs a Windows host with developer mode or a POSIX CI to
+execute.
+
+---
+
 *End of review. Sections 1–6 describe the original source-only audit: no source,
 test, Cargo, README, or other project file was changed and no build, test, or
-binary run was performed for them. Sections 7–10 record the implementation and
-the second, third and fourth passes, which did build, test and run the binary.*
+binary run was performed for them. Sections 7–11 record the implementation and
+the second, third, fourth and fifth passes, which did build, test and run the
+binary.*
