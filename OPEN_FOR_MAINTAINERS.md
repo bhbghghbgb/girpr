@@ -1,0 +1,22 @@
+# OPEN FOR MAINTAINERS — `girpr` (root crate)
+
+`girpr` (root crate), branch `fix-gaps/girpr`. These are deliberate trade-offs, unverified areas and product decisions that remain open after the adversarial review — not open defects. Each item lives here only; the review and its binding decisions are in [`ADVERSARIAL_REVIEW.md`](ADVERSARIAL_REVIEW.md).
+
+## Open items
+
+- `expected_paths()` and `classify_purge_path` still compare case-sensitively on Windows. N-5 closed duplicate plan entries, but an existing file whose case differs from the manifest can still be an orphan under `--purge-after`.
+- F-6's `spawn_blocking` panic, P-2's two in-place `File::metadata()` sites, S-3's deprecated-stat failure arm, and R-5's `sync_all` failure have no public injection seam; S-3's arm is pinned at its classifier, the rest remain code-reading claims.
+- S-1 keeps an empty out-of-scope directory rather than warning and deleting it; the choice is deliberate (the scope says the path does not exist) and pinned by a unit and an integration test. A directory hidden only by an `--exclude` of its *contents* (`--exclude "mods/*"`) is still swept when empty, because the exclude pattern does not name the directory itself.
+- `--dry-run`/`--check-only` still skip `validate_chunk_ranges`; a corrupt range is refused by the repair paths that would use it (exit `3`), not by the plan (exit `2`). If the plan should refuse such a manifest instead, the validation moves into `build_plan` (exit `2`) rather than the per-file path (exit `3`).
+- N-19's `errors` counter is diagnostic only; the delete ceilings still see the candidates the walk could reach, not the ones under an unreadable directory.
+- R-2's strictness is a behaviour change: an unreadable audio scan file now fails the run (exit `1`) instead of falling back to `en-us`.
+- T-1 keeps a mixed ignore/blacklist file usable by warning per bad line; only a file with no usable entry and at least one parse failure is refused. A maintainer who prefers any malformed line to fail the run changes the final condition in `parse_config_list`, not the two readers.
+- T-2 treats a directory at a planned file path as `Present(dir_len)`, so it is reported as a size mismatch, not as unreadable; that is safe but is a separate state from a failed stat. A deny-ACL fixture was not available on this host.
+- U-1 normalises the manifest rel, the deprecated list and the three audio dirs at their boundary. `res_category_dir` and `blacklist_dir` are read-only inputs with no scope gate and still validate at their `contained_join` sink; if a future gate matches them against the scope, they need the same `util::clean_rel` treatment.
+- F-9 `kept_bytes` on resume (product decision, implemented as kept): a resumed `_tmp` prefix is bytes the repair did not write, so it counts as kept, consistent with the field's definition. If maintainers prefer "kept" to mean only correct-where-it-belongs in-place bytes, the counter needs a different definition and the new assertion changes with it.
+
+## Unverified areas carried from the first pass
+
+- Live manifest shapes are unverified: whether the CDN ever serves a zero-length entry with `EMPTY_MD5`, a `..` segment, a drive-relative `C:` path, or an `offset + size > i64::MAX` is not verified. The findings are about what the code does if such data arrives, not a claim that it does.
+- The first pass did not enumerate every panic site: the concrete `temp.rs:193` overflow (F-1) and the file-semaphore `unwrap` (now a named `expect`, N-12) were handled, but there was no exhaustive panic sweep.
+- `--print-plan --audio` under an active path scope is source-verified but was not executed; the fix gates the write, and the scope-refusal interaction is covered by the existing `explicit_audio_under_a_scope_...` test, not by a print-plan variant.

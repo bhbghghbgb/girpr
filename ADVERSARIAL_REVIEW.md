@@ -10,7 +10,9 @@ byte-identical to the pre-fix baseline. The prior review/fix series
 This document is a fresh source-level review of the current tree. It does not
 assume any sentence of the reverted review is true. The fixes landed on
 `fix-gaps/girpr`; §7 is the first-pass implementation table and §8 is the pass
-log that carries every later finding to its final verdict.
+log that carries every later finding to its final verdict. Deliberate
+trade-offs, unverified areas and product decisions that remain open are listed
+in [`OPEN_FOR_MAINTAINERS.md`](OPEN_FOR_MAINTAINERS.md).
 
 ---
 
@@ -712,48 +714,7 @@ and all six `*_tmp` doc sites plus the `kept_bytes` comment are corrected.
 | F-8 | Regression coverage gaps | **Fixed.** All six listed gaps are covered: panic → `3`, the drive-relative/absolute/UNC/traversal spellings and the two post-phase sinks, the partial body, `--print-plan --audio`, `--check-only --scan` zero-length absence, and the full-length corrupt `_tmp`. | The first five are in the F-1/F-2/F-3/F-4/F-5 commits above; the last is `a_full_length_corrupt_tmp_is_deleted_and_rebuilt` (delete → retry → rebuild, `_tmp` not reused). | `3546902` |
 | F-9 | `kept_bytes` comment says the temp path keeps nothing | **Fixed.** The comment now says the temp path rewrites every chunk it does not resume and that an earlier `_tmp` prefix counts as kept; the resume test sets `repair_mode_explicit` and pins `kept_bytes == 64`. | `partial_tmp_prefix_is_resumed` (extended). | `64e32ac` |
 
-### 7.1 Behavioural notes and pending maintainer decisions
-
-1. **F-3 hard cap vs. documenting A6 (decided: cap).** A body that sends more
-   than the manifest's `compressed_size` is now refused at the piece that
-   crosses the line instead of being streamed. That is stricter than capture
-   invariant A6 and means a *well-formed but different-length* frame is refused
-   before its digest can be checked; the write-meter test pins its corrupt body
-   by giving the manifest a few bytes of `compressed_size` slack. The review
-   allows the alternative (trust A6 and document the approximation). Keep the
-   cap: it bounds the traffic, and a body past its claim is not the blob the
-   manifest describes.
-2. **F-3 reported vs. live figures (decided: unchanged split).** `download_bytes`
-   (settled) still counts only the successful body of each chunk, because it is
-   a function of the promoted install; `download_bytes_spent` (live) now counts
-   every partial body. A chunk can charge up to `ATTEMPTS × reserved` per call,
-   so a flaky origin can pass the ceiling by the bytes it actually delivered
-   before the next reservation stops the run. That is the honest number; the
-   alternative (refuse the retry once the reservation is spent) would reject
-   recoverable transfers.
-3. **F-2 plan validation runs before the blacklist/scope/dedup filters
-   (decided: strict).** Any escaping manifest entry fails the plan with exit
-   `2`, even one that would have been filtered out. The alternative is to
-   validate after filtering and silently ignore a hostile entry that is out of
-   scope. Keep strict: a manifest that names a path outside the install is not
-   trustworthy for the parts that happen to be in scope.
-4. **F-5 checks presence with one `stat` per planned file under
-   `--check-only --scan` (decided: stat).** It matches the non-scan path's
-   answer and avoids a second notion of presence. A `Verdict.present` flag
-   would avoid the syscall but add state that can drift from the disk between
-   the scan and the check.
-5. **F-9 `kept_bytes` on resume (product decision, implemented as kept).** A
-   resumed `_tmp` prefix is bytes the repair did not write, so it counts as
-   kept, consistent with the field's definition. If maintainers prefer "kept"
-   to mean only correct-where-it-belongs in-place bytes, the counter needs a
-   different definition and the new assertion changes with it.
-6. **F-1 dry runs skip `validate_chunk_ranges`.** A range that would fail a
-   write is still planned under `--dry-run`/`--check-only`, because those modes
-   never seek; a corrupt range is reported by the repair paths that would use
-   it. If the plan should refuse such a manifest instead, the validation moves
-   into `build_plan` (exit `2`) rather than the per-file path (exit `3`).
-
-### 7.2 Verification
+### 7.1 Verification
 
 Run on the first-pass final tree on Windows (`cargo` 1.x, debug profile). The
 latest full-suite numbers are in §8.10.
@@ -863,9 +824,9 @@ Earlier findings re-validated: F-1/F-8 panic wiring is now exercised through `re
 
 1. **Saturate, never wrap**, in every server-size estimate (N-13, N-15, N-19, S-2).
 2. **Containment is a strict lexical gate**: fail closed on an unresolvable probe (N-1); refuse drive/UNC, `..`, trailing separators, Windows device names, trailing dot/space and ADS colons on every host (N-14); clean `./` rather than refuse it (N-6); fold case for plan dedup on Windows only (N-5); an outside path is exit `2` even if a scope filter would drop it (F-2).
-3. **Downloads stop at settle time**: the overrun bound is the body already in flight; partial bodies charge `download_bytes_spent`, settled bodies charge `download_bytes` (F-3, N-2).
+3. **Downloads stop at settle time**: the overrun bound is the body already in flight; partial bodies charge `download_bytes_spent`, settled bodies charge `download_bytes` (F-3, N-2). A body past its reservation is refused at the piece that crosses it rather than streamed, stricter than capture invariant A6 (F-3).
 4. **The scanned estimate models the write path** and the resolved mode; one per-file vector feeds both `PLAN` and `--plan-out` (N-17, N-16, P-1).
-5. **Absent is `NotFound` only**; unreadable local state is exit `1` (R-2, R-6). An empty audio scan file is game-only; non-blank text with no known language and a BOM-only file are refused; one leading BOM is stripped (R-8). The launcher's ignore/blacklist JSON-lines follow the same split: one leading BOM is stripped, a mixed file warns per unparseable line with path and line, and a list whose non-blank text produced no entry and had a parse failure is refused rather than read as empty (T-1).
+5. **Absent is `NotFound` only**; unreadable local state is exit `1` (R-2, R-6). An empty audio scan file is game-only; non-blank text with no known language and a BOM-only file are refused; one leading BOM is stripped (R-8). The launcher's ignore/blacklist JSON-lines follow the same split: one leading BOM is stripped, a mixed file warns per unparseable line with path and line, and a list whose non-blank text produced no entry and had a parse failure is refused rather than read as empty (T-1). `--check-only --scan` checks presence and length with one `stat` per planned file, matching the non-scan path (F-5).
 6. **The deferred audio write keeps the plan half mutation-free**: the scan file is written only in execution, after every refusal, so `--print-plan`/`--dry-run`/`--check-only` write nothing (R-7); `--plan-out` is a requested artifact, written before mutation, failure exit `3` (R-1).
 7. **Publishing is crash-safe**: scan file via same-directory temp plus rename (R-2); `config.ini` syncs before its rename and removes the temp on a failed write (R-5).
 8. **The post phase is best-effort housekeeping**: only the `config.ini` bump and the delete ceiling are fatal; a refused move/delete, an unreadable deprecated size, an unremovable directory and an unreadable purge subtree are warned, counted where possible, and left in place (N-3, N-11, P-2, P-4, N-19).
@@ -888,17 +849,5 @@ Full run on Windows, debug profile, ninth-pass final tree:
 The four ninth-pass tests are the three `./`-spelling cases and the undeletable-lock unit case.
 
 **Not run:** the `#[cfg(unix)]` blocks of the containment, mode, `file_len` and file-as-parent tests (this host is Windows; the three new path-spelling tests are host-independent); the 7 ignored tests; no release-profile run; no Linux/macOS host; no live CDN traffic (all tests use the in-process mock). U-2's real undeletable-file shape was exercised only with the Windows sharing-violation probe; the in-repo test injects the failed removal, so the arm is pinned on every host. S-1 was reproduced with the real binary over the mock. R-8's purge-deletion consequence remains a code-reading claim: the mock fixture has a single `game` manifest and no per-language package to delete. T-1 is pinned at the unit reader, not through the binary. T-2's root cause was reproduced with a real non-`NotFound` stat error, but the full `check.rs` log path is pinned at the classifier and syscall boundary, not through a deny-ACL fixture.
-
-### 8.11 Open for maintainers
-
-- `expected_paths()` and `classify_purge_path` still compare case-sensitively on Windows. N-5 closed duplicate plan entries, but an existing file whose case differs from the manifest can still be an orphan under `--purge-after`.
-- F-6's `spawn_blocking` panic, P-2's two in-place `File::metadata()` sites, S-3's deprecated-stat failure arm, and R-5's `sync_all` failure have no public injection seam; S-3's arm is pinned at its classifier, the rest remain code-reading claims.
-- S-1 keeps an empty out-of-scope directory rather than warning and deleting it; the choice is deliberate (the scope says the path does not exist) and pinned by a unit and an integration test. A directory hidden only by an `--exclude` of its *contents* (`--exclude "mods/*"`) is still swept when empty, because the exclude pattern does not name the directory itself.
-- `--dry-run`/`--check-only` still skip `validate_chunk_ranges` (§7.1 item 6); a corrupt range is refused by the repair paths (exit `3`), not by the plan (exit `2`).
-- N-19's `errors` counter is diagnostic only; the delete ceilings still see the candidates the walk could reach, not the ones under an unreadable directory.
-- R-2's strictness is a behaviour change: an unreadable audio scan file now fails the run (exit `1`) instead of falling back to `en-us`.
-- T-1 keeps a mixed ignore/blacklist file usable by warning per bad line; only a file with no usable entry and at least one parse failure is refused. A maintainer who prefers any malformed line to fail the run changes the final condition in `parse_config_list`, not the two readers.
-- T-2 treats a directory at a planned file path as `Present(dir_len)`, so it is reported as a size mismatch, not as unreadable; that is safe but is a separate state from a failed stat. A deny-ACL fixture was not available on this host.
-- U-1 normalises the manifest rel, the deprecated list and the three audio dirs at their boundary. `res_category_dir` and `blacklist_dir` are read-only inputs with no scope gate and still validate at their `contained_join` sink; if a future gate matches them against the scope, they need the same `util::clean_rel` treatment.
 
 *End of review. §1–§7 record the first pass; §8 is the pass log, and the commits it cites are the source, test and doc changes.*
