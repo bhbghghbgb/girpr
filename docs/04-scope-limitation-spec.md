@@ -719,7 +719,9 @@ pure config, `gate.rs` counting) and `girsync`'s `planner/` → `apply` split.
 per-directory kept-count map, deepest-first, `game_dir` excluded), so
 `remove_emptied_dirs` does not re-walk. Equivalent to "try `remove_dir` on every
 directory" — a dir with kept content fails `remove_dir` harmlessly — but decided
-up front, which is the property the scope work needs.
+up front, which is the property the scope work needs. A directory the active
+scope hides is not added to the sweep set at all (it has no file to mark its
+ancestors), and is counted in `PurgePlan::hidden` so the scope warning names it.
 
 The pure modules unit-test without a filesystem, exactly like
 `plan::purge::classify_purge_path` and `plan::build_plan` do. The impure part is
