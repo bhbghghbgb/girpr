@@ -308,7 +308,7 @@ pub(super) struct DiskSpelling {
 }
 
 impl DiskSpelling {
-    fn new(renames: &[(String, String)], dir_moves: &[(String, String)]) -> Self {
+    pub(super) fn new(renames: &[(String, String)], dir_moves: &[(String, String)]) -> Self {
         let mut moves = Vec::with_capacity(renames.len() + dir_moves.len());
         for (old, new) in renames {
             moves.push((new.clone(), old.clone()));

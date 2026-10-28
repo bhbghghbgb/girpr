@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -279,12 +280,56 @@ fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+/// The on-disk spelling of the entry `name` in the canonical directory `parent`.
+///
+/// On Windows the filesystem matches names case-insensitively, so a link text
+/// may say `real\X.BIN` while the walk — and therefore `sm`/`dm`, the spare and
+/// the R9-3 grouping — reports `real/x.bin`. The final component of a target is
+/// deliberately not resolved (it may be the chain's next hop), so its spelling
+/// has to come from the directory listing: an exact entry wins, otherwise the
+/// unique case-insensitive match is the one the OS would open.
+///
+/// POSIX names are case-sensitive, so `name` already is the entry's spelling and
+/// no lookup is needed (N-5: case folding is Windows-only). `None` means the
+/// directory holds no entry the OS would match; the caller keeps the lexical
+/// spelling, as it did before this lookup existed.
+#[cfg(windows)]
+fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
+    let mut folded = None;
+    let entries =
+        std::fs::read_dir(parent).with_context(|| format!("list {}", parent.display()))?;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("list {}", parent.display()))?;
+        let candidate = entry.file_name();
+        if candidate == name {
+            return Ok(Some(candidate));
+        }
+        if candidate.to_string_lossy().to_lowercase() == name.to_string_lossy().to_lowercase() {
+            // A directory can be case-sensitive per directory on Windows; two
+            // case-only names then make "the" entry ambiguous, and the name the
+            // OS would open is the exact one that is not there.
+            if folded.is_some() {
+                return Ok(None);
+            }
+            folded = Some(candidate);
+        }
+    }
+    Ok(folded)
+}
+
+#[cfg(not(windows))]
+fn on_disk_name(_parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
+    Ok(Some(name.to_owned()))
+}
+
 /// The dst-relative spelling of a link target, if the target is inside `dst`.
 ///
 /// The **final component** is deliberately not resolved: an intermediate link
 /// must stay in the chain so it can be spared as well, and a `read_link` target
-/// may be relative or contain `..`. Resolving the parent and keeping the name
-/// gives the entry the walk reported at that path.
+/// may be relative or contain `..`. Resolving the parent and naming the entry
+/// gives the spelling the walk reported at that path — including the final
+/// component, whose spelling a link text need not share on a case-insensitive
+/// filesystem.
 ///
 /// Only `NotFound` is read as "not inside dst". Any other `canonicalize` error
 /// is returned: a permission or I/O failure must not silently disable the spare
@@ -300,13 +345,17 @@ fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<String>> {
             return Err(e).with_context(|| format!("resolve {}", target.display()));
         }
     };
+    // A parent outside dst is the documented write-through: the final name
+    // cannot bring it back inside. Asking before the listing also keeps an
+    // unreadable outside directory from turning a write-through into an error.
+    let Ok(parent_rel) = parent.strip_prefix(canonical_dst) else {
+        return Ok(None);
+    };
     let Some(name) = target.file_name() else {
         return Ok(None);
     };
-    let resolved = parent.join(name);
-    let Ok(rel) = resolved.strip_prefix(canonical_dst) else {
-        return Ok(None);
-    };
+    let name = on_disk_name(&parent, name)?.unwrap_or_else(|| name.to_owned());
+    let rel = parent_rel.join(name);
     let rel = rel.to_string_lossy().replace('\\', "/");
     Ok((!rel.is_empty()).then_some(rel))
 }
@@ -1904,6 +1953,180 @@ mod tests {
             msg.contains("`a`") && msg.contains("`b`"),
             "names both links: {msg}"
         );
+    }
+
+    /// **R10-1.** The final component came back in the link text's spelling, so
+    /// on a case-insensitive filesystem `REAL/X.BIN` missed the walk's
+    /// `real/x.bin` key in `sm`/`dm`, in the spare's `delete_files` match and in
+    /// the R9-3 grouping. The resolver must name the entry the walk reported.
+    #[test]
+    fn a_case_differing_final_component_names_the_walk_entry() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "target_case");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
+        let root = std::fs::canonicalize(&dst).unwrap();
+        if std::fs::metadata(dst.join("REAL/X.BIN")).is_err() {
+            eprintln!("skip: case-sensitive filesystem; `REAL/X.BIN` is another entry");
+            return;
+        }
+
+        assert_eq!(
+            target_rel(&dst.join("REAL/X.BIN"), &root).unwrap(),
+            Some("real/x.bin".to_string()),
+            "both spellings name the one entry the walk reported"
+        );
+        assert_eq!(
+            target_rel(&dst.join("real/x.bin"), &root).unwrap(),
+            Some("real/x.bin".to_string()),
+            "the walk's own spelling is unchanged"
+        );
+    }
+
+    /// **R10-1, dry-run parity.** A case-only rename of the target is routine
+    /// for a mirror. A real run moves the entry to src's casing before the plan,
+    /// while a dry run leaves it on disk and maps the spelling forward. Both
+    /// must hand `sm`/`dm`, the spare and the R9-3 grouping the same key.
+    #[test]
+    fn a_case_only_rename_of_the_target_is_one_spare_in_both_modes() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "target_case_rename");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
+        let root = std::fs::canonicalize(&dst).unwrap();
+        if std::fs::metadata(dst.join("real/X.BIN")).is_err() {
+            eprintln!("skip: case-sensitive filesystem; the rename is not a pair");
+            return;
+        }
+        let spelling =
+            DiskSpelling::new(&[("real/x.bin".to_string(), "real/X.BIN".to_string())], &[]);
+
+        // Dry run: the entry is still `x.bin` on disk; the guard maps forward.
+        let dry = target_rel(&dst.join("real/X.BIN"), &root)
+            .unwrap()
+            .map(|disk| plan_rel(Some(&spelling), disk));
+        std::fs::rename(dst.join("real/x.bin"), dst.join("real/X.BIN")).unwrap();
+        // Real run: the rename already happened, so the disk answers directly.
+        let real = target_rel(&dst.join("real/X.BIN"), &root)
+            .unwrap()
+            .map(|disk| plan_rel(None, disk));
+
+        assert_eq!(
+            dry.as_deref(),
+            Some("real/X.BIN"),
+            "dry run names the plan key"
+        );
+        assert_eq!(real, dry, "the two modes agree on the spare's key");
+    }
+
+    /// **R10-1, R9-1's half.** A target whose intermediate link is spelled with
+    /// another case (`LINK` on disk is `link`) spared the link-text spelling, so
+    /// the walk's `link` stayed in `delete_files` and the run unlinked it.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_case_differing_link_component_is_spared_under_the_walk_spelling() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "link_component_case");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        std::fs::write(dst.join("real/x.bin"), b"x").unwrap();
+        if let Err(e) = make_dir_link(&dst.join("real"), &dst.join("link")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if std::fs::metadata(dst.join("LINK")).is_err() {
+            eprintln!("skip: case-sensitive filesystem; `LINK` is another entry");
+            return;
+        }
+        let root = std::fs::canonicalize(&dst).unwrap();
+        let target = dst.join("LINK/x.bin");
+
+        let mut storage = LinkStorage::default();
+        spare_link_components(&target, &root, None, &mut storage).unwrap();
+        assert!(
+            storage.keep.contains("link"),
+            "the walk's alias for the link component is spared: {:?}",
+            storage.keep
+        );
+        assert!(
+            !storage.keep.contains("LINK"),
+            "the link text's spelling is not a key the walk reported: {:?}",
+            storage.keep
+        );
+    }
+
+    /// **R10-1, the mirrored-target refusal.** The same spelling feeds the
+    /// `sm.get` key, so a case-differing target used to look absent and the
+    /// plan copied through the link instead of refusing it. The terminal's map
+    /// record is the guard's input; the junction stands in for the file link.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_case_differing_mirrored_target_is_refused() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "mirrored_case");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        if let Err(e) = make_dir_link(&dst.join("REAL"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if std::fs::metadata(dst.join("REAL")).is_err() {
+            eprintln!("skip: case-sensitive filesystem; `REAL` is another entry");
+            return;
+        }
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), file());
+        sm.insert("real".to_string(), file());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("real".to_string(), file());
+
+        let mut diff = Diff::default();
+        let mut p = plan(&[], &["a"], &[]);
+        let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+            .expect_err("a mirrored target cannot also be given a new content");
+        let msg = err.to_string();
+        assert!(msg.contains("`real`"), "names the target's walk key: {msg}");
+    }
+
+    /// **R10-1 through the full spare pass.** A junction's `read_link` target
+    /// keeps the spelling it was created with, so a case-differing terminal
+    /// (`REAL` on disk is `real`) spared a key no removal list holds: the
+    /// directory stayed in `rmdir` and `remove_dir_all` took the link's storage.
+    /// The junction stands in for the file link this host refuses.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_case_differing_terminal_is_spared_by_the_full_pass() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "spare_terminal_case");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("real")).unwrap();
+        if let Err(e) = make_dir_link(&dst.join("REAL"), &dst.join("a")) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        if std::fs::metadata(dst.join("REAL")).is_err() {
+            eprintln!("skip: case-sensitive filesystem; `REAL` is another entry");
+            return;
+        }
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), file());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), link_file());
+        dm.insert("real".to_string(), dir());
+
+        let mut diff = Diff {
+            extra: vec!["real".to_string()],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.rmdir = vec!["real".to_string()];
+
+        spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+
+        assert!(
+            p.rmdir.is_empty(),
+            "the terminal's owning directory is spared: {:?}",
+            p.rmdir
+        );
+        assert!(diff.extra.is_empty(), "{:?}", diff.extra);
     }
 
     /// **R9-3.** Two kept links share one dst-only file. Neither terminal target
