@@ -58,8 +58,12 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
 
 /// Read local state, then fetch the server metadata that defines the target.
 pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
-    // 1. local state
-    let local_version = util::read_game_version(game_dir);
+    // 1. local state. An absent `config.ini` is a fresh install; an unreadable
+    // one is an error, not a fresh install that the post-phase would then
+    // overwrite the version of.
+    let local_version = util::read_game_version(game_dir)
+        .context("read local game version")
+        .map_err(RunFailure::usage)?;
     tracing::info!("local game_version: {local_version:?}");
 
     // 2. server metadata (up to 5 calls)
@@ -124,12 +128,18 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             .context("res_category_dir")
             .map_err(RunFailure::metadata)?;
         util::read_ignore_categories(&p)
+            .context("read res_category ignore list")
+            .map_err(RunFailure::usage)?
+            .unwrap_or_default()
     };
     let blacklist = if config.enable_resource_blacklist && !config.blacklist_dir.is_empty() {
         let p = util::contained_join(game_dir, &config.blacklist_dir)
             .context("blacklist_dir")
             .map_err(RunFailure::metadata)?;
         util::read_blacklist(&p)
+            .context("read blacklist")
+            .map_err(RunFailure::usage)?
+            .unwrap_or_default()
     } else {
         HashSet::new()
     };
@@ -159,10 +169,13 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     }
 
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
-    // and overwrites the scan file; omitted flag keeps the detected set,
-    // defaulting to `en-us` when undetectable.
+    // and overwrites the scan file; omitted flag keeps the detected set. An
+    // absent scan file falls back to `en-us`; an unreadable one fails the run
+    // rather than silently replacing the selection (R-2).
     let explicit = ctx.audio_explicit.then_some(&ctx.audio);
-    let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit);
+    let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit)
+        .context("resolve audio selection")
+        .map_err(RunFailure::usage)?;
     if ctx.audio_explicit
         && !ctx.readonly()
         && !ctx.print_plan

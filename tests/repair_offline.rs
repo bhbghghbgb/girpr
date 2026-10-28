@@ -1468,6 +1468,46 @@ async fn explicit_audio_selection_overwrites_scan_file() {
 }
 
 #[tokio::test]
+async fn an_unreadable_audio_scan_file_fails_before_any_repair() {
+    // R-2: a scan file that exists but cannot be read is local state, not the
+    // documented "absent → en-us" case. Treating it as absence silently
+    // replaces the selection; this run refuses (exit 1) instead.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_unreadable");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    // A directory where the scan file belongs is readable-as-a-path but not
+    // readable-as-a-file on every supported host.
+    std::fs::create_dir_all(dir.join("Audio").join("scan.txt")).unwrap();
+
+    let ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    let err = repair::run(ctx)
+        .await
+        .expect_err("an unreadable scan file must not default to en-us");
+    assert_eq!(err.exit_code, 1, "local config read failure: {err:#}");
+    assert!(
+        format!("{err:#}").contains("scan.txt"),
+        "the report names the file: {err:#}"
+    );
+    assert!(
+        mock.chunk_hits().is_empty(),
+        "nothing may be planned or downloaded on a failed selection"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn non_chunk_download_mode_is_a_usage_error() {
     // Only DOWNLOAD_MODE_CHUNK is patchable; FILE and LDIFF need the 7z/hdiff
     // paths v1 does not have, so the run must stop with exit 1 (not let getBuild

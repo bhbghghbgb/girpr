@@ -49,17 +49,24 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    paths (Steps 3–4), so `--purge-before` executes as Step 5.
 
 ### Step 1 — Read local state
-1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
+1. Parse `game_dir/config.ini` for `game_version=` (last match wins); a missing
+   file or no match → `none`. A file that exists but cannot be read is an error
+   (exit 1), not a fresh install: treating it as one would let the post-phase
+   overwrite the version record.
 2. Read `res_category_dir` ignore list if game config names it (see step 2): file of JSON lines
-   `{"category":"<matching_field>","is_delete":true}` → ignore set.
+   `{"category":"<matching_field>","is_delete":true}` → ignore set. An absent file is an
+   empty set; an unreadable one is an error. Same rule for the blacklist file.
   3. Determine effective audio langs: explicit flag wins, including `--audio none`
    (explicit empty = game-only, scan file overwritten with an empty list); else read
    audio scan file (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean`
-   → map to `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default for
-   automation so the game launches — Starward/ Collapse use game-only when the scan file
+   → map to `zh-cn|en-us|ja-jp|ko-kr`). A **missing** scan file defaults to `{en-us}`
+   automation so the game launches — Starward/Collapse use game-only when the scan file
    is missing, and `none` opts into that behavior explicitly).
+   A **readable empty** file is the game-only selection written by `--audio none` and is
+   kept as-is. An **unreadable** file is an error, not a default.
    Write the scan file back when an explicit selection was given (including `none`),
-   except in `--dry-run` / `--check-only` (no writes) or when the scan dir is unconfigured.
+   except in `--dry-run` / `--check-only` / `--print-plan` (no writes) or when the scan
+   dir is unconfigured. The write is atomic (temp + rename in the same directory).
 
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:

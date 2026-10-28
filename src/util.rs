@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -440,20 +440,36 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
 /// (`matches[^1]` over `game_version=(.+)`); missing file means fresh install.
 /// Do not "fix" to first-match.
+///
+/// `Ok(None)` is the documented fresh-install/absent case (and a file with no
+/// match). A read error other than `NotFound` is `Err`: an unreadable
+/// `config.ini` must not silently look like a fresh install and overwrite the
+/// version on the next bump.
 /// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L47-L70>
-pub fn read_game_version(game_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
-    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;
-    re.captures_iter(&text)
+pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
+    let p = game_dir.join("config.ini");
+    let text = match std::fs::read_to_string(&p) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
+    };
+    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
+        .expect("the game_version pattern is a literal");
+    Ok(re
+        .captures_iter(&text)
         .last()
-        .map(|c| c[1].trim().to_string())
+        .map(|c| c[1].trim().to_string()))
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
-pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return set;
+///
+/// `Ok(None)` means the file is not there (the launcher did not configure
+/// it); `Err` means it is there but could not be read, which must not become
+/// an empty ignore set without a trace.
+pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
+    let mut set = HashSet::new();
+    let Some(text) = read_config_list(path, "ignore categories")? else {
+        return Ok(None);
     };
     for line in text.lines() {
         let line = line.trim();
@@ -469,14 +485,18 @@ pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> 
             set.insert(c.to_string());
         }
     }
-    set
+    Ok(Some(set))
 }
 
 /// Read blacklist file: JSON-lines {"fileName":"..."}.
-pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return set;
+///
+/// The absent/unreadable split is the same as
+/// [`read_ignore_categories`]: a missing file is an empty blacklist; a file
+/// that cannot be read is an error.
+pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
+    let mut set = HashSet::new();
+    let Some(text) = read_config_list(path, "blacklist")? else {
+        return Ok(None);
     };
     for line in text.lines() {
         let line = line.trim();
@@ -489,7 +509,16 @@ pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
             set.insert(n.replace('\\', "/"));
         }
     }
-    set
+    Ok(Some(set))
+}
+
+/// The shared absent/error split for the launcher's JSON-lines config files.
+fn read_config_list(path: &Path, what: &str) -> anyhow::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("read {what} file {}", path.display())),
+    }
 }
 
 /// Whether the test-only `GIRPR_TEST_NO_FSYNC` hook is on.
@@ -686,12 +715,29 @@ pub fn write_config_ini(
         return Ok(());
     }
     let tmp = path.with_extension("ini.girpr_tmp");
-    {
+    let write = (|| -> Result<()> {
         let mut f = File::create(&tmp)?;
         f.write_all(out.as_bytes())?;
         if !test_no_fsync() {
-            f.sync_all().ok();
+            // `write_all` only reaches the page cache. Publishing the rename
+            // over a config whose version bump is not durable is exactly the
+            // failure this sync exists to prevent, so its error is fatal.
+            f.sync_all()
+                .with_context(|| format!("sync {}", tmp.display()))?;
         }
+        Ok(())
+    })();
+    if let Err(e) = write {
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
+            Err(cleanup) => tracing::debug!(
+                path = %tmp.display(),
+                error = %cleanup,
+                "could not remove the config.ini temp after a failed write"
+            ),
+        }
+        return Err(e);
     }
     std::fs::rename(&tmp, &path)?;
     Ok(())
@@ -1098,7 +1144,7 @@ mod tests {
             "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n",
         )
         .unwrap();
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
     }
 
     #[test]
@@ -1109,9 +1155,43 @@ mod tests {
             "{\"category\":\"10302\",\"is_delete\":true}\n{}\n",
         )
         .unwrap();
-        assert!(read_ignore_categories(&dir.join("rc")).contains("10302"));
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .contains("10302")
+        );
         std::fs::write(dir.join("bl"), "{\"fileName\":\"a/b.dat\"}\n").unwrap();
-        assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
+        assert!(
+            read_blacklist(&dir.join("bl"))
+                .unwrap()
+                .unwrap()
+                .contains("a/b.dat")
+        );
+    }
+
+    /// R-6: absent is a documented default (`None`); an unreadable file is an
+    /// error that names the file, never an empty set that silently changes
+    /// what the run repairs or ignores. A directory at the path is the
+    /// portable way to force something other than `NotFound`.
+    #[test]
+    fn unreadable_config_lists_are_errors_and_absent_ones_are_none() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "unreadable");
+        for name in ["rc", "bl", "config.ini"] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+        }
+
+        let err = read_game_version(&dir).expect_err("a directory is not config.ini");
+        assert!(format!("{err:#}").contains("config.ini"), "{err:#}");
+        let err = read_ignore_categories(&dir.join("rc")).expect_err("a directory is not a list");
+        assert!(format!("{err:#}").contains("rc"), "{err:#}");
+        let err = read_blacklist(&dir.join("bl")).expect_err("a directory is not a list");
+        assert!(format!("{err:#}").contains("bl"), "{err:#}");
+
+        let empty = girpr_tempdir::TempDir::new("girpr_test_lists", "absent");
+        assert!(read_game_version(&empty).unwrap().is_none());
+        assert!(read_ignore_categories(&empty.join("rc")).unwrap().is_none());
+        assert!(read_blacklist(&empty.join("bl")).unwrap().is_none());
     }
 
     #[test]
@@ -1143,7 +1223,7 @@ mod tests {
         assert!(lines.contains(&"channel=1"));
         assert!(lines.contains(&"sub_channel=0"));
         assert!(lines.contains(&"cps=hyp_hoyoverse"));
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Keys within the section are sorted (Collapse SaveInner parity).
         let sorted = lines
             .iter()
@@ -1252,7 +1332,7 @@ mod tests {
         assert!(lower.contains("\nplugin_sdk_version=9.0\n"), "{text}");
         // sdk_version created empty when missing.
         assert!(lower.contains("\nsdk_version=\n"), "{text}");
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Rerun byte-identical.
         let snapshot = text.clone();
         write_config_ini(
