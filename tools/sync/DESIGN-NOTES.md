@@ -179,6 +179,51 @@ through a junction; the file-link case may skip),
 `sync_refuses_a_dst_directory_link_into_src` (the first may skip; the junction
 case runs here), and `a_removal_whose_parent_resolves_inside_src_is_refused`.
 
+### A filtered dst blocker is refused before the rename
+
+`--include`/`--exclude` hide entries from the effective dst map (`dm`) but not
+from the disk. A file that the filter hides can still be sitting exactly where
+the plan will `mkdir`, so `build_plan` sees no type conflict and
+`ensure_dirs_applicable` — which reads `dm` — sees no blocker. The dry run then
+prints a `MKDIR`/`COPY` plan that the real run cannot execute: `create_dir_all`
+fails with `AlreadyExists` after earlier phases have changed dst.
+
+`ensure_mkdir_targets_free` closes that gap before the rename pass, which is the
+first filesystem change. It derives the same mkdir candidates `build_plan` will:
+src directories that the post-rename `dm` does not hold (a lowercase pair in
+insensitive mode, because the rename collapses those), and stats each candidate
+and every strict prefix on disk. An existing directory is fine; a non-directory
+is refused unless it is a planned `fix_dirs` entry, which runs before the
+nested mkdir. Every strict ancestor of a src directory is itself a src
+directory, so the blocker is normally its own candidate. `dm` is deliberately
+not widened to retain non-directory ancestors: that would make the planner
+delete an entry the filter promised to leave alone.
+
+**Enforced by:** `a_filtered_file_at_a_mkdir_path_is_refused_from_disk`,
+`a_file_at_a_strict_prefix_is_refused_from_disk`,
+`a_planned_fix_at_a_strict_prefix_is_applicable`, and
+`a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename` (which also
+pins that no case-only rename precedes the refusal).
+
+### A hard-linked destination is refused, not written through
+
+`try_is_link` answers only for reparse points, so a dst file that is another
+name for a src file is ordinary content to the walk. `File::create` truncates
+the inode, not the name, so a run would report success after destroying the
+other name; the verify then reads the changed inode back and agrees with
+itself. `copy_one` therefore takes the destination's link count before
+truncating and refuses any count above one.
+
+The count, not an identity comparison with the copied source, is the check that
+covers the reported shape: `dst/a.txt` can be a hard link to `src/b.txt` while
+the copy is reading `src/a.txt`. The refusal is conservative by design — any
+shared inode is outside a mirror's write contract, wherever it lives — and the
+documented dst **symlink** write-through is unchanged, because a symlink is a
+different directory entry rather than a second name for the truncated inode.
+
+**Enforced by:** `a_dst_hard_link_is_refused_without_touching_the_shared_inode`
+(also under `--hash-all-of none`) and the `hardlink::tests` count cases.
+
 ### A digest is looked up by name, not by slot
 
 `DigestSet` has two lookups and they are not interchangeable: `get(HashAlg)` reads

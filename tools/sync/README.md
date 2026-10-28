@@ -736,7 +736,8 @@ Mirrors `src` → `dst`:
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
-   Windows) — after the plan, before the diff, so both sides are on exact keys.
+   Windows) - after the pair plan and the mkdir preflight, before the diff, so
+   both sides are on exact keys.
 4. `FIX-DIR` type-conflicts toward src kind, then `MKDIR` missing dirs, then
    `DELETE` extra files (skipped when `--keep-extra`, which spares directories as
    well as files), then `COPY` missing + changed files (skipped when
@@ -745,10 +746,19 @@ Mirrors `src` → `dst`:
    **`FIX-DIR` precedes `MKDIR`** because a src directory can be nested under a
    path where dst holds a file: the fix replaces the blocker, and only then can the
    nested directory be created. The dry run reports the same order.
+   A `MKDIR` path that already exists on disk as a file is refused **before the
+   rename and before the plan is printed**, even when `--include`/`--exclude` hid
+   that dst entry from the map. The dry run and the real run exit 3 with the same
+   message naming the blocker, instead of the real run failing in
+   `create_dir_all` after an earlier action had already landed.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
    than one rw operation permitted those lines come out in completion order.
+   **A destination with more than one hard link is refused before truncation.**
+   The other name is the same inode, so writing through it would change that file
+   too — and the verify would read the changed inode back and agree with itself.
+   This is what stops a `dst` hard link to a src file from destroying the source.
    **No resume**, in two senses: a failed mtime restore aborts the run although the
    bytes are already correct (a rerun recopies that file), and cache rows written
    since the last periodic commit are discarded when a run aborts (copies that
@@ -1054,7 +1064,12 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   touching the filesystem, naming the link (remove it, or `--exclude` it). Its
   extra descendants are left in place, so a default run fails rather than exit 0
   on a tree it did not converge; `--keep-extra` and `--missing-only` accept that
-  non-convergence. Dirs compare by presence only.
+  non-convergence. **Hard links are not symlinks** and are not reported by
+  `try_is_link`. A destination with more than one hard link is refused before
+  truncation (see `copy`), because the other name shares the inode and would be
+  changed too; otherwise a hard link is compared and copied as an ordinary file.
+  Unix reads the count from `nlink`, Windows from `GetFileInformationByHandle`.
+  Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
   stderr;
@@ -1100,7 +1115,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 352 test functions, one of them #[ignore]d (351 run by default)
+cargo nextest run -p girsync   # 384 test functions, one of them #[ignore]d (383 run by default)
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's
