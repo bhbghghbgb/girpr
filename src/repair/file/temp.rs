@@ -111,7 +111,7 @@ async fn repair_attempt_inner(
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, writes)? {
+        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, tmp_path, writes)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -203,6 +203,7 @@ fn try_reuse_slice(
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
+    tmp_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
     // The manifest controls both numbers; a corrupt pair must fail this file
@@ -217,7 +218,10 @@ fn try_reuse_slice(
                 c.id, c.offset, c.uncompressed_size
             )
         })?;
-    let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
+    let cur_len = out
+        .metadata()
+        .with_context(|| format!("stat tmp {} before reuse", tmp_path.display()))?
+        .len();
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
     // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
@@ -485,7 +489,9 @@ fn promote_tmp(
     stats: &ChunkStats,
     writes: &FileWrites,
 ) -> Result<ChunkStats> {
-    let len = util::file_len(tmp_path).unwrap_or(0);
+    let len = std::fs::metadata(tmp_path)
+        .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+        .len();
     if len != file.size as u64 {
         anyhow::bail!("tmp length {} != expected {}", len, file.size);
     }
@@ -520,4 +526,46 @@ fn promote_tmp(
         settled_writes: writes.settled,
         mode: Mode::Temp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stat failure on the `_tmp` used to be read as "0 bytes" by
+    /// `util::file_len`, so `promote_tmp` answered "tmp length 0 != expected N"
+    /// for a tmp that was not empty and discarded the real `io::Error`.
+    ///
+    /// The seam is a path that cannot be statted: `foo.dat_tmp` under a
+    /// **regular file** is `ENOTDIR` on every platform, which is exactly the
+    /// `io::Error` the old `unwrap_or(0)` threw away. The error must name the
+    /// stat and the path.
+    #[test]
+    fn a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "promote_stat");
+        let blocker = dir.join("game");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let tmp = blocker.join("foo.dat_tmp");
+        let final_path = dir.join("foo.dat");
+        let file = PlannedFile {
+            rel: "game/foo.dat".into(),
+            size: 64,
+            md5: String::new(),
+            chunks: Vec::new(),
+        };
+
+        let err = promote_tmp(
+            &file,
+            &tmp,
+            &final_path,
+            &ChunkStats::default(),
+            &FileWrites::default(),
+        )
+        .expect_err("the tmp path cannot be statted");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("stat tmp") && chain.contains(&tmp.display().to_string()),
+            "the real cause must be named, not `tmp length 0`: {chain}"
+        );
+    }
 }

@@ -179,7 +179,10 @@ async fn attempt_inplace_inner(
     // difference is the *peak* disk usage, which nothing reports. The log is
     // the only place the outcome is visible, so both branches say which one
     // they took.
-    let have = handle.metadata().map(|m| m.len()).unwrap_or(0);
+    let have = handle
+        .metadata()
+        .with_context(|| format!("stat {} before the trim", final_path.display()))?
+        .len();
     if have > file.size.max(0) as u64 {
         if trim_is_free(file, &file.chunks, &sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
@@ -268,7 +271,10 @@ async fn attempt_inplace_inner(
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
                 .collect();
-            let usable = handle.metadata().map(|m| m.len()).unwrap_or(0);
+            let usable = handle
+                .metadata()
+                .with_context(|| format!("stat {} for the salvage order", final_path.display()))?
+                .len();
             let o = reuse::salvage_order(&chunks, &srcs, usable);
             tracing::info!(
                 file = %file.rel,
