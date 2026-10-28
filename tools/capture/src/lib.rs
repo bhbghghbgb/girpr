@@ -65,6 +65,7 @@ pub mod paths;
 pub mod report;
 pub mod run;
 pub mod select;
+mod tasks;
 pub mod verify;
 
 pub use exit::ExitCode;

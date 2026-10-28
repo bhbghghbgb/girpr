@@ -386,15 +386,16 @@ impl Fetcher {
     /// artifact.
     ///
     /// One failure does not abandon the rest: each item's `Err` stays in its own
-    /// slot, and a task that panics is recorded as an `Err` at that index. A
-    /// missing blob is better evidence than no bundle.
+    /// slot, and a task that panics is recorded as an `Err` at that index,
+    /// carrying the panic's own message. A missing blob is better evidence than
+    /// no bundle.
     ///
     /// `f` returns `(index, result)` and **never** an outer `Err`. The index has
     /// to come back even when the work failed, or a failed task is
-    /// indistinguishable from one that died: `JoinSet` reports a panic but not
-    /// which task panicked, so the only way to find out afterwards is to see
-    /// which index never came home. An outer `Result` would throw the index away
-    /// exactly when it is most needed.
+    /// indistinguishable from one that died. A `JoinSet` does not carry our
+    /// index through a panic — it names the failing task by id — so the loop
+    /// records each spawned task's id and maps it back. That is what lets the
+    /// payload reach its own slot instead of every failure sharing one string.
     ///
     /// `f` receives a clone of this fetcher rather than a borrow, because
     /// `JoinSet::spawn` needs a `'static` future. Cloning is three `Arc`s and
@@ -414,27 +415,56 @@ impl Fetcher {
     {
         let n = items.len();
         let mut out: Vec<Option<Result<R, String>>> = (0..n).map(|_| None).collect();
-        // Which items have been accounted for. A `JoinSet` will not say *which*
-        // task panicked, so a task that dies takes its slot with it and the
-        // index is recovered at the end from what never came back.
-        let mut returned: Vec<bool> = vec![false; n];
+        // Task id -> item index. `JoinSet` reports which task failed by id, not
+        // by our index, so recording each spawn's id is what lets a panic keep
+        // both its index and its cause instead of collapsing into one generic
+        // slot text. The map holds at most `jobs` entries: a completion removes
+        // its id and the replacement inserts a new one.
+        let mut slots: std::collections::HashMap<tokio::task::Id, usize> =
+            std::collections::HashMap::new();
         let mut set = tokio::task::JoinSet::new();
         let mut next = 0_usize;
 
         while next < n && set.len() < jobs.max(1) {
             let i = next;
             next += 1;
-            set.spawn(f(self.clone(), i, items[i].clone()));
+            slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
         }
-        while let Some(joined) = set.join_next().await {
-            if let Ok((i, r)) = joined {
-                returned[i] = true;
-                out[i] = Some(r);
+        while let Some(joined) = set.join_next_with_id().await {
+            match joined {
+                Ok((id, (i, r))) => {
+                    slots.remove(&id);
+                    out[i] = Some(r);
+                }
+                Err(e) => {
+                    // Recover the index *before* `join_failure` consumes the
+                    // error, so the cause can travel with the item it belongs
+                    // to rather than only into the log.
+                    let id = e.id();
+                    let why = crate::tasks::join_failure(e, "request");
+                    match slots.remove(&id) {
+                        Some(i) => {
+                            tracing::error!(
+                                item = i,
+                                error = %why,
+                                "a request task did not report"
+                            );
+                            out[i] = Some(Err(format!("item {i} did not return: {why}")));
+                        }
+                        // Unreachable while every spawn's id is recorded, but a
+                        // failure must still be visible rather than silently
+                        // lost if that ever stops being true.
+                        None => tracing::error!(
+                            error = %why,
+                            "a request task did not report and its index could not be recovered"
+                        ),
+                    }
+                }
             }
             if next < n {
                 let i = next;
                 next += 1;
-                set.spawn(f(self.clone(), i, items[i].clone()));
+                slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
             }
         }
 
@@ -442,11 +472,11 @@ impl Fetcher {
             .enumerate()
             .map(|(i, r)| {
                 r.unwrap_or_else(|| {
-                    Err(if returned[i] {
-                        format!("item {i} was dispatched but never returned")
-                    } else {
-                        "a request task panicked".to_string()
-                    })
+                    // A hole means no task ever reported and no id was left to
+                    // blame; keep the index rather than dropping the item.
+                    Err(format!(
+                        "item {i}: a request task panicked and its index could not be recovered"
+                    ))
                 })
             })
             .collect()

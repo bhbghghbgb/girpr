@@ -322,7 +322,7 @@ impl Store {
                 // in the log before falling through to the generic row text.
                 Err(e) => {
                     tracing::error!(
-                        error = %join_failure(e),
+                        error = %crate::tasks::join_failure(e, "chunk fetch"),
                         "a chunk fetch task did not report; its slot is filled below"
                     );
                 }
@@ -630,28 +630,6 @@ impl Store {
     }
 }
 
-/// The most useful text a [`tokio::task::JoinError`] carries.
-///
-/// **`JoinError`'s `Display` does not include the panic payload.** It says only
-/// that the task panicked, so a message the failing task wrote — the reason an
-/// operator actually needs — has to be downcast out of [`into_panic`]. The
-/// index row stays generic on purpose (it is a stable document), but the log
-/// must not throw the cause away with the task.
-///
-/// [`into_panic`]: tokio::task::JoinError::into_panic
-fn join_failure(e: tokio::task::JoinError) -> String {
-    if !e.is_panic() {
-        return format!("the chunk fetch task was cancelled: {e}");
-    }
-    let payload = e.into_panic();
-    let message = payload
-        .downcast_ref::<&str>()
-        .map(|s| (*s).to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a non-string panic payload".to_string());
-    format!("the chunk fetch task panicked: {message}")
-}
-
 /// Every file pair the selection admitted, given as manifest entries.
 ///
 /// Pure, so the retention plan can be checked before a single byte is fetched:
@@ -797,22 +775,6 @@ mod tests {
 
     fn scratch(name: &str) -> girpr_tempdir::TempDir {
         girpr_tempdir::TempDir::new("gircap-blobs", name)
-    }
-
-    /// A task that panics reports the payload, not just "task panicked".
-    ///
-    /// The `fill` loop has no slot to attach the failure to, so it logs this and
-    /// lets the hole-fill write the generic index row. Before the helper, the
-    /// `JoinError` was discarded and the operator could not see the cause at all.
-    #[tokio::test]
-    async fn a_panicking_chunk_task_reports_its_panic_message() {
-        let handle = tokio::spawn(async { panic!("chunk store exploded") });
-        let e = handle.await.expect_err("the task panicked");
-        let why = join_failure(e);
-        assert!(
-            why.contains("chunk store exploded"),
-            "the panic payload is the part worth logging: {why}"
-        );
     }
 
     /// `fs::rename` **does** replace an existing destination on Windows: it calls

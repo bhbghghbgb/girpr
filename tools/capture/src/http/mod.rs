@@ -822,6 +822,36 @@ mod tests {
         v.into_iter().next_back().expect("at least one row")
     }
 
+    /// A panicking metadata job keeps its index and carries its own cause.
+    ///
+    /// The slot string reaches `fetch_errors` and the summary, so reporting
+    /// only "a request task panicked" loses the one text that says why.
+    /// `JoinSet` names the failed task by id; the loop maps that id back to the
+    /// item index before the error is consumed.
+    #[tokio::test]
+    async fn a_panicking_request_task_keeps_its_index_and_cause() {
+        let f = fetcher(1, Arc::new(RecordingSleep::default()));
+        let items = [0usize, 1, 2];
+        let got = f
+            .map_concurrently(&items, 2, |_fetcher, i, _item| async move {
+                if i == 1 {
+                    panic!("metadata job exploded");
+                }
+                (i, Ok::<usize, String>(i * 10))
+            })
+            .await;
+
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].as_ref().ok(), Some(&0));
+        let why = got[1].as_ref().expect_err("the middle job panicked");
+        assert!(why.contains("item 1"), "the index is context: {why}");
+        assert!(
+            why.contains("metadata job exploded"),
+            "the cause must survive: {why}"
+        );
+        assert_eq!(got[2].as_ref().ok(), Some(&20), "the rest still runs");
+    }
+
     /// A panic in one fetch must not take the log — or the run — with it.
     ///
     /// Poisoning was genuinely reachable, not theoretical: the log's lock sits
