@@ -669,7 +669,7 @@ The fourth pass reused the ID `F-1` for a different finding; the original high f
 | P6-3 | The README test count was stale; it now states 384 test functions, 383 run by default | fixed | `8d52de6` |
 
 **Decisions still in force:**
-- Any destination with more than one hard link is refused, blanket rather than limited to links into src; P7-4 credits a same-inode name the plan removes before the copy (§7.7).
+- Any destination with more than one hard link is refused, blanket rather than limited to links into src; P7-4 credits a same-inode name the plan removes before the copy (§7.7). P8-1 narrows the blanket rule to regular-file destinations (§7.8).
 - The mkdir preflight and the real run read the same disk state, so a filtered blocker is refused alike in `--dry-run` and before any record.
 - `--max-depth` still skips silently; an excluded dst directory at an ancestor still reports `MKDIR` although `create_dir_all` is a no-op.
 
@@ -677,7 +677,7 @@ The fourth pass reused the ID `F-1` for a different finding; the original high f
 
 | ID | Finding | Status | Commits |
 |----|---------|--------|---------|
-| P7-1 | The case-only rename used a fixed sibling temporary, so a user file at that name was replaced (exit 0, silent loss) and a directory aborted the pass; the temporary is now a unique `<full name>.girsync_case_tmp.<n>`, claimed before use and stepped past an occupied candidate | fixed | `7e8809b` |
+| P7-1 | The case-only rename used a fixed sibling temporary, so a user file at that name was replaced (exit 0, silent loss) and a directory aborted the pass; the temporary became a unique `<full name>.girsync_case_tmp.<n>`, claimed before use and stepped past an occupied candidate (the name was later bounded to a fixed short sibling, P8-4) | fixed | `7e8809b` |
 | P7-2 | `ensure_link_safe` refused a descendant of a dst link that the plan's own `fix_dirs` removes first; a link ancestor that is a planned fix is now skipped, while a link above it is still refused | fixed | `f4dd3c0` |
 | P7-3 | `RENAME` and `renamed` were published before the two renames, so a failed pass left a record for an action that did not happen; a real run now emits after both succeed, and a dry run still reports the step it would take | fixed | `7e8809b`, `f60e151` |
 | P7-4 | The sixth pass's hard-link refusal lived only in `copy_one`, so a dry run reported `COPY` and exit 0 for a tree the real run refused; `hardlink::info` adds an inode identity and `ensure_hard_linked_targets_safe` decides at plan time in both modes | fixed | `53d113f` |
