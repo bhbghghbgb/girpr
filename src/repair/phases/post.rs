@@ -215,6 +215,12 @@ fn delete_deprecated(
 /// scope may not have admitted.
 ///
 /// `dry_run` logs the move and does none of it.
+///
+/// The summary line at the end is **derived from the outcomes**, not emitted
+/// because the function was reached: `moved` counts the sources that are gone
+/// from the cache (renamed, or copied and then removed) and `kept` counts the
+/// ones still there. An empty cache and a move that was refused both end
+/// without a success claim.
 fn move_audio_cache(
     game_dir: &Path,
     config: &crate::hyp::GameConfig,
@@ -283,6 +289,8 @@ fn move_audio_cache(
         }
         return;
     }
+    let mut moved = 0u64;
+    let mut kept = 0u64;
     for src in files {
         let Ok(rel) = src.strip_prefix(&cache) else {
             continue;
@@ -299,10 +307,11 @@ fn move_audio_cache(
                 error = %e,
                 "audio cache move: destination directory could not be created; source kept"
             );
+            kept += 1;
             continue;
         }
         match std::fs::rename(&src, &target) {
-            Ok(()) => {}
+            Ok(()) => moved += 1,
             Err(rename_err) => {
                 match std::fs::copy(&src, &target) {
                     Ok(_) => {
@@ -310,18 +319,23 @@ fn move_audio_cache(
                         // removed **after** a successful copy, never before.
                         // Removing it unconditionally would delete a cache
                         // file that had no copy if the copy failed.
-                        if let Err(e) = std::fs::remove_file(&src) {
-                            tracing::warn!(
-                                src = %src.display(),
-                                error = %e,
-                                "audio cache move: copied, but the source could not be removed"
-                            );
+                        match std::fs::remove_file(&src) {
+                            Ok(()) => moved += 1,
+                            Err(e) => {
+                                kept += 1;
+                                tracing::warn!(
+                                    src = %src.display(),
+                                    error = %e,
+                                    "audio cache move: copied, but the source could not be removed"
+                                );
+                            }
                         }
                     }
                     Err(copy_err) => {
                         // Hard data-loss bug in the old shape: it removed the
                         // source even when the copy failed. Keep the source and
                         // say why.
+                        kept += 1;
                         tracing::warn!(
                             src = %src.display(),
                             target = %target.display(),
@@ -334,7 +348,12 @@ fn move_audio_cache(
             }
         }
     }
-    tracing::info!("moved audio cache -> res");
+    // The one line an operator greps for: only when a relocation was
+    // attempted, and with both halves of the outcome, so "moved" cannot stand
+    // for a run that moved nothing.
+    if moved + kept > 0 {
+        tracing::info!(moved, kept, "audio cache -> res");
+    }
 }
 
 /// Join two rel path fragments into the `/`-separated form the scope matches on.
@@ -351,6 +370,8 @@ fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use crate::hyp::GameConfig;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
 
     fn config(cache: &str, res: &str) -> GameConfig {
         serde_json::from_value(serde_json::json!({
@@ -358,6 +379,35 @@ mod tests {
             "audio_pkg_res_dir": res,
         }))
         .unwrap()
+    }
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Run `f` with a debug-level subscriber whose lines are captured.
+    ///
+    /// `with_default` is thread-local, so this does not race the other tests
+    /// (nothing in the lib installs a global subscriber; only `main` does).
+    fn logs_of(f: impl FnOnce()) -> String {
+        let buf = Captured::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
     }
 
     /// N-3: the copy fallback used to remove the source **after** a failed
@@ -375,12 +425,14 @@ mod tests {
         std::fs::write(base.join("Audio/cache/a.pck"), b"cache bytes").unwrap();
         std::fs::create_dir_all(base.join("Audio/res/a.pck")).unwrap();
 
-        move_audio_cache(
-            base,
-            &config("Audio/cache", "Audio/res"),
-            &PathScope::default(),
-            false,
-        );
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
 
         assert_eq!(
             std::fs::read(base.join("Audio/cache/a.pck")).unwrap(),
@@ -390,6 +442,71 @@ mod tests {
         assert!(
             base.join("Audio/res/a.pck").is_dir(),
             "the destination that made the move fail is untouched"
+        );
+
+        // The summary line must not claim a move: the source is still there,
+        // and the counts say so.
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=0")
+                && logs.contains("kept=1"),
+            "a refused move is reported as kept, not moved: {logs}"
+        );
+    }
+
+    /// The other half of the same line: a relocation that did happen is
+    /// reported with its counts.
+    #[test]
+    fn a_completed_audio_move_logs_the_count() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "moved");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache/sub")).unwrap();
+        std::fs::write(base.join("Audio/cache/sub/a.pck"), b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
+
+        assert!(
+            !base.join("Audio/cache/sub/a.pck").exists(),
+            "the source moved"
+        );
+        assert_eq!(
+            std::fs::read(base.join("Audio/res/sub/a.pck")).unwrap(),
+            b"cache bytes"
+        );
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=1")
+                && logs.contains("kept=0"),
+            "the summary names what happened: {logs}"
+        );
+    }
+
+    /// An empty cache relocates nothing, so there is nothing to report.
+    #[test]
+    fn an_empty_audio_cache_logs_no_relocation() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "empty");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
+
+        assert!(
+            !logs.contains("audio cache -> res"),
+            "nothing moved, so no move is claimed: {logs}"
         );
     }
 }
