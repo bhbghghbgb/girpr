@@ -69,7 +69,7 @@ use crate::rw::{RwRuntime, RwSide};
 use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
-use plan::{build_plan, ensure_dirs_applicable, ensure_link_safe};
+use plan::{build_plan, ensure_dirs_applicable, ensure_link_safe, ensure_mkdir_targets_free};
 use rename::rename_to_src_casing;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
@@ -285,14 +285,20 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
 
-    // 5. Align casing before diffing, so the diff can be case-sensitive.
+    // 5. Refuse a mkdir dst cannot create **before** the rename, which is the
+    // first filesystem change. A filter can hide the blocking dst entry from
+    // `dm`, so this asks the disk about every mkdir candidate's path and strict
+    // prefixes; the map-based `ensure_dirs_applicable` below cannot see them.
+    ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive)?;
+
+    // 6. Align casing before diffing, so the diff can be case-sensitive.
     let renamed = if common.case_sensitive {
         0
     } else {
         rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
 
-    // 6. Plan, then print or apply.
+    // 7. Plan, then print or apply.
     //
     // `plans.required`, and it is keyed by **src** path — which survives the rename,
     // because the rename re-keys dst onto src's casing and never touches src's own

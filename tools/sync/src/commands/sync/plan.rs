@@ -5,9 +5,10 @@
 //! plan a real run would execute.
 
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::apply::Applied;
 use crate::diff::Diff;
@@ -393,6 +394,113 @@ pub(super) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
     Ok(())
 }
 
+/// Refuse, before the rename pass, a src directory that dst holds on disk as
+/// something other than a directory.
+///
+/// `--include`/`--exclude` hide entries from the effective dst map but not from
+/// the disk. A filtered-out file at a `mkdir` path is therefore invisible to
+/// [`build_plan`] and to [`ensure_dirs_applicable`], both of which read `dm`: the
+/// plan says `MKDIR`, the dry run prints it as applicable, and `create_dir_all`
+/// then fails with `AlreadyExists` after earlier phases have changed dst.
+///
+/// This runs before [`super::rename`] because a case-only rename is a filesystem
+/// change, and a refusal must not follow one. It cannot read the plan — that is
+/// built after the rename — so it derives the same mkdir candidates
+/// [`build_plan`] will: src directories the post-rename `dm` will not hold. In
+/// insensitive mode that is a lowercase match, because the rename pass collapses
+/// those pairs; a same-path dst **file** is then a planned `fix_dirs` entry, not
+/// a mkdir, and is allowed.
+///
+/// Every strict ancestor of a src directory is itself a src directory, so the
+/// blocker is normally its own candidate. A prefix that is not (a file in `dm`
+/// while the disk agrees) is a planned type conflict for the same reason, and the
+/// map-based [`ensure_dirs_applicable`] remains the later assertion for it.
+pub(super) fn ensure_mkdir_targets_free(
+    sm: &HashMap<String, EffRec>,
+    dm: &HashMap<String, EffRec>,
+    dst: &Path,
+    case_sensitive: bool,
+) -> Result<()> {
+    // The dst view the plan will see after the rename: exact keys in sensitive
+    // mode, lowercase pairs otherwise.
+    let dst_lower: HashMap<String, &EffRec> = if case_sensitive {
+        HashMap::new()
+    } else {
+        dm.iter().map(|(k, v)| (k.to_lowercase(), v)).collect()
+    };
+    let paired = |rel: &str| dst_after_rename(rel, dm, &dst_lower, case_sensitive);
+    // A src directory the plan will fix rather than mkdir, because dst holds a
+    // file (or a file link) at the same path after the rename.
+    let fixed: HashSet<&str> = sm
+        .iter()
+        .filter(|(rel, rec)| rec.kind == "dir" && paired(rel).is_some_and(|dst| dst.kind == "file"))
+        .map(|(rel, _)| rel.as_str())
+        .collect();
+    for (rel, rec) in sm {
+        if rec.kind != "dir" || paired(rel).is_some() {
+            continue;
+        }
+        // Shortest prefix first, so the message names the entry that actually
+        // blocks the path rather than the action underneath it.
+        let mut end = 0;
+        loop {
+            let (prefix, next) = match rel[end..].find('/') {
+                Some(i) => (&rel[..end + i], Some(end + i + 1)),
+                None => (rel.as_str(), None),
+            };
+            match disk_is_dir(&dst.join(prefix))? {
+                // Existing directory (including a link to one): create_dir_all
+                // accepts it.
+                Some(true) => {}
+                // A file the plan will replace before the nested mkdir runs.
+                Some(false) if fixed.contains(prefix) => {}
+                Some(false) => bail!(
+                    "cannot create `{rel}`: dst holds `{prefix}` as a file and it is not \
+                     a planned type-conflict fix (a filter can hide it from the dst map); \
+                     remove it, or include it so the conflict can be resolved"
+                ),
+                None => {}
+            }
+            match next {
+                Some(next) => end = next,
+                None => break,
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The dst entry a src path will pair with after the rename pass.
+fn dst_after_rename<'a>(
+    rel: &str,
+    dm: &'a HashMap<String, EffRec>,
+    lower: &'a HashMap<String, &'a EffRec>,
+    case_sensitive: bool,
+) -> Option<&'a EffRec> {
+    if case_sensitive {
+        dm.get(rel)
+    } else {
+        lower.get(&rel.to_lowercase()).copied()
+    }
+}
+
+/// `Some(is_dir)` when `path` exists, judged the way `create_dir_all` judges it.
+///
+/// A link is followed: a link to a directory is an existing directory, while a
+/// dangling link (or one to a file) is not. `None` means there is no entry, which
+/// is also fine. Every other error is returned rather than read as "not there".
+fn disk_is_dir(path: &Path) -> Result<Option<bool>> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
+        Ok(_) => match std::fs::metadata(path) {
+            Ok(md) => Ok(Some(md.is_dir())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Some(false)),
+            Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
+        },
+    }
+}
+
 /// The `SUMMARY` record's fields, in both modes.
 ///
 /// One struct, one field list, one [`Record`] constructor — so a dry run and a
@@ -530,6 +638,16 @@ mod tests {
         }
     }
 
+    fn dir() -> EffRec {
+        EffRec {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            hashes: DigestSet::default(),
+            is_link: false,
+        }
+    }
+
     fn plan(mkdir: &[&str], copy: &[&str], fix_dirs: &[&str]) -> Plan {
         Plan {
             mkdir: mkdir.iter().map(|s| s.to_string()).collect(),
@@ -571,5 +689,97 @@ mod tests {
         let p = plan(&["a/b"], &["a/b/x.txt"], &["a"]);
 
         ensure_dirs_applicable(&p, &dm).expect("fix-dirs runs before mkdir and copy");
+    }
+
+    /// **The P6-1 shape.** `foo` is absent from `dm` because `--include` hid the
+    /// dst file, so the map-based guard cannot see the blocker. The disk can.
+    #[test]
+    fn a_filtered_file_at_a_mkdir_path_is_refused_from_disk() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "filtered_blocker");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("foo"), b"blocker").unwrap();
+        let mut sm = HashMap::new();
+        sm.insert("foo".to_string(), dir());
+        sm.insert("foo/bar.txt".to_string(), file());
+        let dm = HashMap::new();
+
+        let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+            .expect_err("a filtered dst file blocks the mkdir and the copy under it");
+        let msg = err.to_string();
+        assert!(msg.contains("`foo`"), "names the blocker: {msg}");
+        assert!(
+            msg.contains("cannot create `foo`"),
+            "names the mkdir: {msg}"
+        );
+    }
+
+    /// An existing directory is what `create_dir_all` wants, so it is not a
+    /// blocker even though the filtered `dm` does not know about it.
+    #[test]
+    fn an_existing_filtered_directory_is_not_a_blocker() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "filtered_dir");
+        let dst = t.subdir("dst");
+        std::fs::create_dir_all(dst.join("foo")).unwrap();
+        let mut sm = HashMap::new();
+        sm.insert("foo".to_string(), dir());
+        sm.insert("foo/bar.txt".to_string(), file());
+
+        ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false)
+            .expect("create_dir_all is a no-op on an existing directory");
+    }
+
+    /// In insensitive mode the rename pass pairs dst's `foo` with src's `Foo`,
+    /// and the plan turns the same-path kind difference into a `fix_dirs` entry.
+    /// The preflight must use the same pairing, not the exact key.
+    #[test]
+    fn a_case_paired_file_is_a_planned_fix_not_a_mkdir() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "case_pair_fix");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("foo"), b"blocker").unwrap();
+        let mut sm = HashMap::new();
+        sm.insert("Foo".to_string(), dir());
+        let mut dm = HashMap::new();
+        dm.insert("foo".to_string(), file());
+
+        ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+            .expect("rename then fix-dirs resolves the pair");
+    }
+
+    /// The strict-prefix half: `a/b` is the candidate, and `a` is a file on disk
+    /// that `dm` misreports as a directory. The plan would `mkdir a/b` and fail,
+    /// because `a` is not a `fix_dirs` entry.
+    #[test]
+    fn a_file_at_a_strict_prefix_is_refused_from_disk() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "prefix_blocker");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a"), b"blocker").unwrap();
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), dir());
+        sm.insert("a/b".to_string(), dir());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), dir());
+
+        let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+            .expect_err("the prefix is a file on disk and is not a planned fix");
+        let msg = err.to_string();
+        assert!(msg.contains("`a`"), "names the blocking prefix: {msg}");
+        assert!(msg.contains("a/b"), "names the action: {msg}");
+    }
+
+    /// A planned fix is exactly the licence a strict prefix gets: `fix_dirs`
+    /// removes the file and creates the directory before `mkdir a/b` runs.
+    #[test]
+    fn a_planned_fix_at_a_strict_prefix_is_applicable() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "prefix_fix");
+        let dst = t.subdir("dst");
+        std::fs::write(dst.join("a"), b"blocker").unwrap();
+        let mut sm = HashMap::new();
+        sm.insert("a".to_string(), dir());
+        sm.insert("a/b".to_string(), dir());
+        let mut dm = HashMap::new();
+        dm.insert("a".to_string(), file());
+
+        ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+            .expect("fix-dirs replaces `a` before the nested mkdir");
     }
 }
