@@ -95,6 +95,17 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         .await
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)?;
+    // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
+    // have no per-file chunk manifests to patch from, so refuse rather than
+    // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
+    // i.e. exit 2 instead of the documented usage error).
+    // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
+    if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
+        return Err(RunFailure::usage(anyhow::anyhow!(
+            "game download mode {:?} is not chunk mode; chunk repair not supported (unexpected for Genshin)",
+            config.default_download_mode
+        )));
+    }
     // These three dirs feed both a path-scope gate and a filesystem sink. Clean
     // each spelling once, here, so the gate and the sink compare the same
     // string; cleaning only inside `contained_join` would let a `./`-spelled
@@ -113,17 +124,6 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         config.audio_pkg_cache_dir,
         config.default_download_mode
     );
-    // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
-    // have no per-file chunk manifests to patch from, so refuse rather than
-    // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
-    // i.e. exit 2 instead of the documented usage error).
-    // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
-    if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
-        return Err(RunFailure::usage(anyhow::anyhow!(
-            "game download mode {:?} is not chunk mode; chunk repair not supported (unexpected for Genshin)",
-            config.default_download_mode
-        )));
-    }
 
     let game_branch = hyp
         .game_branch()
