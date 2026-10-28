@@ -16,7 +16,7 @@ discard a failure the review standard says must be visible.
 | ID | Verdict | Change | Commit |
 |---|---|---|---|
 | T-1 | **Valid, fixed.** Reproduced: a BOM-prefixed valid blacklist line plus a truncated second line returned `Ok(Some({}))`; an all-malformed ignore file returned `Ok(Some({}))`; both with no log. `src/util.rs` now strips one leading UTF-8 BOM, warns per unparseable line with the path and 1-based line, and refuses a file whose non-blank text produced no entry and had a parse failure (matching R-8's rule for the audio scan file). A valid entryless `{}` and a blank file stay empty. | `parse_config_list` shared by both readers; unit tests `config_lists_strip_a_bom_and_warn_per_unparseable_line`, `an_all_malformed_config_list_is_refused`; `test_support` is now `pub(crate)` so `util` tests can capture logs. | `ad0a09c` |
-| T-2 | Validating | — | — |
+| T-2 | **Valid, fixed.** Reproduced at the root: `util::file_len(Path::new("bad\\0name"))` returned `None` for a `metadata` error that is not `NotFound`. `file_len` now returns a three-state `FileLen` classified by `classify_len`; only `NotFound` is `Absent`, every other error is `Unreadable`. `check.rs` logs `CHECK fail: unreadable` with the file and the `io::Error` instead of `CHECK fail: size`; `temp.rs` warns with the path and error and still repairs. Unit test `file_len_separates_present_absent_and_unreadable` injects `PermissionDenied`, exercises a real NUL path, and (Unix) a file-as-parent `NotADirectory`; Windows maps file-as-parent to `NotFound`, so it is not used for the unreadable arm here. | `src/util.rs` `FileLen`/`classify_len`, both `check.rs` branches, `temp.rs`; `src/util.rs` test. | `baf6498` |
 
 ## T-1 — Low — an unparseable config line is discarded silently
 
@@ -139,24 +139,28 @@ present / failed without a permission fixture by classifying an injected
 
 ## Verification
 
-On `fix-gaps/girpr` at `1d63841`, Windows, debug profile:
+On `fix-gaps/girpr` after the fixes, Windows, debug profile:
 
 | Command | Result |
 |---|---|
-| `cargo build` | `Finished dev profile [unoptimized + debuginfo] target(s) ... in 46.00s` |
-| `cargo test -p girpr` | **335 passed, 0 failed, 7 ignored** — 196 lib, 0 `src/main.rs`, 7 `artifact_server`, 17 `cli_contract`, 25 `repair_machinery`, 90 `repair_offline`, 0 doc-tests; ignored: 6 `artifact_bridge` + 1 `peak_heap` |
-| `cargo clippy -p girpr --all-targets` | `Finished dev profile [unoptimized + debuginfo] target(s) ... in 24.77s`; no warnings |
+| `cargo build` | `Finished dev profile [unoptimized + debuginfo] target(s) ... in 14.34s` |
+| `cargo test -p girpr` | **338 passed, 0 failed, 7 ignored** — 199 lib, 0 `src/main.rs`, 7 `artifact_server`, 17 `cli_contract`, 25 `repair_machinery`, 90 `repair_offline`, 0 doc-tests; ignored: 6 `artifact_bridge` + 1 `peak_heap` |
+| `cargo clippy -p girpr --all-targets` | `Finished dev profile [unoptimized + debuginfo] target(s) ... in 17.10s`; no warnings |
 | `cargo fmt --check` | exit `0`, no diff |
 
-`git status --short --branch` before the review: `## fix-gaps/girpr`, clean.
+`git status --short --branch` before the review: `## fix-gaps/girpr`, clean. The two new lib tests are `config_lists_strip_a_bom_and_warn_per_unparseable_line`, `an_all_malformed_config_list_is_refused`, and `file_len_separates_present_absent_and_unreadable`; the lib count moved 196 → 199.
 
 ## Not verified
 
-- T-1 was not reproduced through the binary: no offline fixture writes a
-  BOM-prefixed or truncated `blacklist_dir`/`res_category_dir` file, so the
-  claim is code-reading plus `serde_json`'s rejection of a leading U+FEFF.
-- T-2's stat failure was not reproduced on this host (no ACL fixture, and
-  `file_len` has no injection seam); the claim is code-reading.
+- T-1 was reproduced in a unit fixture (BOM-prefixed valid line plus a
+  truncated second line returned `Ok(Some({}))` before the fix) and is now
+  pinned by two unit tests. It was still not driven through the whole binary:
+  no offline fixture writes a BOM-prefixed `blacklist_dir`/`res_category_dir`.
+- T-2's root cause was reproduced on this host: `file_len` answered `None`
+  for a real non-`NotFound` `metadata` error (a NUL path). A deny-ACL fixture
+  was not available, so the full `check.rs` log path is pinned at the
+  classifier (`PermissionDenied` injected) and the syscall boundary (NUL),
+  not through an ACL.
 - The `#[cfg(unix)]` blocks of the containment and mode tests did not run
   (Windows host).
 - The 7 ignored tests (6 `artifact_bridge`, 1 `peak_heap`) did not run.
