@@ -112,7 +112,7 @@ pub fn file_link(target: &Path, link: &Path) -> std::io::Result<()> {
 ///
 /// `cmd /c mklink /J` creates a directory reparse point without elevation, and
 /// the walk and the deletion guard treat it as a link either way
-/// (`girsync::link::is_link`). If both calls fail, the original error is
+/// (`girsync::link::try_is_link`). If both calls fail, the original error is
 /// returned so the caller can report why it skipped.
 pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -163,23 +163,28 @@ macro_rules! skip_if_no_link {
     };
 }
 
-/// True when `path` is itself a link or junction (the test-side mirror of
-/// `girsync::link::is_link`, which is not exported from the public surface).
+/// True when `path` is itself a link or junction: the test-side mirror of
+/// `girsync::link::try_is_link`. The reparse attribute alone is not enough on
+/// Windows (cloud placeholders and other non-redirecting tags carry it), so the
+/// tag is confirmed through std's name-surrogate test or `read_link`; this form
+/// is infallible because every caller is an assertion, not a destructive guard.
 pub fn is_link(path: &Path) -> bool {
-    if path.is_symlink() {
-        return true;
-    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        std::fs::symlink_metadata(path)
-            .map(|md| md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-            .unwrap_or(false)
+        match std::fs::symlink_metadata(path) {
+            Ok(md) => {
+                md.file_type().is_symlink()
+                    || (md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                        && std::fs::read_link(path).is_ok())
+            }
+            Err(_) => false,
+        }
     }
     #[cfg(not(windows))]
     {
-        false
+        path.is_symlink()
     }
 }
 

@@ -13,12 +13,16 @@
 //! ## Links and junctions
 //!
 //! On Windows both a symbolic link and a directory junction are reparse points
-//! (`FILE_ATTRIBUTE_REPARSE_POINT`). The two `FileType` bits are not a reliable
-//! test across toolchains: on rustc 1.98.1 a junction reports
-//! `is_symlink = true` and `is_dir = false` from `symlink_metadata`, while older
-//! reports had `is_symlink = false`. [`is_link`] therefore asks the reparse
-//! attribute, which is the property Windows itself uses, and falls back to
-//! `is_symlink` on other platforms.
+//! (`FILE_ATTRIBUTE_REPARSE_POINT`), but **not every reparse point redirects**:
+//! cloud placeholders, dedup and AppExecLink carry the same attribute and are
+//! ordinary entries here. The two `FileType` bits are not a reliable test across
+//! toolchains either: on rustc 1.98.1 a junction reports `is_symlink = true` and
+//! `is_dir = false` from `symlink_metadata`, while older reports had
+//! `is_symlink = false`. [`try_is_link`] therefore uses std's name-surrogate
+//! test (`FileType::is_symlink`, which is true for a junction on this toolchain)
+//! and falls back to `std::fs::read_link`, which succeeds only for the two
+//! redirecting tags (`IO_REPARSE_TAG_SYMLINK` and `IO_REPARSE_TAG_MOUNT_POINT`);
+//! on other platforms it uses `is_symlink`.
 //!
 //! Removal has to match: `DeleteFileW` (Rust's `remove_file`) rejects a
 //! directory entry, and `RemoveDirectoryW` (`remove_dir`) is not what removes a
@@ -36,59 +40,51 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 /// True when `path` itself is a link or a junction, whichever the platform
 /// calls it. Never follows the final component.
 ///
-/// This is the infallible convenience form. Destructive guards use
-/// [`try_is_link`] instead, because a metadata error treated as "not a link" is
-/// the unsafe direction: the guard would then reach through the path it could
-/// not read.
-pub fn is_link(path: &Path) -> bool {
-    try_is_link(path).unwrap_or(false)
-}
-
-/// [`is_link`] with metadata errors reported.
-///
 /// `NotFound` is `Ok(false)`: there is no entry, so there is nothing to
 /// traverse. Every other error is returned, so a caller that is about to
 /// remove or write through a path can fail instead of silently assuming the
 /// path is not a link.
+///
+/// On Windows only redirecting reparse points (symbolic link, junction, WSL
+/// link) count. A non-link reparse point (cloud placeholder, dedup,
+/// AppExecLink) is `Ok(false)`; treating it as a link would refuse ordinary
+/// data as if it were a boundary, and route a directory to `remove_dir`
+/// instead of `remove_dir_all`.
 pub fn try_is_link(path: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(path) {
-        Ok(md) => Ok(is_link_metadata(&md)),
+        Ok(md) => is_link_metadata(path, &md),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
 }
 
 /// Whether `symlink_metadata`'s result describes a link.
-fn is_link_metadata(md: &std::fs::Metadata) -> bool {
+fn is_link_metadata(path: &Path, md: &std::fs::Metadata) -> io::Result<bool> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        md.file_type().is_symlink()
-    }
-}
-
-/// True when `path` carries a Windows reparse point. Never follows, and never
-/// errors: the walk already has a live entry, so this is the extra junction
-/// check for a directory whose `path_is_symlink` was false on some toolchain.
-///
-/// Returns `false` everywhere else, so the walk pays nothing for a check that
-/// cannot succeed.
-pub fn is_reparse_point(path: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        std::fs::symlink_metadata(path)
-            .map(|md| md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-            .unwrap_or(false)
+        // `FileType::is_symlink` from `symlink_metadata` is std's own reparse-tag
+        // test: the attribute is set *and* the tag carries the name-surrogate
+        // bit, which symbolic links, junctions and WSL links do and cloud
+        // placeholders, dedup and AppExecLink do not. It is the primary test, so
+        // a non-link tag is never opened.
+        if md.file_type().is_symlink() {
+            return Ok(true);
+        }
+        // The attribute alone is not enough: it is set by every reparse tag.
+        // `read_link` succeeds only for the two redirecting tags
+        // (`IO_REPARSE_TAG_SYMLINK`, `IO_REPARSE_TAG_MOUNT_POINT`), so it is the
+        // fallback for a toolchain whose `FileType` does not know a junction.
+        // Every other tag is reported as an error and is an ordinary entry.
+        if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            return Ok(false);
+        }
+        Ok(std::fs::read_link(path).is_ok())
     }
     #[cfg(not(windows))]
     {
         let _ = path;
-        false
+        Ok(md.file_type().is_symlink())
     }
 }
 
@@ -220,5 +216,17 @@ mod tests {
         std::fs::create_dir_all(root.join("a/b")).unwrap();
         assert_eq!(link_ancestor_above(&root, "a/b/c.txt").unwrap(), None);
         assert_eq!(topmost_link_ancestor(&root, "a/b/c.txt").unwrap(), None);
+    }
+
+    /// Ordinary entries are not links. On Windows this is also the fast path:
+    /// the reparse attribute is absent, so the classification never opens the
+    /// entry to ask for a reparse tag.
+    #[test]
+    fn regular_entries_are_not_links() {
+        let root = girpr_tempdir::TempDir::new("girsync_link", "plain");
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::write(root.join("f.txt"), b"x").unwrap();
+        assert!(!try_is_link(&root.join("f.txt")).unwrap());
+        assert!(!try_is_link(&root.join("d")).unwrap());
     }
 }
