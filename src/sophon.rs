@@ -6,6 +6,7 @@ use std::io::Write;
 
 use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 use crate::sleep::Sleep;
+use crate::util;
 
 /// Sophon chunk manifest protobuf (Starward `Sophon.proto` parity).
 /// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
@@ -658,6 +659,18 @@ pub fn join_url(prefix: &str, id: &str) -> String {
 }
 
 /// Build local-chunk reuse map: path -> list of (uncompressed_md5, uncompressed_size, offset).
+///
+/// The key is the **cleaned** rel — the same string `build_plan` stores in
+/// `PlannedFile::rel` — because every consumer (`est_download_bytes_by_file`,
+/// the scan, the temp and in-place writers) looks the file up by that spelling.
+/// Keying on the raw local-manifest spelling would lose reuse for a `./`- or
+/// `//`-spelled local manifest while the map's whole purpose is to find the
+/// bytes already on disk. Two raw spellings that clean to one key merge, which
+/// is the intended "first occurrence per chunk" behaviour.
+///
+/// The local manifest is best effort (`local_reuse_map`'s contract): an entry
+/// that cannot be cleaned is skipped with a warning rather than failing the
+/// run, because this map only ever saves downloads.
 pub fn build_local_chunk_map(
     manifests: &[WantedManifest],
 ) -> HashMap<String, Vec<(String, i64, i64)>> {
@@ -667,7 +680,18 @@ pub fn build_local_chunk_map(
             if f.is_folder {
                 continue;
             }
-            let e = map.entry(f.file.clone()).or_default();
+            let key = match util::clean_rel(&f.file) {
+                Ok(key) => key,
+                Err(e) => {
+                    tracing::warn!(
+                        file = %f.file,
+                        error = %format!("{e:#}"),
+                        "local reuse map: skipping a non-contained path"
+                    );
+                    continue;
+                }
+            };
+            let e = map.entry(key).or_default();
             for c in &f.chunks {
                 // keep first occurrence per md5 (duplicates exist)
                 if !e
@@ -1081,5 +1105,46 @@ mod tests {
         );
         // folders never enter the reuse map
         assert!(!map.contains_key("dir/"));
+    }
+
+    /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),
+    /// and every reuse consumer looks the file up by that string. A key built
+    /// from the raw manifest spelling (`./game/foo.dat`) would never be hit, so
+    /// a non-canonical local manifest would lose all reuse. The key is cleaned
+    /// here, once, at the map's boundary; a path that cannot be cleaned is
+    /// skipped like any other best-effort local-manifest degradation.
+    #[test]
+    fn local_chunk_map_keys_are_the_cleaned_plan_spelling() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![
+                SophonChunkFile {
+                    file: "./game/foo.dat".into(),
+                    chunks: vec![chunk("c1", "d41d8cd98f00b204e9800998ecf8427e", 0, 20)],
+                    is_folder: false,
+                    size: 20,
+                    md5: "m1".into(),
+                },
+                SophonChunkFile {
+                    file: "../escape.dat".into(),
+                    chunks: vec![chunk("c2", "0cc175b9c0f1b6a831c399e269772661", 0, 20)],
+                    is_folder: false,
+                    size: 20,
+                    md5: "m2".into(),
+                },
+            ],
+        }];
+        let map = build_local_chunk_map(&wm);
+        assert!(
+            map.contains_key("game/foo.dat"),
+            "the key must be the plan's cleaned spelling: {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+        assert!(!map.contains_key("./game/foo.dat"));
+        assert!(
+            map.keys().all(|k| k != "../escape.dat"),
+            "a non-contained path must not enter the map"
+        );
+        assert_eq!(map.len(), 1);
     }
 }
