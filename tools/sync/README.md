@@ -726,20 +726,25 @@ Mirrors `src` → `dst`:
    path, if one root contains the other (a mirror may not contain its own source;
    compared by canonical path and component-wise, so `A`/`AB` is not nesting and
    `ROOT`/`root` is one tree on Windows), if a link inside `src` resolves to `dst`,
-   to something inside it, or to a directory that contains it (checked after the
-   src walk, before any mirror change; a link pointing anywhere else is ordinary
-   content), or on any IO error (dangling symlink, walk loop, locked file — first
-   error aborts the run).
+   to something inside it, or to a directory that contains it, if a link inside
+   `dst` resolves to `src`, to something inside it, or to a directory that
+   contains it (each checked after its side's walk and before any mirror change; a
+   link pointing anywhere else is ordinary content), or on any IO error (dangling
+   symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
    Windows) — after the plan, before the diff, so both sides are on exact keys.
-4. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
-   `DELETE` extra files + remove dst-only dirs deepest-first (both skipped when
-   `--keep-extra`, which spares directories as well as files).
-   Type-conflicts resolve toward src kind.
+4. `FIX-DIR` type-conflicts toward src kind, then `MKDIR` missing dirs, then
+   `DELETE` extra files (skipped when `--keep-extra`, which spares directories as
+   well as files), then `COPY` missing + changed files (skipped when
+   `--missing-only`), then remove dst-only dirs deepest-first (also skipped when
+   `--keep-extra`).
+   **`FIX-DIR` precedes `MKDIR`** because a src directory can be nested under a
+   path where dst holds a file: the fix replaces the blocker, and only then can the
+   nested directory be created. The dry run reports the same order.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
@@ -787,7 +792,7 @@ and depends on none of those. Do not treat a *missing* row as a crash signal,
 though: a scan may legitimately record stat without a digest, so absence proves
 nothing.
 
-`--dry-run` reports `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in
+`--dry-run` reports `FIX-DIR`/`MKDIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in
 apply order and writes nothing (no backups, no cache updates, no FS changes). Its
 records are the same ones a real run reports, with `dry_run=true` on the
 `SUMMARY`; see the `--dry-run` section below.
@@ -841,7 +846,7 @@ and it is a hard error in both modes.
 `sync`'s two outputs are the same document. The `SUMMARY` uses identical field
 names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 `keep_extra` — and the action records share one vocabulary and one order
-(`MKDIR`, `FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
+(`FIX-DIR`, `MKDIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
 run's only addition is `dry_run=true`, so a caller reading either does not have to
 know which it got.
 
@@ -1030,8 +1035,13 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   reparse tags (symbolic link, junction) are links; other reparse points (cloud
   placeholders, dedup, AppExecLink) are ordinary entries and are copied and
   removed as such. A `dst` link to a **file** is
-  followed and written through: the copy lands on the target. A `dst` directory
-  link where `src` has a file is unlinked, and the file is written in its place.
+  followed and written through: the copy lands on the target, unless the target
+  resolves into `src`. A **dst** link that reaches `src` (its target is `src`,
+  inside it, or is a directory containing it) is refused before any mirror change
+  with the same `disjoint` rule as a src link into dst, because a file link at a
+  copy path would otherwise truncate a source file. A `dst` directory link where
+  `src` has a file is unlinked, and the file is written in its place, when the
+  link points outside `src`.
   Deleting an extra directory link removes **the link**, never its target: a path
   under a `dst` link is never deleted through it, and the link is removed when
   `src` does not have that path. A **src** link that reaches `dst` (its target is

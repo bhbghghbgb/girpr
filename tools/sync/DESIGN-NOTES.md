@@ -150,6 +150,19 @@ decided what this run's source is — and before dst is scanned, planned, rename
 or applied. A link to anywhere else is ordinary mirrored content, including one
 that points back inside `src`.
 
+`validate_dst_links` is the same check in the other direction, run immediately
+after dst's phase A. A dst link that resolves into `src`, or contains it, is
+refused before the plan, the rename or any apply phase. The dangerous shape is a
+final-component file link at a copy path: `File::create` follows it, truncates
+the source file, and the verify then reads the same file back through the link,
+so the run could exit 0 having destroyed its own input. The check is about where
+the link resolves, not about what this run's plan would do with it, so a dst-only
+link into `src` is refused even though unlinking it would be safe. `copy_one`
+re-asks the filesystem at the final component before it unlinks or creates
+anything, so a plan and a disk that disagree still cannot reach `src`. A dst link
+to anywhere else — including one inside `dst` itself — keeps the documented
+write-through.
+
 The removal passes do not rely on that check alone. `guard_removal_outside_src`
 canonicalizes each delete target's **parent** and refuses one that resolves
 inside src; the final component is deliberately not resolved, so a link at the
@@ -161,8 +174,10 @@ remove the file the run is copying.
 `sync_refuses_a_src_directory_link_inside_dst`,
 `sync_refuses_a_src_directory_link_containing_dst`,
 `sync_refuses_a_src_file_link_into_dst` (all but the last run on a Windows host
-through a junction; the file-link case may skip) and
-`a_removal_whose_parent_resolves_inside_src_is_refused`.
+through a junction; the file-link case may skip),
+`sync_refuses_a_dst_file_link_into_src` and
+`sync_refuses_a_dst_directory_link_into_src` (the first may skip; the junction
+case runs here), and `a_removal_whose_parent_resolves_inside_src_is_refused`.
 
 ### A digest is looked up by name, not by slot
 
