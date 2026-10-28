@@ -511,13 +511,14 @@ wrong conclusion; **wrong claim** = the current tree contradicts the claim.
    `is_symlink = true`, `is_dir = false`, `is_file = false`, `attrs = 0x410`,
    while `path_is_symlink()` is true and followed `metadata()` is a directory.
    Older toolchains have been reported to differ, so the `FileType` bits are not
-   a portable test. The walk follows junctions (they are reparse points resolved
-   by `fs::metadata`), so F-1’s deletion shape applies to them too. The reliable
-   test is `FILE_ATTRIBUTE_REPARSE_POINT` from
-   `std::os::windows::fs::MetadataExt::file_attributes()`; `src/link.rs` now
-   uses it and does not depend on the `FileType` bits. Whether `remove_dir_all`
-   on a junction removes only the junction or recurses into the target is still
-   **not verified** here, and the fix avoids depending on it.
+   a portable test on their own. The walk follows junctions (they are reparse points resolved
+   by `fs::metadata`), so F-1’s deletion shape applies to them too. **The third
+   pass corrected the predicate again:** `FILE_ATTRIBUTE_REPARSE_POINT` is
+   necessary but not sufficient — cloud placeholders, dedup and AppExecLink set
+   it too — so `src/link.rs` now starts from std’s name-surrogate
+   `FileType::is_symlink` and falls back to `read_link`; see §9 T-4. Whether
+   `remove_dir_all` on a junction removes only the junction or recurses into the
+   target is still **not verified** here, and the fix avoids depending on it.
 3. **`remove_dir_all` on a directory symlink.** Rust’s documentation says it removes
    the link rather than following it, but I did not run it. F-1 does not depend on
    this: the data loss is the `remove_file` of a descendant.
@@ -584,7 +585,7 @@ not the implementation.
 
 | ID | Status | Change | Commits |
 |----|--------|--------|---------|
-| F-1 | **fixed**, covered after the second pass | Link-ness is carried from the walk (`link::try_is_link`, reparse-attribute based, so junctions are included) into `LiveEnt`/`SideEntry`/`EffRec`. `build_plan` replaces any extra path under a dst link with the topmost link and drops its descendants from `delete_files`/`rmdir`; both apply passes re-check disk before removing. The second pass found that a **shared** dst link (src also has the path) still let writes and type-conflict fixes traverse it; `plan::ensure_link_safe` now refuses such a plan before the dry run or any filesystem change, and every destructive apply path re-checks its ancestors. Tests: inside-dst target, external target, `--keep-extra`, shared-link fix/copy/rename refusal, shared-link extras. | `1c827b2`, `42b9766`, `cca7218`; `9beede2`, `00f3e39`, `dae1a78`, `943e2d5` |
+| F-1 | **fixed**, covered after the second pass | Link-ness is carried from the walk (`link::try_is_link`, redirecting-reparse-tag based, so junctions are included; the predicate was narrowed in §9 T-4) into `LiveEnt`/`SideEntry`/`EffRec`. `build_plan` replaces any extra path under a dst link with the topmost link and drops its descendants from `delete_files`/`rmdir`; both apply passes re-check disk before removing. The second pass found that a **shared** dst link (src also has the path) still let writes and type-conflict fixes traverse it; `plan::ensure_link_safe` now refuses such a plan before the dry run or any filesystem change, and every destructive apply path re-checks its ancestors. Tests: inside-dst target, external target, `--keep-extra`, shared-link fix/copy/rename refusal, shared-link extras. | `1c827b2`, `42b9766`, `cca7218`; `9beede2`, `00f3e39`, `dae1a78`, `943e2d5` |
 | F-2 | **fixed**, covered | `copy_one` unlinks a directory link at a file path with a platform-correct call (`link::remove`: `remove_dir` on Windows for a directory target, `remove_file` on Unix) instead of skipping it and failing in `File::create`. A file link is still followed and written through, and the README now says so. Test uses a directory link to an external target. | `2bec6b3`, `cca7218` |
 | F-3 | **tests** | 17 link cases in `tests/symlink.rs`: three walk cases (file link stats as target, directory link subtree, dangling link aborts) and fourteen `sync` cases (src file link, src dir link, dst file-link write-through, F-2, F-1 inside/external, `--keep-extra`, shared-link fix/copy/rename refusal, shared-link extras fail vs `--keep-extra`, `compare-self` clean after link removal and after a type-conflict fix, `--exclude link`). Directory links fall back to a junction where `symlink_dir` needs a privilege. | `1c827b2`, `2bec6b3`, `42b9766`, `f4ffb59`, `943e2d5` |
 | F-4 | **tests** | Depth-11 file with the default cap: `sync` exits 0, the deep file stays unmirrored, the shallow file is copied. | `d077a78` |
@@ -623,8 +624,10 @@ here through `cmd /c mklink /J`, including F-1 and F-2.
 **Not verified; decisions left.**
 
 - True `symlink_dir` (as opposed to a junction) is not exercised on this host,
-  and no Unix link path was run. Junctions are detected by the reparse attribute,
-  not by `FileType::is_symlink`, which is true for them on rustc 1.98.1.
+  and no Unix link path was run. Junctions are detected by a redirecting reparse
+  tag; since §9 T-4 the test starts from std’s name-surrogate
+  `FileType::is_symlink` (true for them on rustc 1.98.1) and falls back to
+  `read_link`.
 - `std::fs::remove_dir_all` on a *genuine* directory that contains a junction is
   still unexercised; only paths that are themselves links are special-cased. The
   pre-existing recursive removals keep their old behavior.
@@ -765,7 +768,171 @@ with one testable rule instead of the earlier hybrid.
 
 ---
 
+## 9. Third adversarial pass (T-1…T-6)
+
+A third review re-audited `e8585fa` with the debug binary in
+`E:\Symlinks\Temp\rev3new` and the current source. Its notes are folded in here;
+the notes file itself is removed. T-1, T-2 and T-6 are **valid**; T-3 and T-4 are
+**valid but latent on this host**; T-5 is a valid dead-code/doc defect. T-1 and
+T-6 were reproduced with the binary, T-2 is confirmed from the source (there was
+no portable flush injector), T-3 is derived from the rename order and the two
+`fs::rename` calls, and T-4 needs a non-link reparse point (none was available).
+
+| ID | Severity | Verdict | Resolution | Commits |
+|----|----------|---------|------------|---------|
+| T-1 | high | valid, fixed | Nested/overlapping roots are refused before any cache or file change. Canonical roots, component-wise containment (`A`/`AB` is not nesting; case-insensitive on Windows). | `71c473c`, `2f536de`, `e0ecfff` |
+| T-2 | medium | valid, fixed | A failed `sync_all` aborts the copy with exit 3; no cache row is written. Test-only `GIRSYNC_TEST_FAIL_FLUSH` injects it. | `924e475`, `2f536de`, `e0ecfff` |
+| T-3 | medium | valid (latent), fixed | Parent-first renames rewrite each child through the directory moves already performed; a child the parent move covered is a no-op and emits no `RENAME`. Map/cache descendants are re-keyed. | `8279581`, `2f536de` |
+| T-4 | low | valid (latent), fixed | Only redirecting reparse points are links. std’s name-surrogate test first, `read_link` as the old-toolchain fallback; the reparse-only helper and the dead public `is_link` are gone. | `2477e0c`, `e0ecfff` |
+| T-5 | low | valid, fixed | Dead public `link::is_link` deleted; the test-side mirror no longer claims the predicate is unexported and mirrors the narrowed test. | `2477e0c` |
+| T-6 | low | valid, fixed | `cache_identity` canonicalizes the **root** and joins the cache name, so `root` and `ROOT` collide on a fresh tree; a lock error no longer advises `--ignore-cache`. | `08c19ae`, `2f536de`, `e0ecfff` |
+
+### T-1 — nested and overlapping roots
+
+Reproduction A: `src=root`, `dst=root/sub` exited 0, overwrote `root/sub/y.txt`
+with src’s bytes and created `root/sub/sub/y.txt`. Reproduction B:
+`src=root/sub`, `dst=root` deleted the source’s `sub/x.txt` and `sub/y.txt`, then
+exited 3. `validate_inputs` now canonicalizes both roots and refuses containment
+in either direction, before the backup/cache step and in `--dry-run` too. The
+comparison is component-wise, so `root`/`root2` is allowed and `C:\AB` is not
+inside `C:\A`; on Windows it ignores case, which is what makes the same check
+cover a case-only spelling. Test
+`run_sync_refuses_nested_roots_before_touching_anything` asserts exit 3, the
+`disjoint` message, unchanged bytes, no nested copy and no cache in either
+direction, plus the allowed sibling. It was run against the pre-fix tree (the
+`mod.rs` change stashed) and failed: the first direction exited 0.
+
+### T-2 — a failed flush was ignored
+
+`copy_one` called `fout.sync_all().ok()`. A real flush failure (disk full,
+quota, a network volume that went away) was therefore followed by the verify
+re-reading the same page cache the flush never wrote through, caching the
+digest, and exiting 0. `flush_file` now propagates the error with the dst path
+as context, so the copy fails before its record is returned to the cache and a
+rerun recopies. `GIRSYNC_TEST_FAIL_FLUSH` names one relative path; the test
+overrides the workspace’s nextest `GIRSYNC_TEST_NO_FSYNC=1`, since a skipped
+flush cannot fail. `a_failed_flush_aborts_before_the_copy_is_cached` was run
+with `copy.rs` stashed and failed on exit 0 versus 3; it also asserts no row for
+the file and a clean rerun.
+
+### T-3 — parent-before-child renames
+
+`case_renames` sorts by lowercase src key, so a directory precedes everything
+beneath it. The old loop renamed the parent and then called `fs::rename` on the
+child’s **old** path; on a case-sensitive host that path is gone, so the run
+exited 3 after printing `RENAME` records it did not perform. `plan_steps`
+rewrites each child’s `from` through the directory moves already planned
+(longest component-boundary prefix), marks a child covered by its parent as a
+no-op, and `final_key` re-keys the dst map and cache for exact renames and for
+dst-only descendants of a renamed directory. Three unit tests pin the ordering,
+the longest-prefix rewrite and the descendant re-key; the integration case
+`run_sync_renames_a_case_only_directory_before_its_children` runs here but
+**cannot fail first on this host**: the filesystem is case-insensitive, so the
+old child rename resolved through the new parent casing and succeeded, and
+`fsutil file setCaseSensitiveInfo` is denied. On a case-sensitive host it is the
+failing-first regression.
+
+### T-4 — every reparse point was a link
+
+`FILE_ATTRIBUTE_REPARSE_POINT` is set by cloud placeholders, dedup and
+AppExecLink as well as by symlinks and junctions. A tagged directory was
+therefore walked as `is_link = true`, refused as a link ancestor by
+`ensure_link_safe`/`link_ancestor_above` (with a diagnosis that names a link
+the user does not have), and routed to `remove_dir` instead of `remove_dir_all`
+on deletion. The predicate now starts from `FileType::is_symlink` on
+`symlink_metadata` — std’s name-surrogate test, true for symlinks, junctions and
+WSL links, false for the non-redirecting tags — and falls back to `read_link`
+for a toolchain whose `FileType` does not know a junction. The fallback matters
+for the error contract: std returns `Uncategorized` (“Unsupported reparse point
+type”), not `InvalidInput`, for an unknown tag, so the code treats a failed
+`read_link` after the reparse bit as “ordinary entry” rather than propagating an
+error that would refuse to walk the directory. `scan.rs` propagates a real
+`try_is_link` error for a directory. A non-link reparse point could not be
+created on this host (no OneDrive install; setting a tag needs elevation), so
+only regular entries and the existing link suite are exercised at runtime.
+
+### T-5 — dead public `is_link` and a stale comment
+
+`link::is_link` had no caller, was exported through `pub mod link`, and its own
+doc said not to use it in a destructive guard; the test-side mirror’s comment
+claimed it was not exported. It is deleted. `tests/common/mod.rs` now says it
+mirrors `try_is_link`, and the mirror implements the narrowed predicate so it
+cannot call a non-link reparse point a link.
+
+### T-6 — case-only root spellings
+
+`cache_identity` canonicalized the cache **file**, which does not exist on a
+fresh tree, and fell back to the raw path. `root` and `ROOT` then compared
+unequal, the src side created `root/girpr-cache`, and the dst open failed with
+`Database already open. Cannot acquire lock.` plus the harmful
+`(corrupt? use --ignore-cache)` advice: `--ignore-cache` deletes the cache the
+src side just made and turns the run into the meaningless self-pair the guard
+exists to refuse. It now canonicalizes the root and joins `CACHE_PREFIX`,
+compares with `same_path` (case-insensitive on Windows), and `cachedb::open_file`
+distinguishes `DatabaseAlreadyOpen` from corruption, naming the likely cause
+without suggesting `--ignore-cache`.
+`run_sync_refuses_case_only_spellings_of_one_root` (`#[cfg(windows)]`) asserts
+exit 3, the `resolve to the same cache` message, no `--ignore-cache` advice and
+no cache file; it was run with `side.rs` stashed and failed on the lock message.
+With T-1’s containment check also present, the distinct-sides check now runs
+first and gives the accurate diagnosis; the T-1 check would otherwise have
+called the pair “inside” rather than “the same cache”.
+
+### Re-checked, no finding
+
+The F-1/F-2 guards are still at their call sites (the planner remap, both apply
+re-checks, the shared-link refusal before apply), and the N-1…N-8 guards the §8
+table cites are still present: subtree-aware exclusion, ancestor retention,
+cache pruning in step with dst, and the reparse check gated on `is_dir()`. Two
+probes agreed with the earlier passes: `remove_dir_all` on a genuine directory
+containing a junction removed only the junction (the external target survived,
+exit 0), and `root` vs `root\.` is still refused with the same-cache message
+(exit 3). This was a presence check, not a fresh audit of every §8 wording.
+
+### Surviving decisions
+
+- A mirror inside its own source is refused, not supported. There is no
+  “exclude the destination automatically” mode.
+- A failed flush is fatal. The copy is not retried in-process; a rerun copies
+  the file again because no row was written.
+- One directory rename is one `RENAME`; descendants that the move already put
+  on src’s casing are silent. The cache and map still follow them.
+- A Windows link is a redirecting reparse point. Non-link reparse points are
+  ordinary data, copied and removed as such.
+- A lock is not corruption: `--ignore-cache` is never suggested for
+  `DatabaseAlreadyOpen`.
+- Two case-only spellings of one root are one cache on a case-insensitive
+  filesystem, whether or not the cache file exists yet.
+
+**Failing first.** T-1, T-2 and T-6 were each run against the pre-fix tree with
+only that fix file stashed, and each failed (T-1: exit 0; T-2: exit 0 instead of
+3; T-6: the lock message instead of the same-cache message). T-3’s integration
+case and T-4’s non-link reparse case cannot be made to fail on this host for the
+reasons above; their unit tests and the link suite pin the new decision.
+
+**Final verification.** On Windows 11, on `fix-gaps/girsync` (source at
+`2f536de`; the README/DESIGN-NOTES and this section are later docs commits):
+
+- `cargo build -p girsync` — Finished, no warnings.
+- `cargo test -p girsync` — 361 passed, 0 failed, 1 ignored
+  (`tests/sync.rs`, the same pre-existing `#[ignore]`).
+- `cargo clippy -p girsync --all-targets` — clean, no warnings.
+- `cargo fmt -p girsync --check` — exit 0.
+- `cargo test -p girsync --test symlink -- --nocapture` — 17 passed, 0 failed;
+  the same four file-link cases print the `os error 1314` skip line, and every
+  junction case runs.
+
+No file outside `tools/sync` was changed.
+
+**Open for the maintainer.** T-3’s only failing-first regression is the
+case-sensitive-host integration test, which this Windows host cannot enable; it
+should be watched on the Linux CI. T-4’s non-link reparse classification is
+source-verified only (no OneDrive/elevation here). T-2’s injector is test-only;
+production takes the same `sync_all` call. T-6’s binary test is Windows-only.
+
+---
+
 *End of review. Sections 1–6 describe the original source-only audit: no source,
 test, Cargo, README, or other project file was changed and no build, test, or
-binary run was performed for them. Sections 7–8 record the implementation and the
-second pass, which did build, test and run the binary.*
+binary run was performed for them. Sections 7–9 record the implementation and
+the second and third passes, which did build, test and run the binary.*
