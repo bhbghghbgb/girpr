@@ -133,11 +133,13 @@ pub struct BlobProps {
     pub container: String,
     /// MD5 of the bytes as served.
     pub md5_compressed: String,
-    /// MD5 of the bytes after zstd.
+    /// MD5 of the bytes after zstd. On an unmeasured row (`--no-chunk-blobs`)
+    /// this is the manifest's declared `uncompressed_md5`, not a measurement.
     pub md5_decompressed: String,
     /// SHA-256 of the bytes as served, so a reader can check with a stock tool.
     pub sha256_compressed: String,
-    /// `len(decoded)`.
+    /// `len(decoded)`. On an unmeasured row this is the manifest's declared
+    /// `uncompressed_size`, not a measurement.
     pub uncompressed_size: u64,
     /// The manifest's opaque field 6, carried through a diff that never reads it.
     pub unknown_field6: i64,
@@ -345,12 +347,14 @@ impl BlobProps {
 
     /// The entry for a blob that was never fetched.
     ///
-    /// `--no-chunk-blobs` produces these. The declared sizes come from the
-    /// manifest and the digests are **empty strings rather than zeros**,
-    /// because a zeroed digest is a claim and an absent one is not. M9's
-    /// `verify` reports `verified: null` as "not measured", which is the
-    /// honest reading and is why the spec says that flag breaks A7–A10 by
-    /// design.
+    /// `--no-chunk-blobs` produces these. Nothing was measured, so `bytes` is
+    /// zero, the two **compressed** digests are empty strings rather than zeros
+    /// — a zeroed digest is a claim and an absent one is not — and `verified`
+    /// and `decode_error` are null. `md5_decompressed` and `uncompressed_size`
+    /// do carry values, but they are the manifest's **declared** digest and
+    /// length, not a measurement: they say which bytes are missing. M9's
+    /// `verify` reports `verified: null` as "not measured", which is the honest
+    /// reading and is why the spec says that flag breaks A7–A10 by design.
     pub fn unmeasured(chunk: &SophonChunk) -> BlobProps {
         BlobProps {
             chunk_id: chunk.id.clone(),

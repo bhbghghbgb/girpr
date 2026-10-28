@@ -632,10 +632,14 @@ attempted:
   failed, or a fetch task that panicked mid-measure — and the row records which
   in `decode_error`. The message is the same one the run's error list carries,
   and the chunk is counted once among the failed fetches.
-- **No fetch was attempted** — a `--no-chunk-blobs` row. It has
-  `decode_error: null`, `verified: null` and empty digest strings, and it means
-  "not measured", not "failed"; the flag also skips A6–A12, A19 and A21–A23
-  (see §16).
+- **No fetch was attempted** — a `--no-chunk-blobs` row. It means "not
+  measured", not "failed": `stored_path`, `verified` and `decode_error` are
+  `null`, `bytes` is `0`, and the two compressed digests (`md5_compressed`,
+  `sha256_compressed`) are `""`. `md5_decompressed` and `uncompressed_size` are
+  **not** empty: they carry the manifest's declared digest and length, so a
+  reader can tell which bytes are missing. They are claims, not measurements —
+  `verified` is `null` precisely because nothing was measured. The flag also
+  skips A6–A12, A19 and A21–A23 (see §16).
 
 ### `build_id` — part of the chunk's address
 
