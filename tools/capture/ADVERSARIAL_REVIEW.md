@@ -658,6 +658,16 @@ K1 follows `decode_counts`: *measurements* saturate, while address-like sums use
 
 K2 takes the spec-supported row: an unframed body is a successful fetch with `stored_path`, `bytes`, both compressed digests, `decode_error`, and `verified` carrying the two decode-independent answers and two `false` decode-dependent keys. Because the fetch succeeded, the store stops rather than asking a second source and renaming a good body over the evidence; a real I/O error after the rename removes the published blob so disk and index agree. Both docs now state this. A loopback `Store::fill` test drives the real store path.
 
+### Eighth pass — L1–L2
+
+Re-derived at `b9c1682`; both confirmed valid and both reproduced before the fix. L1 failed as `--old-tag "CON" must be refused`; L2's `select` fixture panicked in debug at `accum.rs:206:1` (`attempt to add with overflow`) and the release budget test reported `18446744073709551612` against the ledger's `u64::MAX`.
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| L1 | A tag may name a Windows DOS device, so `manifests/<tag>` fails late or names a directory Windows cannot open. | fixed | `63ba129`, `f049c12` |
+| L2 | `bytes_admitted` and `total_admitted` use plain `.sum()` while the budget saturates. | fixed | `06c650b` |
+
+L1 makes `paths::is_windows_device_name` `pub(crate)` and calls it from `tag_shape_problem`, so the flag path, the API-resolved tags and the manifest writer share one rule; the extension is ignored, and `7.1.0`/`CONSOLE`/`COM0`/`LPT10` stay legal. L2 folds both totals with `saturating_add`, so the summary and `diff/matrix.json` report the same saturated number; a `select` fixture with two `u64::MAX - 1` costs pins it in debug and release.
 
 ### Decisions that still constrain current behaviour
 
@@ -665,6 +675,8 @@ K2 takes the spec-supported row: an unframed body is a successful fetch with `st
 - **F1 matrix.** `matrix.json` reports the charged ledger, with a debug assertion tying it to `bytes_admitted`.
 - **F5.** An error body is drained through a counting cap, but the status is always preserved, partial bytes are recorded, and a 404 is never retried.
 - **F6/G1.** One shared validator covers every document-supplied path: no `\`, absolute path, `:`, `..`, empty component or control character on any host; tags also refuse Windows-reserved characters and leading/trailing dots. A chunk id must match `<16 hex>_<32 hex>` (case-insensitive), not merely be one component.
+- **L1.** A tag also refuses DOS device names through the same `paths::is_windows_device_name` helper the path rule uses, extension ignored (`CON`, `NUL.txt`, `COM1`, `CONIN$`), on the flag path, the API-resolved tags and the manifest writer.
+- **L2.** `Selection::bytes_admitted` and `budget::total_admitted` saturate with the charged ledger, so a crafted maximum cost cannot panic in debug or wrap in release.
 - **F3.** A classless forced path is reported in `forced_unscored`/`forced_files_unscored`, not overloaded onto `forced_skipped`.
 - **F4.** The fetch reason goes in `decode_error`; a dedicated `fetch_error` remains open.
 - **F7.** A metadata-only run does not enforce a chunk wire-byte ceiling it pays nothing towards.
@@ -681,16 +693,16 @@ K2 takes the spec-supported row: an unframed body is a successful fetch with `st
 - **K1.** Measurement totals saturate; address-like sums and plan costs use `checked_add` with an error naming the offending chunk and values. No negative `offset`, `compressed_size` or `uncompressed_size` is accepted at a decode boundary, and no `uncompressed_size` above `i64::MAX` survives index validation.
 - **K2.** An unframed fetched body is a successful fetch and an `undecodable` row, not a failed fetch; it is not retried from another source, because replacing it would destroy the evidence. A post-rename I/O error removes the published blob.
 
-### Verification (latest: seventh pass, `41fdef9`)
+### Verification (latest: eighth pass, `f049c12`)
 
 | Command | Result |
 |---|---|
 | `cargo build -p gircap` | finished, no warnings |
-| `cargo test -p gircap` | **690 passed, 0 failed** (546 lib + 144 integration) |
+| `cargo test -p gircap` | **693 passed, 0 failed** (549 lib + 144 integration) |
 | `cargo clippy -p gircap --all-targets` | finished, no diagnostics |
 | `cargo fmt -p gircap --check` | clean |
 
-Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran.
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. The eighth-pass reproductions are now in-tree unit/fixture tests; `cargo test -p gircap --release --lib maximum_costs` also passes (2 passed).
 
 ## Open for maintainers
 
@@ -699,6 +711,8 @@ Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(uni
 - **F8 replay.** The recorded argv is lossy; replaying a bundle would need a raw-bytes companion.
 - **F11 older orphans.** Cleanup covers handled errors only; a panic unwinds past it, orphans from older binaries are not swept, and the historical accumulation rate is unmeasured.
 - **F6/G1 live inputs.** Whether a live API echoes a hostile tag, serves a hostile document or audio path, or uses an unusual but legitimate chunk-id spelling is unverified; the local sinks and rejection paths are tested.
+- **L1 end to end / cross-host.** No capture was run with a device-name tag — it is now refused at argument resolution, before any request — and a Linux-produced `manifests/CON/` bundle was not replayed through `verify` on Windows; A16's missing-file consequence is reasoned, not executed.
+- **L2 through the command.** The near-`u64::MAX` cost is driven through `select` with a `PathScore` fixture, not through a hand-edited manifest read from disk; no live manifest declaring extreme sizes was sampled.
 - **G2 crash tear.** Whether a metadata document can be left torn in a way `checksums.json` misses was not stress-tested.
 - **H3 live manifests.** Whether a live manifest contains names differing only by a trailing dot or space was not sampled.
 - **H4 on-disk bundle.** No real `--no-chunk-blobs` bundle was inspected; the doc matches the constructor and the tests.
