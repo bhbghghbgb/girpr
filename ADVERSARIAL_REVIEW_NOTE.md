@@ -127,7 +127,7 @@ catches it.
 **Required fix.** Extend the help string to the serialized shape
 (`…,mode,extra_bytes`). No behaviour changes.
 
-## 3. Verification
+## 3. Verification (pre-fix baseline)
 
 Run on Windows, debug profile, at tip `1f00dbd` with only
 `ADVERSARIAL_REVIEW_NOTE.md` added:
@@ -158,4 +158,71 @@ exits `3`), `DiskPlan` still conflates missing and unreadable with `stat().ok()`
 only `config.ini`, the lock and `audio_lang_*` / `Audio_*_pkg_version` is the
 documented v1 Genshin parity (`purge.rs:282-298`).
 
-*This note is the sixth-pass record; `ADVERSARIAL_REVIEW.md` was not modified.*
+## 4. Sixth-pass validation and fixes
+
+All three findings were checked against the source at their cited lines and
+then reproduced before the fix. R-7 and R-8 were executed through the real
+binary against the in-process mock; R-9 was read from `--help`. All three were
+valid and are fixed. No shared crate or tool was touched.
+
+| # | Verdict | What changed | Commit |
+|---|---|---|---|
+| R-7 | **Valid** (Medium, partial mutation) | `metadata::fetch` no longer calls `write_scan_file`. It keeps the containment validation and the explicit-`--audio`/scope refusal (both are plan-half validation), and `repair::run` writes the scan file in the execution phase — after `create_dir_all`, the single-writer lock, the ceilings, the empty-`--include` refusal, the plan build and the `--plan-out` write. The repair uses the in-memory `Meta::audio`, not the file. | `be6d83f` |
+| R-8 | **Valid** (Medium, data loss) | `read_scan_file` parses through `parse_scan_text`: one leading U+FEFF is stripped, and non-blank text that yields zero recognized languages is `Err` naming the file and the first unrecognized line (mapped to exit `1`). A recognized-plus-unrecognized file keeps the known set and warns per unknown line; a blank/empty file is still the game-only selection. | `a44c666` |
+| R-9 | **Valid** (Low, doc/CLI) | The `--plan-out` help now lists `mode` and `extra_bytes` and says what they mean. `docs/04:417-419` already showed the full shape; only the CLI text was one shape behind. | `c9fb86f` |
+
+**R-7 reproduction.** `explicit_audio_is_not_written_before_a_refusal`
+(`tests/repair_offline.rs`) drives the binary with `--audio en-us` and, in
+turn, `--max-files 0` (exit `5`), an unwritable `--plan-out` directory (exit
+`3`) and an `--include` matching nothing (exit `1`), each against a missing
+game dir. On the unfixed tree it failed at the first case: exit `5` had
+already created `<game>/Audio/scan.txt`. With the write deferred it passes:
+no game dir, no scan dir, no chunk request.
+
+**R-8 reproduction.** On the unfixed tree an `Audio/scan.txt` containing only
+`English (US)` produced `keeping current audio langs: {}` (game-only) and the
+run exited `0` after fetching chunks. The new binary test
+`an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only` requires
+exit `1`, an error that names the file and the line, no chunk request, and the
+file left byte-identical. Unit tests cover the same error through
+`resolve_effective_audio`, a BOM-prefixed `Chinese` (now `zh-cn`), and a mixed
+file whose unknown line is identified. The purge consequence was established
+by reading the chain (`select_manifests` drops audio manifests →
+`plan.expected_paths()` loses them → `classify_purge_path` returns `Purge`); it
+was not executed end to end because the mock fixture carries a single `game`
+manifest and no per-language package to delete. The new refusal removes the
+empty set that reached that chain.
+
+**R-9 reproduction.** `--help` showed
+`{repair:[{rel,size,chunks_total,est_download_bytes}],purge:[{rel,size}]}`.
+The new binary test `plan_out_help_documents_every_serialized_field`
+(`tests/cli_contract.rs`) fails on that text and passes on
+`…,mode,extra_bytes…`.
+
+**Surviving decisions.** (1) The plan half is now literally mutation-free; an
+explicit `--audio` writes the scan file only in the execution phase, so
+`--print-plan`, `--dry-run` and `--check-only` still write nothing. (2) A
+non-empty scan file naming no known language is local-config exit `1`, not the
+game-only selection; an editor-added BOM is tolerated because it is stripped
+before parsing. (3) Mixed known/unknown lines stay tolerant, with a warning per
+unknown line; the warning is a code-reading claim because tracing caches a
+callsite's interest globally, which makes a log capture order-dependent.
+
+## 5. Verification after the fixes
+
+Full run on Windows, debug profile, final sixth-pass tree:
+
+- `cargo build` — ok.
+- `cargo test -p girpr` — **326 passed, 0 failed, 7 ignored** (188 lib + 7
+  `artifact_server` + 17 `cli_contract` + 25 `repair_machinery` + 89
+  `repair_offline`; ignored: 6 `artifact_bridge` + 1 `peak_heap`; 0
+  `src/main.rs`, 0 doc-tests). The fifth-pass tree had 320; the six new tests
+  are the difference (two binary R-7/R-8, three audio unit, one CLI help).
+- `cargo clippy -p girpr --all-targets` — clean, no warnings.
+- `cargo fmt --check` — clean (exit `0`).
+
+**Not run:** the `#[cfg(unix)]` blocks of the containment tests (Windows
+host); the 7 ignored tests; no release-profile run; no Linux/macOS host; no
+live CDN traffic. R-8's purge-deletion consequence and the mixed-line warning
+capture are the two sixth-pass behaviours with no executed test, for the
+reasons above.
