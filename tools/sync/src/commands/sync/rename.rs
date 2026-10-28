@@ -6,10 +6,26 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::report::{Record, Report};
+
+/// Whether the test-only `GIRSYNC_TEST_FAIL_RENAME` hook names `rel`, i.e. this
+/// rename must fail before it touches the filesystem.
+///
+/// Default **off**: an unset variable matches nothing. A test needs the failure
+/// because a real failed `fs::rename` (a lock, a permission, a volume that went
+/// away) cannot be arranged portably; naming one relative path exercises the
+/// same error path the production call takes, including the rule that a failed
+/// rename publishes no `RENAME` record.
+fn test_fail_rename(rel: &str) -> bool {
+    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAIL_REL
+        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_RENAME").ok())
+        .as_deref()
+        == Some(rel)
+}
 
 /// The dst paths that must move to src's casing, as `(dst rel, src rel)` pairs.
 ///
@@ -140,6 +156,72 @@ fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, Stri
     }
 }
 
+/// A unique sibling path for the two-step rename, claimed before it is used.
+///
+/// The candidate is the **full** source file name plus `.girsync_case_tmp.<n>`,
+/// not `from.with_extension(...)`: replacing the extension turned `data.txt`
+/// into `data.girsync_case_tmp`, a predictable name that a user file could
+/// occupy, and `fs::rename` replaces an existing file without asking. The suffix
+/// is only a disambiguator; `create_new`/`create_dir` is what actually claims the
+/// name, so two runs over the same tree cannot pick the same temporary. A
+/// leftover from an interrupted run occupies one number and the next run steps
+/// over it instead of clobbering it.
+///
+/// The placeholder is removed for a directory because Windows cannot rename a
+/// directory onto an existing entry; a file placeholder is left in place and the
+/// step1 rename replaces it (it is ours, empty, and never user data). A failed
+/// step1 removes the file placeholder again.
+fn claim_case_tmp(from: &Path, is_dir: bool) -> Result<PathBuf> {
+    let parent = from.parent().context("case-fix path has no parent")?;
+    let name = from.file_name().context("case-fix path has no file name")?;
+    for n in 0..1000 {
+        let mut cand_name = name.to_os_string();
+        cand_name.push(format!(".girsync_case_tmp.{n}"));
+        let cand = parent.join(cand_name);
+        // Ask first whether the name is taken: `create_new` on an existing
+        // *directory* reports `Access is denied` rather than `AlreadyExists`, so
+        // the error kind alone cannot distinguish "occupied" from "cannot write
+        // here".
+        match std::fs::symlink_metadata(&cand) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("stat {}", cand.display()));
+            }
+        }
+        let claimed = if is_dir {
+            std::fs::create_dir(&cand)
+        } else {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&cand)
+                .map(drop)
+        };
+        match claimed {
+            Ok(()) => {
+                if is_dir {
+                    std::fs::remove_dir(&cand).with_context(|| {
+                        format!("remove case-fix placeholder {}", cand.display())
+                    })?;
+                }
+                return Ok(cand);
+            }
+            Err(e) => {
+                // A racing creator, or a candidate that appeared between the
+                // stat and the claim: the name is ours only if we created it.
+                match std::fs::symlink_metadata(&cand) {
+                    Ok(_) => continue,
+                    Err(_) => {
+                        return Err(e).with_context(|| format!("claim {}", cand.display()));
+                    }
+                }
+            }
+        }
+    }
+    bail!("no free case-fix temporary beside {}", from.display())
+}
+
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
 ///
 /// Returns the number of renames performed (or that a dry run would perform).
@@ -182,16 +264,18 @@ pub(super) fn rename_to_src_casing(
             // a rename that did not happen.
             continue;
         }
-        // One record, one log event. `Report::emit` does both, so there is no
-        // second hand-written `info!` stating the same rename — the count above and
-        // the `SUMMARY` cover the narration, and the record covers the detail.
-        report.emit(Record::pair(
-            "RENAME", "->", "from", &step.from, "to", &step.to,
-        ));
-        renamed += 1;
-
+        let record = || Record::pair("RENAME", "->", "from", &step.from, "to", &step.to);
+        // A dry run reports the rename it *would* make. That is the one place a
+        // record names an operation this process does not perform: the plan
+        // afterwards must describe dst in src's casing, and the summary's
+        // `renamed` counts the steps a real run would take.
         if dry_run {
+            report.emit(record());
+            renamed += 1;
             continue;
+        }
+        if test_fail_rename(&step.from) {
+            bail!("test: injected rename failure for {}", step.from);
         }
 
         let from = dst_root.join(&step.from);
@@ -200,12 +284,42 @@ pub(super) fn rename_to_src_casing(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        // two-step for Windows case-only rename
-        let tmp = from.with_extension("girsync_case_tmp");
-        std::fs::rename(&from, &tmp)
-            .with_context(|| format!("rename {} (case fix step1)", from.display()))?;
-        std::fs::rename(&tmp, &to)
-            .with_context(|| format!("rename to {} (case fix step2)", to.display()))?;
+        // Two-step for the Windows case-only rename. The temporary is a unique
+        // sibling claimed before use: the old fixed `with_extension(...)` name was
+        // a path in the user's namespace, so a file there was replaced by step1
+        // (silent loss) and a directory made step1 fail after the record had
+        // already been published.
+        let tmp = claim_case_tmp(&from, step.is_dir)?;
+        if let Err(step1) = std::fs::rename(&from, &tmp) {
+            // A file claim leaves an empty placeholder; step1 replaces it only on
+            // success. Do not leave tool residue behind a failed rename.
+            if !step.is_dir {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            return Err(step1)
+                .with_context(|| format!("rename {} (case fix step1)", from.display()));
+        }
+        if let Err(step2) = std::fs::rename(&tmp, &to) {
+            // Put the path back where it was, so a failed step does not leave dst
+            // half-renamed. The first error is the reason; a rollback's own error
+            // is reported beside it rather than replacing it.
+            return match std::fs::rename(&tmp, &from) {
+                Ok(()) => Err(step2)
+                    .with_context(|| format!("rename to {} (case fix step2)", to.display())),
+                Err(rollback) => Err(step2).with_context(|| {
+                    format!(
+                        "rename to {} (case fix step2); rolling back to {} also failed: \
+                         {rollback}",
+                        to.display(),
+                        from.display()
+                    )
+                }),
+            };
+        }
+        // **After** both renames: a record describes an action that happened. A
+        // failed step1/step2 above leaves no record and no count.
+        report.emit(record());
+        renamed += 1;
     }
     // The directory moves actually performed, for descendants that were not
     // themselves renamed (dst-only paths under a renamed parent included).

@@ -511,6 +511,83 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
+/// **P7-1.** The two-step case rename must not reuse a predictable sibling path.
+///
+/// The temporary used to be `from.with_extension("girsync_case_tmp")`, a name in
+/// the user's namespace: a file there was replaced by step1 (silent loss, exit
+/// 0) and a directory made the pass abort. The temporary is now
+/// `<full source name>.girsync_case_tmp.<n>`, claimed before use, so occupied
+/// candidates are stepped over and left exactly as they were.
+#[test]
+fn run_sync_case_rename_steps_over_occupied_temporaries() {
+    let t = temp_root("case_tmp_collision");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+    // The directory form takes the other claim branch (create_dir, not
+    // create_new), so it gets its own occupied candidate.
+    wfile(&src, "Dir/nested.txt", b"nested");
+    wfile(&dst, "dir/nested.txt", b"nested");
+    sync_mtime(&src.join("Dir/nested.txt"), &dst.join("dir/nested.txt"));
+    // The name the old implementation used, a file at the first new candidate,
+    // and a directory at the second. None is the tool's to overwrite.
+    wfile(&dst, "data.girsync_case_tmp", b"OLD-NAME");
+    wfile(&dst, "data.txt.girsync_case_tmp.0", b"PRECIOUS");
+    wfile(&dst, "data.txt.girsync_case_tmp.1/keep.txt", b"KEEP");
+    wfile(&dst, "dir.girsync_case_tmp.0", b"PRECIOUS-DIR");
+
+    let recs = run_binary(
+        &src,
+        &dst,
+        &["--keep-extra"],
+        &[("GIRSYNC_TEST_CACHE", "memory")],
+    );
+
+    let renames: Vec<&str> = recs
+        .iter()
+        .filter(|r| r["event"] == "rename")
+        .map(|r| r["from"].as_str().expect("a rename names its source"))
+        .collect();
+    assert_eq!(renames, ["data.txt", "dir"], "{recs:?}");
+    assert_eq!(rfile(&dst, "Data.txt"), b"payload", "the rename happened");
+    assert_eq!(rfile(&dst, "Dir/nested.txt"), b"nested");
+    // The filesystem is case-insensitive here, so `dst.join("dir").exists()`
+    // cannot tell the two spellings apart; the directory entries can.
+    let names = entry_names(&dst);
+    assert!(
+        names.iter().any(|n| n == "Dir") && !names.iter().any(|n| n == "dir"),
+        "the directory moved to src's casing, leaving no old spelling: {names:?}"
+    );
+    assert_eq!(
+        rfile(&dst, "data.girsync_case_tmp"),
+        b"OLD-NAME",
+        "the old fixed temporary name is not a path this code writes"
+    );
+    assert_eq!(
+        rfile(&dst, "data.txt.girsync_case_tmp.0"),
+        b"PRECIOUS",
+        "an occupied candidate is stepped over, not replaced"
+    );
+    assert_eq!(
+        rfile(&dst, "data.txt.girsync_case_tmp.1/keep.txt"),
+        b"KEEP",
+        "a directory at a candidate is stepped over too"
+    );
+    assert_eq!(
+        rfile(&dst, "dir.girsync_case_tmp.0"),
+        b"PRECIOUS-DIR",
+        "the directory rename steps over its occupied candidate"
+    );
+    assert!(
+        !dst.join("data.txt.girsync_case_tmp.2").exists()
+            && !dst.join("dir.girsync_case_tmp.1").exists(),
+        "the claimed temporaries are consumed by the rename: {:?}",
+        entry_names(&dst)
+    );
+}
+
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
 ///
 /// This is the one gate that catches a wrong planner case-flag, and it exists
