@@ -220,6 +220,99 @@ fn sync_writes_through_a_dst_file_link() {
     );
 }
 
+/// **P8-2.** The target of a kept dst file link is that link's content, not an
+/// extra path. With no copy planned the delete phase used to remove the target
+/// and exit 0, leaving `a.bin` dangling — and the next run aborted in the walk.
+/// The target is spared in both runs, so the pair is stable.
+#[test]
+fn sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed() {
+    let t = temp_root("sync_dst_file_link_equal");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"same");
+    wfile(&dst, "target.bin", b"same");
+    skip_if_no_link!(
+        "file",
+        file_link(&dst.join("target.bin"), &dst.join("a.bin"))
+    );
+    common::sync_mtime(&src.join("a.bin"), &dst.join("target.bin"));
+
+    for run in 1..=2 {
+        assert_eq!(
+            cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+            0,
+            "run {run}"
+        );
+        assert!(
+            is_link(&dst.join("a.bin")),
+            "the link survives run {run}: its target was not deleted"
+        );
+        assert_eq!(
+            rfile(&dst, "target.bin"),
+            b"same",
+            "and so does the content it names, after run {run}"
+        );
+    }
+}
+
+/// **P8-2.** The target can sit under a dst-only directory. Both the target and
+/// that directory are in the removal plan; the `rmdir` pass runs *after* the
+/// copy, so leaving either in the plan removes the content the write-through
+/// landed in.
+#[test]
+fn sync_spares_a_link_target_inside_a_dst_only_directory() {
+    let t = temp_root("sync_dst_file_link_dir");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"NEW-CONTENT");
+    wfile(&dst, "d/target.bin", b"old");
+    skip_if_no_link!(
+        "file",
+        file_link(&dst.join("d/target.bin"), &dst.join("a.bin"))
+    );
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(
+        dst.join("d").is_dir(),
+        "the directory holding the target stays"
+    );
+    assert_eq!(rfile(&dst, "d/target.bin"), b"NEW-CONTENT");
+    assert!(is_link(&dst.join("a.bin")), "the link is still a link");
+}
+
+/// **P8-2.** When src also mirrors the target, the link and the target are one
+/// file that cannot hold two contents. A copy at either end would change the
+/// other path, so the run refuses before touching the tree.
+#[test]
+fn sync_refuses_a_dst_file_link_whose_target_is_also_mirrored() {
+    let t = temp_root("sync_dst_file_link_mirrored");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"AAAA");
+    wfile(&src, "target.bin", b"BBBBBBBB");
+    wfile(&dst, "target.bin", b"old");
+    skip_if_no_link!(
+        "file",
+        file_link(&dst.join("target.bin"), &dst.join("a.bin"))
+    );
+
+    let err = cmd_sync(sync_mem(src.clone(), dst.clone()), &log())
+        .expect_err("one inode cannot be given two contents");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("refusing"), "names the refusal: {msg}");
+    assert!(msg.contains("link"), "names the shape: {msg}");
+    assert!(msg.contains("target.bin"), "names the target: {msg}");
+    assert_eq!(
+        rfile(&dst, "target.bin"),
+        b"old",
+        "the shared file is untouched"
+    );
+    assert!(is_link(&dst.join("a.bin")), "and the link is left in place");
+}
+
 // ---------------------------------------------------------------------------
 // F-2: src file, dst link-to-directory
 // ---------------------------------------------------------------------------

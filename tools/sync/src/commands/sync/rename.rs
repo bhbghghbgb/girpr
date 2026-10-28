@@ -276,6 +276,31 @@ impl DiskSpelling {
             None => Cow::Borrowed(rel),
         }
     }
+
+    /// The inverse of [`Self::disk_rel`]: the post-rename spelling of an
+    /// on-disk path.
+    ///
+    /// The disk-resolving plan preflight ([`super::plan`]'s link-storage check)
+    /// canonicalizes a link target, which answers in the *old* spelling, and must
+    /// then look the path up in the post-rename plan. Longest old prefix wins, the
+    /// same boundary rule in the other direction.
+    pub(super) fn plan_rel<'a>(&'a self, rel: &'a str) -> Cow<'a, str> {
+        let mut best: Option<&(String, String)> = None;
+        for mov in &self.moves {
+            let old = &mov.1;
+            let boundary = rel == old
+                || rel
+                    .strip_prefix(old)
+                    .is_some_and(|rest| rest.starts_with('/'));
+            if boundary && best.is_none_or(|b| old.len() > b.1.len()) {
+                best = Some(mov);
+            }
+        }
+        match best {
+            Some((new, old)) => Cow::Owned(format!("{new}{}", &rel[old.len()..])),
+            None => Cow::Borrowed(rel),
+        }
+    }
 }
 
 /// Rename dst paths to src's casing, updating the dst cache and `dm` in step.
@@ -611,6 +636,21 @@ mod tests {
             spelling.disk_rel("Dir2/f.txt"),
             "Dir2/f.txt",
             "a prefix match must end at a component boundary"
+        );
+
+        // The inverse, used after canonicalizing a link target: the same
+        // longest-prefix rule against the old spelling.
+        assert_eq!(spelling.plan_rel("dir/sub/f.txt"), "Dir/Sub/f.txt");
+        assert_eq!(
+            spelling.plan_rel("dir/orphan.txt"),
+            "Dir/orphan.txt",
+            "a dst-only descendant follows its renamed parent"
+        );
+        assert_eq!(spelling.plan_rel("other.txt"), "Other.txt");
+        assert_eq!(
+            spelling.plan_rel("dir2/f.txt"),
+            "dir2/f.txt",
+            "a textual prefix is not a component boundary here either"
         );
     }
 

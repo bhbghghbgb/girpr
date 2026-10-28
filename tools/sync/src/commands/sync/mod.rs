@@ -71,7 +71,7 @@ use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 use apply::Applier;
 use plan::{
     build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
-    ensure_mkdir_targets_free,
+    ensure_mkdir_targets_free, spare_link_storage,
 };
 use rename::{RenameOutcome, rename_to_src_casing};
 
@@ -313,7 +313,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // differ.
     // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
     // the plan print takes the equal set only if asked.
-    let diff = diff_maps(
+    let mut diff = diff_maps(
         &sm,
         &dm,
         &plans.required,
@@ -321,6 +321,14 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         CasePairing::Exact,
         common.show_identical,
     );
+
+    let mut plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
+    // Before the plan print: a dst file link and a target inside dst are one
+    // file. The plan must not delete the target the write-through needs, and it
+    // must not ask the two names to hold two contents. The diff's `EXTRA` record
+    // is dropped with the delete, so the printed plan and the applied plan name
+    // the same set.
+    spare_link_storage(&sm, &dm, &mut plan, &mut diff, &dst, on_disk.as_ref())?;
 
     // The plan print, the way `compare` prints it — every record except its
     // `SUMMARY`. `sync` emits its **own** summary at the end, counting actions
@@ -339,7 +347,6 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         report.emit(rec);
     }
 
-    let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
     // Before the dry-run branch: a plan that cannot be applied is not a plan a
     // dry run should print as if it could be. The apply passes re-check the
     // paths they touch; this is the one place that fails before *any* of them.

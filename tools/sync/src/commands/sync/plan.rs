@@ -142,6 +142,198 @@ fn disk_rel<'a>(on_disk: Option<&'a DiskSpelling>, rel: &'a str) -> Cow<'a, str>
     }
 }
 
+/// The post-rename `rel` of a path canonicalized from disk.
+fn plan_rel(on_disk: Option<&DiskSpelling>, disk: String) -> String {
+    match on_disk {
+        Some(spelling) => spelling.plan_rel(&disk).into_owned(),
+        None => disk,
+    }
+}
+
+/// Dst paths that are the storage of a dst file link this plan keeps.
+///
+/// A dst file link is followed by the walk, so `dm` holds its path as an
+/// ordinary file and its **target** as a second path when the target is inside
+/// dst. The two names are one file: writing through the link changes the target,
+/// so the target must not be in `delete_files` or under a directory in `rmdir`,
+/// and the plan cannot also copy the target to a different content.
+///
+/// This is a **plan-time** answer in both modes. The disk is asked because that
+/// is what `copy_one` writes through; the mode only changes the spelling it must
+/// ask about ([`disk_rel`]).
+#[derive(Debug, Default)]
+struct LinkStorage {
+    /// Paths whose removal would take the content of a kept link with it: the
+    /// final target, plus any link on the resolution chain.
+    keep: HashSet<String>,
+    /// Their ancestor directories, which must not be `rmdir`'d.
+    keep_dirs: HashSet<String>,
+}
+
+impl LinkStorage {
+    /// Drop the spared paths from the diff and the plan.
+    ///
+    /// The diff is adjusted too, so a dry run does not print `EXTRA target` for
+    /// a path it will deliberately keep — the record and the action must name the
+    /// same set, which is the whole reason `build_plan` reads the diff.
+    fn apply(&self, diff: &mut Diff, plan: &mut Plan) {
+        if self.keep.is_empty() && self.keep_dirs.is_empty() {
+            return;
+        }
+        diff.extra
+            .retain(|p| !self.keep.contains(p) && !self.keep_dirs.contains(p));
+        plan.delete_files.retain(|p| !self.keep.contains(p));
+        plan.rmdir
+            .retain(|p| !self.keep.contains(p) && !self.keep_dirs.contains(p));
+    }
+}
+
+/// Add an ancestor directory and every directory above it to `keep_dirs`.
+fn keep_ancestors(rel: &str, keep_dirs: &mut HashSet<String>) {
+    for (i, _) in rel.match_indices('/') {
+        keep_dirs.insert(rel[..i].to_string());
+    }
+}
+
+/// The dst-relative spelling of a link target, if the target is inside `dst`.
+///
+/// The **final component** is deliberately not resolved: an intermediate link
+/// must stay in the chain so it can be spared as well, and a `read_link` target
+/// may be relative or contain `..`. Resolving the parent and keeping the name
+/// gives the entry the walk reported at that path.
+fn target_rel(target: &Path, canonical_dst: &Path) -> Option<String> {
+    let parent = target.parent()?.canonicalize().ok()?;
+    let resolved = parent.join(target.file_name()?);
+    let rel = resolved
+        .strip_prefix(canonical_dst)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    (!rel.is_empty()).then_some(rel)
+}
+
+/// Find the storage of every dst file link the plan keeps, and refuse a plan
+/// that asks the link and its target to hold two different contents.
+///
+/// A link **stays** when src has a file at its path; a src directory or an
+/// absent path means the plan replaces or removes it, and its target is then
+/// nobody's storage. For each kept link:
+///
+/// - walk the `read_link` chain while the next entry is itself a link, sparing
+///   each one (deleting an intermediate link would dangle the one above it);
+/// - a final target inside dst that src does **not** have is the link's content,
+///   so it is spared with its ancestor directories;
+/// - a final target src **does** have is a second mirrored path on the same
+///   inode. If either end is copied, refuse: one file cannot be given two
+///   contents, and copying one name would silently change the other (or race it
+///   under the parallel copy phase). A target the plan replaces with a directory
+///   is refused for the same reason — the copy would write through a link whose
+///   target is gone.
+///
+/// A target outside dst is the documented write-through and is not this plan's
+/// business.
+pub(super) fn spare_link_storage(
+    sm: &HashMap<String, EffRec>,
+    dm: &HashMap<String, EffRec>,
+    plan: &mut Plan,
+    diff: &mut Diff,
+    dst: &Path,
+    on_disk: Option<&DiskSpelling>,
+) -> Result<()> {
+    let mut storage = LinkStorage::default();
+    // Nothing to spare when no copy or delete could meet a link target.
+    let mut rels: Vec<&String> = dm.keys().collect();
+    rels.sort();
+    let mut canonical_dst: Option<std::path::PathBuf> = None;
+    for rel in rels {
+        let rec = &dm[rel];
+        if !rec.is_link || rec.kind != "file" {
+            continue;
+        }
+        // Only a link src mirrors as a file stays. Anything else is replaced by
+        // a directory or removed as an extra, and its target is not its
+        // content.
+        if sm.get(rel).is_none_or(|s| s.kind != "file") {
+            continue;
+        }
+        let mut cur = dst.join(disk_rel(on_disk, rel).as_ref());
+        // A chain longer than this is a loop the walk would already have
+        // refused; the bound keeps a plan-time check from spinning.
+        for _ in 0..64 {
+            let target = match std::fs::read_link(&cur) {
+                Ok(t) => t,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => break,
+                Err(e) => {
+                    return Err(e).with_context(|| format!("read link {}", cur.display()));
+                }
+            };
+            let target = if target.is_absolute() {
+                target
+            } else {
+                match cur.parent() {
+                    Some(parent) => parent.join(target),
+                    None => target,
+                }
+            };
+            if canonical_dst.is_none() {
+                canonical_dst = Some(
+                    std::fs::canonicalize(dst)
+                        .with_context(|| format!("resolve dst root {}", dst.display()))?,
+                );
+            }
+            let dst_root = canonical_dst.as_ref().expect("set above");
+            let Some(disk_target) = target_rel(&target, dst_root) else {
+                break;
+            };
+            let target_rel = plan_rel(on_disk, disk_target);
+            let target_is_link = crate::link::try_is_link(&target)
+                .with_context(|| format!("check link {}", target.display()))?;
+            if target_is_link {
+                // An intermediate link is part of the chain the kept link
+                // resolves through; removing it would break the kept link.
+                storage.keep.insert(target_rel);
+                cur = target;
+                continue;
+            }
+            match sm.get(&target_rel) {
+                Some(trec) if trec.kind == "file" => {
+                    if plan
+                        .copy
+                        .iter()
+                        .any(|item| item.rel == *rel || item.rel == target_rel)
+                    {
+                        bail!(
+                            "refusing to sync `{rel}`: dst `{rel}` is a link to `{target_rel}`, \
+                             which src also has; copying either path would change the one file \
+                             they share (remove the link, or exclude it with --exclude)"
+                        );
+                    }
+                }
+                Some(_) => {
+                    if plan.fix_dirs.contains(&target_rel) {
+                        bail!(
+                            "refusing to sync `{rel}`: dst `{rel}` is a link to `{target_rel}`, \
+                             which this plan replaces with a directory; the copy would write \
+                             through a link whose target is gone (remove the link, or exclude \
+                             it with --exclude)"
+                        );
+                    }
+                }
+                None => {
+                    // The link's content, not an extra path: deleting it (or a
+                    // directory above it) is what turns the write-through into a
+                    // dangling link.
+                    keep_ancestors(&target_rel, &mut storage.keep_dirs);
+                    storage.keep.insert(target_rel);
+                }
+            }
+            break;
+        }
+    }
+    storage.apply(diff, plan);
+    Ok(())
+}
+
 /// Decide what to do about each difference between `sm` (src) and `dm` (dst).
 ///
 /// `diff` must have been computed case-*sensitively*: the rename pass runs
@@ -1087,5 +1279,61 @@ mod tests {
             std::io::ErrorKind::Unsupported,
             "no link API",
         ))
+    }
+
+    /// **P8-2.** A kept link's content is not an extra path. Sparing it has to
+    /// drop the `EXTRA` record, the planned delete, and the `rmdir` of every
+    /// directory above it — otherwise the delete phase removes the file the
+    /// write-through is about to need.
+    #[test]
+    fn sparing_a_links_content_drops_it_from_every_removal_list() {
+        let mut diff = Diff {
+            extra: vec![
+                "d".to_string(),
+                "d/target.bin".to_string(),
+                "other.bin".to_string(),
+            ],
+            ..Diff::default()
+        };
+        let mut p = plan(&[], &[], &[]);
+        p.delete_files = vec!["d/target.bin".to_string(), "other.bin".to_string()];
+        p.rmdir = vec!["d".to_string(), "gone".to_string()];
+
+        let mut storage = LinkStorage::default();
+        storage.keep.insert("d/target.bin".to_string());
+        keep_ancestors("d/target.bin", &mut storage.keep_dirs);
+        storage.apply(&mut diff, &mut p);
+
+        assert_eq!(
+            diff.extra,
+            ["other.bin"],
+            "the record and the action name the same set"
+        );
+        assert_eq!(p.delete_files, ["other.bin"], "the content is spared");
+        assert_eq!(p.rmdir, ["gone"], "and so is the directory holding it");
+    }
+
+    /// A `read_link` target can be relative or carry `..`; the plan needs the
+    /// dst-relative spelling of the entry, not of the link text.
+    #[test]
+    fn a_link_target_is_named_relative_to_the_dst_root() {
+        let t = girpr_tempdir::TempDir::new("girsync_plan", "target_rel");
+        let dst = t.subdir("dst");
+        let outside = t.subdir("outside");
+        std::fs::create_dir_all(dst.join("d")).unwrap();
+        std::fs::write(dst.join("d/t.bin"), b"x").unwrap();
+        std::fs::write(outside.join("x.bin"), b"x").unwrap();
+        let root = std::fs::canonicalize(&dst).unwrap();
+
+        assert_eq!(
+            target_rel(&dst.join("d").join("..").join("d").join("t.bin"), &root),
+            Some("d/t.bin".to_string()),
+            "the resolved parent plus the final name, not the link text"
+        );
+        assert_eq!(
+            target_rel(&outside.join("x.bin"), &root),
+            None,
+            "a target outside dst is the documented write-through, not storage"
+        );
     }
 }

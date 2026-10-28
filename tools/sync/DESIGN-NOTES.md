@@ -232,6 +232,41 @@ rather than a second name for the truncated inode.
 the plan-time preflight cases in `plan::tests`, and the `hardlink::tests`
 count and identity cases.
 
+### A kept dst file link's target is its content, not an extra
+
+The walk follows a file link, so `dm` holds the link at its own path and its
+target at the target's path when the target is inside `dst`. The two names are
+one file. The delete plan cannot know that from the map alone: the target looks
+`EXTRA`, so `delete_extras` removes it before the copy phase, and the copy then
+canonicalizes a dangling link (`NotFound`, exit 3) — or, with equal content and
+no copy, the run exits 0 leaving the link dangling and the next walk aborts.
+
+`spare_link_storage` answers this at plan time, in both modes, from the disk.
+For every `dm` file link that `src` also has as a file (so the link stays), it
+walks the `read_link` chain. An intermediate link is part of the chain and is
+spared too. A final target inside `dst` that `src` does not have is the link's
+content: it is dropped from `delete_files`, from the diff's `extra` bucket (so
+the printed record and the action name the same set), and from `rmdir` together
+with every directory above it. A final target `src` **does** have is one inode
+carrying two mirrored paths; if either end is planned for copy, the plan is
+refused before any change, because one file cannot hold two contents and the
+parallel copy phase could interleave them. A target the plan replaces with a
+directory is refused for the same reason. A target outside `dst` is the
+documented write-through and is not the plan's business.
+
+In a dry run the link is still at its pre-rename spelling on disk, while `dm`
+and the plan use src's casing. `spare_link_storage` stats the on-disk spelling
+and maps the canonicalized target back through `DiskSpelling::plan_rel`, the
+same path map the other plan-time guards use.
+
+**Enforced by:** `sync_writes_through_a_dst_file_link`,
+`sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed`,
+`sync_spares_a_link_target_inside_a_dst_only_directory`,
+`sync_refuses_a_dst_file_link_whose_target_is_also_mirrored` (file-link cases
+self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
+`sparing_a_links_content_drops_it_from_every_removal_list` and
+`a_link_target_is_named_relative_to_the_dst_root`.
+
 ### A digest is looked up by name, not by slot
 
 `DigestSet` has two lookups and they are not interchangeable: `get(HashAlg)` reads

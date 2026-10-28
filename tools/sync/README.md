@@ -1054,7 +1054,12 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   placeholders, dedup, AppExecLink) are ordinary entries and are copied and
   removed as such. A `dst` link to a **file** is
   followed and written through: the copy lands on the target, unless the target
-  resolves into `src`. A **dst** link that reaches `src` (its target is `src`,
+  resolves into `src`. When that target is inside `dst` and `src` does not have
+  the target's path, the target is the link's content, not an extra: the plan
+  keeps it (and the directories above it) instead of deleting them. If `src`
+  does have the target too, the link and the target are one file, so a plan that
+  would copy either path is refused before any change. A **dst** link that
+  reaches `src` (its target is `src`,
   inside it, or is a directory containing it) is refused before any mirror change
   with the same `disjoint` rule as a src link into dst, because a file link at a
   copy path would otherwise truncate a source file. A `dst` directory link where
