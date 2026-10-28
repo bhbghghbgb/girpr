@@ -745,6 +745,40 @@ fn list_finds_a_bundle_from_the_root() {
     // is a directory left behind when the test panics before the removal.
 }
 
+/// The published order is the relative path, **not** depth.
+///
+/// `list`'s doc used to promise "deepest first"; the walk is a depth-first
+/// traversal but both lists are re-sorted by the relative-path string, so a
+/// shallower bundle whose leading component sorts earlier comes first. This
+/// pins the order the summary's `first` and `last` report.
+#[test]
+fn list_orders_bundles_by_relative_path_not_by_depth() {
+    let shallow = Bundle::build("order-shallow");
+    let deep = Bundle::build("order-deep");
+    // `z_region/hk4e_global/...` sorts after the shallow bundle's
+    // `hk4e_global/...` even though it is one directory deeper.
+    let pair = shallow
+        .artifacts
+        .join("z_region")
+        .join(BIZ)
+        .join(format!("{OLD_TAG}__{NEW_TAG}"));
+    std::fs::create_dir_all(&pair).unwrap();
+    std::fs::rename(&deep.root, pair.join("20261014T000000Z")).unwrap();
+
+    let found = gircap::verify::list(&shallow.artifacts).expect("lists");
+    assert_eq!(found.bundles.len(), 2, "{found:#?}");
+    assert_eq!(
+        found.bundles[0].path,
+        format!("{BIZ}/{OLD_TAG}__{NEW_TAG}/20261014T000000Z"),
+        "the shallower bundle sorts first because `hk4e_global` < `z_region`"
+    );
+    assert_eq!(
+        found.bundles[1].path,
+        format!("z_region/{BIZ}/{OLD_TAG}__{NEW_TAG}/20261014T000000Z"),
+        "the deeper bundle is last: depth is not an ordering key"
+    );
+}
+
 /// A directory that *looks* like a bundle - it has a `MANIFEST.json` - but is
 /// truncated is skipped, not fatal. `list` runs over trees that may contain a
 /// capture in progress.
