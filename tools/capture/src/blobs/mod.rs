@@ -1374,9 +1374,25 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).expect("nonblocking accept");
         let served = xml.clone();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("one request");
+            // Bounded rather than a blocking `accept`: a future regression that
+            // makes the fetch fail before connecting must fail the assertions,
+            // not hang the suite on `join`.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).ok();
