@@ -1057,9 +1057,15 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   followed and written through: the copy lands on the target, unless the target
   resolves into `src`. When that target is inside `dst` and `src` does not have
   the target's path, the target is the link's content, not an extra: the plan
-  keeps it (and the directories above it) instead of deleting them. If `src`
-  does have the target too, the link and the target are one file, so a plan that
-  would copy either path is refused before any change. A **dst** link that
+  keeps it (and the directories above it) instead of deleting them, and it keeps
+  every link component on the way to it in both the walk's spelling and the
+  canonical one, with their ancestor directories. The target is matched as the
+  entry the walk reported (case-insensitively on Windows), so a link text with
+  different casing obeys the same rules. If `src` does have the target too, the
+  link and the target are one file, so a plan that would copy either path is
+  refused before any change; two or more kept links that resolve to one terminal
+  are judged as a set, refused if any of them would be copied and left alone
+  when none is. A **dst** link that
   reaches `src` (its target is `src`,
   inside it, or is a directory containing it) is refused before any mirror change
   with the same `disjoint` rule as a src link into dst, because a file link at a

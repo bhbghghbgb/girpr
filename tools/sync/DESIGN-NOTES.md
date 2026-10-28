@@ -244,28 +244,51 @@ no copy, the run exits 0 leaving the link dangling and the next walk aborts.
 `spare_link_storage` answers this at plan time, in both modes, from the disk.
 For every `dm` file link that `src` also has as a file (so the link stays), it
 walks the `read_link` chain. An intermediate link is part of the chain and is
-spared too. A final target inside `dst` that `src` does not have is the link's
-content: it is dropped from `delete_files`, from the diff's `extra` bucket (so
-the printed record and the action name the same set), and from `rmdir` together
-with every directory above it. A final target `src` **does** have is one inode
-carrying two mirrored paths; if either end is planned for copy, the plan is
-refused before any change, because one file cannot hold two contents and the
-parallel copy phase could interleave them. A target the plan replaces with a
-directory is refused for the same reason. A target outside `dst` is the
-documented write-through and is not the plan's business.
+spared too. Every link **component** of the target path is spared as well — the
+walk's alias spelling (`link/x`) and the canonical one (`real/x`) both, because
+the delete plan may name either — and every spared entry goes through
+`keep_path`, so all its ancestor directories are spared with it as well. A final
+target inside `dst` that `src` does not have is the link's content: it is dropped
+from `delete_files`, from the diff's `extra` bucket (so the printed record and
+the action name the same set), and from `rmdir` together with every directory
+above it. A final target `src` **does** have is one inode carrying two mirrored
+paths; if either end is planned for copy, the plan is refused before any change,
+because one file cannot hold two contents and the parallel copy phase could
+interleave them. A target the plan replaces with a directory is refused for the
+same reason. A target outside `dst` is the documented write-through and is not
+the plan's business.
 
-In a dry run the link is still at its pre-rename spelling on disk, while `dm`
-and the plan use src's casing. `spare_link_storage` stats the on-disk spelling
-and maps the canonicalized target back through `DiskSpelling::plan_rel`, the
-same path map the other plan-time guards use.
+Two or more kept links can resolve to one terminal even when neither target is
+itself mirrored by `src` (`a -> c` and `b -> c`, or the chained `a -> b -> c`).
+`ensure_shared_storage_safe` judges that set as a whole by terminal storage: a
+plan that would copy any member is refused before the plan print and before any
+mutation, while a group with no copy writes nothing and is left alone.
+
+The target is named in the spelling the walk reported. Its final component is
+deliberately not resolved — it may be the chain's next hop — so its spelling is
+read from the parent directory's listing, case-insensitively on Windows only
+(the component rule of `util::same_path`); a link text with different casing
+therefore cannot miss `sm`/`dm`, the spare or the grouping key. In a dry run the
+link is still at its pre-rename spelling on disk, while `dm` and the plan use
+src's casing. `spare_link_storage` stats the on-disk spelling and maps the
+canonicalized target back through `DiskSpelling::plan_rel`, the same path map
+the other plan-time guards use.
 
 **Enforced by:** `sync_writes_through_a_dst_file_link`,
 `sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed`,
 `sync_spares_a_link_target_inside_a_dst_only_directory`,
-`sync_refuses_a_dst_file_link_whose_target_is_also_mirrored` (file-link cases
+`sync_refuses_a_dst_file_link_whose_target_is_also_mirrored`,
+`sync_spares_a_kept_link_through_a_dst_directory_link`,
+`sync_refuses_two_kept_links_that_share_one_dst_file` and
+`sync_refuses_a_chained_pair_of_kept_links_sharing_storage` (file-link cases
 self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
-`sparing_a_links_content_drops_it_from_every_removal_list` and
-`a_link_target_is_named_relative_to_the_dst_root`.
+`sparing_a_links_content_drops_it_from_every_removal_list`,
+`a_link_target_is_named_relative_to_the_dst_root`,
+`a_case_differing_final_component_names_the_walk_entry`,
+`a_case_differing_link_component_is_spared_under_the_walk_spelling`,
+`a_case_differing_mirrored_target_is_refused`,
+`a_case_differing_terminal_is_spared_by_the_full_pass` and
+`a_case_only_rename_of_the_target_is_one_spare_in_both_modes`.
 
 ### A digest is looked up by name, not by slot
 
