@@ -125,7 +125,9 @@ async fn repair_attempt_inner(
                     // chunk's offset makes the resume honest — the chunks
                     // before it were each digest-checked when they were
                     // written, and everything from it on is gone.
-                    rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64)?;
+                    if let Err(rollback) = rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64) {
+                        return Err(chunk_failure_after_rollback(tmp_path, rollback, e));
+                    }
                     return Err(e);
                 }
             }
@@ -185,6 +187,23 @@ fn rollback_tmp(f: &mut File, tmp_path: &std::path::Path, offset: u64) -> Result
         "the failed chunk is rolled back out of the tmp"
     );
     Ok(())
+}
+
+/// Compose the two failures of one chunk attempt: the chunk error stays the
+/// reported cause, and a rollback failure is attached as context.
+///
+/// The rollback is the urgent condition — a `_tmp` left past the failed chunk
+/// would be trusted by the next length-based resume — but replacing the chunk
+/// error with it hides which chunk failed and why. Keep both.
+fn chunk_failure_after_rollback(
+    tmp_path: &std::path::Path,
+    rollback: anyhow::Error,
+    chunk: anyhow::Error,
+) -> anyhow::Error {
+    chunk.context(format!(
+        "rolling the tmp back to the failed chunk also failed ({}): {rollback:#}",
+        tmp_path.display()
+    ))
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
@@ -566,6 +585,37 @@ mod tests {
         assert!(
             chain.contains("stat tmp") && chain.contains(&tmp.display().to_string()),
             "the real cause must be named, not `tmp length 0`: {chain}"
+        );
+    }
+
+    /// R-3: when the rollback fails as well, the report must name the chunk
+    /// failure *and* the rollback. The old `?` returned the rollback error and
+    /// dropped the chunk error entirely.
+    ///
+    /// The seam is a read-only handle: truncation needs write access, so
+    /// `rollback_tmp` fails while the original chunk error — the fault the run
+    /// was cleaning up after — is still in hand.
+    #[test]
+    fn a_failed_rollback_keeps_the_chunk_error_as_the_cause() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "rollback_failure");
+        let tmp = dir.join("foo.dat_tmp");
+        std::fs::write(&tmp, b"0123456789").unwrap();
+        let mut read_only = File::open(&tmp).unwrap();
+        let rollback =
+            rollback_tmp(&mut read_only, &tmp, 0).expect_err("a read-only handle cannot truncate");
+        let err = chunk_failure_after_rollback(
+            &tmp,
+            rollback,
+            anyhow::anyhow!("chunk 7: digest mismatch"),
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("chunk 7: digest mismatch"),
+            "the original chunk failure must survive: {chain}"
+        );
+        assert!(
+            chain.contains(&tmp.display().to_string()) && chain.contains("rolling the tmp back"),
+            "the rollback failure must be attached with the path: {chain}"
         );
     }
 }
