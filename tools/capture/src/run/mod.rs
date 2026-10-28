@@ -711,9 +711,23 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// `gircap list` — index every capture under a root.
 ///
 /// The only command that takes a root rather than a bundle, because its
-/// job is to find bundles. A directory that looks like one and does not open is
-/// listed as a skip rather than aborting the walk: `list` exists to be run over a
-/// tree that may contain a half-finished capture.
+/// job is to find bundles. It is meant to be run over a tree that may contain
+/// a half-finished capture, so a directory that is not a bundle is not an
+/// error. There are three arms, and they differ:
+///
+/// 1. A directory that is not a bundle at all — no `MANIFEST.json`, or a
+///    manifest that declares no schema version this build can read — is
+///    stepped over silently. A half-written capture is a normal transient.
+/// 2. A directory that *is* a bundle this build refuses — an older schema, a
+///    permanent condition with a known fix — is named on stderr with the reason
+///    and counted in the summary's `bundles_unreadable`. It is still not a
+///    `BUNDLE` record: there is no bundle to describe, so a record would have
+///    to carry the failure instead of the facts, and a caller asking "which
+///    bundles are here" would get an entry that is not one.
+/// 3. A directory, entry or `MANIFEST.json` the walk **cannot read** stops the
+///    command with a usage error naming what could not be read — exit `1`,
+///    `result=error`. An inventory that quietly omits a subtree it never saw is
+///    wrong, and a bundle behind a share lock or an ACL denial is exactly that.
 ///
 /// One `BUNDLE` record per **valid** bundle on stdout, then one `SUMMARY`. The
 /// per-bundle facts are on the data plane so a machine can consume this command
@@ -721,15 +735,11 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// two a caller needs to decide which bundle to verify, and neither is on the
 /// summary.
 ///
-/// A directory that does not open stays stderr-only, as before: there is no
-/// bundle to describe, so a `BUNDLE` record would have to carry the failure
-/// instead of the facts, and a caller asking "which bundles are here" would get
-/// an entry that is not one.
-///
-/// **The summary still counts them.** A bundle this build refuses — an older
-/// schema — is a permanent condition with a known fix, and an operator whose
-/// inventory quietly omits one has an inventory that is wrong. So the count is
-/// on the summary and the path and the reason are on stderr.
+/// **The summary still counts the ones that are bundles.** A bundle this build
+/// refuses — an older schema — is a permanent condition with a known fix, and
+/// an operator whose inventory quietly omits one has an inventory that is
+/// wrong. So the count is on the summary and the path and the reason are on
+/// stderr.
 pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
     let index = crate::verify::list(&root).map_err(|e| Failure::usage(e.to_string()))?;
     let found = index.bundles;
