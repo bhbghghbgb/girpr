@@ -87,6 +87,16 @@ pub fn write(
             format!("manifest field {problem}"),
         ));
     }
+    // The tag is the other component of all four names, and it was the one the
+    // writer trusted. The CLI validates both resolved tags before a pair is
+    // named, but this sink is reachable by any in-crate caller that builds a
+    // `CapturedManifest`, and `tag_dir`/`archive_rel` interpolate it raw.
+    if let Some(problem) = crate::config::tag_shape_problem(&tag) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("manifest tag {problem}"),
+        ));
+    }
     let mut out = Vec::with_capacity(4);
 
     // 1. The archive, byte-exact.
@@ -397,6 +407,27 @@ mod tests {
         assert!(
             !outside.exists(),
             "the field escaped the dump root: {}",
+            outside.display()
+        );
+    }
+
+    /// The tag is the **other** component of the same four names. The writer used
+    /// to validate only the field, so a hand-built `CapturedManifest` with a
+    /// traversal tag reached `root.join(rel)` unrefused.
+    #[test]
+    fn a_tag_that_names_a_path_is_refused_before_anything_is_written() {
+        let root = tmp("tag-escape");
+        let outside = root.parent().unwrap().join("tag-escape");
+        let mut c = captured();
+        c.tag = "../../tag-escape".into();
+
+        let e = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(e.to_string().contains("manifest tag"), "{e}");
+        assert!(!root.exists(), "the dump created a tree it refused");
+        assert!(
+            !outside.exists(),
+            "the tag escaped the dump root: {}",
             outside.display()
         );
     }

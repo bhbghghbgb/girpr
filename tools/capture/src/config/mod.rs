@@ -569,7 +569,11 @@ fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
 /// The message names the tag and the rule, so both the flag path (which prefixes
 /// the flag) and the API path (which prefixes `main.tag` or `diff_tags[0]`) say
 /// which string was refused and why.
-fn tag_shape_problem(tag: &str) -> Option<String> {
+///
+/// `manifest::dump::write` calls it too: it is the last place a tag becomes a
+/// path, and a caller that builds a `CapturedManifest` by hand must meet the
+/// same rule as the capture path.
+pub(crate) fn tag_shape_problem(tag: &str) -> Option<String> {
     if tag.is_empty() {
         return Some("was given an empty tag".to_string());
     }

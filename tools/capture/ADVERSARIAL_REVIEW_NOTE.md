@@ -75,6 +75,18 @@ paragraph in `docs/00-spec.md` now says an unreadable walk is a usage error rath
 than a shorter inventory. The trade-off is deliberate: a transient stat failure
 now aborts the audit instead of omitting a possible bundle.
 
+### I5 - fixed
+
+`config::tag_shape_problem` is now `pub(crate)`, and `manifest::dump::write` calls
+it before the first `create_dir_all`/write, returning `InvalidInput` with
+`manifest tag {problem}`. The field check and the tag check are adjacent, so both
+interpolated components of the four names meet the same rule. The CLI still
+validates both resolved tags earlier; this closes the writer's own defence for a
+hand-built `CapturedManifest`. Test:
+`a_tag_that_names_a_path_is_refused_before_anything_is_written`, which mirrors the
+H2 field test and asserts the tree was never created and nothing landed in the
+parent.
+
 ---
 
 ### I1 - Forced paths of one primary class share a capture id
