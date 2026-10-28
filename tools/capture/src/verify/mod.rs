@@ -348,6 +348,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 /// **absence** and **a document that is not a bundle** are both "step over",
 /// but a manifest the process **cannot read** is an entry the walk could not
 /// see, and [`list`] must fail rather than answer with a shorter inventory.
+#[derive(Debug)]
 enum ManifestProbe {
     /// No `MANIFEST.json` here: not a bundle.
     Missing,
@@ -1397,6 +1398,25 @@ mod tests {
             e.contains("held by another process"),
             "the cause is kept: {e}"
         );
+    }
+
+    /// A stat failure that is not `NotFound` is a manifest the walk could not
+    /// see, not an absent one.
+    ///
+    /// The old `is_file()` probe turned any stat failure into `false` and the
+    /// directory was treated as "not a bundle at all" before any read happened.
+    /// A path holding a NUL cannot be stat'ed for a reason other than absence
+    /// on either host; the walk itself only reaches this arm when a share or an
+    /// ACL denies the stat, which a unit test cannot set up portably.
+    #[test]
+    fn a_manifest_that_cannot_be_stat_ed_fails_the_probe() {
+        let bad = Path::new("bad\0name").join("MANIFEST.json");
+        let e = probe_manifest(&bad, |_| {
+            panic!("the read is not reached when the stat fails")
+        })
+        .expect_err("a stat failure is not an absent manifest");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("MANIFEST.json"), "the manifest is named: {e}");
     }
 
     /// One failed entry is the whole walk's failure: a child that vanished
