@@ -912,3 +912,154 @@ fn excluding_a_dst_link_leaves_it_and_its_target_alone() {
     assert_eq!(paths(&dry, "rmdir"), paths(&recs, "rmdir"));
     assert!(paths(&recs, "delete").is_empty(), "{recs:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Ninth pass: R9-1, R9-2, R9-3 — the whole chain, and shared storage
+// ---------------------------------------------------------------------------
+
+/// **R9-1.** A kept dst file link whose target passes through a dst **directory
+/// link**: `dst/a.bin -> link/x.bin`, `dst/link -> dst/real`. Canonicalizing
+/// the target's parent named only `real/x.bin`, so `link` stayed in the delete
+/// plan; the run unlinked it and left `a.bin` dangling (exit 0). Both spellings
+/// and the intermediate link are storage now. This host refuses file symlinks
+/// without developer mode, so the case may skip; the resolver is unit-covered.
+#[test]
+fn sync_spares_a_kept_link_through_a_dst_directory_link() {
+    let t = temp_root("kept_link_via_dir_link");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"same");
+    wfile(&dst, "real/x.bin", b"same");
+    common::sync_mtime(&src.join("a.bin"), &dst.join("real/x.bin"));
+    skip_if_no_link!("directory", dir_link(&dst.join("real"), &dst.join("link")));
+    skip_if_no_link!(
+        "file",
+        file_link(Path::new("link/x.bin"), &dst.join("a.bin"))
+    );
+
+    for run in 1..=2 {
+        let (status, recs) = sync_bin(&src, &dst, &[]);
+        assert!(status.success(), "run {run} failed: {recs:?}");
+        assert!(
+            is_link(&dst.join("a.bin")),
+            "the kept link survives run {run}: {recs:?}"
+        );
+        assert!(
+            is_link(&dst.join("link")),
+            "the intermediate directory link survives run {run}: {recs:?}"
+        );
+        assert_eq!(
+            rfile(&dst, "real/x.bin"),
+            b"same",
+            "and so does the content it names, after run {run}"
+        );
+        assert!(
+            !paths(&recs, "delete").contains(&"link"),
+            "the delete plan never unlinks the chain component: {recs:?}"
+        );
+    }
+}
+
+/// **R9-2.** A kept link whose chain passes through an intermediate dst file
+/// link under a dst-only directory: `dst/a.bin -> extra/b`, `dst/extra/b ->
+/// outside/real.bin`. The intermediate link was spared by exact path, but
+/// `extra` stayed in `plan.rmdir`, and `remove_dir_all` took `b` with it. Every
+/// kept path now carries its ancestors. File symlinks skip here as above.
+#[test]
+fn sync_spares_an_intermediate_file_links_ancestor_directory() {
+    let t = temp_root("kept_link_intermediate");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "a.bin", b"payload");
+    wfile(&outside, "real.bin", b"payload");
+    common::sync_mtime(&src.join("a.bin"), &outside.join("real.bin"));
+    std::fs::create_dir_all(dst.join("extra")).unwrap();
+    skip_if_no_link!(
+        "file",
+        file_link(&outside.join("real.bin"), &dst.join("extra/b"))
+    );
+    skip_if_no_link!("file", file_link(Path::new("extra/b"), &dst.join("a.bin")));
+
+    for run in 1..=2 {
+        let (status, recs) = sync_bin(&src, &dst, &[]);
+        assert!(status.success(), "run {run} failed: {recs:?}");
+        assert!(
+            is_link(&dst.join("a.bin")),
+            "the kept link survives run {run}: {recs:?}"
+        );
+        assert!(
+            is_link(&dst.join("extra/b")),
+            "the intermediate link survives run {run}: {recs:?}"
+        );
+        assert!(
+            !paths(&recs, "rmdir").contains(&"extra"),
+            "the directory above the kept link is not removed: {recs:?}"
+        );
+    }
+}
+
+/// **R9-3.** Two kept links to one dst-only file, `dst/a -> c` and `dst/b -> c`,
+/// with different src files at `a` and `b`. The per-link check never saw the
+/// second name, so both copies wrote through the one inode and one mirrored path
+/// ended wrong at exit 0. The plan now refuses before any mutation, in both
+/// modes. File symlinks skip here.
+#[test]
+fn sync_refuses_two_kept_links_that_share_one_dst_file() {
+    let t = temp_root("kept_links_shared");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a", b"AAAA");
+    wfile(&src, "b", b"BBBBBBBB");
+    wfile(&dst, "c", b"old");
+    skip_if_no_link!("file", file_link(Path::new("c"), &dst.join("a")));
+    skip_if_no_link!("file", file_link(Path::new("c"), &dst.join("b")));
+
+    for extra in [&["--dry-run"][..], &[][..]] {
+        let out = sync_bin_raw(&src, &dst, extra);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "one inode cannot be given two contents ({extra:?}): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("refusing") && stderr.contains("`a`") && stderr.contains("`b`"),
+            "the error names both links: {stderr}"
+        );
+        assert_eq!(rfile(&dst, "c"), b"old", "the shared file is untouched");
+        assert!(is_link(&dst.join("a")) && is_link(&dst.join("b")));
+    }
+}
+
+/// **R9-3, chained.** `dst/a -> b -> c` with `src/a` and `src/b` both regular
+/// files. `b` is an intermediate link *and* a kept link; copying `a` rewrites
+/// the file `b` mirrors. The terminal storage groups both and refuses. File
+/// symlinks skip here.
+#[test]
+fn sync_refuses_a_chained_pair_of_kept_links_sharing_storage() {
+    let t = temp_root("kept_links_chained");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a", b"AAAA");
+    wfile(&src, "b", b"BBBBBBBB");
+    wfile(&dst, "c", b"old");
+    skip_if_no_link!("file", file_link(Path::new("c"), &dst.join("b")));
+    skip_if_no_link!("file", file_link(Path::new("b"), &dst.join("a")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "copying one end would break the other: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refusing") && stderr.contains("`a`") && stderr.contains("`b`"),
+        "the error names both links: {stderr}"
+    );
+    assert_eq!(rfile(&dst, "c"), b"old", "the shared file is untouched");
+    assert!(is_link(&dst.join("a")) && is_link(&dst.join("b")));
+}
