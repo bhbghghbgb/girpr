@@ -588,6 +588,54 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     );
 }
 
+/// **P7-3.** A failed rename must publish no `RENAME` record.
+///
+/// The record used to be emitted before the two `fs::rename` calls, so an
+/// interrupted case fix left a line claiming an action that did not happen. The
+/// injected failure names the step, because a real rename failure (a lock, a
+/// volume that went away) cannot be arranged portably.
+#[test]
+fn a_failed_case_rename_leaves_no_record() {
+    let t = temp_root("case_rename_fail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected rename failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected rename failure"),
+        "the error names the failure: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "dst is left exactly as it was"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload");
+}
+
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
 ///
 /// This is the one gate that catches a wrong planner case-flag, and it exists
