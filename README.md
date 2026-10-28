@@ -241,7 +241,7 @@ flowchart TD
   24 h is taken over. A read-only run (`--check-only`, `--dry-run`,
   `--print-plan`) never takes it, and a **scoped** run does not either — the
   lock's path is outside the scope, so it does not exist to the run.
-- audio: omitted flag = keep scan file (default `en-us` only when the file is **absent**; an unreadable scan file fails the run rather than silently replacing the selection). An empty scan file is the game-only choice, not absence. Explicit list/`none` overwrites the scan file atomically. `none` never mixes with langs.
+- audio: omitted flag = keep scan file (default `en-us` only when the file is **absent**; an unreadable scan file fails the run rather than silently replacing the selection). An empty scan file is the game-only choice, not absence. A non-empty scan file that names no known language is a config error (exit `1`, naming the file and the offending line) rather than an empty selection `--purge-after` would act on. Explicit list/`none` overwrites the scan file atomically, in the execution phase after every plan-half refusal. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**

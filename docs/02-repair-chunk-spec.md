@@ -63,10 +63,16 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    automation so the game launches — Starward/Collapse use game-only when the scan file
    is missing, and `none` opts into that behavior explicitly).
    A **readable empty** file is the game-only selection written by `--audio none` and is
-   kept as-is. An **unreadable** file is an error, not a default.
+   kept as-is. An **unreadable** file is an error, not a default. A non-empty file
+   whose lines name none of the four display names is also an error (exit 1) naming
+   the file and the first unrecognized line — an empty result would read as game-only
+   and hide the selected language from the purge keep set. An unrecognized line beside
+   a recognized one is warned and ignored; a leading UTF-8 BOM is stripped.
    Write the scan file back when an explicit selection was given (including `none`),
    except in `--dry-run` / `--check-only` / `--print-plan` (no writes) or when the scan
-   dir is unconfigured. The write is atomic (temp + rename in the same directory).
+   dir is unconfigured. The write happens in the execution phase, after every refusal
+   in the plan half, so a refused run leaves the install untouched. It is atomic
+   (temp + rename in the same directory).
 
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:

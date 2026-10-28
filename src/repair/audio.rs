@@ -70,8 +70,10 @@ pub fn resolve_effective_audio(
 ///   caller applies the documented `en-us` default.
 /// - `Ok(Some(set))` — the file was read. An empty set is a real selection
 ///   (game-only), not "unreadable".
-/// - `Err` — the file exists but could not be read. Treating this as absence
-///   would silently replace the user's selection with `en-us`.
+/// - `Err` — the file exists but could not be read, or it contains text but
+///   none of it names a language. Treating either as absence would silently
+///   replace the user's selection with `en-us`; treating the second as
+///   game-only would drop the selected language from the purge keep set.
 pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<String>>> {
     if scan_dir.is_empty() {
         return Ok(None);
@@ -84,9 +86,46 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<
             return Err(e).with_context(|| format!("read audio scan file {}", p.display()));
         }
     };
+    let (set, unrecognized) = parse_scan_text(&text);
+    if set.is_empty() && !unrecognized.is_empty() {
+        // Non-empty text with no recognized language is a malformed selection,
+        // not `--audio none`. The empty set would make `select_manifests` drop
+        // every audio manifest and hide the selected language from the purge
+        // keep set, so `--purge-after` would delete its packages.
+        return Err(anyhow::anyhow!(
+            "audio scan file {} contains no recognized language (first unrecognized line: {:?}); \
+             expected one of Chinese, English(US), Japanese, Korean, or an empty file for game-only",
+            p.display(),
+            unrecognized[0]
+        ));
+    }
+    for line in unrecognized {
+        tracing::warn!(
+            path = %p.display(),
+            line = %line,
+            "unrecognized line in the audio scan file; ignored"
+        );
+    }
+    Ok(Some(set))
+}
+
+/// Parse the scan file's text into canonical codes plus the non-blank lines
+/// that named none of the four display names (in file order).
+///
+/// Blank lines carry no selection and are not reported: an empty file is the
+/// game-only choice `--audio none` writes. A single leading UTF-8 BOM is
+/// stripped first, because `char::is_whitespace` does not treat U+FEFF as
+/// whitespace and it would hide the first display name.
+fn parse_scan_text(text: &str) -> (HashSet<String>, Vec<&str>) {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut set = HashSet::new();
+    let mut unrecognized: Vec<&str> = Vec::new();
     for line in text.lines() {
-        let code = match line.trim() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let code = match line {
             "Chinese" => Some("zh-cn"),
             s if s.eq_ignore_ascii_case("English(US)") || s.eq_ignore_ascii_case("English") => {
                 Some("en-us")
@@ -95,11 +134,14 @@ pub fn read_scan_file(game_dir: &Path, scan_dir: &str) -> Result<Option<HashSet<
             "Korean" => Some("ko-kr"),
             _ => None,
         };
-        if let Some(c) = code {
-            set.insert(c.to_string());
+        match code {
+            Some(c) => {
+                set.insert(c.to_string());
+            }
+            None => unrecognized.push(line),
         }
     }
-    Ok(Some(set))
+    (set, unrecognized)
 }
 
 /// Write the selection back as display names. An empty set writes an empty file,
@@ -233,6 +275,55 @@ mod tests {
         let err = resolve_effective_audio(&d, "scan.txt", None)
             .expect_err("an unreadable file must not default to en-us");
         assert!(format!("{err:#}").contains("scan.txt"), "{err:#}");
+    }
+
+    /// R-8: a non-blank file that names no known language is not the game-only
+    /// selection. Reading it as an empty set drops the real language from the
+    /// purge keep set; name the file and the offending line instead.
+    #[test]
+    fn an_all_unrecognized_file_is_an_error_that_names_the_line() {
+        let d = dir("all_unknown");
+        std::fs::write(d.join("scan.txt"), "English (US)\n").unwrap();
+        let err = read_scan_file(&d, "scan.txt").expect_err("no line was recognized");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("scan.txt"),
+            "the error must name the file: {chain}"
+        );
+        assert!(
+            chain.contains("English (US)"),
+            "the error must quote the first unrecognized line: {chain}"
+        );
+        assert!(
+            resolve_effective_audio(&d, "scan.txt", None).is_err(),
+            "a malformed file must never resolve to game-only"
+        );
+    }
+
+    /// R-8: a UTF-8 BOM is not whitespace, so the first display name used to
+    /// match nothing and a one-language file read as game-only.
+    #[test]
+    fn a_utf8_bom_does_not_hide_the_first_language() {
+        let d = dir("bom");
+        std::fs::write(d.join("scan.txt"), "\u{feff}Chinese\n").unwrap();
+        let set = read_scan_file(&d, "scan.txt").unwrap().unwrap();
+        assert_eq!(
+            set,
+            HashSet::from(["zh-cn".to_string()]),
+            "the BOM is stripped before the line is parsed"
+        );
+    }
+
+    /// The tolerant case R-8 keeps: one unknown line beside a known one is
+    /// skipped, and `read_scan_file` warns for each unknown line. The warning
+    /// itself is not captured here: tracing caches a callsite's interest
+    /// globally, so another test hitting the same `warn!` without a subscriber
+    /// first would make the capture order-dependent.
+    #[test]
+    fn an_unrecognized_line_beside_a_known_one_is_skipped() {
+        let (set, unrecognized) = parse_scan_text("Japanese\nKlingon\n");
+        assert_eq!(set, HashSet::from(["ja-jp".to_string()]));
+        assert_eq!(unrecognized, vec!["Klingon"]);
     }
 
     /// The scan file is written through a temp in the same directory and then

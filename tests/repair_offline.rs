@@ -1887,6 +1887,68 @@ async fn max_files_refuses_before_touching_anything() {
     mock.stop();
 }
 
+/// R-8: a non-empty scan file whose lines are all unrecognized used to read as
+/// an empty set, i.e. the game-only selection. With `--purge-after` that
+/// selection drops the real language's manifests from the keep set and deletes
+/// its packages. It must be a config error instead.
+#[tokio::test]
+async fn an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only() {
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_unknown");
+    std::fs::create_dir_all(dir.join("Audio")).unwrap();
+    let scan = dir.join("Audio").join("scan.txt");
+    // A renamed display name: non-blank, understood by nothing.
+    std::fs::write(&scan, "English (US)\n").unwrap();
+
+    let game_arg = dir.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(
+        code, 1,
+        "an all-unrecognized scan file is a config error, not game-only:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stderr.contains("scan.txt"),
+        "the error names the file: {stderr}"
+    );
+    assert!(
+        stderr.contains("English (US)"),
+        "the error quotes the offending line: {stderr}"
+    );
+    assert!(
+        mock.chunk_hits().is_empty(),
+        "nothing may be planned or downloaded from a malformed selection"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&scan).unwrap(),
+        "English (US)\n",
+        "the scan file is reported, never rewritten"
+    );
+    mock.stop();
+}
+
 #[tokio::test]
 async fn max_files_at_the_boundary_does_not_refuse() {
     // "> N", not ">= N": a run that exactly fits must be allowed through.
