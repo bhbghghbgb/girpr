@@ -146,6 +146,29 @@ this filesystem pairs them). For the record half, a unit test of
 `classify`/`is_record_path` suffices:
 a case-renamed record input must reach the `mod.rs:439-441` refusal.
 
+**Progress (this host).** R11-1 was reproduced against the pre-fix binary at
+`16bb199` in `E:\Symlinks\Temp\girsync_r11_repro`: after a case-only rename of
+`src\girpr-cache`, `sync --dry-run` printed `{"event":"missing","path":"GIRPR-CACHE"}`
+and a `copy` plan; the real run exited 3 with
+`copy ...\src\GIRPR-CACHE -> ...\dst\GIRPR-CACHE ... (os error 33)`, and a
+following `update --dir dst` panicked inside redb at `btree.rs:145` (exit 101).
+Restoring the pre-run destination cache and renaming the source cache back made
+both `update` runs exit 0.
+
+Fixed at the root cause in `40102cd`: `src/util.rs` now has one private
+`has_cache_prefix` predicate (Windows `eq_ignore_ascii_case` over the prefix
+bytes, POSIX `starts_with`), used by both `is_cache_rel` and `is_record_path`.
+No other production site recognizes the prefix; backups and snapshots are
+generated with the lowercase name and reach the walk through `is_cache_rel`.
+The unit test `the_cache_prefix_folds_case_on_windows_only` pins exact and
+case-only spellings for both predicates, `fixtures_classify_as_folders` pins a
+case-renamed record's classification on Windows, and
+`run_sync_excludes_a_case_renamed_cache_directory` (Windows, self-skips on a
+case-sensitive directory) runs the real binary: the dry run plans no
+cache path and the real run leaves both caches open. That end-to-end case fails
+before the fix at `tests/sync.rs:1650` on the `missing` record for
+`GIRPR-CACHE`.
+
 The tenth-pass fixes themselves were re-read at `400f8cb` — `on_disk_name`'s
 exact-first/unique-fold/`None` rules (`plan.rs`), `target_rel`'s parent strip and
 canonical check, `DiskSpelling::plan_rel` mapping, and the folded alias lookup
@@ -157,22 +180,29 @@ canonical check, `DiskSpelling::plan_rel` mapping, and the folded alias lookup
 ## Verification (eleventh pass, this host)
 
 - `cargo build -p girsync` — exit 0, no warnings.
-- `cargo test -p girsync` — **426 passed, 0 failed, 1 ignored**. Breakdown: lib 168;
+- `cargo test -p girsync` — **428 passed, 0 failed, 1 ignored**. Breakdown: lib 169;
   cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12,
   lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32,
-  sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+  sync 32 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
 - `cargo test -p girsync --test symlink -- --nocapture` — 32 passed, 0 failed.
   Thirteen file-link bodies print `skip:` and return (`os error 1314`); one
   case-only body self-skips because this filesystem pairs `CaseProbe` with
   `caseprobe`.
 - `cargo clippy -p girsync --all-targets` — exit 0, no warnings.
 - `cargo fmt -p girsync --check` — exit 0.
-- R11-1 was reproduced outside the repo with the current binary, as steps 1-6
-  above: dry run reports `MISSING`/`COPY` for `GIRPR-CACHE`; the real run exits 3
-  with `os error 33` (one earlier run exited 101 with the redb panic); the
-  destination cache then panics on open until its pre-run backup is restored.
+- R11-1 was reproduced outside the repo with the pre-fix binary at `16bb199`, as
+  steps 1-6 above: dry run reports `MISSING`/`COPY` for `GIRPR-CACHE`; the real run
+  exits 3 with `os error 33`; the destination cache then panics on open (exit 101)
+  until its pre-run backup is restored.
+- The fixed binary was probed again in `E:\Symlinks\Temp\girsync_r11_fixed`: after
+  the same case-only rename, `sync --dry-run` summarised `copied=0` with no
+  `GIRPR-CACHE` record, the real `sync` exited 0, and `update --dir` exited 0 on
+  both roots. `run_sync_excludes_a_case_renamed_cache_directory` is the
+  in-suite form and fails first at `tests/sync.rs:1650` with the pre-fix
+  `missing` record.
 
-Only this file was created; no other project file was modified.
+The working note is folded into `ADVERSARIAL_REVIEW.md` and deleted; the fix and
+tests are `40102cd`.
 
 ## Not verified
 
@@ -188,5 +218,6 @@ Only this file was created; no other project file was modified.
   both outcomes were observed, and the post-failure open panic was reproduced.
 - File-symlink end-to-end cases still self-skip on this host (`os error 1314`), as
   recorded in `OPEN_FOR_MAINTAINERS.md:8,10`; this pass adds no link fixture.
-- The fix and its tests are proposed, not implemented: this pass records the
-  finding only.
+- The fix and its tests are implemented in `40102cd` and pass on this host
+  (see the progress note above and the verification section); the POSIX and
+  per-directory-case-sensitive forms remain reasoned, not run, as listed above.
