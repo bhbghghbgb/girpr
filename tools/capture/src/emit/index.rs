@@ -52,8 +52,8 @@ pub struct ManifestInput<'a> {
     pub index: &'a crate::blobs::ChunkIndex,
     /// Bytes the CDN sent.
     pub bytes_downloaded: u64,
-    /// The command line.
-    pub argv: &'a [String],
+    /// The command line, both the lossy rendering and the exact bytes.
+    pub argv: &'a crate::cli::RecordedArgv,
     /// Whether the run finished.
     pub complete: bool,
 }
@@ -129,7 +129,8 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
             id,
             captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             host_os: std::env::consts::OS.to_string(),
-            tool_argv: i.argv.to_vec(),
+            tool_argv: i.argv.lossy.clone(),
+            tool_argv_raw: i.argv.raw.clone(),
             complete: i.complete,
         },
         biz: Biz_ {
@@ -828,7 +829,7 @@ mod tests {
         diff_tags: Vec<String>,
         audio: Vec<String>,
         fields: Vec<String>,
-        argv: Vec<String>,
+        argv: crate::cli::RecordedArgv,
         diffs: Vec<crate::manifest::diff::FieldDiff>,
     }
 
@@ -872,7 +873,7 @@ mod tests {
                 diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
                 audio: vec!["audio_1".to_string()],
                 fields: vec!["game".to_string()],
-                argv: vec!["gircap".to_string(), "capture".to_string()],
+                argv: crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
                 // `common + added` is what `selection_pool.manifest_entries`
                 // records, so a fixture with real counts is what pins that
                 // arithmetic. Zeros would pass either way and so would say
@@ -1178,7 +1179,18 @@ pub struct Capture {
     /// `windows` | `linux` | `macos`.
     pub host_os: String,
     /// The arguments, so a reader can reproduce the request set.
+    ///
+    /// `to_string_lossy` of each, so an argument that is not valid Unicode is
+    /// recorded with a replacement character. [`Self::tool_argv_raw`] has the
+    /// exact bytes for that case.
     pub tool_argv: Vec<String>,
+    /// The exact bytes of each argument, in the same order as `tool_argv`.
+    ///
+    /// The platform's own representation, which `host_os` disambiguates:
+    /// UTF-16LE code-unit bytes on Windows, the native byte string on Unix. A
+    /// non-Unicode `--out` or `argv[0]` cannot be recovered from the lossy form
+    /// above, so this is the only place the run's real command line survives.
+    pub tool_argv_raw: Vec<Vec<u8>>,
     /// False only if the run was interrupted; the selfcheck then says why.
     pub complete: bool,
 }

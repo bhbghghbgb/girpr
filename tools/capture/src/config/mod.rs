@@ -246,7 +246,9 @@ pub struct CapturePlan {
     ///
     /// Built by [`crate::cli::recorded_argv`] from `args_os`, so a non-Unicode
     /// path is recorded lossily rather than panicking after a successful parse.
-    pub argv: Vec<String>,
+    /// The exact bytes are kept beside the lossy form; see
+    /// [`crate::cli::RecordedArgv`].
+    pub argv: crate::cli::RecordedArgv,
 }
 
 /// Validate an API base override.
@@ -314,7 +316,7 @@ impl std::fmt::Display for AudioSelection {
 /// This cannot resolve a version pair — that needs an API answer — but everything
 /// that is wrong in the *request* is caught here, so a bad flag is rejected
 /// before a socket is opened rather than after.
-pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan> {
+pub fn capture_plan(args: &CaptureArgs, argv: crate::cli::RecordedArgv) -> Result<CapturePlan> {
     let transport = validate_transport(
         args.jobs,
         args.retries,
@@ -777,7 +779,10 @@ mod tests {
     }
 
     fn plan(mutate: impl FnOnce(&mut CaptureArgs)) -> Result<CapturePlan> {
-        capture_plan(&args_with(mutate), vec!["gircap".into(), "capture".into()])
+        capture_plan(
+            &args_with(mutate),
+            crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
+        )
     }
 
     #[test]
@@ -863,7 +868,16 @@ mod tests {
             p.max_decompressed_bytes,
             crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
         );
-        assert_eq!(p.argv, vec!["gircap".to_string(), "capture".to_string()]);
+        assert_eq!(
+            p.argv.lossy,
+            vec!["gircap".to_string(), "capture".to_string()]
+        );
+        // The raw form is recorded beside it, one entry per argument, in the
+        // same order. Its bytes are the host's own representation, so the test
+        // asserts what is portable: the shape, and that decoding the bytes the
+        // way `host_os` says gives back the lossy argument.
+        assert_eq!(p.argv.raw.len(), 2);
+        assert_eq!(p.argv.raw.len(), p.argv.lossy.len());
     }
 
     #[test]

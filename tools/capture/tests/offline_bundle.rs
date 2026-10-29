@@ -353,6 +353,7 @@ fn manifest() -> Manifest {
             captured_at: "2026-10-14T00:00:00Z".into(),
             host_os: "test".into(),
             tool_argv: vec!["gircap".into()],
+            tool_argv_raw: vec![b"gircap".to_vec()],
             complete: true,
         },
         biz: gircap::emit::index::Biz_ {

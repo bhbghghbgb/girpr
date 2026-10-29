@@ -248,8 +248,61 @@ fn the_manifest_index_key_set_is_the_documented_one() {
     assert_eq!(keys(&doc["versions"]), vec!["diff_tags", "new", "old"]);
     assert_eq!(
         keys(&doc["capture"]),
-        vec!["captured_at", "complete", "host_os", "id", "tool_argv"]
+        vec![
+            "captured_at",
+            "complete",
+            "host_os",
+            "id",
+            "tool_argv",
+            "tool_argv_raw",
+        ]
     );
+}
+
+/// `capture.tool_argv_raw` has one byte array per `tool_argv` entry, and those
+/// bytes decode back to the lossy argument.
+///
+/// The lossy form is what a reader shows a human; the raw form is what makes a
+/// non-Unicode argument (an unpaired surrogate in `--out`, say) recoverable at
+/// all. The two lists must stay aligned, and the bytes must be in the encoding
+/// `host_os` names.
+#[test]
+fn a_capture_records_the_exact_bytes_of_its_arguments() {
+    let b = bundle();
+    let doc = json(&b.join("MANIFEST.json"));
+    let lossy = doc["capture"]["tool_argv"]
+        .as_array()
+        .expect("tool_argv is an array");
+    let raw = doc["capture"]["tool_argv_raw"]
+        .as_array()
+        .expect("tool_argv_raw is an array");
+    assert_eq!(raw.len(), lossy.len(), "one raw entry per argument");
+    let host = doc["capture"]["host_os"].as_str().expect("host_os");
+    for (i, (l, r)) in lossy.iter().zip(raw).enumerate() {
+        let bytes: Vec<u8> = r
+            .as_array()
+            .unwrap_or_else(|| panic!("raw[{i}] is an array"))
+            .iter()
+            .map(|n| {
+                n.as_u64()
+                    .unwrap_or_else(|| panic!("raw[{i}] holds numbers")) as u8
+            })
+            .collect();
+        let decoded = match host {
+            "windows" => {
+                assert_eq!(bytes.len() % 2, 0, "raw[{i}] is whole UTF-16 code units");
+                let units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                String::from_utf16(&units).expect("each argument was valid Unicode")
+            }
+            _ => String::from_utf8(bytes).expect("each argument was valid Unicode"),
+        };
+        assert_eq!(&decoded, l.as_str().expect("lossy entry is a string"));
+    }
+    // The command is the second argument, as it was invoked.
+    assert_eq!(lossy[1], "capture");
 }
 
 /// A raised decompression ceiling is recorded, not silently replaced by the

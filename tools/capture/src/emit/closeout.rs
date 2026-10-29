@@ -361,7 +361,7 @@ mod tests {
         selection: crate::select::Selection,
         index: crate::blobs::ChunkIndex,
         fields: Vec<String>,
-        argv: Vec<String>,
+        argv: crate::cli::RecordedArgv,
     }
 
     fn fixture() -> Fixture {
@@ -421,7 +421,7 @@ mod tests {
                 sets: BTreeMap::new(),
             },
             fields: vec!["game".to_string()],
-            argv: vec!["gircap".to_string(), "capture".to_string()],
+            argv: crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
         }
     }
 

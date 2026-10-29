@@ -402,7 +402,8 @@ where
     Cli::try_parse_from(argv)
 }
 
-/// The `argv` a capture records, **lossily** rather than fatally.
+/// The `argv` a capture records: a human-readable rendering **and** the exact
+/// bytes of every argument.
 ///
 /// `std::env::args()` panics on any argument that is not valid Unicode, and the
 /// realistic carriers are the `PathBuf`-typed flags (`--out`, `--log-file`) plus
@@ -413,13 +414,62 @@ where
 /// A recorded path with a replacement character is a worse record than the real
 /// bytes, but it is a record; the alternative is none at all, and the flag whose
 /// value it was has already been used from the `OsString` clap parsed.
-pub fn recorded_argv<I>(args: I) -> Vec<String>
+///
+/// **The lossy form cannot be reversed, so the exact bytes are kept beside it.**
+/// `raw` is the platform's own representation: UTF-16LE code-unit bytes on
+/// Windows, the native byte string on Unix. `host_os` in the same document says
+/// which. Nothing replays it yet; the point is that a later replay could, and a
+/// run whose `--out` held an unpaired surrogate can still be described exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedArgv {
+    /// `to_string_lossy`, one entry per argument.
+    pub lossy: Vec<String>,
+    /// The exact bytes of each argument, in the same order.
+    pub raw: Vec<Vec<u8>>,
+}
+
+impl RecordedArgv {
+    /// The raw bytes of each argument, as the bundle records them.
+    pub fn raw(&self) -> &[Vec<u8>] {
+        &self.raw
+    }
+}
+
+/// Turn an `OsString` into the exact bytes this host's argv carries.
+#[cfg(windows)]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+    arg.encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<u8>>()
+}
+
+/// Turn an `OsString` into the exact bytes this host's argv carries.
+#[cfg(unix)]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt as _;
+    arg.as_bytes().to_vec()
+}
+
+/// Fallback for a host that is neither Windows nor Unix: keep the lossy bytes
+/// rather than failing to compile. No supported target takes this arm.
+#[cfg(not(any(windows, unix)))]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    arg.to_string_lossy().into_owned().into_bytes()
+}
+
+/// Record both forms of an argv, in one pass.
+pub fn recorded_argv<I>(args: I) -> RecordedArgv
 where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
-    args.into_iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect()
+    let mut lossy = Vec::new();
+    let mut raw = Vec::new();
+    for arg in args {
+        lossy.push(arg.to_string_lossy().into_owned());
+        raw.push(argv_bytes(&arg));
+    }
+    RecordedArgv { lossy, raw }
 }
 
 /// Exit with `code` on a clap error, having printed clap's own message.
@@ -459,13 +509,15 @@ mod tests {
         Cli::command().debug_assert();
     }
 
-    /// A non-Unicode argument is recorded, not fatal.
+    /// A non-Unicode argument is recorded, not fatal — and its exact bytes are
+    /// kept beside the lossy rendering, because the lossy one cannot be reversed.
     ///
     /// Windows is where an unpaired surrogate can reach `argv` (a very old or
     /// unusual filesystem path). `std::env::args()` panics on it; `args_os`
     /// plus this helper does not, and a recorded path with U+FFFD is still a
     /// truthful record of "the caller named a path this process could not spell
-    /// in Unicode".
+    /// in Unicode". The raw entry is the UTF-16LE code units, so the surrogate
+    /// survives exactly.
     #[cfg(windows)]
     #[test]
     fn a_non_unicode_argument_is_recorded_lossily_instead_of_panicking() {
@@ -474,19 +526,61 @@ mod tests {
 
         let bad = OsString::from_wide(&[0xD800]);
         let argv = recorded_argv([OsString::from("gircap"), bad.clone()]);
-        assert_eq!(argv.len(), 2);
-        assert_eq!(argv[0], "gircap");
+        assert_eq!(argv.lossy.len(), 2);
+        assert_eq!(argv.raw.len(), 2);
+        assert_eq!(argv.lossy[0], "gircap");
         assert!(
-            argv[1].contains('\u{FFFD}'),
+            argv.lossy[1].contains('\u{FFFD}'),
             "the surrogate is replaced, not dropped: {:?}",
-            argv[1]
+            argv.lossy[1]
         );
+        // The exact bytes decode back to what the caller wrote, which the lossy
+        // form cannot: that is the whole reason the field exists.
+        let units: Vec<u16> = argv.raw[1]
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        assert_eq!(OsString::from_wide(&units), bad);
         // And it does not panic for a plain ASCII path either, so the helper is
         // not merely tolerating the one case it was written for.
+        let ascii = recorded_argv([OsString::from("--out"), OsString::from(r"C:\a")]);
+        assert_eq!(ascii.lossy, vec!["--out".to_string(), r"C:\a".to_string()]);
         assert_eq!(
-            recorded_argv([OsString::from("--out"), OsString::from(r"C:\a")]),
-            vec!["--out".to_string(), r"C:\a".to_string()]
+            ascii.raw[1],
+            r"C:\a"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>()
         );
+    }
+
+    /// Every flag typed `PathBuf` accepts a non-Unicode value on its own
+    /// subcommand.
+    ///
+    /// The single-flag tests above prove the helper does not panic; this proves
+    /// the *parser* does not either, for each place a path can enter. A future
+    /// `String`-typed path flag would fail here rather than at the first run on a
+    /// machine with such a path.
+    #[cfg(windows)]
+    #[test]
+    fn every_path_flag_parses_a_non_unicode_value() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let cases: &[&[&str]] = &[
+            &["capture", "--out"],
+            &["capture", "--log-file"],
+            &["verify", "--artifact"],
+            &["materialize", "--artifact", "a", "--out"],
+            &["materialize", "--artifact"],
+            &["list", "--root"],
+        ];
+        for case in cases {
+            let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
+            argv.extend(case.iter().map(OsString::from));
+            argv.push(OsString::from_wide(&[0xD800]));
+            parse_from(argv).unwrap_or_else(|e| panic!("{case:?}: {e}"));
+        }
     }
 
     fn parse(args: &[&str]) -> Cli {
