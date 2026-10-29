@@ -32,8 +32,12 @@ traffic, no release profile and no Linux/macOS host.
 5. **Evidence depth** — §5 is resolved: P-2's two in-place stat sites share a
    private classifier so the error arm is unit-tested, and F-6/S-3/R-5 are
    accepted as-is; see the resolved decisions log at the end.
-6. **Unverified areas** — §6. Probe or accept; do not decide them from the
-   current mock/reference corpus.
+6. **Unverified areas** — §6 is resolved: the zero-length manifest shapes are
+   probed with crafted fixtures, the panic sweep is written up in
+   [`docs/07-panic-audit.md`](docs/07-panic-audit.md) with no unguarded
+   server-derived panic found, and `--print-plan --audio` under an active scope
+   is executed in both the out-of-scope and in-scope cases; see the resolved
+   decisions log at the end.
 
 ---
 
@@ -94,76 +98,40 @@ No `docs/02`, workspace `Cargo.toml` or `Cargo.lock` change.
 
 ## 6. Unverified areas carried from the first pass
 
-### 6.1 Live manifest shapes
+**Resolved (2026-10-30).** All three items are closed by evidence in this tree;
+see the [`Resolved decisions`](#resolved-decisions) log at the end and
+[`docs/07-panic-audit.md`](docs/07-panic-audit.md).
 
-**What is unverified.** Whether the CDN ever serves a zero-length entry with
-`EMPTY_MD5` (`util.rs:13`), a `..` segment, a drive-relative `C:` path, or an
-`offset + size > i64::MAX`. The findings describe what the code does **if** such
-data arrives, not a claim that it does.
+- **6.1 zero-length manifest shapes** — probed with crafted fixtures through
+  the real binary. A legitimate empty file (`size = 0`, `EMPTY_MD5`) passes
+  `--check-only`, `--dry-run`, `--print-plan` (a `PLAN` record) and a repair,
+  with the file left empty and no `_tmp`. A zero-length entry with a non-empty
+  digest is refused by the MD5 gate: `--check-only` exit `4`, `--dry-run` exit
+  `0`, `--print-plan` exit `0` with the `PLAN` record, and a repair exit `3`
+  that publishes no file. A zero-length entry that declares a chunk is refused
+  at plan time by the `end > size` arm (exit `2`). The `..`, `C:` and
+  `offset + size > i64::MAX` shapes keep their existing refusing gates and are
+  pinned by `a_manifest_path_that_escapes_the_game_dir_is_refused` and
+  `a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs`. **No live
+  CDN zero-length entry was available**, so the crafted fixture is the probe;
+  the ignored `artifact_bridge` suite can be run separately as extra evidence.
+- **6.2 panic sweep** — source audit of `unwrap`/`expect`/direct indexing/
+  integer arithmetic on server-derived values in the manifest, parse, plan,
+  scan and write paths. No unguarded server-derived panic was found; every
+  candidate is checked, saturated or an invariant. The full table and the one
+  non-panic observation (a `u64 as i64` wrap in `hyp.rs`) are in
+  [`docs/07-panic-audit.md`](docs/07-panic-audit.md).
+- **6.3 `--print-plan --audio` under an active scope** — executed in both
+  directions. With the scan file out of scope the run exits `0` (the
+  print-plan exemption), prints a `PLAN` record and writes no scan file; with
+  the scan file in scope it still exits `0`, prints the `PLAN` record and
+  defers the write. The two cases pin the independent guards rather than only
+  the exit code.
 
-**What the code does now.** `contained_rel` refuses `..`, `C:` and roots before
-any sink (`util.rs:306-340`); `validate_chunk_ranges` refuses the overflow per
-file (`file/mod.rs:314-345`); a legitimate empty file matches `EMPTY_MD5` in
-the MD5 gate and `scan.rs:278` uses the same constant for an absent/unreadable
-scan verdict.
-
-**Decision that follows.** **Accept risk** for `..`, `C:` and the overflow:
-each has a refusing gate, so the worst case is a refused file or run, not a
-write outside the game dir. **Probe** the zero-length shape, because its
-handling is spread across the scan verdict, the range validator (no chunks) and
-the MD5 gate.
-
-**What closes it.** One live capture (or a crafted bundle through
-`tests/artifact_bridge`) containing each shape, run through `--check-only`,
-`--dry-run`, `--print-plan` and a repair; for `EMPTY_MD5`, assert an empty file
-is intact and a zero-length entry with a non-empty digest is refused. This also
-supplies the evidence for §2.1's exit-code choice.
-
-### 6.2 No exhaustive panic sweep
-
-**What is unverified.** The first pass did not enumerate every panic site. The
-known server-data panic `temp.rs:193` (F-1) and the file-semaphore `unwrap`
-(now a named `expect`, N-12) were handled, but there was no systematic sweep of
-`unwrap`/`expect`/slice indexing on server-derived values.
-
-**Decision that follows.** **Probe, not defensive code.** Do not wrap the
-pipeline in `catch_unwind`; enumerate the sites and classify each as
-server-derived (fix/refuse) or invariant (keep). The existing pattern is to
-convert a server-data panic into a per-file `anyhow::Error` (F-1,
-`validate_chunk_ranges`).
-
-**What closes it.** A source audit (or a small `rg` checklist) of `unwrap`,
-`expect`, direct indexing and integer arithmetic in the manifest/plan/scan/write
-paths on values that come from the server, plus one hostile-manifest case per
-newly found site. A fuzz target over manifest parsing/planning would cover the
-arithmetic half.
-
-### 6.3 `--print-plan --audio` under an active path scope
-
-**What is unverified.** The combination is source-verified but was not
-executed. `metadata.rs:203-212` excludes `print_plan` from the refusal, and
-`mod.rs:346` returns before the audio write at `mod.rs:384`, so the run exits
-`0` and writes nothing; the existing
-`explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scope`
-(`tests/repair_offline.rs:1840`) covers the refusal, not the print-plan
-variant.
-
-**Decision that follows.** **Accept risk** for the write (it cannot happen:
-two independent guards), but **probe** the contract, because a user may expect
-the same exit `1` refusal from `--print-plan` and instead gets a plan.
-
-**What closes it.** One integration case with `print_plan = true`,
-`audio_explicit = true`, an active scope and the scan file out of scope,
-asserting exit `0`, a `PLAN` record, and no scan file on disk; a second case
-with the scan file in scope asserting the `PLAN` record still appears and the
-write is deferred. If the expected behaviour is refusal, change the
-`!ctx.print_plan` condition and the test together.
-
-**Cross-project impact (whole §6).** The evidence for §6.1 runs through
-`tests/artifact_bridge*` and `docs/06` (a crafted bundle) and `docs/02` (the
-documented refusals), so those two contracts must stay aligned with whatever
-the probe finds. `crates/log`, `crates/tempdir`, `.config/nextest*` and the
-workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
+**Cross-project impact (whole §6).** `docs/06` (the crafted-bundle contract)
+and `docs/02` (the documented refusals) stay aligned with the probe; `docs/07`
+is the new audit record. `crates/log`, `crates/tempdir`, `.config/nextest*` and
+the workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
 `tools/sync` code moves.
 
 ---
@@ -185,3 +153,6 @@ workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
 - **P-2** — option (b): the two in-place stat sites classify `io::Result<Metadata>` so the error arm is unit-tested; production still fails the file (exit `3`) with path context. (2026-10-30)
 - **S-3** — no change: the four-state `classify_deprecated` is already the seam and is executed; the syscall wrapper needs none. (2026-10-30)
 - **R-5** — accept (a): the linear temp-write/sync/rename path already shares the write-error cleanup; a fault-injection hook costs more than the risk. (2026-10-30)
+- **6.1** — probe with crafted fixtures: a legitimate `size = 0`/`EMPTY_MD5` file passes `--check-only`, `--dry-run`, `--print-plan` and repair untouched; a zero-length entry with a non-empty digest is refused by the MD5 gate (`--check-only` `4`, `--dry-run` `0`, `--print-plan` `0` + `PLAN`, repair `3`, no file published); a zero-length entry declaring a chunk is refused at plan time (exit `2`). No live CDN zero-length entry was available, so this is fixture evidence; pinned by `a_legitimate_empty_file_passes_every_mode_untouched`, `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` and `a_zero_length_entry_declaring_a_chunk_is_refused_at_plan_time`, with `..`/`C:`/overflow still pinned by `a_manifest_path_that_escapes_the_game_dir_is_refused` and `a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs`. (2026-10-30)
+- **6.2** — probe, not `catch_unwind`: the source audit in `docs/07-panic-audit.md` enumerates every `unwrap`/`expect`/index/arithmetic site on server-derived manifest/plan/scan/write values; no unguarded server-derived panic remains (checked, saturated or invariant), and the only non-panic note is the `u64 as i64` wrap in `hyp.rs`. (2026-10-30)
+- **6.3** — probe both guards: with the scan file out of scope `--print-plan --audio` exits `0`, prints `PLAN` and writes no scan file; with it in scope the run still exits `0`, prints `PLAN` and defers the write. Pinned by `print_plan_audio_outside_the_scope_is_not_refused_and_writes_nothing` and `print_plan_audio_inside_the_scope_still_defers_the_write`. (2026-10-30)

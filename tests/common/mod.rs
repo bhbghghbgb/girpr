@@ -186,6 +186,14 @@ pub struct Lies {
     /// Same class as [`Self::huge_file_size`], for the download estimate and
     /// the per-file document: three such chunks overflow the sum.
     pub huge_compressed_size: Vec<String>,
+    /// File rel paths whose declared whole-file `md5` is a digest no payload
+    /// can match.
+    ///
+    /// The bytes on disk are unchanged, so the size gate passes and the digest
+    /// gate is what has to refuse. On a zero-length entry the honest digest is
+    /// [`girpr::util::EMPTY_MD5`]; the lie is a non-empty digest, which a real
+    /// server would never publish for a file with no bytes.
+    pub wrong_file_md5: Vec<String>,
 }
 
 /// A whole fixture: the new side, the old side, and what is on disk.
@@ -341,7 +349,14 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             } else {
                 f.data.len() as i64
             },
-            md5: f.md5.clone(),
+            md5: if spec.lies.wrong_file_md5.contains(&f.rel) {
+                // A digest no payload can have. The layout on disk is
+                // unchanged; only the manifest's claim about the file is
+                // hostile.
+                "00000000000000000000000000000000".to_string()
+            } else {
+                f.md5.clone()
+            },
         });
     }
     let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);

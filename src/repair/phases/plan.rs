@@ -754,6 +754,17 @@ mod tests {
         }
     }
 
+    /// A zero-length file is legitimate only when it declares no bytes. One
+    /// that declares a chunk has a range past its own size, and the same gate
+    /// that refuses every other malformed range refuses it here — before the
+    /// empty-chunk drop could quietly delete the evidence.
+    #[test]
+    fn a_zero_length_entry_declaring_a_chunk_is_refused_at_plan_time() {
+        let msg = plan_error(manifest_file("empty.dat", 0, vec![chunk("c", 0, 64)]));
+        assert!(msg.contains("empty.dat"), "rel missing from {msg}");
+        assert!(msg.contains("past the file's size 0"), "{msg}");
+    }
+
     /// The range gate runs *after* the blacklist/scope/dedup filters, so an
     /// entry the run would not touch cannot block the rest of the plan — even
     /// when its range is corrupt.

@@ -2828,6 +2828,115 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
 }
 
 #[tokio::test]
+async fn print_plan_audio_outside_the_scope_is_not_refused_and_writes_nothing() {
+    // Two independent gates used to contradict each other here. An explicit
+    // `--audio` under an active scope whose scan file is *not* included is a
+    // usage error (exit `1`) — unless the run is `--print-plan`, which never
+    // writes the scan file at all. `--print-plan` therefore has to exempt the
+    // scope gate while still deferring the write: exit `0`, a `PLAN`, and no
+    // scan file on disk prove both halves.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("print_plan_audio_scope_out");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--audio",
+            "en-us",
+            "--include",
+            "game/foo.dat",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("PLAN ")),
+        "the plan must still be reported:\n{stdout}"
+    );
+    assert!(
+        !game.join("Audio").join("scan.txt").exists(),
+        "the scan file is out of scope and print-plan must not write it"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn print_plan_audio_inside_the_scope_still_defers_the_write() {
+    // The companion case: include the scan file's own rel, so the scope gate
+    // would admit the write. `--print-plan` alone still defers it — exit `0`,
+    // the `PLAN` is printed, and the file the scope admitted is not created.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("print_plan_audio_scope_in");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--audio",
+            "en-us",
+            "--include",
+            "Audio/scan.txt",
+            "--include",
+            "game/foo.dat",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("PLAN ")),
+        "the plan must still be reported:\n{stdout}"
+    );
+    assert!(
+        !game.join("Audio").join("scan.txt").exists(),
+        "print-plan must defer the scan write even when the scope admits it"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking() {
     // `size` and `compressed_size` are server manifest data. Three files at
     // `i64::MAX` and one file with three chunks at `i64::MAX` each overflow the
@@ -3949,6 +4058,164 @@ async fn a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs() {
 
         mock.stop();
     }
+}
+
+// ---------------------------------------------------------------------------
+// zero-length manifest entries
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_legitimate_empty_file_passes_every_mode_untouched() {
+    // A `size = 0` entry whose digest is `EMPTY_MD5` describes a real, empty
+    // file. The fixture builder derives both from the (empty) layout, so this
+    // is the honest shape. Every mode must accept it, and the repair must not
+    // rewrite a file that is already correct.
+    let fx = build_fixture_spec(&FixtureSpec::new(vec![FileSpec::new(
+        "game/empty.dat",
+        vec![],
+    )]));
+    assert_eq!(fx.files[0].data, Vec::<u8>::new());
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("empty_legit");
+    let game = dir.join("install");
+    // Present and empty, exactly as the manifest describes it.
+    write_game_file(&game, "game/empty.dat", b"");
+    let game_arg = game.to_string_lossy().into_owned();
+    let base = [
+        "--game-path",
+        &game_arg,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+
+    let mut args = base.to_vec();
+    args.push("--check-only");
+    let (code, _, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(
+        code, 0,
+        "--check-only must call the empty file clean: {stderr}"
+    );
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "the check must not touch the file"
+    );
+
+    let mut args = base.to_vec();
+    args.push("--dry-run");
+    let (code, _, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "--dry-run: {stderr}");
+
+    let mut args = base.to_vec();
+    args.push("--print-plan");
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "--print-plan: {stderr}");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("PLAN ")),
+        "an empty file is still a planned file:\n{stdout}"
+    );
+
+    let (code, _, stderr) = run_binary(&base, &[]).await;
+    assert_eq!(
+        code, 0,
+        "the repair must accept the correct empty file: {stderr}"
+    );
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "the repair must leave the empty file empty"
+    );
+    assert!(!game.join("game").join("empty.dat_tmp").exists());
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
+    // A zero-length entry whose declared digest is not `EMPTY_MD5` cannot
+    // describe any byte string, so the size gate passes and the digest gate
+    // is the one that has to refuse. The read-only modes disagree on purpose:
+    // `--check-only` reports the file bad (exit `4`), `--dry-run` changes
+    // nothing (exit `0`), `--print-plan` still prints the plan (exit `0`); a
+    // real repair fails the file (exit `3`) without publishing a wrong one.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new("game/empty.dat", vec![])]).with_lies(Lies {
+            wrong_file_md5: vec!["game/empty.dat".into()],
+            ..Default::default()
+        }),
+    );
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("empty_bad_md5");
+    let game = dir.join("install");
+    write_game_file(&game, "game/empty.dat", b"");
+    let game_arg = game.to_string_lossy().into_owned();
+    let base = [
+        "--game-path",
+        &game_arg,
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1",
+        "--hyp-base",
+        &mock.hyp_base,
+        "--sophon-base",
+        &mock.sophon_base,
+    ];
+
+    let mut args = base.to_vec();
+    args.push("--check-only");
+    let (code, _, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(
+        code, 4,
+        "--check-only must report the digest mismatch: {stderr}"
+    );
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "the check must not touch the file"
+    );
+
+    let mut args = base.to_vec();
+    args.push("--dry-run");
+    let (code, _, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "--dry-run: {stderr}");
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "--dry-run must not touch the file"
+    );
+
+    let mut args = base.to_vec();
+    args.push("--print-plan");
+    let (code, stdout, stderr) = run_binary(&args, &[]).await;
+    assert_eq!(code, 0, "--print-plan: {stderr}");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("PLAN ")),
+        "the plan is printed even though the digest is wrong:\n{stdout}"
+    );
+
+    let (code, _, stderr) = run_binary(&base, &[]).await;
+    assert_eq!(
+        code, 3,
+        "the repair must fail the one file it cannot make true: {stderr}"
+    );
+    assert_eq!(
+        read_game_file(&game, "game/empty.dat"),
+        Some(Vec::new()),
+        "no wrong bytes may be published in its place"
+    );
+    assert!(
+        !game.join("game").join("empty.dat_tmp").exists(),
+        "a failed empty-file repair must leave no artefact"
+    );
+
+    mock.stop();
 }
 
 #[tokio::test]
