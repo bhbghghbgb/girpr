@@ -117,6 +117,10 @@ pub struct Bundle {
     /// same reason as `error_shapes.json`: a bundle that recorded only successes
     /// has lost what the origin said when it refused.
     pub error_responses: crate::http::ErrorResponses,
+    /// `diagnostics/rejections.json` — every value a shape rule refused, with
+    /// its source and rule. Required: a bundle that recorded only what it wrote
+    /// has lost the API's own attempts to name things it would not hold.
+    pub rejections: crate::rejections::RejectionsDocument,
 }
 
 impl Bundle {
@@ -185,6 +189,8 @@ impl Bundle {
         let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
         let error_responses: crate::http::ErrorResponses =
             read_json(&root.join("api/error_responses.json"))?;
+        let rejections: crate::rejections::RejectionsDocument =
+            read_json(&root.join("diagnostics/rejections.json"))?;
         let patchmaps = read_patchmaps(root)?;
         // **The shape of every document-supplied path is checked at the door.**
         // `verify` is the command an operator runs on a bundle they may not have
@@ -203,6 +209,7 @@ impl Bundle {
             recorded,
             error_shapes,
             error_responses,
+            rejections,
         })
     }
 

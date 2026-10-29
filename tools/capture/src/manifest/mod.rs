@@ -373,6 +373,7 @@ pub async fn capture(
     tag: &str,
     matching_field: &str,
     max_decompressed_bytes: u64,
+    rejections: &crate::rejections::Rejections,
 ) -> Result<CapturedManifest, ApiError> {
     // `matching_field` becomes `manifests/<tag>/<field>.manifest…` and travels
     // into the meta document, so it has to be one file-name component. The flag
@@ -471,7 +472,7 @@ pub async fn capture(
         // hostile or compromised CDN write outside `--out`; no later check
         // exists on either sink, so refuse the document here, before the tree is
         // created or a chunk is fetched.
-        validate_entry_paths(&url, &m.chuncks)?;
+        validate_entry_paths(&format!("{tag}/{matching_field}"), &m.chuncks, rejections)?;
         // The same boundary, for the numbers: `offset`, `compressed_size` and
         // `uncompressed_size` are raw `int64`s on the wire. A negative cost or
         // an offset that cannot be added is refused here, before a selection or
@@ -558,21 +559,80 @@ pub async fn capture(
 /// artifact directory exists. The rule and its rationale live in
 /// [`crate::paths`], shared with `--files`, the bundle reader and the launcher's
 /// scan directory.
-fn validate_entry_paths(url: &str, entries: &[SophonChunkFile]) -> Result<(), ApiError> {
-    for entry in entries {
-        if let Some(problem) = crate::paths::relative_path_problem(&entry.file) {
-            return Err(ApiError::shape(url, format!("manifest entry {problem}")));
+fn validate_entry_paths(
+    context: &str,
+    entries: &[SophonChunkFile],
+    rejections: &crate::rejections::Rejections,
+) -> Result<(), ApiError> {
+    // **Every offending name, not the first.** H3: a manifest with two
+    // Windows-folded paths says more about the API than one with a single path,
+    // and stopping at the first would make the second discoverable only by
+    // editing the first out. Each one is recorded in the rejection document as
+    // it is found; the message lists them so an operator does not have to open
+    // the bundle to learn what was wrong.
+    let mut problems: Vec<String> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some((rule, problem)) = crate::paths::relative_path_rule(&entry.file) {
+            let row = rejections.record(
+                format!("manifest {context} entry {i} file"),
+                &entry.file,
+                rule,
+            );
+            problems.push(format!(
+                "entry {i} {:?}: {}",
+                row.value,
+                brief(&problem, 240)
+            ));
         }
-        for chunk in &entry.chunks {
-            if let Some(problem) = crate::paths::chunk_id_problem(&chunk.id) {
-                return Err(ApiError::shape(
-                    url,
-                    format!("manifest entry {:?} chunk {problem}", entry.file),
+        for (j, chunk) in entry.chunks.iter().enumerate() {
+            if let Some((rule, problem)) = crate::paths::chunk_id_rule(&chunk.id) {
+                rejections.record(
+                    format!("manifest {context} entry {i} chunk {j} id"),
+                    &chunk.id,
+                    rule,
+                );
+                problems.push(format!(
+                    "entry {i} {:?} chunk {j}: {}",
+                    brief(&entry.file, 120),
+                    brief(&problem, 240)
                 ));
             }
         }
     }
-    Ok(())
+    if problems.is_empty() {
+        return Ok(());
+    }
+    // The message is for an operator, not an archive: name enough to act on and
+    // count the rest. The full list, up to the document's own cap, is in the
+    // rejection document.
+    const SHOWN: usize = 8;
+    let mut message = problems
+        .iter()
+        .take(SHOWN)
+        .map(|p| brief(p, 240))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if problems.len() > SHOWN {
+        message.push_str(&format!("; and {} more", problems.len() - SHOWN));
+    }
+    Err(ApiError::shape(
+        context,
+        format!(
+            "{} refused name{}: {message}",
+            problems.len(),
+            if problems.len() == 1 { "" } else { "s" }
+        ),
+    ))
+}
+
+/// A bounded rendering of an untrusted string for a one-line failure.
+fn brief(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 async fn fetch_archive(fetcher: &Fetcher, url: &str) -> Result<Fetched, ApiError> {
@@ -1216,23 +1276,71 @@ mod tests {
     /// third spelling of it — so accepting the shapes would make the last write
     /// win wherever the tree is materialised. This pins that `manifest::capture`
     /// consults the shared rule, not only `--files`.
+    ///
+    /// **And that it collects every offending name before refusing.** Stopping at
+    /// the first would make a second bad path discoverable only by editing the
+    /// first out of a downloaded manifest.
     #[test]
     fn a_manifest_entry_windows_folds_onto_another_is_a_shape_error() {
-        for bad in ["a/b.", "a/b ", "a/./b"] {
+        for (bad, rule) in [
+            ("a/b.", "path.windows-fold"),
+            ("a/b ", "path.windows-fold"),
+            ("a/./b", "path.dot-component"),
+        ] {
             let entries = vec![file(bad, vec![], 10)];
-            let err = validate_entry_paths("https://example.test/manifest", &entries)
+            let rejections = crate::rejections::Rejections::new();
+            let err = validate_entry_paths("7.1.0/game", &entries, &rejections)
                 .expect_err("a folded name must stop the run");
             let ApiError::Shape { subject, detail } = err else {
                 panic!("{bad:?} must be a shape error");
             };
-            assert_eq!(subject, "https://example.test/manifest");
-            assert!(detail.contains("manifest entry"), "{bad:?}: {detail}");
+            assert_eq!(subject, "7.1.0/game");
+            assert!(detail.contains("1 refused name"), "{bad:?}: {detail}");
+            let rows = rejections.snapshot();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].value, bad);
+            assert_eq!(rows[0].rule, rule);
+            assert_eq!(rows[0].source, "manifest 7.1.0/game entry 0 file");
         }
         // An ordinary dotted name is still legal.
         assert!(
-            validate_entry_paths("u", &[file("a/b.c", vec![], 10)]).is_ok(),
+            validate_entry_paths(
+                "u",
+                &[file("a/b.c", vec![], 10)],
+                &crate::rejections::Rejections::new()
+            )
+            .is_ok(),
             "a dot inside a name is not a folded trailing dot"
         );
+    }
+
+    /// One refusal does not hide the next: every offending entry and chunk id is
+    /// named in the failure and recorded in the rejection document.
+    #[test]
+    fn every_hostile_name_in_one_manifest_is_reported_together() {
+        let mut bad_chunk = chunk(0, 1);
+        bad_chunk.id = "not-a-chunk-id".into();
+        let entries = vec![
+            file("a/b.", vec![], 1),
+            file("CON", vec![], 1),
+            file("ok/file", vec![bad_chunk], 1),
+        ];
+        let rejections = crate::rejections::Rejections::new();
+        let err = validate_entry_paths("7.1.0/game", &entries, &rejections)
+            .expect_err("three bad names must stop the run");
+        let ApiError::Shape { detail, .. } = err else {
+            panic!("a shape error");
+        };
+        assert!(detail.contains("3 refused names"), "{detail}");
+        let rows = rejections.snapshot();
+        let rules: Vec<&str> = rows.iter().map(|r| r.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            vec!["path.windows-fold", "path.device", "chunk-id.shape"],
+            "one row per offending name, with its own rule"
+        );
+        let values: Vec<&str> = rows.iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(values, vec!["a/b.", "CON", "not-a-chunk-id"]);
     }
 
     // ------------------------------------------------------------ A4

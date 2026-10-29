@@ -289,6 +289,13 @@ impl Bundle {
         // absent and leaving a reader unable to tell "none" from "not recorded".
         write_json(&root.join("api/error_responses.json"), &error_responses());
 
+        // `diagnostics/rejections.json`, required in version 3. A successful
+        // fixture refuses nothing, so the honest document is the empty one.
+        write_json(
+            &root.join("diagnostics/rejections.json"),
+            &gircap::rejections::Rejections::new().document(),
+        );
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -912,6 +919,9 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     // says the two halves still agree on the wire format.
     round_trip::<gircap::http::probe::ErrorShapes>(&b.root.join("api/error_shapes.json"));
     round_trip::<gircap::http::ErrorResponses>(&b.root.join("api/error_responses.json"));
+    round_trip::<gircap::rejections::RejectionsDocument>(
+        &b.root.join("diagnostics/rejections.json"),
+    );
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 

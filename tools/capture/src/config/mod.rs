@@ -591,50 +591,73 @@ fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
 /// path, and a caller that builds a `CapturedManifest` by hand must meet the
 /// same rule as the capture path.
 pub(crate) fn tag_shape_problem(tag: &str) -> Option<String> {
+    tag_shape_rule(tag).map(|(_, problem)| problem)
+}
+
+/// [`tag_shape_problem`] with the rule's stable identifier.
+pub(crate) fn tag_shape_rule(tag: &str) -> Option<(&'static str, String)> {
     if tag.is_empty() {
-        return Some("was given an empty tag".to_string());
+        return Some(("tag.empty", "was given an empty tag".to_string()));
     }
     if tag.len() > 32 {
-        return Some(format!(
-            "{tag:?} is longer than 32 characters; that is not a version tag"
+        return Some((
+            "tag.too-long",
+            format!("{tag:?} is longer than 32 characters; that is not a version tag"),
         ));
     }
     if tag.chars().any(char::is_control) {
-        return Some(format!(
-            "{tag:?} contains a control character; a tag is a bare version string"
+        return Some((
+            "tag.control",
+            format!("{tag:?} contains a control character; a tag is a bare version string"),
         ));
     }
     if tag.contains('/') || tag.contains('\\') || tag.contains(' ') {
-        return Some(format!(
-            "{tag:?} contains a separator or a space; a tag is a bare version string"
+        return Some((
+            "tag.separator",
+            format!("{tag:?} contains a separator or a space; a tag is a bare version string"),
         ));
     }
     if tag.contains(':') {
-        return Some(format!(
-            "{tag:?} looks like a drive-qualified or namespaced path; a tag is a \
-             bare version string"
+        return Some((
+            "tag.drive",
+            format!(
+                "{tag:?} looks like a drive-qualified or namespaced path; a tag is a \
+                 bare version string"
+            ),
         ));
     }
     if tag.contains(['*', '?', '"', '<', '>', '|']) {
-        return Some(format!(
-            "{tag:?} contains a character Windows cannot use in a directory name; \
-             a tag is a bare version string"
+        return Some((
+            "tag.windows-character",
+            format!(
+                "{tag:?} contains a character Windows cannot use in a directory name; \
+                 a tag is a bare version string"
+            ),
         ));
     }
     if tag.starts_with('.') || tag.ends_with('.') {
-        return Some(format!(
-            "{tag:?} starts or ends with `.`; Windows strips a trailing dot from a \
-             directory name, so two tags could name one directory"
+        return Some((
+            "tag.edge-dot",
+            format!(
+                "{tag:?} starts or ends with `.`; Windows strips a trailing dot from a \
+                 directory name, so two tags could name one directory"
+            ),
         ));
     }
     if crate::paths::is_windows_device_name(tag) {
-        return Some(format!(
-            "{tag:?} names a Windows device; a tag is a bare version string and \
-             becomes a directory name"
+        return Some((
+            "tag.device",
+            format!(
+                "{tag:?} names a Windows device; a tag is a bare version string and \
+                 becomes a directory name"
+            ),
         ));
     }
     if tag.split(['/', '\\']).any(|c| c == "..") {
-        return Some(format!("{tag:?} escapes the artifact directory"));
+        return Some((
+            "tag.parent",
+            format!("{tag:?} escapes the artifact directory"),
+        ));
     }
     None
 }

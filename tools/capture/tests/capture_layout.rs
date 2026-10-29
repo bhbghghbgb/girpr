@@ -153,6 +153,21 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The directory a refused capture left its rejection document in.
+///
+/// A run that refuses at the manifest boundary writes no `MANIFEST.json`, so
+/// [`bundle_in`] cannot find it. The diagnostics document is the one thing such
+/// a run does write, and it is written into the directory the bundle would have
+/// occupied.
+fn rejections_in(out: &Path) -> PathBuf {
+    let mut found = Vec::new();
+    walk(out, &mut found);
+    found
+        .into_iter()
+        .find(|p| p.join("diagnostics/rejections.json").is_file())
+        .unwrap_or_else(|| panic!("no rejection document under {}", out.display()))
+}
+
 /// A capture against a healthy mock, reused by several tests.
 fn capture_ok(name: &str) -> (Mock, Scratch, Run, PathBuf) {
     let mock = Mock::start(World::all_shapes());
@@ -497,6 +512,29 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_require
     }
 }
 
+/// And the same for `diagnostics/rejections.json`.
+#[test]
+fn a_bundle_without_the_rejection_document_does_not_verify() {
+    let (_m, _s, r, bundle) = capture_ok("norej");
+    assert_eq!(r.code, 0);
+    let file = bundle.join("diagnostics/rejections.json");
+    assert!(file.is_file(), "the capture wrote it even with no refusals");
+    std::fs::remove_file(&file).unwrap();
+
+    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
+    assert_ne!(
+        v.code, 0,
+        "a bundle without its rejection document must not verify clean:\n{}{}",
+        v.stdout, v.stderr
+    );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("rejections.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
+}
+
 /// Every chunk id the negative probes asked for, read from the document that
 /// records them.
 fn probe_chunk_ids(bundle: &std::path::Path) -> Vec<String> {
@@ -656,6 +694,7 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "api/tag_probe.json",
         "api/error_shapes.json",
         "api/error_responses.json",
+        "diagnostics/rejections.json",
         "chunks/index.json",
         "diff/paths.diff.json",
         "diff/candidates.json",
@@ -808,6 +847,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
         "diff/paths.diff.json",
@@ -850,6 +890,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
         "diff/paths.diff.json",
@@ -1581,15 +1622,25 @@ fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
 
     assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
     let text = format!("{}{}", r.stdout, r.stderr);
-    assert!(text.contains("manifest entry"), "{text}");
+    assert!(text.contains("refused name"), "{text}");
     assert!(text.contains("escapes the bundle root"), "{text}");
     assert!(
         !scratch.root.join("gircap-escape").exists(),
         "nothing may be written outside --out"
     );
-    assert!(
-        !scratch.out().exists(),
-        "the refusal happens before the artifact directory exists"
+    // **The refusal is evidence.** The value is not written as a path — the
+    // escape target does not exist — but it is kept in the diagnostics document
+    // inside the directory the bundle would have occupied, with the rule it
+    // failed.
+    let dir = rejections_in(&scratch.out());
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("diagnostics/rejections.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["rejections"][0]["value"], hostile);
+    assert_eq!(doc["rejections"][0]["rule"], "path.parent");
+    assert_eq!(
+        doc["rejections"][0]["source"],
+        "manifest 7.0.0/game entry 0 file"
     );
 }
 
@@ -1619,6 +1670,16 @@ fn a_manifest_chunk_id_outside_the_documented_shape_is_refused() {
     assert!(
         !scratch.root.join("gircap-chunk").exists(),
         "nothing may be written outside --out"
+    );
+    let dir = rejections_in(&scratch.out());
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("diagnostics/rejections.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["rejections"][0]["value"], hostile);
+    assert_eq!(doc["rejections"][0]["rule"], "chunk-id.shape");
+    assert_eq!(
+        doc["rejections"][0]["source"],
+        "manifest 7.0.0/game entry 0 chunk 0 id"
     );
 }
 

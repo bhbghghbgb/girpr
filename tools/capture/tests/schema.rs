@@ -198,6 +198,7 @@ fn every_document_carries_the_crate_schema_version() {
         "verify/selfcheck.json",
         "api/tag_probe.json",
         "api/error_responses.json",
+        "diagnostics/rejections.json",
         "manifests/7.0.0/game.manifest.meta.json",
     ] {
         let doc = json(&b.join(rel));
@@ -368,6 +369,34 @@ fn the_error_responses_document_has_the_documented_shape() {
             None => assert_eq!(kept, 0, "no path means nothing was kept: {row}"),
         }
     }
+}
+
+/// The rejection document's shape, and that a healthy run really has none.
+///
+/// The document is written even when nothing was refused — an absent file would
+/// be indistinguishable from a run that never looked — so its empty state is the
+/// one this fixture can pin. The rows themselves are asserted where they are
+/// produced: `capture_layout`'s hostile-manifest tests read a real refusal back
+/// from disk.
+#[test]
+fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture() {
+    let b = bundle();
+    let doc = json(&b.join("diagnostics/rejections.json"));
+    assert_eq!(
+        keys(&doc),
+        vec![
+            "cap_bytes",
+            "omitted",
+            "rejections",
+            "schema_version",
+            "total",
+        ],
+        "diagnostics/rejections.json's top-level keys"
+    );
+    assert_eq!(doc["cap_bytes"], 512);
+    assert_eq!(doc["total"], 0);
+    assert_eq!(doc["omitted"], 0);
+    assert_eq!(doc["rejections"], serde_json::json!([]));
 }
 
 /// A raised decompression ceiling is recorded, not silently replaced by the

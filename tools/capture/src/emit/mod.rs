@@ -146,6 +146,22 @@ pub fn write_error_responses(
     Ok(written)
 }
 
+/// Write `diagnostics/rejections.json`, the values the capture refused.
+///
+/// **The document is always written**, even when nothing was refused: a reader
+/// then cannot mistake "this run saw no hostile value" for "this run did not
+/// look", which is the ambiguity `error_shapes.json` was made required to
+/// remove. When the run refuses at the manifest boundary — before the rest of
+/// the tree exists — the caller writes the same document into the would-be
+/// bundle directory so the evidence survives the failed run.
+pub fn write_rejections(
+    root: &Path,
+    rejections: &crate::rejections::Rejections,
+) -> std::io::Result<Vec<String>> {
+    write_doc(root, "diagnostics/rejections.json", &rejections.document())?;
+    Ok(vec!["diagnostics/rejections.json".to_string()])
+}
+
 /// Write `diff/paths.diff.json`, `diff/paths.tsv` and `diff/reuse_pool.json`.
 ///
 /// Returns the paths written, in bundle order. `reuse_pool.json` is the first

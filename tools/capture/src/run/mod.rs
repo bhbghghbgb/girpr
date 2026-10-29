@@ -163,14 +163,46 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("re-read the captured new build", &e))?;
     let manifest_wants =
         manifest::fetch::wants(&fields, &old_tag, &new_tag, &old_build, &new_build);
-    let mut manifests = manifest::fetch::fetch_all(
+    // Every value a shape rule refuses during the run lands here. The store is
+    // created before the manifests are fetched because that is the first place
+    // an untrusted value reaches a write decision; the document is written with
+    // the rest of the tree below.
+    let rejections = std::sync::Arc::new(crate::rejections::Rejections::new());
+    let mut manifests = match manifest::fetch::fetch_all(
         &fetcher,
         &manifest_wants,
         fields.len(),
         plan.jobs,
         plan.max_decompressed_bytes,
+        rejections.clone(),
     )
-    .await?;
+    .await
+    {
+        Ok(m) => m,
+        Err(e) => {
+            // **The refusal is also evidence.** A hostile manifest path stops
+            // the run before a bundle exists, so there is no `MANIFEST.json` to
+            // carry the rejection document. Write what was refused into the
+            // directory the bundle would have occupied anyway: the run's verdict
+            // is unchanged, and the values are not left only in a scrollback.
+            if !rejections.is_empty() {
+                let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
+                match emit::write_rejections(&dir, &rejections) {
+                    Ok(paths) => tracing::warn!(
+                        dir = %dir.display(),
+                        documents = ?paths,
+                        "the run refused manifest input; the rejected values are recorded"
+                    ),
+                    Err(io) => tracing::warn!(
+                        dir = %dir.display(),
+                        error = %io,
+                        "could not record the rejected values"
+                    ),
+                }
+            }
+            return Err(e);
+        }
+    };
 
     // 6a. What the API does with a request it will not serve.
     //
@@ -260,6 +292,15 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     })?;
     let mut written = tree.written;
     let mut api_documents = tree.api_documents;
+
+    // 7a-ii. What the run refused, beside what it kept.
+    //
+    //     Written after the tree so it joins `files[]` and the checksum list,
+    //     and before the chunk fetches because every shape refusal happens at
+    //     the manifest boundary or earlier. An empty document is still written:
+    //     "no hostile value was seen" is a fact, and leaving the file out would
+    //     make it indistinguishable from "this run did not look".
+    written.extend(emit::write_rejections(&dir, &rejections).map_err(|e| write_err(&dir, e))?);
 
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //

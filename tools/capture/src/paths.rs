@@ -32,57 +32,82 @@
 /// The message names the value and the rule, so a caller only has to add where
 /// the value came from (`--files`, a manifest entry, the index).
 pub fn relative_path_problem(value: &str) -> Option<String> {
+    relative_path_rule(value).map(|(_, problem)| problem)
+}
+
+/// [`relative_path_problem`] with the rule's stable identifier.
+///
+/// The prose is for a human reading a failure; the identifier is for
+/// `diagnostics/rejections.json`, where a consumer wants to count refusals by
+/// rule without matching message text that may be reworded.
+pub fn relative_path_rule(value: &str) -> Option<(&'static str, String)> {
     if value.is_empty() {
-        return Some(format!("{value:?} is an empty path"));
+        return Some(("path.empty", format!("{value:?} is an empty path")));
     }
     if value.chars().any(char::is_control) {
-        return Some(format!(
-            "{value:?} contains a control character; a bundle path is printable text"
+        return Some((
+            "path.control",
+            format!("{value:?} contains a control character; a bundle path is printable text"),
         ));
     }
     if value.contains('\\') {
-        return Some(format!(
-            "{value:?} uses backslashes; bundle paths are /-separated"
+        return Some((
+            "path.backslash",
+            format!("{value:?} uses backslashes; bundle paths are /-separated"),
         ));
     }
     if value.starts_with('/') {
-        return Some(format!(
-            "{value:?} is absolute; paths are relative to the bundle root"
+        return Some((
+            "path.absolute",
+            format!("{value:?} is absolute; paths are relative to the bundle root"),
         ));
     }
     if value.contains(':') {
-        return Some(format!(
-            "{value:?} looks like a drive-qualified path; paths are relative to the \
-             bundle root"
+        return Some((
+            "path.drive",
+            format!(
+                "{value:?} looks like a drive-qualified path; paths are relative to the \
+                 bundle root"
+            ),
         ));
     }
     if value.split('/').any(|c| c == "..") {
-        return Some(format!("{value:?} escapes the bundle root"));
+        return Some(("path.parent", format!("{value:?} escapes the bundle root")));
     }
     if value.split('/').any(|c| c == ".") {
-        return Some(format!(
-            "{value:?} has a `.` component; a bundle path names something in the \
-             bundle, and `.` names the directory it is in"
+        return Some((
+            "path.dot-component",
+            format!(
+                "{value:?} has a `.` component; a bundle path names something in the \
+                 bundle, and `.` names the directory it is in"
+            ),
         ));
     }
     if value
         .split('/')
         .any(|c| c.ends_with('.') || c.ends_with(' '))
     {
-        return Some(format!(
-            "{value:?} has a component ending in `.` or a space; Windows folds such \
-             a name onto the one without it, so two paths could name one file"
+        return Some((
+            "path.windows-fold",
+            format!(
+                "{value:?} has a component ending in `.` or a space; Windows folds such \
+                 a name onto the one without it, so two paths could name one file"
+            ),
         ));
     }
     if value.split('/').any(is_windows_device_name) {
-        return Some(format!(
-            "{value:?} names a Windows device; such a component opens the device \
-             instead of a file, so the bundle would not hold the bytes it lists"
+        return Some((
+            "path.device",
+            format!(
+                "{value:?} names a Windows device; such a component opens the device \
+                 instead of a file, so the bundle would not hold the bytes it lists"
+            ),
         ));
     }
     if value.split('/').any(|c| c.is_empty()) {
-        return Some(format!(
-            "{value:?} has an empty component (a doubled or trailing separator)"
+        return Some((
+            "path.empty-component",
+            format!("{value:?} has an empty component (a doubled or trailing separator)"),
         ));
     }
     None
@@ -120,12 +145,18 @@ pub(crate) fn is_windows_device_name(component: &str) -> bool {
 /// allows but a field cannot have: `/`. A field names one file-name component,
 /// not a subdirectory.
 pub fn field_component_problem(value: &str) -> Option<String> {
-    if let Some(problem) = relative_path_problem(value) {
+    field_component_rule(value).map(|(_, problem)| problem)
+}
+
+/// [`field_component_problem`] with the rule's stable identifier.
+pub fn field_component_rule(value: &str) -> Option<(&'static str, String)> {
+    if let Some(problem) = relative_path_rule(value) {
         return Some(problem);
     }
     if value.contains('/') {
-        return Some(format!(
-            "{value:?} contains a `/`; a manifest field is one file-name component"
+        return Some((
+            "field.multi-component",
+            format!("{value:?} contains a `/`; a manifest field is one file-name component"),
         ));
     }
     None
@@ -140,17 +171,22 @@ pub fn field_component_problem(value: &str) -> Option<String> {
 /// metacharacter, or a different length — because the same string becomes both a
 /// URL path segment and a file name.
 pub fn chunk_id_problem(value: &str) -> Option<String> {
+    chunk_id_rule(value).map(|(_, problem)| problem)
+}
+
+/// [`chunk_id_problem`] with the rule's stable identifier.
+pub fn chunk_id_rule(value: &str) -> Option<(&'static str, String)> {
     if value.is_empty() {
-        return Some(format!("{value:?} is an empty chunk id"));
+        return Some(("chunk-id.empty", format!("{value:?} is an empty chunk id")));
     }
     let Some((prefix, suffix)) = value.split_once('_') else {
-        return Some(not_a_chunk_id(value));
+        return Some(("chunk-id.shape", not_a_chunk_id(value)));
     };
     let hex = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit());
     if hex(prefix, 16) && hex(suffix, 32) {
         None
     } else {
-        Some(not_a_chunk_id(value))
+        Some(("chunk-id.shape", not_a_chunk_id(value)))
     }
 }
 
