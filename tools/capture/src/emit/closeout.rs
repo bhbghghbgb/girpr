@@ -393,7 +393,24 @@ mod tests {
                 rejected: Vec::new(),
                 forced_skipped: Vec::new(),
                 forced_unscored: Vec::new(),
-                matrix: Vec::new(),
+                // Every real capture writes one row per required class, so the
+                // fixture must too: A17 is about the matrix being *complete*,
+                // and an empty matrix is a bundle that has not said what
+                // happened to any class. The statuses are irrelevant to the
+                // close-out tests, which are about write order; `unavailable`
+                // is the honest one for a fixture that captured nothing.
+                matrix: crate::select::Class::ALL
+                    .iter()
+                    .map(|class| crate::select::MatrixRow {
+                        class: *class,
+                        status: crate::select::MatrixStatus::Unavailable,
+                        capture_id: None,
+                        covered_by: None,
+                        path: None,
+                        reason: Some("fixture: no captures".to_string()),
+                        candidates_considered: 0,
+                    })
+                    .collect(),
                 bytes_admitted: 0,
                 budget: crate::select::Budget::unlimited(),
             },
