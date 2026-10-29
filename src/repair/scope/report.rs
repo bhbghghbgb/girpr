@@ -51,7 +51,9 @@ pub struct FileDisk {
 ///   files (that is what `--scan` is for). For the temp path it is exact.
 /// - `est_extra_bytes` — the free space the run needs **beyond** the
 ///   install: the peak extra disk of a single file, times the number of
-///   files in flight. Zero for a same-size in-place repair; `jobs × largest
+///   files in flight. Zero for a same-size in-place repair; the file's growth
+///   for an in-place or `discard` repair of a truncated file (discard deletes
+///   the target first, so it never holds a second copy); `jobs × largest
 ///   file` for the temp path.
 ///
 /// The per-file table is what the two modes really differ on, and it is what
@@ -89,7 +91,7 @@ impl DiskPlan {
                     continue;
                 }
             };
-            let on_disk = std::fs::metadata(&path).ok().map(|m| m.len());
+            let on_disk = planned_on_disk(util::file_len(&path), &f.rel, &path);
             let size = f.size.max(0) as u64;
             let (mode, extra) = match resolve_mode(requested, &path) {
                 // The temp path duplicates the whole file: the target and the
@@ -97,7 +99,12 @@ impl DiskPlan {
                 Mode::Temp => (Mode::Temp, size),
                 // The in-place path only needs the file's *growth*; a file
                 // that is already the right size needs nothing at all.
-                Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk.unwrap_or(0))),
+                // `discard` is the in-place path with the target deleted first,
+                // so it never holds a second copy either: a full-size target
+                // needs 0, while a truncated one still grows by `size - on_disk`.
+                // Reporting 0 for that growth would understate the free space
+                // the run needs before it starts.
+                Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk)),
             };
             // Manifest sizes are server data. Three files at `i64::MAX` do not
             // fit in a `u64`; a debug-build panic (or a release wrap that makes
@@ -127,6 +134,30 @@ impl DiskPlan {
             mode: "inplace",
             extra_bytes: 0,
         })
+    }
+}
+
+/// The on-disk length the disk plan charges for one file.
+///
+/// [`util::file_len`] keeps an absent file (`NotFound`) distinct from a stat
+/// that failed for another reason. Only absence is zero; an unreadable file is
+/// warned with its path and the I/O error and charged as absent, which is the
+/// safe overestimate (the whole file as growth) rather than pretending it is
+/// already the right size. Split from the caller so the injected error arm is
+/// testable without a deny-ACL fixture.
+fn planned_on_disk(len: util::FileLen, rel: &str, path: &Path) -> u64 {
+    match len {
+        util::FileLen::Present(n) => n,
+        util::FileLen::Absent => 0,
+        util::FileLen::Unreadable(e) => {
+            tracing::warn!(
+                file = rel,
+                path = %path.display(),
+                error = %e,
+                "disk plan: cannot stat the file; estimating it as absent"
+            );
+            0
+        }
     }
 }
 
@@ -493,6 +524,77 @@ mod tests {
         assert_eq!(disk.for_file("game/foo.dat").mode, "temp");
         assert_eq!(disk.for_file("game/foo.dat").extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
+    }
+
+    /// E-2: `discard` deletes the target before writing, so it never needs a
+    /// second copy (that is `temp`'s cost). For a target that is already the
+    /// right size, the extra disk is 0; a truncated target still has to grow by
+    /// `size - on_disk`, exactly like an in-place repair. Reporting 0 for that
+    /// growth would understate the free space the run needs before it starts.
+    #[test]
+    fn discard_needs_the_growth_but_never_a_second_copy() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "discard");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        // foo.dat is full size; bar.dat is 16 of 64 bytes.
+        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
+        std::fs::write(dir.join("game").join("bar.dat"), vec![0u8; 16]).unwrap();
+
+        let disk = DiskPlan::new(&dir, &plan(), RepairMode::Discard, 4);
+        assert_eq!(
+            disk.for_file("game/foo.dat").extra_bytes,
+            0,
+            "a full-size target is deleted and rewritten in place: no second copy"
+        );
+        assert_eq!(
+            disk.for_file("game/bar.dat").extra_bytes,
+            64 - 16,
+            "a truncated target still grows to its manifest size"
+        );
+        assert_eq!(disk.est_extra_bytes, (64 - 16) * 4);
+        // The whole file is rewritten, so the write figure is still the plan's
+        // total size (the empty third file adds nothing).
+        assert_eq!(disk.est_write_bytes, 128 + 64);
+    }
+
+    /// E-3: a stat that failed for anything but `NotFound` is not a
+    /// zero-length file. Charging it as absent is the safe overestimate, but
+    /// it must be logged with the path and the I/O error so the plan does not
+    /// silently claim a disk requirement it never measured.
+    #[test]
+    fn an_unreadable_stat_is_charged_as_the_whole_file_and_warned() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "unreadable_stat");
+        let path = dir.join("f.dat");
+        std::fs::write(&path, b"12345").unwrap();
+        assert_eq!(planned_on_disk(util::file_len(&path), "f.dat", &path), 5);
+        let missing = dir.join("missing.dat");
+        assert_eq!(
+            planned_on_disk(util::file_len(&missing), "missing.dat", &missing),
+            0,
+            "only NotFound is an absent file"
+        );
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let mut charged = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            charged = Some(planned_on_disk(
+                util::FileLen::Unreadable(denied),
+                "f.dat",
+                &path,
+            ));
+        });
+        assert_eq!(
+            charged,
+            Some(0),
+            "an unreadable stat is charged as absent, the safe full-size estimate"
+        );
+        assert!(
+            logs.contains("disk plan: cannot stat the file"),
+            "the failed stat is logged: {logs}"
+        );
+        assert!(
+            logs.contains("f.dat") && logs.contains("denied"),
+            "the log names the file and the I/O error: {logs}"
+        );
     }
 
     #[test]
