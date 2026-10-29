@@ -29,8 +29,9 @@ traffic, no release profile and no Linux/macOS host.
 4. **Counters and the disk model** — §3 is resolved: `kept_bytes` keeps its
    documented meaning and `discard` keeps its growth cost (F-9, E-2); see the
    resolved decisions log at the end.
-5. **Evidence depth** — §5 (stat/panic injection seams). No product decision;
-   only add a seam where a cheap classifier refactor exists.
+5. **Evidence depth** — §5 is resolved: P-2's two in-place stat sites share a
+   private classifier so the error arm is unit-tested, and F-6/S-3/R-5 are
+   accepted as-is; see the resolved decisions log at the end.
 6. **Unverified areas** — §6. Probe or accept; do not decide them from the
    current mock/reference corpus.
 
@@ -72,84 +73,21 @@ See the [`Resolved decisions`](#resolved-decisions) log at the end of this file.
 
 ## 5. Stat-failure and panic evidence seams
 
-These four paths have no public injection seam. The code is source-read at the
-failure arm; only S-3 has a classifier that can be unit-tested with an injected
-`io::Error`. None is a known defect.
+**Resolved (2026-10-30).** The evidence depth stays as accepted: these paths
+have no public injection seam and none is added. The code is source-read at the
+failure arm except where a cheap classifier exists. F-6 (a panicked scan task),
+S-3 (the deprecated-stat failure arm) and R-5 (`write_config_ini`'s `sync_all`)
+are accepted as-is. P-2's two in-place `metadata()` sites now share a private
+two-state classifier over `io::Result<Metadata>`, so the error arm is executed
+in a unit test; production still fails the file (exit `3`) with the same path
+context. See the [`Resolved decisions`](#resolved-decisions) log at the end of
+this file.
 
-### 5.1 F-6 — a panicked scan task
-
-**Current.** `scan_plan` runs `scan_one` on the blocking pool and treats a
-`JoinError` as a warning; the estimate stays safe because an unreached file is
-estimated in full (`src/repair/scan.rs:213-245`, `64c80d6`). No `#[cfg(test)]`
-sentinel and no test raises a panic inside `scan_one`; the branch is
-code-reading. By contrast, the repair task has `TEST_PANIC_REL`
-(`file/mod.rs:390-410`) and `a_panic_inside_a_file_task_fails_the_run`
-(`file/mod.rs:794`).
-
-**Options.** (a) Accept — the warning is not load-bearing for correctness. (b)
-Add a `TEST_PANIC_REL`-style sentinel in `scan_one` plus a test — pins the
-warning and the safe estimate. Failure mode for (a): a future refactor could
-drop the `Err` arm silently again. (b) adds test-only code in a hot loop.
-
-**Recommendation.** **Accept (a)** unless the warning text is a contract; the
-estimate is already conservative. *(The panic is reasoned from the
-`JoinError` arm, not injected.)*
-
-### 5.2 P-2 — the two in-place `File::metadata()` sites
-
-**Current.** `inplace.rs:183` (before the trim) and `inplace.rs:271` (salvage
-order) call `handle.metadata()?`; the error propagates to `repair_one_file` and
-becomes a failed file (exit `3`). `temp.rs` was moved to `file_len`/`classify_len`
-(`edb2eb4`), but the in-place sites still call the handle directly, so there is
-no classifier to unit-test.
-
-**Options.** (a) Accept — the `?` already fails the file with path context.
-(b) Extract a `classify_len`-style helper over `io::Result<Metadata>` (the same
-shape as `classify_deprecated`) and unit-test the error arm; production
-behaviour is unchanged. (c) Add a trait/injection seam — overkill for two call
-sites.
-
-**Recommendation.** **(b).** It is a small refactor with no public seam and
-makes the error arm executable, matching S-3. *(Inferred from the existing
-`classify_deprecated` pattern.)*
-
-### 5.3 S-3 — the deprecated-stat failure arm
-
-**Current.** `classify_deprecated` (`post.rs:246-255`) splits
-`File | NotAFile | AlreadyGone | Failed`; the failure arm warns with the path
-and deletes without counting an unknown size (`post.rs:185-200`). It is pinned
-by `classify_deprecated(Err(denied))` (`post.rs:545`) and
-`stat_deprecated_separates_file_non_file_and_absent` (`post.rs:557`). History
-`e2040cd`/`63a53de`.
-
-**Recommendation.** **No change.** The four-state classifier is the seam; the
-syscall wrapper needs none. *(The classifier is executed; the real ACL shape is
-not.)*
-
-### 5.4 R-5 — `write_config_ini`'s `sync_all`
-
-**Current.** The temp is written, `sync_all` runs unless
-`GIRPR_TEST_NO_FSYNC` is truthy, any write error removes the temp and aborts,
-and only then is the rename done (`src/util.rs:855-890`). A failed `sync_all` is
-fatal and removes the temp, but no test forces the syscall to fail: the hook
-only **skips** it (`util.rs:666-683`; `.config/nextest.toml:38-40`). History
-`a812fce`, hook `24c5d0c`.
-
-**Options.** (a) Accept — the path is linear and the cleanup is the same one
-the write-error branch exercises. (b) Add a test-only `sync` wrapper selected by
-an env var (like the fsync hook) that returns `Err`, and a test asserting no
-rename and no temp. Failure mode for (a): a future refactor could publish the
-rename after a failed sync unnoticed. (b) adds a production-adjacent env var.
-
-**Recommendation.** **Accept (a).** The cost of a fault-injection hook is
-higher than the risk in a three-line path; if a seam is wanted, the `#[cfg(test)]`
-wrapper is the smallest one. *(Inferred from the code and the existing hook.)*
-
-**Cross-project impact (whole §5).** `.config/nextest.toml` and
-`.config/nextest-test-env{,.cmd}` are workspace-wide and already carry both
-`GIRPR_TEST_NO_FSYNC` and `GIRSYNC_TEST_NO_FSYNC`; any new hook must be added
-there and affects both tools. `crates/log` and `crates/tempdir` are unaffected
-(the latter is dev-only scratch, `girpr_tempdir::TempDir`, with no API change).
+**Cross-project impact.** `.config/nextest.toml` and
+`.config/nextest-test-env{,.cmd}` are workspace-wide and carry both
+`GIRPR_TEST_NO_FSYNC` and `GIRSYNC_TEST_NO_FSYNC`; no new hook was added, so
+they do not change. `crates/log` and `crates/tempdir` are unaffected (the
+latter is dev-only scratch, `girpr_tempdir::TempDir`, with no API change).
 No `docs/02`, workspace `Cargo.toml` or `Cargo.lock` change.
 
 ---
@@ -243,3 +181,7 @@ workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
 - **V-2** — keep (a): an uncleannable blacklist entry is fatal; protection must not degrade silently, unlike the optimisation-shaped reuse map. (2026-10-30)
 - **T-2/E-3** — keep (a): `FileLen` keeps present, absent and unreadable distinct and a directory at a file path is still reported damaged; no new enum arm for a diagnostic improvement. (2026-10-30)
 - **U-1** — keep (a): normalisation happens once at each boundary, and the two read-only directory inputs are validated at `contained_join`; no defensive second clean. (2026-10-30)
+- **F-6** — accept (a): the scan `JoinError` warning is not load-bearing for correctness and the estimate is conservative; no test-only panic sentinel in the hot loop. (2026-10-30)
+- **P-2** — option (b): the two in-place stat sites classify `io::Result<Metadata>` so the error arm is unit-tested; production still fails the file (exit `3`) with path context. (2026-10-30)
+- **S-3** — no change: the four-state `classify_deprecated` is already the seam and is executed; the syscall wrapper needs none. (2026-10-30)
+- **R-5** — accept (a): the linear temp-write/sync/rename path already shares the write-error cleanup; a fault-injection hook costs more than the risk. (2026-10-30)

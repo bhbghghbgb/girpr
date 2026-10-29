@@ -179,10 +179,8 @@ async fn attempt_inplace_inner(
     // difference is the *peak* disk usage, which nothing reports. The log is
     // the only place the outcome is visible, so both branches say which one
     // they took.
-    let have = handle
-        .metadata()
-        .with_context(|| format!("stat {} before the trim", final_path.display()))?
-        .len();
+    let have = handle_len(&handle)
+        .with_context(|| format!("stat {} before the trim", final_path.display()))?;
     if have > file.size.max(0) as u64 {
         if trim_is_free(file, &file.chunks, &sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
@@ -267,10 +265,8 @@ async fn attempt_inplace_inner(
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
                 .collect();
-            let usable = handle
-                .metadata()
-                .with_context(|| format!("stat {} for the salvage order", final_path.display()))?
-                .len();
+            let usable = handle_len(&handle)
+                .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
             let o = reuse::salvage_order(&chunks, &srcs, usable);
             tracing::info!(
                 file = %file.rel,
@@ -391,6 +387,46 @@ async fn attempt_inplace_inner(
         "repaired in place"
     );
     Ok(Inplace::Repaired(stats.clone()))
+}
+
+/// What one `File::metadata()` call said about the in-place target.
+///
+/// Only the length matters at the two sites that stat the handle: before the
+/// eager trim and for the salvage order. Keeping the error as its own state
+/// lets the failure arm be executed with an injected `io::Error`
+/// (`post::classify_deprecated`'s shape) instead of only being read, without a
+/// trait or an injection seam. [`handle_len`] turns it back into the exact
+/// `io::Result` the callers used to get, so production still propagates the
+/// error with the site's path context and fails the file (exit `3`).
+#[derive(Debug)]
+enum InplaceLen {
+    /// The handle is open; this is its current length.
+    Present(u64),
+    /// The handle exists but could not be stat'd.
+    Failed(std::io::Error),
+}
+
+/// Classify one in-place `metadata` result.
+///
+/// Split from [`handle_len`] so the error arm is unit-testable without a
+/// permission fixture, matching `util::classify_len` and
+/// `post::classify_deprecated`.
+fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> InplaceLen {
+    match stat {
+        Ok(m) => InplaceLen::Present(m.len()),
+        Err(e) => InplaceLen::Failed(e),
+    }
+}
+
+/// The handle's current length, with the stat error preserved.
+///
+/// This is the same `io::Result` the two sites got from `handle.metadata()?`,
+/// so the `?` path — and the failed-file outcome behind it — is unchanged.
+fn handle_len(handle: &std::fs::File) -> std::io::Result<u64> {
+    match classify_len(handle.metadata()) {
+        InplaceLen::Present(len) => Ok(len),
+        InplaceLen::Failed(e) => Err(e),
+    }
 }
 
 /// Is trimming the file's dead tail free?
@@ -521,6 +557,33 @@ mod tests {
     fn an_already_absent_discard_target_is_not_an_error() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_absent");
         discard_target(&dir.join("gone.dat")).expect("absent is the desired state");
+    }
+
+    /// P-2: the two in-place stat sites used a bare `handle.metadata()?`, so
+    /// the failure arm could only be read. The classifier keeps the error
+    /// itself, and `handle_len` hands it back to the caller's `?`, which still
+    /// fails the file (exit `3`) with the site's path context.
+    #[test]
+    fn a_failed_inplace_stat_preserves_the_error() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        match classify_len(Err(denied)) {
+            InplaceLen::Failed(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(e.to_string(), "denied");
+            }
+            other => panic!("an ACL failure is a stat failure, not a length: {other:?}"),
+        }
+    }
+
+    /// The length half of the same classifier: the handle's metadata is what
+    /// the trim and the salvage order consume.
+    #[test]
+    fn an_inplace_stat_reports_the_handle_length() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "stat_len");
+        let path = dir.join("foo.dat");
+        std::fs::write(&path, b"12345").unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert_eq!(handle_len(&handle).unwrap(), 5);
     }
 
     fn chunk(id: &str, size: i64) -> SophonChunk {
