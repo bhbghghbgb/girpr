@@ -3,7 +3,7 @@
 **Baseline:** HEAD `64dc69d` (`revert: drop the adversarial review series`), tree `66985753edf618610a3df629bacdf2b6b70609fa`, identical to `7f2d69c` (`git diff --stat 7f2d69 HEAD` is empty); reviewed 2026-10-27 against HEAD, not the reverted `f9352f7` series.
 **Scope:** `tools/capture/src/**`, `tools/capture/tests/**`, `tools/capture/Cargo.toml`, `tools/capture/docs/00-spec.md`, `docs/01-artifact-schema.md`, `docs/03-design-notes.md`, `docs/04-bundle-differ.md`; source-verified by `git show`, `git grep`/`rg` and file reads — no build, test, binary or network run.
 **History:** the uncompacted first-pass audit (F1–F12 essays, corrections to the reverted series, landing order) is in git: `git show 65eaa38:tools/capture/ADVERSARIAL_REVIEW.md`.
-**Open items:** [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).
+**Open items:** none — every settled decision from the maintainer list is implemented; the bundle schema in [`docs/01-artifact-schema.md`](docs/01-artifact-schema.md) is the current contract.
 
 ## Pass log
 

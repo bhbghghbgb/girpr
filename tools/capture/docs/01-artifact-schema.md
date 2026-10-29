@@ -21,7 +21,7 @@ it; every gzipped document ships a plain-text sidecar (`*.tsv`) so an agent can
 `grep` it without decompressing.
 
 The worked values throughout are from the reference capture of `hk4e_global`
-7.0.0 → 7.1.0: 78 files, 6 captures, 25 chunk blobs, 43 request rows, 93
+7.0.0 → 7.1.0: 81 files, 6 captures, 25 chunk blobs, 43 request rows, 93
 selfcheck rows, `result: "pass"`.
 
 ---
@@ -41,6 +41,8 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── getBuild.<old_tag>.json
 │   ├── tag_probe.json
 │   ├── error_shapes.json
+│   ├── error_responses.json
+│   ├── error_bodies/<seq:06>.body           # the retained bytes, one file per response
 │   └── requests.ndjson
 ├── manifests/<tag>/
 │   ├── <field>.manifest.zst                  # raw blob, byte-exact
@@ -64,6 +66,9 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   └── index.json
 ├── patchmaps/
 │   └── <capture_id>.json
+├── diagnostics/
+│   ├── rejections.json                       # every value a shape rule refused
+│   └── path_map.json                         # every logical→on-disk escaped name
 └── verify/
     ├── checksums.json
     └── selfcheck.json
@@ -71,6 +76,12 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `reuse_in_place`,
 `reuse_moved+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
+
+A `<tag>` or capture path that names a Windows device — `manifests/CON/`,
+`game/…/NUL` — is written under an escaped component (`%CON`, `%NUL`); the
+documents keep the game's spelling and `diagnostics/path_map.json` (§5c) records
+the pair. `MANIFEST.json → files[]` and `checksums.json` name the on-disk form,
+because that is what exists.
 
 Nothing published under `chunks/` or `manifests/` is ever deleted by the tool.
 The `.tmp` file that a chunk fetch writes is not an exception: it is removed,
@@ -105,6 +116,7 @@ is the completion proof.
     "captured_at": "2026-10-20T15:48:10Z",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
+    "tool_argv_raw": [[116,0,97,0,…], …],   // exact host bytes per argument, see below
     "complete": true            // false only if interrupted; selfcheck then explains why
   },
   "biz":      { "id": "hk4e_global", "launcher_id": "VYTpXlbWo8", "game_id": "gopR6Cufr3",
@@ -161,9 +173,12 @@ refusal is `--require-class`'s job. The row's optional keys
 than a guess. Version 1 carried a `repair` block and an
 `expectations.summary` block, and its class ids named a repair tool's internal
 decisions; version 2's blob rows could not say why a fetch failed, whether a body
-was partial, or why a measurement did not return. A reader that understood the
-current shape would ignore all of that and report a bundle as consistent when it
-is not. The refusal names the command that produces a current bundle.
+was partial, or why a measurement did not return. Version 3 makes those fields
+required and adds the documents that keep the rest of what a run sees: retained
+error bodies, the values a shape rule refused, the logical→on-disk mapping for
+device names, and the exact argv bytes. A reader that understood the current
+shape would ignore all of that and report a bundle as consistent when it is not.
+The refusal names the command that produces a current bundle.
 
 `files[]` lists every file that existed **before the close-out began** — the
 fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
@@ -173,8 +188,8 @@ before they are written: `MANIFEST.json` (it is being written), `README.md` and
 (its own). A document that hashes itself has no fixed point, and here the
 dependency runs both ways.
 
-`verify/checksums.json` is the complete inventory: `file_count: 77` for a
-78-file bundle, and it covers all four.
+`verify/checksums.json` is the complete inventory: `file_count: 80` for an
+81-file bundle, and it covers all four.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
@@ -195,6 +210,15 @@ this ceiling, so a reader reproducing a decode needs the number the capture
 actually used. Substituting the flag's default would turn a run with a raised
 ceiling into a bundle that cannot be read back, and would do so silently.
 
+`tool_argv_raw` is the exact argv the host carried: one array of byte values per
+argument, in the same order as `tool_argv`. On Windows each byte is a UTF-16LE
+code unit, so an unpaired surrogate survives; on Unix the bytes are the argument
+as `execve` saw them. It is required because `tool_argv` is a `to_string_lossy`
+rendering and U+FFFD cannot be reversed: a path that was not valid Unicode is
+recorded truthfully by the raw form and only approximately by the readable one.
+No replay command reads it yet; the point is that the evidence cannot be
+reconstructed later.
+
 ---
 
 ## 3. `api/*.json`
@@ -205,6 +229,8 @@ records how they were obtained.
 
 The two exceptions are generated, and both are this tool's own measurements
 rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5a).
+Two more are generated for the same reason: `error_responses.json` (§5b) and its
+byte-exact `error_bodies/` files, and the two `diagnostics/` documents (§5c).
 
 ## 4. `api/requests.ndjson`
 
@@ -366,6 +392,120 @@ some bundles and not others, with nothing in the bundle to say which.
 
 It is read back through the same type that wrote it, so a document that is
 present and unusable fails at open, by name, rather than at some later consumer.
+
+---
+
+## 5b. `api/error_responses.json` and `api/error_bodies/`
+
+The **incidental** non-2xx responses the run saw — a throttled chunk, a missing
+blob, a retried `503` — with the body bytes that were actually received. This is
+the other half of §5a: that document records the *deliberate* negative probes,
+this one records what the origin said when it refused something the run wanted.
+
+```jsonc
+{ "schema_version": 3,
+  "budget_bytes": 8388608,                 // the run-wide retention budget
+  "total_retained_bytes": 734,
+  "responses": [
+    { "seq": 31,                           // the request's row in requests.ndjson
+      "url": "https://autopatchhk.yuanshen.com/…/chunks/…/000…",
+      "final_url": "https://autopatchhk.yuanshen.com/…",
+      "status": 404, "attempts": 1,
+      "content_type": "application/xml",
+      "bytes_received": 367,
+      "retained_bytes": 367,
+      "truncated": false,
+      "stored_path": "api/error_bodies/000031.body" }
+  ] }
+```
+
+`api/error_bodies/<seq:06>.body` holds the retained bytes **verbatim**, with no
+JSON escaping and no re-encoding: the file is `retained_bytes` long and is the
+origin's body. `stored_path` is `null` only when zero bytes were retained.
+
+Two budgets keep an error body from becoming the artifact:
+
+- `--max-response-bytes` bounds **reading**, exactly as it does for a success.
+- `budget_bytes` (8 MiB) bounds **retention** for the whole run. A throttled run
+  can fail thousands of chunk requests, and keeping every `429` page would make
+  the bundle larger than the data it exists to describe.
+
+A response that crossed either bound is still a row, with `truncated: true` and
+the bytes that were kept. A `503` is retried like any other status; `seq` names
+the *first* request of that retry chain, so a reader joins the row to the request
+log by `seq` and reads `attempts` for how many tries it took.
+
+The document is required, and an empty `responses` list is a fact: this run met
+no refusal. Deleting the document would make "this bundle recorded the origin's
+failures" true of some bundles and not others, with nothing to say which.
+
+---
+
+## 5c. `diagnostics/`
+
+Two documents that keep what a capture refused or had to rename. Both are
+written on every run, including a run that writes no other diagnostics: an empty
+list says "nothing was refused/escaped", which is a measurement, not a gap.
+
+### `diagnostics/rejections.json`
+
+Every value a shape rule refused — the flag, manifest path, manifest tag, audio
+field or chunk id — with where it came from and which rule it failed. The write
+rules are strict; throwing the value away would also throw away the most
+interesting fact a capture can learn about the API.
+
+```jsonc
+{ "schema_version": 3,
+  "cap_bytes": 512,                        // per-value cap this run used
+  "total": 1,
+  "omitted": 0,                            // rows after the 4096-row cap
+  "rejections": [
+    { "source": "manifest 7.1.0/game entry 42 file",
+      "value": "GenshinImpact_Data/Resources/aux.dll",
+      "rule": "path.device",
+      "truncated": false }
+  ] }
+```
+
+`rule` is a stable identifier — `path.device`, `path.windows-fold`, `tag.device`,
+`chunk-id.shape`, … — and is the thing to assert on. `value` is JSON-escaped and
+capped at `cap_bytes` (512); `truncated` says whether it was cut. `value` is
+text, never joined to a filesystem path. `omitted` counts refusals that happened
+after the 4096-row cap, so a hostile manifest cannot make the document unbounded
+and the loss is still visible.
+
+A refusal that stops the run before a bundle directory exists writes this
+document into the would-be bundle directory: the refusal is evidence even when
+there is no capture to attach it to.
+
+### `diagnostics/path_map.json`
+
+Every path written under a name other than the one the documents spell. A
+Windows device component (`CON`, `NUL`, `COM1`, with or without an extension)
+cannot be a file name, but a live manifest may legitimately contain one. The
+value is **kept** in every document — `entries[].file`, `patchmaps/*.json`'s
+`path`, the index's `referenced_by[].path` — and only the on-disk name is
+escaped.
+
+```jsonc
+{ "schema_version": 3,
+  "entries": [
+    { "logical": "game/GenshinImpact_Data/Resources/CON",
+      "on_disk": "game/GenshinImpact_Data/Resources/%CON" }
+  ] }
+```
+
+The escape is one component at a time: a component whose stem is a reserved
+device name gets a leading `%` (`CON` → `%CON`, `CON.txt` → `%CON.txt`), and
+every literal `%` is doubled (`%CON` → `%%CON`), so a device name and an
+ordinary name containing `%` cannot collide. Entries are sorted by `logical`, and
+the list is empty when nothing needed escaping. `verify` re-derives the escape
+and refuses a mapping that disagrees with it, so the document cannot redirect a
+read.
+
+`MANIFEST.json → files[]` and `verify/checksums.json` name the **on-disk** path,
+because those are the files that exist; the mapping is how a reader gets back to
+the logical path.
 
 ---
 
@@ -683,6 +823,24 @@ A `stored_path` that is `null` has three causes:
   because nothing was measured. The flag also skips A6–A12, A19 and A21–A23
   (see §16).
 
+### Negative and extreme declared sizes
+
+A manifest is the API's document, not a trusted one. A file entry can declare
+`size: -1`, two chunk sizes can sum past `i64::MAX`, and a file's declaration can
+disagree with its chunks. The decode keeps what can be true and records the
+saturation rather than wrapping or aborting:
+
+- a negative per-file size contributes `0` to `total_file_bytes`;
+- a negative per-chunk size contributes `0` to the chunk and file byte sums;
+- offsets and byte totals use saturating arithmetic, so an overflowing sum stops
+  at the type's maximum rather than wrapping to a small positive number.
+
+The individual entry still appears with its declared values in
+`manifests/<tag>/<field>.manifest.json.gz`; the counters in
+`meta.json → decoded` and the index are the clamped view. A reader comparing a
+negative declaration with a zero contribution is seeing the rule working, not a
+lossy dump.
+
 ### `build_id` — part of the chunk's address
 
 A chunk's URL is `…/chunks/<series>/<build_id>/<16hex>_<32hex>`, so the build id
@@ -877,7 +1035,7 @@ whose two sides are deliberately byte-identical.
       "md5": "8c718562f39f91f7e399b02de591f3bd",
       "sha256": "…", "encoding": "gzip" }
   ],
-  "file_count": 77, "total_bytes": 175623337 }
+  "file_count": 80, "total_bytes": 175623265 }
 ```
 
 This is the **complete** inventory of the bundle: every file except

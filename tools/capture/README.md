@@ -98,29 +98,29 @@ difference between a five-second loop and a two-minute one.
   to. Pin both when you want a specific pair, especially when the result is going
   to be kept.
 
-**Compatibility.** Every document carries `"schema_version": 2`, and a reader
-should reject an unknown one rather than guess. A bundle whose documents all
-validate is a bundle every reader can use — which is why a **new field** is
-additive and a **new document** is not: adding either leaves `schema_version` at
-`2`, but a new document becomes required and the bundles that predate it are
-stale by definition. `verify` reports what it cannot re-derive instead of
-refusing, so a bundle whose `selfcheck` disagrees is a finding rather than an
-unreadable tree; a bundle *missing a required document* is refused, because a
-fixture that half-answers a question is worse than one that does not answer it.
-A bundle written by schema version `1` is refused outright — `gircap verify`
-names the command that produces a current one — and a bundle whose selfcheck
-does not pass is not a fixture: re-capture it.
+**Compatibility.** Every document carries `"schema_version": 3`, and a reader
+should reject an unknown one rather than guess. Backwards compatibility is not a
+requirement: version 3 makes the evidence fields and documents that earlier
+versions omitted **required**, so a version-2 bundle is re-captured rather than
+read with a default substituted for what nobody recorded. `verify` reports what
+it cannot re-derive instead of refusing, so a bundle whose `selfcheck` disagrees
+is a finding rather than an unreadable tree; a bundle *missing a required
+document* is refused, because a fixture that half-answers a question is worse
+than one that does not answer it. A bundle written by schema version `1` or `2`
+is refused outright — `gircap verify` names the command that produces a current
+one — and a bundle whose selfcheck does not pass is not a fixture: re-capture it.
 
 ## Status
 
 Complete. A live `capture` writes the `api/` documents byte-exact — including
-`api/tag_probe.json` and `api/error_shapes.json`, the two generated
-measurements — fetches and verifies the `game` manifest for both builds, diffs
-them, and assembles a **complete artifact**:
+`api/tag_probe.json`, `api/error_shapes.json` and `api/error_responses.json`, the
+generated measurements — fetches and verifies the `game` manifest for both
+builds, diffs them, and assembles a **complete artifact**:
 
 | | shipped |
 |---|---|
-| `api/` | six response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `requests.ndjson` |
+| `api/` | six response bodies, byte-exact, + `tag_probe.json` + `error_shapes.json` + `error_responses.json` and retained `error_bodies/` + `requests.ndjson` |
+| `diagnostics/` | `rejections.json` (refused values) and `path_map.json` (escaped device names) |
 | `diff/` | `paths.diff.json`, `paths.tsv`, `candidates.json`, `reuse_pool.json`, `matrix.json` |
 | `chunks/` | the three retention sets, every blob, `index.json` with `build_id` on each reference |
 | `game/` / `expected/` | the fixture and the ground truth, per capture |

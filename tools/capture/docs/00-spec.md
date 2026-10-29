@@ -1166,7 +1166,7 @@ makes it **2 290 529 B**.
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| `schema_version` | **stays `2`** unless the bundle's byte layout changes incompatibly | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| `schema_version` | **`3`**; a bump is a deliberate decision, not a default, and version 3 requires the added evidence | [`01-artifact-schema.md`](01-artifact-schema.md) |
 | commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---
