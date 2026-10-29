@@ -583,6 +583,88 @@ mod tests {
         }
     }
 
+    /// The other half of [`every_path_flag_parses_a_non_unicode_value`]: every
+    /// value-taking flag, whatever its type, either accepts a non-Unicode value
+    /// or refuses it through clap — never panics — and the exact bytes reach
+    /// `tool_argv_raw` in both cases.
+    ///
+    /// The `String`-typed flags cannot *represent* an unpaired surrogate, so
+    /// clap refuses them; that refusal is the correct behaviour and is pinned
+    /// here. What must not vary is the record: a refused flag never reaches the
+    /// bundle, but the argv is recorded before parsing, so the raw bytes are
+    /// kept anyway. A future flag whose type silently accepted a lossy value
+    /// would fail this table rather than at the first replay.
+    #[cfg(windows)]
+    #[test]
+    fn every_value_flag_either_parses_or_refuses_a_non_unicode_value_but_records_its_bytes() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let bad = OsString::from_wide(&[0xD800]);
+        // (argv before the value, whether clap's value type accepts non-Unicode)
+        let cases: &[(&[&str], bool)] = &[
+            // PathBuf: the realistic carrier, accepted.
+            (&["capture", "--out"], true),
+            (&["capture", "--log-file"], true),
+            (&["verify", "--artifact"], true),
+            (&["materialize", "--artifact", "a", "--out"], true),
+            (&["list", "--root"], true),
+            // String, enums and numbers: not representable, refused by clap.
+            (&["capture", "--new-tag"], false),
+            (&["capture", "--old-tag"], false),
+            (&["capture", "--require-class"], false),
+            (&["capture", "--files"], false),
+            (&["capture", "--audio"], false),
+            (&["capture", "--probe-tags"], false),
+            (&["capture", "--hyp-base"], false),
+            (&["capture", "--sophon-base"], false),
+            (&["capture", "--output"], false),
+            (&["capture", "--biz"], false),
+            (&["capture", "--manifest-detail"], false),
+            (&["capture", "--per-class"], false),
+            (&["capture", "--max-download-bytes"], false),
+            (&["capture", "--gzip-threshold"], false),
+            (&["capture", "--jobs"], false),
+            (&["capture", "--retries"], false),
+            (&["capture", "--timeout"], false),
+            (&["capture", "--max-response-bytes"], false),
+            (&["capture", "--max-decompressed-bytes"], false),
+        ];
+        for (prefix, accepted) in cases {
+            let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
+            argv.extend(prefix.iter().map(OsString::from));
+            argv.push(bad.clone());
+
+            // The raw record is made from the same argv the parser sees, and it
+            // survives either outcome.
+            let recorded = recorded_argv(argv.iter().cloned());
+            assert_eq!(
+                recorded.raw.last().expect("the value is last"),
+                &argv_bytes(&bad),
+                "{prefix:?}: the exact bytes were not kept"
+            );
+
+            match parse_from(argv) {
+                Ok(_) => assert!(
+                    *accepted,
+                    "{prefix:?} accepted a non-Unicode value; its type is not PathBuf"
+                ),
+                Err(e) => {
+                    assert!(
+                        !*accepted,
+                        "{prefix:?} refused a value its PathBuf type should accept: {e}"
+                    );
+                    // A refusal is still usable: it says which value was wrong.
+                    let text = e.to_string();
+                    assert!(
+                        text.to_ascii_lowercase().contains("invalid"),
+                        "{prefix:?}: the refusal does not name the cause: {text}"
+                    );
+                }
+            }
+        }
+    }
+
     fn parse(args: &[&str]) -> Cli {
         let mut argv = vec!["gircap"];
         argv.extend_from_slice(args);
