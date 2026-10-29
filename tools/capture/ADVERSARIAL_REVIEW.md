@@ -182,6 +182,46 @@ has a panicking-closure test (`src/tasks.rs:81`, `src/blobs/mod.rs:1476`,
 `src/run/mod.rs:914`); no portable input makes the real decoder or writer
 panic, so that instruction remains unexercised.
 
+### Eleventh pass — O1–O4
+
+Re-derived at `bcb4c38`; all four confirmed and reproduced before the fix. O1
+panicked with `capacity overflow` on a `Content-Length` of
+`(isize::MAX as u64) + 1` and asked the allocator for 10 GiB below that; O2
+returned a green A17 for a five-row and for a lone-unknown-class matrix; O3
+printed `OverBudget`, not `over_budget`; O4's ~8 KiB zstd frame expanded to
+268 435 456 bytes under `zstd::decode_all`.
+
+| ID | Finding | Status | Commit |
+|---|---|---|---|
+| O1 | A success body sizes its buffer from an untrusted `Content-Length` before the response ceiling rejects it, so a header can abort or panic instead of producing the typed refusal. | fixed | `bb43a8b` |
+| O2 | A17 checks each present row's state but not completeness against `Class::ALL`, so `verify` certifies a matrix with a missing or unknown class. | fixed | `daca14c` |
+| O3 | The `--require-class` failure text uses the `Debug` spelling (`OverBudget`) and its doc example names a variant that does not exist. | fixed | `066a3e9` |
+| O4 | Manifest and bundle zstd output is unbounded; the declared uncompressed size is compared only after `decode_all` materialises the frame. | fixed | `d17fb18` |
+
+O1 adds `body_reservation`, which clamps the declared length to the response
+ceiling and to a 64 KiB starting size; the typed `too_big` refusal still comes
+from `drain_capped`. Its loopback test covers both the review's 10 GiB header and
+the `isize::MAX + 1` value that used to panic before any read.
+
+O2 makes `Manifest::a17` compare the matrix with `Class::ALL`: every class
+exactly once, no unknown class, no duplicate, and one of the four documented
+states. `verify` reaches the same function and reports the result as a failed
+A17 row and `agrees: false`; `Bundle::open` remains a structural reader.
+
+O3 renders the row through `MatrixStatus`'s existing `Display` (which delegates
+to `id`) and corrects the example to `reuse_moved: over_budget (...)`.
+
+O4 derives the decode limit from the declared or expected size, capped by
+`MAX_DECOMPRESSED_BYTES = 256 MiB`, and reads through `take(limit + 1)` so an
+overrun is a typed refusal before the rest is materialised. The initial
+capacity is clamped to 64 KiB, never the untrusted declaration. The manifest
+path computes the declared sizes first; the bundle path derives the limit from
+the index's `uncompressed_size`.
+
+`177f304` is a test-fixture follow-up: the closeout suite's seeded selection now
+carries one `unavailable` row per class, because strict A17 correctly rejects
+the empty matrix the old fixture used.
+
 ### Decisions that still constrain current behaviour
 
 - **F1/F2/F9.** Forced paths share one cumulative budget; a refusal is recorded and the loop continues; duplicate `--files` paths are a usage error.
@@ -193,6 +233,10 @@ panic, so that instruction remains unexercised.
 - **M1.** The checksums total is folded from an untrusted document: it saturates for reporting, and an overflow is its own finding before the equality test, so `u64::MAX` is agreement only when the entries really sum to it.
 - **M2.** A failing task keeps its item index and its `JoinError` payload; cancellation is named as cancellation, not as a panic; both `JoinSet` loops use one helper (`src/tasks.rs`).
 - **N1.** A blocking task that does not return goes through `tasks::join_blocking`, so its payload survives; a panicking measurement removes the already-published blob rather than leaving it without an index row.
+- **O1.** A success body reserves `min(declared, ceiling, 64 KiB)` bytes up front; the declared header is never an allocation size, and the typed `too_big` refusal still comes from `drain_capped`'s checks.
+- **O2.** A17 is equality with `Class::ALL`: exactly six classes, each once, each in `captured`/`covered_by`/`over_budget`/`unavailable`. An unknown, missing or duplicated class fails A17; `verify` surfaces it as a failed A17 row and `agrees: false`, while `Bundle::open` stays a structural reader.
+- **O3.** Requirement failures use the artifact spelling from `MatrixStatus`'s `Display`/`id`, not its `Debug` variant name.
+- **O4.** A zstd decode is limited by the declared/expected uncompressed size, capped absolutely at 256 MiB, and reads `limit + 1` bytes to detect an overrun. The initial capacity is at most 64 KiB; an absent declaration gets the ceiling, and a false or absent declaration cannot make the output unbounded.
 - **F3.** A classless forced path is reported in `forced_unscored`/`forced_files_unscored`, not overloaded onto `forced_skipped`.
 - **F4.** The fetch reason goes in `decode_error`; a dedicated `fetch_error` remains open.
 - **F7.** A metadata-only run does not enforce a chunk wire-byte ceiling it pays nothing towards.
@@ -209,13 +253,17 @@ panic, so that instruction remains unexercised.
 - **K1.** Measurement totals saturate; address-like sums and plan costs use `checked_add` with an error naming the offending chunk and values. No negative `offset`, `compressed_size` or `uncompressed_size` is accepted at a decode boundary, and no `uncompressed_size` above `i64::MAX` survives index validation.
 - **K2.** An unframed fetched body is a successful fetch and an `undecodable` row, not a failed fetch; it is not retried from another source, because replacing it would destroy the evidence. A post-rename I/O error removes the published blob.
 
-### Verification (latest: tenth pass, `a84d3c5`)
+### Verification (latest: eleventh pass, `177f304`)
 
 | Command | Result |
 |---|---|
-| `cargo build -p gircap` | finished, no warnings (23.78s) |
-| `cargo test -p gircap` | **701 passed, 0 failed** (557 lib + 144 integration) |
-| `cargo clippy -p gircap --all-targets` | finished, no diagnostics (9.51s) |
-| `cargo fmt -p gircap --check` | clean |
+| `cargo build -p gircap` | finished, no warnings (0.48s cached; the fix commits built in 9.01s or less) |
+| `cargo test -p gircap` | **711 passed, 0 failed, 0 ignored** (566 lib + 145 integration/doc) |
+| `cargo clippy -p gircap --all-targets` | finished, no diagnostics (33.11s) |
+| `cargo fmt -p gircap --check` | clean, no output |
 
-Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 15 + 15; no test is `#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. The five new tests are the two `join_blocking` tests, the measurement panic-and-discard test through its closure seam, and the request-log panic and return-value tests. No release build was repeated this pass; the ninth-pass targeted release runs are recorded in its commit.
+Integration total 3 + 8 + 32 + 2 + 30 + 10 + 29 + 16 + 15; no test is
+`#[cfg(unix)]`, so none was skipped and the `#[cfg(windows)]` tests ran. The
+eleventh pass adds nine library tests (O1 one, O2 five, O3 one, O4 two) and one
+`tests/offline_bundle.rs` test, and the closeout fixture change is covered by
+the existing closeout suite.
