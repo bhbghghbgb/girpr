@@ -1219,6 +1219,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_declared_length_far_beyond_the_ceiling_is_a_typed_refusal_not_an_allocation() {
+        // **O1.** The buffered path used the declared `Content-Length` as a
+        // `Vec::with_capacity` size *before* `drain_capped` applied the ceiling.
+        // A loopback origin could therefore make the process request 10 GiB (and
+        // a declaration at or above `isize::MAX` panicked with a capacity
+        // overflow) instead of returning the promised typed refusal.
+        //
+        // Both cases matter: the first is the review's 10 GiB header, the second
+        // is the value that made the old conversion a panic rather than an
+        // allocation attempt. The reservation is now clamped, so neither reaches
+        // the allocator as a size.
+        let cases = [(isize::MAX as u64) + 1, 10 * 1024 * 1024 * 1024];
+        for claim in cases {
+            let Ok(claim) = usize::try_from(claim) else {
+                continue;
+            };
+            let body = big_body(64);
+            let mock = spawn_answers(
+                vec![Answer {
+                    status: 200,
+                    body: leak(&body),
+                    claim: Some(claim),
+                    omit_length: false,
+                }],
+                "",
+            );
+            let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
+
+            let err = f
+                .get(&url(&mock, "/huge"), Kind::Chunk, None)
+                .await
+                .expect_err("a declared length over the ceiling must be a typed refusal");
+            let text = err.to_string();
+            assert!(
+                text.contains("ceiling"),
+                "Content-Length {claim} must be refused by the ceiling, not the allocator: {text}"
+            );
+            assert_eq!(
+                mock.hits.load(Ordering::SeqCst),
+                1,
+                "a Shape refusal is not retried"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn the_file_destination_is_capped_too() {
         // A ceiling enforced in the buffered path and not the file path is a
         // ceiling with a hole in it — and the file path is the one that fetches

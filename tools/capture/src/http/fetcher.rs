@@ -111,6 +111,24 @@ fn declared_over_ceiling(resp: &reqwest::Response, cap: u64) -> Option<u64> {
     resp.content_length().filter(|d| *d > cap)
 }
 
+/// How much of a success body to reserve up front, from an untrusted header.
+///
+/// **The declared length is not an allocation size.** Reserving it was the O1
+/// bug: a loopback origin answering `Content-Length: 10737418240` made
+/// `Vec::with_capacity` ask for 10 GiB (and a header at or above `isize::MAX`
+/// panicked with a capacity overflow) *before* [`drain_capped`] could apply the
+/// ceiling. The reservation is therefore clamped to the ceiling **and** to a
+/// small starting size; the buffer grows as bytes actually arrive, where the
+/// running-total check is the bound. The typed `too_big` refusal still comes
+/// from [`drain_capped`], so a huge declaration is one error, not two.
+fn body_reservation(declared: Option<u64>, cap: u64) -> usize {
+    /// Enough to avoid repeated tiny reallocations on the common body, and far
+    /// too little for a header to turn into a memory commitment.
+    const INITIAL: u64 = 64 * 1024;
+    let bounded = declared.unwrap_or(0).min(cap).min(INITIAL);
+    usize::try_from(bounded).unwrap_or(usize::MAX)
+}
+
 /// Drain a **successful** response body into `sink`, refusing to exceed the
 /// transport's ceiling.
 ///
@@ -906,8 +924,10 @@ impl Fetcher {
                     );
                     (err, record)
                 };
-                let mut buf: Vec<u8> =
-                    Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
+                let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
+                    resp.content_length(),
+                    self.max_response_bytes,
+                ));
                 match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
                     Ok(n) => {
                         bytes_in = n;
