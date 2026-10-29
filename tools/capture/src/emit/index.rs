@@ -1009,6 +1009,92 @@ mod tests {
             "the fixture's byte total must not coincide with bytes_downloaded"
         );
     }
+
+    fn manifest_with(rows: &[(&str, &str)]) -> Manifest {
+        let f = Fixture::new();
+        let mut m = build_manifest(&f.input(), &[]).expect("manifest");
+        m.matrix = rows
+            .iter()
+            .map(|(class, status)| ManifestMatrixRow {
+                class: (*class).into(),
+                status: (*status).into(),
+                capture_id: None,
+                path: None,
+                matching_field: None,
+                covered_by: None,
+                also_satisfies: None,
+                reason: None,
+                candidates_considered: Some(0),
+            })
+            .collect();
+        m
+    }
+
+    fn complete_rows() -> Vec<(&'static str, &'static str)> {
+        crate::select::Class::ALL
+            .iter()
+            .map(|c| (c.id(), "unavailable"))
+            .collect()
+    }
+
+    #[test]
+    fn a17_accepts_a_complete_matrix() {
+        // The positive half: a matrix with exactly the six required classes, each
+        // once, is what every real capture writes.
+        let (ok, detail) = manifest_with(&complete_rows()).a17();
+        assert!(ok, "{detail}");
+        assert!(detail.contains("6 classes"), "{detail}");
+    }
+
+    #[test]
+    fn a17_rejects_a_five_row_matrix_naming_the_missing_class() {
+        // **O2.** A17 iterated the rows it was given and never compared them
+        // with `Class::ALL`, so deleting one row left a green A17 whose detail
+        // said "5 classes". Completeness is the assertion's whole job.
+        let mut rows = complete_rows();
+        rows.retain(|(class, _)| *class != "added");
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "a five-row matrix must not pass A17");
+        assert!(
+            detail.contains("added"),
+            "the missing class is named: {detail}"
+        );
+        assert!(detail.contains("missing"), "{detail}");
+    }
+
+    #[test]
+    fn a17_rejects_an_unknown_class_even_beside_the_required_six() {
+        // A row for a class that does not exist is not a substitute for the six:
+        // it must be reported itself, not silently carried as an extra row.
+        let mut rows = complete_rows();
+        rows.push(("bogus", "captured"));
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "an unknown class must not pass A17");
+        assert!(detail.contains("bogus"), "{detail}");
+        assert!(
+            detail.contains("required classes"),
+            "the detail names the valid set: {detail}"
+        );
+    }
+
+    #[test]
+    fn a17_rejects_a_lone_unknown_class() {
+        // The review's minimal reproducer: a matrix of one invented class used
+        // to report "(1 classes, each present and in an acceptable state)".
+        let (ok, detail) = manifest_with(&[("bogus", "captured")]).a17();
+        assert!(!ok, "{detail}");
+        assert!(detail.contains("bogus"), "{detail}");
+    }
+
+    #[test]
+    fn a17_still_rejects_a_duplicate_class() {
+        let mut rows = complete_rows();
+        rows.push(("reuse_in_place", "captured"));
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "a duplicated class must not pass A17");
+        assert!(detail.contains("reuse_in_place"), "{detail}");
+        assert!(detail.contains("twice"), "{detail}");
+    }
 }
 
 /// `MANIFEST.json` — the bundle's own index.
@@ -1283,7 +1369,8 @@ impl Manifest {
         s
     }
 
-    /// A17: every required class is present and in one of the four states.
+    /// A17: every required class is present exactly once, and each is in one
+    /// of the four states.
     ///
     /// **Every state is acceptable.** A17 is about the matrix being
     /// *complete* — every class has a row, and every row says what happened to
@@ -1296,7 +1383,17 @@ impl Manifest {
     /// consequence that a class the budget refused ended the whole capture with
     /// exit `3`, while `--require-class` was documented as the only thing that
     /// turns an unmet class into a failed run.
+    ///
+    /// **Completeness means equality with [`crate::select::Class::ALL`], not
+    /// merely a set of rows that each look valid.** Checking only the rows that happen to be
+    /// present let a five-row matrix (or a single `{"class":"bogus"}` row) pass
+    /// with a detail claiming "5 classes": the one assertion whose job is to
+    /// prove the matrix is complete certified that it was not. An unknown class
+    /// is an A17 failure rather than a decode-boundary refusal because the
+    /// matrix is a *claim* the bundle makes about itself; `verify` is where a
+    /// claim is checked, and `Bundle::open` stays a structural reader.
     pub fn a17(&self) -> (bool, String) {
+        let required = crate::select::Class::ALL;
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {
             if !matches!(
@@ -1311,10 +1408,25 @@ impl Manifest {
                     ),
                 );
             }
+            if !required.iter().any(|c| c.id() == row.class) {
+                return (
+                    false,
+                    format!(
+                        "{} is not one of the required classes ({})",
+                        row.class,
+                        required.map(|c| c.id()).join(", ")
+                    ),
+                );
+            }
             if seen.contains(&row.class.as_str()) {
                 return (false, format!("{} appears twice", row.class));
             }
             seen.push(&row.class);
+        }
+        for class in required {
+            if !seen.contains(&class.id()) {
+                return (false, format!("{} is missing from the matrix", class.id()));
+            }
         }
         (
             true,

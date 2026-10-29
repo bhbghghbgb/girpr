@@ -496,6 +496,39 @@ fn verify_passes_a_good_bundle() {
     assert!(!r.findings.is_empty() || r.findings.is_empty());
 }
 
+/// **O2.** `verify` is the command for a bundle someone else produced, so an
+/// incomplete matrix must be a red A17 rather than a clean pass. The document is
+/// mutated after `Bundle::open` so the test exercises the re-derivation path
+/// without also making A16 report the edited file; the point is that A17 sees
+/// the claim, not that the checksum catches the edit.
+#[test]
+fn verify_surfaces_an_incomplete_matrix_as_a_failed_a17() {
+    let b = Bundle::build("a17-incomplete");
+    let mut bundle = gircap::verify::Bundle::open(&b.root).expect("the bundle opens");
+    bundle.manifest.matrix.retain(|r| r.class != "added");
+    // The fixture records only A6; a real capture also records A17 as holding,
+    // which is the recording `verify` must contradict once the matrix is short.
+    bundle.recorded.assertions.push(Assertion::pass(
+        "A17",
+        "every required class is present",
+        "MANIFEST.json matrix",
+        "6 classes",
+    ));
+    let r = gircap::verify::reverify(bundle);
+    assert_eq!(r.result(), "fail");
+    let a17 = r
+        .rows
+        .iter()
+        .find(|x| x.id == "A17")
+        .expect("A17 is re-derived");
+    assert!(!a17.ok, "A17 must fail: {:?}", a17);
+    assert!(a17.actual.contains("added"), "{}", a17.actual);
+    assert!(
+        !r.agrees,
+        "the capture recorded A17 as holding; re-derivation must disagree"
+    );
+}
+
 /// After corrupting one byte of one chunk blob, `verify` reports `3` and
 /// names the blob and the assertion.
 #[test]
