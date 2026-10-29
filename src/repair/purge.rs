@@ -831,10 +831,9 @@ mod tests {
 
     #[test]
     fn a_scope_keeps_an_empty_out_of_scope_directory_out_of_the_sweep() {
-        // S-1: `mark_kept_ancestors` only protects directories reached from a
-        // kept *file*. An empty directory has no file to mark it, so the sweep
-        // used to remove an out-of-scope placeholder even though `--include`
-        // hides it.
+        // `mark_kept_ancestors` only protects directories reached from a kept
+        // *file*. An empty directory has no file to mark it, so an
+        // `--include`-hidden empty directory stays out of the sweep.
         let dir = TempDir::new("girpr_test_purge", "scope_empty_dir");
         std::fs::create_dir_all(dir.join("game")).unwrap();
         std::fs::create_dir_all(dir.join("mods/nested")).unwrap();
@@ -1031,8 +1030,8 @@ mod tests {
     }
 
     /// The sweep's expected failure — something appeared after the plan was
-    /// built — used to be discarded with `let _`, indistinguishable from a
-    /// sharing violation or an ACL. The reason has to be recoverable.
+    /// built — must surface its reason rather than being discarded like a
+    /// sharing violation or an ACL.
     #[test]
     fn a_dir_the_sweep_could_not_remove_is_logged_with_the_reason() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_purge", "sweep");

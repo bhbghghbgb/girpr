@@ -728,9 +728,7 @@ mod tests {
                 "negative offset",
             ),
             // A negative size must be refused *before* the empty-chunk drop:
-            // `uncompressed_size <= 0` used to be warn-and-drop, which would
-            // turn this corrupt range into a missing chunk instead of a
-            // refusal.
+            // a corrupt range is a refusal, not a missing chunk.
             (
                 "negative chunk size",
                 manifest_file("bad.dat", 64, vec![chunk("c", 0, -1)]),

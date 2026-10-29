@@ -169,10 +169,9 @@ pub struct Lies {
     pub not_zstd: Vec<String>,
     /// Chunk ids whose declared `offset` is `i64::MAX`.
     ///
-    /// The range they claim ends past `i64::MAX`, so the old `i64` add that
-    /// computed a chunk's end overflowed and panicked the file task. The
-    /// fixture's own layout keeps the real offset, so only the manifest lies:
-    /// that is what a corrupt server response looks like.
+    /// The range they claim ends past `i64::MAX`. The fixture's own layout
+    /// keeps the real offset, so only the manifest lies: that is what a
+    /// corrupt server response looks like.
     pub huge_offset: Vec<String>,
     /// File rel paths whose declared `size` is `i64::MAX`.
     ///

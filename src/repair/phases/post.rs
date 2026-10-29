@@ -389,9 +389,7 @@ fn move_audio_cache(
                         }
                     }
                     Err(copy_err) => {
-                        // Hard data-loss bug in the old shape: it removed the
-                        // source even when the copy failed. Keep the source and
-                        // say why.
+                        // Keep the source when the copy fails, and say why.
                         kept += 1;
                         tracing::warn!(
                             src = %src.display(),
@@ -437,10 +435,9 @@ mod tests {
         .unwrap()
     }
 
-    /// N-3: the copy fallback used to remove the source **after** a failed
-    /// copy, so a locked destination or a cross-volume refusal deleted the
-    /// cache file without a destination. The source is now removed only after
-    /// a successful copy.
+    /// The source is removed only after a successful copy: a locked
+    /// destination or a cross-volume refusal never deletes the cache file
+    /// without a destination.
     ///
     /// A directory at the destination makes both `rename` and `copy` fail on
     /// every platform, which is the deterministic shape of that failure.

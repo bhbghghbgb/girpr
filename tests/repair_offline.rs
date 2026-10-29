@@ -195,9 +195,7 @@ async fn check_only_dirty_reports_damage_and_writes_nothing() {
 async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
     // The scan's verdict for an absent file carries the empty digest, and a
     // legitimate empty file's manifest entry has exactly that digest. The
-    // md5 alone therefore cannot tell them apart, and `--check-only --scan`
-    // used to call the missing file clean while plain `--check-only` called
-    // it damage.
+    // md5 alone therefore cannot tell them apart.
     let spec = FixtureSpec::new(vec![FileSpec::new("game/empty.dat", vec![])]);
     let mock = MockServer::start(build_fixture_spec(&spec), MockOpts::default()).await;
     let dir = temp_dir("check_empty_absent");
@@ -350,12 +348,10 @@ async fn purge_before_deletes_orphans_then_repairs() {
 
 #[tokio::test]
 async fn blacklisted_files_survive_every_purge_spelling() {
-    // V-1: the blacklist excludes a file from the *work list*; it does not
-    // remove it from the expected install. The plan therefore used to drop a
-    // blacklisted manifest path from `expected_paths()` and the files-cleanup
-    // deleted it. docs/01 says blacklisted entries are "never deleted" and
-    // docs/02 defines the cleanup's expected set from the manifest, so the
-    // blacklist must also be a keep input.
+    // The blacklist excludes a file from the *work list*; it does not remove
+    // it from the expected install. docs/01 says blacklisted entries are
+    // "never deleted" and docs/02 defines the cleanup's expected set from the
+    // manifest, so the blacklist must also be a keep input.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -682,13 +678,7 @@ async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
 
 #[tokio::test]
 async fn a_manifest_offset_overflow_refuses_the_plan_instead_of_panicking() {
-    // The old code computed a chunk's end as `c.offset + c.uncompressed_size`
-    // in `i64`, so an offset near `i64::MAX` panicked the file task in a debug
-    // build. A panicked task used to be dropped with `let _ = h.await`, which
-    // left `files_failed == 0`: the run reached the post phase, bumped
-    // `config.ini`, and exited `0` with the file unrepaired.
-    //
-    // A malformed range is now a **plan** error (metadata, exit `2`) before any
+    // A malformed range is a **plan** error (metadata, exit `2`) before any
     // mode runs, so there is no unrunnable plan to print and no file task to
     // panic or seek to `i64::MAX`.
     let fx = build_fixture_spec(
@@ -1411,9 +1401,7 @@ async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
 
 #[tokio::test]
 async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
-    // `--scan --repair-mode temp` used to ignore the scan it was handed and
-    // answer with the pre-scan rule ("a reuse candidate exists -> free"),
-    // which is exactly the question the scan answers. Both of foo's chunks
+    // Both of foo's chunks
     // have a candidate entry (config.ini names the installed build), but
     // chunk 1 is corrupt on disk: the temp path re-hashes the candidate
     // slice, refuses it and fetches `chunk_foo1`. The scanned plan must price
@@ -1794,10 +1782,6 @@ async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
 
 #[tokio::test]
 async fn a_scoped_purge_keeps_an_empty_out_of_scope_directory() {
-    // S-1: the emptied-dir sweep used to delete every directory with no kept
-    // file under it, even one `--include` hides. An empty placeholder has no
-    // file to mark its ancestors, which is why the file-level keep-set missed
-    // it. `--purge-only` is the shortest path to the sweep.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("scope_purge_empty_dir");
@@ -1988,11 +1972,10 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
 
 #[tokio::test]
 async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
-    // U-1: the server may spell the same file `./old/legacy.dll`. The scope
-    // matches the *cleaned* rel (`old/legacy.dll`), so an exclude that hides the
-    // plain spelling must hide this one too. The old code gated on the raw
-    // spelling and then cleaned only at the delete sink: the excluded file was
-    // deleted.
+    // The server may spell the same file `./old/legacy.dll`. The scope
+    // matches the *cleaned* rel (`old/legacy.dll`), so an exclude that hides
+    // the plain spelling must hide this one too: the gate cleans before it
+    // compares.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -2029,10 +2012,10 @@ async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
 
 #[tokio::test]
 async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
-    // U-1, the fail-closed direction: the scan file's own rel path is the
-    // documented escape hatch for `--audio` under a scope. A `./` spelling is
-    // the same file, so the include that names the plain path must admit it;
-    // the old code compared the raw spelling and refused the run with exit 1.
+    // The scan file's own rel path is the documented escape hatch for
+    // `--audio` under a scope. A `./` spelling is the same file, so the
+    // include that names the plain path must admit it; the gate cleans before
+    // it compares, so a `./` spelling cannot refuse an in-scope run.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -2064,10 +2047,9 @@ async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
 
 #[tokio::test]
 async fn a_dot_spelled_audio_cache_hidden_by_the_scope_is_not_moved() {
-    // U-1's move sink: `./Audio/cache` and `Audio/cache` are one directory.
-    // An exclude that hides the cache must leave it where it is; the old code
-    // gated on the raw spelling, then cleaned at the rename/copy boundary, and
-    // relocated the excluded tree.
+    // `./Audio/cache` and `Audio/cache` are one directory: the move sink
+    // cleans before it gates. An exclude that hides the cache must leave it
+    // where it is.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -2185,9 +2167,8 @@ async fn run_audio_refusal(
     run_binary(&args, &[]).await
 }
 
-/// R-7: with an explicit `--audio`, every refusal used to leave the scan file
-/// (and, on a missing install, `game_dir`) behind because `metadata::fetch`
-/// wrote it before the plan was even finished. A refusal must touch nothing.
+/// A refusal must touch nothing: no scan file and no `game_dir`, however the
+/// run is refused.
 #[tokio::test]
 async fn explicit_audio_is_not_written_before_a_refusal() {
     let fx = build_fixture();
@@ -2243,10 +2224,10 @@ async fn explicit_audio_is_not_written_before_a_refusal() {
     mock.stop();
 }
 
-/// R-8: a non-empty scan file whose lines are all unrecognized used to read as
-/// an empty set, i.e. the game-only selection. With `--purge-after` that
-/// selection drops the real language's manifests from the keep set and deletes
-/// its packages. It must be a config error instead.
+/// A non-empty scan file whose lines are all unrecognized is not the
+/// game-only selection: with `--purge-after` that selection drops the real
+/// language's manifests from the keep set and deletes its packages. It must
+/// be a config error instead.
 #[tokio::test]
 async fn an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only() {
     let fx = build_fixture();
@@ -2540,13 +2521,12 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
 /// bytes, the retry's body is charged on top, and crossing the ceiling is a
 /// hard stop — even though the retry repaired the file.
 ///
-/// The old code refunded the whole reservation on any error, so a flaky
-/// transport could deliver half of every chunk for free and the live figure
-/// (`download_bytes_spent`) under-reported what the run actually caused. The
-/// partial body is now charged, and the settled figure — the bytes of the file
-/// that was promoted — stays the manifest's size. The ceiling is exactly that
-/// size, so the partial body is the bytes that cross it: the run must exit `5`
-/// with the stop named, not `0`.
+/// A flaky transport could deliver half of every chunk for free and the live
+/// figure (`download_bytes_spent`) would under-report what the run actually
+/// caused. The partial body is charged, and the settled figure — the bytes of
+/// the file that was promoted — stays the manifest's size. The ceiling is
+/// exactly that size, so the partial body is the bytes that cross it: the run
+/// must exit `5` with the stop named, not `0`.
 #[tokio::test]
 async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
     // Incompressible bytes: `compressed_size` is close to the payload's length,
@@ -2775,9 +2755,8 @@ async fn print_plan_reports_the_plan_and_writes_nothing() {
 
 #[tokio::test]
 async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
-    // `--print-plan` is documented as read-only by construction. An explicit
-    // `--audio` used to write the scan file (and create the game dir) because
-    // the gate consulted `readonly()`, which does not include `print_plan`.
+    // `--print-plan` is documented as read-only by construction: it never
+    // writes the scan file or creates `game_dir`.
     //
     // The report must still name the requested language: resolving the audio
     // set is not the write.
@@ -2829,8 +2808,8 @@ async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
 
 #[tokio::test]
 async fn print_plan_audio_outside_the_scope_is_not_refused_and_writes_nothing() {
-    // Two independent gates used to contradict each other here. An explicit
-    // `--audio` under an active scope whose scan file is *not* included is a
+    // An explicit `--audio` under an active scope whose scan file is *not*
+    // included is a
     // usage error (exit `1`) — unless the run is `--print-plan`, which never
     // writes the scan file at all. `--print-plan` therefore has to exempt the
     // scope gate while still deferring the write: exit `0`, a `PLAN`, and no
@@ -3063,9 +3042,8 @@ async fn print_plan_out_writes_the_per_file_json_document() {
 
 #[tokio::test]
 async fn plan_out_without_print_plan_writes_the_document_of_the_run() {
-    // R-1: the help says the flag works on its own, but the only write site
-    // used to be inside the `--print-plan` early return. Through the real
-    // binary, because the promise is about the flag.
+    // The help says the flag works on its own: the document is written before
+    // execution, through the real binary.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("plan_out_alone");

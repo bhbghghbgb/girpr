@@ -558,14 +558,9 @@ fn promote_tmp(
 mod tests {
     use super::*;
 
-    /// A stat failure on the `_tmp` used to be read as "0 bytes" by
-    /// `util::file_len`, so `promote_tmp` answered "tmp length 0 != expected N"
-    /// for a tmp that was not empty and discarded the real `io::Error`.
-    ///
-    /// The seam is a path that cannot be statted: `foo.dat_tmp` under a
-    /// **regular file** is `ENOTDIR` on every platform, which is exactly the
-    /// `io::Error` the old `unwrap_or(0)` threw away. The error must name the
-    /// stat and the path.
+    /// A stat failure on the `_tmp` must name the stat and the path:
+    /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
+    /// and that `io::Error` must surface instead of a zero length.
     #[test]
     fn a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "promote_stat");

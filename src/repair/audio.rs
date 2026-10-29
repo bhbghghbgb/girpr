@@ -308,7 +308,7 @@ mod tests {
         );
     }
 
-    /// R-8: a BOM is not whitespace. A file whose only content is a BOM is
+    /// A BOM is not whitespace: a file whose only content is a BOM is
     /// non-empty and names no language, so it must be refused too — only a
     /// genuinely blank file is the game-only selection.
     #[test]
@@ -329,8 +329,8 @@ mod tests {
         );
     }
 
-    /// R-8: a UTF-8 BOM is not whitespace, so the first display name used to
-    /// match nothing and a one-language file read as game-only.
+    /// A UTF-8 BOM is not whitespace: it is stripped before the line is
+    /// parsed, so the first language is not hidden.
     #[test]
     fn a_utf8_bom_does_not_hide_the_first_language() {
         let d = dir("bom");

@@ -222,11 +222,10 @@ mod tests {
         assert!(lock.path().exists());
     }
 
-    /// U-2: a stale lock whose removal fails (an open handle without
+    /// A stale lock whose removal fails (an open handle without
     /// `FILE_SHARE_DELETE`, a read-only file, a delete-denying ACL) is refused
-    /// once, with the path and the I/O error. The old code discarded the error
-    /// and called `acquire` again with no state change, so this shape overflowed
-    /// the stack (`exit -1073741571`) instead of exiting `1`.
+    /// once, with the path and the I/O error — never retried, so it cannot
+    /// overflow the stack.
     ///
     /// The removal is injected: that pins the arm on every host without needing
     /// a platform-specific undeletable file.

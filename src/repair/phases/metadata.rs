@@ -187,12 +187,8 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit)
         .context("resolve audio selection")
         .map_err(RunFailure::usage)?;
-    // The write itself is deferred to the execution phase. An explicit
-    // `--audio` used to write the scan file here, so a run that then refused
-    // (a tripped ceiling, an empty `--include`, a hostile manifest rel, an
-    // unwritable `--plan-out`) had already changed the install — and on a
-    // missing one, created `game_dir` through the scan file's parent. The
-    // repair reads the in-memory `audio` above, never the file.
+    // The write itself is deferred to the execution phase: the repair reads
+    // the in-memory `audio` above, never the file.
     //
     // An explicit `--audio` under an active path scope is a contradiction, not
     // a merge — the flag would mutate a path the scope may not have admitted.

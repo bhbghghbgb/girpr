@@ -53,7 +53,7 @@ server-controlled.
 | `src/sophon.rs:296-313` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `src/sophon.rs:563` compressed-body sum | network bytes | server | **Saturating**. |
 | `src/hyp.rs:120-145` `num_from_string` | JSON number/string sizes | server | `u64 as i64` **wraps** for values above `i64::MAX` but does not panic; negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. Non-panic, recorded rather than changed. |
-| `src/repair/phases/plan.rs:195-227` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` replaces the old panicking `i64` add. |
+| `src/repair/phases/plan.rs:195-227` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
 | `src/repair/phases/plan.rs:57-102` `layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
 | `src/repair/phases/plan.rs:166-181` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
 | `src/repair/reuse.rs:114-138` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
@@ -91,8 +91,8 @@ conservative estimate, not a panic or a write outside the install. Fixing the
 cast would change the JSON acceptance boundary for a shape no capture has
 produced; it is recorded here instead.
 
-The known historical panic `temp.rs:193` (F-1) is covered by the plan-time range
-gate, and the file-semaphore `unwrap` (N-12) is the named `expect` above.
+The plan-time range gate covers the temp-file overflow path, and the
+file-semaphore `unwrap` is the named `expect` above.
 
 ---
 

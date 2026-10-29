@@ -395,8 +395,8 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
   `gircap` and `girsync` alike. The name carries the pid, a timestamp and a
   per-process counter, so two runs — or two `cargo nextest run` invocations —
   never share a tree, and the guard removes the tree when the test ends
-  however it ends. It used to be six copies of this, three of them in the same
-  project, each of which had to be kept in step by hand.
+  however it ends. One policy, one implementation, shared by all three
+  projects.
   Every one of those trees lives under **one** directory in the system temp
   directory: `<temp>/girpr-test/`. So a directory left behind by a killed run
   is recognisable as this project's — "whose leftover is this?" has an answer —

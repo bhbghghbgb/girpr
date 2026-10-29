@@ -1087,13 +1087,15 @@ mod tests {
         }
     }
 
-    /// Windows: a directory junction inside the install that points out of it
-    /// is an escape, exactly like a Unix symlink. The product is
-    /// Windows-first, so the resolution path needs a test on the platform
-    /// whose reparse points it will meet.
+    /// A directory junction inside the install that points out of it is an
+    /// escape, exactly like a Unix symlink, so the resolution path needs a
+    /// test on the platform whose reparse points it will meet.
     ///
-    /// Junctions need no privilege (unlike symlinks), but if the host refuses
-    /// to create one the case is skipped rather than failed.
+    /// Junctions need no privilege (unlike symlinks), but a host that refuses
+    /// to create one cannot confirm the escape here, so the case is skipped
+    /// rather than failed. Link support is host-dependent — see
+    /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
+    /// only, exFAT has no hard links).
     #[cfg(windows)]
     #[test]
     fn contained_join_resolves_a_junction_and_refuses_the_escape() {
@@ -1409,11 +1411,8 @@ mod tests {
         }
     }
 
-    /// T-1: a BOM is not whitespace, so the old `if let Ok(from_str(line))`
-    /// dropped a BOM-prefixed first line with no log, and an all-malformed
-    /// file silently became the empty selection. One leading BOM is stripped;
-    /// a mixed file warns with the path and line number and keeps the
-    /// well-formed entry.
+    /// A BOM is not whitespace: one leading BOM is stripped; a mixed file
+    /// warns with the path and line number and keeps the well-formed entry.
     #[test]
     fn config_lists_strip_a_bom_and_warn_per_unparseable_line() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "bom_mixed");

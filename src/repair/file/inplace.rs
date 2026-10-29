@@ -396,7 +396,7 @@ async fn attempt_inplace_inner(
 /// lets the failure arm be executed with an injected `io::Error`
 /// (`post::classify_deprecated`'s shape) instead of only being read, without a
 /// trait or an injection seam. [`handle_len`] turns it back into the exact
-/// `io::Result` the callers used to get, so production still propagates the
+/// `io::Result` from `handle.metadata()`, so production still propagates the
 /// error with the site's path context and fails the file (exit `3`).
 #[derive(Debug)]
 enum InplaceLen {
@@ -491,11 +491,10 @@ fn staged_payload(
 /// Delete the target for `--repair-mode discard`.
 ///
 /// `NotFound` is success: the file is already gone, which is what the mode
-/// wanted. Every other error is fatal. Ignoring it used to turn a refused
-/// delete (read-only attribute, ACL, sharing violation) into a later
-/// `create <path>: access denied` — the wrong syscall — or, when the open
-/// succeeded, silently kept the old bytes while every chunk was treated as
-/// missing.
+/// wanted. Every other error is fatal: a refused delete (read-only
+/// attribute, ACL, sharing violation) must not become a later
+/// `create <path>: access denied` or silently keep old bytes while every
+/// chunk is treated as missing.
 fn discard_target(path: &std::path::Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),

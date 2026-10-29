@@ -41,7 +41,7 @@
 //! | shape | what it does |
 //! |---|---|
 //! | **streamed** | `sophon::stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
-//! | **buffered** | `resp.bytes()` → `zstd::decode_all` → the decoded buffer — what the tool used to do |
+//! | **buffered** | `resp.bytes()` → `zstd::decode_all` → the decoded buffer — the buffered path |
 //!
 //! The payload is the shape of the reference bundle's largest chunk: ~2.16 MB
 //! of essentially incompressible bytes, so the compressed body and the
@@ -309,8 +309,8 @@ async fn the_chunk_paths_peak_live_heap() {
         "and it is the right chunk"
     );
 
-    // The buffered path: what the tool used to do. The compressed body is
-    // resident, and the decoded body is a buffer that grows by doubling.
+    // The buffered path: the compressed body is resident, and the decoded body
+    // is a buffer that grows by doubling.
     let (buffered, (compressed, decoded)) = measure(async {
         let resp = client
             .get(format!("{base}/chunk"))

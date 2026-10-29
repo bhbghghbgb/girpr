@@ -511,12 +511,9 @@ One job left, and it is real:
   *deliberately* exercise the largest-chunk branch, which no small synthetic
   fixture reaches.
 
-**The memory half is gone.** It used to be the flag's reason to exist: S1
-buffered whole chunks (fetch → decode → write), so the peak RAM per active
-chunk was roughly `compressed + uncompressed` — at `--io-threads 8`, a real
-number. The chunk path is **streamed** now: the body is decoded as it arrives
-and the decoded bytes are written into the target as they are produced, so the
-peak per active chunk is one read window, not the chunk. Skipping files whose
+The chunk path is **streamed**: the body is decoded as it arrives and the
+decoded bytes are written into the target as they are produced, so the peak
+per active chunk is one read window, not the chunk. Skipping files whose
 largest chunk exceeds `N` bounds nothing about RAM any more.
 
 `PLAN max_chunk_bytes=` reports this number today without enforcing it — it is
