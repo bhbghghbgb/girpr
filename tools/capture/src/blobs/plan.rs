@@ -3,7 +3,7 @@
 //! **Lived inline in `run::capture`,** as ~50 lines between the selection and
 //! the first blob fetch. Two of them are decisions — "is this retention plan
 //! legal" (A12) and "is this store affordable" (`--max-download-bytes`) — and
-//! both used to be reachable only by running a capture.
+//! both are now testable without running a capture.
 //!
 //! # Why the whole plan is one function
 //!

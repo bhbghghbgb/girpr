@@ -204,9 +204,9 @@ what `du` reports (≈167 MB against ≈98 MB on disk for the reference bundle);
 that is the correct answer, because it is the number a reader would need to hold
 the document in memory.
 
-`gzip_threshold` is **required**, like every other field in this document. It
-used to default on read, so a bundle with no recorded threshold would read back
-as having used the flag's default — a claim about a run nobody wrote down, on the
+`gzip_threshold` is **required**, like every other field in this document. A
+`default` on read would let a bundle with no recorded threshold read back as
+having used the flag's default — a claim about a run nobody wrote down, on the
 one field whose purpose is to say why one document is gzipped and the next is
 not. A field that defaults to a constant is worse than one that is required,
 because the default is indistinguishable from the real value.

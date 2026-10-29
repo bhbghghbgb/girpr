@@ -915,8 +915,7 @@ mod tests {
     }
 
     /// **O4.** A frame's *input* is bounded by the response ceiling; its output
-    /// used to be unbounded because `zstd::decode_all` expanded the whole frame
-    /// before the declared size was checked. A 1 MiB run of zeroes is a small
+    /// is bounded by the declared size, so a 1 MiB run of zeroes is a small
     /// frame (well under 16 KiB) and a declaration of 1 KiB must stop it at the
     /// limit rather than materialise the megabyte.
     #[test]

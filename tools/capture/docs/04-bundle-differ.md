@@ -52,11 +52,11 @@ scrubbing those four, two captures of one binary are identical — which is the
 check that the normalisation is not vacuous, and it is re-run for **every** commit
 probed (see §5).
 
-`verify/selfcheck.json` is **not** in the list. It used to be, blanking A16's
-"N files, M B" totals — and that exemption was hiding a number rather than
-removing one, because A16's byte total described the *previous* pass rather than
-the tree it was written into. A16 no longer states a byte total, so nothing in
-that document moves between two captures of one binary and it is compared in full.
+`verify/selfcheck.json` is **not** in the list. Blanking A16's "N files, M B"
+totals once hid a number rather than removing one: A16's byte total described the
+*previous* pass rather than the tree it was written into. A16 no longer states a
+byte total, so nothing in that document moves between two captures of one binary
+and it is compared in full.
 
 | token | where it appears |
 |---|---|

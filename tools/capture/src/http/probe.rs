@@ -140,9 +140,8 @@ pub async fn probe_tags(
     jobs: usize,
 ) -> Result<TagProbe, ApiError> {
     // Tags already answered by the pair's own `getBuild` cost nothing, and the
-    // rest used to be fetched strictly one after another. They do not depend on
-    // each other, so they go together; `diff_tags` is unbounded by contract and
-    // the real run asks about seven.
+    // rest do not depend on each other, so they go together; `diff_tags` is
+    // unbounded by contract and the real run asks about seven.
     //
     // The document is still assembled in `tags` order, which is what
     // `requested` and every reader's row order assume. Which probe answered

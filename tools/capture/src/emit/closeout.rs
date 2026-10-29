@@ -119,12 +119,11 @@ pub struct Closed {
 /// disk. A third pass would find nothing new, which is the proof it converged —
 /// and `two_passes_converge` is that proof, as a test.
 ///
-/// The second pass is **unconditional.** It used to be guarded by
-/// `if !selfcheck.by_id().contains_key("A16")`, which could never be false:
-/// `selfcheck` is built from `rows`, and A16 is pushed *inside* the guard. A
-/// conditional that always fires is worse than none — it reads as "this might
-/// converge in one pass", and the comment above the pair is what actually
-/// guarantees it.
+/// The second pass is **unconditional.** A guard such as
+/// `if !selfcheck.by_id().contains_key("A16")` could never be false:
+/// `selfcheck` is built from `rows`, and A16 is pushed inside it. A conditional
+/// that always fires is worse than none — it reads as "this might converge in
+/// one pass", and the comment above the pair is what actually guarantees it.
 pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     let mut written = std::mem::take(&mut i.written);
     // A13-A15: about the tree that just exists. A16 and A17 are added below,
@@ -147,11 +146,10 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     }
     super::selfcheck::report_failed(&i.rows);
 
-    // The close-out's **one** full-tree digest pass. It used to be a fourth
-    // one, in a private function that also re-implemented `Checksums::scan`'s
-    // walk and inlined its `encoding_of` — so a third encoding would have
-    // taught `MANIFEST.json` the wrong one while `checksums.json` learned the
-    // right one.
+    // The close-out's **one** full-tree digest pass. A second, independent walk
+    // that re-implemented `Checksums::scan`'s walk and inlined its `encoding_of`
+    // would teach `MANIFEST.json` one encoding while `checksums.json` learned
+    // another.
     //
     // It runs *before* `build_manifest` rather than after. Nothing between here
     // and the call writes to the tree, so the pass sees the same bytes it
@@ -195,10 +193,9 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         })
         .collect();
 
-    // Counted here because the vector is **moved** below. It used to be
-    // `rows.clone()`, so that one integer on the summary could read `rows.len()`
-    // afterwards — a deep copy of every assertion id, subject, expected and
-    // actual string, for one `usize`.
+    // Counted here because the vector is **moved** below. A `rows.clone()` for
+    // one `usize` would be a deep copy of every assertion id, subject, expected
+    // and actual string.
     let assembly_rows = i.rows.len() as u64;
 
     let mut selfcheck = Selfcheck::build(i.rows, matrix_rows, &skipped);
@@ -546,9 +543,8 @@ mod tests {
     fn a16_is_recorded_exactly_once_despite_two_passes() {
         // The second pass pushes A16 onto a `Selfcheck` that was already built
         // and re-builds it. If `Selfcheck::build` ever appended rather than
-        // replacing, A16 would appear twice — and the guard that used to wrap the
-        // second pass was, as its comment says, a conditional that could never be
-        // false. This is the check that would have caught it.
+        // replacing, A16 would appear twice. This is the check that would have
+        // caught it.
         let root = scratch("a16-once");
         seed(&root);
         let closed = run(&root);
@@ -700,7 +696,7 @@ mod tests {
     #[test]
     fn a_failed_row_ends_the_run_with_exit_3() {
         // The behaviour change this commit makes. A bundle whose own rows did
-        // not hold used to be written and reported as a success: `result: "fail"`
+        // not hold was written and reported as a success: `result: "fail"`
         // in the document, exit `0` from the process. A caller reading only the
         // exit code was told the capture worked.
         let s = Selfcheck::build(

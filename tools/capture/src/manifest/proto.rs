@@ -129,10 +129,10 @@ impl SophonChunk {
     /// **A digest is an identity, not a spelling.** `girpr` compares chunk
     /// identities case-insensitively (`repair::reuse::sources_for`,
     /// `repair::plan::Plan`), so a pair of manifests that spell one chunk's
-    /// md5 `AB…` and `ab…` describes the same content to the tool. This crate
-    /// used to compare them exactly, which made the two tools disagree *by
-    /// construction*: `gircap` would call such a chunk fetched where `girpr`
-    /// calls it reused, and the bundle would publish the wrong numbers.
+    /// md5 `AB…` and `ab…` describes the same content to the tool. Comparing
+    /// them exactly made the two tools disagree by construction: `gircap` calls
+    /// such a chunk fetched where `girpr` calls it reused, and the bundle would
+    /// publish the wrong numbers.
     ///
     /// The fix is here rather than at each comparison: normalising once, where
     /// the manifest enters the crate, makes the identity keys, the declared

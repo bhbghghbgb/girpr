@@ -112,7 +112,7 @@ fn help_and_version_are_zero() {
     }
 }
 
-/// The two `capture` help strings that used to contradict the code and the spec.
+/// The two `capture` help strings that contradicted the code and the spec.
 ///
 /// Neither was pinned anywhere. `--require-class` said "Default: all" while an
 /// empty list means nothing is required, and `--no-chunk-blobs` named three of
@@ -478,9 +478,9 @@ fn rust_log_does_not_reach_the_log_file() {
 
 /// `RUST_LOG` adds to the console; it cannot silence the program.
 ///
-/// A `RUST_LOG` naming an unrelated crate used to replace the console's whole
-/// spec, and the program then said nothing at all. The program's own level is
-/// `--log-level`, and `RUST_LOG` only adds to it.
+/// A `RUST_LOG` naming an unrelated crate would replace the console's whole
+/// spec, and the program would then say nothing at all. The program's own
+/// level is `--log-level`, and `RUST_LOG` only adds to it.
 #[test]
 fn an_unrelated_rust_log_does_not_silence_the_capture() {
     let out = Command::new(bin())

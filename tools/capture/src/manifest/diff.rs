@@ -441,9 +441,9 @@ fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
 /// when the *source* it would be copied from does not sit at its destination —
 /// and the source is the **first** old chunk with that identity, which is what
 /// `girpr` reads (`repair::reuse::sources_for`) and what this crate's own
-/// patch flow records (`assemble::patch_flow`). It used to be "the new offset
-/// is not among *any* of the old file's offsets for that identity", which
-/// disagrees with the patchmap's own `source_range` whenever an identity occurs
+/// patch flow records (`assemble::patch_flow`). Counting "the new offset
+/// is not among *any* of the old file's offsets for that identity" as moved
+/// disagrees with the patchmap's own `source_range` whenever an identity
 /// more than once in the old file — and a class is a statement about the
 /// content, so the two have to be the same statement.
 pub fn score(

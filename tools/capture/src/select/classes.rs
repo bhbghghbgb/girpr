@@ -47,11 +47,10 @@ use serde::{Deserialize, Serialize};
 /// A class is a statement about how the content changed, and a predicate that
 /// could look at the name would eventually start doing so.
 ///
-/// **It holds what the predicates read, and nothing else.** The two whole-file
-/// sizes used to be here, and no predicate read them: a field that no
-/// predicate looks at is one that can drift from the fact it names without
-/// anything noticing. The sizes are still published, in the candidate table,
-/// where a reader wants them.
+/// **It holds what the predicates read, and nothing else.** A field no
+/// predicate looks at can drift from the fact it names without anything
+/// noticing — the two whole-file sizes were such a field. The sizes are
+/// still published, in the candidate table, where a reader wants them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     /// A path in both manifests, with the numbers the decision turns on.
@@ -208,12 +207,11 @@ impl Class {
     /// content decision about it at all, so it cannot be a statement about how
     /// the content changed. The live pool holds one such path
     /// (`StreamingAssets/AudioAssets/Music4.pck`): the chunking was re-tiled,
-    /// so four chunks "move", yet the file's content is byte-identical. It
-    /// used to satisfy a direction class as well as `identical`, which was
-    /// three defects in one: the published population was one too high, the
-    /// instrument could not reproduce it, and A19's "is unchanged but its
-    /// class says it should differ" was a trip-wire waiting for a cheap
-    /// candidate.
+    /// so four chunks "move", yet the file's content is byte-identical. An
+    /// unchanged file satisfying a direction class as well as `identical`
+    /// would be three defects in one: the published population one too high, the
+    /// instrument unable to reproduce it, and A19's "is unchanged but its class
+    /// says it should differ" a trip-wire waiting for a cheap candidate.
     ///
     /// The class set is a **partition** on the content, and `identical` is the
     /// class that owns an unchanged file.
@@ -384,7 +382,7 @@ mod tests {
             !Class::ReuseInPlace.matches(all_reused),
             "a file whose every chunk is reused and none of them moved is not a \
              class of its own: it is the shape the removed `full_reuse_reordered` \
-             used to claim, and there is no decision behind it"
+             claimed, and there is no decision behind it"
         );
     }
 
@@ -410,7 +408,7 @@ mod tests {
             Class::all_satisfied_by(reordered).is_empty(),
             "a file whose every chunk is reused and none of them moved is not a \
              class of its own: it is the shape the removed `full_reuse_reordered` \
-             used to claim, and there is no decision behind it"
+             claimed, and there is no decision behind it"
         );
     }
 

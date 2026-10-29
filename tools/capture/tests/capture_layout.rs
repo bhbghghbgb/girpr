@@ -389,12 +389,12 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
 
 /// A bundle without `api/error_shapes.json` does not open.
 ///
-/// The document used to be additive: "a bundle captured before it existed has no
-/// `api/error_shapes.json`, and that is still a valid bundle". That let a bundle
-/// drop the tool's only measurement of what the API does with a request it will
-/// not serve, and still verify clean — so "this bundle can tell you how the API
-/// fails" was true of some bundles and not others, with nothing in the bundle to
-/// tell a reader which is which.
+/// An additive document — "a bundle captured before it existed has no
+/// `api/error_shapes.json`, and that is still a valid bundle" — lets a bundle
+/// drop the tool's only measurement of what the API does with a request it
+/// will not serve, and still verify clean: "this bundle can tell you how the
+/// API fails" is then true of some bundles and not others, with nothing in
+/// the bundle to tell a reader which is which.
 ///
 /// The exit code is `1`, not `3`. "This directory is not a readable bundle" is
 /// already `1` for every other reason — no `MANIFEST.json`, a truncated index —

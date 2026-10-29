@@ -437,8 +437,8 @@ impl Store {
     /// Takes the store by value rather than by reference so the future is
     /// 'static and can run on the runtime's threads.
     ///
-    /// **The slot number comes back even on failure.** It used to be a bare
-    /// `Result<(usize, entry), String>`, which threw the index away exactly when
+    /// **The slot number comes back even on failure.** A bare
+    /// `Result<(usize, entry), String>` would throw the index away exactly when
     /// the caller needed it: the caller could no longer tell a slot that failed
     /// from one that never reported, so it recorded the failure as an error *and*
     /// as a missing chunk, and the index row could only say "not stored".
@@ -680,9 +680,8 @@ impl Store {
             Ok(streamed) => (streamed.seq, None),
             Err(failed) => {
                 let mut failure = FetchError::from_api(Some(source_tag), url, &failed.error);
-                // The run's error list used to spell "{id} via {tag}: {error}".
-                // Keeping that text in `detail` means the summary and the row
-                // cannot tell different stories.
+                // `detail` spells "{id} via {tag}: {error}" — keeping that text
+                // in `detail` means the summary and the row cannot tell different stories.
                 failure.detail = format!("{id} via {source_tag}: {}", failed.error);
                 (failed.seq, Some(failure))
             }
@@ -901,12 +900,12 @@ pub fn file_pairs(
 ) -> Vec<FilePair> {
     // One index per (field, tag), built once.
     //
-    // This used to `entries.iter().find(|e| e.file == a.path)` **per admitted
-    // path, per side**: O(admitted × paths), twice. Over the measured pair that
-    // is a few thousand 2 744-element string scans to build eight pairs — the
-    // single largest waste in the selection→store hand-off. `diff` builds the
-    // same map and throws it away, so the shape was already known; here it is
-    // built where it is used, which costs one walk rather than A×n.
+    // `entries.iter().find(|e| e.file == a.path)` per admitted path, per side,
+    // would be O(admitted × paths), twice. Over the measured pair that is a few
+    // thousand 2 744-element string scans to build eight pairs — the single
+    // largest waste in the selection→store hand-off. `diff` builds the same map
+    // and throws it away, so the shape was already known; here it is built where
+    // it is used, which costs one walk rather than A×n.
     let mut indexes: BTreeMap<
         (&str, &str),
         BTreeMap<&str, &crate::manifest::proto::SophonChunkFile>,

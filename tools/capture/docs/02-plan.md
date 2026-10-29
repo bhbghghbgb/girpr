@@ -236,7 +236,7 @@ every change that must not move a bundle byte.
 
 It compares **two captures of one binary**, so it is blind by construction to a
 change applied **uniformly to every capture** — a field that starts being written
-where it used to be null, or a wording narrowed in every row. Closing that needs
+where it was null, or a wording narrowed in every row. Closing that needs
 a *written expectation*, not a comparison, and that is what the per-document pins
 in `tests/capture_layout.rs` are: `api/requests.ndjson`'s 28 rows, and
 `MANIFEST.json` / `verify/checksums.json` / `README.md` / `verify/selfcheck.json`

@@ -202,7 +202,8 @@ impl<'a> Endpoints<'a> {
     ///
     /// **This leaks, deliberately, and the leak is bounded by construction.**
     /// The next person to find `Box::leak` in a codebase that otherwise avoids it
-    /// would reasonably assume it was a bug and "fix" it — or copy the pattern.
+    /// should not treat it as a bug to "fix" — or copy the pattern without
+    /// reading why.
     ///
     /// The bound, stated so it can be checked:
     ///

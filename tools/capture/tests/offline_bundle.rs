@@ -840,10 +840,10 @@ fn list_finds_a_bundle_from_the_root() {
 
 /// The published order is the relative path, **not** depth.
 ///
-/// `list`'s doc used to promise "deepest first"; the walk is a depth-first
-/// traversal but both lists are re-sorted by the relative-path string, so a
-/// shallower bundle whose leading component sorts earlier comes first. This
-/// pins the order the summary's `first` and `last` report.
+/// "Deepest first" is not the order: the walk is depth-first but both lists
+/// are re-sorted by the relative-path string, so a shallower bundle whose
+/// leading component sorts earlier comes first. This pins the order the
+/// summary's `first` and `last` report.
 #[test]
 fn list_orders_bundles_by_relative_path_not_by_depth() {
     let shallow = Bundle::build("order-shallow");

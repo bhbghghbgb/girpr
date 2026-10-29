@@ -142,16 +142,11 @@ impl MatrixStatus {
     /// **All four.** A17 is about the matrix being *complete*: every class has
     /// a row and every row says what happened. `over_budget` is one of those
     /// answers — "a candidate existed and this run's budget would not pay for
-    /// it" — and a matrix that recorded it is *more* honest than one that
-    /// failed.
-    ///
-    /// It used to be excluded, on the reasoning that `over_budget` is "a
-    /// finding about the run rather than about the world". That reasoning has a
-    /// consequence the same module's own docs already rejected: a class the
-    /// budget refused ended the run with exit `3`, while `--require-class` —
-    /// the flag that says "the caller wanted this class" — was documented as
-    /// the only thing that turns an unmet class into a failed run. A17 was
-    /// doing `--require-class`'s job for a class nobody had required.
+    /// it" — and excluding it would make a class the budget refused end the run
+    /// with exit `3`, while `--require-class` — the flag that says "the caller
+    /// wanted this class" — is the only thing that turns an unmet class into a
+    /// failed run. A17 must not do `--require-class`'s job for a class nobody
+    /// required.
     ///
     /// The requirement is still enforced: [`MatrixRow::is_satisfied`] excludes
     /// `over_budget`, so `--require-class` still refuses with exit `4`.
@@ -518,10 +513,10 @@ pub fn select(
     //
     // A forced path is admitted with ordinal zero only when it is the *first*
     // forced path of its primary class. Two distinct paths that both answer
-    // `added` used to share the id `added`, so the second `patchmaps/added.json`
-    // replaced the first while the run still reported two captures. The ordinal
-    // is assigned here rather than at admission so the rejection record carries
-    // the same id the path would have written.
+    // `added` would share the id `added`, so the second `patchmaps/added.json`
+    // would replace the first while the run still reported two captures. The
+    // ordinal is assigned here rather than at admission so the rejection record
+    // carries the same id the path would have written.
     let mut forced_ordinals: BTreeMap<Class, usize> = BTreeMap::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
@@ -545,8 +540,8 @@ pub fn select(
         forced_ordinals.insert(primary, nth + 1);
         let cost = c.budget_cost();
         if !budget.admits(cost) {
-            // **Record and continue.** This used to `break`, which silently
-            // dropped every forced path after the first refusal - including a
+            // **Record and continue.** A `break` here would silently drop every
+            // forced path after the first refusal — including a cheaper one that
             // cheaper one that would have fitted. A refusal is a finding about
             // one path, not a reason to stop reading the caller's list.
             forced_rejected.push(Rejection {
@@ -589,8 +584,8 @@ pub fn select(
     // `over_budget` — a decision about the *budget*, not about the class.
     let mut coverage: Vec<Coverage> = Vec::new();
     // `candidates_considered` for every class, in **one** pass over the pool.
-    // It used to be nine, one per class, each re-walking 2 921 candidates; the
-    // counts are the same, they were just being recomputed nine times.
+    // Nine passes — one per class — each re-walking 2 921 candidates would
+    // recompute the same counts nine times.
     let considered_by_class = considered_counts(pool);
     for class in Class::REQUIRED_ORDER {
         let considered = considered_by_class[class_idx(class)];
@@ -855,11 +850,10 @@ fn unavailable_reason(class: Class, considered: u64) -> String {
 /// can tell "this version pair does not have one" from "this tool looked
 /// somewhere it should not have".
 ///
-/// **It says nothing about the reference pair, and it used to.** The note used
-/// to point at the spec's record of a class that was absent for 7.0.0 -> 7.1.0,
-/// which was true of the class set the spec had then. All six classes have
-/// candidates for that pair now, so there is no such absence to point at and
-/// the note is about the reader's next move instead.
+/// **It says nothing about the reference pair.** The note once pointed at
+/// the spec's record of a class absent for 7.0.0 -> 7.1.0, but all six
+/// classes have candidates for that pair now, so there is no such absence
+/// to point at and the note is about the reader's next move instead.
 const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
@@ -1255,9 +1249,9 @@ mod tests {
 
     /// A forced path over the ceiling must not hide a later, cheaper one.
     ///
-    /// The loop used to `break` on the first refusal, so `--files a --files b`
-    /// with `a = 500 B`, `b = 100 B` under a 200 B cap captured neither and
-    /// recorded neither. A refusal is about one path, not the rest of the list.
+    /// A `break` on the first refusal would let `--files a --files b` with
+    /// `a = 500 B`, `b = 100 B` under a 200 B cap capture neither and record
+    /// neither. A refusal is about one path, not the rest of the list.
     #[test]
     fn a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it() {
         let pool = candidates(&[field(
@@ -1289,11 +1283,11 @@ mod tests {
     /// Two **distinct** forced paths that answer the same primary class must not
     /// share an id.
     ///
-    /// `capture_id` is `<class>` or `<class>+<n>`, and phase 0 used to pass `0`
-    /// for every forced path. Two new-only paths were therefore both `added`,
-    /// both wrote `patchmaps/added.json`, and the second write replaced the
-    /// first while `captures_admitted` still said two. Numbering per class is
-    /// what keeps the identity of a forced path distinct.
+    /// `capture_id` is `<class>` or `<class>+<n>`, and passing `0` for every
+    /// forced path would make two new-only paths both `added`, both write
+    /// `patchmaps/added.json`, and the second write replace the first while
+    /// `captures_admitted` still said two. Numbering per class is what keeps
+    /// the identity of a forced path distinct.
     #[test]
     fn two_forced_paths_of_one_class_get_distinct_ids() {
         let pool = candidates(&[field(

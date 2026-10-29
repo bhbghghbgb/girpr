@@ -247,8 +247,8 @@ impl Bundle {
 /// and the field is the identity, so trusting it would let a renamed file
 /// masquerade as a second capture. The filename is therefore **not** required to
 /// equal the id, but two documents may not claim the same id: that is one capture
-/// with two irreconcilable descriptions, and `BTreeMap::insert` used to drop the
-/// second silently.
+/// with two irreconcilable descriptions, and `BTreeMap::insert` would drop the
+/// second silently, so this is an explicit error.
 ///
 /// A directory entry that cannot be read, and two documents declaring one id, are
 /// both errors naming the file(s). `verify` is the last place a bundle can be
@@ -442,8 +442,7 @@ fn probe_manifest(
     match std::fs::metadata(path) {
         Ok(m) if m.is_file() => {}
         // A `MANIFEST.json` that is not a file is not a manifest: the directory
-        // is not a bundle, and the walk keeps descending as `is_file() == false`
-        // used to make it.
+        // is not a bundle, and the walk keeps descending.
         Ok(_) => return Ok(ManifestProbe::Missing),
         // Nothing there means no bundle. Anything else is a directory the walk
         // could not see, which is not the same as an empty one.
@@ -1145,9 +1144,8 @@ fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
 ///
 /// One direction only, and the direction that matters: a row the capture
 /// recorded as *holding* that no longer holds is a bundle that has changed since
-/// it was written. The other direction - a row that used to fail and now holds -
-/// is an improvement, and is reported through the row counts rather than as a
-/// disagreement.
+/// it was written. A row that previously failed and now holds is an improvement,
+/// and is reported through the row counts rather than as a disagreement.
 fn check_agreement(b: &Bundle, rows: &[Assertion]) -> bool {
     let recomputed = |id: &str| rows.iter().filter(|r| r.id == id).all(|r| r.ok);
     let mut ok = true;
@@ -1237,7 +1235,7 @@ pub struct Unreadable {
 /// **A walk that cannot read a directory or a manifest is an error, not a
 /// shorter inventory.** The `unreadable` list can name a bundle that does not
 /// open, but it cannot name what it never saw: an entry error, an ACL-denied
-/// directory, or a `MANIFEST.json` that cannot be read used to be dropped, so
+/// directory, or a `MANIFEST.json` that cannot be read would be dropped, so
 /// `list` returned a confident, incomplete answer with exit `0`. An audit
 /// command fails fast instead and names the directory, entry or manifest it
 /// could not read.

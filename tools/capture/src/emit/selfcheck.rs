@@ -217,10 +217,10 @@ pub fn wording(id: &str) -> &'static str {
 
 /// Log every selfcheck row that did not pass, with what it expected.
 ///
-/// **The fuller of the two spellings this replaced.** One call site logged
-/// `detail` and omitted `expected`; the other logged both. The one that dropped
-/// a field was the strict subset, so keeping the fuller form means no log line
-/// anywhere in the crate is less informative than it used to be.
+/// **The fuller of the two spellings.** One call site logged `detail` and
+/// omitted `expected`; the other logged both. The one that dropped a field was
+/// the strict subset, so keeping the fuller form means no log line anywhere in
+/// the crate omits a field the other one recorded.
 ///
 /// Next to the rows rather than in the dispatcher, so a caller cannot add a
 /// red row and forget to say so.
@@ -687,10 +687,10 @@ pub fn check_config_ini(dir: &std::path::Path, old_tag: &str) -> Assertion {
 ///
 /// It is the complement of what a `--no-chunk-blobs` run *does* assert — A1-A5,
 /// A13-A17 — within [`WORDING`], and that is exactly what [`Selfcheck::skipped`]
-/// computes from the rows. This constant used to be a bare `vec![]` at the
-/// call site with the derived method beside it and no connection between them:
-/// two sources of truth for one fact, where a change to `WORDING` would silently
-/// change what the document said without changing what the run recorded.
+/// computes from the rows. A bare `vec![]` at the call site with the derived
+/// method beside it would be two sources of truth for one fact, where a change
+/// to `WORDING` would silently change what the document said without changing
+/// what the run recorded.
 ///
 /// `skipped_were_declared_not_asserted` is the check. It builds a selfcheck the
 /// way a `--no-chunk-blobs` run does and requires the two to be identical.

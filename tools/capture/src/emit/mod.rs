@@ -286,9 +286,8 @@ pub fn write_patchmap(
 /// role lists, because knowing which chunks *would* have been needed is the part
 /// of the document that survives a metadata-only run.
 ///
-/// **`patchmaps/` is created first, as part of writing this.** It used to be a
-/// `create_dir_all` in the orchestrator, one line above the call, which meant
-/// the directory's existence depended on a caller remembering an unrelated step.
+/// **`patchmaps/` is created first, as part of writing this.** The directory's
+/// existence must not depend on a caller remembering an unrelated step:
 /// `--no-chunk-blobs` admits captures and then stores no blobs, so nothing is
 /// written there and the directory simply never appeared — which made `verify`
 /// refuse the bundle as unreadable (exit 1, "a bundle with no patchmaps has no
@@ -513,8 +512,8 @@ pub fn write_json_gz(
             .map_err(|e| std::io::Error::other(format!("flush {rel}: {}", e.into_error())))?;
         // `finish()?` and not a bare drop. **The bytes are the same either way**
         // — `flate2::write::GzEncoder`'s `Drop` attempts the finish, so the
-        // trailer is not what this call is for, contrary to what the comment
-        // here used to say. `Drop` cannot report an error, though, and a
+        // trailer is not what this call is for. `Drop` cannot report an error,
+        // though, and a
         // truncated manifest decode must not be written silently. Pinned by
         // `hash::tests::dropping_a_gz_encoder_without_finishing_produces_the_same_bytes`.
         enc.finish()?;

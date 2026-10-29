@@ -2,10 +2,10 @@
 //!
 //! Two `JoinSet` loops run user work: [`crate::blobs::Store::fill`] and
 //! [`crate::http::Fetcher::map_concurrently`]. Both can lose a task to a panic
-//! or to cancellation, and both used to throw the `JoinError` away — one
-//! silently, one behind a generic "panicked" row. The cause an operator needs
-//! is in the payload, not in `Display`, so the rule lives here once and both
-//! loops call it with their own label. The two direct `spawn_blocking` joins —
+//! or to cancellation, and throwing the `JoinError` away — silently, or behind
+//! a generic "panicked" row — loses the cause an operator needs, which is in
+//! the payload, not in `Display`. The rule lives here once and both loops call
+//! it with their own label. The two direct `spawn_blocking` joins —
 //! [`crate::blobs::Store`]'s measurement and the request-log write — take the
 //! same rule through [`join_blocking`].
 

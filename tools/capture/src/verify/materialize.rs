@@ -182,8 +182,8 @@ impl<'i> ChunksByFile<'i> {
 /// The layout is checked before any byte is placed (A11), so a closure set with
 /// a hole produces an error naming the hole rather than a short file.
 ///
-/// `root` is not a parameter: where the blobs live is already inside `src`, and
-/// this function used to take one and discard it.
+/// `root` is not a parameter: where the blobs live is already inside `src`,
+/// and taking it would only discard it.
 pub fn rebuild(
     by_file: &ChunksByFile<'_>,
     src: &ChunkSource<'_>,

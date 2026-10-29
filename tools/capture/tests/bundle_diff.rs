@@ -41,11 +41,9 @@
 //! what keeps the other ~55 files, including every blob and every assembled
 //! `game/` file, under a byte-exact comparison.
 //!
-//! `verify/selfcheck.json` used to be the fourth, blanking A16's "N files, M B".
-//! It no longer states a byte total at all — the row lives inside one of the
-//! counted documents, so any total written there describes an earlier, smaller
-//! tree — and with nothing volatile left in it the whole document is compared
-//! byte-for-byte.
+//! `verify/selfcheck.json` is not in the list: A16 no longer states a byte
+//! total, so nothing in it moves between two captures of one binary and it is
+//! compared byte-for-byte.
 //!
 //! Two properties keep the remaining exemption honest:
 //!
@@ -441,11 +439,11 @@ fn tree(bundle: &Path, v: &Volatile<'_>) -> BTreeMap<String, Vec<u8>> {
 /// a refactor that renamed a field fails the harness loudly instead of quietly
 /// turning an exemption into "compare nothing".
 ///
-/// `verify/selfcheck.json` appears nowhere above, on purpose. It used to blank
-/// A16's "N files, M B", and that blank was hiding a number rather than removing
-/// one: A16's byte total was the total of the *previous* pass, because the row
-/// lives inside one of the counted documents. A16 no longer states a byte total,
-/// so nothing in that document is volatile and it is compared byte-for-byte.
+/// `verify/selfcheck.json` appears nowhere above, on purpose. Blanking A16's
+/// "N files, M B" once hid a number rather than removing one: A16's byte
+/// total was the total of the *previous* pass, because the row lives inside
+/// one of the counted documents. A16 no longer states a byte total, so
+/// nothing in that document is volatile and it is compared byte-for-byte.
 fn normalize_doc(rel: &str, body: &[u8], v: &Volatile<'_>) -> Vec<u8> {
     let n = normalize(body, v);
     let s = String::from_utf8_lossy(&n).into_owned();

@@ -656,13 +656,13 @@ fn render_size(v: Option<&crate::hyp::IntOrStr>) -> String {
 /// Count the decode: totals, the largest chunk, and the six structural counters.
 ///
 /// **One pass, and an O(1) duplicate test.** Every number this returns is
-/// accumulated in the loop below. It used to re-walk the same entries five more
-/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`, and
-/// to call `chunk_bytes()` for a sixth — a sum the chunk loop had already
-/// computed as its `cursor`, whenever the chunks happened to tile. And the
-/// duplicate check was `Vec::contains`, which is 2 744² / 2 ≈ 3.8 M string
-/// comparisons for the `game` field alone, on a value this module's own `diff`
-/// says must never be quadratic.
+/// accumulated in the loop below. Re-walking the same entries five more
+/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`,
+/// and calling `chunk_bytes()` for a sixth — a sum the chunk loop had already
+/// computed as its `cursor` — would repeat work already done. And the
+/// duplicate check is a `HashSet`, not `Vec::contains`, which is 2 744² / 2 ≈
+/// 3.8 M string comparisons for the `game` field alone, on a value this
+/// module's own `diff` says must never be quadratic.
 pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
     let mut s = Structure::default();
     let mut seen: std::collections::HashSet<&str> =

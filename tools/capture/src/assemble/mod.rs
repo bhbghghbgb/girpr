@@ -1139,8 +1139,9 @@ fn fetch_all_plan(
 /// **The cost is checked.** `compressed_size` is a manifest number, and a plan
 /// that costs a negative number of bytes is a wrong plan, not a small one; an
 /// accumulated sum that does not fit `i64` is a typed error naming the chunk and
-/// the values. Both used to be a plain `+=`, which is how a single
-/// `compressed_size: -1` reached `Totals` and passed A20.
+/// the values. A plain `+=` on either would let a single `compressed_size:
+/// -1` reach `Totals` and pass A20: an overflow is a typed error naming the
+/// chunk and the values, not a small plan.
 fn totals_for(
     plan: &[PlanEntry],
     old: Option<&FileResult>,
@@ -1826,19 +1827,19 @@ mod tests {
     /// `is_moved()` have to be the same number for the same path, or a class is
     /// a statement about a different thing than the patchmap's plan.
     ///
-    /// They used to disagree. The diff counted a chunk as moved when the new
-    /// offset was not among *any* of the old file's offsets for that identity;
-    /// the patch flow took the **first** old chunk with that identity as the
+    /// **"Moved" is one fact.** The diff counts a chunk as moved when the new
+    /// offset is not among *any* of the old file's offsets for that identity;
+    /// the patch flow takes the **first** old chunk with that identity as the
     /// source. When an identity occurs twice in the old file the two answers
-    /// were different numbers — and `girpr` reads the *first* match
+    /// are different numbers — and `girpr` reads the *first* match
     /// (`repair::reuse::sources_for`), so the first match is the rule that has
     /// to win.
     #[test]
     fn the_diffs_moved_count_and_the_patchmaps_own_are_the_same_number() {
-        // The pair where the two used to disagree: the old file holds the same
-        // content **twice**, at 0 and at 64. The new file wants it at 64 — an
-        // offset the old file *does* have — so the old rule called it "not
-        // moved", while the repair would read it from 0 and call it moved.
+        // The pair where they disagree: the old file holds the same content
+        // **twice**, at 0 and at 64. The new file wants it at 64 — an offset the
+        // old file *does* have — so counting any old offset as a match calls it
+        // "not moved", while reading the first source calls it moved.
         let duplicated = FilePair {
             capture_id: "reuse_in_place".into(),
             path: "blk".into(),
@@ -1896,9 +1897,9 @@ mod tests {
             );
         }
 
-        // And the duplicated pair is the one that used to disagree: the diff
-        // says the chunk moved, because the source the repair would read is at
-        // 0 while the chunk lands at 64.
+        // And the duplicated pair is the one they disagree on: the diff says
+        // the chunk moved, because the source the repair would read is at 0
+        // while the chunk lands at 64.
         let a = assemble_pair(&duplicated).expect("assembles");
         let plan = a.map.plan.as_ref().expect("a plan");
         let moved_entry = plan.iter().find(|e| e.is_moved()).expect("a moved entry");

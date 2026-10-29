@@ -755,7 +755,7 @@ fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
     );
 
     // And the bundle's own verify rebuilds every one of them, which is the
-    // check the overwritten patchmap used to make impossible: it saw six.
+    // check an overwritten patchmap would defeat: it would see six.
     let (code, stdout, stderr) = run(&["verify", "--artifact", &c.bundle.to_string_lossy()]);
     assert_eq!(code, 0, "verify failed:\n{stdout}\n{stderr}");
     let summary = stdout

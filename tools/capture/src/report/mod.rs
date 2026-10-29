@@ -580,11 +580,12 @@ pub struct ProbeStats {
 
 /// The `stage` a `capture` summary carries.
 ///
-/// **A named constant, because it is part of the data plane.** It used to spell a
-/// milestone — `m8-artifact` — which told a reader about the order the crate was
-/// built in and nothing about the run in front of them. It names the stage now:
-/// every record this builder emits is written after the artifact, so the value is
-/// the same on every capture and its job is to identify *which* record this is.
+/// **A named constant, because it is part of the data plane.** Spelling it as
+/// a milestone — `m8-artifact` — would tell a reader about the order the crate
+/// was built in and nothing about the run in front of them. It names the stage
+/// now: every record this builder emits is written after the artifact, so the
+/// value is the same on every capture and its job is to identify *which*
+/// record this is.
 pub const STAGE_CAPTURE: &str = "artifact";
 
 /// Build the `capture` summary record.
@@ -1254,11 +1255,10 @@ mod tests {
 
     #[test]
     fn the_stage_names_the_stage_not_a_milestone() {
-        // The value used to be `m8-artifact`, which told a reader about the order
-        // the crate was built in and nothing about the run in front of them. It
-        // is pinned here because it is on the data plane: a caller matching on
-        // `stage=artifact` has to break loudly if it changes, and the pin also
-        // keeps a milestone label from creeping back in.
+        // `m8-artifact` told a reader about the order the crate was built in and
+        // nothing about the run in front of them, so a milestone label must not
+        // creep back in. It is pinned here because it is on the data plane: a
+        // caller matching on `stage=artifact` has to break loudly if it changes.
         let r = capture_summary(&zeroed());
         assert_eq!(
             r.get("stage"),

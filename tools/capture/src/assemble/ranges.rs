@@ -138,10 +138,10 @@ impl Layout {
     /// `Σ uncompressed_size == size`.
     ///
     /// Takes an iterator of `(offset, length)` rather than a slice, so a caller
-    /// can stream its chunks straight in. It used to take `&[(i64, i64)]`, which
-    /// meant every caller built a `Vec` of tuples only for this to convert it
-    /// into a `Vec<Range>` and drop the first one — two vectors where one would
-    /// do, for every file assembled.
+    /// can stream its chunks straight in. Taking a slice would mean every caller
+    /// building a `Vec` of tuples only for this to convert it into a `Vec<Range>`
+    /// and drop the first one — two vectors where one would do, for every file
+    /// assembled.
     pub fn of(parts: impl IntoIterator<Item = (i64, i64)>, declared_size: i64) -> Layout {
         let mut violations = Vec::new();
         let mut ranges: Vec<Range> = Vec::new();

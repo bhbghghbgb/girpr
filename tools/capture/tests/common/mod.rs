@@ -462,9 +462,10 @@ impl World {
     /// [`World::all_shapes`] with a **second** file that is new-only.
     ///
     /// Two distinct `--files` paths then share one primary class (`added`), which
-    /// is the case that used to give both the id `added`: the second patchmap
-    /// replaced the first while the run still reported two captures. Nothing else
-    /// in the world changes, so every other class keeps its ordinary candidate.
+    /// is the case where two forced paths share one primary class (`added`):
+    /// without per-class numbering the second patchmap replaces the first while
+    /// the run still reports two captures. Nothing else in the world changes, so
+    /// every other class keeps its ordinary candidate.
     pub fn with_two_added_files() -> World {
         let mut w = World::all_shapes();
         w.new

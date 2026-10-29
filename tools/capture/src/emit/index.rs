@@ -66,13 +66,9 @@ pub struct ManifestInput<'a> {
 /// `files` is a separate argument rather than a field of [`ManifestInput`]
 /// because it is the one input the caller cannot supply: it comes from the
 /// close-out's full-tree digest pass, which has to run after every other
-/// document exists. As a struct field it invited a caller to pass `&[]` and get
-/// a document that lied, which is exactly what happened.
-///
-/// It used to come back empty, with `totals.bytes_on_disk: 0`, and be overwritten
-/// by the caller afterwards. The claim this doc makes was false for precisely
-/// those two fields; both are now derived here, so the returned document is
-/// whole and there is no second step that can be skipped or reordered.
+/// document exists. Both `files[]` and `totals.bytes_on_disk` are derived here,
+/// so the returned document is whole and there is no second step that can be
+/// skipped or reordered.
 pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
     let id = i.started.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     let manifest_entries: BTreeMap<String, u64> = i
@@ -217,8 +213,8 @@ pub struct FileEntry {
 /// Both digests come from **one pass** — the alternative, hashing the file
 /// twice, reads every blob twice, which on a 90 MB artifact is the difference
 /// between a capture that feels instant and one that does not. The writer is
-/// [`hash::DualDigest`] rather than a `Tee` defined here: it used to be one, and
-/// the blob path re-derived the same thing because it could not reach this one.
+/// [`hash::DualDigest`] rather than a `Tee` defined here: one pass computes
+/// both digests, so a 90 MB artifact is not hashed twice.
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
     let mut file = std::fs::File::open(path)?;
     let mut d = hash::DualDigest::new();
@@ -1402,11 +1398,12 @@ impl Manifest {
     /// run's budget would not pay for it. A matrix that records it is more
     /// honest than one that fails.
     ///
-    /// It used to be excluded, on the reasoning that `over_budget` is "a
-    /// finding about the run rather than about the world" — which had the
-    /// consequence that a class the budget refused ended the whole capture with
-    /// exit `3`, while `--require-class` was documented as the only thing that
-    /// turns an unmet class into a failed run.
+    /// **Every state is acceptable.** `over_budget` is one of those answers: a
+    /// candidate existed and this run's budget would not pay for it. Excluding
+    /// it would make a class the budget refused end the whole capture with exit
+    /// `3`, while `--require-class` is the flag that turns an unmet class into
+    /// a failed run. A17 must not do `--require-class`'s job for a class nobody
+    /// required.
     ///
     /// **Completeness means equality with [`crate::select::Class::ALL`], not
     /// merely a set of rows that each look valid.** Checking only the rows that happen to be

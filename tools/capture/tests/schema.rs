@@ -425,10 +425,9 @@ fn a_capture_records_the_decompression_ceiling_it_used() {
 
 /// `gzip_threshold` is required, and a bundle without it does not open.
 ///
-/// It used to carry `#[serde(default = "…")]` so that `schema_version` could stay
-/// `1` and a bundle predating the field would still verify. That made a bundle
-/// with **no recorded threshold** read back as having used the flag's default —
-/// which is a claim about a run nobody wrote down, on the one field whose whole
+/// `#[serde(default = "…")]` on the field would let a bundle predating it
+/// still verify, reading back the flag's default as though the run had used
+/// it — a claim about a run nobody wrote down, on the one field whose whole
 /// purpose is to say why one document is gzipped and the next is not.
 ///
 /// A field that defaults to a constant is worse than a field that is required,

@@ -74,8 +74,8 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
         //
         // `reused` is 2 of 3, not 3 of 3: a file whose every chunk is reused
         // and none of them moved is the shape the removed
-        // `full_reuse_reordered` class used to claim, and it is not a class of
-        // its own — there is no decision behind it.
+        // `full_reuse_reordered` class claimed, and it is not a class of its own
+        // — there is no decision behind it.
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
             "eeee-old",
@@ -195,7 +195,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "iiii-new",
             // A different chunk entirely. Reusing `iiii` here would make this a
             // file whose every chunk is reused and none of them moved — the
-            // shape the removed `full_reuse_reordered` class used to claim —
+            // shape the removed `full_reuse_reordered` class claimed —
             // rather than the single fresh download the class is about.
             vec![chunk("qqqq", 0, 42, 42)],
         ),
