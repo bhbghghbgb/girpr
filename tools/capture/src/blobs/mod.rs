@@ -1133,6 +1133,12 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 }
             };
+            // The accept loop needs a nonblocking listener so a regression that
+            // never connects cannot hang the suite. An accepted socket on Windows
+            // can inherit that, and a mock that reads before the client has sent
+            // its request would then answer and close mid-send. Back to blocking
+            // so the request is read first and the reply cannot race it.
+            stream.set_nonblocking(false).expect("blocking stream");
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).ok();
@@ -1711,6 +1717,12 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 }
             };
+            // The accept loop needs a nonblocking listener so a regression that
+            // never connects cannot hang the suite. An accepted socket on Windows
+            // can inherit that, and a mock that reads before the client has sent
+            // its request would then answer and close mid-send. Back to blocking
+            // so the request is read first and the reply cannot race it.
+            stream.set_nonblocking(false).expect("blocking stream");
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).ok();
@@ -1826,6 +1838,12 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 }
             };
+            // The accept loop needs a nonblocking listener so a regression that
+            // never connects cannot hang the suite. An accepted socket on Windows
+            // can inherit that, and a mock that reads before the client has sent
+            // its request would then answer and close mid-send. Back to blocking
+            // so the request is read first and the reply cannot race it.
+            stream.set_nonblocking(false).expect("blocking stream");
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).ok();
@@ -1949,6 +1967,12 @@ mod tests {
                     Err(e) => panic!("accept: {e}"),
                 }
             };
+            // The accept loop needs a nonblocking listener so a regression that
+            // never connects cannot hang the suite. An accepted socket on Windows
+            // can inherit that, and a mock that reads before the client has sent
+            // its request would then answer and close mid-send. Back to blocking
+            // so the request is read first and the reply cannot race it.
+            stream.set_nonblocking(false).expect("blocking stream");
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).ok();
