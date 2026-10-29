@@ -64,6 +64,8 @@ pub struct FixtureInput<'a> {
     pub no_chunk_blobs: bool,
     /// The run's `--max-decompressed-bytes`, for every chunk decode.
     pub max_decompressed_bytes: u64,
+    /// Where a device-name path is recorded under its escaped on-disk name.
+    pub path_map: &'a crate::pathmap::PathMap,
 }
 
 /// What the fixture build produced.
@@ -178,6 +180,7 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
                     )
                 })?,
                 &mut out,
+                i.path_map,
             )?;
         }
     }
@@ -224,6 +227,7 @@ fn record(
     a: &crate::select::Admission,
     got: assemble::Assembled,
     out: &mut BuiltFixture,
+    path_map: &crate::pathmap::PathMap,
 ) -> Result<(), Failure> {
     // **No artifact may be replaced by a later one.** `patchmaps/<id>.json` is
     // named from the capture id, so two admissions with one id would silently
@@ -290,6 +294,7 @@ fn record(
                     bytes: &o.bytes,
                     capture_id: &a.capture_id,
                 },
+                path_map,
             )
             .map_err(|e| write_err(dir, e))?,
         );
@@ -304,6 +309,7 @@ fn record(
                     bytes: &n.bytes,
                     capture_id: &a.capture_id,
                 },
+                path_map,
             )
             .map_err(|e| write_err(dir, e))?,
         );

@@ -189,12 +189,25 @@ pub fn write_prelude(
 }
 
 /// Write one variant file into `tree` (`game` or `expected`).
-pub fn write_variant(root: &Path, tree: &str, file: &VariantFile<'_>) -> std::io::Result<String> {
-    let rel = format!("{tree}/{}", file.rel_path);
+///
+/// The manifest path is the game's own spelling; on disk, a Windows device
+/// component is escaped (`CON` → `%CON`) and the pair is recorded in
+/// [`crate::pathmap::PathMap`]. The returned path is the escaped
+/// artifact-relative one, because that is what the tree now holds and what
+/// `MANIFEST.json → files[]` must list.
+pub fn write_variant(
+    root: &Path,
+    tree: &str,
+    file: &VariantFile<'_>,
+    path_map: &crate::pathmap::PathMap,
+) -> std::io::Result<String> {
+    let logical = format!("{tree}/{}", file.rel_path);
+    let rel = path_map.escape(&logical);
     tracing::info!(
         capture_id = file.capture_id,
         bytes = file.bytes.len(),
         path = %file.rel_path,
+        on_disk = %rel,
         tree,
         "variant file written"
     );
@@ -215,17 +228,19 @@ pub fn write_gamedir(
     audio: &[String],
     old_files: &[VariantFile<'_>],
     new_files: &[VariantFile<'_>],
+    path_map: &crate::pathmap::PathMap,
 ) -> std::io::Result<Written> {
     let mut w = Written {
         game: write_prelude(root, biz, old_tag, scan_dir, audio)?,
         expected: Vec::new(),
     };
     for f in old_files {
-        w.game.push(write_variant(root, super::GAME_TREE, f)?);
+        w.game
+            .push(write_variant(root, super::GAME_TREE, f, path_map)?);
     }
     for f in new_files {
         w.expected
-            .push(write_variant(root, super::EXPECTED_TREE, f)?);
+            .push(write_variant(root, super::EXPECTED_TREE, f, path_map)?);
     }
     Ok(w)
 }
@@ -365,6 +380,7 @@ mod tests {
             &["en-us".to_string()],
             &[old, gone],
             &[new],
+            &crate::pathmap::PathMap::new(),
         )
         .expect("writes");
 
@@ -397,6 +413,62 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(expected_entries, vec!["GenshinImpact_Data".to_string()]);
+    }
+
+    /// A device component is written escaped and recorded, while the caller's
+    /// logical path is unchanged.
+    #[test]
+    fn a_device_component_is_written_escaped_and_mapped() {
+        let root = girpr_tempdir::TempDir::new("gircap-m8-gamedir", "device_escape");
+        let map = crate::pathmap::PathMap::new();
+        let device = VariantFile {
+            rel_path: "GenshinImpact_Data/CON",
+            bytes: b"console",
+            capture_id: "identical",
+        };
+        let literal = VariantFile {
+            rel_path: "GenshinImpact_Data/%CON",
+            bytes: b"percent",
+            capture_id: "identical",
+        };
+        let w = write_gamedir(
+            &root,
+            &global(),
+            "7.0.0",
+            "GenshinImpact_Data/Persistent/audio_lang_14",
+            &[],
+            &[],
+            &[device, literal],
+            &map,
+        )
+        .expect("writes");
+
+        assert!(
+            w.expected
+                .contains(&"expected/GenshinImpact_Data/%CON".to_string())
+        );
+        assert!(
+            w.expected
+                .contains(&"expected/GenshinImpact_Data/%%CON".to_string()),
+            "a literal percent is doubled, not confused with the device"
+        );
+        assert_eq!(
+            std::fs::read(root.join("expected/GenshinImpact_Data/%CON")).unwrap(),
+            b"console"
+        );
+        assert_eq!(
+            std::fs::read(root.join("expected/GenshinImpact_Data/%%CON")).unwrap(),
+            b"percent"
+        );
+        let doc = map.document();
+        assert_eq!(
+            doc.resolve("expected/GenshinImpact_Data/CON"),
+            Some("expected/GenshinImpact_Data/%CON")
+        );
+        assert_eq!(
+            doc.resolve("expected/GenshinImpact_Data/%CON"),
+            Some("expected/GenshinImpact_Data/%%CON")
+        );
     }
 
     #[test]

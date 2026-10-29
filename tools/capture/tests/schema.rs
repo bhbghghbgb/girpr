@@ -198,6 +198,7 @@ fn every_document_carries_the_crate_schema_version() {
         "verify/selfcheck.json",
         "api/tag_probe.json",
         "api/error_responses.json",
+        "diagnostics/path_map.json",
         "diagnostics/rejections.json",
         "manifests/7.0.0/game.manifest.meta.json",
     ] {
@@ -397,6 +398,20 @@ fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture() {
     assert_eq!(doc["total"], 0);
     assert_eq!(doc["omitted"], 0);
     assert_eq!(doc["rejections"], serde_json::json!([]));
+}
+
+/// And the mapping document, whose empty state says "nothing needed escaping"
+/// rather than leaving a reader to guess whether it was written at all.
+#[test]
+fn the_path_map_exists_and_is_empty_for_a_healthy_capture() {
+    let b = bundle();
+    let doc = json(&b.join("diagnostics/path_map.json"));
+    assert_eq!(
+        keys(&doc),
+        vec!["entries", "schema_version"],
+        "diagnostics/path_map.json's top-level keys"
+    );
+    assert_eq!(doc["entries"], serde_json::json!([]));
 }
 
 /// A raised decompression ceiling is recorded, not silently replaced by the

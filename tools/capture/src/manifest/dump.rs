@@ -24,8 +24,15 @@ use crate::manifest::proto::SophonChunkFile;
 use crate::manifest::{CapturedManifest, Stored};
 
 /// The artifact-relative path of a manifest's files.
+///
+/// The tag is escaped: an API tag that is a Windows device name (`CON`,
+/// `NUL.txt`) is preserved in the documents but cannot be a directory, so it is
+/// written as `%CON` and `diagnostics/path_map.json` records the pair.
 pub fn dir(tag: &str) -> String {
-    format!("manifests/{tag}")
+    format!(
+        "manifests/{}",
+        crate::paths::escape_component(tag).into_owned()
+    )
 }
 
 /// The archive, stored exactly as served.
@@ -91,7 +98,11 @@ pub fn write(
     // writer trusted. The CLI validates both resolved tags before a pair is
     // named, but this sink is reachable by any in-crate caller that builds a
     // `CapturedManifest`, and `tag_dir`/`archive_rel` interpolate it raw.
-    if let Some(problem) = crate::config::tag_shape_problem(&tag) {
+    //
+    // A device name is **allowed here** because `dir` escapes it; an API tag
+    // that names `CON` is evidence to keep, not a reason to refuse. Every other
+    // tag rule still applies.
+    if let Some(problem) = crate::config::tag_shape_problem_allowing_device(&tag) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("manifest tag {problem}"),
@@ -430,6 +441,35 @@ mod tests {
             "the tag escaped the dump root: {}",
             outside.display()
         );
+    }
+
+    /// A device-name tag is the one tag the writer accepts and escapes: the
+    /// documents keep the API's spelling, the directory is `%CON`, and the four
+    /// files land under it. Refusing it would discard a live observation.
+    #[test]
+    fn a_device_tag_is_written_under_an_escaped_directory() {
+        let root = tmp("tag-device");
+        let mut c = captured();
+        c.tag = "CON".into();
+        c.meta.tag = "CON".into();
+
+        let paths = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap();
+        assert!(
+            paths.iter().all(|p| p.path.starts_with("manifests/%CON/")),
+            "{paths:?}"
+        );
+        assert!(root.join("manifests/%CON/game.manifest.zst").is_file());
+        assert!(
+            !root.join("manifests/CON").exists(),
+            "the unescaped device name must not be created"
+        );
+        // The document keeps the tag the API gave.
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("manifests/%CON/game.manifest.meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["tag"], "CON");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The archive is the bytes the CDN sent, so its MD5 is the CDN's

@@ -473,8 +473,15 @@ pub fn closing(
     // A14: `game/` holds nothing but the tool-read config and the variant
     // files. Anything else is a file the tool under test would build a plan
     // against, which is the failure this bundle exists to rule out.
-    let captured: std::collections::BTreeSet<&str> =
-        selection.admitted.iter().map(|a| a.path.as_str()).collect();
+    // A captured path is compared under the name the tree actually holds: a
+    // device component is escaped on disk (`CON` -> `%CON`) and recorded in
+    // `diagnostics/path_map.json`, so the *logical* spelling would look like a
+    // stray next to the file the writer correctly created.
+    let captured: std::collections::BTreeSet<String> = selection
+        .admitted
+        .iter()
+        .map(|a| crate::paths::escape_path(&a.path))
+        .collect();
     let game_files: std::collections::BTreeSet<&str> = written
         .iter()
         .filter_map(|p| p.strip_prefix("game/"))
@@ -482,7 +489,7 @@ pub fn closing(
     let strays: Vec<&str> = game_files
         .iter()
         .copied()
-        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(p))
+        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(*p))
         .collect();
     rows.push(if strays.is_empty() {
         Assertion::pass(

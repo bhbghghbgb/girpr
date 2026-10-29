@@ -296,6 +296,13 @@ impl Bundle {
             &gircap::rejections::Rejections::new().document(),
         );
 
+        // `diagnostics/path_map.json`, required in version 3. This fixture has
+        // no device-name path, so the honest mapping is empty.
+        write_json(
+            &root.join("diagnostics/path_map.json"),
+            &gircap::pathmap::PathMap::new().document(),
+        );
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -922,6 +929,7 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     round_trip::<gircap::rejections::RejectionsDocument>(
         &b.root.join("diagnostics/rejections.json"),
     );
+    round_trip::<gircap::pathmap::PathMapDocument>(&b.root.join("diagnostics/path_map.json"));
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 

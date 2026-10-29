@@ -118,7 +118,16 @@ impl VersionPair {
             (&new_tag, new_source.as_str()),
             (&old_tag, old_source.as_str()),
         ] {
-            if let Some(problem) = tag_shape_problem(tag) {
+            // A tag the API named is escaped on disk rather than refused, so a
+            // live device name is kept as evidence. A tag from a flag has no
+            // bundle yet and stays refused at argument resolution.
+            let api = matches!(source, "main.tag" | "diff_tags[0]");
+            let problem = if api {
+                tag_shape_problem_allowing_device(tag)
+            } else {
+                tag_shape_problem(tag)
+            };
+            if let Some(problem) = problem {
                 return Err(format!("{source} {problem}"));
             }
         }
@@ -596,6 +605,22 @@ pub(crate) fn tag_shape_problem(tag: &str) -> Option<String> {
 
 /// [`tag_shape_problem`] with the rule's stable identifier.
 pub(crate) fn tag_shape_rule(tag: &str) -> Option<(&'static str, String)> {
+    tag_shape_rule_inner(tag, false)
+}
+
+/// [`tag_shape_problem`] for a tag that came from the API, where a device name
+/// is escaped on disk instead of refused.
+///
+/// **Argument resolution still refuses.** A `--new-tag CON` names a directory
+/// before any request, so there is no observation to keep and refusing is the
+/// honest answer. But `main.tag` and `diff_tags[0]` are the API's own words: a
+/// live `CON` is a fact about the branch, so it is preserved in the documents
+/// and written under `manifests/%CON` (see [`crate::paths::escape_component`]).
+pub(crate) fn tag_shape_problem_allowing_device(tag: &str) -> Option<String> {
+    tag_shape_rule_inner(tag, true).map(|(_, problem)| problem)
+}
+
+fn tag_shape_rule_inner(tag: &str, allow_device: bool) -> Option<(&'static str, String)> {
     if tag.is_empty() {
         return Some(("tag.empty", "was given an empty tag".to_string()));
     }
@@ -644,7 +669,7 @@ pub(crate) fn tag_shape_rule(tag: &str) -> Option<(&'static str, String)> {
             ),
         ));
     }
-    if crate::paths::is_windows_device_name(tag) {
+    if !allow_device && crate::paths::is_windows_device_name(tag) {
         return Some((
             "tag.device",
             format!(
@@ -704,9 +729,15 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
 }
 
 /// `artifacts/<biz>/<old>__<new>/` — the directory a bundle's id sits in.
+///
+/// The joined pair is escaped as one component: `CON.txt__7.1.0` would otherwise
+/// have the stem `CON` and open the console on Windows. Escaping the pair rather
+/// than each tag keeps a tag containing `%` from changing the name unless the
+/// pair itself needs it.
 pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf {
+    let pair = format!("{old_tag}__{new_tag}");
     root.join(biz.as_str())
-        .join(format!("{old_tag}__{new_tag}"))
+        .join(crate::paths::escape_component(&pair).into_owned())
 }
 
 /// The capture id: a UTC timestamp, `YYYYMMDDTHHMMSS.ffffffZ`.
@@ -1372,16 +1403,25 @@ mod tests {
         .unwrap_err();
         assert!(e.contains("--new-tag"), "{e}");
 
-        // A device name is the same class of sink: `manifests/<tag>` cannot be
-        // created on Windows, and a bundle built where it can would not contain
-        // the directory a Windows reader opens.
+        // A device name from the API is *kept*: `manifests/<tag>` is written
+        // under an escaped name and `path_map.json` records the pair. The
+        // documents keep the API's own spelling.
         let mut b = branch();
         b.tag = "CON".into();
-        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
-        assert!(
-            e.contains("main.tag") && e.contains("device"),
-            "the resolved tag is refused with the API field: {e}"
-        );
+        let v = VersionPair::select(&b, p.new_selector(), p.old_selector())
+            .expect("an API device name is escaped, not refused");
+        assert_eq!(v.new.tag, "CON");
+        assert_eq!(v.new.source, "main.tag");
+
+        // The same value from a flag is still refused at argument resolution:
+        // there is no bundle and no observation to keep yet.
+        let e = VersionPair::select(
+            &branch(),
+            NewTagSelector::Explicit("CON"),
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap_err();
+        assert!(e.contains("--new-tag") && e.contains("device"), "{e}");
     }
 
     /// Swapping them would attach a build id to the wrong tag, and every chunk

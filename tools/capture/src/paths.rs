@@ -41,6 +41,30 @@ pub fn relative_path_problem(value: &str) -> Option<String> {
 /// `diagnostics/rejections.json`, where a consumer wants to count refusals by
 /// rule without matching message text that may be reworded.
 pub fn relative_path_rule(value: &str) -> Option<(&'static str, String)> {
+    path_rule(value, false)
+}
+
+/// Why `value` cannot be a **logical** bundle path, or `None` when it can.
+///
+/// A logical path is one that appears in a document: a manifest entry's `file`,
+/// a patchmap's `path`, the index's `referenced_by[].path`. It is the path the
+/// game itself uses, so it is allowed to contain a Windows device name — the
+/// bundle writes that component under an escaped on-disk name and records the
+/// mapping in `diagnostics/path_map.json` (see [`escape_component`]).
+///
+/// Everything else the write rule refuses is still refused: a logical path that
+/// escapes the bundle root, uses a backslash, or folds onto another name is not
+/// a path the game could be using.
+pub fn logical_path_problem(value: &str) -> Option<String> {
+    logical_path_rule(value).map(|(_, problem)| problem)
+}
+
+/// [`logical_path_problem`] with the rule's stable identifier.
+pub fn logical_path_rule(value: &str) -> Option<(&'static str, String)> {
+    path_rule(value, true)
+}
+
+fn path_rule(value: &str, allow_device: bool) -> Option<(&'static str, String)> {
     if value.is_empty() {
         return Some(("path.empty", format!("{value:?} is an empty path")));
     }
@@ -95,7 +119,7 @@ pub fn relative_path_rule(value: &str) -> Option<(&'static str, String)> {
             ),
         ));
     }
-    if value.split('/').any(is_windows_device_name) {
+    if !allow_device && value.split('/').any(is_windows_device_name) {
         return Some((
             "path.device",
             format!(
@@ -134,6 +158,65 @@ pub(crate) fn is_windows_device_name(component: &str) -> bool {
     ) || (stem.len() == 4
         && (stem.starts_with("COM") || stem.starts_with("LPT"))
         && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+}
+
+/// Escape one path component so it cannot name a Windows device.
+///
+/// **The scheme.** A component whose stem is a reserved device name is written
+/// with a leading `%`: `CON` becomes `%CON`, and `CON.txt` becomes `%CON.txt`.
+/// Every other `%` is doubled, so a literal component `%CON` becomes `%%CON`.
+/// The two forms are distinct, which is the whole point: without doubling the
+/// `%`, the device name `CON` and the ordinary name `%CON` would both write to
+/// `%CON` and the last write would win.
+///
+/// The encoding changes nothing about the documents: `entries[].file`,
+/// `patchmaps/*.json`'s `path` and the index's references keep the game's own
+/// spelling. It changes only the file on disk, and
+/// [`crate::pathmap::PathMapDocument`] records each logical→on-disk pair.
+///
+/// **Host-independent.** The rule runs wherever the capture runs, not only on
+/// Windows: a bundle captured on Linux and read on Windows must already be safe.
+pub fn escape_component(component: &str) -> std::borrow::Cow<'_, str> {
+    if is_windows_device_name(component) {
+        return std::borrow::Cow::Owned(format!("%{component}"));
+    }
+    if component.contains('%') {
+        return std::borrow::Cow::Owned(component.replace('%', "%%"));
+    }
+    std::borrow::Cow::Borrowed(component)
+}
+
+/// Escape every component of a `/`-separated bundle path.
+pub fn escape_path(path: &str) -> String {
+    path.split('/')
+        .map(|c| escape_component(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Reverse [`escape_component`].
+///
+/// A leading single `%` marks an escaped device name; anywhere else `%%` stands
+/// for one literal `%`. The forms [`escape_component`] produces are always
+/// unambiguous, so this is the exact inverse on them.
+pub fn unescape_component(component: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(rest) = component.strip_prefix('%')
+        && !rest.starts_with('%')
+    {
+        return std::borrow::Cow::Owned(rest.to_string());
+    }
+    if component.contains("%%") {
+        return std::borrow::Cow::Owned(component.replace("%%", "%"));
+    }
+    std::borrow::Cow::Borrowed(component)
+}
+
+/// Reverse [`escape_path`].
+pub fn unescape_path(path: &str) -> String {
+    path.split('/')
+        .map(|c| unescape_component(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Why `value` cannot be a manifest field name, or `None` when it can.
@@ -306,6 +389,62 @@ mod tests {
         for good in ["CONSOLE", "a/conifer", "a/COM0", "a/LPT10", "a/.con"] {
             assert_eq!(relative_path_problem(good), None, "{good:?}");
         }
+    }
+
+    /// A logical path is the game's own spelling, so a device component is
+    /// accepted there and escaped on disk. Everything a write must still refuse
+    /// stays refused.
+    #[test]
+    fn a_logical_path_may_name_a_device_but_still_may_not_leave_the_bundle() {
+        assert_eq!(logical_path_problem("a/CON"), None);
+        assert_eq!(logical_path_problem("a/aux.txt"), None);
+        assert_eq!(logical_path_problem("a/%CON"), None);
+        for bad in ["../x", "a\\b", "/abs", "C:/x", "a/./b", "a/b.", "a//b", ""] {
+            assert!(
+                logical_path_problem(bad).is_some(),
+                "{bad:?} must still be refused as a logical path"
+            );
+        }
+    }
+
+    /// The scheme has to be an exact inverse on everything it produces, because
+    /// two logical paths that collide on disk are the corruption escaping exists
+    /// to prevent.
+    #[test]
+    fn escaping_a_path_round_trips_and_separates_devices_from_literal_percents() {
+        for (logical, on_disk) in [
+            ("a/b", "a/b"),
+            ("a/CON", "a/%CON"),
+            ("a/CON.txt", "a/%CON.txt"),
+            ("a/nul", "a/%nul"),
+            ("a/%CON", "a/%%CON"),
+            ("a/100%done.bin", "a/100%%done.bin"),
+            ("a/%%", "a/%%%%"),
+            ("CON", "%CON"),
+        ] {
+            assert_eq!(escape_path(logical), on_disk, "{logical:?}");
+            assert_eq!(unescape_path(on_disk), logical, "{on_disk:?}");
+            // The escaped form is safe to write.
+            assert_eq!(
+                relative_path_problem(on_disk),
+                None,
+                "{on_disk:?} is not a safe write path"
+            );
+        }
+        // A device and a literal percent do not collide.
+        assert_ne!(escape_path("CON"), escape_path("%CON"));
+    }
+
+    #[test]
+    fn an_ordinary_component_is_borrowed_not_copied() {
+        assert!(matches!(
+            escape_component("GenshinImpact_Data"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            escape_component("CON"),
+            std::borrow::Cow::Owned(_)
+        ));
     }
 
     #[test]

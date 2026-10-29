@@ -162,6 +162,20 @@ pub fn write_rejections(
     Ok(vec!["diagnostics/rejections.json".to_string()])
 }
 
+/// Write `diagnostics/path_map.json`, the logical→on-disk names.
+///
+/// **Always written.** A bundle with no device name has an empty `entries` list,
+/// which says "nothing needed escaping" rather than leaving a reader to wonder
+/// whether the document was forgotten. The mapping is what an external reader
+/// follows instead of re-deriving [`crate::paths::escape_path`].
+pub fn write_path_map(
+    root: &Path,
+    path_map: &crate::pathmap::PathMap,
+) -> std::io::Result<Vec<String>> {
+    write_doc(root, crate::pathmap::DOCUMENT, &path_map.document())?;
+    Ok(vec![crate::pathmap::DOCUMENT.to_string()])
+}
+
 /// Write `diff/paths.diff.json`, `diff/paths.tsv` and `diff/reuse_pool.json`.
 ///
 /// Returns the paths written, in bundle order. `reuse_pool.json` is the first

@@ -694,6 +694,7 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "api/tag_probe.json",
         "api/error_shapes.json",
         "api/error_responses.json",
+        "diagnostics/path_map.json",
         "diagnostics/rejections.json",
         "chunks/index.json",
         "diff/paths.diff.json",
@@ -847,6 +848,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/path_map.json",
         "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
@@ -890,6 +892,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/path_map.json",
         "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
@@ -1641,6 +1644,143 @@ fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
     assert_eq!(
         doc["rejections"][0]["source"],
         "manifest 7.0.0/game entry 0 file"
+    );
+}
+
+/// **L1: a device name is kept, not discarded.** A manifest path that names
+/// `CON` is a fact about the API. The documents keep the game's spelling, the
+/// tree is written under `%CON`, and `diagnostics/path_map.json` records the
+/// pair. `verify` and `materialize` follow the same escape, so the bundle is
+/// readable on a host where the unescaped name would open a device.
+#[test]
+fn a_device_name_manifest_path_is_kept_and_escaped_on_disk() {
+    const LOGICAL: &str = "GenshinImpact_Data/Resources/CON";
+    let mut world = World::game_only();
+    for build in [&mut world.old, &mut world.new] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        let file = game
+            .iter_mut()
+            .find(|f| f.path == "GenshinImpact_Data/Resources/browser_assets")
+            .expect("the all-shapes world has the identical file");
+        file.path = LOGICAL.to_string();
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("device-path");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    // The tree holds the escaped name, and not the one that would open a device.
+    assert!(
+        bundle
+            .join("game/GenshinImpact_Data/Resources/%CON")
+            .is_file(),
+        "the old side is written escaped"
+    );
+    assert!(
+        bundle
+            .join("expected/GenshinImpact_Data/Resources/%CON")
+            .is_file(),
+        "the new side is written escaped"
+    );
+    assert!(
+        !bundle
+            .join("game/GenshinImpact_Data/Resources/CON")
+            .exists(),
+        "the unescaped device name must never be created"
+    );
+
+    // The documents keep the game's own spelling.
+    let patchmap: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("patchmaps/identical.json")).unwrap())
+            .unwrap();
+    assert_eq!(patchmap["path"], LOGICAL);
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("chunks/index.json")).unwrap()).unwrap();
+    let referenced: Vec<String> = index["blobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["referenced_by"].as_array().cloned().unwrap_or_default())
+        .filter_map(|r| r["path"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        referenced.iter().any(|p| p == LOGICAL),
+        "the index keeps the logical path: {referenced:?}"
+    );
+
+    // The mapping is recorded, and `files[]` lists what was written.
+    let map: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("diagnostics/path_map.json")).unwrap())
+            .unwrap();
+    let game_map = map["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["logical"] == format!("game/{LOGICAL}"))
+        .expect("the old side is mapped");
+    assert_eq!(
+        game_map["on_disk"],
+        format!("game/GenshinImpact_Data/Resources/%CON")
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("MANIFEST.json")).unwrap()).unwrap();
+    let files: Vec<&str> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["path"].as_str())
+        .collect();
+    assert!(
+        files.contains(&"game/GenshinImpact_Data/Resources/%CON"),
+        "files[] lists the on-disk name"
+    );
+
+    // `verify` reads the escaped tree and passes; `materialize` reproduces it.
+    let dir = bundle.to_string_lossy().to_string();
+    let v = run(&["verify", "--artifact", &dir]);
+    assert_eq!(v.code, 0, "{}\n{}", v.stdout, v.stderr);
+
+    let out = scratch.root.join("rebuilt");
+    let m = run(&[
+        "materialize",
+        "--artifact",
+        &dir,
+        "--out",
+        &out.to_string_lossy(),
+    ]);
+    assert_eq!(m.code, 0, "{}\n{}", m.stdout, m.stderr);
+    assert!(out.join("game/GenshinImpact_Data/Resources/%CON").is_file());
+    assert!(!out.join("game/GenshinImpact_Data/Resources/CON").exists());
+}
+
+/// A device name is only escaped where it is an **observation**. At argument
+/// resolution there is no bundle, so `--files` keeps refusing it.
+#[test]
+fn a_device_name_from_a_flag_is_still_refused() {
+    let mock = Mock::start(World::game_only());
+    let scratch = Scratch::new("device-flag");
+    let r = capture(
+        &mock,
+        &scratch,
+        &[
+            "--audio",
+            "none",
+            "--files",
+            "GenshinImpact_Data/Resources/CON",
+        ],
+    );
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        format!("{}{}", r.stdout, r.stderr).contains("device"),
+        "{}{}",
+        r.stdout,
+        r.stderr
     );
 }
 

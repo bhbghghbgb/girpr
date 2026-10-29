@@ -61,6 +61,7 @@ pub mod http;
 pub mod hyp;
 pub mod logging;
 pub mod manifest;
+pub mod pathmap;
 pub mod paths;
 pub mod rejections;
 pub mod report;

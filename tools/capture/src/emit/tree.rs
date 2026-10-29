@@ -57,6 +57,8 @@ pub struct TreeInput<'a> {
     pub selection: &'a crate::select::Selection,
     /// `--per-class`, as the selection was given it.
     pub per_class: usize,
+    /// Where escaped on-disk names are recorded, for `diagnostics/path_map.json`.
+    pub path_map: &'a crate::pathmap::PathMap,
 }
 
 /// What the pre-chunk tree contains.
@@ -90,6 +92,13 @@ pub fn write(i: TreeInput<'_>) -> Result<Tree, Failure> {
         for m in pair.iter_mut() {
             let stored = manifest::dump::write(i.dir, m, i.gzip_threshold, i.manifest_detail)
                 .map_err(|e| write_err(i.dir, e))?;
+            // An API tag that names a device is written under `manifests/%CON`;
+            // record the pair so a reader can follow it back to the documents'
+            // spelling of the tag.
+            i.path_map.record(
+                &format!("manifests/{}", m.tag),
+                &manifest::dump::dir(&m.tag),
+            );
             // `stored_as` is filled in here rather than by the writer: only now is
             // it known where the archive ended up, and only the request log can
             // say it.

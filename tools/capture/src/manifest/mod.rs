@@ -572,7 +572,7 @@ fn validate_entry_paths(
     // the bundle to learn what was wrong.
     let mut problems: Vec<String> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
-        if let Some((rule, problem)) = crate::paths::relative_path_rule(&entry.file) {
+        if let Some((rule, problem)) = crate::paths::logical_path_rule(&entry.file) {
             let row = rejections.record(
                 format!("manifest {context} entry {i} file"),
                 &entry.file,
@@ -1315,7 +1315,8 @@ mod tests {
     }
 
     /// One refusal does not hide the next: every offending entry and chunk id is
-    /// named in the failure and recorded in the rejection document.
+    /// named in the failure and recorded in the rejection document. A device
+    /// name is **not** one of them — it is accepted and escaped on disk.
     #[test]
     fn every_hostile_name_in_one_manifest_is_reported_together() {
         let mut bad_chunk = chunk(0, 1);
@@ -1327,20 +1328,24 @@ mod tests {
         ];
         let rejections = crate::rejections::Rejections::new();
         let err = validate_entry_paths("7.1.0/game", &entries, &rejections)
-            .expect_err("three bad names must stop the run");
+            .expect_err("two bad names must stop the run");
         let ApiError::Shape { detail, .. } = err else {
             panic!("a shape error");
         };
-        assert!(detail.contains("3 refused names"), "{detail}");
+        assert!(detail.contains("2 refused names"), "{detail}");
         let rows = rejections.snapshot();
         let rules: Vec<&str> = rows.iter().map(|r| r.rule.as_str()).collect();
         assert_eq!(
             rules,
-            vec!["path.windows-fold", "path.device", "chunk-id.shape"],
+            vec!["path.windows-fold", "chunk-id.shape"],
             "one row per offending name, with its own rule"
         );
         let values: Vec<&str> = rows.iter().map(|r| r.value.as_str()).collect();
-        assert_eq!(values, vec!["a/b.", "CON", "not-a-chunk-id"]);
+        assert_eq!(values, vec!["a/b.", "not-a-chunk-id"]);
+        assert!(
+            !rows.iter().any(|r| r.value == "CON"),
+            "a device name is kept, not refused; the writer escapes it"
+        );
     }
 
     // ------------------------------------------------------------ A4

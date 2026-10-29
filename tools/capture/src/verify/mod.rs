@@ -121,6 +121,10 @@ pub struct Bundle {
     /// its source and rule. Required: a bundle that recorded only what it wrote
     /// has lost the API's own attempts to name things it would not hold.
     pub rejections: crate::rejections::RejectionsDocument,
+    /// `diagnostics/path_map.json` — every logical path written under an
+    /// escaped on-disk name, such as a Windows device component. Required: a
+    /// reader that materializes `game/`/`expected/` must follow it.
+    pub path_map: crate::pathmap::PathMapDocument,
 }
 
 impl Bundle {
@@ -191,6 +195,8 @@ impl Bundle {
             read_json(&root.join("api/error_responses.json"))?;
         let rejections: crate::rejections::RejectionsDocument =
             read_json(&root.join("diagnostics/rejections.json"))?;
+        let path_map: crate::pathmap::PathMapDocument =
+            read_json(&root.join(crate::pathmap::DOCUMENT))?;
         let patchmaps = read_patchmaps(root)?;
         // **The shape of every document-supplied path is checked at the door.**
         // `verify` is the command an operator runs on a bundle they may not have
@@ -199,7 +205,7 @@ impl Bundle {
         // happened to remember; a field read by A6, by A18 or by `materialize`
         // through the patchmap was still a way out. One pass here names the file
         // and the field before any command reads a byte.
-        validate_document_paths(&manifest, &index, &patchmaps, &error_responses)?;
+        validate_document_paths(&manifest, &index, &patchmaps, &error_responses, &path_map)?;
         Ok(Bundle {
             root: root.to_path_buf(),
             manifest,
@@ -210,6 +216,7 @@ impl Bundle {
             error_shapes,
             error_responses,
             rejections,
+            path_map,
         })
     }
 
@@ -322,6 +329,7 @@ fn validate_document_paths(
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, PatchMap>,
     error_responses: &crate::http::ErrorResponses,
+    path_map: &crate::pathmap::PathMapDocument,
 ) -> Result<(), String> {
     if let Some(problem) = crate::paths::field_component_problem(&manifest.capture.id) {
         return Err(format!("MANIFEST.json capture.id {problem}"));
@@ -336,7 +344,10 @@ fn validate_document_paths(
             ));
         }
         for reference in &blob.referenced_by {
-            if let Some(problem) = crate::paths::relative_path_problem(&reference.path) {
+            // A reference is a **logical** path: the game's spelling, which may
+            // name a device component. The on-disk twin is the escaped
+            // `stored_path`, checked above.
+            if let Some(problem) = crate::paths::logical_path_problem(&reference.path) {
                 return Err(format!(
                     "chunks/index.json blob {} referenced_by path {problem}",
                     blob.props.chunk_id
@@ -345,7 +356,7 @@ fn validate_document_paths(
         }
     }
     for map in patchmaps.values() {
-        if let Some(problem) = crate::paths::relative_path_problem(&map.path) {
+        if let Some(problem) = crate::paths::logical_path_problem(&map.path) {
             return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
         }
     }
@@ -356,6 +367,26 @@ fn validate_document_paths(
             return Err(format!(
                 "api/error_responses.json seq {} stored_path {problem}",
                 row.seq
+            ));
+        }
+    }
+    // The mapping document is the reader's authority for escaped names, so it
+    // must itself be safe and agree with the rule the writer used. A logical
+    // path may name a device; the on-disk path may not, and must be exactly the
+    // escape of the logical one — a map that redirected a read elsewhere would
+    // be a way past every join above.
+    for entry in &path_map.entries {
+        if let Some(problem) = crate::paths::logical_path_problem(&entry.logical) {
+            return Err(format!("diagnostics/path_map.json logical path {problem}"));
+        }
+        if let Some(problem) = crate::paths::relative_path_problem(&entry.on_disk) {
+            return Err(format!("diagnostics/path_map.json on_disk path {problem}"));
+        }
+        let expected = crate::paths::escape_path(&entry.logical);
+        if entry.on_disk != expected {
+            return Err(format!(
+                "diagnostics/path_map.json maps {:?} to {:?}, but the rule gives {:?}",
+                entry.logical, entry.on_disk, expected
             ));
         }
     }
@@ -833,8 +864,10 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
         };
         let rel = format!("{tree}/{}", r.path);
         // Same defence as A6: the patchmap path was checked when the bundle was
-        // opened, and this is the join that would read it.
-        if let Some(problem) = crate::paths::relative_path_problem(&rel) {
+        // opened, and this is the join that would read it. A device component is
+        // legal in this *logical* path and was written under an escaped name, so
+        // the read follows the same escape the capture used.
+        if let Some(problem) = crate::paths::logical_path_problem(&rel) {
             rows.push(Assertion::fail(
                 A18_ID,
                 A18,
@@ -844,6 +877,7 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
             ));
             continue;
         }
+        let on_disk = crate::paths::escape_path(&rel);
 
         // A11: `rebuild` refuses to place a byte into a layout that violates it,
         // so a rebuilt side reaching here has already passed. The row says so
@@ -876,7 +910,7 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
         }
 
         // A18: the rebuilt bytes against what the bundle shipped.
-        match std::fs::read(root.join(&rel)) {
+        match std::fs::read(root.join(&on_disk)) {
             Ok(shipped) => match materialize::compare(&rel, &r.bytes, &shipped) {
                 Ok(()) => rows.push(Assertion::pass(
                     A18_ID,

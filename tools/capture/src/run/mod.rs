@@ -168,6 +168,10 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // an untrusted value reaches a write decision; the document is written with
     // the rest of the tree below.
     let rejections = std::sync::Arc::new(crate::rejections::Rejections::new());
+    // The logical→on-disk names for device components. Every writer records
+    // into it, and the document is written once the fixture has been assembled
+    // (a game/expected path is only known then).
+    let path_map = crate::pathmap::PathMap::new();
     let mut manifests = match manifest::fetch::fetch_all(
         &fetcher,
         &manifest_wants,
@@ -289,6 +293,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         diffs: &diffs,
         selection: &selection,
         per_class: plan.per_class as usize,
+        path_map: &path_map,
     })?;
     let mut written = tree.written;
     let mut api_documents = tree.api_documents;
@@ -362,6 +367,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         audio: plan.audio.codes(),
         no_chunk_blobs: plan.no_chunk_blobs,
         max_decompressed_bytes: plan.max_decompressed_bytes,
+        path_map: &path_map,
     })?;
     let scan_dir = fixture.scan_dir;
     let rows = fixture.rows;
@@ -372,6 +378,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         (fixture.reused, fixture.fetched, fixture.moved);
     let assembly_failures = fixture.failures;
     written.extend(fixture.written);
+
+    // 7c-ii. The logical→on-disk names, now that the fixture has written both
+    //        sides. Written after `game/`/`expected/` because their mappings are
+    //        the ones a materializing reader needs, and before the close-out so
+    //        it joins `files[]` and the checksum list.
+    written.extend(emit::write_path_map(&dir, &path_map).map_err(|e| write_err(&dir, e))?);
 
     // On the blocking pool. Serialising every record and writing them is both
     // CPU-bound and synchronous `std::fs`, so doing it inline inside
@@ -714,17 +726,22 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
             // The check belongs at the join: `out.join("game/../../x")` is the
             // write, and `out.starts_with(&plan.artifact)` above tests the chosen
             // directory, not this destination.
-            if let Some(problem) = crate::paths::relative_path_problem(&rel) {
+            //
+            // A device component is legal in the *logical* path and is escaped
+            // for the write, exactly as the capture wrote it: the rebuild must
+            // reproduce the bundle's own tree, not the game's unescaped one.
+            if let Some(problem) = crate::paths::logical_path_problem(&rel) {
                 return Err(Failure::usage(format!(
                     "materialize: the rebuilt path {problem}"
                 )));
             }
-            let dest = out.join(&rel);
+            let on_disk = crate::paths::escape_path(&rel);
+            let dest = out.join(&on_disk);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| write_err(&plan.artifact, e))?;
             }
             std::fs::write(&dest, &s.bytes).map_err(|e| write_err(&dest, e))?;
-            written.push(rel);
+            written.push(on_disk);
             bytes += s.bytes.len() as u64;
         }
     }
