@@ -404,12 +404,20 @@ pub async fn capture(
             ),
         ));
     }
-    let decompressed =
-        hash::zstd_decompress(&fetched.body, &url).map_err(|e| ApiError::shape(&url, e))?;
-
     // The declared sizes, as strings, beside what was actually fetched.
     let declared_compressed = size_of(declared.manifest.compressed_size.as_ref());
     let declared_uncompressed = size_of(declared.manifest.uncompressed_size.as_ref());
+    // **The declared size bounds the decode, not just the later comparison.**
+    // `zstd::decode_all` expanded the whole frame before this check, so a small
+    // compressed bomb could abort the process (O4). The limit is the declaration
+    // plus one byte (enough to detect an over-long frame) and is itself capped
+    // by the absolute decode ceiling; an absent declaration gets that ceiling.
+    let decompressed = hash::zstd_decompress(
+        &fetched.body,
+        &url,
+        hash::decompression_limit(declared_uncompressed),
+    )
+    .map_err(|e| ApiError::shape(&url, e))?;
     if let Some(want) = declared_compressed
         && want != fetched.body.len() as u64
     {

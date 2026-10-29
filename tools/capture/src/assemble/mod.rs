@@ -619,9 +619,11 @@ impl<'i> ChunkSource<'i> {
                 // through a buffered reader drops the compressed copy entirely, so
                 // peak is the output plus one read window.
                 //
-                // The capacity comes from the index, which carries the declared
-                // decompressed length, so the output buffer is allocated once
-                // rather than grown by doubling across ~20 reallocations.
+                // The capacity hint comes from the index, which carries the
+                // declared decompressed length; it is a hint, not an allocation
+                // size. `zstd_decompress_from` also derives its hard output
+                // limit from that field (capped absolutely), so a bomb blob or a
+                // tiny false declaration is refused rather than materialised.
                 let file = std::fs::File::open(&path)
                     .map_err(|io| format!("open {}: {io}", path.display()))?;
                 let out = hash::zstd_decompress_from(

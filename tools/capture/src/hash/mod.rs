@@ -326,12 +326,64 @@ pub fn is_zstd(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[..4] == ZSTD_MAGIC
 }
 
-/// zstd-decompress a blob.
+/// The absolute ceiling on one decompressed buffer.
+///
+/// **A declaration is not a permission slip.** The manifest's
+/// `uncompressed_size` and a chunk's `uncompressed_size` are document fields,
+/// and either may be absent or wrong; a frame that declares a small size but
+/// expands to gigabytes must still be refused. 256 MiB is far above anything
+/// this tool fetches (the reference manifest decodes to ~16.8 MiB and its
+/// largest chunk to 3.7 MiB) while keeping a decompression bomb from reaching
+/// the allocator as an abort.
+pub const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The output limit for a decode whose claimed length is `expected`.
+///
+/// The limit is the declaration itself; the decoder is read through
+/// `take(limit + 1)` so the extra byte is what detects a frame longer than it
+/// claimed, without materialising the rest of a bomb. The absolute
+/// [`MAX_DECOMPRESSED_BYTES`] ceiling applies even when the declaration is
+/// missing or absurd.
+pub fn decompression_limit(expected: Option<u64>) -> u64 {
+    expected
+        .unwrap_or(MAX_DECOMPRESSED_BYTES)
+        .min(MAX_DECOMPRESSED_BYTES)
+}
+
+/// A starting capacity for a decode, never the untrusted declaration itself.
+fn decode_capacity(expected: Option<u64>, limit: u64) -> usize {
+    /// Grow from a small buffer; the point of the limit is that the upper bound
+    /// is known, not that it is reserved up front.
+    const INITIAL: u64 = 64 * 1024;
+    let bounded = expected.unwrap_or(0).min(limit).min(INITIAL);
+    usize::try_from(bounded).unwrap_or(usize::MAX)
+}
+
+/// zstd-decompress a blob, refusing to produce more than `limit` bytes.
+///
+/// **The output is bounded, not just the input.** `zstd::decode_all` expands the
+/// whole frame before returning, so a small compressed body could make the
+/// process allocate gigabytes (O4). The decoder is streamed through
+/// `take(limit + 1)` instead; once it produces one byte past `limit` the answer
+/// is a typed error, before the rest of the frame is materialised.
 ///
 /// Fails with a message that names the bytes it was handed, because "zstd error"
 /// on a 9 MB blob with no identifier is a useless error report.
-pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
-    zstd::decode_all(bytes).map_err(|e| zstd_error(bytes, what, e))
+pub fn zstd_decompress(bytes: &[u8], what: &str, limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let limit = limit.min(MAX_DECOMPRESSED_BYTES);
+    let mut dec =
+        zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
+    let mut out = Vec::with_capacity(decode_capacity(None, limit));
+    let read_limit = limit.saturating_add(1);
+    (&mut dec)
+        .take(read_limit)
+        .read_to_end(&mut out)
+        .map_err(|e| zstd_error(bytes, what, e))?;
+    if out.len() as u64 > limit {
+        return Err(zstd_too_big_bytes(bytes, what, limit));
+    }
+    Ok(out)
 }
 
 /// [`zstd_decompress`] over a reader, optionally pre-sized.
@@ -342,9 +394,11 @@ pub fn zstd_decompress(bytes: &[u8], what: &str) -> Result<Vec<u8>, String> {
 /// 2 MB blob is the difference between two buffers and one.
 ///
 /// `expected` is the decompressed length when the caller knows it, which for a
-/// chunk it does — the index carries it. It is a capacity hint and nothing else:
-/// the returned length is whatever actually decoded, and a wrong hint costs a
-/// reallocation rather than a wrong answer.
+/// chunk it does — the index carries it. It is both a capacity hint and the
+/// source of the hard output limit ([`decompression_limit`]); a declaration
+/// that is smaller than the frame is refused rather than decoded past, and a
+/// false huge declaration is clamped by [`MAX_DECOMPRESSED_BYTES`]. The
+/// returned length is whatever actually decoded within that bound.
 pub fn zstd_decompress_from<R: std::io::Read>(
     mut reader: R,
     what: &str,
@@ -359,12 +413,31 @@ pub fn zstd_decompress_from<R: std::io::Read>(
     if !is_zstd(head) {
         return Err(zstd_error_streamed(head, what, "not a zstd frame"));
     }
-    let mut out = Vec::with_capacity(expected.unwrap_or(0) as usize);
+    let limit = decompression_limit(expected);
+    let mut out = Vec::with_capacity(decode_capacity(expected, limit));
     let mut dec = zstd::stream::read::Decoder::new(std::io::Cursor::new(head).chain(reader))
         .map_err(|e| zstd_error_streamed(head, what, e))?;
-    dec.read_to_end(&mut out)
+    (&mut dec)
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut out)
         .map_err(|e| zstd_error_streamed(head, what, e))?;
+    if out.len() as u64 > limit {
+        return Err(zstd_error_streamed(
+            head,
+            what,
+            format!("the decoded output exceeds the {limit} B decode limit"),
+        ));
+    }
     Ok(out)
+}
+
+/// The over-limit refusal for the buffered form, keeping the blob's own detail.
+fn zstd_too_big_bytes(bytes: &[u8], what: &str, limit: u64) -> String {
+    zstd_error(
+        bytes,
+        what,
+        format!("the decoded output exceeds the {limit} B decode limit"),
+    )
 }
 
 fn zstd_error(bytes: &[u8], what: &str, e: impl std::fmt::Display) -> String {
@@ -747,24 +820,29 @@ mod tests {
     fn decompressing_from_a_reader_agrees_with_decompressing_the_buffer() {
         // `ChunkSource::decoded` decodes straight off the file rather than reading
         // the blob into a `Vec` first, so the two paths must be the same function.
-        // Checked on a real frame, and with the capacity hint both right and wrong,
-        // because a hint that changed the output would be a silent corruption of
-        // an assembled file.
+        // Checked on a real frame with the declaration absent, accurate and
+        // oversized, because a hint that changed the output would be a silent
+        // corruption of an assembled file. (A hint *smaller* than the frame is
+        // now a refusal, not a truncated answer — see the bomb test below.)
         use std::io::Cursor;
         let payload = b"the quick brown fox jumps over the lazy dog".repeat(900);
         let frame = zstd::encode_all(payload.as_slice(), 3).expect("encode");
 
-        let from_buffer = zstd_decompress(&frame, "blob").expect("buffer");
+        let from_buffer = zstd_decompress(&frame, "blob", MAX_DECOMPRESSED_BYTES).expect("buffer");
         assert_eq!(from_buffer, payload);
 
-        for expected in [None, Some(payload.len() as u64), Some(0), Some(1 << 30)] {
+        for expected in [None, Some(payload.len() as u64), Some(1 << 30)] {
             let from_reader =
                 zstd_decompress_from(Cursor::new(&frame), "blob", expected).expect("reader");
             assert_eq!(
                 from_reader, payload,
-                "capacity hint {expected:?} changed the output"
+                "declaration {expected:?} changed the output"
             );
         }
+
+        let e = zstd_decompress_from(Cursor::new(&frame), "blob", Some(payload.len() as u64 - 1))
+            .expect_err("a declaration below the frame is refused, not truncated");
+        assert!(e.contains("decode limit"), "{e}");
     }
 
     #[test]
@@ -782,6 +860,56 @@ mod tests {
         let e =
             zstd_decompress_from(Cursor::new(&truncated), "blob", None).expect_err("half a frame");
         assert!(e.contains("has-zstd-magic"), "{e}");
+    }
+
+    /// **O4.** A frame's *input* is bounded by the response ceiling; its output
+    /// used to be unbounded because `zstd::decode_all` expanded the whole frame
+    /// before the declared size was checked. A 1 MiB run of zeroes is a small
+    /// frame (well under 16 KiB) and a declaration of 1 KiB must stop it at the
+    /// limit rather than materialise the megabyte.
+    #[test]
+    fn a_decompression_bomb_is_refused_at_the_decode_limit_before_it_is_materialised() {
+        use std::io::Cursor;
+        let payload = vec![0_u8; 1 << 20];
+        let frame = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        assert!(
+            frame.len() < 16 * 1024,
+            "the probe is not a bomb: {} B",
+            frame.len()
+        );
+
+        // The bundle/reader path: the declaration is far smaller than the frame.
+        let e = zstd_decompress_from(Cursor::new(&frame), "chunk x", Some(1024))
+            .expect_err("a frame longer than its declaration must be refused");
+        assert!(e.contains("decode limit"), "{e}");
+        assert!(e.contains("chunk x"), "{e}");
+
+        // The buffered manifest path: the limit is the caller's.
+        let e = zstd_decompress(&frame, "manifest x", 1024)
+            .expect_err("a frame over the limit must be refused");
+        assert!(e.contains("decode limit"), "{e}");
+        assert!(e.contains("manifest x"), "{e}");
+
+        // An accurate declaration still decodes, so the limit is not a blanket
+        // refusal and a legitimate body just above the start of the buffer works.
+        let ok = zstd_decompress_from(Cursor::new(&frame), "chunk x", Some(payload.len() as u64))
+            .expect("an accurate declaration decodes");
+        assert_eq!(ok.len(), payload.len());
+    }
+
+    /// The limit follows the declaration and never exceeds the absolute
+    /// ceiling; the one byte the decoder is allowed past it is the overrun
+    /// probe, not part of the limit.
+    #[test]
+    fn the_decode_limit_is_the_declaration_and_never_above_the_ceiling() {
+        assert_eq!(decompression_limit(None), MAX_DECOMPRESSED_BYTES);
+        assert_eq!(decompression_limit(Some(0)), 0);
+        assert_eq!(decompression_limit(Some(1024)), 1024);
+        assert_eq!(
+            decompression_limit(Some(MAX_DECOMPRESSED_BYTES)),
+            MAX_DECOMPRESSED_BYTES
+        );
+        assert_eq!(decompression_limit(Some(u64::MAX)), MAX_DECOMPRESSED_BYTES);
     }
 
     #[test]
@@ -890,7 +1018,7 @@ mod tests {
             .concat(),
         ];
         for raw in &cases {
-            let body = zstd_decompress(raw, "x").expect("decodes");
+            let body = zstd_decompress(raw, "x", MAX_DECOMPRESSED_BYTES).expect("decodes");
             let m = zstd_measure(raw, "x").expect("measures");
             assert_eq!(m.len, body.len() as u64, "length");
             assert_eq!(m.md5, md5_hex(&body), "digest");
@@ -899,7 +1027,7 @@ mod tests {
         // And on failure both refuse, with the same message.
         let mut truncated = zstd::encode_all(vec![7_u8; 4096].as_slice(), 1).expect("encode");
         truncated.truncate(truncated.len() / 2);
-        let a = zstd_decompress(&truncated, "blob X");
+        let a = zstd_decompress(&truncated, "blob X", MAX_DECOMPRESSED_BYTES);
         let b = zstd_measure(&truncated, "blob X");
         assert!(a.is_err(), "a half frame does not decode");
         assert_eq!(
@@ -911,7 +1039,7 @@ mod tests {
         // Not a frame at all.
         let plain = b"just bytes".to_vec();
         assert_eq!(
-            zstd_decompress(&plain, "blob X").unwrap_err(),
+            zstd_decompress(&plain, "blob X", MAX_DECOMPRESSED_BYTES).unwrap_err(),
             zstd_measure(&plain, "blob X").unwrap_err()
         );
     }
@@ -1027,7 +1155,7 @@ mod tests {
     #[test]
     fn a_zstd_failure_names_the_blob_and_whether_the_magic_was_there() {
         let raw = b"not zstd at all";
-        let e = zstd_decompress(raw, "game manifest 7.1.0").unwrap_err();
+        let e = zstd_decompress(raw, "game manifest 7.1.0", MAX_DECOMPRESSED_BYTES).unwrap_err();
         assert!(e.contains("game manifest 7.1.0"), "{e}");
         assert!(e.contains("no-zstd-magic"), "{e}");
         assert!(e.contains(&format!("{} bytes", raw.len())), "{e}");
@@ -1037,7 +1165,12 @@ mod tests {
 
         // Magic present but the frame is truncated: a different diagnosis, and
         // the message has to distinguish the two.
-        let e = zstd_decompress(&[0x28, 0xB5, 0x2F, 0xFD], "game manifest").unwrap_err();
+        let e = zstd_decompress(
+            &[0x28, 0xB5, 0x2F, 0xFD],
+            "game manifest",
+            MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
         assert!(e.contains("has-zstd-magic"), "{e}");
     }
 }
