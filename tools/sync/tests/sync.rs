@@ -7,8 +7,8 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, compare_mem, entry_names, has_backup_sibling, log, parse_ndjson, recs_of, rfile, sync,
-    sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+    compare, compare_mem, entry_names, has_backup_sibling, is_case_sensitive, log, parse_ndjson,
+    recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
@@ -1586,4 +1586,86 @@ fn run_sync_refuses_case_only_spellings_of_one_root() {
         !root.join(CACHE_PREFIX).exists(),
         "the refusal happens before either cache is opened"
     );
+}
+
+/// **R11-1.** On Windows a case-only rename of `girpr-cache` is the same live
+/// file, so the walk must keep excluding it.
+///
+/// The prefix used to be compared byte-for-byte: after `girpr-cache` was
+/// renamed to `GIRPR-CACHE`, the walk yielded it as content and the plan copied
+/// it over the destination's live cache. The real run then failed with
+/// `os error 33` (or panicked inside redb), and a later `update --dir dst`
+/// could not open that cache until its pre-run backup was restored. Folding the
+/// prefix on Windows makes the renamed cache tool state again, so both the dry
+/// run and the real run leave it alone.
+#[cfg(windows)]
+#[test]
+fn run_sync_excludes_a_case_renamed_cache_directory() {
+    let t = temp_root("case_cache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    if is_case_sensitive(&src) {
+        eprintln!("skip: this filesystem keeps `GIRPR-CACHE` distinct from `girpr-cache`");
+        return;
+    }
+    wfile(&src, "a.txt", b"payload");
+    wfile(&dst, "a.txt", b"payload");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+
+    // Real file caches: with the in-memory backend there is no `girpr-cache`
+    // entry on disk to rename.
+    let out = run_binary_raw(&src, &dst, &[], &[]);
+    assert!(
+        out.status.success(),
+        "initial sync failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(src.join(CACHE_PREFIX).is_file(), "src cache was created");
+    assert!(dst.join(CACHE_PREFIX).is_file(), "dst cache was created");
+
+    // Case-only through a temporary, as `tests/helpers.rs` does: the two
+    // spellings name the same entry on this filesystem, so the rename has to
+    // leave and come back.
+    let tmp = src.join("girsync_case_cache_tmp");
+    std::fs::rename(src.join(CACHE_PREFIX), &tmp).unwrap();
+    std::fs::rename(&tmp, src.join("GIRPR-CACHE")).unwrap();
+    let cache_name = std::fs::read_dir(&src)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.eq_ignore_ascii_case(CACHE_PREFIX))
+        .expect("the live cache is still on disk");
+    assert_eq!(cache_name, "GIRPR-CACHE", "the fixture renamed the cache");
+
+    // Dry run: the cache is tool state, so nothing is planned for it.
+    let out = run_binary_raw(&src, &dst, &["--dry-run"], &[]);
+    assert!(
+        out.status.success(),
+        "dry run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let recs = parse_ndjson(&out.stdout);
+    for rec in &recs {
+        if let Some(p) = rec["path"].as_str() {
+            assert!(
+                !p.to_ascii_lowercase().starts_with(CACHE_PREFIX),
+                "a case-renamed cache is not mirror content: {rec}"
+            );
+        }
+    }
+    let summary = common::summary_of(&recs);
+    assert_eq!(summary["copied"], 0, "the cache is not copied: {summary}");
+    assert_eq!(summary["deleted"], 0, "the cache is not deleted: {summary}");
+
+    // A real run neither copies the cache nor damages dst's live cache.
+    let out = run_binary_raw(&src, &dst, &[], &[]);
+    assert!(
+        out.status.success(),
+        "sync after the rename failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&dst, "a.txt"), b"payload");
+    // Both caches still open; before the fix the dst one could be unreadable.
+    assert_eq!(cmd_update(update(src.clone()), &log()).unwrap(), 0);
+    assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
 }

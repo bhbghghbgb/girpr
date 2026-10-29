@@ -927,7 +927,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   `entries` table + `meta{version, case_sensitive}` in the `meta` table.
   `girpr-cache*` (DB file, backups, olds) is always excluded from scans — at
   **any depth**, since a nested root or a followed link can bring its own cache
-  into the walk, and it is tool state rather than content.
+  into the walk, and it is tool state rather than content. The prefix match
+  folds case on Windows only, where a case-only rename of the cache is the same
+  file; POSIX spellings stay exact.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
@@ -1180,7 +1182,8 @@ them; `--dry-run` costs the same again.
 - Deletes extras **by default**; in-place truncate means a killed run leaves
   truncated files (entries were pre-dropped, so rerun re-copies — verify with `compare`).
 - Backups/olds accumulate (`keep-all`, suffixed `_2…` on timestamp collision);
-  clean them manually. They are `girpr-cache*` so never sync.
+  clean them manually. They are `girpr-cache*` (case-insensitively on Windows)
+  so never sync.
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
