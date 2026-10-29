@@ -163,8 +163,14 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("re-read the captured new build", &e))?;
     let manifest_wants =
         manifest::fetch::wants(&fields, &old_tag, &new_tag, &old_build, &new_build);
-    let mut manifests =
-        manifest::fetch::fetch_all(&fetcher, &manifest_wants, fields.len(), plan.jobs).await?;
+    let mut manifests = manifest::fetch::fetch_all(
+        &fetcher,
+        &manifest_wants,
+        fields.len(),
+        plan.jobs,
+        plan.max_decompressed_bytes,
+    )
+    .await?;
 
     // 6a. What the API does with a request it will not serve.
     //
@@ -265,6 +271,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let store = blobs::Store::new(
         &dir,
         blobs::Sources::from_manifests(manifests.iter().flatten()),
+        plan.max_decompressed_bytes,
     );
     let filled = blobs::fill::fill_or_plan(
         &store,
@@ -299,6 +306,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         old_tag: &old_tag,
         audio: plan.audio.codes(),
         no_chunk_blobs: plan.no_chunk_blobs,
+        max_decompressed_bytes: plan.max_decompressed_bytes,
     })?;
     let scan_dir = fixture.scan_dir;
     let rows = fixture.rows;
@@ -345,6 +353,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             audio: plan.audio.codes(),
             fields: &fields,
             gzip_threshold: plan.gzip_threshold,
+            max_decompressed_bytes: plan.max_decompressed_bytes,
             diffs: &diffs,
             selection: &selection,
             index: &index,

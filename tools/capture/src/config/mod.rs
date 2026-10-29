@@ -235,6 +235,9 @@ pub struct CapturePlan {
     /// a run admits to fetch; this limits any single response, whether or not the
     /// file was admitted.
     pub max_response_bytes: u64,
+    /// Ceiling on one decompressed body, in bytes. Applied to every zstd decode
+    /// and recorded in `MANIFEST.json` so a bundle can be decoded the same way.
+    pub max_decompressed_bytes: u64,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
@@ -328,6 +331,12 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
     if let Some(t) = args.old_tag.as_deref() {
         validate_tag(t, "--old-tag")?;
     }
+    if args.max_decompressed_bytes == 0 {
+        return Err(UsageError::new(
+            "--max-decompressed-bytes must be at least 1; a zero ceiling makes every \
+             zstd decode fail",
+        ));
+    }
     if let (Some(new), Some(old)) = (&args.new_tag, &args.old_tag)
         && new.eq_ignore_ascii_case(old)
     {
@@ -367,6 +376,7 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         retries: transport.retries,
         timeout: transport.timeout,
         max_response_bytes: transport.max_response_bytes,
+        max_decompressed_bytes: args.max_decompressed_bytes,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
         argv,
@@ -745,6 +755,7 @@ mod tests {
             audio: vec![DEFAULT_AUDIO.to_string()],
             manifest_detail: ManifestDetail::Full,
             gzip_threshold: crate::cli::DEFAULT_GZIP_THRESHOLD,
+            max_decompressed_bytes: crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
             probe_tags: Vec::new(),
             no_chunk_blobs: false,
             jobs: 4,
@@ -848,7 +859,27 @@ mod tests {
         assert_eq!(p.per_class, 1);
         assert!(!p.no_chunk_blobs);
         assert_eq!(p.gzip_threshold, crate::cli::DEFAULT_GZIP_THRESHOLD);
+        assert_eq!(
+            p.max_decompressed_bytes,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+        );
         assert_eq!(p.argv, vec!["gircap".to_string(), "capture".to_string()]);
+    }
+
+    #[test]
+    fn a_zero_decompression_ceiling_is_a_usage_error() {
+        // Zero is not a smaller ceiling, it is a decode that can never produce a
+        // byte. Naming the flag before a socket opens is the same rule every
+        // other bad plan value follows.
+        let err = plan(|a| a.max_decompressed_bytes = 0).expect_err("zero is not a plan");
+        let msg = err.to_string();
+        assert!(msg.contains("--max-decompressed-bytes"), "{msg}");
+    }
+
+    #[test]
+    fn a_raised_decompression_ceiling_reaches_the_plan() {
+        let p = plan(|a| a.max_decompressed_bytes = 4096).expect("positive ceiling");
+        assert_eq!(p.max_decompressed_bytes, 4096);
     }
 
     #[test]

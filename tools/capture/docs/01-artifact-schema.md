@@ -2,7 +2,7 @@
 
 Byte-level layout and every field of every machine-readable file.
 
-**Every document below carries `"schema_version": 2`.** A reader should reject an
+**Every document below carries `"schema_version": 3`.** A reader should reject an
 unknown `schema_version` rather than guess. JSON is UTF-8, LF, 2-space indent,
 keys in the order written here. `*.ndjson` is newline-delimited, one object per
 line, no enclosing array, so it streams.
@@ -98,7 +98,7 @@ is the completion proof.
 
 ```jsonc
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
     "id": "20261021T141336Z",
@@ -118,6 +118,7 @@ is the completion proof.
   "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
   "gzip_threshold": 1048576,             // --gzip-threshold this run used
+  "max_decompressed_bytes": 268435456,   // --max-decompressed-bytes this run used
   "selection_pool": {                    // matching_fields scored and diffed
     "fields": ["game", "en-us"],
     "manifest_entries": { "game": 2744, "en-us": 177 },
@@ -155,13 +156,14 @@ refusal is `--require-class`'s job. The row's optional keys
 (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
-**A version-1 bundle is refused.** `gircap verify` reads `MANIFEST.json`
-first, and a `schema_version` it does not know is an error rather than a
-guess: the version-1 patchmap carried a `repair` block and an
+**A bundle from an older schema is refused.** `gircap verify` reads
+`MANIFEST.json` first, and a `schema_version` it does not know is an error rather
+than a guess. Version 1 carried a `repair` block and an
 `expectations.summary` block, and its class ids named a repair tool's internal
-decisions. A reader that understood the current shape would ignore all three
-and report a bundle as consistent when it is not. The refusal names the
-command that produces a current bundle.
+decisions; version 2's blob rows could not say why a fetch failed, whether a body
+was partial, or why a measurement did not return. A reader that understood the
+current shape would ignore all of that and report a bundle as consistent when it
+is not. The refusal names the command that produces a current bundle.
 
 `files[]` lists every file that existed **before the close-out began** — the
 fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
@@ -186,6 +188,12 @@ as having used the flag's default — a claim about a run nobody wrote down, on 
 one field whose purpose is to say why one document is gzipped and the next is
 not. A field that defaults to a constant is worse than one that is required,
 because the default is indistinguishable from the real value.
+
+`max_decompressed_bytes` is required for the same reason. Every zstd decode in
+the bundle — a manifest archive, a chunk blob, or a measurement — is bounded by
+this ceiling, so a reader reproducing a decode needs the number the capture
+actually used. Substituting the flag's default would turn a run with a raised
+ceiling into a bundle that cannot be read back, and would do so silently.
 
 ---
 
@@ -262,7 +270,7 @@ or `null` when it was not kept. Per kind:
 Which tags the API actually serves, with no blob downloads.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "requested": ["7.1.0", "7.0.0", "6.7.0"],
   "results": [
     { "tag": "7.0.0", "in_diff_tags": true, "http": 200, "retcode": 0,
@@ -290,7 +298,7 @@ to invent them, and its claim that "the API 404s things" would be unfounded —
 a bundle recorded only successes contains no not-found evidence at all.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "shapes": [
     { "id": "chunk_missing", "family": "blob",
       "request": "a chunk id under the new build's prefix that the build does not have",
@@ -366,7 +374,7 @@ present and unusable fails at open, by name, rather than at some later consumer.
 Everything known about one archive blob.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu", "matching_field": "game",
   "category_id": "10016", "category_name": "…",   // the API's own name for the category
   "manifest": { "id": "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d",
@@ -428,7 +436,7 @@ The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
 
 ```jsonc
 {
-  "schema_version": 2, "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
+  "schema_version": 3, "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
   "matching_field": "game", "entries": [
     { "file": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "is_folder": false, "size": 2340264, "md5": "d992a789…",
@@ -471,7 +479,7 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 ## 9. `diff/paths.diff.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "old_tag": "7.0.0", "new_tag": "7.1.0",
   "fields": ["game", "en-us"],
   "counts": { "common": 2837, "identical": 1733, "changed": 1104,
@@ -509,7 +517,7 @@ The scoring table, for **every** common path, not just the winners — 2 837 row
 for the reference pool. Lets a later run ask "why did it pick that?"
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
               "moved_later","moved_earlier","old_max_end","same_md5","old_bytes","new_bytes",
               "patch_bytes","total_cost","classes","rank"],
@@ -549,7 +557,7 @@ Quantifies same-file-only reuse. Recorded because it bounds a deliberate
 simplification in the main tool; `gircap` never acts on it.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "new_chunks_total": 113610,
   "new_chunks_md5_present_in_old_manifest": 98910,
   "files_with_a_cross_file_only_chunk": 2,
@@ -567,7 +575,7 @@ when several files or both builds reference it. 25 blobs for the reference
 capture.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "blobs": [
     { "chunk_id": "096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4",
       "stored_path": "chunks/blobs/096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4.zst",
@@ -580,6 +588,9 @@ capture.
       "verified": { "raw_size_matches": true, "md5_compressed_matches": true,
                     "md5_decompressed_matches": true, "decoded_size_matches": true },
       "decode_error": null,
+      "fetch_error": null,
+      "partial": false,
+      "measurement_error": null,
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
           "capture_id": "reuse_moved",
@@ -627,21 +638,50 @@ It is `Option<String>`, so a reader must treat it as optional: a blob that was
 never fetched at all has a null `stored_path`, a null-ish row body and no
 `verified` verdict.
 
-A `stored_path` that is `null` has four causes, split by whether a fetch was
-attempted:
+### `fetch_error`, `partial` and `measurement_error` — why a row is unusable
 
-- **A fetch was attempted and failed** — a source that refused, a write that
-  failed, or a fetch task that panicked mid-measure — and the row records which
-  in `decode_error`. The message is the same one the run's error list carries,
-  and the chunk is counted once among the failed fetches.
+Version 3 added three fields so that "this blob cannot be used" always has a
+machine-readable cause and is never inferred from a null path alone.
+
+`fetch_error` is an object — `source`, `url`, `status`, `transport`, `attempts`,
+`detail` — and is non-null when a fetch did not complete. `source` is the tag that
+was tried, `status` the HTTP status when there was one, `transport` the error
+kind when the failure was not an HTTP answer, and `detail` the same text the run's
+error list carries. `decode_error` stays reserved for a body that **arrived
+whole and would not decode**: conflating the two made "the bytes are here and are
+wrong" indistinguishable from "the bytes are missing".
+
+`partial` is `true` when a fetch stopped after writing some bytes but before the
+body completed. Those bytes are published at `stored_path` and indexed, because a
+prefix is evidence; only a zero-byte temp file is removed. `is_usable` — and
+therefore A6 and assembly — requires `partial == false`, so a partial row is kept
+and never assembled from. A blob only falls through to the next source when the
+attempt produced **no** bytes; the first source that produces any ends the loop.
+
+`measurement_error` is set when the post-rename measurement did not return — an
+I/O error, a panic or cancellation. The blob is kept and `stored_path` stays set,
+so this is distinguishable from "no bytes arrived"; the row is unusable until a
+measurement succeeds.
+
+A `stored_path` that is `null` has three causes:
+
+- **A fetch was attempted and produced no bytes** — a source that refused, a
+  transport failure, a write that failed, or a fetch task that panicked. The row
+  records the structured `fetch_error`, `partial` is `false`, and the chunk is
+  counted once among the failed fetches.
+- **A write or rename failed after the body was fetched** — also a
+  `fetch_error`, with `detail` naming the local path and `transport` null. The
+  temp file is removed: there are no trustworthy digests and no complete path to
+  publish.
 - **No fetch was attempted** — a `--no-chunk-blobs` row. It means "not
-  measured", not "failed": `stored_path`, `verified` and `decode_error` are
-  `null`, `bytes` is `0`, and the two compressed digests (`md5_compressed`,
-  `sha256_compressed`) are `""`. `md5_decompressed` and `uncompressed_size` are
-  **not** empty: they carry the manifest's declared digest and length, so a
-  reader can tell which bytes are missing. They are claims, not measurements —
-  `verified` is `null` precisely because nothing was measured. The flag also
-  skips A6–A12, A19 and A21–A23 (see §16).
+  measured", not "failed": `stored_path`, `verified`, `decode_error` and
+  `fetch_error` are `null`, `partial` is `false`, `bytes` is `0`, and the two
+  compressed digests (`md5_compressed`, `sha256_compressed`) are `""`.
+  `md5_decompressed` and `uncompressed_size` are **not** empty: they carry the
+  manifest's declared digest and length, so a reader can tell which bytes are
+  missing. They are claims, not measurements — `verified` is `null` precisely
+  because nothing was measured. The flag also skips A6–A12, A19 and A21–A23
+  (see §16).
 
 ### `build_id` — part of the chunk's address
 
@@ -669,7 +709,7 @@ manifests survived but whose index is incomplete fails here, and should.
 Per target chunk: where its bytes come from.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "capture_id": "reuse_in_place",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
@@ -825,7 +865,7 @@ whose two sides are deliberately byte-identical.
 ## 15. `verify/checksums.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "algorithm": "sha256",
   "entries": [
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
@@ -878,7 +918,7 @@ The count is safe, because no file appears or disappears between the two passes.
 ## 16. `verify/selfcheck.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "result": "pass",                                  // pass | fail | incomplete
   "counts": { "total": 93, "passed": 93, "failed": 0 },
   "assertions": [

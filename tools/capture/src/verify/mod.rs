@@ -556,13 +556,22 @@ pub fn reverify(bundle: Bundle) -> Report {
     });
 
     // 2. A6, one row per stored blob.
-    rows.extend(check_blobs(&root, &bundle.index));
+    rows.extend(check_blobs(
+        &root,
+        &bundle.index,
+        bundle.manifest.max_decompressed_bytes,
+    ));
 
     // 3. The closure check. A bundle whose blobs cannot rebuild both files is not
     // closed, and that is the single most important thing this command reports -
     // so it short-circuits: every row after this point would be about bytes that
     // do not exist.
-    let rebuilt = match materialize::rebuild_all(&root, &bundle.index, &bundle.patchmaps) {
+    let rebuilt = match materialize::rebuild_all(
+        &root,
+        &bundle.index,
+        &bundle.patchmaps,
+        bundle.manifest.max_decompressed_bytes,
+    ) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(subject = "closure", error = %e, "the retained blobs cannot rebuild the bundle");
@@ -673,7 +682,7 @@ const A18_ID: &str = "A18";
 /// A blob the index lists with no path is red, not skipped. `--no-chunk-blobs`
 /// produces exactly those, and `verify` reporting them as failures is what tells
 /// an operator that the bundle they are holding cannot be materialized.
-fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
+fn check_blobs(root: &Path, index: &ChunkIndex, ceiling: u64) -> Vec<Assertion> {
     let mut rows = Vec::new();
     for b in &index.blobs {
         let id = b.props.chunk_id.as_str();
@@ -735,7 +744,7 @@ fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
                 crate::emit::selfcheck::wording("A6"),
                 rel,
                 &describe_indexed(&b.props),
-                &describe_bytes(&raw),
+                &describe_bytes(&raw, ceiling),
             )),
         }
     }
@@ -762,7 +771,7 @@ fn describe_indexed(p: &crate::blobs::props::BlobProps) -> String {
 /// Not-a-frame is its own sentence rather than a digest mismatch: a truncated
 /// transfer and wrong content are different faults, and a reader sent to the
 /// wrong one loses an afternoon.
-fn describe_bytes(raw: &[u8]) -> String {
+fn describe_bytes(raw: &[u8], ceiling: u64) -> String {
     if !hash::is_zstd(raw) {
         return format!("{} B, not a zstd frame", raw.len());
     }
@@ -770,7 +779,7 @@ fn describe_bytes(raw: &[u8]) -> String {
     // than materialised — `describe_bytes` exists to *describe*, so a multi-megabyte
     // decoded buffer it then throws away was the wrong shape entirely.
     let compressed = hash::md5_sha256(raw);
-    match hash::zstd_measure(raw, "stored blob") {
+    match hash::zstd_measure(raw, "stored blob", ceiling) {
         Ok(m) => format!(
             "{} B md5 {} sha256 {} -> {} B md5 {}",
             compressed.bytes, compressed.md5, compressed.sha256, m.len, m.md5
@@ -1641,7 +1650,14 @@ mod tests {
     #[test]
     fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
         let index = ChunkIndex::build(vec![]);
-        assert!(check_blobs(Path::new("."), &index).is_empty());
+        assert!(
+            check_blobs(
+                Path::new("."),
+                &index,
+                crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+            )
+            .is_empty()
+        );
         let props =
             crate::blobs::props::BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
                 id: "aa00_".to_string() + &"0".repeat(32),
@@ -1661,7 +1677,11 @@ mod tests {
             },
             Vec::new(),
         )]);
-        let rows = check_blobs(Path::new("."), &index);
+        let rows = check_blobs(
+            Path::new("."),
+            &index,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
         assert_eq!(rows.len(), 1);
         assert!(
             !rows[0].ok,
@@ -1701,7 +1721,7 @@ mod tests {
             Vec::new(),
         )]);
         assert!(
-            check_blobs(&d, &index)[0].ok,
+            check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0].ok,
             "the good bundle's row is green"
         );
 
@@ -1710,7 +1730,7 @@ mod tests {
         let last = bad.len() - 1;
         bad[last] ^= 0xFF;
         std::fs::write(d.join("chunks/ab/cd"), &bad).unwrap();
-        let row = &check_blobs(&d, &index)[0];
+        let row = &check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0];
         assert!(!row.ok, "one altered byte turns the row red");
         assert_eq!(row.subject, "chunks/ab/cd", "and names the blob");
         assert!(row.id == "A6", "and the assertion: {}", row.id);

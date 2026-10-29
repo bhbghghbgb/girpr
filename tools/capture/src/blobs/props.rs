@@ -278,6 +278,21 @@ impl BlobProps {
     /// violation rather than a digest mismatch, and there is nothing here to
     /// measure.
     pub fn measure(raw: &[u8], chunk: &SophonChunk) -> Result<BlobProps, ApiError> {
+        Self::measure_with_ceiling(raw, chunk, hash::DEFAULT_MAX_DECOMPRESSED_BYTES)
+    }
+
+    /// [`BlobProps::measure`] with an explicit decode ceiling.
+    ///
+    /// The buffered form is used by readers and tests that already hold the
+    /// bytes; the capture path is [`BlobProps::measure_file`], which is told the
+    /// run's `--max-decompressed-bytes`. Both feed the same measurement, so the
+    /// ceiling has to be a parameter rather than a constant the decoder reaches
+    /// for itself.
+    pub fn measure_with_ceiling(
+        raw: &[u8],
+        chunk: &SophonChunk,
+        ceiling: u64,
+    ) -> Result<BlobProps, ApiError> {
         let what = format!("chunk {}", chunk.id);
         if !hash::is_zstd(raw) {
             return Err(Self::not_a_frame(&what, raw));
@@ -295,7 +310,7 @@ impl BlobProps {
         //
         // And the compressed digests are one pass, not two: `md5_compressed` and
         // `sha256_compressed` cover the same buffer and the crate records both.
-        let measured = hash::zstd_measure(raw, &what);
+        let measured = hash::zstd_measure(raw, &what, ceiling);
         Ok(Self::assemble(compressed, measured, chunk))
     }
 
@@ -324,6 +339,7 @@ impl BlobProps {
         path: &std::path::Path,
         chunk: &SophonChunk,
         compressed: hash::Digests,
+        ceiling: u64,
     ) -> Result<BlobProps, ApiError> {
         let what = format!("chunk {}", chunk.id);
         let file = std::fs::File::open(path).map_err(|e| {
@@ -352,7 +368,7 @@ impl BlobProps {
         reader
             .rewind()
             .map_err(|e| ApiError::shape("chunk", format!("{what}: rewinding to decode: {e}")))?;
-        let measured = hash::zstd_measure_from(reader, &what);
+        let measured = hash::zstd_measure_from(reader, &what, ceiling);
         Ok(Self::assemble(compressed, measured, chunk))
     }
 

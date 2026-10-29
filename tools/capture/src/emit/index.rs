@@ -42,6 +42,8 @@ pub struct ManifestInput<'a> {
     pub fields: &'a [String],
     /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
     pub gzip_threshold: u64,
+    /// The `--max-decompressed-bytes` this run used, recorded in `MANIFEST.json`.
+    pub max_decompressed_bytes: u64,
     /// The diffs, in the same order as `fields`.
     pub diffs: &'a [crate::manifest::diff::FieldDiff],
     /// The selection.
@@ -156,6 +158,7 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
         field: crate::manifest::MANIFEST_FIELD.to_string(),
         audio: i.audio.to_vec(),
         gzip_threshold: i.gzip_threshold,
+        max_decompressed_bytes: i.max_decompressed_bytes,
         selection_pool: SelectionPool {
             fields: i.fields.to_vec(),
             manifest_entries,
@@ -903,6 +906,7 @@ mod tests {
                 audio: &self.audio,
                 fields: &self.fields,
                 gzip_threshold: 1024,
+                max_decompressed_bytes: hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
                 diffs: &self.diffs,
                 selection: &self.selection,
                 index: &self.index,
@@ -1135,6 +1139,14 @@ pub struct Manifest {
     /// field is stale by definition; say so by refusing it rather than by
     /// inventing its number.
     pub gzip_threshold: u64,
+    /// The `--max-decompressed-bytes` this run used, in bytes.
+    ///
+    /// Recorded because every decode in the bundle — a manifest archive, a chunk
+    /// blob, a measurement — is bounded by it. A reader reproducing a decode
+    /// needs the number the capture actually used; assuming the flag's default
+    /// would turn a run with a raised ceiling into a bundle that cannot be read
+    /// back. Required, like `gzip_threshold`, for the same reason.
+    pub max_decompressed_bytes: u64,
     /// The fields that were scored and diffed.
     pub selection_pool: SelectionPool,
     /// The headline numbers.

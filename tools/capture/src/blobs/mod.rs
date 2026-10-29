@@ -252,6 +252,10 @@ impl Sources {
 pub struct Store {
     root: PathBuf,
     sources: Sources,
+    /// The run's `--max-decompressed-bytes`, used when measuring a published
+    /// blob. A measurement decodes, so it is subject to the same ceiling as
+    /// every other decode.
+    max_decompressed_bytes: u64,
     /// `chunks/blobs/` has been created for this store.
     ///
     /// Every blob lands in that one directory and `write` runs once per blob
@@ -298,10 +302,11 @@ impl Store {
     /// Owns its root rather than borrowing it so [`Store::fill`] can spawn
     /// tasks: a `&Path` that has to outlive the call is a lifetime the runtime
     /// would have to invent, and a `Store` is two small allocations to clone.
-    pub fn new(root: &Path, sources: Sources) -> Store {
+    pub fn new(root: &Path, sources: Sources, max_decompressed_bytes: u64) -> Store {
         Store {
             root: root.to_path_buf(),
             sources,
+            max_decompressed_bytes,
             blob_dir: Arc::new(std::sync::OnceLock::new()),
         }
     }
@@ -626,8 +631,9 @@ impl Store {
         // A measurement that fails does not remove the blob: the row keeps
         // `stored_path` and records `measurement_error`, so a reader can tell
         // "measurement failed" from "no bytes". The bytes are still evidence.
+        let ceiling = self.max_decompressed_bytes;
         let props = Self::measure_published(&final_path, &id, digests, &chunk, move || {
-            BlobProps::measure_file(&path, &measure_chunk, measure_digests)
+            BlobProps::measure_file(&path, &measure_chunk, measure_digests, ceiling)
         })
         .await;
 
@@ -935,7 +941,11 @@ mod tests {
         // Fed the *same* id twice on purpose, because that is the only input that
         // distinguishes a slot-suffixed name from an id-derived one.
         let dir = scratch("tmp-per-slot");
-        let store = Store::new(&dir, Sources::from_pairs([]));
+        let store = Store::new(
+            &dir,
+            Sources::from_pairs([]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
         let (a, at) = store.paths_for("chunks/blobs/dead_beef.zst", 0);
         let (b, bt) = store.paths_for("chunks/blobs/dead_beef.zst", 1);
 
@@ -1354,7 +1364,11 @@ mod tests {
     fn an_unfilled_want_still_has_a_row_and_carries_the_fetch_failure() {
         let w = chunks::wants(&[pair()]);
         let root = girpr_tempdir::TempDir::new("gircap-m6", "unfilled_want");
-        let store = Store::new(&root, sources());
+        let store = Store::new(
+            &root,
+            sources(),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
         let failure = FetchError {
             source: Some("7.1.0".into()),
             url: Some("https://cdn/new/old-zero".into()),
@@ -1399,6 +1413,7 @@ mod tests {
                 ("7.0.0".to_string(), dead.clone()),
                 ("7.1.0".to_string(), dead),
             ]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         );
         let fetcher = crate::http::Fetcher::new(
             crate::http::Transport::local(),
@@ -1538,6 +1553,7 @@ mod tests {
         let store = Store::new(
             &root,
             Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         );
         let fetcher = crate::http::Fetcher::new(
             crate::http::Transport::local(),
@@ -1654,6 +1670,7 @@ mod tests {
         let store = Store::new(
             &root,
             Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         );
         let fetcher = crate::http::Fetcher::new(
             crate::http::Transport::local(),

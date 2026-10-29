@@ -722,7 +722,8 @@ fn split_inventory<'a>(paths: &[&'a str]) -> (Vec<&'a str>, BTreeMap<&'a str, us
 ///   world rather than with the tool, and are pinned as counts deliberately.
 /// - the scalar header fields of `MANIFEST.json`: `schema_version`, `tool`, the
 ///   non-URL half of `biz`, `field`, `audio`, `gzip_threshold`,
-///   `selection_pool`, `versions`' key set, `capture.complete`, and the two
+///   `max_decompressed_bytes`, `selection_pool`, `versions`' key set,
+///   `capture.complete`, and the two
 ///   `totals` that count things rather than bytes.
 /// - `README.md` with **every digit run blanked**, so the prose is pinned and
 ///   the sizes are not.
@@ -833,6 +834,10 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["field"], "game");
     assert_eq!(m["audio"], serde_json::json!(["en-us"]));
     assert_eq!(m["gzip_threshold"], 1_048_576);
+    assert_eq!(
+        m["max_decompressed_bytes"],
+        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+    );
     assert_eq!(
         m["selection_pool"]["fields"],
         serde_json::json!(["game", "en-us"])

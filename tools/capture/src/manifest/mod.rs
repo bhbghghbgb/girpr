@@ -372,6 +372,7 @@ pub async fn capture(
     build: &GetBuild,
     tag: &str,
     matching_field: &str,
+    max_decompressed_bytes: u64,
 ) -> Result<CapturedManifest, ApiError> {
     // `matching_field` becomes `manifests/<tag>/<field>.manifest…` and travels
     // into the meta document, so it has to be one file-name component. The flag
@@ -411,11 +412,12 @@ pub async fn capture(
     // `zstd::decode_all` expanded the whole frame before this check, so a small
     // compressed bomb could abort the process (O4). The limit is the declaration
     // plus one byte (enough to detect an over-long frame) and is itself capped
-    // by the absolute decode ceiling; an absent declaration gets that ceiling.
+    // by the run's `--max-decompressed-bytes`; an absent declaration gets that
+    // ceiling. The effective value is recorded in `MANIFEST.json`.
     let decompressed = hash::zstd_decompress(
         &fetched.body,
         &url,
-        hash::decompression_limit(declared_uncompressed),
+        hash::decompression_limit(declared_uncompressed, max_decompressed_bytes),
     )
     .map_err(|e| ApiError::shape(&url, e))?;
     if let Some(want) = declared_compressed

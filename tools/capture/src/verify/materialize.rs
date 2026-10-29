@@ -272,9 +272,10 @@ pub fn rebuild_all(
     root: &std::path::Path,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
+    max_decompressed_bytes: u64,
 ) -> Result<Vec<Pair>, String> {
     let by_file = ChunksByFile::build(index);
-    let src = ChunkSource::from_index(root, index).memoizing();
+    let src = ChunkSource::from_index(root, index, max_decompressed_bytes).memoizing();
     let mut names: Vec<&String> = patchmaps.keys().collect();
     names.sort();
     let mut out = Vec::new();
@@ -495,7 +496,11 @@ mod tests {
         }
 
         fn source(&self) -> ChunkSource<'_> {
-            ChunkSource::from_index(&self.root, &self.index)
+            ChunkSource::from_index(
+                &self.root,
+                &self.index,
+                crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            )
         }
 
         fn by_file(&self) -> ChunksByFile<'_> {
@@ -849,7 +854,13 @@ mod tests {
             "c".to_string(),
             side_map(Some(("7.0.0", 224, 3)), Some(("7.1.0", 224, 3))),
         );
-        let pairs = rebuild_all(&f.root, &f.index, &maps).expect("rebuilds");
+        let pairs = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .expect("rebuilds");
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].old.as_ref().unwrap().bytes.len(), 224);
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
@@ -859,7 +870,13 @@ mod tests {
         wrong.old.as_mut().unwrap().nchunks = 2;
         let mut wrong_maps = BTreeMap::new();
         wrong_maps.insert("c".to_string(), wrong);
-        let e = rebuild_all(&f.root, &f.index, &wrong_maps).unwrap_err();
+        let e = rebuild_all(
+            &f.root,
+            &f.index,
+            &wrong_maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
         assert!(
             e.contains("the index names 3 materialize_old chunks"),
             "{e}"
@@ -881,7 +898,13 @@ mod tests {
         renamed.capture_id = "not-in-the-index".into();
         let mut renamed_maps = BTreeMap::new();
         renamed_maps.insert("not-in-the-index".to_string(), renamed);
-        let e = rebuild_all(&f.root, &f.index, &renamed_maps).unwrap_err();
+        let e = rebuild_all(
+            &f.root,
+            &f.index,
+            &renamed_maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
         assert!(e.contains("references no chunks"), "{e}");
     }
 
@@ -890,7 +913,13 @@ mod tests {
         let f = Fixture::build("onesidedok");
         let mut maps = BTreeMap::new();
         maps.insert("c".to_string(), side_map(None, Some(("7.1.0", 224, 3))));
-        let pairs = rebuild_all(&f.root, &f.index, &maps).expect("rebuilds");
+        let pairs = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .expect("rebuilds");
         assert!(pairs[0].old.is_none(), "no old side to rebuild");
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
     }

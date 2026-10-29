@@ -62,6 +62,8 @@ pub struct FixtureInput<'a> {
     /// `--no-chunk-blobs`, which suppresses the chunk blobs but **not** the
     /// prelude.
     pub no_chunk_blobs: bool,
+    /// The run's `--max-decompressed-bytes`, for every chunk decode.
+    pub max_decompressed_bytes: u64,
 }
 
 /// What the fixture build produced.
@@ -117,7 +119,7 @@ pub struct BuiltFixture {
 /// prints each one, so the operator sees which comparison failed rather than
 /// only that something did — and the run then fails as `assertion`.
 pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
-    let chunk_source = ChunkSource::from_index(i.dir, i.index);
+    let chunk_source = ChunkSource::from_index(i.dir, i.index, i.max_decompressed_bytes);
     // Where the game puts the audio scan file. Never hardcoded: it is the
     // launcher's path, and the fixture has to write it where the tool under
     // test looks for it.

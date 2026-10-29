@@ -231,6 +231,7 @@ fn the_manifest_index_key_set_is_the_documented_one() {
             "files",
             "gzip_threshold",
             "matrix",
+            "max_decompressed_bytes",
             "schema_version",
             "selection_pool",
             "tool",
@@ -240,11 +241,24 @@ fn the_manifest_index_key_set_is_the_documented_one() {
         ],
         "MANIFEST.json's top-level keys"
     );
+    assert_eq!(
+        doc["max_decompressed_bytes"],
+        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+    );
     assert_eq!(keys(&doc["versions"]), vec!["diff_tags", "new", "old"]);
     assert_eq!(
         keys(&doc["capture"]),
         vec!["captured_at", "complete", "host_os", "id", "tool_argv"]
     );
+}
+
+/// A raised decompression ceiling is recorded, not silently replaced by the
+/// default on read: it is the number every decode in the bundle was bounded by.
+#[test]
+fn a_capture_records_the_decompression_ceiling_it_used() {
+    let b = capture_into("gircap-ceiling", &["--max-decompressed-bytes", "123456"]);
+    let doc = json(&b.join("MANIFEST.json"));
+    assert_eq!(doc["max_decompressed_bytes"], 123_456);
 }
 
 /// `gzip_threshold` is required, and a bundle without it does not open.
@@ -281,6 +295,31 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
         .to_string();
     assert!(
         err.contains("gzip_threshold"),
+        "the refusal must name the field: {err}"
+    );
+}
+
+/// `max_decompressed_bytes` is required too: a bundle cannot be decoded without
+/// knowing the ceiling its capture used, and defaulting it would invent a number
+/// nobody recorded.
+#[test]
+fn a_manifest_without_the_decompression_ceiling_does_not_open() {
+    let dir = TempDir::new("gircap-no-ceiling", "copy");
+    copy_tree(&bundle(), &dir);
+
+    let path = dir.join("MANIFEST.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("MANIFEST.json")).expect("parse");
+    doc.as_object_mut()
+        .expect("an object")
+        .remove("max_decompressed_bytes");
+    std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()).expect("rewrite");
+
+    let err = gircap::verify::Bundle::open(&dir)
+        .expect_err("a bundle with no recorded ceiling must not open")
+        .to_string();
+    assert!(
+        err.contains("max_decompressed_bytes"),
         "the refusal must name the field: {err}"
     );
 }

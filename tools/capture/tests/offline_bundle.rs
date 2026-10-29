@@ -373,6 +373,7 @@ fn manifest() -> Manifest {
         field: "game".into(),
         audio: Vec::new(),
         gzip_threshold: 1_048_576,
+        max_decompressed_bytes: gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         selection_pool: gircap::emit::index::SelectionPool {
             fields: vec!["game".into()],
             manifest_entries: BTreeMap::from([("game".to_string(), 2744)]),
@@ -944,7 +945,11 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
     let direct = materialize::rebuild(
         &materialize::ChunksByFile::build(&index),
-        &gircap::assemble::ChunkSource::from_index(&b.root, &index),
+        &gircap::assemble::ChunkSource::from_index(
+            &b.root,
+            &index,
+            gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        ),
         OLD_TAG,
         CAPTURE,
         DLL,

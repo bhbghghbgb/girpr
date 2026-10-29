@@ -43,6 +43,9 @@ enum Inner<'i> {
         /// and md5 built at construction would be a second copy of the index's
         /// whole id space for the life of the source.
         index: &'i ChunkIndex,
+        /// The run's `--max-decompressed-bytes`, recorded in `MANIFEST.json`.
+        /// Every blob decode is bounded by it, whatever the index declares.
+        ceiling: u64,
         /// One cell per stored blob, filled on first decode, when
         /// [`ChunkSource::memoizing`] asked for it.
         cache: Option<BTreeMap<String, OnceLock<Vec<u8>>>>,
@@ -498,11 +501,16 @@ impl<'i> ChunkSource<'i> {
     /// Nothing is copied out of `index` and nothing is cached: the two expensive
     /// choices this type makes are the caller's, and both are documented on
     /// [`ChunkSource::decoded`].
-    pub fn from_index(root: &std::path::Path, index: &'i ChunkIndex) -> ChunkSource<'i> {
+    pub fn from_index(
+        root: &std::path::Path,
+        index: &'i ChunkIndex,
+        ceiling: u64,
+    ) -> ChunkSource<'i> {
         ChunkSource {
             inner: Inner::Disk {
                 root: root.to_path_buf(),
                 index,
+                ceiling,
                 cache: None,
             },
         }
@@ -548,14 +556,19 @@ impl<'i> ChunkSource<'i> {
                 .filter(|b| b.props.stored_path.is_some())
                 .map(|b| (b.props.chunk_id.clone(), OnceLock::new()))
                 .collect();
-            let Inner::Disk { root, index, .. } =
-                std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
+            let Inner::Disk {
+                root,
+                index,
+                ceiling,
+                ..
+            } = std::mem::replace(&mut self.inner, Inner::Memory(BTreeMap::new()))
             else {
                 unreachable!("just matched on Disk")
             };
             self.inner = Inner::Disk {
                 root,
                 index,
+                ceiling,
                 cache: Some(cells),
             };
         }
@@ -588,7 +601,12 @@ impl<'i> ChunkSource<'i> {
                 .get(chunk_id)
                 .map(|v| Cow::Borrowed(v.as_slice()))
                 .ok_or_else(|| format!("chunk {chunk_id} is not in the source")),
-            Inner::Disk { root, index, cache } => {
+            Inner::Disk {
+                root,
+                index,
+                ceiling,
+                cache,
+            } => {
                 let cell = cache.as_ref().and_then(|c| c.get(chunk_id));
                 if let Some(held) = cell.and_then(OnceLock::get) {
                     return Ok(Cow::Borrowed(held.as_slice()));
@@ -637,6 +655,7 @@ impl<'i> ChunkSource<'i> {
                     std::io::BufReader::with_capacity(64 * 1024, file),
                     &format!("chunk {chunk_id}"),
                     Some(b.props.uncompressed_size),
+                    *ceiling,
                 )?;
                 if !b.props.md5_decompressed.is_empty() {
                     let got = hash::md5_hex(&out);
@@ -1306,9 +1325,13 @@ mod tests {
             }],
             sets: std::collections::BTreeMap::new(),
         };
-        let e = ChunkSource::from_index(std::path::Path::new("artifact"), &index)
-            .decoded("x")
-            .unwrap_err();
+        let e = ChunkSource::from_index(
+            std::path::Path::new("artifact"),
+            &index,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .decoded("x")
+        .unwrap_err();
         assert!(e.contains("escapes the bundle root"), "{e}");
         assert!(e.contains("stored_path"), "and names the field: {e}");
     }

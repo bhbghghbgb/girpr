@@ -121,10 +121,19 @@ pub async fn fetch_all(
     wants: &[Want],
     field_count: usize,
     jobs: usize,
+    max_decompressed_bytes: u64,
 ) -> Result<Vec<Vec<CapturedManifest>>, Failure> {
     let fetched = fetcher
-        .map_concurrently(wants, jobs, |fetcher, i, want| async move {
-            match super::capture(&fetcher, &want.build, &want.tag, &want.field_name).await {
+        .map_concurrently(wants, jobs, move |fetcher, i, want| async move {
+            match super::capture(
+                &fetcher,
+                &want.build,
+                &want.tag,
+                &want.field_name,
+                max_decompressed_bytes,
+            )
+            .await
+            {
                 Ok(m) => (i, Ok(m)),
                 Err(e) => (i, Err(e.to_string())),
             }
