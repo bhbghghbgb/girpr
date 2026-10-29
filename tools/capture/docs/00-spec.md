@@ -498,9 +498,11 @@ retried from another source.** The first body's bytes are already the evidence;
 asking the next source and renaming a good body over them would silently destroy
 what actually arrived. The store therefore stops at that source and records the
 undecodable row, rather than treating it as a failed fetch and falling through.
-Only a real error — a refused connection, a truncated read, a failed write, or an
-I/O error while measuring — moves on to the next source; a prefix that loses to a
-complete body or to a longer prefix is removed, so disk and index agree.
+Only a real fetch error — a refused connection, a truncated read or a failed
+write — moves on to the next source; a prefix that loses to a complete body or to
+a longer prefix is removed, so disk and index agree. A failed or panicked
+**measurement** is not a fetch error: the blob stays published and the row carries
+`measurement_error`, so the source loop does not retry it.
 
 **A chunk that never arrived is a row too, and it says why.** A refused source, a
 failed write or a panicked task leaves `stored_path` null and carries the fetch
