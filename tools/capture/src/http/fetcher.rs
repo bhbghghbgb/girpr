@@ -43,6 +43,21 @@ pub enum Destination<'a> {
     File(&'a mut crate::hash::HashingFile),
 }
 
+/// A failed logical fetch, with the sequence number of the last request it
+/// made.
+///
+/// The error alone loses which `api/requests.ndjson` row produced the partial
+/// file on disk, so a caller that keeps those bytes cannot mark the row's
+/// `stored_as`. This carries both without changing [`ApiError`], which is the
+/// type every other caller matches on.
+#[derive(Debug)]
+pub struct FetchFailure {
+    /// What went wrong.
+    pub error: ApiError,
+    /// The `seq` of the final attempt.
+    pub seq: u64,
+}
+
 /// A body that was streamed to disk: what the caller needs without the bytes.
 ///
 /// The mirror of [`Fetched`], which carries the bytes and not the digests.
@@ -634,7 +649,10 @@ impl Fetcher {
         kind: Kind,
         range: Option<&str>,
     ) -> Result<Fetched, ApiError> {
-        let run = self.run(url, kind, range, Destination::Memory).await?;
+        let run = self
+            .run(url, kind, range, Destination::Memory)
+            .await
+            .map_err(|f| f.error)?;
         // `run` is total over its destinations: `Memory` always yields the body
         // and `File` never does. This arm is unreachable by construction, and is
         // an `Err` rather than `unreachable!` so that no production path in this
@@ -679,6 +697,21 @@ impl Fetcher {
         kind: Kind,
         out: &mut crate::hash::HashingFile,
     ) -> Result<Streamed, ApiError> {
+        self.get_to_file_detailed(url, kind, out)
+            .await
+            .map_err(|f| f.error)
+    }
+
+    /// [`Fetcher::get_to_file`], keeping the final attempt's `seq` on failure.
+    ///
+    /// A caller that publishes the bytes a failed fetch left behind needs to
+    /// mark that request's row, and the typed error alone does not identify it.
+    pub async fn get_to_file_detailed(
+        &self,
+        url: &str,
+        kind: Kind,
+        out: &mut crate::hash::HashingFile,
+    ) -> Result<Streamed, FetchFailure> {
         let run = self.run(url, kind, None, Destination::File(out)).await?;
         debug_assert!(
             run.body.is_none(),
@@ -698,10 +731,10 @@ impl Fetcher {
         kind: Kind,
         range: Option<&str>,
         mut dest: Destination<'_>,
-    ) -> Result<Run, ApiError> {
+    ) -> Result<Run, FetchFailure> {
         let started = Instant::now();
         let mut attempts: u32 = 0;
-        let mut last: Option<ApiError> = None;
+        let mut last: Option<FetchFailure> = None;
 
         while attempts < self.policy.attempts {
             attempts += 1;
@@ -735,6 +768,7 @@ impl Fetcher {
                     // The failed attempt is logged too: a run that hit a CDN
                     // throttle and recovered must show the 429, or `attempts`
                     // is a claim nobody can check.
+                    let seq = record.seq;
                     self.log.push(record);
                     let retryable = match &err {
                         ApiError::Transport { .. } => true,
@@ -744,15 +778,18 @@ impl Fetcher {
                         ApiError::Shape { .. } => false,
                     };
                     if !retryable {
-                        return Err(err);
+                        return Err(FetchFailure { error: err, seq });
                     }
                     tracing::debug!(url, attempts, error = %err, "retryable failure");
-                    last = Some(err);
+                    last = Some(FetchFailure { error: err, seq });
                 }
             }
         }
 
-        Err(last.unwrap_or_else(|| ApiError::shape(url, "no attempt was made")))
+        Err(last.unwrap_or_else(|| FetchFailure {
+            error: ApiError::shape(url, "no attempt was made"),
+            seq: 0,
+        }))
     }
 
     /// Fetch and parse as JSON, checking that the wrapper says `retcode == 0`.

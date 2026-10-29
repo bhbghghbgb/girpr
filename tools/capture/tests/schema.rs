@@ -311,8 +311,11 @@ fn the_chunk_index_key_set_is_the_documented_one() {
             "chunk_id",
             "container",
             "decode_error",
+            "fetch_error",
             "md5_compressed",
             "md5_decompressed",
+            "measurement_error",
+            "partial",
             "referenced_by",
             "sets",
             "sha256_compressed",
@@ -323,6 +326,12 @@ fn the_chunk_index_key_set_is_the_documented_one() {
         ],
         "a blob entry's keys"
     );
+    // Version 3's evidence fields are present on every row, even when there was
+    // no failure: a reader can rely on the key rather than distinguish absent
+    // from null.
+    assert!(blob["fetch_error"].is_null());
+    assert_eq!(blob["partial"], serde_json::json!(false));
+    assert!(blob["measurement_error"].is_null());
     assert_eq!(
         keys(&blob["referenced_by"][0]),
         vec!["build_id", "capture_id", "offset", "path", "role", "tag"],

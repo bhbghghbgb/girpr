@@ -116,6 +116,83 @@ impl std::fmt::Display for Verified {
     }
 }
 
+/// Why a chunk fetch did not produce a complete blob.
+///
+/// **A fetch failure is data, not only a sentence.** The source tag, the URL
+/// requested, the status or transport failure and the attempt count were all
+/// known when the request failed and were previously folded into one string in
+/// `decode_error`. Keeping them apart is what lets a reader answer "was this a
+/// `404` from the old CDN, a timeout, or a write that failed?" without parsing
+/// prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FetchError {
+    /// The manifest tag whose source served (or failed to serve) the chunk.
+    /// `null` when no source was reached or the failure was local.
+    pub source: Option<String>,
+    /// The exact URL requested. `null` for a local write or task failure.
+    pub url: Option<String>,
+    /// The HTTP status, when there was one.
+    pub status: Option<u16>,
+    /// The transport failure text, when the request never completed.
+    pub transport: Option<String>,
+    /// Attempts made for the final request, including the first.
+    pub attempts: u32,
+    /// The full human-readable reason, the same one the run's error list carries.
+    pub detail: String,
+}
+
+impl FetchError {
+    /// A failure with no HTTP exchange behind it.
+    pub fn local(detail: impl Into<String>) -> FetchError {
+        FetchError {
+            source: None,
+            url: None,
+            status: None,
+            transport: None,
+            attempts: 0,
+            detail: detail.into(),
+        }
+    }
+
+    /// Build one from the fetcher's typed error.
+    pub fn from_api(source: Option<&str>, url: &str, error: &ApiError) -> FetchError {
+        match error {
+            ApiError::Transport {
+                url,
+                attempts,
+                detail,
+            } => FetchError {
+                source: source.map(str::to_string),
+                url: Some(url.clone()),
+                status: None,
+                transport: Some(detail.clone()),
+                attempts: *attempts,
+                detail: error.to_string(),
+            },
+            ApiError::Status {
+                url,
+                status,
+                attempts,
+            } => FetchError {
+                source: source.map(str::to_string),
+                url: Some(url.clone()),
+                status: Some(*status),
+                transport: None,
+                attempts: *attempts,
+                detail: error.to_string(),
+            },
+            ApiError::Shape { .. } => FetchError {
+                source: source.map(str::to_string),
+                url: Some(url.to_string()),
+                status: None,
+                transport: None,
+                attempts: 1,
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
 /// One stored blob and everything known about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobProps {
@@ -157,9 +234,27 @@ pub struct BlobProps {
     /// the source that refused, the write that failed, or the task that panicked.
     /// The name says "decode", but the question a reader (and A6) asks of this
     /// field is "why is this blob unusable", and a fetch that produced no body is
-    /// the extreme case of that. Splitting it into a second field would be a
-    /// schema change for one string that is already in the run's error list.
+    /// the extreme case of that. Version 3 adds [`BlobProps::fetch_error`] for
+    /// the structured half of that story; this field stays the decode-specific
+    /// one and is `null` when the bytes arrived intact but would not decode.
     pub decode_error: Option<String>,
+    /// The structured fetch failure, when a fetch was attempted and did not
+    /// produce a complete body. `null` on a measured row and on a
+    /// `--no-chunk-blobs` row, where nothing was asked for.
+    pub fetch_error: Option<FetchError>,
+    /// Whether these bytes are only the prefix of a failed fetch.
+    ///
+    /// **A partial body is evidence and must never look usable.** The row names
+    /// the bytes that arrived, their digests and why the fetch stopped; A6 and
+    /// [`BlobProps::is_usable`] reject it.
+    pub partial: bool,
+    /// Why the post-rename measurement did not complete.
+    ///
+    /// Separate from `decode_error`: a decode failure is a measured fact about
+    /// bytes that are all there, while this is an I/O error, panic or
+    /// cancellation in the measurement task. The blob is kept either way;
+    /// `stored_path` stays set so a reader can tell this apart from "no bytes".
+    pub measurement_error: Option<String>,
 }
 
 impl BlobProps {
@@ -333,6 +428,9 @@ impl BlobProps {
                 decoded_size_matches: false,
             }),
             decode_error: Some(why),
+            fetch_error: None,
+            partial: false,
+            measurement_error: None,
         }
     }
 
@@ -364,6 +462,9 @@ impl BlobProps {
             uncompressed_size: decoded_size.unwrap_or(0),
             unknown_field6: chunk.unknown_field6,
             decode_error: measured.as_ref().err().cloned(),
+            fetch_error: None,
+            partial: false,
+            measurement_error: None,
             verified: Some(Verified {
                 raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
                 md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
@@ -397,7 +498,46 @@ impl BlobProps {
             unknown_field6: chunk.unknown_field6,
             verified: None,
             decode_error: None,
+            fetch_error: None,
+            partial: false,
+            measurement_error: None,
         }
+    }
+
+    /// A row for bytes that are on disk but whose measurement never returned.
+    ///
+    /// The compressed digests and byte count came from the write, so they are
+    /// real; `verified` is `None` because nothing measured the decoded side.
+    /// `stored_path` is left for the caller to attach, and
+    /// [`BlobProps::is_usable`] rejects the row until that and a successful
+    /// measurement are both present.
+    pub fn measurement_failed(
+        compressed: hash::Digests,
+        chunk: &SophonChunk,
+        why: impl Into<String>,
+    ) -> BlobProps {
+        BlobProps {
+            chunk_id: chunk.id.clone(),
+            stored_path: None,
+            bytes: compressed.bytes,
+            container: "zstd".to_string(),
+            sha256_compressed: compressed.sha256,
+            md5_compressed: compressed.md5,
+            md5_decompressed: chunk.uncompressed_md5.clone(),
+            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
+            unknown_field6: chunk.unknown_field6,
+            verified: None,
+            decode_error: None,
+            fetch_error: None,
+            partial: false,
+            measurement_error: Some(why.into()),
+        }
+    }
+
+    /// Attach the fetch failure and mark a published prefix as partial.
+    pub fn mark_partial(&mut self, error: FetchError) {
+        self.partial = true;
+        self.fetch_error = Some(error);
     }
 
     /// The A6 assertions this blob contributes, named for the selfcheck.
@@ -421,11 +561,16 @@ impl BlobProps {
     /// Whether this blob can be assembled from.
     ///
     /// `verified: None` is *not* green, and neither is a blob that would not
-    /// decode. A blob nobody measured is not a blob anybody should build a
-    /// fixture file out of, and neither is one whose bytes are not a frame.
+    /// decode, a fetch that never completed, a partial body, or one whose
+    /// post-rename measurement failed. In particular `stored_path` alone is not
+    /// enough: version 3 keeps the bytes of a failed measurement, so a reader
+    /// must ask this question rather than whether a path is present.
     pub fn is_usable(&self) -> bool {
         self.verified.is_some_and(|v| v.all_green())
             && self.decode_error.is_none()
+            && self.fetch_error.is_none()
+            && !self.partial
+            && self.measurement_error.is_none()
             && self.stored_path.is_some()
     }
 
@@ -434,11 +579,20 @@ impl BlobProps {
         if self.is_usable() {
             return None;
         }
-        Some(match (&self.decode_error, self.verified) {
-            (Some(e), _) => format!("{}: {e}", self.chunk_id),
-            (None, None) => format!("{}: never measured", self.chunk_id),
-            (None, Some(v)) => format!("{}: {v}", self.chunk_id),
-        })
+        Some(
+            match (
+                &self.measurement_error,
+                &self.fetch_error,
+                &self.decode_error,
+                self.verified,
+            ) {
+                (Some(e), _, _, _) => format!("{}: measurement failed: {e}", self.chunk_id),
+                (_, Some(e), _, _) => format!("{}: fetch failed: {}", self.chunk_id, e.detail),
+                (_, _, Some(e), _) => format!("{}: {e}", self.chunk_id),
+                (_, _, _, None) => format!("{}: never measured", self.chunk_id),
+                (_, _, _, Some(v)) => format!("{}: {v}", self.chunk_id),
+            },
+        )
     }
 
     /// The path, or a message naming the chunk.
@@ -783,16 +937,19 @@ mod tests {
                 "chunk_id",
                 "container",
                 "decode_error",
+                "fetch_error",
                 "md5_compressed",
                 "md5_decompressed",
+                "measurement_error",
+                "partial",
                 "sha256_compressed",
                 "stored_path",
                 "uncompressed_size",
                 "unknown_field6",
                 "verified",
             ],
-            "docs/01-artifact-schema.md §12, plus the one field the schema does \
-             not carry because a truncated frame needs somewhere to say so"
+            "docs/01-artifact-schema.md §12: the four checks, the decode reason, \
+             and version 3's fetch/partial/measurement evidence"
         );
         assert_eq!(
             v["verified"]
@@ -818,5 +975,8 @@ mod tests {
             v["decode_error"].is_null(),
             "a green blob serialises it away"
         );
+        assert!(v["fetch_error"].is_null(), "nothing failed to fetch");
+        assert_eq!(v["partial"], serde_json::json!(false));
+        assert!(v["measurement_error"].is_null(), "the measurement returned");
     }
 }

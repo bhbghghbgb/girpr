@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use crate::http::{ApiError, Fetcher, Kind};
 use crate::manifest::CapturedManifest;
 use chunks::{FilePair, Reference, Set, Want};
-use props::BlobProps;
+use props::{BlobProps, FetchError};
 
 /// `chunks/index.json`, the bundle's own table of contents for its blobs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -142,11 +142,24 @@ impl ChunkIndex {
         }
     }
 
-    /// Every blob that failed at least one A6 check.
+    /// Every blob that carries evidence it is unusable.
+    ///
+    /// A pure `--no-chunk-blobs` row is not listed: nothing was asked for, A6 is
+    /// skipped for the whole run, and counting those rows as failures would make
+    /// the summary contradict the selfcheck. Every *attempted* gap is listed —
+    /// a failed fetch, a partial body, a decode failure, a failed measurement or
+    /// any of the four A6 checks.
     pub fn failing(&self) -> Vec<&IndexedBlob> {
         self.blobs
             .iter()
-            .filter(|b| b.props.any_failure() || b.props.decode_error.is_some())
+            .filter(|b| {
+                let p = &b.props;
+                p.any_failure()
+                    || p.decode_error.is_some()
+                    || p.fetch_error.is_some()
+                    || p.partial
+                    || p.measurement_error.is_some()
+            })
             .collect()
     }
 
@@ -252,6 +265,28 @@ pub struct Store {
     blob_dir: Arc<std::sync::OnceLock<()>>,
 }
 
+/// What one attempt against one source produced.
+///
+/// Two successful shapes, because a fetch that stopped after writing bytes is
+/// evidence and a fetch that completed is not. The distinction is carried here
+/// rather than inferred from `decode_error`, which version 3 reserves for a body
+/// that arrived whole and would not decode.
+enum Attempt {
+    /// The body arrived complete and was measured.
+    Complete {
+        props: BlobProps,
+        rel: String,
+        seq: u64,
+    },
+    /// The fetch failed after writing some bytes; the bytes were published.
+    Partial {
+        props: BlobProps,
+        rel: String,
+        seq: u64,
+        error: FetchError,
+    },
+}
+
 impl Store {
     /// The chunk sources, for a caller that has to build a URL itself.
     pub fn sources(&self) -> &Sources {
@@ -277,10 +312,15 @@ impl Store {
     /// of which download finished first, so a capture with `--jobs 8` and one
     /// with `--jobs 1` produce the same index.
     ///
-    /// One failure does not abandon the rest: each fetch's error is recorded on
-    /// its blob and the store returns the index either way. A bundle with seven
-    /// good blobs and one failed fetch is far more useful than no bundle, and
-    /// `run` decides whether the gap is fatal.
+    /// One failure does not abandon the rest: each fetch's evidence is recorded
+    /// on its blob and the store returns the index either way. A bundle with
+    /// seven good blobs and one failed fetch is far more useful than no bundle,
+    /// and `run` decides whether the gap is fatal.
+    ///
+    /// **A failure that produced bytes is both a row and an error.** The row is
+    /// `partial: true` with `fetch_error` set; the error list still names it so
+    /// `run` reports the failed fetch. The bytes are never silently promoted to
+    /// a complete chunk because [`BlobProps::is_usable`] and A6 reject them.
     pub async fn fill(
         &self,
         fetcher: &Fetcher,
@@ -307,13 +347,21 @@ impl Store {
         }
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok((i, Ok(entry))) => out[i] = Some(entry),
+                Ok((i, Ok(entry))) => {
+                    // A partial row succeeded at preserving bytes but failed to
+                    // fetch the chunk. The run's failed-fetch count must see it
+                    // once, through the structured reason it carries.
+                    if let Some(e) = &entry.0.props.fetch_error {
+                        errors.push(e.detail.clone());
+                    }
+                    out[i] = Some(entry);
+                }
                 // **The index and the error are recorded together.** The slot is
                 // known, so the row that says the chunk is absent can also say
                 // why -- and the failure is pushed exactly once.
                 Ok((i, Err(e))) => {
                     out[i] = Some(self.unfilled(&wants[i], &e));
-                    errors.push(e);
+                    errors.push(e.detail);
                 }
                 // A panicking task takes its slot number with it, so its hole is
                 // filled below. Pushing a second, slotless error here would count
@@ -345,8 +393,9 @@ impl Store {
         for (i, o) in out.iter_mut().enumerate() {
             if o.is_none() {
                 let why = "the chunk fetch task panicked while storing it";
-                *o = Some(self.unfilled(&wants[i], why));
+                let failure = FetchError::local(why);
                 errors.push(format!("{}: {why}", wants[i].chunk.id));
+                *o = Some(self.unfilled(&wants[i], &failure));
             }
         }
         (out.into_iter().flatten().collect(), errors)
@@ -374,47 +423,78 @@ impl Store {
     /// the caller needed it: the caller could no longer tell a slot that failed
     /// from one that never reported, so it recorded the failure as an error *and*
     /// as a missing chunk, and the index row could only say "not stored".
+    ///
+    /// **A partial body ends the source loop.** The bytes are evidence about the
+    /// source that was actually reached; trying a later source would either
+    /// overwrite them or leave the index naming bytes it no longer holds. A
+    /// failure that produced nothing moves on to the next source, as before.
     async fn one(
         this: Store,
         slot: usize,
         fetcher: Fetcher,
         want: Want,
-    ) -> (usize, Result<(IndexedBlob, Vec<Set>), String>) {
+    ) -> (usize, Result<(IndexedBlob, Vec<Set>), FetchError>) {
         let self_ = &this;
-        let mut last: Option<String> = None;
+        let mut last: Option<FetchError> = None;
         // Sources are ordered newest-first, so the new build's CDN is asked
         // before the old one's, which is the one that may have stopped serving.
         for src in &want.sources {
             let url = match self_.sources.url(&src.tag, &want.chunk.id) {
                 Ok(u) => u,
-                Err(e) => return (slot, Err(e.to_string())),
+                Err(e) => return (slot, Err(FetchError::local(e.to_string()))),
             };
-            match self_.stream_from(&fetcher, &url, &want, slot).await {
-                Ok((mut props, rel, seq)) => {
+            match self_
+                .stream_from(&fetcher, &url, &want, &src.tag, slot)
+                .await
+            {
+                Ok(Attempt::Complete {
+                    mut props,
+                    rel,
+                    seq,
+                }) => {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
                     fetcher.log().set_stored_as(seq, rel);
-                    if !want.conflicts.is_empty() {
-                        tracing::warn!(
-                            chunk = %want.chunk.id,
-                            detail = %want.describe_conflicts(),
-                            "two builds declare this chunk id with different content; \
-                             measured against the first",
-                        );
-                    }
+                    self_.warn_conflicts(&want);
                     // The two fields are moved rather than cloned: this is the last use of `want`.
                     return (slot, Ok(indexed_from(props, &want)));
                 }
+                Ok(Attempt::Partial {
+                    mut props,
+                    rel,
+                    seq,
+                    error,
+                }) => {
+                    props.set_stored(rel.clone());
+                    fetcher.log().set_stored_as(seq, rel);
+                    self_.warn_conflicts(&want);
+                    props.mark_partial(error);
+                    return (slot, Ok(indexed_from(props, &want)));
+                }
                 Err(e) => {
-                    tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e, "chunk fetch failed");
-                    last = Some(format!("{} via {}: {e}", want.chunk.id, src.tag));
+                    tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e.detail, "chunk fetch failed");
+                    last = Some(e);
                 }
             }
         }
         (
             slot,
-            Err(last.unwrap_or_else(|| format!("{}: no source to fetch from", want.chunk.id))),
+            Err(last.unwrap_or_else(|| {
+                FetchError::local(format!("{}: no source to fetch from", want.chunk.id))
+            })),
         )
+    }
+
+    /// One warning for two builds that disagree about a chunk id.
+    fn warn_conflicts(&self, want: &Want) {
+        if !want.conflicts.is_empty() {
+            tracing::warn!(
+                chunk = %want.chunk.id,
+                detail = %want.describe_conflicts(),
+                "two builds declare this chunk id with different content; \
+                 measured against the first",
+            );
+        }
     }
 
     /// The index entry for a want whose bytes never landed.
@@ -423,17 +503,14 @@ impl Store {
     /// nothing was *asked* for. Here something was asked for and did not come,
     /// and the difference is the whole point of the row.
     ///
-    /// **The row carries the reason it is unusable**, from the fetch itself: a
-    /// source that refused, a `write` that failed, or a task that panicked. The
-    /// message is the one the run's error list carries, so the summary count and
-    /// the row cannot tell different stories. `decode_error` is where it goes
-    /// because that is the field a reader (and `selfcheck`'s A6) already uses to
-    /// ask *why is this blob unusable*; the name says "decode" but the answer is
-    /// "no usable bytes", and a fetch that never produced a body is the extreme
-    /// case of that.
-    fn unfilled(&self, want: &Want, why: &str) -> (IndexedBlob, Vec<Set>) {
+    /// **The row carries the structured reason it is unusable**, from the fetch
+    /// itself: a source that refused, a `write` that failed, or a task that
+    /// panicked. `decode_error` stays null because no bytes arrived to decode;
+    /// `fetch_error` is the version-3 field that answers *why is this blob
+    /// unusable* for a fetch that produced no body.
+    fn unfilled(&self, want: &Want, failure: &FetchError) -> (IndexedBlob, Vec<Set>) {
         let mut props = BlobProps::unmeasured(&want.chunk);
-        props.decode_error = Some(why.to_string());
+        props.fetch_error = Some(failure.clone());
         indexed_from(props, want)
     }
 
@@ -463,15 +540,22 @@ impl Store {
     /// carrying its digests and the reason — rather than a hole, and rather than a
     /// bundle claiming the fetch failed when it succeeded.
     ///
-    /// **Every handled error removes the temp file.** The three failure paths
-    /// below — fetch, flush and rename — drop the handle and call
-    /// [`Store::discard_tmp`], best-effort. A *panic* unwinds past that cleanup,
-    /// so a `.tmp` can survive a panicking task; the hole-fill records the panic
-    /// in the index, and a sweep for old `.*.tmp` files remains a possible
-    /// follow-up. The slot is part of the name, so a leftover would only be
-    /// reused if the same chunk id landed in the same slot — a different chunk
-    /// set, `--files`, or the budget can move it, and nothing sweeps
-    /// `chunks/blobs/`. A failed fetch is not a blob.
+    /// **A fetch that stopped after writing bytes keeps them too.** Version 3
+    /// publishes the prefix as a `partial` row with `fetch_error`; only a
+    /// zero-byte temp is removed, because a row with no bytes and no path is the
+    /// only case where there is nothing to preserve. The cap
+    /// (`--max-response-bytes`) still bounds how much arrives.
+    ///
+    /// **A failed flush or rename removes the temp.** Those are local I/O
+    /// failures before publication: there are no trustworthy digests to index and
+    /// no complete path to point at. The fetch failure itself is still carried.
+    ///
+    /// A *panic* unwinds past the temp cleanup, so a `.tmp` can survive a
+    /// panicking task; the hole-fill records the panic in the index, and a sweep
+    /// for old `.*.tmp` files remains a possible follow-up. The slot is part of
+    /// the name, so a leftover would only be reused if the same chunk id landed in
+    /// the same slot — a different chunk set, `--files`, or the budget can move
+    /// it, and nothing sweeps `chunks/blobs/`.
     ///
     /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
     /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
@@ -481,88 +565,121 @@ impl Store {
         fetcher: &Fetcher,
         url: &str,
         want: &Want,
+        source_tag: &str,
         slot: usize,
-    ) -> Result<(BlobProps, String, u64), String> {
+    ) -> Result<Attempt, FetchError> {
         let id = want.chunk.id.clone();
         let rel = BlobProps::stored_path_for(&id);
         let (final_path, tmp_path) = self.paths_for(&rel, slot);
-        self.ensure_blob_dir(&final_path)?;
+        self.ensure_blob_dir(&final_path)
+            .map_err(FetchError::local)?;
         let chunk = want.chunk.clone();
 
         let mut out = crate::hash::HashingFile::create(&tmp_path)
-            .map_err(|e| format!("{id}: create {}: {e}", tmp_path.display()))?;
-        let seq = match fetcher.get_to_file(url, Kind::Chunk, &mut out).await {
-            Ok(s) => s.seq,
-            Err(e) => {
-                // Close before unlinking: on Windows an open handle refuses the
-                // delete. Both steps are best-effort, because this path has
-                // already failed once and the fetch error is what the row must
-                // carry.
-                drop(out);
-                Self::discard_tmp(&tmp_path);
-                return Err(format!("{id}: {e}"));
-            }
-        };
+            .map_err(|e| FetchError::local(format!("{id}: create {}: {e}", tmp_path.display())))?;
+        let fetched = fetcher
+            .get_to_file_detailed(url, Kind::Chunk, &mut out)
+            .await;
         let digests = match out.finish() {
             Ok(d) => d,
             Err(e) => {
                 Self::discard_tmp(&tmp_path);
-                return Err(format!("{id}: flush: {e}"));
+                return Err(FetchError::local(format!("{id}: flush: {e}")));
             }
         };
 
+        let (seq, failure) = match fetched {
+            Ok(streamed) => (streamed.seq, None),
+            Err(failed) => {
+                let mut failure = FetchError::from_api(Some(source_tag), url, &failed.error);
+                // The run's error list used to spell "{id} via {tag}: {error}".
+                // Keeping that text in `detail` means the summary and the row
+                // cannot tell different stories.
+                failure.detail = format!("{id} via {source_tag}: {}", failed.error);
+                (failed.seq, Some(failure))
+            }
+        };
+
+        if digests.bytes == 0 {
+            // Nothing arrived that could be evidence. Remove the temp and keep
+            // the failure as the row's only content.
+            Self::discard_tmp(&tmp_path);
+            return Err(failure.unwrap_or_else(|| {
+                FetchError::local(format!("{id}: the fetch returned no bytes"))
+            }));
+        }
+
         // The atomic step: until this, nothing outside this function looks at the
-        // path; after it, the blob is complete.
+        // path; after it, the bytes are published.
         if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
             Self::discard_tmp(&tmp_path);
-            return Err(format!(
+            return Err(FetchError::local(format!(
                 "{id}: {} -> {}: {e}",
                 tmp_path.display(),
                 final_path.display()
-            ));
+            )));
         }
 
         let path = final_path.clone();
-        // `measure_file` answers `Ok` for a body that is not a zstd frame: that
-        // is a measured, unusable row, not a failed fetch. Only a real I/O
-        // error or a task that never returned reaches the error arms, and the
-        // blob is removed in both so the index's "not stored" row and the
-        // directory cannot disagree. A later source may then retry.
-        let props = Self::measure_published(&final_path, &id, move || {
-            BlobProps::measure_file(&path, &chunk, digests)
+        let measure_chunk = chunk.clone();
+        let measure_digests = digests.clone();
+        // A measurement that fails does not remove the blob: the row keeps
+        // `stored_path` and records `measurement_error`, so a reader can tell
+        // "measurement failed" from "no bytes". The bytes are still evidence.
+        let props = Self::measure_published(&final_path, &id, digests, &chunk, move || {
+            BlobProps::measure_file(&path, &measure_chunk, measure_digests)
         })
-        .await?;
+        .await;
 
-        Ok((props, rel, seq))
+        match failure {
+            None => Ok(Attempt::Complete { props, rel, seq }),
+            Some(error) => Ok(Attempt::Partial {
+                props,
+                rel,
+                seq,
+                error,
+            }),
+        }
     }
 
     /// Measure a published blob on the blocking pool, keeping the cause and the
-    /// disk/index agreement when the task does not return.
+    /// bytes when the task does not return.
     ///
     /// The closure is a parameter rather than a call to
     /// [`BlobProps::measure_file`] so the panic arm can be driven by a test:
     /// no input makes the real measurement panic on demand. A panic or
     /// cancellation is routed through [`crate::tasks::join_blocking`], so the
-    /// payload survives and the already-published blob is discarded just as an
-    /// I/O error discards it — the row will say `stored_path: null`, and the
-    /// directory must not still hold the bytes.
+    /// payload survives, and the already-published blob is **kept** with
+    /// [`BlobProps::measurement_error`] set. `stored_path` is attached by the
+    /// caller, and [`BlobProps::is_usable`] rejects the row until a measurement
+    /// succeeds.
     async fn measure_published<F>(
         final_path: &Path,
         id: &str,
+        compressed: crate::hash::Digests,
+        chunk: &crate::manifest::proto::SophonChunk,
         measure: F,
-    ) -> Result<BlobProps, String>
+    ) -> BlobProps
     where
         F: FnOnce() -> Result<BlobProps, ApiError> + Send + 'static,
     {
         match crate::tasks::join_blocking("measure", measure).await {
-            Ok(Ok(props)) => Ok(props),
+            Ok(Ok(props)) => props,
             Ok(Err(e)) => {
-                Self::discard_published(final_path);
-                Err(e.to_string())
+                tracing::warn!(
+                    blob = %final_path.display(),
+                    error = %e,
+                    "a published blob could not be measured; keeping its bytes"
+                );
+                BlobProps::measurement_failed(compressed, chunk, e.to_string())
             }
             Err(e) => {
-                Self::discard_published(final_path);
-                Err(format!("{id}: {e}"))
+                tracing::warn!(
+                    blob = %final_path.display(),
+                    error = %e,
+                    "the measurement task did not return; keeping its bytes"
+                );
+                BlobProps::measurement_failed(compressed, chunk, format!("{id}: {e}"))
             }
         }
     }
@@ -582,27 +699,6 @@ impl Store {
                 tmp = %path.display(),
                 error = %e,
                 "a failed blob left its temp file behind"
-            ),
-        }
-    }
-
-    /// Best-effort removal of a published blob that could not be measured.
-    ///
-    /// **Disk and index have to agree.** Once the rename has put the bytes at
-    /// their final path, the index row must either carry them or the directory
-    /// must not. An I/O failure while measuring, or a measurement task that
-    /// panicked or was cancelled, is the case that is not `Ok` and not a
-    /// pre-rename failure, so the blob is removed before the caller records the
-    /// slot as unfilled. A removal failure is logged and swallowed: the row's
-    /// reason is still the measurement failure.
-    fn discard_published(path: &Path) {
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                blob = %path.display(),
-                error = %e,
-                "a blob whose measurement failed could not be removed"
             ),
         }
     }
@@ -909,6 +1005,9 @@ mod tests {
                 unknown_field6: 0,
                 verified: None,
                 decode_error: None,
+                fetch_error: None,
+                partial: false,
+                measurement_error: None,
             },
             referenced_by: Vec::new(),
             sets: Vec::new(),
@@ -1250,20 +1349,31 @@ mod tests {
     }
 
     /// A blob that was never fetched is not silently absent from the index, and
-    /// its row carries **why**.
+    /// its row carries **why** in the structured field version 3 added.
     #[test]
     fn an_unfilled_want_still_has_a_row_and_carries_the_fetch_failure() {
         let w = chunks::wants(&[pair()]);
         let root = girpr_tempdir::TempDir::new("gircap-m6", "unfilled_want");
         let store = Store::new(&root, sources());
-        let why = "old-zero via 7.1.0: HTTP 404 Not Found";
-        let (entry, roles) = store.unfilled(&w[0], why);
+        let failure = FetchError {
+            source: Some("7.1.0".into()),
+            url: Some("https://cdn/new/old-zero".into()),
+            status: Some(404),
+            transport: None,
+            attempts: 1,
+            detail: "old-zero via 7.1.0: HTTP 404 Not Found".into(),
+        };
+        let (entry, roles) = store.unfilled(&w[0], &failure);
         assert_eq!(roles, w[0].sets);
         assert!(entry.props.stored_path.is_none());
+        assert!(
+            entry.props.decode_error.is_none(),
+            "no bytes arrived, so there is nothing to decode"
+        );
         assert_eq!(
-            entry.props.decode_error.as_deref(),
-            Some(why),
-            "the row must name the fetch failure, not a generic `not stored`"
+            entry.props.fetch_error.as_ref(),
+            Some(&failure),
+            "the row must carry the structured fetch failure"
         );
         assert!(!entry.props.is_usable());
     }
@@ -1307,16 +1417,28 @@ mod tests {
         for (entry, want) in entries.iter().zip(&w) {
             assert_eq!(entry.0.props.chunk_id, want.chunk.id);
             assert!(entry.0.props.stored_path.is_none());
+            assert!(
+                entry.0.props.decode_error.is_none(),
+                "a fetch that produced no bytes has nothing to decode"
+            );
             let why = entry
                 .0
                 .props
-                .decode_error
-                .as_deref()
+                .fetch_error
+                .as_ref()
                 .expect("the row says why it is absent");
-            assert_ne!(why, "not stored", "the generic message tells nobody why");
+            assert_ne!(
+                why.detail, "not stored",
+                "the generic message tells nobody why"
+            );
             assert!(
-                why.starts_with(&want.chunk.id) && why.contains(" via 7."),
-                "the reason names the chunk and the source it last tried: {why}"
+                why.detail.starts_with(&want.chunk.id) && why.detail.contains(" via 7."),
+                "the reason names the chunk and the source it last tried: {}",
+                why.detail
+            );
+            assert!(
+                why.transport.is_some(),
+                "a refused connection is a transport failure: {why:?}"
             );
         }
 
@@ -1464,27 +1586,150 @@ mod tests {
         );
     }
 
-    /// **N1.** A measurement that does not return loses neither its cause nor
-    /// the disk/index agreement: the panic payload reaches the caller, and the
-    /// already-published blob is removed because the row will say
-    /// `stored_path: null`.
+    /// **F11.** A fetch that stops after writing bytes publishes those bytes as
+    /// an indexed, unusable row: `partial: true`, a structured `fetch_error`,
+    /// and the digests of exactly what arrived. The bytes stay on disk so a
+    /// reader can compare them with a later capture.
+    #[tokio::test]
+    async fn a_truncated_response_keeps_its_prefix_and_marks_the_row_partial() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let payload = b"a chunk the CDN will stop serving half way through".repeat(64);
+        let full = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        let prefix_len = full.len() / 2;
+        let prefix = full[..prefix_len].to_vec();
+        let declared = full.len();
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).expect("nonblocking accept");
+        let served = prefix.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).ok();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                    break;
+                }
+            }
+            // The declaration promises the whole body; the connection closes
+            // after the prefix, which is the real shape of a truncated CDN read.
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&served).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let c = chunk(&payload, 0, 0x5b5b);
+        let p = FilePair {
+            capture_id: "truncated".into(),
+            path: "dll".into(),
+            old: None,
+            new: Some(chunks::NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry("dll", vec![c.clone()]),
+            }),
+        };
+        let w = chunks::wants(&[p]);
+        let root = girpr_tempdir::TempDir::new("gircap-f11", "truncated_kept");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        server.join().expect("the mock served the prefix");
+
+        assert_eq!(errors.len(), 1, "the failed fetch is reported once");
+        assert_eq!(entries.len(), 1, "and its bytes still have a row");
+        let props = &entries[0].0.props;
+        assert!(props.partial, "the row says the body is a prefix");
+        assert!(props.stored_path.is_some(), "the prefix was published");
+        assert_eq!(
+            props.bytes, prefix_len as u64,
+            "the row counts the bytes that arrived"
+        );
+        assert_eq!(props.md5_compressed, hash::md5_hex(&prefix));
+        let failure = props.fetch_error.as_ref().expect("and why it stopped");
+        assert!(
+            failure.transport.is_some(),
+            "a connection that closed early is a transport failure: {failure:?}"
+        );
+        assert!(
+            failure.detail.contains("via 7.1.0"),
+            "the source is named: {}",
+            failure.detail
+        );
+        assert!(!props.is_usable(), "a prefix must never look complete");
+        assert!(
+            props
+                .why_unusable()
+                .unwrap_or_default()
+                .contains("fetch failed"),
+            "and the reason is the fetch, not a decode"
+        );
+        let on_disk = std::fs::read(root.join(BlobProps::stored_path_for(&c.id)))
+            .expect("the indexed path exists");
+        assert_eq!(on_disk, prefix, "the bytes are exactly what arrived");
+    }
+
+    /// **N1/K2.** A measurement that does not return loses neither its cause nor
+    /// the bytes: the panic payload reaches the row as `measurement_error`, and
+    /// the already-published blob stays on disk with `stored_path` set. Only
+    /// `is_usable` rejects it, so a reader can tell "measurement failed" from
+    /// "no bytes were fetched".
     ///
     /// The real [`BlobProps::measure_file`] cannot be made to panic on demand,
     /// so this drives the same seam [`Store::stream_from`] uses with a closure
     /// that panics deterministically.
     #[tokio::test]
-    async fn a_panicking_measurement_discards_the_published_blob_and_keeps_the_cause() {
+    async fn a_panicking_measurement_keeps_the_published_blob_and_the_cause() {
         let dir = scratch("measure-panic");
         let id = "00000000_00000000000000000000000000000000";
+        let bytes = b"published but never measured";
         let final_path = dir.join(BlobProps::stored_path_for(id));
         std::fs::create_dir_all(final_path.parent().expect("blob dir")).expect("create blob dir");
-        std::fs::write(&final_path, b"published but never measured").expect("seed the blob");
+        std::fs::write(&final_path, bytes).expect("seed the blob");
 
-        let why =
-            Store::measure_published(&final_path, id, || panic!("measure exploded at frame 7"))
-                .await
-                .expect_err("a panicking measurement is a failure");
+        let chunk = crate::manifest::proto::SophonChunk {
+            id: id.to_string(),
+            ..Default::default()
+        };
+        let mut props =
+            Store::measure_published(&final_path, id, hash::md5_sha256(bytes), &chunk, || {
+                panic!("measure exploded at frame 7")
+            })
+            .await;
+        props.set_stored(BlobProps::stored_path_for(id));
 
+        let why = props
+            .measurement_error
+            .as_deref()
+            .expect("the row says the measurement failed");
         assert!(why.starts_with(id), "the site's context survives: {why}");
         assert!(
             why.contains("the measure task panicked"),
@@ -1494,9 +1739,32 @@ mod tests {
             why.contains("measure exploded at frame 7"),
             "the payload is the part worth reporting: {why}"
         );
+        assert_eq!(
+            props.bytes,
+            bytes.len() as u64,
+            "the write's byte count survives"
+        );
+        assert_eq!(
+            props.md5_compressed,
+            hash::md5_hex(bytes),
+            "the write's digest survives"
+        );
         assert!(
-            !final_path.exists(),
-            "an unmeasured blob must not outlive the row that says it is absent"
+            props.verified.is_none(),
+            "nothing measured the decoded side"
+        );
+        assert!(props.stored_path.is_some(), "the row still names its bytes");
+        assert!(final_path.exists(), "the published blob must survive");
+        assert!(
+            !props.is_usable(),
+            "bytes are not usable just because a path is set"
+        );
+        assert!(
+            props
+                .why_unusable()
+                .unwrap_or_default()
+                .contains("measurement failed"),
+            "the reason distinguishes this from a fetch that never arrived"
         );
     }
 }

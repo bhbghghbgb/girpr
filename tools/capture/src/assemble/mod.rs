@@ -612,6 +612,13 @@ impl<'i> ChunkSource<'i> {
                         "chunk {chunk_id}: the index's stored_path {problem}"
                     ));
                 }
+                // **A path is not proof of usable bytes.** A partial fetch and a
+                // blob whose measurement failed both keep `stored_path`, and
+                // assembling from either would mix unverified bytes into a file
+                // the bundle claims to reproduce.
+                if let Some(why) = b.props.why_unusable() {
+                    return Err(format!("chunk {chunk_id} cannot be assembled from: {why}"));
+                }
                 let path = root.join(rel);
                 // **Decoded from the file, not from a `Vec` of it.** Reading the
                 // whole blob first would keep the compressed bytes alive for the
@@ -1290,6 +1297,9 @@ mod tests {
                     unknown_field6: 0,
                     verified: None,
                     decode_error: None,
+                    fetch_error: None,
+                    partial: false,
+                    measurement_error: None,
                 },
                 referenced_by: Vec::new(),
                 sets: Vec::new(),

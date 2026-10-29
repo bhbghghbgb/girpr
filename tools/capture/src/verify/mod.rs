@@ -678,12 +678,18 @@ fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
     for b in &index.blobs {
         let id = b.props.chunk_id.as_str();
         let Some(rel) = b.props.stored_path.as_deref() else {
+            let why = match b.props.why_unusable() {
+                Some(reason) => {
+                    format!("no path: the index lists it but nothing was stored ({reason})")
+                }
+                None => "no path: the index lists it but nothing was stored".into(),
+            };
             rows.push(Assertion::fail(
                 "A6",
                 crate::emit::selfcheck::wording("A6"),
                 id,
                 "a stored blob at a path",
-                "no path: the index lists it but nothing was stored",
+                &why,
             ));
             continue;
         };
@@ -697,6 +703,21 @@ fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
                 rel,
                 "a stored blob at a path inside the bundle",
                 &format!("unsafe path: {problem}"),
+            ));
+            continue;
+        }
+        // **Bytes at a path are not a usable blob.** Version 3 keeps a partial
+        // fetch and a blob whose measurement did not return, both with
+        // `stored_path` set. A6 is about a chunk that can be assembled from, so
+        // it asks the same predicate assembly does rather than only whether the
+        // file exists.
+        if let Some(why) = b.props.why_unusable() {
+            rows.push(Assertion::fail(
+                "A6",
+                crate::emit::selfcheck::wording("A6"),
+                rel,
+                "a complete, measured blob with a valid fetch",
+                &why,
             ));
             continue;
         }

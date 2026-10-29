@@ -424,35 +424,18 @@ pub fn api_and_manifest(
                 b.props.stored_path.clone().unwrap_or_else(|| {
                     format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
                 });
-            let v = b.props.verified;
-            rows.push(match v {
-                Some(v) if v.all_green() && b.props.decode_error.is_none() => {
-                    Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
-                }
-                Some(v) => Assertion::fail(
+            // One question, answered by the same predicate assembly and `verify`
+            // use. A version-3 row can hold bytes and still be unusable: a
+            // partial fetch, a decode failure, or a measurement that did not
+            // return all keep `stored_path` while rejecting the blob.
+            rows.push(match b.props.why_unusable() {
+                None => Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed),
+                Some(why) => Assertion::fail(
                     "A6",
                     wording("A6"),
                     &subject,
-                    "all four checks hold",
-                    &format!(
-                        "{}; md5(decompressed) {}",
-                        v.failures().join(", "),
-                        b.props.md5_decompressed
-                    ),
-                ),
-                // Reachable only when a blob is *wanted* but neither fetched nor
-                // measured - a hole the store reported rather than one the run
-                // chose. `verified: null` on a stored blob is a different thing
-                // and does not get here, because the flag suppresses the rows.
-                None => Assertion::fail(
-                    "A6",
-                    wording("A6"),
-                    &subject,
-                    "measured",
-                    b.props
-                        .decode_error
-                        .as_deref()
-                        .unwrap_or("wanted but never measured"),
+                    "a complete, measured blob whose four checks hold",
+                    &why,
                 ),
             });
         }
