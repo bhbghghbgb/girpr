@@ -495,9 +495,9 @@ so disk and index agree.
 
 **A chunk that never arrived is a row too, and it says why.** A refused source, a
 failed write or a panicked task leaves `stored_path` null and carries the fetch
-failure in `decode_error`; the run counts that chunk **once** among the failed
-fetches, so the summary and the index cannot disagree about how many chunks are
-missing.
+failure in `fetch_error`; `decode_error` stays null because no bytes arrived to
+decode. The run counts that chunk **once** among the failed fetches, so the
+summary and the index cannot disagree about how many chunks are missing.
 
 Corollaries that must hold and are asserted:
 

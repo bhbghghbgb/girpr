@@ -1,20 +1,23 @@
 //! Values the capture refused, recorded so the refusal is evidence rather than
 //! only an exit code.
 //!
-//! **F6/G1.** The write rules in [`crate::paths`] and [`crate::config`] keep a
-//! hostile or broken manifest from naming a file outside the bundle. The rule is
-//! right; throwing the value away is not. A manifest that says
+//! **F6/G1.** The write rules in [`crate::paths`] keep a hostile or broken
+//! manifest from naming a file outside the bundle. The rule is right; throwing
+//! the value away is not. A manifest that says
 //! `GenshinImpact_Data/../../../etc/passwd` is a fact about the API — the most
 //! interesting fact a capture could learn that day — and a log line that scrolls
 //! away is a poor place to keep it.
 //!
 //! # What is recorded
 //!
-//! One row per refused value: where it came from, the value itself, and the rule
-//! it failed. [`Rejections`] is a run-wide store so the values survive the point
-//! where the run refuses and can be written into `diagnostics/rejections.json`
-//! when a bundle is still produced (or into the would-be bundle directory when
-//! the refusal is the last thing that happens).
+//! One row per refused manifest entry `file` path or chunk id: where it came
+//! from, the value itself, and the rule it failed. Only
+//! [`crate::manifest`]'s decode check writes here; a flag, a flag-supplied tag
+//! or an audio field is refused before a bundle exists and is reported only in
+//! the error text. [`Rejections`] is a run-wide store so the values survive the
+//! point where the run refuses and can be written into
+//! `diagnostics/rejections.json` when a bundle is still produced (or into the
+//! would-be bundle directory when the refusal is the last thing that happens).
 //!
 //! # Two caps, because the values are untrusted
 //!
@@ -51,11 +54,12 @@ pub const MAX_ROWS: usize = 4096;
 /// One refused value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rejection {
-    /// Where the value came from: `--files`, a manifest entry, an API field.
+    /// Where the value came from: a manifest entry's `file` path or one of its
+    /// chunk ids.
     ///
-    /// Includes enough context to find it again — the tag and field for a
-    /// manifest row, the flag for a request row — but never the refused value
-    /// itself, which is in [`Self::value`].
+    /// Includes enough context to find it again — the tag, field, entry index
+    /// and chunk index for a manifest row — but never the refused value itself,
+    /// which is in [`Self::value`].
     pub source: String,
     /// The value exactly as it arrived, escaped by the JSON writer.
     pub value: String,

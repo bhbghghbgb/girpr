@@ -48,7 +48,7 @@ pub struct ErrorBody {
     pub final_url: String,
     /// The status as received.
     pub status: u16,
-    /// Attempts made before this failure was returned.
+    /// This attempt's retry index: `1` for the first try, `2` for the second, …
     pub attempts: u32,
     /// `Content-Type` as received, when the origin sent one.
     pub content_type: Option<String>,
@@ -82,7 +82,7 @@ pub struct ErrorResponseRow {
     pub final_url: String,
     /// The status as received.
     pub status: u16,
-    /// Attempts made before this failure was returned.
+    /// This attempt's retry index: `1` for the first try, `2` for the second, …
     pub attempts: u32,
     /// `Content-Type` as received, when the origin sent one.
     pub content_type: Option<String>,
@@ -105,7 +105,7 @@ pub struct ErrorResponses {
     pub budget_bytes: u64,
     /// `Σ retained_bytes`.
     pub total_retained_bytes: u64,
-    /// One row per non-2xx response seen by [`super::Fetcher::run`], in `seq`
+    /// One row per non-2xx attempt seen by [`super::Fetcher::run`], in `seq`
     /// order.
     pub responses: Vec<ErrorResponseRow>,
 }

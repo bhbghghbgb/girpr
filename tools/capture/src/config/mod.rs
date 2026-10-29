@@ -731,9 +731,12 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
 /// `artifacts/<biz>/<old>__<new>/` — the directory a bundle's id sits in.
 ///
 /// The joined pair is escaped as one component: `CON.txt__7.1.0` would otherwise
-/// have the stem `CON` and open the console on Windows. Escaping the pair rather
-/// than each tag keeps a tag containing `%` from changing the name unless the
-/// pair itself needs it.
+/// have the stem `CON` and open the console on Windows, so it is written as
+/// `%CON.txt__7.1.0`. Because [`crate::paths::escape_component`] doubles every
+/// `%`, a tag containing one also changes the directory name (`a%b` always
+/// becomes `a%%b`). The tags themselves are kept in `MANIFEST.json → versions`;
+/// `diagnostics/path_map.json` maps renames *inside* the bundle and cannot name
+/// this directory, which sits above it.
 pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf {
     let pair = format!("{old_tag}__{new_tag}");
     root.join(biz.as_str())

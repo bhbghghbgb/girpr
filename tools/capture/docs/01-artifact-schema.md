@@ -67,7 +67,7 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 ├── patchmaps/
 │   └── <capture_id>.json
 ├── diagnostics/
-│   ├── rejections.json                       # every value a shape rule refused
+│   ├── rejections.json                       # refused manifest paths and chunk ids
 │   └── path_map.json                         # every logical→on-disk escaped name
 └── verify/
     ├── checksums.json
@@ -77,11 +77,17 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `reuse_in_place`,
 `reuse_moved+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
-A `<tag>` or capture path that names a Windows device — `manifests/CON/`,
-`game/…/NUL` — is written under an escaped component (`%CON`, `%NUL`); the
-documents keep the game's spelling and `diagnostics/path_map.json` (§5c) records
-the pair. `MANIFEST.json → files[]` and `checksums.json` name the on-disk form,
-because that is what exists.
+An API tag directory or capture path that names a Windows device —
+`manifests/CON/`, `game/…/NUL` — is written under an escaped component (`%CON`,
+`%NUL`); the documents keep the game's spelling and
+`diagnostics/path_map.json` (§5c) records the pair. The directory that holds the
+bundle, `artifacts/<biz>/<old>__<new>/`, is escaped as a single component for the
+same reason; the tags it was built from stay in `MANIFEST.json → versions`. A
+manifest field name or `audio_pkg_scan_dir` is not escaped at all: it is a value
+the run can refuse, so a device there is refused rather than renamed, and a
+device-named tag from a flag is refused for the same reason (§5c).
+`MANIFEST.json → files[]` and `checksums.json` name the on-disk form, because
+that is what exists.
 
 Nothing published under `chunks/` or `manifests/` is ever deleted by the tool.
 The `.tmp` file that a chunk fetch writes is not an exception: it is removed,
@@ -175,10 +181,11 @@ than a guess. Version 1 carried a `repair` block and an
 decisions; version 2's blob rows could not say why a fetch failed, whether a body
 was partial, or why a measurement did not return. Version 3 makes those fields
 required and adds the documents that keep the rest of what a run sees: retained
-error bodies, the values a shape rule refused, the logical→on-disk mapping for
-device names, and the exact argv bytes. A reader that understood the current
-shape would ignore all of that and report a bundle as consistent when it is not.
-The refusal names the command that produces a current bundle.
+error bodies, the manifest paths and chunk ids a shape rule refused, the
+logical→on-disk mapping for device names, and the exact argv bytes. A reader
+that understood the current shape would ignore all of that and report a bundle
+as consistent when it is not. The refusal names the command that produces a
+current bundle.
 
 `files[]` lists every file that existed **before the close-out began** — the
 fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
@@ -407,7 +414,7 @@ this one records what the origin said when it refused something the run wanted.
   "budget_bytes": 8388608,                 // the run-wide retention budget
   "total_retained_bytes": 734,
   "responses": [
-    { "seq": 31,                           // the request's row in requests.ndjson
+    { "seq": 31,                           // this attempt's row in requests.ndjson
       "url": "https://autopatchhk.yuanshen.com/…/chunks/…/000…",
       "final_url": "https://autopatchhk.yuanshen.com/…",
       "status": 404, "attempts": 1,
@@ -431,9 +438,12 @@ Two budgets keep an error body from becoming the artifact:
   the bundle larger than the data it exists to describe.
 
 A response that crossed either bound is still a row, with `truncated: true` and
-the bytes that were kept. A `503` is retried like any other status; `seq` names
-the *first* request of that retry chain, so a reader joins the row to the request
-log by `seq` and reads `attempts` for how many tries it took.
+the bytes that were kept. `seq` is reserved per HTTP attempt, not per logical
+fetch, and every non-2xx attempt gets its own row: `seq` joins that row to the
+same attempt's row in `api/requests.ndjson`, and `attempts` is that attempt's
+retry index — `1` for the first try, `2` for the second, and so on. A `503` that
+is retried therefore appears as several rows, one per failed attempt, each with
+its own `seq`, `attempts` and `stored_path`.
 
 The document is required, and an empty `responses` list is a fact: this run met
 no refusal. Deleting the document would make "this bundle recorded the origin's
@@ -449,10 +459,17 @@ list says "nothing was refused/escaped", which is a measurement, not a gap.
 
 ### `diagnostics/rejections.json`
 
-Every value a shape rule refused — the flag, manifest path, manifest tag, audio
-field or chunk id — with where it came from and which rule it failed. The write
-rules are strict; throwing the value away would also throw away the most
-interesting fact a capture can learn about the API.
+Every manifest entry path and chunk id a shape rule refused, with where it came
+from and which rule it failed. The store is filled by `validate_entry_paths`
+while a manifest is decoded: `source` names the place as
+`manifest <tag>/<field> entry N file` for an entry's `file` path and
+`manifest <tag>/<field> entry N chunk M id` for one of its chunk ids.
+The write rules are strict; throwing the value away would also throw away the
+most interesting fact a capture can learn about the API.
+
+Other shape refusals — a flag, a flag-supplied tag or an audio field — are not
+recorded. They abort before a bundle exists and their only trace is the error
+text.
 
 ```jsonc
 { "schema_version": 3,
@@ -467,16 +484,16 @@ interesting fact a capture can learn about the API.
   ] }
 ```
 
-`rule` is a stable identifier — `path.device`, `path.windows-fold`, `tag.device`,
-`chunk-id.shape`, … — and is the thing to assert on. `value` is JSON-escaped and
-capped at `cap_bytes` (512); `truncated` says whether it was cut. `value` is
-text, never joined to a filesystem path. `omitted` counts refusals that happened
-after the 4096-row cap, so a hostile manifest cannot make the document unbounded
-and the loss is still visible.
+`rule` is a stable identifier — `path.device`, `path.windows-fold`,
+`chunk-id.shape`, `chunk-id.empty`, … — and is the thing to assert on. `value` is
+JSON-escaped and capped at `cap_bytes` (512); `truncated` says whether it was
+cut. `value` is text, never joined to a filesystem path. `omitted` counts
+refusals that happened after the 4096-row cap, so a hostile manifest cannot make
+the document unbounded and the loss is still visible.
 
-A refusal that stops the run before a bundle directory exists writes this
-document into the would-be bundle directory: the refusal is evidence even when
-there is no capture to attach it to.
+A manifest refusal that stops the run before a bundle directory exists writes
+this document into the would-be bundle directory: the refusal is evidence even
+when there is no capture to attach it to.
 
 ### `diagnostics/path_map.json`
 
@@ -506,6 +523,28 @@ read.
 `MANIFEST.json → files[]` and `verify/checksums.json` name the **on-disk** path,
 because those are the files that exist; the mapping is how a reader gets back to
 the logical path.
+
+**The boundary of the keep-and-escape policy.** Escaping applies to values the
+game or API supplied, and `path_map.json` covers every such bundle path that
+changed name:
+
+- **Escaped and recorded** — a manifest tag directory (`manifests/<tag>/`) and
+  each `game/`/`expected/` path. A Windows device component gets a leading `%`;
+  every literal `%` is doubled, so the device form and the literal form cannot
+  collide; each logical→on-disk pair is listed here when the two differ. That is
+  why the document is complete for renames.
+- **Refused, not escaped** — a manifest field name (`game` or an audio code) and
+  `audio_pkg_scan_dir` are checked by the non-device-allowing path rule and then
+  written literally. A device name there aborts the capture with a `path.device`
+  refusal; a literal `%` stays a single `%` and has no entry here, because
+  nothing was renamed. The same is true of `game/<scan_dir>` and the field
+  component of `manifests/<tag>/<field>.manifest…`.
+
+Escaping exists to preserve evidence the run cannot refuse: the game's own
+paths, the API's tag. A field name or scan dir is a naming/config value the run
+can refuse safely, so it stays strict and every read site keeps using the
+literal spelling. The same holds for a device-named tag from a flag; only a
+device-named tag the API supplied is escaped instead.
 
 ---
 

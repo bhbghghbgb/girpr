@@ -197,7 +197,7 @@ person does not spend a day concluding that concurrency is broken.
 | | |
 |---|---|
 | `fs::rename` overwriting an existing destination | works. On Windows it is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, and it is pinned by a test. It is worth knowing because the opposite is a common belief, and acting on it here would mean deleting an atomic step the code needs. |
-| a blob whose `stored_path` is `null` | has four causes: three failures (a source that refused, a write that failed, a task that panicked mid-measure), which say which in `decode_error`, and a `--no-chunk-blobs` row, which is null there and means "not measured". |
+| a blob whose `stored_path` is `null` | has four causes: three failures (a source that refused, a write that failed, a task that panicked mid-measure), which say which in `fetch_error`, and a `--no-chunk-blobs` row, which is null there and means "not measured". |
 | `verify` reporting a blob as red under `--no-chunk-blobs` | correct. The index lists a blob with no path, which is exactly "this bundle cannot be materialized". Red, not skipped. |
 | a `probe` row with `attempts: 1` on every healthy capture | correct, and not evidence that nothing was ever retried. A `getBuild?tag=` probe *is* retried when the status calls for it; the negative probes behind `error_shapes.json` never are. |
 | `identical` appearing in both `game/` and `expected/` with equal bytes | that is the class. `diff -r game/ expected/` shows it as unchanged, on purpose. |
