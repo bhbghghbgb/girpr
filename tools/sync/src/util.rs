@@ -86,7 +86,7 @@ pub fn is_record_path(p: &Path) -> bool {
 /// fail on its live lock. The prefix is reserved at every depth, exactly as
 /// [`is_record_path`] reserves it for a record's own name. The same spelling
 /// rule applies to both: case is folded on Windows only, through
-/// [`has_cache_prefix`].
+/// `has_cache_prefix`.
 pub fn is_cache_rel(rel: &str) -> bool {
     rel.split('/').any(has_cache_prefix)
 }
