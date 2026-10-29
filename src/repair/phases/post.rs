@@ -72,6 +72,8 @@ pub async fn run(
         // stopped (`5`), both of which skip this phase. That is a property of
         // the pipeline, not a property of the ceiling, so the check is here
         // rather than assumed: deletion is the one irreversible act in the tool.
+        // The same check refuses an incomplete plan (`purge.errors > 0`) when a
+        // ceiling is set, because its byte total is only a lower bound.
         if let Some(hit) = ctx.limits.check_delete(&purge_plan) {
             tracing::error!("limit exceeded: {hit}");
             if dry {

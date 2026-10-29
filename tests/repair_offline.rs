@@ -280,6 +280,49 @@ async fn purge_after_deletes_orphans_keeps_manifest_and_config() {
 }
 
 #[tokio::test]
+async fn purge_after_keeps_the_case_variant_it_just_verified() {
+    // N-5: the purge walks the **on-disk** spelling, which on Windows can
+    // differ in case from the manifest. Before the purge key mirrored the
+    // plan's dedup key, `--purge-after` saw `game/foo.dat`, missed the
+    // expected `Game/Foo.dat` and deleted the file the run had just verified.
+    let spec = FixtureSpec::new(vec![FileSpec::new(
+        "Game/Foo.dat",
+        vec![ChunkSpec::new("case_c0", vec![0x41u8; 64], 0)],
+    )]);
+    let expected = build_fixture_spec(&spec);
+    let data = expected.files[0].data.clone();
+    let mock = MockServer::start(build_fixture_spec(&spec), MockOpts::default()).await;
+    let dir = temp_dir("purge_case");
+    write_game_file(&dir, "game/foo.dat", &data);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.purge_after = true;
+    let (_summary, code) = repair::run(ctx).await.expect("case-differing purge run");
+    assert_eq!(code, 0);
+
+    #[cfg(windows)]
+    assert_eq!(
+        read_game_file(&dir, "game/foo.dat").as_deref(),
+        Some(data.as_slice()),
+        "Windows: the case variant is the file the manifest expected, and survives"
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            read_game_file(&dir, "Game/Foo.dat").as_deref(),
+            Some(data.as_slice()),
+            "Unix: the manifest spelling is a distinct file and is kept"
+        );
+        assert!(
+            read_game_file(&dir, "game/foo.dat").is_none(),
+            "Unix: the lower-case sibling is an orphan and still purges"
+        );
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn purge_before_deletes_orphans_then_repairs() {
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;

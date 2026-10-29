@@ -16,9 +16,10 @@ traffic, no release profile and no Linux/macOS host.
 
 ## Suggested decision order
 
-1. **Bytes that can be deleted** — §1 (case-sensitive purge membership, an
-   incomplete delete plan behind a ceiling, the empty-directory sweep). These
-   act on the irreversible half and have concrete failure modes.
+1. **Bytes that can be deleted** — §1 is resolved (case-sensitive purge
+   membership, an incomplete delete plan behind a ceiling, the empty-directory
+   sweep); see the resolved decisions log at the end. These acted on the
+   irreversible half and had concrete failure modes.
 2. **What a read-only run promises** — §2 (`--dry-run`/`--check-only` skip the
    range validation). This decides exit `2` vs `3` and whether a printed plan
    can be trusted.
@@ -36,187 +37,8 @@ traffic, no release profile and no Linux/macOS host.
 
 ## 1. Plan identity and irreversible deletion
 
-### 1.1 N-5 — the purge's expected set is still case-sensitive on Windows
-
-**Current.** `RepairPlan::expected_paths()` returns the plan's `rel` strings
-verbatim (`src/repair/phases/plan.rs:128-130`), and `classify_purge_path` keeps
-a path only on exact `expected.contains(rel)` (`src/repair/purge.rs:384`). The
-same exact comparison applies to `server_keep` (`purge.rs:388`) and `blacklist`
-(`purge.rs:392`). On Windows, `Game/Foo.dat` and `game/foo.dat` name one file:
-the plan's dedup key folds case on Windows only (`plan.rs:188-194`, first
-spelling wins, `the_plan_dedups_case_insensitively_on_windows`,
-`plan.rs:540`), but the purge walk reports the **on-disk** spelling. A manifest
-`Game/Foo.dat` repairing an existing `game/foo.dat` leaves the directory entry
-named `game/foo.dat`; `--purge-after` then sees that name, misses the expected
-set and deletes the file the run just verified.
-
-**History.** N-5 (`56a8a45`) fixed only the plan's `seen` set. Before it, two
-case variants were planned as two files writing the same target concurrently.
-The commit message states the rule: "Windows paths and the path scope are not
-[case-sensitive]", so the plan must fold; it did not touch `expected_paths` or
-the purge. The scope glob is documented case-insensitive (`README.md:285`), so
-the plan, the scope and the purge now disagree. *(The deletion is reasoned
-from the three call sites; it was not reproduced on this host.)*
-
-**Usage and dependents.** `expected_paths()` is consumed only by `plan_purge`
-(`purge.rs:95`). `classify_purge_path` is the single keep/purge predicate
-(`purge.rs:372-...`), reached by `--purge-before`, `--purge-after` and
-`--purge-only` through `apply_purge`. No test builds a case-differing on-disk
-file; the only case test is the plan dedup.
-
-**Options.**
-- **(a) Keep exact matching** — no code change; on Windows a server-side case
-  change can delete a just-verified file.
-- **(b) Fold case on Windows in the purge** — a `purge_key` mirroring
-  `dedup_key`, applied to `rel`, `expected`, `server_keep` and `blacklist`.
-  Matches N-5 and `README.md:285`; on Unix the key is identity, so distinct
-  files stay distinct.
-- **(c) Canonicalise the manifest rel to the on-disk case at plan time** — one
-  comparison rule, but needs a `readdir` per component and cannot canonicalise
-  a path that does not exist yet.
-
-Failure mode for (b): none on Unix (no folding); on Windows the two spellings
-cannot be distinct files. Failure mode for (c): a fresh install has nothing to
-canonicalise.
-
-**Code/tests/docs.** `src/repair/phases/plan.rs:128-130`,
-`src/repair/purge.rs:384-392`. Add a purge case test beside
-`the_plan_dedups_case_insensitively_on_windows` and one integration case with a
-lower-case on-disk file. No doc change beyond the existing scope/case statement.
-
-**Recommendation.** **(b).** It closes a delete path, mirrors the already
-binding N-5/decision 2 rule, and is Windows-only, so it cannot merge two real
-Unix files. *(Inferred from N-5 and the scope contract; the deletion itself is
-source-reasoned, not run.)*
-
-**Verification limits.** No case-differing on-disk fixture; no live CDN. The
-claim that Windows preserves the existing name when opened under another case
-is reasoned from `contained_join` + `metadata`, not observed on a mounted NTFS
-volume with a case-differing manifest.
-
-**Cross-project impact.** none. The expected set and purge are `girpr`-only;
-`gircap` records manifest spellings verbatim and the bridge replays them, so a
-bundle can expose the case only if the capture itself carries both spellings.
-
-### 1.2 N-19 — `errors` is diagnostic; the delete ceiling sees a lower bound
-
-**Current.** `plan_purge` counts a non-`NotFound` walk error (`purge.rs:119-125`)
-and a failed candidate `metadata` (`purge.rs:162-170`) in `PurgePlan::errors`,
-warns once (`purge.rs:201-206`) and still returns the reachable candidates.
-`errors`'s own doc says `total_bytes` is then a lower bound and "the caller must
-not treat it as the whole delete set" (`purge.rs:52-58`). The ceiling does
-exactly that: `check_preflight` uses `pf.purge.map_or(0, |p| p.total_bytes)`
-(`src/repair/scope/limits.rs:122-127`) and `check_delete` compares
-`purge.total_bytes > limit` (`limits.rs:141-144`); neither reads `errors`. The
-post-repair recheck is the same (`src/repair/phases/post.rs:75`).
-
-Two distinct consequences:
-- a **walk** error hides a subtree; those files are not candidates and are not
-  deleted, so the run silently under-cleans and `total_bytes` is short;
-- a **candidate stat** error still pushes the candidate with `bytes: 0`
-  (`purge.rs:162-176`) and `apply_purge` deletes it, because deletion does not
-  need the size — an uncounted file can carry the run past the ceiling.
-
-**History.** N-19 (`408b239`) added the counter and the warning after a
-walk/stat failure was dropped; it did not change the ceiling. The review records
-the decision as "warn and count", not "refuse".
-
-**Usage and dependents.** `--max-delete-bytes` is the only consumer of
-`total_bytes`; `errors` is otherwise unread (construction and the warning
-only). `README.md:288` says the ceiling is checked against the candidates
-"computed before any work starts, and again against the post-repair pass's own
-candidates", without saying the list may be short.
-
-**Options.**
-- **(a) Keep diagnostic only** — no code change; a stat-failed candidate can be
-  deleted uncounted, and an unreadable subtree makes the cleanup silently
-  narrower.
-- **(b) Refuse the delete pass when a ceiling is set and `errors > 0`** — a
-  ceiling is a promise about an exact set, and a lower bound cannot enforce it.
-  Simple: an extra hit in `check_preflight`/`check_delete`. Cons: one ACL
-  failure refuses the whole cleanup.
-- **(c) Mark an unmeasurable candidate and skip it under a ceiling** — precise,
-  leaves the file in place and names it; needs `PurgeCandidate::bytes` to become
-  `Option<u64>` and every consumer to handle it.
-- **(d) Use a conservative size when a candidate cannot be stat'd** — no
-  uncounted delete, but there is no safe substitute for an arbitrary file size.
-
-Failure mode for (b): a permission hiccup blocks a cleanup that would have been
-safe. Failure mode for (c): a larger struct/API change for a rare shape.
-
-**Code/tests/docs.** `limits.rs:98-128, 141-144`, `post.rs:75`,
-`purge.rs:162-176`; `PurgePlan::errors` is constructed as `0` in tests
-(`limits.rs:218`, `scope/report.rs:407`), so the non-zero arm needs a new test
-that injects a walk/stat failure.
-
-**Recommendation.** **(b) for the ceiling case only.** When
-`--max-delete-bytes` is set and `errors > 0`, refuse (exit `5`) before any
-delete and name the count; without a ceiling, keep today's warn-and-delete.
-This respects the `errors` doc without changing the no-ceiling cleanup.
-*(Inferable from the field's own contract and the ceiling's purpose; the
-per-candidate `Option<u64>` option is more precise but not required.)*
-
-**Verification limits.** No test drives a non-zero `errors` into either ceiling;
-the walk/stat failure arms are source-read only.
-
-**Cross-project impact.** none. `PurgePlan` and both ceilings are `girpr`-only.
-
-### 1.3 S-1 — an empty out-of-scope directory is kept
-
-**Current.** In the purge walk a directory is added to `all_dirs` only if
-`scope.is_visible(rel)`; a hidden directory increments `hidden` and is skipped
-(`purge.rs:132-144`). The sweep filters `all_dirs` by `kept_dirs` and `game_dir`
-(`purge.rs:186-190`), so an empty directory the scope hides is never removed,
-and `hidden` drives the "outside the active scope" warning (`purge.rs:196-200`).
-An `--exclude "mods/*"` hides the **files** under `mods` but not `mods` itself
-(`*` crosses `/`, `README.md:285`), so `mods` is visible and is swept when
-empty; only the matched children are hidden.
-
-**History.** S-1 (`3c156c8`) added the `is_visible` gate after the review
-reproduced the binary deleting `mods/` and `mods/nested/` under
-`--include game/foo.dat`. Before it, `mark_kept_ancestors` walked up only from
-kept **files**, and an empty directory has none.
-
-**Usage and evidence.** Unit
-`a_scope_keeps_an_empty_out_of_scope_directory_out_of_the_sweep`
-(`purge.rs:758`), control `a_scope_still_sweeps_a_directory_it_admits`
-(`purge.rs:793`), integration
-`a_scoped_purge_keeps_an_empty_out_of_scope_directory`
-(`tests/repair_offline.rs:1738`). `docs/04-scope-limitation-spec.md:96-97`
-states the rule.
-
-**Options.**
-- **(a) Keep** — the scope says the path does not exist; removing the
-  placeholder would be a deletion the scope did not admit. Cons: a stale empty
-  dir survives a scoped cleanup, and `--exclude "mods/*"` still sweeps `mods`.
-- **(b) Warn and delete hidden empty dirs** — matches "cleanup everything", but
-  violates the stated scope contract and the unit/integration tests.
-- **(c) Treat a directory as hidden when every path under it is hidden** —
-  matches the likely intent of `--exclude "mods/*"`, but needs a decision for
-  an empty directory and changes the "path exists" model.
-
-Failure mode for (a): surprise deletion of `mods` under a content-only exclude;
-for (b): deletes a path the user excluded.
-
-**Code change.** None under (a). Under (c), `purge.rs:132-144` and
-`PathScope::is_visible` need a directory-aware predicate, and
-`docs/04-scope-limitation-spec.md:96-97` / `README.md:285` should say which
-spelling hides a directory.
-
-**Recommendation.** **Keep (a)**, and add one sentence to
-`README.md:285`/`docs/04:96-97` that a content glob does not hide the
-directory itself. The keep rule is the safer of the two irreversible outcomes.
-*(The `mods` sweep is reasoned from `*` crossing `/`; it was not run as its own
-case.)*
-
-**Verification limits.** The hidden-dir case was reproduced with the binary
-before the fix (review, S-1); the `--exclude "mods/*"` sweep was not run as a
-dedicated case.
-
-**Cross-project impact.** `docs/04` is duplicated on `fix-gaps/gircap` and
-`fix-gaps/girsync` with the same rule but older module paths
-(`repair::plan::purge::…`); a sentence added here must be applied there or left
-to the `all/fix-gaps` merge. No code is shared.
+**Resolved (2026-10-30).** N-5, N-19 and S-1 are all resolved; see the
+[`Resolved decisions`](#resolved-decisions) log at the end of this file.
 
 ---
 
@@ -796,3 +618,11 @@ documented refusals), so those two contracts must stay aligned with whatever
 the probe finds. `crates/log`, `crates/tempdir`, `.config/nextest*` and the
 workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
 `tools/sync` code moves.
+
+---
+
+## Resolved decisions
+
+- **N-5** — option (b), fold case on Windows in the purge: mirrors the plan's dedup and the case-insensitive scope, so `--purge-*` cannot delete a just-verified file under a differently-cased on-disk name. (2026-10-30)
+- **N-19** — option (b), refuse the delete pass when a ceiling is set and the plan is incomplete: a lower bound cannot enforce an exact-set ceiling, so exit `5` names `purge_errors` instead of deleting against it; a real counted walk failure is driven through both checks in `purge::tests`. (2026-10-30)
+- **S-1** — keep (a), document the directory-sweep consequence: the keep rule is the safer irreversible outcome, and a content glob does not hide its directory. (2026-10-30)

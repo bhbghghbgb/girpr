@@ -100,7 +100,7 @@ impl Limits {
         if let Some(limit) = self.files {
             let actual = pf.plan.files.len() as u64;
             if actual > limit {
-                hits.push(LimitHit {
+                hits.push(LimitHit::Exceeded {
                     what: "--max-files",
                     key: "plan_files",
                     actual,
@@ -111,7 +111,7 @@ impl Limits {
         if let Some(limit) = self.download_bytes {
             let actual = pf.est_download_bytes;
             if actual > limit {
-                hits.push(LimitHit {
+                hits.push(LimitHit::Exceeded {
                     what: "--max-download-bytes",
                     key: "plan_download_bytes",
                     actual,
@@ -120,9 +120,16 @@ impl Limits {
             }
         }
         if let Some(limit) = self.delete_bytes {
-            let actual = pf.purge.map_or(0, |p| p.total_bytes);
-            if actual > limit {
-                hits.push(delete_hit(limit, actual));
+            // A ceiling is a promise about an exact delete set. A plan with
+            // walk/stat failures is a lower bound, so it cannot enforce that
+            // promise at all — refuse for the cause, not for a byte figure
+            // that is known to be short. No purge plan means no candidates.
+            if let Some(purge) = pf.purge {
+                if purge.errors > 0 {
+                    hits.push(LimitHit::incomplete_purge(purge.errors));
+                } else if purge.total_bytes > limit {
+                    hits.push(delete_hit(limit, purge.total_bytes));
+                }
             }
         }
         hits
@@ -138,14 +145,20 @@ impl Limits {
     /// they are only countable once the repair is done. Deletion is the one
     /// irreversible act in the tool, so both passes are checked rather than
     /// assumed.
+    ///
+    /// An incomplete plan (`errors > 0`) is refused for that cause, not for a
+    /// byte figure: `total_bytes` is a lower bound in that case.
     pub fn check_delete(&self, purge: &PurgePlan) -> Option<LimitHit> {
         let limit = self.delete_bytes?;
+        if purge.errors > 0 {
+            return Some(LimitHit::incomplete_purge(purge.errors));
+        }
         (purge.total_bytes > limit).then(|| delete_hit(limit, purge.total_bytes))
     }
 }
 
 fn delete_hit(limit: u64, actual: u64) -> LimitHit {
-    LimitHit {
+    LimitHit::Exceeded {
         what: "--max-delete-bytes",
         key: "purge_bytes",
         actual,
@@ -153,26 +166,51 @@ fn delete_hit(limit: u64, actual: u64) -> LimitHit {
     }
 }
 
-/// One tripped ceiling: what was requested, what the plan actually wanted, and
-/// the gap. The shape is lifted from `gircap`'s budget for the `describe()`
-/// habit, not for the code — the crates share nothing by design.
+/// One tripped ceiling. The shape is lifted from `gircap`'s budget for the
+/// `describe()` habit, not for the code — the crates share nothing by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LimitHit {
-    /// The flag as the user typed it, so the message is actionable.
-    pub what: &'static str,
-    /// Metric name, from the `SUMMARY` vocabulary.
-    pub key: &'static str,
-    pub actual: u64,
-    pub limit: u64,
+pub enum LimitHit {
+    /// A counted metric went over its ceiling.
+    Exceeded {
+        /// The flag as the user typed it, so the message is actionable.
+        what: &'static str,
+        /// Metric name, from the `SUMMARY` vocabulary.
+        key: &'static str,
+        actual: u64,
+        limit: u64,
+    },
+    /// `--max-delete-bytes` was set, but the purge plan is incomplete
+    /// (`PurgePlan::errors > 0`) so `total_bytes` is only a lower bound.
+    ///
+    /// Deliberately not an `Exceeded` hit: the byte figures are not the
+    /// reason, and quoting them would suggest the ceiling had been evaluated
+    /// against an exact set.
+    IncompletePurge { errors: u64 },
 }
 
 impl LimitHit {
+    fn incomplete_purge(errors: u64) -> Self {
+        Self::IncompletePurge { errors }
+    }
+
     /// One line naming the flag, the shortfall, and the way out.
     pub fn describe(&self) -> String {
-        format!(
-            "{} exceeded: {}={} limit={} (refusing before doing any work; raise the limit or narrow --include)",
-            self.what, self.key, self.actual, self.limit
-        )
+        match *self {
+            Self::Exceeded {
+                what,
+                key,
+                actual,
+                limit,
+            } => format!(
+                "{what} exceeded: {key}={actual} limit={limit} \
+                 (refusing before doing any work; raise the limit or narrow --include)"
+            ),
+            Self::IncompletePurge { errors } => format!(
+                "--max-delete-bytes cannot be enforced: purge_errors={errors} \
+                 (the purge plan is incomplete, so its byte total is only a lower bound; \
+                 refusing before deleting anything — fix the unreadable path or remove --max-delete-bytes)"
+            ),
+        }
     }
 }
 
@@ -269,8 +307,15 @@ mod tests {
         let p1 = plan(1);
         assert_eq!(l.check_preflight(pf(&p0)).len(), 0);
         let hits = l.check_preflight(pf(&p1));
-        assert_eq!(hits[0].what, "--max-files");
-        assert_eq!((hits[0].actual, hits[0].limit), (1, 0));
+        assert_eq!(
+            hits[0],
+            LimitHit::Exceeded {
+                what: "--max-files",
+                key: "plan_files",
+                actual: 1,
+                limit: 0,
+            }
+        );
     }
 
     #[test]
@@ -297,8 +342,15 @@ mod tests {
         let p = plan(3);
         assert!(l.check_preflight(pf_full(&p, 100, &purge(0))).is_empty());
         let hits = l.check_preflight(pf_full(&p, 101, &purge(0)));
-        assert_eq!(hits[0].key, "plan_download_bytes");
-        assert_eq!((hits[0].actual, hits[0].limit), (101, 100));
+        assert_eq!(
+            hits[0],
+            LimitHit::Exceeded {
+                what: "--max-download-bytes",
+                key: "plan_download_bytes",
+                actual: 101,
+                limit: 100,
+            }
+        );
     }
 
     #[test]
@@ -314,7 +366,13 @@ mod tests {
         };
         let p = plan(5);
         let hits = l.check_preflight(pf_full(&p, 7, &purge(9)));
-        let names: Vec<&str> = hits.iter().map(|h| h.what).collect();
+        let names: Vec<&str> = hits
+            .iter()
+            .map(|h| match h {
+                LimitHit::Exceeded { what, .. } => *what,
+                LimitHit::IncompletePurge { .. } => "--max-delete-bytes",
+            })
+            .collect();
         assert_eq!(
             names,
             vec!["--max-files", "--max-download-bytes", "--max-delete-bytes"]
@@ -334,9 +392,15 @@ mod tests {
         };
         assert!(l.check_delete(&purge(10)).is_none(), "the boundary passes");
         let hit = l.check_delete(&purge(11)).expect("11 > 10");
-        assert_eq!(hit.what, "--max-delete-bytes");
-        assert_eq!(hit.key, "purge_bytes");
-        assert_eq!((hit.actual, hit.limit), (11, 10));
+        assert_eq!(
+            hit,
+            LimitHit::Exceeded {
+                what: "--max-delete-bytes",
+                key: "purge_bytes",
+                actual: 11,
+                limit: 10,
+            }
+        );
         // Same verdict as the pre-flight form, on the same plan.
         let p = plan(1);
         assert_eq!(l.check_preflight(pf_full(&p, 0, &purge(11))).len(), 1);
@@ -346,7 +410,7 @@ mod tests {
 
     #[test]
     fn a_hit_describes_itself_in_the_words_a_user_acted_on() {
-        let hit = LimitHit {
+        let hit = LimitHit::Exceeded {
             what: "--max-files",
             key: "plan_files",
             actual: 3000,
@@ -358,6 +422,63 @@ mod tests {
              (refusing before doing any work; raise the limit or narrow --include)"
         );
         assert_eq!(hit.to_string(), hit.describe());
+    }
+
+    /// N-19: a purge plan with walk/stat failures has a `total_bytes` that is
+    /// only a lower bound. With a delete ceiling set, both checks refuse for
+    /// that cause instead of comparing the short figure.
+    #[test]
+    fn a_ceiling_refuses_an_incomplete_purge_plan_in_both_checks() {
+        let l = Limits {
+            delete_bytes: Some(10),
+            ..Default::default()
+        };
+        let incomplete = PurgePlan {
+            errors: 2,
+            ..purge(5)
+        };
+        let hit = l
+            .check_delete(&incomplete)
+            .expect("an incomplete plan cannot enforce the ceiling");
+        assert_eq!(hit, LimitHit::IncompletePurge { errors: 2 });
+
+        let p = plan(1);
+        let hits = l.check_preflight(pf_full(&p, 0, &incomplete));
+        assert_eq!(hits, vec![LimitHit::IncompletePurge { errors: 2 }]);
+        // The message names the cause, not a byte overrun.
+        assert!(hit.describe().contains("purge_errors=2"), "{hit}");
+        assert!(
+            hit.describe().contains("lower bound"),
+            "the message says why the byte total is unusable: {hit}"
+        );
+        assert_ne!(
+            hit.describe(),
+            delete_hit(0, 0).describe(),
+            "an incomplete plan is not a plain byte overrun"
+        );
+    }
+
+    /// Without a ceiling nothing changes: the plan stays diagnostic and the
+    /// run warns-and-deletes exactly as before.
+    #[test]
+    fn no_delete_ceiling_leaves_an_incomplete_purge_plan_alone() {
+        let incomplete = PurgePlan {
+            errors: 3,
+            ..purge(1 << 30)
+        };
+        let p = plan(1);
+        assert!(
+            Limits::default()
+                .check_preflight(pf_full(&p, 0, &incomplete))
+                .is_empty()
+        );
+        assert!(Limits::default().check_delete(&incomplete).is_none());
+        // And a pre-flight context with no purge plan is still a no-op.
+        let ceiling = Limits {
+            delete_bytes: Some(1),
+            ..Default::default()
+        };
+        assert!(ceiling.check_preflight(pf(&p)).is_empty());
     }
 
     #[test]

@@ -25,7 +25,9 @@ use crate::repair::scope::PathScope;
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeCandidate {
-    /// `/`-separated rel path, i.e. exactly what `classify_purge_path` saw.
+    /// `/`-separated rel path in the on-disk (walk) spelling. Classification
+    /// compares its `purge_key`, so the spelling can differ in case from the
+    /// manifest entry that kept it.
     pub rel: String,
     /// Absolute-or-game-relative path to remove.
     pub path: PathBuf,
@@ -52,9 +54,10 @@ pub struct PurgePlan {
     ///
     /// A purge that could not read part of the install still deletes what it
     /// can see, but `total_bytes` is then a lower bound: the caller must not
-    /// treat it as the whole delete set. Zero for a complete plan, and for the
-    /// documented "`game_dir` is not there yet" case, which is an empty plan
-    /// rather than a failure.
+    /// treat it as the whole delete set. `--max-delete-bytes` therefore
+    /// refuses an incomplete plan instead of comparing that lower bound. Zero
+    /// for a complete plan, and for the documented "`game_dir` is not there
+    /// yet" case, which is an empty plan rather than a failure.
     pub errors: u64,
 }
 
@@ -92,7 +95,12 @@ pub fn plan_purge(
     blacklist: &HashSet<String>,
     scope: &PathScope,
 ) -> PurgePlan {
-    let expected = plan.expected_paths();
+    // Fold the three keep sets once, here, rather than rebuilding a set for
+    // every walked file. `classify_purge_path` folds only the walked rel, so
+    // the purge compares the same key the plan dedup uses on Windows.
+    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| purge_key(r)).collect();
+    let server_keep: HashSet<String> = server_keep.iter().map(|r| purge_key(r)).collect();
+    let blacklist: HashSet<String> = blacklist.iter().map(|r| purge_key(r)).collect();
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     // Ancestors of every `Keep`-classified file: anything else is left empty by
@@ -150,7 +158,7 @@ pub fn plan_purge(
         let path = e.path();
         let rel = rel_path(path, game_dir);
         let outside = !scope.is_visible(&rel);
-        match classify_purge_path(&rel, &expected, server_keep, blacklist, scope) {
+        match classify_purge_path(&rel, &expected, &server_keep, &blacklist, scope) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
                 debug_assert!(!outside, "a hidden path must classify Keep");
@@ -301,6 +309,18 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The key the purge compares on. Mirrors `dedup_key` in
+/// [`crate::repair::phases::plan`]: Windows paths are case-insensitive, so the
+/// walked on-disk spelling and the manifest spelling must compare equal there.
+/// On Unix they are distinct paths and the key is the path itself.
+fn purge_key(rel: &str) -> String {
+    if cfg!(windows) {
+        rel.to_lowercase()
+    } else {
+        rel.to_string()
+    }
+}
+
 /// Metadata files the files-cleanup must keep.
 ///
 /// `config.ini` and the single-writer lock. `config.ini` lives inside
@@ -349,6 +369,12 @@ pub enum PurgeVerdict {
 /// Decide the fate of one `/`-separated rel path for the files-cleanup.
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
+/// `expected`, `server_keep` and `blacklist` must already be keyed with
+/// `purge_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
+/// once per file. That keeps the classification case-insensitive on Windows
+/// (the plan's dedup and the scope already are) while leaving Unix paths
+/// distinct.
+///
 /// Rule order matters (first match wins); each rule names its provenance:
 /// 0. **Path scope**: a path outside `--include`/`--exclude`
 ///    does not exist, so it is kept — *before* the manifest check, not after.
@@ -380,16 +406,17 @@ pub fn classify_purge_path(
     if !scope.is_visible(rel) {
         return PurgeVerdict::Keep;
     }
+    let key = purge_key(rel);
     // 1. In the live manifest → keep.
-    if expected.contains(rel) {
+    if expected.contains(&key) {
         return PurgeVerdict::Keep;
     }
     // 2. config.ini → keep.
-    if server_keep.contains(rel) {
+    if server_keep.contains(&key) {
         return PurgeVerdict::Keep;
     }
     // 3. Blacklisted → excluded from repair, still part of the install.
-    if blacklist.contains(rel) {
+    if blacklist.contains(&key) {
         return PurgeVerdict::Keep;
     }
     // 4. Collapse audio pkg-version parity → keep.
@@ -416,6 +443,7 @@ fn file_name(rel: &str) -> &str {
 mod tests {
     use super::*;
     use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::scope::{LimitHit, Limits, Preflight};
     use girpr_tempdir::TempDir;
     use std::collections::HashMap;
 
@@ -469,6 +497,53 @@ mod tests {
         let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
         let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
         PathScope::new(&inc, &exc).unwrap()
+    }
+
+    fn keyed(rels: &[&str]) -> HashSet<String> {
+        rels.iter().map(|r| purge_key(r)).collect()
+    }
+
+    /// N-5: the walked rel is the **on-disk** spelling, which on Windows can
+    /// differ in case from the manifest (and from `server_keep`/`blacklist`).
+    /// `plan_purge` keys all three keep sets once; the classifier keys the
+    /// walked rel, so the two spellings meet. On Unix they are distinct paths
+    /// and the case variant must purge.
+    #[test]
+    fn the_purge_folds_case_on_windows_only() {
+        let open = PathScope::default();
+        let on_disk = "game/foo.dat";
+        let manifest = "Game/Foo.dat";
+        assert_eq!(
+            purge_key(manifest) == purge_key(on_disk),
+            cfg!(windows),
+            "the purge key folds exactly where Windows paths are case-insensitive"
+        );
+        let none = HashSet::new();
+        for (rule, expected, server_keep, blacklist) in [
+            ("expected", keyed(&[manifest]), none.clone(), none.clone()),
+            (
+                "server_keep",
+                none.clone(),
+                keyed(&[manifest]),
+                none.clone(),
+            ),
+            ("blacklist", none.clone(), none.clone(), keyed(&[manifest])),
+        ] {
+            let verdict = classify_purge_path(on_disk, &expected, &server_keep, &blacklist, &open);
+            if cfg!(windows) {
+                assert_eq!(
+                    verdict,
+                    PurgeVerdict::Keep,
+                    "{rule}: the case variant names the same on-disk file"
+                );
+            } else {
+                assert_eq!(
+                    verdict,
+                    PurgeVerdict::Purge,
+                    "{rule}: on Unix the case variant is a distinct path"
+                );
+            }
+        }
     }
 
     #[test]
@@ -832,6 +907,26 @@ mod tests {
         assert!(pp.files.is_empty(), "{:?}", pp.files);
         assert_eq!(pp.total_bytes, 0);
         assert!(pp.errors >= 1, "the unreadable walk is counted");
+
+        // N-19: the same real counted failure refuses a delete ceiling instead
+        // of being compared as the complete delete set.
+        let ceiling = Limits {
+            delete_bytes: Some(u64::MAX),
+            ..Default::default()
+        };
+        let plan = plan_of("game.dat");
+        let hits = ceiling.check_preflight(Preflight {
+            plan: &plan,
+            est_download_bytes: 0,
+            purge: Some(&pp),
+        });
+        assert!(
+            matches!(hits.as_slice(), [LimitHit::IncompletePurge { .. }]),
+            "the walk failure must refuse the ceiling: {hits:?}"
+        );
+        assert!(ceiling.check_delete(&pp).is_some());
+        // Without a ceiling the plan stays diagnostic, exactly as before.
+        assert!(Limits::default().check_delete(&pp).is_none());
     }
 
     #[test]

@@ -100,6 +100,10 @@ touches a path by name has to participate:
 | `util::write_config_ini` (from `repair::phases::post::run`) | **not bumped** — see below |
 | `repair::phases::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
 
+A content glob such as `mods/*` hides the files under `mods` but not `mods`
+itself, so an empty `mods` directory is still visible and may be swept; a
+directory is hidden only when the glob matches the directory path itself.
+
 There are two ways to make a path invisible to the purge: filter inside the
 purge walk (`classify_purge_path` gains a scope argument and returns `Keep`
 *before* the manifest check), or push every hidden path into `server_keep`. The
@@ -723,6 +727,9 @@ directory" — a dir with kept content fails `remove_dir` harmlessly — but dec
 up front, which is the property the scope work needs. A directory the active
 scope hides is not added to the sweep set at all (it has no file to mark its
 ancestors), and is counted in `PurgePlan::hidden` so the scope warning names it.
+A content glob such as `mods/*` hides the files under `mods` but not `mods`
+itself, so an empty `mods` directory is still visible and may be swept; a
+directory is hidden only when the glob matches the directory path itself.
 
 The pure modules unit-test without a filesystem, exactly like
 `purge::classify_purge_path` and `phases::plan::build_plan` do. The impure part is
