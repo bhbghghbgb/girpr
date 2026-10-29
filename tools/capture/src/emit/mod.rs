@@ -88,6 +88,64 @@ pub fn write_api(
     Ok(written)
 }
 
+/// Write the incidental non-2xx bodies and their index.
+///
+/// **`api/error_bodies/<seq>.body` is byte-exact**, for the same reason the six
+/// API bodies are: a re-serialised error envelope would silently restyle what
+/// the origin said. `api/error_responses.json` carries what a reader needs
+/// before opening one: status, content type, the URL and where it landed, how
+/// many attempts it took, how many bytes arrived, how many were kept, whether
+/// that is all of them, and the path.
+///
+/// `<seq>` is the request's sequence number in `api/requests.ndjson`, zero-padded
+/// to six digits so a directory listing sorts in issue order. A row with no kept
+/// bytes has `stored_path: null` and no file — a zero-byte file would be a body
+/// that was never read, which is a different fact from a body that was empty.
+///
+/// Returns the paths written, bodies first then the index, which is the order
+/// they join `MANIFEST.json → files[]`.
+pub fn write_error_responses(
+    root: &Path,
+    bodies: &[crate::http::ErrorBody],
+    budget: u64,
+) -> std::io::Result<Vec<String>> {
+    let mut written = Vec::with_capacity(bodies.len() + 1);
+    let mut responses = Vec::with_capacity(bodies.len());
+    for b in bodies {
+        let stored_path = if b.body.is_empty() {
+            None
+        } else {
+            let rel = format!("api/error_bodies/{:06}.body", b.seq);
+            write_bytes(root, &rel, &b.body)?;
+            written.push(rel.clone());
+            Some(rel)
+        };
+        responses.push(crate::http::ErrorResponseRow {
+            seq: b.seq,
+            url: b.url.clone(),
+            final_url: b.final_url.clone(),
+            status: b.status,
+            attempts: b.attempts,
+            content_type: b.content_type.clone(),
+            bytes_received: b.bytes_received,
+            retained_bytes: b.retained_bytes(),
+            truncated: b.truncated,
+            stored_path,
+        });
+    }
+    let doc = crate::http::ErrorResponses {
+        schema_version: crate::SCHEMA_VERSION,
+        budget_bytes: budget,
+        total_retained_bytes: responses
+            .iter()
+            .fold(0u64, |n, r| n.saturating_add(r.retained_bytes)),
+        responses,
+    };
+    write_doc(root, "api/error_responses.json", &doc)?;
+    written.push("api/error_responses.json".to_string());
+    Ok(written)
+}
+
 /// Write `diff/paths.diff.json`, `diff/paths.tsv` and `diff/reuse_pool.json`.
 ///
 /// Returns the paths written, in bundle order. `reuse_pool.json` is the first
@@ -524,6 +582,83 @@ mod tests {
         // Absent, not created: one of these cases is about the writer creating
         // its own parents, so pre-creating the root would assert nothing.
         girpr_tempdir::TempDir::absent("gircap-emit", name)
+    }
+
+    #[test]
+    fn error_bodies_are_written_byte_exact_and_indexed() {
+        // F5: the body of a refused request is evidence, and a re-serialised one
+        // would be the tool's reading of the origin rather than the origin's
+        // words. The index has to answer "what did I keep, and is it all of it"
+        // without opening a body.
+        let root = tmp("error-bodies");
+        let envelope = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let bodies = vec![
+            crate::http::ErrorBody {
+                seq: 7,
+                url: "https://cdn.example/chunks/gone".into(),
+                final_url: "https://cdn.example/chunks/gone".into(),
+                status: 404,
+                attempts: 1,
+                content_type: Some("application/xml".into()),
+                bytes_received: envelope.len() as u64,
+                body: envelope.to_vec(),
+                truncated: false,
+            },
+            // Nothing kept: the run's budget had been spent. The row survives.
+            crate::http::ErrorBody {
+                seq: 9,
+                url: "https://cdn.example/chunks/slow".into(),
+                final_url: "https://cdn.example/chunks/slow".into(),
+                status: 429,
+                attempts: 3,
+                content_type: None,
+                bytes_received: 5_000,
+                body: Vec::new(),
+                truncated: true,
+            },
+        ];
+        let written = write_error_responses(&root, &bodies, crate::http::ERROR_BODY_BUDGET_BYTES)
+            .expect("write");
+        assert_eq!(
+            written,
+            vec![
+                "api/error_bodies/000007.body".to_string(),
+                "api/error_responses.json".to_string(),
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.join("api/error_bodies/000007.body")).expect("read back"),
+            envelope,
+            "the kept body is byte-exact"
+        );
+        assert!(
+            !root.join("api/error_bodies/000009.body").exists(),
+            "a row that kept nothing names no file"
+        );
+
+        let doc: crate::http::ErrorResponses =
+            serde_json::from_slice(&std::fs::read(root.join("api/error_responses.json")).unwrap())
+                .expect("the document parses through its own type");
+        assert_eq!(doc.schema_version, crate::SCHEMA_VERSION);
+        assert_eq!(doc.budget_bytes, crate::http::ERROR_BODY_BUDGET_BYTES);
+        assert_eq!(doc.total_retained_bytes, envelope.len() as u64);
+        assert_eq!(doc.responses.len(), 2);
+        let kept = &doc.responses[0];
+        assert_eq!(kept.seq, 7);
+        assert_eq!(kept.status, 404);
+        assert_eq!(kept.retained_bytes, envelope.len() as u64);
+        assert_eq!(kept.bytes_received, envelope.len() as u64);
+        assert!(!kept.truncated);
+        assert_eq!(
+            kept.stored_path.as_deref(),
+            Some("api/error_bodies/000007.body")
+        );
+        let lost = &doc.responses[1];
+        assert_eq!(lost.retained_bytes, 0);
+        assert_eq!(lost.bytes_received, 5_000);
+        assert!(lost.truncated);
+        assert_eq!(lost.stored_path, None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

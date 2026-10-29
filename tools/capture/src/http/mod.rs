@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 use crate::exit::ExitCode;
 
 pub mod error;
+pub mod error_bodies;
 pub mod fetcher;
 pub mod log;
 pub mod negative;
@@ -52,6 +53,9 @@ pub mod record;
 pub mod transport;
 
 pub use error::ApiError;
+pub use error_bodies::{
+    ERROR_BODY_BUDGET_BYTES, ErrorBodies, ErrorBody, ErrorResponseRow, ErrorResponses,
+};
 pub(crate) use fetcher::shared_req_headers;
 pub use fetcher::{Destination, Fetched, Fetcher, Observation, Streamed};
 
@@ -809,6 +813,21 @@ mod tests {
         .expect("client builds")
     }
 
+    /// [`fetcher`] with an explicit error-body retention budget.
+    fn fetcher_with_error_budget(retries: u32, sleeper: Arc<dyn Sleep>, budget: u64) -> Fetcher {
+        Fetcher::with_sleeper_and_error_budget(
+            Transport {
+                retries,
+                timeout: Duration::from_secs(5),
+                max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            },
+            RequestLog::new(),
+            sleeper,
+            budget,
+        )
+        .expect("client builds")
+    }
+
     /// The provenance row a fetch logged, for asserting what was **recorded**.
     ///
     /// `Fetched` carries only a `seq`, so the assertions read the log instead —
@@ -1361,6 +1380,9 @@ mod tests {
         // `bytes_in` must price every request, not only the successful ones: a
         // `429` carrying a few KB of XML envelope is transferred, and the requests
         // it would under-report are the retried ones — the expensive ones.
+        //
+        // The same body is now **kept** as well as counted (F5): the status alone
+        // says the origin refused, and the envelope says why.
         let envelope = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
                          <Code>TooManyRequests</Code>\n  <Message>Slow down.</Message>\n\
                          </Error>\n";
@@ -1384,6 +1406,44 @@ mod tests {
             "bytes_in must count the body that arrived, not report the failure as free"
         );
         assert_eq!(rows[0].status, 429);
+
+        let kept = f.error_bodies().snapshot();
+        assert_eq!(kept.len(), 1, "one row per failed response");
+        assert_eq!(kept[0].seq, rows[0].seq, "the row joins the request log");
+        assert_eq!(kept[0].body, envelope, "the body is kept byte-exact");
+        assert_eq!(kept[0].bytes_received, envelope.len() as u64);
+        assert_eq!(kept[0].retained_bytes(), envelope.len() as u64);
+        assert!(!kept[0].truncated);
+        assert_eq!(kept[0].status, 429);
+        assert_eq!(
+            kept[0].content_type.as_deref(),
+            Some("application/octet-stream"),
+            "the content type is what the origin sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_run_budget_is_kept_in_part_and_marked_truncated() {
+        // A throttled run can fail thousands of chunks; keeping every page would
+        // make the evidence larger than the artifact. The row survives, the body
+        // is cut, and `truncated` says which.
+        let envelope = b"0123456789";
+        let mock = spawn(vec![(404, envelope)], "");
+        let f = fetcher_with_error_budget(1, Arc::new(RecordingSleep::default()), 4);
+
+        f.get(&url(&mock, "/gone"), Kind::Chunk, None)
+            .await
+            .expect_err("404 is not a success");
+
+        let kept = f.error_bodies().snapshot();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].body, b"0123", "the budget bounds retention");
+        assert_eq!(
+            kept[0].bytes_received, 10,
+            "the count is still what the request cost"
+        );
+        assert!(kept[0].truncated, "the row must not claim it kept it all");
+        assert_eq!(f.error_bodies().remaining(), 0);
     }
 
     #[tokio::test]

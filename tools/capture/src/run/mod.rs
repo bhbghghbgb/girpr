@@ -259,7 +259,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         per_class: plan.per_class as usize,
     })?;
     let mut written = tree.written;
-    let api_documents = tree.api_documents;
+    let mut api_documents = tree.api_documents;
 
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //
@@ -286,6 +286,20 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let index = blobs::ChunkIndex::build(filled.entries);
     tracing::info!(detail = %blobs::describe(&wants, &index), "chunk store done");
     written.push(emit::write_chunk_index(&dir, &index).map_err(|e| write_err(&dir, e))?);
+
+    // 7b-ii. The bodies of the non-2xx responses the run paid for.
+    //
+    //     Written here, not with the other `api/` documents, because chunk
+    //     fetches happen after those: a `404` on one blob and a `429` on another
+    //     are only known now. `write_requests_log` below is later still, so every
+    //     `stored_path` these rows name is already on disk and in `written`.
+    {
+        let bodies = fetcher.error_bodies();
+        let paths = emit::write_error_responses(&dir, &bodies.snapshot(), bodies.budget())
+            .map_err(|e| write_err(&dir, e))?;
+        api_documents += paths.len() as u64;
+        written.extend(paths);
+    }
 
     // 7c. The fixture: assemble every admitted capture and write both sides,
     //     plus the launcher metadata that is not a chunk at all.

@@ -441,6 +441,62 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
     }
 }
 
+/// And the same for `api/error_responses.json`, the version-3 addition.
+///
+/// A capture that saw no non-2xx still writes the document, with an empty
+/// `responses` list: absence would be indistinguishable from "this tool never
+/// looked", which is exactly the ambiguity `error_shapes.json` was made required
+/// to remove.
+#[test]
+fn a_bundle_without_the_error_responses_document_does_not_verify() {
+    let (_m, _s, r, bundle) = capture_ok("noresps");
+    assert_eq!(r.code, 0);
+    let file = bundle.join("api/error_responses.json");
+    assert!(file.is_file(), "the capture wrote it even with no failures");
+    std::fs::remove_file(&file).unwrap();
+
+    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
+    assert_ne!(
+        v.code, 0,
+        "a bundle without its error responses must not verify clean:\n{}{}",
+        v.stdout, v.stderr
+    );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("error_responses.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
+}
+
+/// And `materialize` agrees, through the same door.
+#[test]
+fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_required() {
+    let (_m, _s, r, bundle) = capture_ok("noresps2");
+    assert_eq!(r.code, 0);
+    std::fs::remove_file(bundle.join("api/error_responses.json")).unwrap();
+    let dir = bundle.to_string_lossy().to_string();
+
+    for cmd in [
+        vec!["verify", "--artifact", &dir],
+        vec!["materialize", "--artifact", &dir],
+    ] {
+        let out = run(&cmd);
+        assert_ne!(
+            out.code, 0,
+            "{} must refuse a bundle with no error responses:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+        assert!(
+            format!("{}{}", out.stdout, out.stderr).contains("error_responses.json"),
+            "{} must name the document:\n{}{}",
+            cmd[0],
+            out.stdout,
+            out.stderr
+        );
+    }
+}
+
 /// Every chunk id the negative probes asked for, read from the document that
 /// records them.
 fn probe_chunk_ids(bundle: &std::path::Path) -> Vec<String> {
@@ -599,6 +655,7 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "api/error_shapes.json",
+        "api/error_responses.json",
         "chunks/index.json",
         "diff/paths.diff.json",
         "diff/candidates.json",
@@ -740,6 +797,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     let json = |p: &str| -> serde_json::Value { serde_json::from_str(&read(p)).expect(p) };
 
     const MANIFEST_DOCUMENTS: &[&str] = &[
+        "api/error_responses.json",
         "api/error_shapes.json",
         "api/getBuild.7.0.0.json",
         "api/getBuild.7.1.0.json",
@@ -781,6 +839,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     const CHECKSUM_DOCUMENTS: &[&str] = &[
         "MANIFEST.json",
         "README.md",
+        "api/error_responses.json",
         "api/error_shapes.json",
         "api/getBuild.7.0.0.json",
         "api/getBuild.7.1.0.json",
@@ -1652,7 +1711,11 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         .flatten()
         .map(|e| format!("api/{}", e.file_name().to_string_lossy()))
         .filter(|p| p.ends_with(".json"))
-        .filter(|p| !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json"))
+        .filter(|p| {
+            !p.ends_with("tag_probe.json")
+                && !p.ends_with("error_shapes.json")
+                && !p.ends_with("error_responses.json")
+        })
         .collect();
     on_disk.sort();
 
@@ -1666,7 +1729,7 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         "six metadata bodies are fetched; the count is the claim: {marked:?}"
     );
 
-    // And the two summary documents stayed unmarked, which is the half that
+    // And the summary documents stayed unmarked, which is the half that
     // stops a later edit from marking everything under `api/`.
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     for row in &rows {
@@ -1681,9 +1744,9 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         );
     }
     assert!(
-        !marked
-            .iter()
-            .any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
+        !marked.iter().any(|p| p.contains("tag_probe")
+            || p.contains("error_shapes")
+            || p.contains("error_responses")),
         "a probe row is not a stored body: {marked:?}"
     );
 }

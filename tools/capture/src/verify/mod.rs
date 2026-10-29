@@ -112,6 +112,11 @@ pub struct Bundle {
     /// serve. Required: a bundle without it cannot answer a question every
     /// consumer of the bundle eventually has to ask.
     pub error_shapes: ErrorShapes,
+    /// `api/error_responses.json` - the incidental non-2xx bodies the run saw,
+    /// with the bytes that were retained in `api/error_bodies/`. Required for the
+    /// same reason as `error_shapes.json`: a bundle that recorded only successes
+    /// has lost what the origin said when it refused.
+    pub error_responses: crate::http::ErrorResponses,
 }
 
 impl Bundle {
@@ -178,6 +183,8 @@ impl Bundle {
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
         let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
+        let error_responses: crate::http::ErrorResponses =
+            read_json(&root.join("api/error_responses.json"))?;
         let patchmaps = read_patchmaps(root)?;
         // **The shape of every document-supplied path is checked at the door.**
         // `verify` is the command an operator runs on a bundle they may not have
@@ -186,7 +193,7 @@ impl Bundle {
         // happened to remember; a field read by A6, by A18 or by `materialize`
         // through the patchmap was still a way out. One pass here names the file
         // and the field before any command reads a byte.
-        validate_document_paths(&manifest, &index, &patchmaps)?;
+        validate_document_paths(&manifest, &index, &patchmaps, &error_responses)?;
         Ok(Bundle {
             root: root.to_path_buf(),
             manifest,
@@ -195,6 +202,7 @@ impl Bundle {
             checksums,
             recorded,
             error_shapes,
+            error_responses,
         })
     }
 
@@ -306,6 +314,7 @@ fn validate_document_paths(
     manifest: &Manifest,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, PatchMap>,
+    error_responses: &crate::http::ErrorResponses,
 ) -> Result<(), String> {
     if let Some(problem) = crate::paths::field_component_problem(&manifest.capture.id) {
         return Err(format!("MANIFEST.json capture.id {problem}"));
@@ -331,6 +340,16 @@ fn validate_document_paths(
     for map in patchmaps.values() {
         if let Some(problem) = crate::paths::relative_path_problem(&map.path) {
             return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
+        }
+    }
+    for row in &error_responses.responses {
+        if let Some(rel) = row.stored_path.as_deref()
+            && let Some(problem) = crate::paths::relative_path_problem(rel)
+        {
+            return Err(format!(
+                "api/error_responses.json seq {} stored_path {problem}",
+                row.seq
+            ));
         }
     }
     Ok(())

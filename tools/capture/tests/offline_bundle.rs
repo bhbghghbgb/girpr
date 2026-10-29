@@ -283,6 +283,12 @@ impl Bundle {
         // always find a way to be easier.
         write_json(&root.join("api/error_shapes.json"), &error_shapes());
 
+        // `api/error_responses.json`, also required in version 3. This fixture
+        // captures successfully, so the honest document is an empty one: no
+        // non-2xx body was retained, and the document says so rather than being
+        // absent and leaving a reader unable to tell "none" from "not recorded".
+        write_json(&root.join("api/error_responses.json"), &error_responses());
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -421,6 +427,16 @@ fn build(tag: &str, id: &str) -> gircap::emit::index::Build {
 /// because the requirement under test is "the document is there and readable",
 /// not "the numbers are right". The numbers are `capture_layout`'s job, against
 /// a real probe.
+/// The empty error-response index for a fixture whose capture saw no non-2xx.
+fn error_responses() -> gircap::http::ErrorResponses {
+    gircap::http::ErrorResponses {
+        schema_version: gircap::SCHEMA_VERSION,
+        budget_bytes: gircap::http::ERROR_BODY_BUDGET_BYTES,
+        total_retained_bytes: 0,
+        responses: Vec::new(),
+    }
+}
+
 fn error_shapes() -> gircap::http::probe::ErrorShapes {
     use gircap::http::probe::ErrorShape;
     gircap::http::probe::ErrorShapes {
@@ -895,6 +911,7 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     // have been a compile error rather than a discovery. The round-trip is what
     // says the two halves still agree on the wire format.
     round_trip::<gircap::http::probe::ErrorShapes>(&b.root.join("api/error_shapes.json"));
+    round_trip::<gircap::http::ErrorResponses>(&b.root.join("api/error_responses.json"));
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 

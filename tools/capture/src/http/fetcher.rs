@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::{
-    ACCEPT, ACCEPT_ENCODING, ApiError, Kind, RealSleep, RequestLog, RequestRecord, RetryPolicy,
-    Sleep, Transport, header_map, now_rfc3339,
+    ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, Kind, RealSleep, RequestLog,
+    RequestRecord, RetryPolicy, Sleep, Transport, header_map, now_rfc3339,
 };
 
 /// A fetched body and the record of how it arrived.
@@ -203,17 +203,23 @@ async fn drain_capped<W: std::io::Write>(
     }
 }
 
-/// Count the body of a failed response, stopping at the transport's ceiling.
+/// What [`drain_error_body`] saw.
+struct DrainedErrorBody {
+    /// Bytes that crossed the wire, whether or not they were kept.
+    bytes_received: u64,
+    /// The bytes kept, never more than the retention cap.
+    body: Vec<u8>,
+    /// Whether `body` is the whole received body.
+    truncated: bool,
+}
+
+/// Collect the body of a failed response, stopping at the transport's ceiling.
 ///
-/// **Counting only, and never fallible.** The body of a `4xx`/`5xx` is discarded;
-/// only its length is data (`bytes_in` prices the request, including the ones a
-/// throttle made expensive). So this applies the same two checks as
-/// [`drain_capped`] — the declared length before reading, the running total as
-/// bytes arrive — and returns how many bytes crossed the wire, without turning
-/// any outcome into a different error.
-///
-/// That last part is the whole reason this is not `drain_capped` plus
-/// `io::sink()`:
+/// **The status is the failure, and nothing here changes that.** The body of a
+/// `4xx`/`5xx` is evidence, not the reason the request failed, so this applies
+/// the same two ceilings as [`drain_capped`] — the declared length before
+/// reading, the running total as bytes arrive — without turning any outcome into
+/// a different error:
 ///
 /// - a body that fails mid-read is still a `Status` failure, so it is counted up
 ///   to the failure and not retried as if the network were at fault;
@@ -222,10 +228,21 @@ async fn drain_capped<W: std::io::Write>(
 ///   would retry it);
 /// - a `404` with a truncated body stays a `404` and is not fetched again.
 ///
-/// The ceiling still bounds time and bandwidth: an origin that declares a huge
-/// body is not read at all, and one that omits or understates the header is
-/// stopped once the running total crosses it.
-async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u64 {
+/// **`cap` bounds reading; `retain` bounds keeping.** The first is the
+/// `--max-response-bytes` promise and is used for `bytes_in`, exactly as before.
+/// The second is the smaller of that ceiling and what the run's error-body
+/// budget has left — buffering up to the response ceiling only to truncate the
+/// same bytes afterwards would hold a hostile body in memory twice.
+///
+/// The returned `truncated` is true whenever `body` is shorter than
+/// `bytes_received`, including a read that ended early and a body the retention
+/// cap could not hold.
+async fn drain_error_body(
+    mut resp: reqwest::Response,
+    cap: u64,
+    retain: u64,
+    url: &str,
+) -> DrainedErrorBody {
     if let Some(declared) = declared_over_ceiling(&resp, cap) {
         // Nothing has crossed the wire yet, so `0` is the honest count.
         tracing::warn!(
@@ -234,9 +251,16 @@ async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u
             cap,
             "error body declares more than --max-response-bytes; not read"
         );
-        return 0;
+        return DrainedErrorBody {
+            bytes_received: 0,
+            body: Vec::new(),
+            truncated: true,
+        };
     }
+    let retain = usize::try_from(retain.min(cap)).unwrap_or(usize::MAX);
     let mut seen = 0_u64;
+    let mut body: Vec<u8> = Vec::new();
+    let mut truncated = false;
     loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
@@ -250,7 +274,17 @@ async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u
                         cap,
                         "error body crossed --max-response-bytes; stopped reading"
                     );
+                    truncated = true;
                     break;
+                }
+                // Keep reading past the retention cap so `bytes_received` stays
+                // the same number the request row prices; only the buffer stops.
+                let room = retain.saturating_sub(body.len());
+                if chunk.len() > room {
+                    body.extend_from_slice(&chunk[..room]);
+                    truncated = true;
+                } else {
+                    body.extend_from_slice(&chunk);
                 }
             }
             Ok(None) => break,
@@ -265,11 +299,19 @@ async fn drain_error_body(mut resp: reqwest::Response, cap: u64, url: &str) -> u
                     error = %e,
                     "error-body read failed; counting what arrived"
                 );
+                truncated = true;
                 break;
             }
         }
     }
-    seen
+    if body.len() as u64 != seen {
+        truncated = true;
+    }
+    DrainedErrorBody {
+        bytes_received: seen,
+        body,
+        truncated,
+    }
 }
 
 /// Whether a body read failed because it could not be read, rather than because
@@ -397,6 +439,8 @@ pub struct Fetcher {
     base_req_headers: BTreeMap<String, String>,
     /// The ceiling on one response body, from [Transport::max_response_bytes].
     max_response_bytes: u64,
+    /// The bodies of non-2xx responses, shared by every clone.
+    error_bodies: std::sync::Arc<ErrorBodies>,
 }
 
 impl Fetcher {
@@ -527,6 +571,24 @@ impl Fetcher {
         log: RequestLog,
         sleeper: Arc<dyn Sleep>,
     ) -> Result<Self, ApiError> {
+        Self::with_sleeper_and_error_budget(
+            transport,
+            log,
+            sleeper,
+            super::error_bodies::ERROR_BODY_BUDGET_BYTES,
+        )
+    }
+
+    /// [`Fetcher::with_sleeper`] with an explicit error-body retention budget.
+    ///
+    /// The budget is a run-wide constant in production; this seam exists so a
+    /// test can drive the truncation without writing a megabyte of mock body.
+    pub fn with_sleeper_and_error_budget(
+        transport: Transport,
+        log: RequestLog,
+        sleeper: Arc<dyn Sleep>,
+        error_body_budget: u64,
+    ) -> Result<Self, ApiError> {
         let ua = crate::logging::user_agent();
         // `default_headers` from the same list the record is built from, so the
         // bundle's claim about the request and the request itself cannot differ.
@@ -545,7 +607,17 @@ impl Fetcher {
             log,
             base_req_headers: RequestRecord::default_req_headers(&ua, None),
             max_response_bytes: transport.max_response_bytes,
+            error_bodies: std::sync::Arc::new(ErrorBodies::new(error_body_budget)),
         })
+    }
+
+    /// The non-2xx bodies this fetcher has seen.
+    ///
+    /// A handle rather than a snapshot: the caller that writes
+    /// `api/error_responses.json` runs after every fetch, and copying the bytes
+    /// before then would be a second copy of evidence nobody has read yet.
+    pub fn error_bodies(&self) -> &ErrorBodies {
+        &self.error_bodies
     }
 
     /// The log every fetch through this fetcher is recorded in.
@@ -892,26 +964,31 @@ impl Fetcher {
         // `2xx`, which includes `206` — a `Range` response is a success, not a
         // partial failure.
         if !resp.status().is_success() {
-            // **The body of a failure is counted, not ignored.** A CDN
-            // `429`/`503` carrying a few KB of XML envelope is paid for on the
-            // wire, so recording `bytes_in: 0` reports it as free.
-            // `bytes_in` is sold in this module's doc as "the only way to price a
-            // manifest without re-downloading it", and it must not under-report
-            // *precisely the retried requests that cost the most* — a throttled
-            // run's cost figures are optimistic by exactly the amount the throttle
-            // cost.
-            //
-            // **Streamed and discarded, and capped**, not read into a buffer: the
-            // content is useless, only the length is not. Draining also lets the
-            // connection go back to the pool, which dropping a response mid-body
-            // would not. `drain_error_body` stops at `--max-response-bytes`, so a
-            // hostile `503` costs the ceiling rather than the timeout.
-            //
-            // A body that fails to read mid-way counts what arrived, like every
-            // other count here: reporting `0` for bytes that demonstrably crossed
-            // the network would be a lie in the direction that matters least to
-            // notice. What it must not do is replace the status.
-            let bytes_in = drain_error_body(resp, self.max_response_bytes, url).await;
+            // **The body of a failure is kept as well as counted.** It is the
+            // origin's own words about why it would not serve, and the status
+            // alone leaves a later reader guessing. `--max-response-bytes` still
+            // bounds the read, and the run-wide budget bounds what is retained;
+            // what does not fit is a `truncated` row rather than a lost
+            // observation. See [`super::error_bodies`].
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let remaining = self.error_bodies.remaining();
+            let drained = drain_error_body(resp, self.max_response_bytes, remaining, url).await;
+            let bytes_in = drained.bytes_received;
+            self.error_bodies.push(ErrorBody {
+                seq,
+                url: url.to_string(),
+                final_url: final_url.clone(),
+                status,
+                attempts,
+                content_type,
+                bytes_received: bytes_in,
+                body: drained.body,
+                truncated: drained.truncated,
+            });
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,

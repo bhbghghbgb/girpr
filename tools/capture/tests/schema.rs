@@ -197,6 +197,7 @@ fn every_document_carries_the_crate_schema_version() {
         "verify/checksums.json",
         "verify/selfcheck.json",
         "api/tag_probe.json",
+        "api/error_responses.json",
         "manifests/7.0.0/game.manifest.meta.json",
     ] {
         let doc = json(&b.join(rel));
@@ -303,6 +304,70 @@ fn a_capture_records_the_exact_bytes_of_its_arguments() {
     }
     // The command is the second argument, as it was invoked.
     assert_eq!(lossy[1], "capture");
+}
+
+/// The incidental error-body index, and the bodies it names.
+///
+/// The row is the observation; the body is the evidence. A `stored_path` that
+/// names a file of a different length from `retained_bytes` would make the
+/// index lie about what it kept, so both are checked on whatever rows this
+/// capture happened to produce.
+#[test]
+fn the_error_responses_document_has_the_documented_shape() {
+    let b = bundle();
+    let doc = json(&b.join("api/error_responses.json"));
+    assert_eq!(
+        keys(&doc),
+        vec![
+            "budget_bytes",
+            "responses",
+            "schema_version",
+            "total_retained_bytes",
+        ],
+        "api/error_responses.json's top-level keys"
+    );
+    assert_eq!(doc["budget_bytes"], gircap::http::ERROR_BODY_BUDGET_BYTES);
+    let rows = doc["responses"].as_array().expect("responses is an array");
+    let retained: u64 = rows
+        .iter()
+        .map(|r| r["retained_bytes"].as_u64().expect("retained_bytes"))
+        .sum();
+    assert_eq!(doc["total_retained_bytes"], retained);
+    for row in rows {
+        assert_eq!(
+            keys(row),
+            vec![
+                "attempts",
+                "bytes_received",
+                "content_type",
+                "final_url",
+                "retained_bytes",
+                "seq",
+                "status",
+                "stored_path",
+                "truncated",
+                "url",
+            ],
+            "a row's keys"
+        );
+        let (kept, received) = (
+            row["retained_bytes"].as_u64().expect("retained_bytes"),
+            row["bytes_received"].as_u64().expect("bytes_received"),
+        );
+        assert!(
+            kept <= received,
+            "a row cannot keep more than arrived: {row}"
+        );
+        match row["stored_path"].as_str() {
+            Some(rel) => {
+                let on_disk = std::fs::metadata(b.join(rel))
+                    .unwrap_or_else(|e| panic!("{rel}: {e}"))
+                    .len();
+                assert_eq!(on_disk, kept, "{rel} is not the length the row claims");
+            }
+            None => assert_eq!(kept, 0, "no path means nothing was kept: {row}"),
+        }
+    }
 }
 
 /// A raised decompression ceiling is recorded, not silently replaced by the
