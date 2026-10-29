@@ -232,9 +232,9 @@ flowchart TD
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
   (expected set = live-manifest paths + `config.ini` + the single-writer lock
-  + `audio_lang_*`/`Audio_*_pkg_version` patterns; **everything else purges**,
-  incl. temps, exe, logs, `ScreenShot/`). The whole plan is built before the
-  first delete.
+  + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version` patterns;
+  **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
+  `ScreenShot/`). The whole plan is built before the first delete.
 - single-writer lock: a run that mutates the install takes `{game_dir}/girpr.lock`
   (`create_new`, so the creation *is* the exclusion). A live lock refuses the
   second run with **exit `1`**, naming the file and the pid; a lock older than
@@ -247,7 +247,8 @@ flowchart TD
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
 S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
-single-writer lock (`purge::keep_set`). Version parse is last-match-wins
+single-writer lock (`purge::keep_set`); the cleaned blacklist is a separate keep input
+(`purge::plan_purge`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
 **Resume.** The two write modes resume differently, and each in the way that suits it:
@@ -289,7 +290,7 @@ cargo build --release
 | `--max-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`) once N bytes have been written into the install. This is the **disk** cost: reuse-copies and chunk writes are counted, neither of which `download_bytes` sees. With the in-place path it counts only the bytes that are wrong. The two halves are reported: `SUMMARY write_bytes_spent` is the live figure the ceiling bounds (the bytes that landed, gate or no gate), and `SUMMARY write_bytes` is the settled one — the bytes written from sources that passed their gate, so it is a function of the install and not of the transport (a corrupt chunk contributes nothing) |
 | `--max-verified-download-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-download-bytes`) once N bytes of **verified** downloads have been made — the bytes of the files that were actually repaired, not the traffic the run caused. A budget on the *repair* rather than on the network: a retry that fetched the same chunk twice, and a chunk that failed its digest, cost nothing here. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime, so the line is checked when a file is repaired and can be crossed by that one file |
 | `--max-verified-write-bytes <N>` | (no limit) | Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-verified-write-bytes`) once N bytes have been written into the install **from sources that passed their gate**. The same split as `--max-write-bytes`, on the other half: the bytes that landed without passing a gate are spent and are what `--max-write-bytes` bounds; this bounds the bytes the repair was allowed to spend. Cannot be a pre-flight refusal — the split between the two figures is only known at runtime, so the line is checked when a write is settled and can be crossed by that one write |
-| `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (0 extra disk, a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
+| `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (no second copy: 0 extra disk when the target is already full size, its growth when it is truncated, and a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
 | `--check-only` | off | Verify size+MD5; writes nothing |
@@ -501,7 +502,7 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
 |---|---|---|---|
 | `inplace` (default) | the wrong bytes are written into the file, at the offsets they belong at | the file's **growth** (0 for a same-size repair) | the least disk and the least writing, and a rerun that re-verifies and continues |
 | `temp` (`--repair-mode temp`) | the repair is assembled in `{path}_tmp` and swapped over the target with an atomic rename | the whole file | **the target file is never modified** — a repair that fails leaves it exactly as it was, and the swap is atomic |
-| `discard` (`--repair-mode discard`) | the target is deleted and written from scratch | 0 | a file with nothing reusable in it, written without asking the network twice |
+| `discard` (`--repair-mode discard`) | the target is deleted and written from scratch | the file's **growth** (0 when the target is already full size), never a second copy | a file with nothing reusable in it, written without asking the network twice |
 
 The whole-file MD5 is the gate in every mode, `config.ini` advances only when every planned
 file verified, and `--scan` reports the exact figures before any of it starts. The two modes

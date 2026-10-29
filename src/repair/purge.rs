@@ -303,15 +303,24 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 
 /// Metadata files the files-cleanup must keep.
 ///
-/// v1: `config.ini` ONLY. It lives inside `game_dir` but NEVER appears in
-/// Sophon chunk manifests, and the tool rewrites it after patching — purging
-/// it would break the version bookkeeping. Everything else (exe, blacklist /
-/// res-category / audio-scan bookkeeping, `ScreenShot/`, logs, temps) is
-/// intentionally NOT kept: Collapse's `GenshinInstall.GetUnusedFileInfoList`
-/// protects only `FilesCleanupIgnoreList` (empty for Genshin) plus the
+/// `config.ini` and the single-writer lock. `config.ini` lives inside
+/// `game_dir` but NEVER appears in Sophon chunk manifests, and the tool
+/// rewrites it after patching — purging it would break the version
+/// bookkeeping. The lock is the other root-level file that is not in the
+/// manifest: a run that holds it must not lose its exclusion to the sweep.
+///
+/// Everything else in this set's sense (exe, res-category / audio-scan
+/// bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT kept:
+/// Collapse's `GenshinInstall.GetUnusedFileInfoList` protects only
+/// `FilesCleanupIgnoreList` (empty for Genshin) plus the
 /// `Audio_*_pkg_version` regexes, and this tool maximizes free space — if the
 /// user wants anything else kept, that needs an explicit `--keep` flag
 /// (not implemented in v1).
+///
+/// Blacklisted paths are a **separate** keep input to [`plan_purge`] (rule 3),
+/// not part of this set: they come from the launcher's `blacklist_dir`, while
+/// these two are files the tool itself owns. The doc for [`keep_set`] is not
+/// the whole expected set; [`classify_purge_path`] is.
 ///
 /// NOTE: the game flags unknown executables inside the game folder, so the
 /// tool binary itself must never live there; the exe needs no keep rule.
@@ -348,7 +357,8 @@ pub enum PurgeVerdict {
 ///    here would leave the cleanup with a *narrower* keep set than an
 ///    unfiltered run, and the fixture `gircap` hands us would be eaten.
 /// 1. Manifest membership (Collapse expected set).
-/// 2. `config.ini` ([`keep_set`] — the only metadata keep).
+/// 2. `config.ini` and the single-writer lock ([`keep_set`] — the metadata
+///    keeps the tool itself owns).
 /// 3. Blacklist membership (the launcher's `blacklist_dir`): a blacklisted
 ///    path is excluded from the work list but is still part of the expected
 ///    install, so the cleanup must never delete it (docs/01).

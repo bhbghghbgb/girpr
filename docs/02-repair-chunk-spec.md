@@ -345,8 +345,10 @@ optimization).
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
 1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
-   `{blacklisted paths}`. `config.ini` is the ONLY metadata keep: it lives inside `game_dir` but never
-   appears in chunk manifests. The exe needs no keep (the game flags unknown
+   `{the single-writer lock}` ∪ `{blacklisted paths}`. `config.ini` and the
+   single-writer lock are the only metadata keeps: neither appears in a chunk
+   manifest, and `config.ini` lives inside `game_dir` but the tool rewrites it
+   after patching. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
    `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
@@ -389,14 +391,16 @@ The per-mode model, with `S` = target size, `O` = current on-disk size (0 if abs
 |---|---|---|---|
 | `inplace` (default) | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | a mixed file, re-verified next run |
 | `temp` | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file untouched + a partial `*_tmp` |
-| `discard` | `S` | `0` | a partial file |
+| `discard` | `S` | `max(0, S − min(O, S))` | a partial file |
 
 The rows are two ways to spend disk, not two rungs of a safety ladder: `inplace` spends the
 least and writes the least, and `temp` spends the whole file in exchange for the target
 never being modified. For a corrupt-but-right-sized file — the common repair case —
 `inplace` needs **zero** extra space and writes only the corrupt bytes. For a file that
 grows by `Δ`, `inplace` needs `Δ`, not `S`. For a fresh install nothing is saved because
-nothing is on disk to save.
+nothing is on disk to save. `discard` is `inplace` with the target deleted first: it never
+holds a second copy, but a truncated target still needs its growth, so its peak extra
+space is the same as `inplace` (0 only when the target is already full size).
 
 **The bytes the repair did not have to touch.** `SUMMARY kept_bytes` is the run's disk
 claim in one number: the bytes that were already correct where they belonged and did not
