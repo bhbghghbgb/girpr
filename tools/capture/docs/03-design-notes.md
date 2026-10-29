@@ -43,7 +43,7 @@ Re-measure before trusting them; they are a scale reference, not a benchmark.
 | total chunk bytes in `game` 7.1.0 | 128.3 GB |
 | manifest archive | 9 007 187 B zstd → 16 827 424 B |
 | largest single chunk | 3 689 476 B compressed — this bounds the main tool's whole-chunk buffering |
-| a default capture | ~98 MiB on disk: 78 files, 4 manifests, 25 stored chunks, 43 request rows |
+| a default capture | ~98 MiB on disk: 81 files, 4 manifests, 25 stored chunks, 43 request rows |
 | admitted files per capture | 6 captures, 5 in `game/` and 5 in `expected/` |
 | assembled bytes per capture | 453 033 100 B |
 
