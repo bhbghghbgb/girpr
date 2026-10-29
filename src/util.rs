@@ -510,23 +510,35 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
 /// it); `Err` means it is there but could not be read **or** its text could
 /// not be parsed into any entry, which must not become an empty ignore set
 /// without a trace. One leading UTF-8 BOM is stripped; a mixed file warns per
-/// unparseable line and keeps the well-formed entries (see
-/// [`parse_config_list`]).
+/// bad line and keeps the well-formed entries (see [`parse_config_list`]).
+///
+/// A line is an entry only when `is_delete` is `true`; an absent or `false`
+/// `is_delete` is the launcher's explicit no-op. A wrong-typed `is_delete`,
+/// or `is_delete: true` without a string `category`, is a malformed entry —
+/// not a silent skip: ignoring it would leave a category the user excluded
+/// repaired.
 pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
     let Some(text) = read_config_list(path, "ignore categories")? else {
         return Ok(None);
     };
     let set = parse_config_list(path, "ignore categories", &text, |v| {
-        if !v
-            .get("is_delete")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false)
-        {
-            return None;
+        let Some(is_delete) = v.get("is_delete") else {
+            // `{}` and an absent `is_delete` are the launcher's no-op.
+            return Ok(None);
+        };
+        let is_delete = is_delete.as_bool().ok_or_else(|| {
+            anyhow::anyhow!(
+                "`is_delete` must be a boolean, found {}",
+                json_kind(is_delete)
+            )
+        })?;
+        if !is_delete {
+            return Ok(None);
         }
-        v.get("category")
-            .and_then(|c| c.as_str())
-            .map(str::to_string)
+        let category = v.get("category").and_then(|c| c.as_str()).ok_or_else(|| {
+            anyhow::anyhow!("`category` must be a string when `is_delete` is true")
+        })?;
+        Ok(Some(category.to_string()))
     })?;
     Ok(Some(set))
 }
@@ -542,15 +554,21 @@ pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<Stri
 ///
 /// The absent/unreadable/parse split is the same as
 /// [`read_ignore_categories`]: a missing file is an empty blacklist; a file
-/// that cannot be read, or whose only text is unparseable, is an error.
+/// that cannot be read, or whose only text is unparseable or malformed, is an
+/// error. A line without a string `fileName` is a malformed entry, not a
+/// silent no-op (the case where an explicit exclusion protects nothing).
 pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
     let Some(text) = read_config_list(path, "blacklist")? else {
         return Ok(None);
     };
     let raw = parse_config_list(path, "blacklist", &text, |v| {
-        v.get("fileName")
-            .and_then(|n| n.as_str())
-            .map(str::to_string)
+        let name = v.get("fileName").and_then(|n| n.as_str()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "`fileName` must be a string, found {}",
+                v.get("fileName").map_or("nothing", json_kind)
+            )
+        })?;
+        Ok(Some(name.to_string()))
     })?;
     raw.into_iter()
         .map(|entry| clean_rel(&entry).with_context(|| format!("blacklist entry {entry:?}")))
@@ -566,18 +584,22 @@ pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
 /// and make that line unparseable.
 ///
 /// A line that is not JSON is warned with its 1-based line number and skipped.
-/// That keeps the well-formed entries usable when the launcher wrote a
-/// crash-truncated last line. But a file whose non-blank text produced no
-/// entry **and** had at least one unparseable line is refused: degrading an
-/// explicit configuration to "delete nothing" (ignore categories) or "no
-/// blacklist" would silently change what the run repairs and keeps, which is
-/// what R-6 fixed for the read errors. A valid but entryless line (`{}`) and a
-/// genuinely blank file stay empty selections.
+/// So is a parseable line that is not a JSON object or whose required fields
+/// are missing or wrong-typed: the reader's closure returns `Err`, which is
+/// the same malformed-entry state (a `{"fileName":123}` must not silently
+/// disable an explicit exclusion). Skipping bad lines keeps the well-formed
+/// entries usable when the launcher wrote a crash-truncated or corrupt tail.
+/// But a file whose non-blank text produced no entry **and** had at least one
+/// bad line is refused: degrading an explicit configuration to "delete
+/// nothing" (ignore categories) or "no blacklist" would silently change what
+/// the run repairs and keeps, which is what R-6 fixed for the read errors. A
+/// valid but entryless line (`{}`) and a genuinely blank file stay empty
+/// selections.
 fn parse_config_list(
     path: &Path,
     what: &str,
     text: &str,
-    mut entry: impl FnMut(&serde_json::Value) -> Option<String>,
+    mut entry: impl FnMut(&serde_json::Value) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<HashSet<String>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut set = HashSet::new();
@@ -587,32 +609,49 @@ fn parse_config_list(
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<serde_json::Value>(line) {
-            Ok(v) => {
-                if let Some(entry) = entry(&v) {
+        let failure = match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) if !v.is_object() => Some(anyhow::anyhow!("the line is not a JSON object")),
+            Ok(v) => match entry(&v) {
+                Ok(Some(entry)) => {
                     set.insert(entry);
+                    None
                 }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    line = i + 1,
-                    error = %e,
-                    "unparseable line in the {what} list; ignored"
-                );
-                first_failure.get_or_insert((i + 1, e.to_string()));
-            }
+                Ok(None) => None,
+                Err(e) => Some(e),
+            },
+            Err(e) => Some(e.into()),
+        };
+        if let Some(e) = failure {
+            tracing::warn!(
+                path = %path.display(),
+                line = i + 1,
+                error = %e,
+                "invalid entry in the {what} list; ignored"
+            );
+            first_failure.get_or_insert((i + 1, e.to_string()));
         }
     }
     if set.is_empty()
         && let Some((line, e)) = first_failure
     {
         return Err(anyhow::anyhow!(
-            "{what} file {} has no usable entry: line {line} is not valid JSON ({e})",
+            "{what} file {} has no usable entry: line {line}: {e}",
             path.display()
         ));
     }
     Ok(set)
+}
+
+/// A short name for a JSON value's type, for a malformed-entry message.
+fn json_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
 }
 
 /// The shared absent/error split for the launcher's JSON-lines config files.
@@ -1390,7 +1429,7 @@ mod tests {
         });
         assert_eq!(blacklist, HashSet::from(["a/b.dat".to_string()]));
         assert!(
-            logs.contains("unparseable line in the blacklist list"),
+            logs.contains("invalid entry in the blacklist list"),
             "the dropped line must be logged: {logs}"
         );
         assert!(logs.contains("line=2"), "the log names the line: {logs}");
@@ -1410,9 +1449,116 @@ mod tests {
         });
         assert_eq!(ignore, HashSet::from(["10302".to_string()]));
         assert!(
-            logs.contains("unparseable line in the ignore categories list")
-                && logs.contains("line=2"),
+            logs.contains("invalid entry in the ignore categories list") && logs.contains("line=2"),
             "the dropped line must be logged with its line: {logs}"
+        );
+    }
+
+    /// E-1: a line that is valid JSON but whose entry field is missing or
+    /// wrong-typed is a malformed entry, not a silent no-op. The two shapes
+    /// from the review are pinned here; a mixed file keeps the well-formed
+    /// entries and warns per bad line, and an all-malformed file is refused
+    /// instead of reading as an empty selection.
+    #[test]
+    fn malformed_config_list_entries_are_refused_not_dropped() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "malformed_entries");
+
+        // The first review shape: `{"fileName":123}` protects nothing. Alone
+        // it is a refused file, naming the path, the line and the field.
+        std::fs::write(dir.join("bl"), "{\"fileName\":123}\n").unwrap();
+        let mut err = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", err.expect("the probe ran"));
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1")
+                && msg.contains("fileName"),
+            "the refusal names the file, line and field: {msg}"
+        );
+        assert!(
+            logs.contains("invalid entry in the blacklist list")
+                && logs.contains("line=1")
+                && logs.contains("a number"),
+            "the malformed entry is warned with its line and type: {logs}"
+        );
+
+        // Mixed: the well-formed entry survives, the bad line is warned.
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":\"a/b.dat\"}\n{\"fileName\":null}\n",
+        )
+        .unwrap();
+        let mut got = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            got = Some(read_blacklist(&dir.join("bl")).unwrap().unwrap());
+        });
+        assert_eq!(got.unwrap(), HashSet::from(["a/b.dat".to_string()]));
+        assert!(
+            logs.contains("invalid entry in the blacklist list")
+                && logs.contains("line=2")
+                && logs.contains("null"),
+            "the bad line is warned, the good one kept: {logs}"
+        );
+
+        // The second review shape: `is_delete` as the string `"true"` is not
+        // a boolean and must not silently ignore a category.
+        std::fs::write(
+            dir.join("rc"),
+            "{\"category\":\"10302\",\"is_delete\":\"true\"}\n",
+        )
+        .unwrap();
+        let mut err = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", err.expect("the probe ran"));
+        assert!(
+            msg.contains("ignore categories")
+                && msg.contains(&dir.join("rc").display().to_string())
+                && msg.contains("line 1")
+                && msg.contains("is_delete"),
+            "the refusal names the file, line and field: {msg}"
+        );
+        assert!(
+            logs.contains("invalid entry in the ignore categories list") && logs.contains("line=1"),
+            "the malformed entry is warned with its line: {logs}"
+        );
+
+        // `is_delete: true` without a string `category` is malformed too.
+        std::fs::write(dir.join("rc"), "{\"is_delete\":true}\n").unwrap();
+        let err = read_ignore_categories(&dir.join("rc")).expect_err("missing category");
+        assert!(
+            format!("{err:#}").contains("category"),
+            "the refusal names the missing field: {err:#}"
+        );
+
+        // A no-op entry (`is_delete` absent or false) stays a valid empty
+        // selection, as does the entryless `{}`.
+        std::fs::write(dir.join("rc"), "{\"category\":\"10302\"}\n{}\n").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+
+        // All-malformed: a parseable but wrong-typed line is refused even
+        // though every line was valid JSON.
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":123}\n{\"FileName\":\"x/y.dat\"}\n",
+        )
+        .unwrap();
+        let err = read_blacklist(&dir.join("bl")).expect_err("no usable entry");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and first bad line: {msg}"
         );
     }
 
