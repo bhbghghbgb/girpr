@@ -71,6 +71,23 @@ pub struct Blob {
     pub uncompressed_md5: String,
     /// `len(body)`.
     pub uncompressed_size: i64,
+    /// The length the manifest declares, when it is not `len(body)`.
+    ///
+    /// `None` for every ordinary blob, so the world keeps its "declare what the
+    /// bytes say" property by default. A test overwrites it to model a manifest
+    /// whose arithmetic is hostile - a chunk at `i64::MAX`, which is the one
+    /// extreme the decoder accepts, since it refuses a negative chunk size at
+    /// its arithmetic boundary - while the bytes a CDN serves stay ordinary.
+    /// The archive stats are derived from this value with the same `.max(0)`
+    /// and saturating additions the decoder applies, so A5 still reconciles.
+    pub declared_uncompressed_size: Option<i64>,
+    /// The bytes the CDN serves, when they are not `raw`.
+    ///
+    /// `None` for every ordinary blob. A test sets it to model a server that
+    /// returns something other than the frame the manifest declares; the
+    /// declaration (`compressed_size`, `compressed_md5`) is left alone, which
+    /// is exactly the mis-served-body case the capture has to record.
+    pub served: Option<Vec<u8>>,
 }
 
 /// A chunk whose bytes are a function of `seed`, and nothing else.
@@ -100,8 +117,28 @@ pub fn blob(seed: u64, len: usize) -> Blob {
         compressed_size: raw.len() as i64,
         uncompressed_md5,
         uncompressed_size: body.len() as i64,
+        declared_uncompressed_size: None,
+        served: None,
         raw,
         body,
+    }
+}
+
+impl Blob {
+    /// Declare a length other than `len(body)` in the manifest.
+    ///
+    /// The bytes, their digests and their compressed size are untouched: only
+    /// the number the manifest says the chunk decodes to changes, which is what
+    /// makes the capture's clamping visible in `chunks/index.json`.
+    pub fn declaring_uncompressed_size(mut self, size: i64) -> Blob {
+        self.declared_uncompressed_size = Some(size);
+        self
+    }
+
+    /// The length the manifest declares for this chunk.
+    pub fn declared_uncompressed_size(&self) -> i64 {
+        self.declared_uncompressed_size
+            .unwrap_or(self.uncompressed_size)
     }
 }
 
@@ -112,6 +149,13 @@ pub struct File {
     pub path: String,
     /// Its chunks, left to right.
     pub chunks: Vec<Blob>,
+    /// The file size the manifest declares, when it is not `Σ chunk size`.
+    ///
+    /// `None` for every ordinary file. A test sets it to model a manifest whose
+    /// file-level arithmetic disagrees with its chunks - notably a negative
+    /// `size`, which the decoder clamps out of the totals but still counts as a
+    /// structural violation.
+    pub declared_size: Option<i64>,
 }
 
 impl File {
@@ -120,7 +164,14 @@ impl File {
         File {
             path: path.to_string(),
             chunks: seeds.iter().map(|s| blob(*s, len)).collect(),
+            declared_size: None,
         }
+    }
+
+    /// Declare a whole-file size other than the chunk sum.
+    pub fn declaring_size(mut self, size: i64) -> File {
+        self.declared_size = Some(size);
+        self
     }
 
     /// The bytes a reader would get back.
@@ -128,9 +179,18 @@ impl File {
         self.chunks.iter().flat_map(|c| c.body.clone()).collect()
     }
 
-    /// The declared size, which is `Σ uncompressed_size`.
+    /// The declared size, which is `Σ uncompressed_size` unless a test
+    /// overwrote it.
+    ///
+    /// Saturating, because a test may declare a chunk at `i64::MAX`; the
+    /// decoder sums file sizes the same way.
     pub fn size(&self) -> i64 {
-        self.chunks.iter().map(|c| c.uncompressed_size).sum()
+        if let Some(size) = self.declared_size {
+            return size;
+        }
+        self.chunks.iter().fold(0, |total, c| {
+            total.saturating_add(c.declared_uncompressed_size())
+        })
     }
 
     /// The declared whole-file MD5.
@@ -144,16 +204,21 @@ impl File {
         self.chunks
             .iter()
             .map(|c| {
+                let size = c.declared_uncompressed_size();
                 let chunk = gircap::manifest::proto::SophonChunk {
                     id: c.id.clone(),
                     uncompressed_md5: c.uncompressed_md5.clone(),
                     offset: cursor,
                     compressed_size: c.compressed_size,
-                    uncompressed_size: c.uncompressed_size,
+                    uncompressed_size: size,
                     unknown_field6: 0,
                     compressed_md5: c.compressed_md5.clone(),
                 };
-                cursor += c.uncompressed_size;
+                // A hostile declaration can make the next start unrepresentable.
+                // The decoder measures that as a broken tiling rather than
+                // refusing the manifest, and the mock must be able to produce
+                // the row it measures.
+                cursor = cursor.saturating_add(size);
                 chunk
             })
             .collect()
@@ -463,12 +528,66 @@ impl World {
             plain_len: plain.len() as i64,
             file_count: files.len() as i64,
             chunk_count: files.iter().map(|f| f.chunks.len() as i64).sum(),
-            uncompressed_size: files.iter().map(|f| f.size()).sum(),
+            // The same arithmetic `manifest::decode_counts` applies to the same
+            // declarations: a negative file contributes zero, and the sums
+            // saturate. A5 compares these against the decoder's totals, so a
+            // mock that summed the raw signed values would fail the capture for
+            // a fixture bug rather than for a tool bug.
+            uncompressed_size: files.iter().fold(0_u64, |total, f| {
+                total.saturating_add(f.size().max(0) as u64)
+            }),
             compressed_size: files
                 .iter()
-                .map(|f| f.chunks.iter().map(|c| c.compressed_size).sum::<i64>())
-                .sum(),
+                .flat_map(|f| &f.chunks)
+                .fold(0_u64, |total, c| {
+                    total.saturating_add(c.compressed_size.max(0) as u64)
+                }),
         })
+    }
+
+    /// Every chunk's declared `(uncompressed_md5, uncompressed_size)`.
+    ///
+    /// Read from the same values the manifests encode, by id, so a test can
+    /// compare an index row against the declaration it came from rather than
+    /// restating a number. `uncompressed_size` is clamped here exactly as
+    /// `BlobProps::unmeasured` clamps it.
+    pub fn declared(&self) -> BTreeMap<String, (String, u64)> {
+        let mut out = BTreeMap::new();
+        for build in [&self.new, &self.old] {
+            for (_, files) in &build.fields {
+                for f in files {
+                    for c in &f.chunks {
+                        out.insert(
+                            c.id.clone(),
+                            (
+                                c.uncompressed_md5.clone(),
+                                c.declared_uncompressed_size().max(0) as u64,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Replace the bytes the CDN serves for `chunk_id`, leaving the manifest
+    /// declaration alone. Returns whether any build published that id.
+    pub fn mis_serve(&mut self, chunk_id: &str, bytes: Vec<u8>) -> bool {
+        let mut found = false;
+        for build in [&mut self.new, &mut self.old] {
+            for (_, files) in &mut build.fields {
+                for f in files {
+                    for c in &mut f.chunks {
+                        if c.id == chunk_id {
+                            c.served = Some(bytes.clone());
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+        found
     }
 }
 
@@ -488,9 +607,9 @@ pub struct Archive {
     /// `Σ chunk count`.
     pub chunk_count: i64,
     /// `Σ file size`.
-    pub uncompressed_size: i64,
+    pub uncompressed_size: u64,
     /// `Σ chunk compressed_size`.
-    pub compressed_size: i64,
+    pub compressed_size: u64,
 }
 
 // --------------------------------------------------------------- the server
@@ -1265,7 +1384,7 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
         ["cdn", build, "chunk", id] => table
             .chunks
             .get(&(build.to_string(), (*id).to_string()))
-            .map(|c| c.raw.clone()),
+            .map(|c| c.served.clone().unwrap_or_else(|| c.raw.clone())),
         _ => None,
     }
 }
