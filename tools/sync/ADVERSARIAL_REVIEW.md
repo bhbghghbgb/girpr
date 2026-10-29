@@ -8,7 +8,7 @@ Open items, trade-offs and unverified areas: [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_
 
 ## Pass log
 
-Implementation plus the ten review passes after it, one subsection each. Evidence,
+Implementation plus the eleven review passes after it, one subsection each. Evidence,
 failure scenarios and per-pass verification are in the git history:
 `git log --oneline main..HEAD` and `git show <commit>`; the hashes below are the
 index. The first pass's original text is at
@@ -207,12 +207,37 @@ host, with directory junctions standing in for the file links it refuses.
 - An alias derived from link text is matched to the map's spelling through a lowercase index (empty on POSIX, where two spellings are two paths), so the spare names the key the walk reported.
 - The rest of the ninth pass's decisions are unchanged; the tenth pass adds no refusal or failure mode.
 
+### Eleventh pass — R11-1
+
+R11-1 was confirmed against `16bb199` and fixed at the root cause; none was
+rejected. One Medium.
+
+| ID | Finding | Status | Commits |
+|----|---------|--------|---------|
+| R11-1 | `is_cache_rel`/`is_record_path` matched the `girpr-cache` prefix byte-for-byte, so on Windows a case-only rename of the live cache was walked as content and copied over the destination's live cache (`os error 33`, then a redb panic on reopen); one `has_cache_prefix` predicate now folds case on Windows only | fixed | `40102cd` |
+
+R11-1 was reproduced here with the pre-fix binary: after renaming `src\girpr-cache`
+to `GIRPR-CACHE`, `sync --dry-run` printed `{"event":"missing","path":"GIRPR-CACHE"}`
+and a `copy` plan; the real run exited 3 with
+`copy ...\src\GIRPR-CACHE -> ...\dst\GIRPR-CACHE ... (os error 33)`, and a
+following `update --dir dst` panicked inside redb at `btree.rs:145` (exit 101).
+Restoring the pre-run destination cache made both `update` runs exit 0. The fix
+was then reprobed outside the repo: the same rename now plans `copied=0`, the
+real sync and both `update` runs exit 0. The in-suite case fails first at
+`tests/sync.rs:1650` on the pre-fix `missing` record.
+
+**Decisions still in force:**
+- A `girpr-cache*` component is reserved case-insensitively on Windows only: a case-only rename of the live cache is the same file there. POSIX spellings stay exact, where the two names are distinct entries.
+- Both recognition sites share one predicate: `is_cache_rel` and `is_record_path` go through `has_cache_prefix`, and no other production site recognizes the prefix.
+- Backups and `old-*` snapshots are named with the lowercase prefix and reach the walk through `is_cache_rel`; the fold covers a case-only re-spelling of them too.
+
 ### Latest verification
 
-- `cargo test -p girsync` — **426 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 427 functions, 426 run. Breakdown: lib 168; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 31 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
+- `cargo test -p girsync` — **428 passed, 0 failed, 1 ignored** (the pre-existing `tests/sync.rs` case); suite 429 functions, 428 run. Breakdown: lib 169; cli_dispatch 1, compare 13, compare_self 12, convert 4, hash_mode 18, helpers 12, lazy 27, migration_lock 11, output 16, rw_threads 15, stat_trust 19, symlink 32, sync 32 (+1 ignored), sync_plan 19, update 3, why 25; doctests 0.
 - `cargo test -p girsync --test symlink -- --nocapture` — 32 passed, 0 failed. Thirteen file-link bodies print `skip: ... (os error 1314)` and return; one case-only body self-skips because this filesystem pairs `CaseProbe` with `caseprobe`.
 - `cargo build -p girsync`, `cargo clippy -p girsync --all-targets`, `cargo fmt -p girsync --check` — clean, exit 0, no warnings.
+- R11-1's reproduction and the fixed-binary probe are recorded in the eleventh pass above; both used the real binary outside the repo, with the destination cache backed up before the deliberately damaging pre-fix run.
 
 ---
 
-*End of review. The first pass was a source-only audit: no project file changed, nothing built, tested or run; its uncompacted text is at `git show 94f1c3a:tools/sync/ADVERSARIAL_REVIEW.md`. The pass log records the implementation and the second through tenth passes, which did build, test and run the binary; per-pass detail is in the commits it cites. Open items are in [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).*
+*End of review. The first pass was a source-only audit: no project file changed, nothing built, tested or run; its uncompacted text is at `git show 94f1c3a:tools/sync/ADVERSARIAL_REVIEW.md`. The pass log records the implementation and the second through eleventh passes, which did build, test and run the binary; per-pass detail is in the commits it cites. Open items are in [OPEN_FOR_MAINTAINERS.md](OPEN_FOR_MAINTAINERS.md).*
