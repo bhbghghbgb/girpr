@@ -482,7 +482,10 @@ streams every fetched body to disk, digests it on the way past and records the
 row. If the bytes are not a zstd frame the row carries `decode_error` with the
 real reason and the two decode-dependent `verified` keys false, instead of being
 discarded. A truncated or mis-served response is the evidence this tool exists
-to keep.
+to keep. A successful response with an empty body is kept the same way: the
+zero-byte file is published and measured, so the row has `stored_path`,
+`bytes: 0` and a `decode_error`, and is not counted among the failed fetches.
+Only a *failed* fetch's zero-byte temp file is removed.
 
 **That row is the outcome of a successful fetch, so it is not retried from
 another source.** The first body's bytes are already the evidence; asking the

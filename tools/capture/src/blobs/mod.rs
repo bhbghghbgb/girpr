@@ -543,12 +543,14 @@ impl Store {
     /// **An undecodable body is kept, not dropped.** The bytes are on disk before
     /// they are ever measured, so a body that is not a zstd frame becomes a row
     /// carrying its digests and the reason — rather than a hole, and rather than a
-    /// bundle claiming the fetch failed when it succeeded.
+    /// bundle claiming the fetch failed when it succeeded. A successful `2xx` with
+    /// an empty body is published and measured too, as a zero-byte row whose
+    /// `decode_error` says there was no frame.
     ///
     /// **A fetch that stopped after writing bytes keeps them too.** Version 3
-    /// publishes the prefix as a `partial` row with `fetch_error`; only a
-    /// zero-byte temp is removed, because a row with no bytes and no path is the
-    /// only case where there is nothing to preserve. The cap
+    /// publishes the prefix as a `partial` row with `fetch_error`; only a *failed*
+    /// fetch's zero-byte temp is removed, because a row with no bytes and no path
+    /// is the only case where there is nothing to preserve. The cap
     /// (`--max-response-bytes`) still bounds how much arrives.
     ///
     /// **A failed flush or rename removes the temp.** Those are local I/O
@@ -606,12 +608,16 @@ impl Store {
         };
 
         if digests.bytes == 0 {
-            // Nothing arrived that could be evidence. Remove the temp and keep
-            // the failure as the row's only content.
-            Self::discard_tmp(&tmp_path);
-            return Err(failure.unwrap_or_else(|| {
-                FetchError::local(format!("{id}: the fetch returned no bytes"))
-            }));
+            // **Only a failed fetch's empty temp is removed.** A successful
+            // response with a zero-byte body is evidence about the origin: it is
+            // renamed and measured like any other, and measurement records an
+            // undecodable row whose digests cover no bytes. A failure that wrote
+            // nothing has nothing to publish, so it falls through to the next
+            // source with the fetch failure as the row's only content.
+            if let Some(error) = failure {
+                Self::discard_tmp(&tmp_path);
+                return Err(error);
+            }
         }
 
         // The atomic step: until this, nothing outside this function looks at the
@@ -1599,6 +1605,126 @@ mod tests {
         assert_eq!(
             on_disk, xml,
             "the published bytes are exactly what the CDN served"
+        );
+    }
+
+    /// **A successful empty body is evidence, not a failed fetch.** A `2xx` whose
+    /// body is zero bytes still says something about the origin, so the empty file
+    /// is published and measured. The row keeps `stored_path`, `bytes: 0` and a
+    /// `decode_error`, and the run does not count the chunk among the failed
+    /// fetches. Only a *failed* fetch's zero-byte temp is removed.
+    #[tokio::test]
+    async fn a_successful_empty_body_is_stored_and_measured_as_undecodable() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).expect("nonblocking accept");
+        let server = std::thread::spawn(move || {
+            // Bounded rather than a blocking `accept`: a future regression that
+            // makes the fetch fail before connecting must fail the assertions,
+            // not hang the suite on `join`.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).ok();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                    break;
+                }
+            }
+            // A successful answer that simply carries nothing: the origin was
+            // reached and said "no bytes", which is a fact worth a row.
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream.flush().unwrap();
+        });
+
+        let c = chunk(b"a chunk the CDN answers with an empty body", 0, 0x5c5c);
+        let p = FilePair {
+            capture_id: "empty".into(),
+            path: "dll".into(),
+            old: None,
+            new: Some(chunks::NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry("dll", vec![c.clone()]),
+            }),
+        };
+        let w = chunks::wants(&[p]);
+        assert_eq!(w.len(), 1, "the fixture asks for exactly one chunk");
+
+        let root = girpr_tempdir::TempDir::new("gircap-k2", "empty_body_kept");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([("7.1.0".to_string(), format!("http://127.0.0.1:{port}/cdn"))]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        server.join().expect("the mock served the empty body");
+
+        assert!(
+            errors.is_empty(),
+            "a successful empty body is not a failed fetch: {errors:?}"
+        );
+        assert_eq!(entries.len(), 1, "the chunk still has a row");
+        let props = &entries[0].0.props;
+        assert_eq!(
+            props.stored_path.as_deref(),
+            Some(BlobProps::stored_path_for(&c.id).as_str()),
+            "the empty body was published like any other"
+        );
+        assert_eq!(props.bytes, 0, "the row counts the bytes that arrived");
+        assert!(
+            !props.partial,
+            "the fetch completed, so nothing is a prefix"
+        );
+        assert!(
+            props.fetch_error.is_none(),
+            "nothing failed to fetch: {:?}",
+            props.fetch_error
+        );
+        assert!(
+            props
+                .decode_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("not a zstd frame"),
+            "the row says why it will not decode: {:?}",
+            props.decode_error
+        );
+        assert!(
+            !props.is_usable(),
+            "zero bytes cannot be assembled into the chunk the manifest named"
+        );
+
+        let on_disk = std::fs::read(root.join(BlobProps::stored_path_for(&c.id)))
+            .expect("the indexed path exists on disk");
+        assert!(
+            on_disk.is_empty(),
+            "the published file is exactly the empty body: {} bytes",
+            on_disk.len()
         );
     }
 

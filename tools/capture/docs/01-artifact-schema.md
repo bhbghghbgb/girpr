@@ -812,6 +812,10 @@ backfilled with a "the fetch failed" story — with the two decode-dependent
 `verified` keys `false` and the two that need no decode still decided. Because the
 fetch itself succeeded, the store does not ask a second source for that chunk: the
 bytes that arrived are not replaced, and the row's `stored_path` points at them.
+A successful `2xx` that carries no bytes at all follows the same rule: the empty
+file is published and measured, and the row records `bytes: 0` with a
+`decode_error` (`not a zstd frame (0 bytes, magic [])`) rather than a
+`fetch_error`.
 
 It is `Option<String>`, so a reader must treat it as optional: a blob that was
 never fetched at all has a null `stored_path`, a null-ish row body and no
@@ -832,10 +836,14 @@ wrong" indistinguishable from "the bytes are missing".
 
 `partial` is `true` when a fetch stopped after writing some bytes but before the
 body completed. Those bytes are published at `stored_path` and indexed, because a
-prefix is evidence; only a zero-byte temp file is removed. `is_usable` — and
-therefore A6 and assembly — requires `partial == false`, so a partial row is kept
-and never assembled from. A blob only falls through to the next source when the
-attempt produced **no** bytes; the first source that produces any ends the loop.
+prefix is evidence; only a **failed** fetch's zero-byte temp file is removed. A
+successful `2xx` with an empty body is not a failed fetch: the empty file is
+renamed into place and measured, so its row carries `stored_path`, `bytes: 0`,
+`partial: false`, no `fetch_error` and a `decode_error` saying there was no
+frame. `is_usable` — and therefore A6 and assembly — requires `partial == false`,
+so a partial row is kept and never assembled from. A blob only falls through to
+the next source when the attempt produced **no** bytes *and failed*; the first
+source that produces any ends the loop.
 
 `measurement_error` is set when the post-rename measurement did not return — an
 I/O error, a panic or cancellation. The blob is kept and `stored_path` stays set,
@@ -844,10 +852,12 @@ measurement succeeds.
 
 A `stored_path` that is `null` has three causes:
 
-- **A fetch was attempted and produced no bytes** — a source that refused, a
-  transport failure, a write that failed, or a fetch task that panicked. The row
-  records the structured `fetch_error`, `partial` is `false`, and the chunk is
-  counted once among the failed fetches.
+- **A fetch was attempted and failed without producing bytes** — a source that
+  refused, a transport failure, a write that failed, or a fetch task that
+  panicked. The row records the structured `fetch_error`, `partial` is `false`,
+  and the chunk is counted once among the failed fetches. A *successful* response
+  with an empty body is **not** this case: the empty file is published and
+  measured, so its row has a `stored_path` and a `decode_error` instead.
 - **A write or rename failed after the body was fetched** — also a
   `fetch_error`, with `detail` naming the local path and `transport` null. The
   temp file is removed: there are no trustworthy digests and no complete path to
