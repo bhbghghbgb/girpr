@@ -1,20 +1,24 @@
 # OPEN FOR MAINTAINERS — `girpr` (root crate)
 
-`girpr` (root crate), branch `fix-gaps/girpr`. These are deliberate trade-offs,
-unverified areas and product decisions that remain open after the adversarial
-review — not open defects. Each item below gives the current and historical
-behaviour, who depends on it, the real options, the code that would move, a
-recommendation where one is genuinely inferable, and what was not verified.
-Claims are grounded in `file:line`, a test name, a doc section or a commit hash;
-anything reasoned rather than run is labelled. The review and its binding
-decisions are in [`ADVERSARIAL_REVIEW.md`](ADVERSARIAL_REVIEW.md).
+`girpr` (root crate), branch `fix-gaps/girpr`. These were deliberate trade-offs,
+unverified areas and product decisions left open after the adversarial review —
+not open defects. **All items are resolved as of 2026-10-30.** Each section now
+carries a one-paragraph resolved note, and the
+[`Resolved decisions`](#resolved-decisions) log at the end records the chosen
+option, the rationale and what pins it. The original per-item analysis (current/historical
+behaviour, options, failure modes) was removed once the decision was taken; it
+remains in the git history. Claims were grounded in `file:line`, a test name, a
+doc section or a commit hash. The review is in
+[`ADVERSARIAL_REVIEW.md`](ADVERSARIAL_REVIEW.md).
 
 Verification baseline: `ADVERSARIAL_REVIEW.md` records **349 passed, 0 failed,
-7 ignored** on Windows debug for the eleventh-pass tree. The seven ignored are
-the six `artifact_bridge` cases and `peak_heap`; that run has no live CDN
-traffic, no release profile and no Linux/macOS host.
+7 ignored** on Windows debug for the eleventh-pass tree. After the resolutions
+in this file the tree runs **362 passed, 0 failed, 7 skipped** (the seven are
+the six `artifact_bridge` cases and `peak_heap`); the ignored `artifact_bridge`
+suite was also run separately against the real bundle and passed 6/6. No live
+CDN traffic, no release profile and no Linux/macOS host were used.
 
-## Suggested decision order
+## Suggested decision order (all resolved)
 
 1. **Bytes that can be deleted** — §1 is resolved (case-sensitive purge
    membership, an incomplete delete plan behind a ceiling, the empty-directory
